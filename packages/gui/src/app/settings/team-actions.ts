@@ -43,36 +43,45 @@ export async function inviteMember(
   return { ok: true };
 }
 
-export async function changeMemberRole(userId: string, role: WorkspaceRole) {
+export async function changeMemberRole(
+  userId: string,
+  role: WorkspaceRole,
+): Promise<TeamActionState> {
   const user = await getSessionUser();
-  if (!user) throw new Error('Not authenticated');
+  if (!user) return { error: 'Not authenticated' };
   const workspace = await getActiveWorkspace();
-  if (!workspace || workspace.role !== 'admin') throw new Error('Admin access required');
-  if (userId === user.id) throw new Error('Cannot change your own role');
+  if (!workspace || workspace.role !== 'admin') return { error: 'Admin access required' };
+  if (userId === user.id) return { error: 'Cannot change your own role' };
 
   const supabase = createSupabaseAdminClient();
-  await supabase
+  const { error } = await supabase
     .from('workspace_members')
     .update({ role })
     .eq('workspace_id', workspace.id)
     .eq('user_id', userId);
 
+  if (error) return { error: error.message };
+
   revalidatePath('/settings');
+  return { ok: true };
 }
 
-export async function removeMember(userId: string) {
+export async function removeMember(userId: string): Promise<TeamActionState> {
   const user = await getSessionUser();
-  if (!user) throw new Error('Not authenticated');
+  if (!user) return { error: 'Not authenticated' };
   const workspace = await getActiveWorkspace();
-  if (!workspace || workspace.role !== 'admin') throw new Error('Admin access required');
-  if (userId === user.id) throw new Error('Cannot remove yourself');
+  if (!workspace || workspace.role !== 'admin') return { error: 'Admin access required' };
+  if (userId === user.id) return { error: 'Cannot remove yourself' };
 
   const supabase = createSupabaseAdminClient();
-  await supabase
+  const { error } = await supabase
     .from('workspace_members')
     .delete()
     .eq('workspace_id', workspace.id)
     .eq('user_id', userId);
 
+  if (error) return { error: error.message };
+
   revalidatePath('/settings');
+  return { ok: true };
 }

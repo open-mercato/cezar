@@ -1,6 +1,7 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import { cn } from '@/components/ui/cn';
 import { TrashIcon } from '@/components/icons';
 import { inviteMember, changeMemberRole, removeMember, type TeamActionState } from './team-actions';
@@ -22,9 +23,36 @@ interface TeamSectionProps {
 
 export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProps) {
   const [inviteState, inviteAction, invitePending] = useActionState<TeamActionState, FormData>(inviteMember, {});
+  const router = useRouter();
+  const [memberError, setMemberError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const onRoleChange = (userId: string, role: WorkspaceRole): void => {
+    setMemberError(null);
+    startTransition(async () => {
+      const res = await changeMemberRole(userId, role);
+      if (!res?.ok) setMemberError(res?.error ?? 'Failed to change role');
+      else router.refresh();
+    });
+  };
+
+  const onRemove = (userId: string, label: string): void => {
+    if (!confirm(`Remove ${label} from this workspace?`)) return;
+    setMemberError(null);
+    startTransition(async () => {
+      const res = await removeMember(userId);
+      if (!res?.ok) setMemberError(res?.error ?? 'Failed to remove member');
+      else router.refresh();
+    });
+  };
 
   return (
     <div className="space-y-6">
+      {memberError && (
+        <div className="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
+          {memberError}
+        </div>
+      )}
       {/* Members table */}
       <div className="overflow-hidden rounded-md border border-outline-variant">
         <table className="min-w-full text-sm">
@@ -63,8 +91,9 @@ export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProp
                   {isAdmin && m.userId !== currentUserId ? (
                     <select
                       value={m.role}
-                      onChange={(e) => changeMemberRole(m.userId, e.target.value as WorkspaceRole)}
-                      className="h-8 rounded-md border border-outline-variant bg-surface px-2 text-xs text-on-surface focus:border-primary focus:outline-none"
+                      onChange={(e) => onRoleChange(m.userId, e.target.value as WorkspaceRole)}
+                      disabled={pending}
+                      className="h-8 rounded-md border border-outline-variant bg-surface px-2 text-xs text-on-surface focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <option value="admin">admin</option>
                       <option value="actor">actor</option>
@@ -81,8 +110,9 @@ export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProp
                   <td className="px-4 py-3 text-right align-middle">
                     {m.userId !== currentUserId && (
                       <button
-                        onClick={() => removeMember(m.userId)}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-outline-variant text-on-surface-variant transition-colors hover:border-error/40 hover:text-error"
+                        onClick={() => onRemove(m.userId, m.name || m.email)}
+                        disabled={pending}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-outline-variant text-on-surface-variant transition-colors hover:border-error/40 hover:text-error disabled:cursor-not-allowed disabled:opacity-50"
                         title="Remove member"
                         aria-label={`Remove ${m.name || m.email}`}
                       >
