@@ -64,16 +64,21 @@ export async function listRunSummaries(dir: string): Promise<LocalRunSummary[]> 
   } catch {
     return [];
   }
-  const out: LocalRunSummary[] = [];
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    try {
-      const raw = await readFile(join(dir, name), 'utf8');
-      out.push(JSON.parse(raw) as LocalRunSummary);
-    } catch {
-      // Skip unreadable/corrupt files.
-    }
-  }
+  const jsonNames = names.filter((n) => n.endsWith('.json'));
+  // Parallelize the per-file reads — a long-lived store can accumulate
+  // hundreds of run files, and sequential disk I/O makes `cezar runs` lag.
+  const results = await Promise.all(
+    jsonNames.map(async (name) => {
+      try {
+        const raw = await readFile(join(dir, name), 'utf8');
+        return JSON.parse(raw) as LocalRunSummary;
+      } catch {
+        // Skip unreadable/corrupt files.
+        return null;
+      }
+    }),
+  );
+  const out = results.filter((r): r is LocalRunSummary => r !== null);
   // Newest first.
   out.sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''));
   return out;
