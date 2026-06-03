@@ -179,8 +179,17 @@ export async function executeJobLocally(
       // open-pr step is unaffected — autosave commits just trail the branch
       // history. Failures here are logged only — autosave MUST NOT abort the
       // job (a stuck index, an fsck blip, etc. shouldn't take down a run).
+      //
+      // The overlap guard is per-job (closure-scoped), not module-global, so a
+      // slow autosave on one concurrent job never causes another job's tick to
+      // silently no-op — each worktree keeps its own "one autosave per tick".
+      let jobAutosaveRunning = false;
       autosaveTimer = setInterval(() => {
-        void autosaveWorktree(worktree!.worktreePath);
+        if (jobAutosaveRunning) return;
+        jobAutosaveRunning = true;
+        void autosaveWorktree(worktree!.worktreePath).finally(() => {
+          jobAutosaveRunning = false;
+        });
       }, AUTOSAVE_INTERVAL_MS);
     }
 
@@ -307,14 +316,12 @@ export async function executeJobLocally(
  * default doesn't prompt; the author is hardcoded so we never depend on the
  * operator's git identity (and so the commits stand out in `git log`).
  *
- * A `running` guard skips overlapping ticks — git is generally fast enough
- * that 90s gives plenty of slack, but a slow disk shouldn't queue stale
- * commits behind a still-running `git add`.
+ * The caller skips overlapping ticks via a per-job guard — git is generally
+ * fast enough that 90s gives plenty of slack, but a slow disk shouldn't queue
+ * stale commits behind a still-running `git add`. The guard lives in the caller
+ * (closure-scoped per job) so concurrent jobs autosave independently.
  */
-let autosaveRunning = false;
 async function autosaveWorktree(cwd: string): Promise<void> {
-  if (autosaveRunning) return;
-  autosaveRunning = true;
   try {
     await execFileAsync('git', ['add', '-A'], { cwd });
     await execFileAsync(
@@ -333,7 +340,5 @@ async function autosaveWorktree(cwd: string): Promise<void> {
     // are an unborn HEAD (worktree just created, no initial commit on this
     // branch) or a transient git lock; the next tick will retry.
     console.warn('[runner] autosave failed:', err instanceof Error ? err.message : err);
-  } finally {
-    autosaveRunning = false;
   }
 }
