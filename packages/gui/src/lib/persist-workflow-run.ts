@@ -1,8 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AgentRunRecord } from '@cezar/core';
 import type { Database, AgentRunEventType } from './supabase/types';
 
 type AgentRunsRow = Database['public']['Tables']['agent_runs']['Row'];
+
+/**
+ * High-stakes writes get a small in-memory retry with exponential backoff so a
+ * transient Supabase blip (rate-limit / connection reset) doesn't silently
+ * leave the run in a partial-write state. Transient `agent_run_events` inserts
+ * stay fire-and-forget (no retry) — losing one of those is cheap.
+ */
+const PERSIST_MAX_ATTEMPTS = 3;
+const PERSIST_BACKOFF_MS = 200;
 
 export interface CreateWorkflowRunOpts {
   workspaceId: string;
@@ -17,10 +27,14 @@ export interface CreateWorkflowRunOpts {
   issueNumber: number | null;
   prNumber?: number | null;
   /**
-   * Reports a per-write persistence failure (Supabase rejection / network blip).
-   * The persister itself never throws on writes — failures here are best-effort
-   * by design (a workflow run shouldn't die because one event insert failed).
-   * Callers can hook this to log, surface in their legacy event channel, etc.
+   * Reports a per-write persistence failure (Supabase rejection / network blip),
+   * after retries are exhausted for the run's lifecycle writes (insert /
+   * finalize / fail) and on first failure for best-effort writes (events, step
+   * rows). The persister still never throws — a workflow run shouldn't die
+   * because one event insert failed — but every swallowed failure is counted in
+   * `failedWrites` and stamped into `workflow_runs.outcome` at finalize. Callers
+   * can hook this to log, surface in their legacy event channel, etc. When unset
+   * the persister logs a structured single-line `console.error` instead.
    */
   onPersistError?: (label: string, err: unknown) => void;
 }
@@ -32,11 +46,21 @@ export interface CreateWorkflowRunOpts {
  *
  * Designed for fire-and-forget callers — every write is wrapped in a `safe(...)`
  * try/catch so a transient Supabase error never propagates and kills the run.
+ * The run's lifecycle writes (insert / finalize / fail) retry with backoff
+ * before giving up; best-effort writes (events, step rows) try once. Any
+ * write that exhausts its budget is counted in `failedWrites`.
  * The pause/cancel probes are simple re-reads of the same row.
  */
 export interface WorkflowRunPersister {
   /** The `workflow_runs.id` this persister writes against. Null when the initial insert failed. */
   readonly id: string | null;
+  /**
+   * Count of writes that exhausted their retries and were swallowed. A non-zero
+   * value means the persisted view of this run may be inconsistent with what
+   * actually happened — `finalize` folds it into `workflow_runs.outcome`
+   * (`{ failedWrites: n }`) so the cockpit can flag the row.
+   */
+  readonly failedWrites: number;
   /**
    * Open an `agent_runs` row with `status='running'` for a step that's about
    * to execute, then emit a matching `step-start` event so the cockpit can
@@ -75,32 +99,78 @@ export async function createWorkflowRunPersister(
 ): Promise<WorkflowRunPersister> {
   const { workspaceId, jobId, workflow, repo, issueNumber, prNumber, onPersistError } = opts;
 
-  const safe = async (label: string, fn: () => Promise<void>): Promise<void> => {
-    try { await fn(); } catch (err) {
-      if (onPersistError) onPersistError(label, err);
-      else console.error(`[persist-workflow-run] ${label} failed:`, err instanceof Error ? err.message : err);
+  let failedWrites = 0;
+
+  /**
+   * Run `fn`, retrying transient Supabase failures with exponential backoff.
+   * `critical` writes (the run row's lifecycle: insert / finalize / fail) get
+   * the full retry budget; best-effort writes (events, step rows) try once.
+   * On final failure the error is logged with structured context and counted —
+   * it never propagates, so a single blip can't kill the run.
+   */
+  const safe = async (
+    label: string,
+    fn: () => Promise<void>,
+    opts2?: { critical?: boolean },
+  ): Promise<void> => {
+    const attempts = opts2?.critical ? PERSIST_MAX_ATTEMPTS : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try { await fn(); return; } catch (err) {
+        if (attempt < attempts - 1) {
+          await new Promise((r) => setTimeout(r, PERSIST_BACKOFF_MS * 2 ** attempt));
+          continue;
+        }
+        failedWrites++;
+        if (onPersistError) onPersistError(label, err);
+        else {
+          // Structured single-line log so an operator can grep by workspace /
+          // run id and reconstruct the intended write from agent traces.
+          console.error('[persist-workflow-run] persist failed', JSON.stringify({
+            label,
+            workspaceId,
+            workflowRunId,
+            attempts,
+            error: err instanceof Error ? err.message : String(err),
+          }));
+        }
+        return;
+      }
     }
   };
 
+  // Mint the id client-side so the insert is idempotent: a retry after a write
+  // that actually landed (e.g. the response was lost to a connection reset)
+  // hits `ON CONFLICT DO NOTHING` on the primary key instead of inserting a
+  // duplicate run.
   let workflowRunId: string | null = null;
+  const candidateId = randomUUID();
   await safe('workflow_runs insert', async () => {
     const { data, error } = await supabase
       .from('workflow_runs')
-      .insert({
-        workspace_id: workspaceId,
-        job_id: jobId ?? null,
-        workflow,
-        repo,
-        issue_number: issueNumber,
-        pr_number: prNumber ?? null,
-        status: 'running',
-        started_at: new Date().toISOString(),
-      })
+      .upsert(
+        {
+          id: candidateId,
+          workspace_id: workspaceId,
+          job_id: jobId ?? null,
+          workflow,
+          repo,
+          issue_number: issueNumber,
+          pr_number: prNumber ?? null,
+          status: 'running',
+          started_at: new Date().toISOString(),
+        },
+        { onConflict: 'id', ignoreDuplicates: true },
+      )
       .select('id')
-      .single();
+      // `maybeSingle`, not `single`: with `ignoreDuplicates` the conflict path
+      // returns zero rows, which `single` would surface as an error and falsely
+      // count as a failed write.
+      .maybeSingle();
     if (error) throw error;
-    workflowRunId = data?.id ?? null;
-  });
+    // No row means the conflict path was taken (a retry-after-success on the
+    // same `candidateId`) — that row already landed, so reuse the id we minted.
+    workflowRunId = data?.id ?? candidateId;
+  }, { critical: true });
 
   const recordEvent: WorkflowRunPersister['recordEvent'] = async (type, payload, agentRunId) => {
     if (!workflowRunId) return;
@@ -201,9 +271,19 @@ export async function createWorkflowRunPersister(
 
   const finalize: WorkflowRunPersister['finalize'] = async (patch) => {
     if (!workflowRunId) return;
+    // Fold the swallowed-write count into `outcome` so a non-zero value is
+    // visible in the cockpit (the row may be inconsistent with reality). We
+    // merge rather than clobber any caller-supplied outcome.
+    const finalPatch: Database['public']['Tables']['workflow_runs']['Update'] = { ...patch };
+    if (failedWrites > 0) {
+      const base = (patch.outcome && typeof patch.outcome === 'object' && !Array.isArray(patch.outcome))
+        ? (patch.outcome as Record<string, unknown>)
+        : {};
+      finalPatch.outcome = { ...base, failedWrites } as Database['public']['Tables']['workflow_runs']['Update']['outcome'];
+    }
     await safe('workflow_runs finalize', async () => {
-      await supabase.from('workflow_runs').update(patch).eq('id', workflowRunId!);
-    });
+      await supabase.from('workflow_runs').update(finalPatch).eq('id', workflowRunId!);
+    }, { critical: true });
   };
 
   const fail: WorkflowRunPersister['fail'] = async (reason) => {
@@ -233,6 +313,7 @@ export async function createWorkflowRunPersister(
 
   return {
     get id() { return workflowRunId; },
+    get failedWrites() { return failedWrites; },
     recordStepStart,
     recordAgentRun,
     recordEvent,
