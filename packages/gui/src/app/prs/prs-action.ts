@@ -9,7 +9,15 @@ export interface SyncPrsResult {
   ok: boolean;
   error?: string;
   count?: number;
+  /** True when the sync cap was hit — the full `prs-sync` cron backfills the rest. */
+  capped?: boolean;
 }
+
+// Hard cap on the GitHub round-trip from the interactive server action: 500
+// open PRs (~5 pages of 100). Busy repos can't block the route handler
+// indefinitely (or time the action out); the background `prs-sync` cron does
+// the uncapped walk. listOpenPullRequests stops fetching once the cap is hit.
+const MAX_SYNC_ITEMS = 500;
 
 /**
  * On-demand counterpart to the `prs-sync` cron — fetches open PRs from
@@ -40,10 +48,14 @@ export async function syncPullRequests(): Promise<SyncPrsResult> {
     const github = new core.GitHubService({
       github: { owner: workspace.repoOwner, repo: workspace.repoName, token },
     } as never);
-    openPrs = await github.listOpenPullRequests();
+    openPrs = await github.listOpenPullRequests(MAX_SYNC_ITEMS);
   } catch (err) {
     return { ok: false, error: `GitHub fetch failed: ${err instanceof Error ? err.message : String(err)}` };
   }
+
+  // Hitting the cap means more PRs exist than we walked — flag it so the UI
+  // can tell the user the cron will backfill the remainder.
+  const capped = openPrs.length >= MAX_SYNC_ITEMS;
 
   if (openPrs.length === 0) {
     revalidatePath('/prs');
@@ -74,5 +86,5 @@ export async function syncPullRequests(): Promise<SyncPrsResult> {
   if (error) return { ok: false, error: `Upsert failed: ${error.message}` };
 
   revalidatePath('/prs');
-  return { ok: true, count: openPrs.length };
+  return { ok: true, count: openPrs.length, capped };
 }

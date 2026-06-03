@@ -75,7 +75,7 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatusFilter>('all');
   const [sortKey, setSortKey] = useState<SortKey>('number');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const [syncState, setSyncState] = useState<{ ok?: boolean; error?: string; count?: number } | null>(null);
+  const [syncState, setSyncState] = useState<{ ok?: boolean; error?: string; count?: number; capped?: boolean } | null>(null);
   const [syncing, startSync] = useTransition();
 
   const filtered = useMemo(() => {
@@ -188,6 +188,9 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
       {syncState?.ok && (
         <div className="mb-4 rounded-md border border-primary/30 bg-primary-container/20 px-4 py-2 text-sm text-primary">
           Synced {syncState.count ?? 0} open PR{(syncState.count ?? 0) === 1 ? '' : 's'} from GitHub.
+          {syncState.capped && (
+            <> Page cap reached — the background sync will backfill the rest.</>
+          )}
         </div>
       )}
       {syncState?.error && (
