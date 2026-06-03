@@ -6,6 +6,29 @@ import { join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Per-`repoRoot` async mutex. Every operation that mutates the *shared* git
+ * directory (`worktree prune`/`add`/`remove`, `branch -D`) must run inside
+ * this lock, otherwise two concurrent autofix attempts against the same
+ * `repoRoot` race: they fight over `.git/index.lock`, and a second attempt's
+ * stale-worktree cleanup can `worktree remove --force` a live worktree the
+ * first attempt is mid-write on. See issue #57.
+ *
+ * This only serialises operations *within a single Node process*. Multiple
+ * workers sharing a `repoRoot` via a volume still need one-clone-per-worker.
+ */
+const repoLocks = new Map<string, Promise<unknown>>();
+
+async function withRepoLock<T>(repoRoot: string, fn: () => Promise<T>): Promise<T> {
+  const prev = repoLocks.get(repoRoot) ?? Promise.resolve();
+  // Chain regardless of whether the previous holder resolved or rejected.
+  const next = prev.then(fn, fn);
+  // Keep the chain alive (swallow rejections) so a failed holder doesn't break
+  // the lock for subsequent callers.
+  repoLocks.set(repoRoot, next.then(() => {}, () => {}));
+  return next;
+}
+
 export interface WorktreeHandle {
   path: string;
   branch: string;
@@ -168,67 +191,83 @@ export async function createWorktree(opts: {
   await assertIsGitRepo(opts.repoRoot);
   await assertNotCezarCheckout(opts.repoRoot);
 
-  // Drop registrations whose filesystem paths no longer exist. Without this,
-  // a prior crashed attempt leaves the branch "checked out" by a phantom
-  // worktree and `git worktree add` refuses to proceed.
-  await runGit(opts.repoRoot, ['worktree', 'prune']);
+  // Everything below mutates the *shared* git directory of `repoRoot`
+  // (prune/fetch/branch -D/worktree add) and the global `.git/index.lock`.
+  // Serialise it per-repoRoot so two concurrent attempts can't corrupt each
+  // other's worktree or fight over the index lock. See issue #57.
+  const { worktreePath, parent, startingRef, baseSha } = await withRepoLock(
+    opts.repoRoot,
+    async () => {
+      // Drop registrations whose filesystem paths no longer exist. Without this,
+      // a prior crashed attempt leaves the branch "checked out" by a phantom
+      // worktree and `git worktree add` refuses to proceed.
+      await runGit(opts.repoRoot, ['worktree', 'prune']);
 
-  // Pull the latest remote tip before branching. If the user's local
-  // baseBranch is behind origin, building on it guarantees PR merge conflicts
-  // against the current GitHub state. Branching from <remote>/<baseBranch>
-  // sidesteps the user's working copy entirely.
-  let startingRef = opts.startRef ?? opts.baseBranch;
-  if (!opts.startRef && opts.fetchRemote) {
-    try {
-      await fetchBaseBranch(opts.repoRoot, opts.remote, opts.baseBranch);
-      startingRef = `${opts.remote}/${opts.baseBranch}`;
-    } catch (err) {
-      // Fall back to local baseBranch if the fetch fails (offline, auth issue,
-      // etc). The caller can disable this behavior via autofix.fetchBeforeAttempt=false.
-      opts.onWarn?.(`[autofix] fetch ${opts.remote}/${opts.baseBranch} failed; falling back to local ${opts.baseBranch}: ${(err as Error).message}`);
-    }
-  }
+      // Pull the latest remote tip before branching. If the user's local
+      // baseBranch is behind origin, building on it guarantees PR merge conflicts
+      // against the current GitHub state. Branching from <remote>/<baseBranch>
+      // sidesteps the user's working copy entirely.
+      let startingRef = opts.startRef ?? opts.baseBranch;
+      if (!opts.startRef && opts.fetchRemote) {
+        try {
+          await fetchBaseBranch(opts.repoRoot, opts.remote, opts.baseBranch);
+          startingRef = `${opts.remote}/${opts.baseBranch}`;
+        } catch (err) {
+          // Fall back to local baseBranch if the fetch fails (offline, auth issue,
+          // etc). The caller can disable this behavior via autofix.fetchBeforeAttempt=false.
+          opts.onWarn?.(`[autofix] fetch ${opts.remote}/${opts.baseBranch} failed; falling back to local ${opts.baseBranch}: ${(err as Error).message}`);
+        }
+      }
 
-  const baseSha = await getHeadSha(opts.repoRoot, startingRef);
+      const baseSha = await getHeadSha(opts.repoRoot, startingRef);
 
-  const parent = await mkdtemp(join(tmpdir(), 'cezar-autofix-'));
-  const worktreePath = join(parent, 'repo');
+      const parent = await mkdtemp(join(tmpdir(), 'cezar-autofix-'));
+      const worktreePath = join(parent, 'repo');
 
-  // If a live (non-phantom) worktree still holds this branch, remove it.
-  // This happens when a prior attempt's dispose() was skipped but the dir
-  // still exists on disk (e.g. the user killed the process with Ctrl+C).
-  const busyPath = await findBusyWorktreePath(opts.repoRoot, opts.branch);
-  if (busyPath) {
-    await runGit(opts.repoRoot, ['worktree', 'remove', '--force', busyPath]).catch(() => {});
-    await rm(busyPath, { recursive: true, force: true }).catch(() => {});
-    await runGit(opts.repoRoot, ['worktree', 'prune']);
-  }
+      // If a live (non-phantom) worktree still holds this branch, remove it.
+      // This happens when a prior attempt's dispose() was skipped but the dir
+      // still exists on disk (e.g. the user killed the process with Ctrl+C).
+      const busyPath = await findBusyWorktreePath(opts.repoRoot, opts.branch);
+      if (busyPath) {
+        await runGit(opts.repoRoot, ['worktree', 'remove', '--force', busyPath]).catch(() => {});
+        await rm(busyPath, { recursive: true, force: true }).catch(() => {});
+        await runGit(opts.repoRoot, ['worktree', 'prune']);
+      }
 
-  const branchAlreadyExists = await branchExistsLocally(opts.repoRoot, opts.branch);
+      const branchAlreadyExists = await branchExistsLocally(opts.repoRoot, opts.branch);
 
-  if (branchAlreadyExists && opts.resetBranch) {
-    // Safe to delete: cezar only pushes the branch on review-pass, so a local
-    // branch with the same name is always stale work from a prior attempt.
-    await runGit(opts.repoRoot, ['branch', '-D', opts.branch]);
-  }
+      if (branchAlreadyExists && opts.resetBranch) {
+        // Safe to delete: cezar only pushes the branch on review-pass, so a local
+        // branch with the same name is always stale work from a prior attempt.
+        await runGit(opts.repoRoot, ['branch', '-D', opts.branch]);
+      }
 
-  if (branchAlreadyExists && !opts.resetBranch) {
-    // Existing branch takes precedence — caller asked to continue it, not
-    // reset. Ignore startingRef in this case.
-    await runGit(opts.repoRoot, ['worktree', 'add', worktreePath, opts.branch]);
-  } else {
-    await runGit(opts.repoRoot, ['worktree', 'add', '-b', opts.branch, worktreePath, startingRef]);
-  }
+      if (branchAlreadyExists && !opts.resetBranch) {
+        // Existing branch takes precedence — caller asked to continue it, not
+        // reset. Ignore startingRef in this case.
+        await runGit(opts.repoRoot, ['worktree', 'add', worktreePath, opts.branch]);
+      } else {
+        await runGit(opts.repoRoot, ['worktree', 'add', '-b', opts.branch, worktreePath, startingRef]);
+      }
+
+      return { worktreePath, parent, startingRef, baseSha };
+    },
+  );
 
   let disposed = false;
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
-    try {
-      await runGit(opts.repoRoot, ['worktree', 'remove', '--force', worktreePath]);
-    } catch {
-      // fall through to fs cleanup
-    }
+    // `worktree remove` also takes the global `.git/index.lock`, so hold the
+    // per-repoRoot lock here too — otherwise a dispose racing a concurrent
+    // attempt's `createWorktree` fails with a lock error. See issue #57.
+    await withRepoLock(opts.repoRoot, async () => {
+      try {
+        await runGit(opts.repoRoot, ['worktree', 'remove', '--force', worktreePath]);
+      } catch {
+        // fall through to fs cleanup
+      }
+    });
     await rm(parent, { recursive: true, force: true }).catch(() => {});
   };
 
