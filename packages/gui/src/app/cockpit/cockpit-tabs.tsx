@@ -12,10 +12,12 @@ import { usePathname } from 'next/navigation';
  */
 export function CockpitTabs() {
   const pathname = usePathname() ?? '/cockpit';
-  // Detail pages match /cockpit/<uuid> but NOT /cockpit/runners.
-  const isDetail = /^\/cockpit\/[^/]+$/.test(pathname) && pathname !== '/cockpit/runners';
+  // Runners tab matches /cockpit/runners and its children, NOT sibling paths
+  // like /cockpit/runners-of-doom.
+  const isRunners = pathname === '/cockpit/runners' || pathname.startsWith('/cockpit/runners/');
+  // Detail pages match /cockpit/<id> but NOT the runners route.
+  const isDetail = /^\/cockpit\/[^/]+$/.test(pathname) && !isRunners;
   if (isDetail) return null;
-  const isRunners = pathname.startsWith('/cockpit/runners');
   return (
     <div className="border-b border-border bg-bg">
       <div className="flex items-center gap-1 px-8 pt-4">
