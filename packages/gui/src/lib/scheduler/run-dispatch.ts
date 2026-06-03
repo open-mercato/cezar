@@ -19,6 +19,26 @@ export interface DispatchResult {
   error?: string;
 }
 
+// Last-resort cleanup for a job whose executor promise rejected *before/outside*
+// its own try/catch (e.g. a synchronous throw while dynamically importing
+// `@cezar/core`). In the normal path the executor finalizes the job itself; here
+// the row would otherwise sit stuck in `running` (holding its claim lease and
+// blocking dedupe in triage) until the watchdog's lease reclaim fires. Fail it
+// immediately and drop the lease so the row's lifetime is always bound.
+async function failStuckJob(
+  supabase: SupabaseClient<Database>,
+  jobId: string,
+  err: unknown,
+): Promise<void> {
+  console.error(`[dispatch] job ${jobId} crashed:`, err);
+  const { error } = await supabase
+    .from('jobs')
+    .update({ status: 'failed', claim_expires_at: null, updated_at: new Date().toISOString() })
+    .eq('id', jobId)
+    .eq('status', 'running');
+  if (error) console.error(`[dispatch] could not fail stuck job ${jobId}:`, error.message);
+}
+
 export async function runDispatch(supabase: SupabaseClient<Database>): Promise<DispatchResult> {
   const DISPATCH_BATCH = Number(process.env.CEZAR_DISPATCH_BATCH) || 3;
   const STALE_MINUTES = Number(process.env.CEZAR_DISPATCH_STALE_MINUTES) || 15;
@@ -89,9 +109,7 @@ export async function runDispatch(supabase: SupabaseClient<Database>): Promise<D
         workspaceId: job.workspace_id,
         jobId: job.id,
         analysisId,
-      }).catch((err) => {
-        console.error(`[dispatch] job ${job.id} crashed:`, err);
-      });
+      }).catch((err) => failStuckJob(supabase, job.id, err));
       dispatched += 1;
       continue;
     }
@@ -106,9 +124,7 @@ export async function runDispatch(supabase: SupabaseClient<Database>): Promise<D
       ciFollowupSeed: payload.ciFollowup,
       flowId: payload.flowId,
       flowInput: payload.flowInput,
-    }).catch((err) => {
-      console.error(`[dispatch] job ${job.id} crashed:`, err);
-    });
+    }).catch((err) => failStuckJob(supabase, job.id, err));
     dispatched += 1;
   }
 
