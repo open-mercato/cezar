@@ -17,22 +17,41 @@ export async function loadConfig(overrides: Partial<Config> = {}): Promise<Confi
     raw.llm.apiKey = raw.llm.apiKey || process.env.ANTHROPIC_API_KEY;
   }
 
-  // Merge CLI overrides
-  const merged = deepMerge(raw, overrides);
+  // Merge CLI overrides — explicit values (including '') win over config-file values.
+  const merged = deepMerge(raw, overrides as Record<string, unknown>, true);
 
-  return ConfigSchema.parse(merged);
+  const result2 = ConfigSchema.safeParse(merged);
+  if (!result2.success) {
+    const lines = result2.error.issues.map(
+      (i) => `  • ${i.path.join('.') || '(root)'}: ${i.message}`,
+    );
+    throw new Error(`Invalid configuration:\n${lines.join('\n')}`);
+  }
+  return result2.data;
 }
 
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Deep-merge `source` into `target`.
+ *
+ * When `allowEmpty` is false (env merging), empty/unset values (`undefined`,
+ * `null`, `''`) are skipped so an unset env var never clobbers a config value.
+ * When `allowEmpty` is true (CLI/override merging), only `undefined` is skipped
+ * so an explicit `''` can deliberately clear a leftover value.
+ */
+function deepMerge(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  allowEmpty = false,
+): Record<string, unknown> {
   const result = { ...target };
   for (const key of Object.keys(source)) {
     const val = source[key];
-    if (val !== undefined && val !== null && val !== '') {
-      if (typeof val === 'object' && !Array.isArray(val) && typeof result[key] === 'object' && !Array.isArray(result[key])) {
-        result[key] = deepMerge(result[key] as Record<string, unknown>, val as Record<string, unknown>);
-      } else {
-        result[key] = val;
-      }
+    const skip = allowEmpty ? val === undefined : val === undefined || val === null || val === '';
+    if (skip) continue;
+    if (typeof val === 'object' && val !== null && !Array.isArray(val) && typeof result[key] === 'object' && result[key] !== null && !Array.isArray(result[key])) {
+      result[key] = deepMerge(result[key] as Record<string, unknown>, val as Record<string, unknown>, allowEmpty);
+    } else {
+      result[key] = val;
     }
   }
   return result;
