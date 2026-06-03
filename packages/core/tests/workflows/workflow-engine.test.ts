@@ -126,6 +126,61 @@ function tinyWorkflow(): Workflow<TinyBB> {
   };
 }
 
+// ─── a multi-step loop: a `fix` head (can fail-retriable mid-loop) + a `review`
+//     tail (whose `until` gates the loop). Mirrors the autofix loop shape so we
+//     can exercise the "mid-loop fail-retriable then tail-until on the SAME pass"
+//     double-bump path. ─────────────────────────────────────────────────────────
+
+const FixSchema = z.object({ done: z.boolean() });
+const ReviewSchema = z.object({ pass: z.boolean() });
+
+interface LoopBB { fix?: z.infer<typeof FixSchema>; review?: z.infer<typeof ReviewSchema> }
+
+function multiStepLoopWorkflow(maxIterations: number): Workflow<LoopBB> {
+  return {
+    id: 'autofix',
+    title: 'Multi-step loop',
+    commentTargetOrder: ['issue'],
+    initialBlackboard: () => ({}),
+    steps: [
+      agentStep<LoopBB, z.infer<typeof FixSchema>>({
+        id: 'fix',
+        kind: 'agent',
+        builtinSkillId: 'fix',
+        builtinSystemPrompt: 'SYSTEM-FIX',
+        builtinModel: 'model-fix',
+        builtinTools: ['Read'],
+        responseSchema: FixSchema,
+        cwdRequired: false,
+        buildUserPrompt: () => 'USER-FIX',
+        // `done:false` ⇒ a mid-loop retriable failure (jumps back to the head);
+        // `done:true` ⇒ continue on to the `review` tail.
+        onResult: (parsed) => parsed.done
+          ? { kind: 'continue', blackboardPatch: { fix: parsed } }
+          : { kind: 'fail', reason: 'fix not done', retriable: true, blackboardPatch: { fix: parsed } },
+      }),
+      agentStep<LoopBB, z.infer<typeof ReviewSchema>>({
+        id: 'review',
+        kind: 'agent',
+        builtinSkillId: 'review',
+        builtinSystemPrompt: 'SYSTEM-REVIEW',
+        builtinModel: 'model-review',
+        builtinTools: ['Read'],
+        responseSchema: ReviewSchema,
+        cwdRequired: false,
+        buildUserPrompt: () => 'USER-REVIEW',
+        onResult: (parsed) => ({ kind: 'continue', blackboardPatch: { review: parsed } }),
+      }),
+    ],
+    loops: [{
+      id: 'fix-review',
+      stepIds: ['fix', 'review'],
+      until: (ctx) => ctx.blackboard.review?.pass === true,
+      maxIterations,
+    }],
+  };
+}
+
 function baseCtx() {
   return {
     config: makeConfig(),
@@ -441,5 +496,87 @@ describe('WorkflowEngine.runWorkflow', () => {
     expect(result.sessionId).toBeTypeOf('string');
     const agentRecords = records.filter((r) => r.kind === 'agent');
     for (const r of agentRecords) expect(r.sessionId).toBeUndefined();
+  });
+
+  it('a mid-loop fail-retriable + the same pass\'s tail until-false count as ONE iteration (no double-bump)', async () => {
+    // maxIterations: 2 ⇒ at most one re-entry. Sequence:
+    //   pass 0: fix done:false  → fail-retriable, bump to iter 1, jump to head
+    //   pass 1: fix done:true   → review pass:false → tail until-false.
+    //           The OLD engine bumped AGAIN here (iter 2 → exhausted → failed)
+    //           even though only one logical iteration had been consumed.
+    //           The fixed engine consumes the one-shot and re-enters w/o bumping.
+    //   pass 1 (re-entry): fix done:true → review pass:true → until done.
+    const store = await makeStore();
+    const runner = new FakeRunner('anthropic-api', [
+      { done: false }, // fix — mid-loop retriable fail
+      { done: true },  // fix — retry succeeds
+      { pass: false }, // review — not yet passing (tail until-false)
+      { done: true },  // fix — re-entry
+      { pass: true },  // review — now passing
+    ]);
+    const records: AgentRunRecord[] = [];
+    const result = await runWorkflow(multiStepLoopWorkflow(2), {
+      ...baseCtx(),
+      store,
+      github: makeFakeGitHub(),
+      runnerFactory: () => runner,
+      onRunRecord: (r) => records.push(r),
+    });
+    expect(result.status).toBe('succeeded');
+    // The loop body ran: fix×3, review×2 — the budget was NOT exhausted a full
+    // iteration early.
+    expect(records.filter((r) => r.stepId === 'fix')).toHaveLength(3);
+    expect(records.filter((r) => r.stepId === 'review')).toHaveLength(2);
+    // The iteration counter never exceeded its cap-1 (only one genuine re-entry
+    // was charged across the fail-retriable + the subsequent tail until-false).
+    const fixIters = records.filter((r) => r.stepId === 'fix').map((r) => r.iteration);
+    expect(Math.max(...fixIters)).toBe(1);
+  });
+
+  it('an explicit goto-loop re-entry after a clean loop bumps the counter exactly once', async () => {
+    // The loop completes cleanly on iteration 0 (fix done, review pass), so the
+    // counter stays at 0. A goto-loop back into it must bump to exactly 1, not
+    // reuse a stale higher value.
+    const wf: Workflow<LoopBB> = multiStepLoopWorkflow(3);
+    // Append a tail step that issues one goto-loop back into 'fix-review'.
+    let gotoFired = false;
+    wf.steps.push(
+      agentStep<LoopBB, z.infer<typeof FixSchema>>({
+        id: 'second-round',
+        kind: 'agent',
+        builtinSkillId: 'second-round',
+        builtinSystemPrompt: 'SYSTEM-SECOND',
+        builtinModel: 'model-second',
+        builtinTools: ['Read'],
+        responseSchema: FixSchema,
+        cwdRequired: false,
+        buildUserPrompt: () => 'USER-SECOND',
+        onResult: () => {
+          if (gotoFired) return { kind: 'continue' };
+          gotoFired = true;
+          return { kind: 'goto-loop', loopId: 'fix-review' };
+        },
+      }),
+    );
+    const store = await makeStore();
+    const runner = new FakeRunner('anthropic-api', [
+      { done: true }, { pass: true }, // loop pass 0 (clean)
+      { done: false },                // second-round → goto-loop
+      { done: true }, { pass: true }, // loop pass after re-entry
+      { done: true },                 // second-round again → continue
+    ]);
+    const records: AgentRunRecord[] = [];
+    const result = await runWorkflow(wf, {
+      ...baseCtx(),
+      store,
+      github: makeFakeGitHub(),
+      runnerFactory: () => runner,
+      onRunRecord: (r) => records.push(r),
+    });
+    expect(result.status).toBe('succeeded');
+    // The re-entry pass ran at iteration 1 (a single bump from the goto-loop),
+    // not iteration 2+ from a stale counter.
+    const fixIters = records.filter((r) => r.stepId === 'fix').map((r) => r.iteration);
+    expect(fixIters).toEqual([0, 1]);
   });
 });

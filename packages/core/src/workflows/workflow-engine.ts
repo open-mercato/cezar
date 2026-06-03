@@ -475,6 +475,34 @@ export class WorkflowEngine {
 
     let i = 0;
     const loopIterations = new Map<string, number>();
+
+    // Re-entering a loop is the ONE canonical place we bump the iteration
+    // counter — whether the re-entry is a fail-retriable retry, an explicit
+    // `goto-loop`, or a tail `until` returning false. Centralizing it keeps
+    // a single logical iteration from burning two slots (e.g. a mid-loop
+    // fail-retriable followed by the tail `until` for the same pass — see
+    // `justReentered` below) and makes the cap mean exactly "N body passes".
+    // Returns the step index to jump to, or a finished run when the cap is hit.
+    const reenterLoop = (
+      loop: typeof effectiveLoops[number],
+      reason?: string,
+    ): number | Promise<WorkflowRunResult<W>> => {
+      const next = (loopIterations.get(loop.id) ?? 0) + 1;
+      if (next >= loop.maxIterations) {
+        return finishRun('failed', reason
+          ? `${reason} (loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s))`
+          : `loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s)`);
+      }
+      loopIterations.set(loop.id, next);
+      ctx.onEvent?.(`[#${ctx.issueNumber}] loop '${loop.id}' — iteration ${next}/${loop.maxIterations}${reason ? `: ${reason}` : ''}`);
+      return loopFirstIndex.get(loop.id)!;
+    };
+
+    // One-shot: set when a fail-retriable just bumped + jumped to the loop
+    // head, so the tail `until`-false branch on the resulting pass doesn't
+    // double-bump the same logical iteration. Cleared once that pass reaches
+    // the loop tail (or the run otherwise moves on).
+    let justReentered = false;
     while (i < workflow.steps.length) {
       if (await resolveFlag(ctx.cancelRequested)) {
         return finishRun('cancelled', 'cancelled');
@@ -714,26 +742,25 @@ export class WorkflowEngine {
         if (!retriable) {
           return finishRun('failed', outcome.reason);
         }
-        // Retry the loop.
-        const next = (loopIterations.get(loop.id) ?? 0) + 1;
-        if (next >= loop.maxIterations) {
-          return finishRun('failed', `${outcome.reason} (loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s))`);
-        }
-        loopIterations.set(loop.id, next);
-        ctx.onEvent?.(`[#${ctx.issueNumber}] loop '${loop.id}' — retry ${next}/${loop.maxIterations}: ${outcome.reason}`);
-        i = loopFirstIndex.get(loop.id)!;
+        // Retry the loop. This re-entry IS the iteration bump — flag it so the
+        // tail `until` on the resulting pass doesn't bump again for the same
+        // logical iteration.
+        const target = reenterLoop(loop, outcome.reason);
+        if (typeof target !== 'number') return target;
+        justReentered = true;
+        i = target;
         continue;
       }
 
       if (outcome.kind === 'goto-loop') {
         const targetLoop = loopById.get(outcome.loopId);
         if (!targetLoop) return finishRun('failed', `goto-loop to unknown loop '${outcome.loopId}'`);
-        const next = (loopIterations.get(targetLoop.id) ?? 0) + 1;
-        if (next >= targetLoop.maxIterations) {
-          return finishRun('failed', `loop '${targetLoop.id}' exhausted ${targetLoop.maxIterations} iteration(s)`);
-        }
-        loopIterations.set(targetLoop.id, next);
-        i = loopFirstIndex.get(targetLoop.id)!;
+        const target = reenterLoop(targetLoop);
+        if (typeof target !== 'number') return target;
+        // A fresh re-entry into the loop body — drop any pending one-shot from
+        // a prior in-loop retry so the new pass's tail `until` bumps normally.
+        justReentered = false;
+        i = target;
         continue;
       }
 
@@ -741,15 +768,22 @@ export class WorkflowEngine {
       if (loop && step.id === loop.stepIds[loop.stepIds.length - 1]) {
         const done = loop.until(stepCtx);
         if (!done) {
-          const next = (loopIterations.get(loop.id) ?? 0) + 1;
-          if (next >= loop.maxIterations) {
-            return finishRun('failed', `loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s) without satisfying its exit condition`);
+          // If a fail-retriable already bumped this pass, the re-entry was
+          // counted there — don't burn a second slot for the same iteration.
+          // Consume the one-shot and re-enter without bumping.
+          if (justReentered) {
+            justReentered = false;
+            i = loopFirstIndex.get(loop.id)!;
+            continue;
           }
-          loopIterations.set(loop.id, next);
-          ctx.onEvent?.(`[#${ctx.issueNumber}] loop '${loop.id}' — iteration ${next}/${loop.maxIterations}`);
-          i = loopFirstIndex.get(loop.id)!;
+          const target = reenterLoop(loop);
+          if (typeof target !== 'number') return target;
+          i = target;
           continue;
         }
+        // Loop tail with `until` satisfied — the loop is done. Clear the
+        // one-shot (a fail-retriable earlier in this pass is now moot).
+        justReentered = false;
       }
 
       i++;
