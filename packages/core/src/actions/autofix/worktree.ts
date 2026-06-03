@@ -51,19 +51,49 @@ export async function assertIsGitRepo(path: string): Promise<void> {
   await runGit(path, ['rev-parse', '--git-dir']);
 }
 
-export async function assertNotCezarCheckout(repoRoot: string): Promise<void> {
+// Matches any git remote URL pointing at the cezar repo (or a known fork like
+// comerito/cezar), in both SSH (`git@host:owner/cezar.git`) and HTTPS
+// (`https://host/owner/cezar`) forms, with or without the `.git` suffix.
+const CEZAR_REMOTE_RE = /(?:[/:])(?:comerito\/|open-mercato\/)?cezar(?:\.git)?$/i;
+
+/**
+ * Run git without throwing on a non-zero exit. Returns the trimmed stdout and
+ * the process exit code (`null` if git could not be spawned at all, e.g. the
+ * binary is missing from PATH). Used by guards that need to tell "git ran and
+ * reported the key is absent" apart from "git itself failed".
+ */
+async function tryRunGit(cwd: string, args: string[]): Promise<{ stdout: string; code: number | null }> {
   try {
-    const remote = await runGit(repoRoot, ['config', '--get', 'remote.origin.url']);
-    if (/comerito\/cezar(\.git)?$/i.test(remote) || /[/:]cezar(\.git)?$/i.test(remote)) {
+    const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+    return { stdout: stdout.trim(), code: 0 };
+  } catch (error) {
+    const err = error as { stdout?: string; code?: unknown };
+    const code = typeof err.code === 'number' ? err.code : null;
+    return { stdout: (err.stdout ?? '').trim(), code };
+  }
+}
+
+export async function assertNotCezarCheckout(repoRoot: string): Promise<void> {
+  // List every configured remote URL. `git config --get-regexp` exits 0 with
+  // one `remote.<name>.url <value>` line per remote, or exit 1 with no output
+  // when no remote is configured at all. Any other exit code (binary missing,
+  // unreadable .git/config, etc.) is a real failure we must surface rather than
+  // swallow — failing open here would defeat the whole point of this guard.
+  const result = await tryRunGit(repoRoot, ['config', '--get-regexp', '^remote\\..*\\.url$']);
+  if (result.code !== 0 && result.code !== 1) {
+    throw new Error(
+      `Could not verify the target repo's git remotes (git config exited ${result.code}); ` +
+      `refusing to autofix until the cezar-checkout guard can run.`,
+    );
+  }
+
+  for (const line of result.stdout.split('\n')) {
+    const url = line.slice(line.indexOf(' ') + 1).trim();
+    if (url && CEZAR_REMOTE_RE.test(url)) {
       throw new Error(
-        `Refusing to autofix inside the cezar checkout itself (remote: ${remote}). ` +
+        `Refusing to autofix inside the cezar checkout itself (remote: ${url}). ` +
         `Set autofix.repoRoot to an external repository.`,
       );
-    }
-  } catch (error) {
-    // If the remote isn't set we can't do this check — allow but stay cautious
-    if (error instanceof Error && error.message.includes('Refusing to autofix')) {
-      throw error;
     }
   }
 }
