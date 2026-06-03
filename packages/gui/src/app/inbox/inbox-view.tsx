@@ -352,6 +352,14 @@ export function InboxView({
   const bulkDismiss = useCallback(() => {
     const ids = Array.from(selectedFindings);
     if (ids.length === 0) return;
+    // Bulk-dismiss is hard to undo (reversible only by trawling Supabase rows),
+    // so confirm before dismissing a large batch.
+    if (ids.length > 5) {
+      const ok = window.confirm(
+        `Dismiss ${ids.length} findings? They won't reappear in the inbox.`,
+      );
+      if (!ok) return;
+    }
     setItems((prev) => removeFindingFromItems(prev, ids));
     setSelectedFindings(new Set());
     startTransition(async () => {

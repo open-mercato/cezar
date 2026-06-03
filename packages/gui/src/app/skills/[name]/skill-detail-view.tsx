@@ -590,7 +590,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
           disabled={readOnly || (!dirty && !hasOverride)}
           className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface px-3 text-sm text-on-surface-variant transition-colors hover:border-primary hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {hasOverride ? 'Revert to upstream' : 'Discard changes'}
+          {hasOverride ? 'Delete override' : 'Discard changes'}
         </button>
         <div className="flex items-center gap-2">
           {saveError && <span className="text-xs text-error">{saveError}</span>}
