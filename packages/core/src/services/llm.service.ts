@@ -26,6 +26,9 @@ export const DuplicateResponseSchema = z.object({
 export type DuplicateMatch = z.infer<typeof DuplicateResponseSchema>['duplicates'][number];
 
 export class LLMService {
+  /** Max retry attempts for transient Anthropic errors (429/529/5xx). */
+  private static readonly MAX_RETRIES = 4;
+
   private client: Anthropic;
   private model: string;
   private maxTokens: number;
@@ -153,15 +156,31 @@ Respond ONLY with valid JSON — no markdown, no explanation:
 }`;
   }
 
-  private async callLLM(prompt: string): Promise<string> {
-    const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: this.maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    });
+  private async callLLM(prompt: string, attempt = 0): Promise<string> {
+    try {
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: this.maxTokens,
+        messages: [{ role: 'user', content: prompt }],
+      });
 
-    const textBlock = response.content.find(b => b.type === 'text');
-    return textBlock?.text ?? '';
+      const textBlock = response.content.find(b => b.type === 'text');
+      return textBlock?.text ?? '';
+    } catch (err: any) {
+      // Retry transient Anthropic errors with exponential backoff:
+      // 429 rate_limit_error, 529 overloaded_error, and 5xx server errors.
+      const status: number | undefined = err?.status;
+      const retryable = status === 429 || status === 529 || (typeof status === 'number' && status >= 500);
+      if (retryable && attempt < LLMService.MAX_RETRIES) {
+        const retryAfter = Number(err?.headers?.['retry-after']) * 1000;
+        const delay = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter
+          : (2 ** attempt) * 1000;
+        await new Promise(r => setTimeout(r, delay));
+        return this.callLLM(prompt, attempt + 1);
+      }
+      throw err;
+    }
   }
 
   private parseJSON<T>(raw: string, schema: z.ZodSchema<T>): T | null {

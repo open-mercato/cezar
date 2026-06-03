@@ -192,6 +192,68 @@ describe('LLMService', () => {
     });
   });
 
+  describe('retries on transient errors', () => {
+    it('retries on 429 and eventually succeeds', async () => {
+      vi.useFakeTimers();
+      try {
+        const rateLimited: any = new Error('rate limited');
+        rateLimited.status = 429;
+        mockCreate
+          .mockRejectedValueOnce(rateLimited)
+          .mockResolvedValueOnce({
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                digests: [{ number: 1, summary: 'ok', category: 'bug', affectedArea: 'core', keywords: ['a'] }],
+              }),
+            }],
+          });
+
+        const service = new LLMService(makeConfig());
+        const promise = service.generateDigests([{ number: 1, title: 'Issue 1', body: 'Body 1' }], 20);
+        await vi.runAllTimersAsync();
+        const result = await promise;
+
+        expect(mockCreate).toHaveBeenCalledTimes(2);
+        expect(result.size).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not retry non-retryable errors (e.g. 400)', async () => {
+      const badRequest: any = new Error('bad request');
+      badRequest.status = 400;
+      mockCreate.mockRejectedValue(badRequest);
+
+      const service = new LLMService(makeConfig());
+      await expect(
+        service.generateDigests([{ number: 1, title: 'Issue 1', body: 'Body 1' }], 20),
+      ).rejects.toThrow('bad request');
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives up after exhausting retries on persistent 529', async () => {
+      vi.useFakeTimers();
+      try {
+        const overloaded: any = new Error('overloaded');
+        overloaded.status = 529;
+        mockCreate.mockRejectedValue(overloaded);
+
+        const service = new LLMService(makeConfig());
+        const promise = service.generateDigests([{ number: 1, title: 'Issue 1', body: 'Body 1' }], 20);
+        const assertion = expect(promise).rejects.toThrow('overloaded');
+        await vi.runAllTimersAsync();
+        await assertion;
+
+        // initial attempt + 4 retries
+        expect(mockCreate).toHaveBeenCalledTimes(5);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('detectDuplicates', () => {
     it('parses valid duplicate response', async () => {
       mockCreate.mockResolvedValue({
