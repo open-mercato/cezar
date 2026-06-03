@@ -39,9 +39,13 @@ export async function loadAnalytics(workspaceId: string): Promise<AnalyticsData 
   try {
     const supabase = await createSupabaseServerClient();
 
+    // Velocity only needs the last 12 weeks; cap the runs fetch so the page
+    // stays O(recent activity) instead of O(workspace history).
+    const since = new Date(Date.now() - 12 * 7 * 24 * 60 * 60 * 1000).toISOString();
+
     const [{ data: issues }, { data: runs }] = await Promise.all([
-      supabase.from('issues').select('number, state, labels, analysis, created_at').eq('workspace_id', workspaceId),
-      supabase.from('workflow_runs').select('id, workflow, issue_number, status, tokens_used, started_at').eq('workspace_id', workspaceId).order('started_at', { ascending: false }),
+      supabase.from('issues').select('number, state, labels, analysis, created_at').eq('workspace_id', workspaceId).gte('created_at', since),
+      supabase.from('workflow_runs').select('id, workflow, issue_number, status, tokens_used, started_at').eq('workspace_id', workspaceId).order('started_at', { ascending: false }).limit(200),
     ]);
 
     const allIssues = issues ?? [];
@@ -98,7 +102,8 @@ export async function loadAnalytics(workspaceId: string): Promise<AnalyticsData 
       .slice(0, 12);
 
     return { velocity, runOutcomes, costs, totalTokens, priorityDist, typeDist, labelDist };
-  } catch {
+  } catch (err) {
+    console.error('loadAnalytics failed', err);
     return null;
   }
 }
