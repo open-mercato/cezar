@@ -64,19 +64,33 @@ const JOBS: CronJob[] = [
 interface SchedulerState {
   intervals: Array<ReturnType<typeof setInterval>>;
   inflight: Map<string, boolean>;
+  /** last-tick health per path — used to log failure/recovery transitions once, not every tick */
+  failing: Map<string, boolean>;
 }
 
 function getState(): SchedulerState {
   const g = globalThis as unknown as Record<symbol, SchedulerState>;
-  if (!g[FLAG]) g[FLAG] = { intervals: [], inflight: new Map() };
+  if (!g[FLAG]) g[FLAG] = { intervals: [], inflight: new Map(), failing: new Map() };
   return g[FLAG];
 }
 
+class CronHttpError extends Error {
+  constructor(readonly status: number, readonly path: string, readonly snippet: string) {
+    super(`${path} → ${status}: ${snippet}`);
+    this.name = 'CronHttpError';
+  }
+}
+
 function resolveBaseUrl(): string {
+  // The scheduler hits the local cron routes that run in this same process, so
+  // a loopback URL is the correct default — prefer it over `NEXT_PUBLIC_APP_URL`
+  // (which in a Docker/Traefik deploy points at the external LB, adding a
+  // pointless TLS round-trip and risking dropped `Authorization` headers → 401s).
+  // `CEZAR_INPROCESS_CRON_BASE_URL` is the explicit escape hatch for the rare
+  // reverse-proxy case. (Vercel deploys leave `CEZAR_INPROCESS_CRON` unset and
+  // use the `vercel.json` HTTP cron schedules instead — see the module header.)
   return (
     process.env.CEZAR_INPROCESS_CRON_BASE_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
     `http://127.0.0.1:${process.env.PORT || '3000'}`
   );
 }
@@ -98,7 +112,7 @@ async function hit(path: string, baseUrl: string, secret?: string): Promise<unkn
   const text = await res.text();
   let body: unknown;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-  if (!res.ok) throw new Error(`${path} → ${res.status}: ${text.slice(0, 200)}`);
+  if (!res.ok) throw new CronHttpError(res.status, path, text.slice(0, 200));
   return body;
 }
 
@@ -124,12 +138,31 @@ export function startInProcessScheduler(): void {
       state.inflight.set(job.path, true);
       try {
         const body = await hit(job.path, baseUrl, secret);
+        // Recovered: a prior tick was failing, this one succeeded — surface that.
+        if (state.failing.get(job.path)) {
+          console.log(`[scheduler] ${job.path} — recovered (2xx)`);
+          state.failing.set(job.path, false);
+        }
         const line = job.formatLog
           ? job.formatLog(body)
           : `ok`; // generic: legacy routes return varied shapes — only log when something noteworthy
         if (line !== null && line !== 'ok') console.log(`[scheduler] ${job.path} — ${line}`);
       } catch (err) {
-        console.error(`[scheduler] ${job.path} threw:`, err instanceof Error ? err.message : err);
+        // Log the first failure of each path prominently (with the status code
+        // and, on 401, a CRON_SECRET hint) so a silent 401 storm can't hide in a
+        // busy log. Subsequent consecutive failures stay quiet until recovery.
+        if (!state.failing.get(job.path)) {
+          state.failing.set(job.path, true);
+          if (err instanceof CronHttpError) {
+            const hint =
+              err.status === 401
+                ? ' — the cron route rejected the request; check that CRON_SECRET matches the value the route reads'
+                : '';
+            console.error(`[scheduler] ${job.path} failing — HTTP ${err.status}${hint}: ${err.snippet}`);
+          } else {
+            console.error(`[scheduler] ${job.path} failing —`, err instanceof Error ? err.message : err);
+          }
+        }
       } finally {
         state.inflight.set(job.path, false);
       }
@@ -150,4 +183,5 @@ export function stopInProcessScheduler(): void {
   for (const iv of state.intervals) clearInterval(iv);
   state.intervals = [];
   state.inflight.clear();
+  state.failing.clear();
 }
