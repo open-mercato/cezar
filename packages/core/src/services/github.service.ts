@@ -387,14 +387,22 @@ export class GitHubService {
   async fetchCommentsForIssues(
     issueNumbers: number[],
     onProgress?: (done: number, total: number) => void,
+    onError?: (issueNumber: number, error: unknown) => void,
   ): Promise<Map<number, Array<{ author: string; body: string; createdAt: string }>>> {
     const result = new Map<number, Array<{ author: string; body: string; createdAt: string }>>();
     for (const [idx, num] of issueNumbers.entries()) {
       try {
         const comments = await this.getIssueComments(num);
         result.set(num, comments);
-      } catch {
-        // Skip issues where comment fetch fails
+      } catch (error) {
+        // Auth / rate-limit failures aren't per-issue glitches: they'll hit
+        // every remaining issue identically and the caller needs to back off
+        // or fix scopes rather than persist a partial map with commentsFetchedAt
+        // left null. Re-throw those; only swallow genuinely per-issue failures.
+        if (isAuthOrRateLimitError(error)) throw error;
+        // Surface the per-issue failure to the caller if it wants to know;
+        // otherwise skip this issue and carry on.
+        onError?.(num, error);
       }
       onProgress?.(idx + 1, issueNumbers.length);
     }
@@ -564,8 +572,11 @@ export class GitHubService {
           repo: this.repo,
           issue_number: prNumber,
           labels: opts.labels,
-        }).catch(() => {
-          // Label attach is best-effort; don't fail the PR opening on a missing label
+        }).catch((err: unknown) => {
+          // Label attach is best-effort; don't fail the PR opening on a missing
+          // label — but log it so a scope/typo problem isn't completely silent.
+          const reason = err instanceof Error ? err.message : String(err);
+          console.warn(`[github] failed to attach labels to PR #${prNumber}: ${reason}`);
         });
       }
 
@@ -756,6 +767,25 @@ export class GitHubService {
       }
     }
   }
+}
+
+// Auth (401) and access/rate-limit (403) failures are not transient per-item
+// glitches — they apply to the whole token and will recur on every subsequent
+// request. Callers that loop over many resources need to bail out rather than
+// silently dropping every item. Matches both the raw Octokit error shape
+// (`.status`) and the normalized Error messages thrown by `handleError`.
+export function isAuthOrRateLimitError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'status' in error) {
+    const status = (error as { status: unknown }).status;
+    if (status === 401 || status === 403) return true;
+  }
+  if (error instanceof Error) {
+    return (
+      error.message.includes('Invalid GitHub token') ||
+      error.message.includes('rate limit exceeded or access forbidden')
+    );
+  }
+  return false;
 }
 
 // Pure helper for CI attribution. GitHub Actions check-run html_urls follow
