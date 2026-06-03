@@ -5,7 +5,7 @@ import { Octokit } from '@octokit/rest';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { ensureRepoClone } from './repo-clone';
+import { ensureRepoClone, withRepoLock } from './repo-clone';
 import type {
   Database,
   LabelAnalysisDraft,
@@ -155,8 +155,12 @@ export async function executeLabelAnalysisJob(
     // ── 2. codebase guide files ───────────────────────────────────────
     let codebaseGuides: Array<{ path: string; content: string }> = [];
     try {
-      const repoRoot = await ensureRepoClone(owner, repo, githubToken);
-      codebaseGuides = await readCodebaseGuides(repoRoot);
+      // Hold the per-repo worktree lock across the clone + read so a sibling
+      // triage/autofix job can't checkout/reset the tree mid-read.
+      codebaseGuides = await withRepoLock(owner, repo, async () => {
+        const repoRoot = await ensureRepoClone(owner, repo, githubToken);
+        return readCodebaseGuides(repoRoot);
+      });
     } catch (err) {
       // Non-fatal — the analysis just runs without codebase guides.
       console.warn(

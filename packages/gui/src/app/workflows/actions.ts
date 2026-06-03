@@ -11,7 +11,7 @@ import {
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { loadWorkspaceConfig } from '@/lib/load-workspace-config';
-import { ensureRepoClone } from '@/lib/repo-clone';
+import { ensureRepoClone, withRepoLock } from '@/lib/repo-clone';
 import type { Database } from '@/lib/supabase/types';
 
 /**
@@ -478,17 +478,24 @@ export async function renderStepPreview(params: {
   let skillBodyMissing = true;
   try {
     const config = await loadWorkspaceConfig(workspace.id, supabase, {});
-    if (!config.autofix.repoRoot && config.github.owner && config.github.repo) {
-      config.autofix.repoRoot = await ensureRepoClone(
-        config.github.owner,
-        config.github.repo,
-        config.github.token,
-        config.autofix.baseBranch,
-      );
-    }
-    if (config.autofix.repoRoot) {
-      const skills = await discoverSkills(config.autofix.repoRoot, config.autofix.skillsDir ?? '.ai/skills');
-      const hit = skills.find((s) => s.name === step.skill);
+    if (config.github.owner && config.github.repo) {
+      // Serialize the clone + skill read on the shared per-repo worktree so a
+      // concurrent triage/autofix job can't reset it mid-read (see
+      // withRepoLock in lib/repo-clone).
+      const owner = config.github.owner;
+      const repo = config.github.repo;
+      const hit = await withRepoLock(owner, repo, async () => {
+        if (!config.autofix.repoRoot) {
+          config.autofix.repoRoot = await ensureRepoClone(
+            owner,
+            repo,
+            config.github.token,
+            config.autofix.baseBranch,
+          );
+        }
+        const skills = await discoverSkills(config.autofix.repoRoot, config.autofix.skillsDir ?? '.ai/skills');
+        return skills.find((s) => s.name === step.skill);
+      });
       if (hit) {
         skillBody = hit.body;
         skillBodyMissing = false;

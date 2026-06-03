@@ -7,7 +7,7 @@ import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { loadWorkspaceConfig } from '@/lib/load-workspace-config';
-import { ensureRepoClone } from '@/lib/repo-clone';
+import { ensureRepoClone, withRepoLock } from '@/lib/repo-clone';
 
 const exec = promisify(execFile);
 
@@ -57,22 +57,26 @@ export async function refreshRepoSkills(): Promise<RefreshSkillsResult> {
   }
   if (!token) return { ok: false, error: 'No GitHub token — sign out and back in to refresh' };
 
-  let repoRoot: string;
+  // Hold the per-repo worktree lock across the clone + reads (rev-parse +
+  // discoverSkills) so a concurrent triage/autofix job can't checkout/reset the
+  // shared tree out from under us (see withRepoLock in lib/repo-clone).
+  let commitSha: string | null = null;
+  let skills: Awaited<ReturnType<typeof core.discoverSkills>>;
   try {
-    repoRoot = await ensureRepoClone(owner, repo, token, baseBranch);
+    ({ commitSha, skills } = await withRepoLock(owner, repo, async () => {
+      const repoRoot = await ensureRepoClone(owner, repo, token, baseBranch);
+      let sha: string | null = null;
+      try {
+        const { stdout } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
+        sha = stdout.trim() || null;
+      } catch {
+        sha = null;
+      }
+      return { commitSha: sha, skills: await core.discoverSkills(repoRoot, skillsDir) };
+    }));
   } catch (err) {
     return { ok: false, error: `Clone failed: ${err instanceof Error ? err.message : String(err)}` };
   }
-
-  let commitSha: string | null = null;
-  try {
-    const { stdout } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
-    commitSha = stdout.trim() || null;
-  } catch {
-    commitSha = null;
-  }
-
-  const skills = await core.discoverSkills(repoRoot, skillsDir);
   // discoverSkills now returns the merged catalog (built-in shipped with
   // Cezar + repo skills under .ai/skills). We cache both so the GUI doesn't
   // need to re-discover built-ins on every render — the source field tells

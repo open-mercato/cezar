@@ -4,7 +4,7 @@ import { SupabaseStoreAdapter } from './adapters/supabase-store';
 import { loadWorkspaceConfig } from './load-workspace-config';
 import { loadWorkspaceLabels } from './load-workspace-labels';
 import { createWorkflowRunPersister, type WorkflowRunPersister } from './persist-workflow-run';
-import { ensureRepoClone } from './repo-clone';
+import { acquireRepoLock, ensureRepoClone } from './repo-clone';
 import { runTriagePassJob } from './run-triage-pass-job';
 import type { Database } from './supabase/types';
 
@@ -49,6 +49,10 @@ export async function executeWorkflowJob(
 ): Promise<void> {
   const { workspaceId, workflow, issueNumber, prNumber, jobId, ciFollowupSeed, flowId, flowInput } = params;
   let persister: WorkflowRunPersister | null = null;
+  // Held for the whole run: the engine clones into a per-repo shared worktree
+  // and the agent edits it across steps, so concurrent jobs for the same repo
+  // must be serialized (see withRepoLock in repo-clone). Released in finally.
+  let releaseRepoLock: (() => void) | null = null;
 
   const finishJob = async (status: Database['public']['Tables']['jobs']['Row']['status']): Promise<void> => {
     if (!jobId) return;
@@ -99,6 +103,10 @@ export async function executeWorkflowJob(
     const labels: WorkspaceLabel[] = await loadWorkspaceLabels(adminSupabase, workspaceId);
 
     if (!config.autofix.repoRoot) {
+      // Serialize on the shared per-repo worktree before the clone, and hold
+      // the lock until the run finishes (released in the finally below) so a
+      // sibling job can't reset/checkout the tree while the agent edits it.
+      releaseRepoLock = await acquireRepoLock(config.github.owner, config.github.repo);
       const repoRoot = await ensureRepoClone(
         config.github.owner,
         config.github.repo,
@@ -336,6 +344,9 @@ export async function executeWorkflowJob(
     console.error('[dispatch] executeWorkflowJob failed:', message);
     if (persister) await persister.fail(message).catch(() => {});
     await finishJob('failed').catch(() => {});
+  } finally {
+    // Release the per-repo worktree lock so the next job for this repo can run.
+    releaseRepoLock?.();
   }
 }
 
