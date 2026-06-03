@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from './ui/cn';
+import { RUN_STATUS_PALETTE } from './run-status-palette';
 import type { ActionRunSummary, RunStatus } from '@/lib/action-runs-loader';
 
 // ─────────────────────────────────────────────────────────────────────
@@ -69,7 +70,7 @@ function RunDot({ run }: { run: ActionRunSummary }) {
         aria-label={`${run.actionName} — ${run.status}`}
         className={cn(
           'inline-block h-[14px] w-[14px] rounded-full ring-1 ring-inset ring-black/20 transition-transform',
-          STATUS_COLOR[run.status],
+          RUN_STATUS_PALETTE[run.status].dot,
           run.status === 'running' && 'animate-pulse',
           'hover:scale-125 focus-visible:outline-none focus-visible:scale-125 focus-visible:ring-2 focus-visible:ring-primary',
         )}
@@ -112,7 +113,7 @@ function RunTooltip({ run }: { run: ActionRunSummary }) {
       <header className="flex items-start justify-between gap-3 border-b border-outline-variant/60 px-3 py-2.5">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', STATUS_COLOR[run.status])} />
+            <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', RUN_STATUS_PALETTE[run.status].dot)} />
             <span className="truncate font-mono text-[12px] font-semibold uppercase tracking-wider text-on-surface">
               {run.actionName}
             </span>
@@ -181,7 +182,7 @@ function OverflowTooltip({ runs }: { runs: ActionRunSummary[] }) {
               href={`/cockpit/${r.workflowRunId}`}
               className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-surface-container/60"
             >
-              <span className={cn('h-2 w-2 shrink-0 rounded-full', STATUS_COLOR[r.status])} />
+              <span className={cn('h-2 w-2 shrink-0 rounded-full', RUN_STATUS_PALETTE[r.status].dot)} />
               <span className="truncate font-mono text-on-surface">{r.actionName}</span>
               <span className="ml-auto shrink-0 text-[10px] text-outline">
                 {formatRelative(r.startedAt)}
@@ -210,7 +211,7 @@ function StatusChip({ status }: { status: RunStatus }) {
     <span
       className={cn(
         'inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 font-display text-[9.5px] font-semibold uppercase tracking-wider',
-        STATUS_CHIP[status],
+        RUN_STATUS_PALETTE[status].chip,
       )}
     >
       {status === 'queued' ? 'enqueued' : status}
@@ -352,28 +353,6 @@ function TooltipPortal({
     document.body,
   );
 }
-
-// ─────────────────────────────────────────────────────────────────────
-// Status → color/style maps. Kept here (not in tailwind tokens) because
-// these are status-specific semantics that don't belong in the palette.
-// ─────────────────────────────────────────────────────────────────────
-const STATUS_COLOR: Record<RunStatus, string> = {
-  queued: 'bg-[#8c909f]',
-  running: 'bg-[#60a5fa]',
-  paused: 'bg-[#ffb786]',
-  succeeded: 'bg-[#22c55e]',
-  failed: 'bg-[#ffb4ab]',
-  skipped: 'bg-[#525866]',
-};
-
-const STATUS_CHIP: Record<RunStatus, string> = {
-  queued: 'border-outline-variant bg-surface-container text-on-surface-variant',
-  running: 'border-primary/40 bg-primary/10 text-primary',
-  paused: 'border-tertiary/40 bg-tertiary/10 text-tertiary',
-  succeeded: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-  failed: 'border-error/40 bg-error/10 text-error',
-  skipped: 'border-outline-variant bg-surface-container text-outline',
-};
 
 function statusVerb(status: RunStatus, finished: boolean): string {
   if (status === 'running') return 'Running';

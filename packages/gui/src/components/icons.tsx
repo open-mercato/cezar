@@ -1,4 +1,5 @@
 import type { SVGProps } from 'react';
+import { RUN_STATUS_PALETTE } from './run-status-palette';
 
 type IconProps = SVGProps<SVGSVGElement>;
 
@@ -232,22 +233,35 @@ export function StatusDotIcon({
   tone = 'enabled',
   ...props
 }: IconProps & {
-  tone?: 'enabled' | 'disabled' | 'warning' | 'error' | 'running' | 'queued' | 'succeeded';
+  tone?:
+    | 'enabled'
+    | 'disabled'
+    | 'warning'
+    | 'error'
+    | 'running'
+    | 'queued'
+    | 'paused'
+    | 'succeeded';
 }) {
+  // Run-status tones derive their colour from the single RUN_STATUS_PALETTE
+  // source of truth so this icon stays in sync with run-status-dots.tsx.
+  // 'warning' aliases the 'paused' colour; 'enabled'/'disabled' are
+  // icon-level semantics with no run-status equivalent.
   const color =
     tone === 'enabled'
       ? '#df7412'
       : tone === 'warning'
-        ? '#ffb786'
+        ? RUN_STATUS_PALETTE.paused.hex
         : tone === 'error'
-          ? '#ffb4ab'
+          ? RUN_STATUS_PALETTE.failed.hex
           : tone === 'running'
-            ? '#60a5fa'
-            : tone === 'succeeded'
-              ? '#22c55e'
-              : tone === 'queued'
-                ? '#8c909f'
-                : '#8c909f';
+            ? RUN_STATUS_PALETTE.running.hex
+            : tone === 'paused'
+              ? RUN_STATUS_PALETTE.paused.hex
+              : tone === 'succeeded'
+                ? RUN_STATUS_PALETTE.succeeded.hex
+                : // 'queued' and 'disabled'/fallthrough share the neutral grey
+                  RUN_STATUS_PALETTE.queued.hex;
   return (
     <svg {...base} {...props} fill={color} stroke="none">
       <circle cx="12" cy="12" r="4" />
