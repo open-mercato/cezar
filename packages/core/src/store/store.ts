@@ -108,12 +108,16 @@ export class IssueStore {
 
     const stateChanged = existing.state !== issue.state;
     const commentCountChanged = existing.commentCount !== issue.commentCount;
+    const assigneesChanged =
+      existing.assignees.length !== issue.assignees.length ||
+      existing.assignees.some((a, i) => a !== issue.assignees[i]);
 
     if (existing.contentHash !== issue.contentHash) {
       existing.title = issue.title;
       existing.body = issue.body;
       existing.state = issue.state;
       existing.labels = issue.labels;
+      existing.assignees = issue.assignees;
       existing.author = issue.author;
       existing.updatedAt = issue.updatedAt;
       existing.htmlUrl = issue.htmlUrl;
@@ -132,13 +136,17 @@ export class IssueStore {
     // Update mutable fields that don't affect content hash
     existing.state = issue.state;
     existing.labels = issue.labels;
+    existing.assignees = issue.assignees;
     // Invalidate comments when comment count changes
     if (commentCountChanged) {
       existing.commentsFetchedAt = null;
     }
     existing.commentCount = issue.commentCount;
     existing.reactions = issue.reactions;
-    return { action: stateChanged || commentCountChanged ? 'updated' : 'unchanged', stateChanged };
+    return {
+      action: stateChanged || commentCountChanged || assigneesChanged ? 'updated' : 'unchanged',
+      stateChanged,
+    };
   }
 
   setDigest(issueNumber: number, digest: IssueDigest): void {
