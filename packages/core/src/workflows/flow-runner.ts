@@ -403,7 +403,7 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
         // the heading claims "stopped" but the chain actually proceeds, and
         // cumulative output usually blows past GitHub's 65536-byte comment
         // limit so the issue gets no visible update.
-        if (STOP_MARKER_RE.test(rawText)) {
+        if (isEndOfOutputStopMarker(rawText)) {
           return {
             kind: 'skip-run',
             reason: `stopped at step ${idx + 1}: agent emitted NO_ACTION_NEEDED`,
@@ -416,13 +416,12 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
         // Returning `fail` here (vs `continue`) marks the step failed in the
         // cockpit AND stops the chain — otherwise a no-op fix would cascade
         // into open-pr opening nothing, then review-pr asking which PR.
-        const statusFailMatch = rawText.match(STATUS_FAIL_RE);
-        if (statusFailMatch) {
-          const status = statusFailMatch[1].toLowerCase();
-          const tailReason = extractStatusReason(rawText, statusFailMatch.index ?? 0);
+        const statusFail = findEndOfOutputStatus(rawText);
+        if (statusFail) {
+          const { status, reason } = statusFail;
           return {
             kind: 'fail',
-            reason: `step ${idx + 1} (\`${step.skill}\`) reported Status: ${status}${tailReason ? ` — ${tailReason}` : ''}`,
+            reason: `step ${idx + 1} (\`${step.skill}\`) reported Status: ${status}${reason ? ` — ${reason}` : ''}`,
             blackboardPatch: patch,
           };
         }
@@ -449,7 +448,11 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
 
 // ─── Living-comment rendering helpers ──────────────────────────────────────
 
-const STOP_MARKER_RE = /^NO_ACTION_NEEDED\b/m;
+/** How many trailing non-empty lines count as the agent's "end of output".
+ *  The autofix skill set's contract is to terminate with its verdict, so a
+ *  `Status:`/`NO_ACTION_NEEDED` marker only counts when it lands in this tail
+ *  window — not when an earlier line quotes a CI log or thinks aloud. */
+const END_OF_OUTPUT_TAIL_LINES = 5;
 
 /** Cap on `{{previousOutput}}` (chars) so a chain of long outputs doesn't
  *  cascade into runaway prompts. ~8KB ≈ ~2k tokens — enough for a structured
@@ -465,9 +468,46 @@ const MAX_PREV_OUTPUT_CHARS = 8000;
  *  for multiple sections plus header overhead. */
 const MAX_STEP_BODY_CHARS = 20000;
 
-/** Matches an end-of-output `Status: blocked` / `Status: failed` marker (per the
- *  autofix skill set's output contract). Case-insensitive, line-anchored. */
-const STATUS_FAIL_RE = /^Status:\s*(blocked|failed)\b/im;
+/** Matches a `Status: blocked` / `Status: failed` line (per the autofix skill
+ *  set's output contract), capturing the trailing reason text. Case-insensitive.
+ *  Only applied to individual tail lines (see `findEndOfOutputStatus`) so a
+ *  quoted log line or a "if it returns Status: failed I'll retry" aside earlier
+ *  in the output never trips a hard fail. */
+const STATUS_FAIL_LINE_RE = /^Status:\s*(blocked|failed)\b\s*(.*)$/i;
+
+/** Walks backwards over the final `END_OF_OUTPUT_TAIL_LINES` non-empty lines and
+ *  returns the agent's end-of-output `Status: blocked|failed` verdict (with its
+ *  reason) if present. Returns null if no such marker lands in the tail window,
+ *  so only the agent's actual conclusion — not quoted text earlier in the run —
+ *  hard-fails the chain. */
+function findEndOfOutputStatus(rawText: string): { status: string; reason: string } | null {
+  const lines = (rawText ?? '').trimEnd().split(/\r?\n/);
+  for (let i = lines.length - 1, seen = 0; i >= 0 && seen < END_OF_OUTPUT_TAIL_LINES; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    seen++;
+    const m = line.match(STATUS_FAIL_LINE_RE);
+    if (m) {
+      const reason = (m[2] || (lines[i + 1] ?? '').trim()).slice(0, 200);
+      return { status: m[1].toLowerCase(), reason };
+    }
+  }
+  return null;
+}
+
+/** True when `NO_ACTION_NEEDED` appears as an end-of-output marker (one of the
+ *  final `END_OF_OUTPUT_TAIL_LINES` non-empty lines), not merely quoted earlier
+ *  in conversational text. */
+function isEndOfOutputStopMarker(rawText: string): boolean {
+  const lines = (rawText ?? '').trimEnd().split(/\r?\n/);
+  for (let i = lines.length - 1, seen = 0; i >= 0 && seen < END_OF_OUTPUT_TAIL_LINES; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    seen++;
+    if (/^NO_ACTION_NEEDED\b/.test(line)) return true;
+  }
+  return false;
+}
 
 function truncateOutput(rawText: string): string {
   const trimmed = (rawText ?? '').trim();
@@ -475,23 +515,12 @@ function truncateOutput(rawText: string): string {
   return `… (truncated; showing last ${MAX_PREV_OUTPUT_CHARS} chars)\n\n${trimmed.slice(-MAX_PREV_OUTPUT_CHARS)}`;
 }
 
-/** Grab a one-line reason that follows a `Status: blocked|failed` marker. */
-function extractStatusReason(rawText: string, matchIndex: number): string {
-  // Take the rest of the matched line + the next non-empty line as the reason.
-  const after = rawText.slice(matchIndex);
-  const lines = after.split(/\r?\n/);
-  const sameLineRest = lines[0].replace(STATUS_FAIL_RE, '').trim();
-  if (sameLineRest) return sameLineRest.slice(0, 200);
-  const nextLine = (lines[1] ?? '').trim();
-  return nextLine.slice(0, 200);
-}
-
 function flowStepHeading(idx: number, step: FlowStep, rawText: string): string {
   const base = `Step ${idx + 1} — \`${step.skill}\``;
   if (step.stopChainIfContains && rawText.includes(step.stopChainIfContains)) {
     return `${base} (stopped: \`${step.stopChainIfContains}\`)`;
   }
-  if (STOP_MARKER_RE.test(rawText)) return `${base} (stopped: \`NO_ACTION_NEEDED\`)`;
+  if (isEndOfOutputStopMarker(rawText)) return `${base} (stopped: \`NO_ACTION_NEEDED\`)`;
   const { url, number } = extractPrMarkers(rawText);
   if (url && number != null) return `${base} → PR [#${number}](${url})`;
   return base;
