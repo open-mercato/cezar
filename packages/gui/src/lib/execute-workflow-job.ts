@@ -303,7 +303,11 @@ export async function executeWorkflowJob(
             summary,
             confidence,
           });
-          if (error) {
+          // 23505 = unique_violation against pending_decisions_dedup_idx: a
+          // pending decision for this (action, target, effect, args) already
+          // exists. That's the intended dedup behaviour (see migration 0029),
+          // not a failure — drop it silently.
+          if (error && error.code !== '23505') {
             console.error('[dispatch] pending_decisions insert failed:', error.message);
           }
         },
