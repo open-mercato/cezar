@@ -23,6 +23,9 @@ type WorkflowRunRow = Database['public']['Tables']['workflow_runs']['Row'];
 const STATUS_PILLS: DbWorkflowRunStatus[] = ['running', 'paused', 'queued', 'failed', 'succeeded', 'cancelled'];
 const WORKFLOW_OPTIONS = ['autofix', 'ci-followup', 'triage'] as const;
 
+// Keep the realtime list in step with the server-side `.limit(100)` cap.
+const REALTIME_ROW_CAP = 100;
+
 interface Props {
   workspaceId: string;
   repoOwner: string;
@@ -62,6 +65,15 @@ export function CockpitList({
     setSelected(new Set());
   }, [initialRuns]);
 
+  // Does an incoming row still belong in the list given the active filter bar?
+  const matchesFilters = useCallback(
+    (r: WorkflowRunRow) =>
+      (filters.statuses.length === 0 || filters.statuses.includes(r.status)) &&
+      (!filters.workflow || r.workflow === filters.workflow) &&
+      (!filters.repo || r.repo === filters.repo),
+    [filters.statuses, filters.workflow, filters.repo],
+  );
+
   // ── Realtime: postgres_changes on workflow_runs, scoped to this workspace ──
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -80,9 +92,14 @@ export function CockpitList({
           setRuns((prev) => {
             const idx = prev.findIndex((r) => r.id === row.id);
             if (idx === -1) {
-              // A brand-new run — prepend (it matches the workspace; filter
-              // refinement happens on next navigation/refresh).
-              return [row, ...prev];
+              // A brand-new run — prepend only if it matches the active filter,
+              // then trim to keep parity with the server-side limit.
+              return matchesFilters(row) ? [row, ...prev].slice(0, REALTIME_ROW_CAP) : prev;
+            }
+            // An update — drop the row if it no longer matches the filter
+            // (e.g. status changed out of scope), otherwise merge in place.
+            if (!matchesFilters(row)) {
+              return prev.filter((_, i) => i !== idx);
             }
             const next = prev.slice();
             next[idx] = { ...next[idx], ...row };
@@ -94,7 +111,7 @@ export function CockpitList({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [workspaceId]);
+  }, [workspaceId, matchesFilters]);
 
   // ── Filter-bar query-string updates ──
   const setParam = useCallback(
