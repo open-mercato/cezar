@@ -124,10 +124,13 @@ export function SkillDetailView({ skill, readOnly }: Props) {
     skill.metadata.capabilities,
   ]);
 
-  // Debounced body autosave.
+  // Debounced body autosave. Only runs once an override already exists —
+  // editing an upstream (repo/built-in) skill must NOT silently fork it on the
+  // first keystroke. Until then the body stays "Unsaved" and the user opts in
+  // explicitly via "Save as override" / "Save & Enable Skill".
   const bodyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!bodyDirty || readOnly) return;
+    if (!bodyDirty || readOnly || !hasOverride) return;
     if (bodyTimerRef.current) clearTimeout(bodyTimerRef.current);
     bodyTimerRef.current = setTimeout(async () => {
       setSaveState('saving');
@@ -136,7 +139,6 @@ export function SkillDetailView({ skill, readOnly }: Props) {
         setSaveState('saved');
         setSaveError(null);
         setBodyDirty(false);
-        setHasOverride(true);
         if (result.updatedAt) setOverrideUpdatedAt(result.updatedAt);
         if (typeof result.enabled === 'boolean') setEnabled(result.enabled);
       } else {
@@ -147,7 +149,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
     return () => {
       if (bodyTimerRef.current) clearTimeout(bodyTimerRef.current);
     };
-  }, [body, bodyDirty, readOnly, skill.name]);
+  }, [body, bodyDirty, readOnly, hasOverride, skill.name]);
 
   const buildPayload = useCallback(
     (): OverridePayload => ({

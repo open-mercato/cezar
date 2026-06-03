@@ -98,9 +98,15 @@ export async function saveSkillOverride(
 }
 
 /**
- * Body-only autosave. Creates the override if it didn't exist yet, copying
- * the metadata defaults. Cheaper than the full save so it can run on a
- * debounce.
+ * Body-only autosave. Updates the body of an *existing* override only.
+ *
+ * It deliberately does NOT create the override: forking an upstream skill must
+ * be an intentional act (the explicit "Save as override" / "Save & Enable"
+ * buttons, which carry the full metadata payload). Auto-creating here on the
+ * first keystroke would silently flip the skill to OVERRIDE and reset metadata
+ * to DB defaults — exactly the surprise the override pattern guards against.
+ * Callers gate this on the override already existing; if it somehow doesn't,
+ * we no-op with an error rather than insert a default row.
  */
 export async function autosaveSkillOverrideBody(
   skillName: string,
@@ -112,7 +118,6 @@ export async function autosaveSkillOverrideBody(
 
   const supabase = createSupabaseAdminClient();
 
-  // If a row exists, update only body. Otherwise insert a default row.
   const { data: existing } = await supabase
     .from('skill_overrides')
     .select('id')
@@ -120,27 +125,14 @@ export async function autosaveSkillOverrideBody(
     .eq('skill_name', skillName)
     .maybeSingle();
 
-  if (existing) {
-    const { data, error } = await supabase
-      .from('skill_overrides')
-      .update({ body, updated_by: user.id })
-      .eq('id', existing.id)
-      .select('updated_at, enabled')
-      .single();
-    if (error) return { ok: false, error: error.message };
-    revalidateSkill(skillName);
-    return { ok: true, updatedAt: data?.updated_at ?? undefined, enabled: data?.enabled ?? true };
+  if (!existing) {
+    return { ok: false, error: 'No override to autosave — use "Save as override" first' };
   }
 
   const { data, error } = await supabase
     .from('skill_overrides')
-    .insert({
-      workspace_id: workspace.id,
-      skill_name: skillName,
-      body,
-      updated_by: user.id,
-      created_by: user.id,
-    })
+    .update({ body, updated_by: user.id })
+    .eq('id', existing.id)
     .select('updated_at, enabled')
     .single();
   if (error) return { ok: false, error: error.message };
