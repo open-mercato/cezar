@@ -79,9 +79,26 @@ export async function saveWorkspaceConfig(
   };
 
   const supabase = await createSupabaseServerClient();
+
+  // Read-modify-write: preserve any other top-level config namespaces
+  // (e.g. github, workflow, dispatch, agent-backend overrides) that this
+  // form does not edit — a full `update({ config })` would wipe them.
+  const { data: existing, error: readError } = await supabase
+    .from('workspaces')
+    .select('config')
+    .eq('id', workspace.id)
+    .single();
+  if (readError) return { error: readError.message };
+
+  const merged = {
+    ...((existing?.config as Record<string, unknown>) ?? {}),
+    sync: config.sync,
+    autofix: config.autofix,
+  };
+
   const { error } = await supabase
     .from('workspaces')
-    .update({ config })
+    .update({ config: merged })
     .eq('id', workspace.id);
 
   if (error) return { error: error.message };
