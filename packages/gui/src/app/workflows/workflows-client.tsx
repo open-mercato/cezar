@@ -44,10 +44,12 @@ export function WorkflowsClient({ workspaceName, workspaceRole, initialFlows, av
 
   useEffect(() => {
     if (dirty.size > 0 || pendingNew) return;
-    const i = window.setInterval(async () => {
-      const next = await listFlows();
-      setFlows(next);
-    }, 4000);
+    const tick = () => {
+      // Don't burn Supabase request budget polling a background tab.
+      if (document.visibilityState !== 'visible') return;
+      listFlows().then(setFlows);
+    };
+    const i = window.setInterval(tick, 15000);
     return () => window.clearInterval(i);
   }, [dirty.size, pendingNew]);
 
