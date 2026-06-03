@@ -5,6 +5,26 @@ export interface SetupCommandResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  timedOut?: boolean;
+}
+
+export interface SetupCommandOptions {
+  /** Hard wall-clock limit for the command. Defaults to 10 minutes. */
+  timeoutMs?: number;
+  /** Grace period after SIGTERM before SIGKILL on timeout. Defaults to 5s. */
+  killGraceMs?: number;
+  /** Cap each of stdout/stderr to this many bytes (tail kept). Defaults to 64 KB. */
+  maxCaptureBytes?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_KILL_GRACE_MS = 5 * 1000;
+const DEFAULT_MAX_CAPTURE_BYTES = 64 * 1024;
+
+/** Appends to a captured buffer while keeping only the last `max` bytes. */
+function appendBounded(buffer: string, text: string, max: number): string {
+  const next = buffer + text;
+  return next.length > max ? next.slice(next.length - max) : next;
 }
 
 /**
@@ -16,21 +36,63 @@ export interface SetupCommandResult {
  * type them in a terminal (with pipes, env-vars, etc.). Trust boundary is the
  * same as a CI script — the worktree is a clone of the user's own repo and
  * the command list is configured by the workspace admin.
+ *
+ * Hardening against a wedged/runaway command (per-workspace config can DoS a
+ * shared dispatch worker otherwise):
+ * - a hard `timeoutMs` wall clock (SIGTERM, then SIGKILL after a grace period);
+ * - stdin is detached so an interactive credential prompt errors out instead of
+ *   blocking forever;
+ * - captured stdout/stderr are bounded to the last `maxCaptureBytes` (the tail
+ *   is all any caller reads anyway).
  */
 export function runSetupCommand(
   command: string,
   cwd: string,
   onLine?: (line: string) => void,
+  options: SetupCommandOptions = {},
 ): Promise<SetupCommandResult> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+  const maxCaptureBytes = options.maxCaptureBytes ?? DEFAULT_MAX_CAPTURE_BYTES;
+
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, env: process.env });
+    // stdin is ignored so an interactive prompt (e.g. a missing credential
+    // helper) fails fast instead of hanging on a read from a closed pipe.
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    let settled = false;
+
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      // Escalate to SIGKILL if the process ignores SIGTERM.
+      killTimer = setTimeout(() => child.kill('SIGKILL'), killGraceMs);
+    }, timeoutMs);
+
+    const cleanup = () => {
+      clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+    };
+
+    const finish = (result: SetupCommandResult) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
 
     const handleChunk = (kind: 'out' | 'err') => (chunk: Buffer) => {
       const text = chunk.toString();
-      if (kind === 'out') stdout += text;
-      else stderr += text;
+      if (kind === 'out') stdout = appendBounded(stdout, text, maxCaptureBytes);
+      else stderr = appendBounded(stderr, text, maxCaptureBytes);
       if (onLine) {
         for (const line of text.split('\n')) {
           const trimmed = line.trimEnd();
@@ -42,10 +104,13 @@ export function runSetupCommand(
     child.stdout?.on('data', handleChunk('out'));
     child.stderr?.on('data', handleChunk('err'));
     child.on('error', (err) => {
-      resolve({ ok: false, exitCode: null, stdout, stderr: stderr + `\n${err.message}` });
+      finish({ ok: false, exitCode: null, stdout, stderr: stderr + `\n${err.message}`, timedOut });
     });
     child.on('close', (code) => {
-      resolve({ ok: code === 0, exitCode: code, stdout, stderr });
+      const stderrOut = timedOut
+        ? stderr + `\nsetup command timed out after ${timeoutMs}ms`
+        : stderr;
+      finish({ ok: !timedOut && code === 0, exitCode: code, stdout, stderr: stderrOut, timedOut });
     });
   });
 }
