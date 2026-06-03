@@ -65,6 +65,37 @@ export async function POST(req: Request) {
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Trust-boundary guard (issue #80): `github_installation_id` is consumed by
+  // `/jobs` to mint an installation access token against ANY id the central
+  // App can reach. A runner must not be able to pivot to an arbitrary
+  // installation by self-reporting one on its own heartbeat. So:
+  //   • workspace-scoped runner → the requested id must equal its own
+  //     workspace's recorded `installation_id` (set by the GitHub App
+  //     `installation` webhook). Clearing (null) is always allowed.
+  //   • managed runner (no workspace_id) → refuse heartbeat-driven sets
+  //     entirely; a managed runner's install must be flipped in the admin GUI.
+  if (body.githubInstallationId !== undefined && body.githubInstallationId !== null) {
+    if (runner.workspace_id == null) {
+      return NextResponse.json(
+        { error: 'managed runners cannot self-set github_installation_id; configure it in the admin GUI' },
+        { status: 403 },
+      );
+    }
+    const { data: ws, error: wsErr } = await admin
+      .from('workspaces')
+      .select('installation_id')
+      .eq('id', runner.workspace_id)
+      .maybeSingle();
+    if (wsErr) return NextResponse.json({ error: wsErr.message }, { status: 500 });
+    // `workspaces.installation_id` is text; the runner reports a number.
+    if (!ws?.installation_id || String(body.githubInstallationId) !== ws.installation_id) {
+      return NextResponse.json(
+        { error: 'github_installation_id does not match this runner\'s workspace installation' },
+        { status: 403 },
+      );
+    }
+  }
+
   // Phase 4 (migration 0026) — runner self-describes its GitHub identity.
   // Phase 5 (migration 0027) — runner reports its utilization snapshot.
   // Only update fields the runner actually sent, so older daemons (and
@@ -81,8 +112,9 @@ export async function POST(req: Request) {
       patch.github_inherit_host = body.githubInheritHost;
     }
     if (body.githubInstallationId !== undefined) {
-      // null clears the per-runner install; a number sets it. The claim
-      // route enforces precedence (inherit_host wins).
+      // null clears the per-runner install; a number sets it (validated above
+      // to match the runner's workspace installation). The claim route
+      // enforces precedence (inherit_host wins).
       patch.github_installation_id = body.githubInstallationId;
     }
     if (body.utilization !== undefined) {

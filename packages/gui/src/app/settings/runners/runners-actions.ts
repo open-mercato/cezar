@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getActiveWorkspace } from '@/lib/workspace';
-import { hashRunnerToken } from '@/app/api/runner/_auth';
+import { hashRunnerToken, invalidateRunnerAuth } from '@/app/api/runner/_auth';
 
 /** Backends a *self-hosted* runner may advertise. */
 const VALID_BACKENDS = ['claude-cli', 'codex-cli', 'anthropic-api'] as const;
@@ -78,12 +78,22 @@ export async function revokeRunner(
   if (!id) return { error: 'Missing runner id' };
 
   const supabase = await createSupabaseServerClient();
+  // Grab the token hash before deleting so we can drop it from the in-process
+  // runner-auth cache — without this the revoked token keeps authenticating
+  // for up to RUNNER_AUTH_TTL_MS (issue #80). Best-effort across runtimes.
+  const { data: row } = await supabase
+    .from('runners')
+    .select('token_hash')
+    .eq('id', id)
+    .eq('workspace_id', workspace.id)
+    .maybeSingle();
   const { error } = await supabase
     .from('runners')
     .delete()
     .eq('id', id)
     .eq('workspace_id', workspace.id);
   if (error) return { error: error.message };
+  if (row?.token_hash) invalidateRunnerAuth(row.token_hash);
 
   revalidatePath('/settings/runners');
   return { ok: true };
