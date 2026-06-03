@@ -91,6 +91,18 @@ export class RunnerDaemon {
     process.on('SIGINT', () => { void this.shutdown('SIGINT'); });
     process.on('SIGTERM', () => { void this.shutdown('SIGTERM'); });
 
+    // Global safety nets: a stray rejection/exception must never leave the
+    // daemon "online but mute" (heartbeat still reporting green while the
+    // pump is dead and jobs queue indefinitely). An unhandled rejection is
+    // logged but tolerated; an uncaught exception is fatal, so we shut down.
+    process.on('unhandledRejection', (reason) => {
+      console.error('[runner] unhandledRejection:', reason instanceof Error ? reason.stack ?? reason.message : reason);
+    });
+    process.on('uncaughtException', (err) => {
+      console.error('[runner] uncaughtException:', err instanceof Error ? err.stack ?? err.message : err);
+      void this.shutdown('uncaught-exception');
+    });
+
     console.log(`[runner] starting — kind=${this.cfg.kind} backends=${this.cfg.backends.join(',')} concurrency=${this.concurrency}`);
 
     // Phase 4 — prime the host GH token cache before the first heartbeat so
@@ -151,7 +163,15 @@ export class RunnerDaemon {
         }
       }
     };
-    void pump();
+    // Top-level safety net: if the pump loop ever rejects (e.g. an exception
+    // thrown outside its inner try, or a sleep rejection after an AbortSignal
+    // refactor), `void pump()` would discard the rejection and leave the
+    // daemon alive-but-dead. Catch it here and shut down cleanly so the
+    // heartbeat goes `offline` and the SaaS stops dispatching to us.
+    void pump().catch((err) => {
+      console.error('[runner] pump loop crashed — shutting down:', err instanceof Error ? err.stack ?? err.message : err);
+      return this.shutdown('pump-crash');
+    });
 
     // Keep the process alive until shutdown resolves.
     await new Promise<void>((resolve) => { this.resolveExit = resolve; });
