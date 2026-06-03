@@ -302,6 +302,10 @@ async function runToolUseMode(
   type Message = { role: 'user' | 'assistant'; content: string | ContentBlock[] };
   const messages: Message[] = [{ role: 'user', content: mode.userMessage }];
   let finalText = '';
+  // Tracks whether the loop ran out of iterations while the model was still
+  // calling tools. If it does, the run never produced a final answer — surface
+  // that as a failure rather than returning an empty-text "success".
+  let exhausted = true;
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const resp = await mode.client.messages.create({
@@ -328,6 +332,7 @@ async function runToolUseMode(
     // No tool calls → this is the final answer. Capture the text blocks.
     if (toolUses.length === 0) {
       finalText = extractText(resp);
+      exhausted = false;
       break;
     }
 
@@ -360,6 +365,12 @@ async function runToolUseMode(
       });
     }
     messages.push({ role: 'user', content: resultBlocks });
+  }
+
+  if (exhausted) {
+    throw new Error(
+      `tool-use loop exceeded ${MAX_TOOL_ITERATIONS} iterations without a final answer`,
+    );
   }
 
   return {
