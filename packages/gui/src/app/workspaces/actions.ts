@@ -223,6 +223,13 @@ export async function deleteWorkspace(workspaceId: string) {
   const user = await getSessionUser();
   if (!user) throw new Error('Not authenticated');
   const supabase = createSupabaseAdminClient();
+  const { data: member } = await supabase
+    .from('workspace_members')
+    .select('role')
+    .eq('workspace_id', workspaceId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (!member || member.role !== 'admin') throw new Error('Admin role required');
   const { error } = await supabase.from('workspaces').delete().eq('id', workspaceId);
   if (error) throw new Error(error.message);
   redirect('/dashboard');
