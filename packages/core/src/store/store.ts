@@ -82,7 +82,27 @@ export class IssueStore {
 
   async save(): Promise<void> {
     if (this.port) {
-      await this.port.save(this.data);
+      // Re-read before save so concurrent runs (two triage/autofix jobs sharing
+      // a workspace) don't clobber each other's writes with a stale snapshot.
+      // Shallow-merge meta and replace per-issue, preserving any issues only the
+      // fresh copy has (written by another in-flight run since we loaded).
+      let toSave = this.data;
+      try {
+        const fresh = await this.port.load();
+        const byNumber = new Map(fresh.issues.map((i) => [i.number, i]));
+        for (const issue of this.data.issues) {
+          byNumber.set(issue.number, issue);
+        }
+        toSave = {
+          meta: { ...fresh.meta, ...this.data.meta },
+          issues: Array.from(byNumber.values()),
+        };
+        this.data = toSave;
+      } catch {
+        // If the re-read fails, fall back to writing our own snapshot rather
+        // than dropping the save entirely.
+      }
+      await this.port.save(toSave);
       return;
     }
     const dir = dirname(this.filePath);
