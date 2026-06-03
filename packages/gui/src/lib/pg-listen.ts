@@ -41,15 +41,28 @@ export function getPgConnectionString(): string | null {
 const MAX_CONCURRENT_LISTENERS = 64;
 let activeListeners = 0;
 
+// Per-runner cap: a single buggy/malicious runner opening many concurrent
+// `?wait=25` connections must not be able to drain the whole global pool and
+// starve every other runner. Keep this small — a healthy runner only needs
+// one in-flight long-poll at a time; 2 leaves room for a re-poll racing the
+// previous one's teardown without ever monopolizing the pool.
+const MAX_LISTENERS_PER_RUNNER = 2;
+const perRunnerListeners = new Map<string, number>();
+
 /** Current count of in-flight long-poll connections (for /api/runner/jobs). */
 export function getActiveListenerCount(): number {
   return activeListeners;
 }
 
-/** True if the long-poll pool has room; callers use this to decide between
+/** True if the long-poll pool has room AND (when a runnerId is given) that
+ * runner is under its per-runner cap; callers use this to decide between
  * long-poll and short-poll on each request. */
-export function canAcquireListener(): boolean {
-  return activeListeners < MAX_CONCURRENT_LISTENERS;
+export function canAcquireListener(runnerId?: string): boolean {
+  if (activeListeners >= MAX_CONCURRENT_LISTENERS) return false;
+  if (runnerId !== undefined && (perRunnerListeners.get(runnerId) ?? 0) >= MAX_LISTENERS_PER_RUNNER) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -64,16 +77,18 @@ export function canAcquireListener(): boolean {
 export async function waitForJobsQueuedNotify(
   timeoutMs: number,
   abort?: AbortSignal,
+  runnerId?: string,
 ): Promise<boolean> {
   const conn = getPgConnectionString();
   if (!conn || timeoutMs <= 0) return false;
-  if (!canAcquireListener()) return false;
+  if (!canAcquireListener(runnerId)) return false;
 
   // Supabase's pooled connection string (pgbouncer) does NOT carry LISTEN
   // sessions. Allow callers to point at the direct (5432) connection string;
   // the helper just trusts whatever it gets.
   const client = new Client({ connectionString: conn });
   activeListeners += 1;
+  if (runnerId !== undefined) perRunnerListeners.set(runnerId, (perRunnerListeners.get(runnerId) ?? 0) + 1);
 
   let notified = false;
   let timer: NodeJS.Timeout | null = null;
@@ -108,6 +123,11 @@ export async function waitForJobsQueuedNotify(
     try { await client.query(`UNLISTEN ${JOBS_QUEUED_CHANNEL}`); } catch { /* terminal */ }
     try { await client.end(); } catch { /* terminal */ }
     activeListeners -= 1;
+    if (runnerId !== undefined) {
+      const next = (perRunnerListeners.get(runnerId) ?? 1) - 1;
+      if (next <= 0) perRunnerListeners.delete(runnerId);
+      else perRunnerListeners.set(runnerId, next);
+    }
   }
 
   return notified;

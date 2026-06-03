@@ -70,8 +70,8 @@ export async function GET(req: Request) {
   // timeout / client disconnect) and try once more. We only enter this if the
   // caller asked for it AND the in-process listener pool has room — otherwise
   // we behave like the old short-poll (single attempt, return null).
-  if (!job && waitSec > 0 && canAcquireListener()) {
-    const woke = await waitForJobsQueuedNotify(waitSec * 1000, req.signal);
+  if (!job && waitSec > 0 && canAcquireListener(runner.id)) {
+    const woke = await waitForJobsQueuedNotify(waitSec * 1000, req.signal, runner.id);
     if (woke && !req.signal.aborted) {
       try { job = await claimOnce(); }
       catch (err) { return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 }); }
@@ -90,6 +90,18 @@ export async function GET(req: Request) {
       updated_at: new Date().toISOString(),
     }).eq('id', job.id);
   };
+
+  // Disconnect race: a claim can land AFTER the runner walked away (it timed
+  // out / aborted the long-poll between the NOTIFY wake and the claim
+  // committing). The runner will never read this response, so the job would
+  // sit `running`/`claimed` — showing a phantom `running` in the cockpit and
+  // orphaning the workflow_runs row below — until the lease expires. Give the
+  // job straight back and bail BEFORE the expensive workspace/config/store
+  // work. 499 = "client closed request" (nginx convention).
+  if (req.signal.aborted) {
+    await releaseJob().catch(() => {});
+    return new Response(null, { status: 499 });
+  }
 
   try {
     const core = await import('@cezar/core');
