@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { resolve } from 'node:path';
 
 export const ConfigSchema = z.object({
   github: z.object({
@@ -13,10 +12,7 @@ export const ConfigSchema = z.object({
     apiKey: z.string().default(''),
   }).default({}),
   store: z.object({
-    path: z.string().default('.issue-store').refine(
-      (p) => resolve(p).startsWith(process.cwd()),
-      'Store path must be within the project directory',
-    ),
+    path: z.string().default('.issue-store'),
   }).default({}),
   sync: z.object({
     digestBatchSize: z.number().default(20),
