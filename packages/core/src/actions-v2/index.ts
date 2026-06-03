@@ -21,6 +21,8 @@ export { runAction } from './runner.js';
 export {
   buildAutoCommentBody,
   actionAlreadyCommented,
+  actionPreviouslyCommented,
+  autoCommentTag,
   type BuildAutoCommentArgs,
 } from './auto-comment.js';
 export {

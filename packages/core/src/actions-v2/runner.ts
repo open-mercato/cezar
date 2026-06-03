@@ -5,7 +5,11 @@ import {
   formatLabelCatalogPrompt,
   type WorkspaceLabel,
 } from '../labels/label-catalog.js';
-import { actionAlreadyCommented, buildAutoCommentBody } from './auto-comment.js';
+import {
+  actionAlreadyCommented,
+  actionPreviouslyCommented,
+  buildAutoCommentBody,
+} from './auto-comment.js';
 import {
   ALL_EFFECT_NAMES,
   EFFECT_REGISTRY,
@@ -137,6 +141,21 @@ export async function runAction(
       });
 
   if (deps.autoComment?.enabled && !actionAlreadyCommented(result.effectsApplied)) {
+    // Cross-run dedupe: if a previous run of this action already posted its
+    // auto-comment on the target (re-triage after an issue edit, a webhook
+    // re-delivery, …), don't post it again. Best-effort — a fetch failure
+    // falls through to posting, preserving the prior behaviour.
+    let alreadyCommented = false;
+    try {
+      const existing = await deps.effectCtx.github.listIssueCommentsWithIds(
+        deps.effectCtx.targetNumber,
+      );
+      alreadyCommented = actionPreviouslyCommented(action.name, existing);
+    } catch {
+      alreadyCommented = false;
+    }
+    if (alreadyCommented) return result;
+
     const body = buildAutoCommentBody({
       actionName: action.name,
       text: result.text,

@@ -107,10 +107,23 @@ const linkDuplicate: EffectDef<{ duplicateOf: number; reason?: string }> = {
     reason: z.string().optional(),
   }),
   async execute({ duplicateOf, reason }, { github, targetNumber }) {
+    // Idempotency: re-running on an edited issue (or a webhook re-delivery)
+    // must not re-post the "Duplicate of #N" comment / re-add the label.
+    // Best-effort — if the comment fetch fails we fall through and post,
+    // preserving the prior behaviour.
+    const marker = `Duplicate of #${duplicateOf}`;
+    try {
+      const existing = await github.listIssueCommentsWithIds(targetNumber);
+      if (existing.some((c) => c.body.includes(marker))) {
+        return `#${targetNumber} already linked as duplicate of #${duplicateOf}`;
+      }
+    } catch {
+      // ignore — proceed to post.
+    }
     const note = reason ? ` Reason: ${reason}` : '';
     await github.addComment(
       targetNumber,
-      `Duplicate of #${duplicateOf}.${note}`,
+      `${marker}.${note}`,
     );
     await github.addLabel(targetNumber, 'duplicate');
     return `linked #${targetNumber} as duplicate of #${duplicateOf}`;

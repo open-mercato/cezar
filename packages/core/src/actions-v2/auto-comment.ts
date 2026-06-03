@@ -59,3 +59,27 @@ export function actionAlreadyCommented(
   }
   return false;
 }
+
+/**
+ * The stable per-action tag embedded in every auto-comment — present both in
+ * the heading (`**Cezar · <name>**`) and the audit footer (`🤖 *Cezar · <name>
+ * · …*`). Used to dedupe against a prior run's comment so re-running an action
+ * on an edited issue doesn't re-post the same auto-comment.
+ */
+export function autoCommentTag(actionName: string): string {
+  return `Cezar · ${actionName}`;
+}
+
+/**
+ * Cross-run dedupe: returns true when a previous run of this action already
+ * left its auto-comment on the target. Scans fetched comment bodies for the
+ * action's stable tag. Complements `actionAlreadyCommented`, which only sees
+ * the *current* run's effects.
+ */
+export function actionPreviouslyCommented(
+  actionName: string,
+  comments: ReadonlyArray<{ body: string }>,
+): boolean {
+  const tag = autoCommentTag(actionName);
+  return comments.some((c) => c.body.includes(tag));
+}

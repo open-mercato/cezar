@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { actionAlreadyCommented, buildAutoCommentBody, type BuildAutoCommentArgs } from '@cezar/core';
+import {
+  actionAlreadyCommented,
+  actionPreviouslyCommented,
+  autoCommentTag,
+  buildAutoCommentBody,
+  type BuildAutoCommentArgs,
+} from '@cezar/core';
 import type { EffectCall } from '@cezar/core';
 
 const baseMeta = {
@@ -106,5 +112,31 @@ describe('actionAlreadyCommented', () => {
 
   it('returns false on an empty list', () => {
     expect(actionAlreadyCommented([])).toBe(false);
+  });
+});
+
+describe('actionPreviouslyCommented', () => {
+  it('matches a prior run by the action footer/heading tag', () => {
+    // A real auto-comment from a prior run embeds the stable tag.
+    const prior = buildAutoCommentBody({
+      actionName: 'auto-triage',
+      text: 'Classified as a bug.',
+      effectsApplied: [],
+      meta: { actionName: 'auto-triage', model: 'claude-sonnet-4-6' },
+    });
+    expect(actionPreviouslyCommented('auto-triage', [{ body: prior }])).toBe(true);
+  });
+
+  it('returns false when no comment carries the action tag', () => {
+    expect(
+      actionPreviouslyCommented('auto-triage', [
+        { body: 'just a human comment' },
+        { body: autoCommentTag('some-other-action') },
+      ]),
+    ).toBe(false);
+  });
+
+  it('returns false on an empty comment list', () => {
+    expect(actionPreviouslyCommented('auto-triage', [])).toBe(false);
   });
 });

@@ -141,6 +141,8 @@ export {
   runTriagePass,
   buildAutoCommentBody,
   actionAlreadyCommented,
+  actionPreviouslyCommented,
+  autoCommentTag,
   type ActionDef,
   type ActionTrigger,
   type ActionRunResult,
