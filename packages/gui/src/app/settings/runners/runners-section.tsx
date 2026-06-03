@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { cn } from '@/components/ui/cn';
 import { StatusDotIcon } from '@/components/icons';
 import { timeAgo } from '@/lib/time-ago';
@@ -50,6 +50,17 @@ const STATUS_LABEL_CLASS: Record<RunnerDisplayStatus, string> = {
 export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: RunnersSectionProps) {
   const [state, formAction, pending] = useActionState<RunnerActionState, FormData>(registerRunner, {});
 
+  // Mirror the one-shot token into local state so we can wipe it from memory:
+  // useActionState keeps its own result around (and can replay it on a
+  // back/forward navigation), so we never render `state.token` directly — we
+  // surface a copy that we clear on a timeout or an explicit dismiss.
+  const [revealedToken, setRevealedToken] = useState<{ token: string; backends: string[] } | null>(null);
+  useEffect(() => {
+    if (state.token && state.runnerId) {
+      setRevealedToken({ token: state.token, backends: state.backends ?? [] });
+    }
+  }, [state.token, state.runnerId, state.backends]);
+
   return (
     <div className="space-y-6">
       {/* This workspace's runners */}
@@ -87,8 +98,13 @@ export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: 
       {/* Register a runner */}
       {isAdmin && (
         <Card title="Register a runner">
-          {state.token && state.runnerId ? (
-            <TokenReveal token={state.token} backends={state.backends ?? []} appUrl={appUrl} />
+          {revealedToken ? (
+            <TokenReveal
+              token={revealedToken.token}
+              backends={revealedToken.backends}
+              appUrl={appUrl}
+              onDismiss={() => setRevealedToken(null)}
+            />
           ) : (
             <form action={formAction} className="space-y-4">
               {state.error && (
@@ -232,45 +248,101 @@ function RevokeButton({ runnerId, name }: { runnerId: string; name: string }) {
   );
 }
 
-function TokenReveal({ token, backends, appUrl }: { token: string; backends: string[]; appUrl: string }) {
+// Seconds the one-shot token stays in memory before it auto-clears. Keeps the
+// raw credential out of the DOM/React state for longer than necessary.
+const TOKEN_AUTO_CLEAR_MS = 60_000;
+
+function TokenReveal({
+  token,
+  backends,
+  appUrl,
+  onDismiss,
+}: {
+  token: string;
+  backends: string[];
+  appUrl: string;
+  onDismiss: () => void;
+}) {
   const url = appUrl || '<your-cezar-url>';
   const csv = (backends.length > 0 ? backends : ['claude-cli']).join(',');
   const command = `cezar-runner start --url ${url} --token ${token} --backends ${csv}`;
+  const [revealed, setRevealed] = useState(false);
+
+  // Auto-clear the token from memory after a short window so it doesn't sit in
+  // the DOM/React state for the lifetime of the tab.
+  useEffect(() => {
+    const t = setTimeout(onDismiss, TOKEN_AUTO_CLEAR_MS);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+
   return (
     <div className="space-y-3 rounded-md border border-primary/40 bg-primary/10 p-4">
       <p className="text-sm text-on-surface">
         Runner registered. <strong className="text-primary">Copy the token now — it won&apos;t be shown again.</strong>
       </p>
-      <CopyBox label="Token" value={token} />
-      <CopyBox label="Start command" value={command} />
-      <p className="text-xs text-on-surface-variant">
-        Reload this page after copying. The token is never stored in plaintext — only a hash is kept.
+      <CopyBox label="Token" value={token} secret revealed={revealed} onToggleReveal={() => setRevealed((v) => !v)} />
+      <CopyBox label="Start command" value={command} secret revealed={revealed} />
+      <p className="text-xs text-on-surface-variant" role="status" aria-live="polite">
+        The token hides itself in {TOKEN_AUTO_CLEAR_MS / 1000}s. It is never stored in plaintext — only a hash is kept.
       </p>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="inline-flex h-8 items-center rounded-md border border-outline-variant bg-surface px-3 text-xs text-on-surface-variant transition-colors hover:border-primary/40 hover:text-primary"
+        >
+          Dismiss &amp; hide
+        </button>
+      </div>
     </div>
   );
 }
 
-function CopyBox({ label, value }: { label: string; value: string }) {
+function CopyBox({
+  label,
+  value,
+  secret = false,
+  revealed = false,
+  onToggleReveal,
+}: {
+  label: string;
+  value: string;
+  secret?: boolean;
+  revealed?: boolean;
+  onToggleReveal?: () => void;
+}) {
   const [copied, setCopied] = useState(false);
+  const masked = secret && !revealed;
+  const display = masked ? '••••••••••••••••••••••••••••••••' : value;
   return (
     <div>
-      <div className="mb-1 flex items-center justify-between">
+      <div className="mb-1 flex items-center justify-between gap-3">
         <span className="text-xs font-medium text-on-surface-variant">{label}</span>
-        <button
-          type="button"
-          onClick={() => {
-            void navigator.clipboard?.writeText(value).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            });
-          }}
-          className="text-xs text-primary hover:underline"
-        >
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
+        <div className="flex items-center gap-3">
+          {secret && onToggleReveal && (
+            <button type="button" onClick={onToggleReveal} className="text-xs text-primary hover:underline">
+              {revealed ? 'Hide' : 'Reveal'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard?.writeText(value).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+            className="text-xs text-primary hover:underline"
+          >
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
       </div>
-      <pre className="overflow-x-auto rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 font-mono text-xs text-on-surface">
-{value}
+      <pre
+        className="overflow-x-auto rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 font-mono text-xs text-on-surface"
+        aria-live="polite"
+      >
+{display}
       </pre>
     </div>
   );
