@@ -385,11 +385,15 @@ export class WorkflowEngine {
         });
       }
       if (disposeWorktree) await disposeWorktree().catch(() => {});
+      // Best-effort: finalizing the living comment must never throw out of
+      // finishRun — that would discard the run result and leak the run.
       await living.finalize({
         done: status === 'succeeded',
         prNumber,
         prUrl,
         reason,
+      }).catch((err) => {
+        ctx.onEvent?.(`[#${ctx.issueNumber}] living comment finalize failed: ${(err as Error).message}`);
       });
       return {
         status,
@@ -407,7 +411,14 @@ export class WorkflowEngine {
       };
     };
 
-    await living.start();
+    // Best-effort, mirroring how appendSection/rerender already swallow GitHub
+    // errors: a flaky GitHub API at run-start must not leak the run as
+    // forever-running (it would skip the try/catch loop and never reach
+    // finishRun, leaking the unified session + worktree). The living comment is
+    // best-effort per its own design — the step results are the source of truth.
+    await living.start().catch((err: Error) => {
+      ctx.onEvent?.(`[#${ctx.issueNumber}] living comment start failed: ${err.message}`);
+    });
     ctx.onEvent?.(`[#${ctx.issueNumber}] workflow '${workflow.id}' — ${workflow.steps.length} step(s)`);
 
     // Build a quick lookup for which loop (if any) a step belongs to. Apply
