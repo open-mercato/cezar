@@ -109,7 +109,8 @@ export async function cancelLabelAnalysis(): Promise<{ ok: boolean; cancelled: n
     .update({ status: 'cancelled', updated_at: ts })
     .eq('workspace_id', workspace.id)
     .eq('kind', 'label-analysis')
-    .in('status', ['queued', 'claimed', 'running']);
+    .in('status', ['queued', 'claimed', 'running'])
+    .in('payload->>analysisId', analysisIds);
   if (jErr) {
     // Non-fatal: analyses are already cancelled. Log + continue.
     console.error('[cancelLabelAnalysis] job update failed:', jErr.message);
