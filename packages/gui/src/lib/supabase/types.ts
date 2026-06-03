@@ -725,6 +725,17 @@ export interface Database {
         };
         Update: Partial<Database['public']['Tables']['workspace_labels']['Insert']>;
       };
+      webhook_deliveries: {
+        Row: {
+          delivery_id: string;
+          received_at: string;
+        };
+        Insert: {
+          delivery_id: string;
+          received_at?: string;
+        };
+        Update: Partial<Database['public']['Tables']['webhook_deliveries']['Insert']>;
+      };
     };
   };
 }

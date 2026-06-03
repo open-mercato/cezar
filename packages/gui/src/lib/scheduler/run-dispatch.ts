@@ -56,6 +56,14 @@ export async function runDispatch(supabase: SupabaseClient<Database>): Promise<D
     if (error) console.error('[dispatch] requeue_jobs_for_offline_runners failed:', error.message);
     else requeued += typeof data === 'number' ? data : 0;
   }
+  {
+    // GC the webhook delivery-id dedup table (migration 0029). Best-effort;
+    // retention only needs to outlive GitHub's retry window.
+    const { error } = await supabase.rpc('prune_webhook_deliveries', {
+      p_retention_hours: Number(process.env.CEZAR_WEBHOOK_DEDUP_RETENTION_HOURS) || 48,
+    });
+    if (error) console.error('[dispatch] prune_webhook_deliveries failed:', error.message);
+  }
 
   // ── claim ──
   // 5-minute lease (migration 0025): cron handlers are fire-and-forget and

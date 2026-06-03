@@ -26,6 +26,11 @@ export const runtime = 'nodejs';
  * Always responds fast — no agent work happens here. Without
  * `GITHUB_APP_WEBHOOK_SECRET` set it returns 503 (so a missing setup is
  * obvious; the `/api/cron/triage-sweep` poll is the fallback in that case).
+ *
+ * Replay/idempotency: after the signature check, the `X-GitHub-Delivery` id is
+ * recorded in `webhook_deliveries` (migration 0029). A duplicate id (captured
+ * replay or GitHub's own 5xx retry) short-circuits as `{ ok: true, replay: true }`
+ * so we never re-upsert or re-enqueue. The dispatch cron GCs the table.
  */
 export async function POST(req: Request): Promise<NextResponse> {
   const secret = process.env.GITHUB_APP_WEBHOOK_SECRET;
@@ -56,6 +61,30 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   try {
     const admin = createSupabaseAdminClient();
+
+    // Idempotency / replay guard (migration 0029). Record the delivery id
+    // before dispatch; a unique-violation means we've already processed this
+    // delivery (malicious replay or GitHub's own 5xx retry) — short-circuit so
+    // we don't re-upsert issues/PRs or re-enqueue triage/ci-followup/flow jobs.
+    // Runs after the signature check so only authenticated deliveries reach the
+    // table. A `ping` carries no actionable work; let it through unrecorded.
+    if (event !== 'ping') {
+      const deliveryId = req.headers.get('x-github-delivery') ?? '';
+      if (!deliveryId) {
+        return NextResponse.json({ error: 'missing delivery id' }, { status: 400 });
+      }
+      const { error: dedupError } = await admin.from('webhook_deliveries').insert({ delivery_id: deliveryId });
+      if (dedupError) {
+        if (dedupError.code === '23505') {
+          return NextResponse.json({ ok: true, replay: true });
+        }
+        // A transient insert failure shouldn't drop the delivery — fall through
+        // and process it (the in-flight-job dedup downstream limits the blast
+        // radius). Log so it's visible.
+        console.error(`[github-webhook] delivery dedup insert failed:`, dedupError.message);
+      }
+    }
+
     switch (event) {
       case 'ping':
         return NextResponse.json({ ok: true });
