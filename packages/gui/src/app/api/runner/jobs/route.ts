@@ -81,8 +81,20 @@ export async function GET(req: Request) {
   if (!job) return NextResponse.json({ job: null });
 
   // From here on, any failure should release the job back to the queue so it
-  // isn't stuck `claimed` until the watchdog.
+  // isn't stuck `claimed` until the watchdog. If we already inserted a fresh
+  // `workflow_runs` row for this claim (vs. reusing an in-flight one), mark it
+  // `failed` so it doesn't leak as a phantom `running` row the next claim's
+  // reuse branch could latch onto — leaving two runners writing to it.
+  let insertedRunRowId: string | null = null;
   const releaseJob = async () => {
+    if (insertedRunRowId) {
+      await admin.from('workflow_runs').update({
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        reason: 'claim aborted before runner ack',
+        updated_at: new Date().toISOString(),
+      }).eq('id', insertedRunRowId);
+    }
     await admin.from('jobs').update({
       status: 'queued',
       claimed_by_runner: null,
@@ -243,6 +255,10 @@ export async function GET(req: Request) {
         .single();
       if (runErr || !runRow) throw new Error(`workflow_runs insert failed: ${runErr?.message}`);
       runRowId = runRow.id;
+      // Track the freshly-inserted row so `releaseJob` can mark it `failed`
+      // rather than leak it as a phantom `running` row. We don't touch the
+      // reuse branch's row — that one legitimately belongs to a prior claim.
+      insertedRunRowId = runRowId;
     }
 
     await admin.from('jobs').update({ status: 'running', updated_at: new Date().toISOString() }).eq('id', job.id);
