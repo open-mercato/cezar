@@ -57,7 +57,7 @@ async function readMarkdownSkills(
     } catch {
       continue;
     }
-    const { frontmatter, body } = parseFrontmatter(raw);
+    const { frontmatter, body } = parseFrontmatter(raw, absPath);
     const name = typeof frontmatter.name === 'string' && frontmatter.name.trim()
       ? frontmatter.name.trim()
       : basename(rel, extname(rel));
@@ -124,15 +124,23 @@ type FrontmatterValue = string | string[];
  * `  - a` block arrays. Deliberately not a full YAML parser (no nesting, no
  * multi-line scalars) so we avoid a `js-yaml`/`gray-matter` dependency.
  */
-function parseFrontmatter(raw: string): { frontmatter: Record<string, FrontmatterValue>; body: string } {
+function parseFrontmatter(
+  raw: string,
+  sourcePath?: string,
+): { frontmatter: Record<string, FrontmatterValue>; body: string } {
   const text = raw.replace(/\r\n/g, '\n');
   if (!text.startsWith('---\n')) return { frontmatter: {}, body: raw };
 
-  const end = text.indexOf('\n---', 4);
-  if (end === -1) return { frontmatter: {}, body: raw };
+  // Match the closing delimiter only on its own line (`\n---\n`, or `\n---` at
+  // EOF) so a `---` thematic break inside the body doesn't terminate the block
+  // early.
+  const end = text.indexOf('\n---\n', 4);
+  const endAtEof = text.endsWith('\n---') ? text.length - 4 : -1;
+  const closeAt = end === -1 ? endAtEof : end;
+  if (closeAt === -1) return { frontmatter: {}, body: raw };
 
-  const block = text.slice(4, end);
-  const afterDelimiter = text.indexOf('\n', end + 1);
+  const block = text.slice(4, closeAt);
+  const afterDelimiter = end === -1 ? -1 : text.indexOf('\n', closeAt + 1);
   const body = afterDelimiter === -1 ? '' : text.slice(afterDelimiter + 1);
 
   const frontmatter: Record<string, FrontmatterValue> = {};
@@ -141,7 +149,11 @@ function parseFrontmatter(raw: string): { frontmatter: Record<string, Frontmatte
     const line = lines[i];
     if (!line.trim() || line.trim().startsWith('#')) continue;
     const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!m) continue;
+    if (!m) {
+      const where = sourcePath ? `${sourcePath}: ` : '';
+      console.warn(`[skill-catalog] ${where}unrecognised frontmatter line: ${line}`);
+      continue;
+    }
     const key = m[1];
     const rest = m[2].trim();
 
