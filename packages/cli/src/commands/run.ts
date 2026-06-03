@@ -15,6 +15,11 @@ interface RunOptions {
 }
 
 export async function runCommand(actionName: string, opts: RunOptions, config: Config): Promise<void> {
+  if (opts.apply && opts.dryRun) {
+    console.error(chalk.red('Cannot pass both --apply and --dry-run.'));
+    process.exit(1);
+  }
+
   const catalog = await loadActionCatalog();
   const action = catalog.find((a) => a.name === actionName);
   if (!action) {
