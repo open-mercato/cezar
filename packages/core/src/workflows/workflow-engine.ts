@@ -510,6 +510,15 @@ export class WorkflowEngine {
         } else if (step.kind === 'human-gate') {
           const r = await this.runHumanGate(step, stepCtx);
           if (r.kind === 'paused') {
+            // Finalize the synthetic record before bailing so the cockpit's
+            // `agent_runs` row for this gate transitions out of 'running'
+            // (StepRunStatus has no 'paused' — 'skipped' is the closest) and
+            // shows up in WorkflowRunResult.runRecords.
+            record!.status = 'skipped';
+            record!.summary = `paused — awaiting human decision at '${step.id}'`;
+            record!.finishedAt = new Date().toISOString();
+            runRecords.push(record!);
+            ctx.onRunRecord?.(record!);
             return finishRun('paused', `paused — awaiting human decision at '${step.id}'`);
           }
           outcome = r.outcome;
