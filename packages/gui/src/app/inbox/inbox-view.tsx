@@ -91,6 +91,11 @@ interface SkillFilterOption {
 
 const ALL_SKILLS_OPTION: SkillFilterOption = { id: 'all', label: 'All skills' };
 
+// Client-side mirror of the server-side sync cooldown (see sync-action.ts /
+// migration 0029). Keeps the button disabled for the same window so the user
+// can't fire calls the server will only reject.
+const SYNC_COOLDOWN_MS = 30_000;
+
 // Humanize an action name like 'log-analyzer' → 'Log analyzer'. The action
 // name is the canonical identifier; the label is purely presentational.
 function humanizeActionName(name: string): string {
@@ -190,6 +195,10 @@ export function InboxView({
   const [typeFilter, setTypeFilter] = useState<(typeof TYPE_FILTERS)[number]>(TYPE_FILTERS[0]);
   const [syncing, setSyncing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<number>(initialSyncedAt);
+  // Epoch-ms until which the sync button stays disabled — mirrors the
+  // server-side cooldown so we don't fire calls the server will reject.
+  const [cooldownUntil, setCooldownUntil] = useState<number>(0);
+  const [, forceCooldownTick] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
 
   // ── derived counts / filters ──
@@ -363,14 +372,20 @@ export function InboxView({
   }, [selectedFindings, router]);
 
   const handleSync = useCallback(async () => {
+    if (Date.now() < cooldownUntil) return;
     setSyncing(true);
     const result = await syncAndDigest();
     setSyncing(false);
     if (!result.ok) {
+      // The server enforces its own cooldown; mirror it client-side so the
+      // button stays disabled for the same window instead of letting the
+      // user keep firing rejected calls.
+      if (result.retryAfter) setCooldownUntil(Date.now() + result.retryAfter * 1000);
       setToast(`Sync failed: ${result.error ?? 'unknown'}`);
       return;
     }
     setSyncedAt(Date.now());
+    setCooldownUntil(Date.now() + SYNC_COOLDOWN_MS);
     const bits: string[] = [];
     if (result.issuesFetched) {
       const created = result.issuesCreated ?? 0;
@@ -380,9 +395,11 @@ export function InboxView({
     if (result.digestsCreated) bits.push(`${result.digestsCreated} digested`);
     if (result.commentsFetched) bits.push(`${result.commentsFetched} commented`);
     if (result.prsUpdated) bits.push(`${result.prsUpdated} PR${result.prsUpdated === 1 ? '' : 's'}`);
-    setToast(bits.length > 0 ? `Synced: ${bits.join(' · ')}` : 'Already up to date');
+    let summary = bits.length > 0 ? `Synced: ${bits.join(' · ')}` : 'Already up to date';
+    if (result.truncated) summary += ' · more to digest — sync again in a minute';
+    setToast(summary);
     router.refresh();
-  }, [router]);
+  }, [router, cooldownUntil]);
 
   // ── keyboard: Cmd+A / Ctrl+A selects all visible findings ──
   useEffect(() => {
@@ -406,6 +423,15 @@ export function InboxView({
     const t = setTimeout(() => setToast(null), 1800);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // ── re-enable the sync button when the cooldown elapses ──
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) return;
+    const t = setTimeout(() => forceCooldownTick((n) => n + 1), cooldownUntil - Date.now());
+    return () => clearTimeout(t);
+  }, [cooldownUntil]);
+
+  const inCooldown = cooldownUntil > Date.now();
 
   const pendingTotal = counts.decisions;
   const hasAny = visibleItems.length > 0;
@@ -435,16 +461,18 @@ export function InboxView({
           <button
             type="button"
             onClick={handleSync}
-            disabled={syncing}
+            disabled={syncing || inCooldown}
+            title={inCooldown ? 'Synced moments ago — wait a few seconds before retrying' : undefined}
             className={cn(
               'inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium transition-colors',
-              syncing
-                ? 'cursor-wait border-outline-variant bg-surface-container text-on-surface-variant'
+              syncing || inCooldown
+                ? 'cursor-not-allowed border-outline-variant bg-surface-container text-on-surface-variant'
                 : 'border-primary/40 bg-primary/10 text-primary hover:border-primary/60 hover:bg-primary/15',
+              syncing && 'cursor-wait',
             )}
           >
             <RefreshIcon className={cn('h-4 w-4', syncing && 'animate-spin')} />
-            {syncing ? 'Syncing…' : 'Sync & Digest'}
+            {syncing ? 'Syncing…' : inCooldown ? 'Synced just now' : 'Sync & Digest'}
           </button>
         </div>
       </header>

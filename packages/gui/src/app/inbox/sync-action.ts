@@ -27,7 +27,22 @@ export interface SyncResult {
   digestsCreated?: number;
   commentsFetched?: number;
   prsUpdated?: number;
+  /** Set when the per-call digest cap was hit — more issues remain undigested. */
+  truncated?: boolean;
+  /** Seconds the caller should wait before retrying (set on a cooldown rejection). */
+  retryAfter?: number;
 }
+
+// Server-side rate limit: refuse a fresh sync within this window of the last
+// one, and collapse concurrent calls (two tabs / rapid clicks) to a single
+// run. Every sync is real Anthropic spend, so we gate it at the source rather
+// than trusting the client's disabled button. See migration 0029.
+const SYNC_COOLDOWN_SECONDS = 30;
+
+// Cap on digests generated per click. Onboarding a huge repo shouldn't bill
+// Claude for thousands of digests in one shot; the UI surfaces `truncated` so
+// the user can sync again to drain the rest.
+const MAX_DIGESTS_PER_SYNC = 200;
 
 export async function syncAndDigest(): Promise<SyncResult> {
   const user = await getSessionUser();
@@ -48,6 +63,28 @@ export async function syncAndDigest(): Promise<SyncResult> {
   if (!token) return { ok: false, error: 'No GitHub token — sign out and back in to sync' };
 
   const supabase = createSupabaseAdminClient();
+
+  // ── Rate limit + concurrency guard ──
+  // claim_sync_slot atomically stamps workspaces.last_synced_at = now() and
+  // returns true iff the previous sync is older than the cooldown. Concurrent
+  // callers both run the UPDATE but only the first to commit matches the
+  // predicate, so exactly one wins — the rest get `false` and bail before any
+  // GitHub fetch or LLM call. Done before any paid work so spam is free.
+  const { data: claimed, error: claimErr } = await supabase.rpc('claim_sync_slot', {
+    wid: workspace.id,
+    p_cooldown_seconds: SYNC_COOLDOWN_SECONDS,
+  });
+  if (claimErr) {
+    return { ok: false, error: `Sync gate failed: ${claimErr.message}` };
+  }
+  if (!claimed) {
+    return {
+      ok: false,
+      error: 'Synced moments ago — wait a few seconds before retrying.',
+      retryAfter: SYNC_COOLDOWN_SECONDS,
+    };
+  }
+
   const adapter = new SupabaseStoreAdapter(supabase, workspace.id);
 
   // The store may be empty for a newly-connected workspace; tolerate that
@@ -116,8 +153,13 @@ export async function syncAndDigest(): Promise<SyncResult> {
 
   // ── 2. Generate digests for issues that don't have one yet ──
   let digestsCreated = 0;
+  let truncated = false;
   try {
-    const needDigest = store.getIssues({ hasDigest: false });
+    const allNeedDigest = store.getIssues({ hasDigest: false });
+    // Cap the LLM spend per click; surface `truncated` so the UI can prompt
+    // another sync to drain the remainder.
+    truncated = allNeedDigest.length > MAX_DIGESTS_PER_SYNC;
+    const needDigest = truncated ? allNeedDigest.slice(0, MAX_DIGESTS_PER_SYNC) : allNeedDigest;
     if (needDigest.length > 0) {
       const llm = new core.LLMService(config);
       const issueData = needDigest.map((i) => ({ number: i.number, title: i.title, body: i.body }));
@@ -194,5 +236,6 @@ export async function syncAndDigest(): Promise<SyncResult> {
     digestsCreated,
     commentsFetched,
     prsUpdated,
+    truncated,
   };
 }
