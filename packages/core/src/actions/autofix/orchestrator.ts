@@ -696,6 +696,9 @@ export class AutofixOrchestrator {
       return { status: 'failed', reason: `worktree setup failed: ${(err as Error).message}`, branch: input.branch };
     }
 
+    // Wrap everything after worktree creation so an uncaught throw from a
+    // runAgentSession / commit / push call can't leak the worktree.
+    try {
     // Re-run setup commands (fresh worktree, no deps installed yet).
     if (cfg.setupCommands && cfg.setupCommands.length > 0) {
       opts.onEvent?.(`[#${input.issueNumber}] CI-FIX SETUP — running ${cfg.setupCommands.length} command(s)`);
@@ -705,7 +708,6 @@ export class AutofixOrchestrator {
           opts.onEvent?.(`  ${line}`);
         });
         if (!result.ok) {
-          await worktree.dispose().catch(() => {});
           const tail = (result.stderr || result.stdout).split('\n').slice(-5).join(' | ').trim();
           return {
             status: 'failed',
@@ -755,11 +757,9 @@ export class AutofixOrchestrator {
     });
 
     if (fixer.budgetExceeded) {
-      await worktree.dispose().catch(() => {});
       return { status: 'failed', reason: 'token budget exceeded during CI follow-up fix', branch: input.branch };
     }
     if (!fixer.parsed) {
-      await worktree.dispose().catch(() => {});
       return { status: 'failed', reason: 'fixer did not return a valid FixReport for CI follow-up', branch: input.branch };
     }
     const fixReport = fixer.parsed;
@@ -768,7 +768,6 @@ export class AutofixOrchestrator {
     const commitMessage = buildCiFollowupCommitMessage(input, issueData.issue.title, fixReport);
     const commitSha = await commitAll(worktree.path, commitMessage);
     if (!commitSha) {
-      await worktree.dispose().catch(() => {});
       return { status: 'skipped', reason: 'fixer made no file changes — CI failure may no longer reproduce' };
     }
 
@@ -802,7 +801,6 @@ export class AutofixOrchestrator {
     const passes = cfg.requireReviewPass ? verdict.verdict === 'pass' && blockers === 0 : blockers === 0;
 
     if (!passes) {
-      await worktree.dispose().catch(() => {});
       return {
         status: 'failed',
         reason: `CI follow-up review ${verdict.verdict} (${blockers} blocker(s))`,
@@ -816,7 +814,6 @@ export class AutofixOrchestrator {
     try {
       await this.github.pushBranch(input.branch, worktree.path, cfg.remote);
     } catch (err) {
-      await worktree.dispose().catch(() => {});
       return { status: 'failed', reason: `push failed: ${(err as Error).message}`, verdict, fixReport, branch: input.branch };
     }
 
@@ -828,10 +825,12 @@ export class AutofixOrchestrator {
       opts.onEvent?.(`[#${input.issueNumber}] CI-FIX NOTE — could not post PR comment: ${(err as Error).message}`);
     }
 
-    await worktree.dispose().catch(() => {});
     opts.onEvent?.(`[#${input.issueNumber}] CI-FIX DONE — ${commitSha.slice(0, 8)} pushed to ${input.branch}`);
 
     return { status: 'pushed', branch: input.branch, headSha: commitSha, verdict, fixReport };
+    } finally {
+      await worktree.dispose().catch(() => {});
+    }
   }
 
   // ─── Phase 3a: workflow-engine path (config.workflow.useEngine) ─────────
