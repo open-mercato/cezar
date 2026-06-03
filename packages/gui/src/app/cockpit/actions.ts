@@ -227,6 +227,8 @@ export async function retryRun(runId: string): Promise<ActionResult> {
  * This is the minimal "enqueue from the UI" path; `retryRun` above also inserts
  * jobs.
  */
+const ENQUEUEABLE_KINDS: readonly JobKind[] = ['autofix', 'triage', 'ci-followup'];
+
 export async function enqueueWorkflowRun(params: {
   workflow: JobKind;
   issueNumber?: number;
@@ -237,6 +239,22 @@ export async function enqueueWorkflowRun(params: {
   const workspace = await getActiveWorkspace();
   if (!workspace) return { error: 'No workspace selected' };
   if (workspace.role === 'viewer') return { error: 'Viewers cannot start runs' };
+
+  if (!ENQUEUEABLE_KINDS.includes(params.workflow)) {
+    return { error: 'Unsupported workflow kind' };
+  }
+  if (
+    params.issueNumber != null &&
+    (!Number.isInteger(params.issueNumber) || params.issueNumber <= 0)
+  ) {
+    return { error: 'Invalid issue number' };
+  }
+  if (
+    params.prNumber != null &&
+    (!Number.isInteger(params.prNumber) || params.prNumber <= 0)
+  ) {
+    return { error: 'Invalid PR number' };
+  }
 
   const repo =
     workspace.repoOwner && workspace.repoName ? `${workspace.repoOwner}/${workspace.repoName}` : null;
