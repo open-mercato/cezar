@@ -66,19 +66,22 @@ export async function executeWorkflowJob(
     const adapter = new SupabaseStoreAdapter(adminSupabase, workspaceId);
     const store = await core.IssueStore.fromPort(adapter);
 
+    // Read the workspace row ONCE (issue #98). The same row feeds the owner
+    // peek, the merged-config load, the workflow settings, and the triage
+    // pass — collapsing four `SELECT … FROM workspaces WHERE id=$ws` round-trips
+    // into one column-broad fetch per job.
+    const { data: workspaceRow } = await adminSupabase
+      .from('workspaces')
+      .select(
+        'config, repo_owner, repo_name, auto_triage_enabled, autofix_enabled, separate_comment_per_step, action_auto_comment',
+      )
+      .eq('id', workspaceId)
+      .single();
+
     // GitHub token: prefer an installation token (if a GitHub App is wired up),
     // else fall back to the per-workspace admin token the crons use.
     let githubToken: string | null = null;
-    let owner: string | undefined;
-    {
-      // Peek at the workspace to learn the owner before the full config load.
-      const { data: ws } = await adminSupabase
-        .from('workspaces')
-        .select('repo_owner, repo_name')
-        .eq('id', workspaceId)
-        .single();
-      owner = ws?.repo_owner ?? undefined;
-    }
+    const owner: string | undefined = workspaceRow?.repo_owner ?? undefined;
     if (owner && core.GitHubAppService.isConfigured()) {
       try {
         githubToken = await new core.GitHubAppService().getInstallationToken(owner);
@@ -89,7 +92,10 @@ export async function executeWorkflowJob(
     if (!githubToken) githubToken = await resolveWorkspaceToken(workspaceId, adminSupabase);
     if (!githubToken) throw new Error('no github token available for workspace');
 
-    const config = await loadWorkspaceConfig(workspaceId, adminSupabase, { githubToken });
+    const config = await loadWorkspaceConfig(workspaceId, adminSupabase, {
+      githubToken,
+      prefetchedWorkspace: workspaceRow,
+    });
     // Phase 3c — the dispatcher always runs the declarative engine.
     config.workflow = { ...(config.workflow ?? {}), useEngine: true };
 
@@ -273,6 +279,7 @@ export async function executeWorkflowJob(
         supabase: adminSupabase,
         persister,
         labels,
+        actionAutoComment: workspaceRow?.action_auto_comment ?? null,
         deferSink: async ({ call, confidence, summary, action, target }) => {
           // Write the deferred effect to pending_decisions for the inbox.
           const { error } = await adminSupabase.from('pending_decisions').insert({

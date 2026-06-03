@@ -6,6 +6,16 @@ import type { Database, WorkflowBackend } from './supabase/types';
 const VALID_BACKENDS: WorkflowBackend[] = ['anthropic-api', 'claude-cli', 'codex-cli'];
 
 /**
+ * The subset of `workspaces` columns the workflow loaders read. When a caller
+ * has already fetched the row (e.g. `executeWorkflowJob`), it can thread it
+ * down so the loaders skip a redundant `SELECT … FROM workspaces`.
+ */
+export type WorkspaceWorkflowRow = Pick<
+  Database['public']['Tables']['workspaces']['Row'],
+  'auto_triage_enabled' | 'autofix_enabled' | 'separate_comment_per_step'
+>;
+
+/**
  * Loads the workspace's `workflow_bindings` rows (for this repo, plus the
  * repo-agnostic null-repo rows) as core `WorkflowBinding`s. Rows that set
  * nothing (skill/backend/model all null AND extra_tools empty) are dropped —
@@ -46,16 +56,26 @@ export async function loadWorkflowBindings(
   return bindings;
 }
 
-/** Reads the three workflow toggle columns off the `workspaces` row, defaulting via core. */
+/**
+ * Reads the three workflow toggle columns off the `workspaces` row, defaulting
+ * via core. Pass `prefetched` to reuse an already-loaded row and skip the
+ * `SELECT`.
+ */
 export async function loadWorkflowSettings(
   workspaceId: string,
   supabase: SupabaseClient<Database>,
+  prefetched?: WorkspaceWorkflowRow | null,
 ): Promise<WorkspaceWorkflowSettings> {
-  const { data } = await supabase
-    .from('workspaces')
-    .select('auto_triage_enabled, autofix_enabled, separate_comment_per_step')
-    .eq('id', workspaceId)
-    .single();
+  let data: WorkspaceWorkflowRow | null;
+  if (prefetched !== undefined) {
+    data = prefetched;
+  } else {
+    ({ data } = await supabase
+      .from('workspaces')
+      .select('auto_triage_enabled, autofix_enabled, separate_comment_per_step')
+      .eq('id', workspaceId)
+      .single());
+  }
 
   if (!data) return { ...DEFAULT_WORKSPACE_WORKFLOW_SETTINGS };
   return {

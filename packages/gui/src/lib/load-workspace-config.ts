@@ -1,7 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Config } from '@cezar/core';
 import type { Database } from './supabase/types';
-import { loadWorkflowBindings, loadWorkflowSettings } from './workflow-config';
+import { loadWorkflowBindings, loadWorkflowSettings, type WorkspaceWorkflowRow } from './workflow-config';
+
+/**
+ * The subset of `workspaces` columns `loadWorkspaceConfig` reads. A caller that
+ * has already fetched the row (e.g. `executeWorkflowJob`) can pass it via
+ * `overrides.prefetchedWorkspace` to skip the redundant `SELECT`.
+ */
+export type WorkspaceConfigRow = Pick<
+  Database['public']['Tables']['workspaces']['Row'],
+  'config' | 'repo_owner' | 'repo_name'
+> &
+  WorkspaceWorkflowRow;
 
 /**
  * Loads a merged config: cosmiconfig defaults + workspace JSONB overrides.
@@ -10,7 +21,13 @@ import { loadWorkflowBindings, loadWorkflowSettings } from './workflow-config';
 export async function loadWorkspaceConfig(
   workspaceId: string,
   supabase: SupabaseClient<Database>,
-  overrides?: { githubToken?: string; repoOwner?: string; repoName?: string },
+  overrides?: {
+    githubToken?: string;
+    repoOwner?: string;
+    repoName?: string;
+    /** Pre-fetched `workspaces` row — when set, no `SELECT` is issued. */
+    prefetchedWorkspace?: WorkspaceConfigRow | null;
+  },
 ): Promise<Config> {
   const core = await import('@cezar/core');
 
@@ -27,11 +44,16 @@ export async function loadWorkspaceConfig(
     });
   }
 
-  const { data: ws } = await supabase
-    .from('workspaces')
-    .select('config, repo_owner, repo_name')
-    .eq('id', workspaceId)
-    .single();
+  let ws: WorkspaceConfigRow | null;
+  if (overrides?.prefetchedWorkspace !== undefined) {
+    ws = overrides.prefetchedWorkspace;
+  } else {
+    ({ data: ws } = await supabase
+      .from('workspaces')
+      .select('config, repo_owner, repo_name, auto_triage_enabled, autofix_enabled, separate_comment_per_step')
+      .eq('id', workspaceId)
+      .single());
+  }
 
   const wsConfig = (ws?.config ?? {}) as Record<string, unknown>;
 
@@ -92,7 +114,7 @@ export async function loadWorkspaceConfig(
   baseConfig.workflow = {
     useEngine,
     bindings: await loadWorkflowBindings(workspaceId, supabase, baseConfig.github.repo || undefined),
-    settings: await loadWorkflowSettings(workspaceId, supabase),
+    settings: await loadWorkflowSettings(workspaceId, supabase, ws),
   };
 
   return baseConfig;

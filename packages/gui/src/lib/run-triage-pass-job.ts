@@ -24,6 +24,11 @@ export interface RunTriagePassJobParams {
   deferSink?: TriagePassDeferSink;
   /** Workspace label catalog appended to each action's system message. */
   labels?: WorkspaceLabel[];
+  /**
+   * Pre-fetched `workspaces.action_auto_comment` flag. When provided (including
+   * `null`), the per-job `SELECT action_auto_comment FROM workspaces` is skipped.
+   */
+  actionAutoComment?: boolean | null;
 }
 
 export interface RunTriagePassJobResult {
@@ -55,12 +60,18 @@ export async function runTriagePassJob(params: RunTriagePassJobParams): Promise<
   const core = await import('@cezar/core');
   const { issueNumber, github, supabase, persister, workspaceId, trigger, deferSink, labels } = params;
 
-  const { data: workspaceRow } = await supabase
-    .from('workspaces')
-    .select('action_auto_comment')
-    .eq('id', workspaceId)
-    .single();
-  const autoCommentEnabled = workspaceRow?.action_auto_comment ?? true;
+  let actionAutoComment: boolean | null;
+  if (params.actionAutoComment !== undefined) {
+    actionAutoComment = params.actionAutoComment;
+  } else {
+    const { data: workspaceRow } = await supabase
+      .from('workspaces')
+      .select('action_auto_comment')
+      .eq('id', workspaceId)
+      .single();
+    actionAutoComment = workspaceRow?.action_auto_comment ?? null;
+  }
+  const autoCommentEnabled = actionAutoComment ?? true;
 
   await persister.recordEvent('lifecycle', { message: `triage-pass: fetching issue #${issueNumber}` });
   const fetched = await github.getIssueWithComments(issueNumber);
