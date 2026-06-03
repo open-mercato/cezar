@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
+import { readFile, open, rename, mkdir, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { StoreSchema, type Store, type StorePort } from '@cezar/core';
@@ -22,8 +22,17 @@ export class FileStoreAdapter implements StorePort {
   async save(store: Store): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
     const tmpPath = `${this.filePath}.${randomUUID()}.tmp`;
-    await writeFile(tmpPath, JSON.stringify(store, null, 2), 'utf-8');
     try {
+      // fsync the temp file before renaming so a crash/power loss between the
+      // write and the next fsync can't leave a zero-byte store.json (rename(2)
+      // only orders the dir entry, not the file data).
+      const fh = await open(tmpPath, 'w');
+      try {
+        await fh.writeFile(JSON.stringify(store, null, 2), 'utf-8');
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
       await rename(tmpPath, this.filePath);
     } catch (error) {
       await unlink(tmpPath).catch(() => {});
