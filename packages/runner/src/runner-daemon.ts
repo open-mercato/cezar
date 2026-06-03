@@ -4,6 +4,7 @@ import os from 'node:os';
 import { RunnerClient, type ClaimedJob, type RunnerUtilizationPayload } from './runner-client.js';
 import { executeJobLocally } from './execute-job-locally.js';
 import { maintainBareClones } from './repo-clone.js';
+import { redactToken } from './redact.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -218,7 +219,10 @@ export class RunnerDaemon {
       // stays NULL for those rows (no attribution, no error).
       runnerId: this.runnerId,
     }).catch((err) => {
-      console.error(`[runner] job ${claimed.job.id} crashed:`, err instanceof Error ? err.message : err);
+      console.error(
+        `[runner] job ${claimed.job.id} crashed:`,
+        redactToken(err instanceof Error ? err.message : String(err)),
+      );
     }).finally(() => {
       this.inFlight.delete(claimed.job.id);
       console.log(`[runner] job ${claimed.job.id} finished (${this.inFlight.size} in flight)`);

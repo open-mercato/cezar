@@ -4,6 +4,7 @@ import type { AgentRunRecord, Config } from '@cezar/core';
 import type { ClaimedJob, RunnerEvent } from './runner-client.js';
 import { RunnerClient } from './runner-client.js';
 import { prepareJobWorktree, type JobWorktree } from './repo-clone.js';
+import { redactToken } from './redact.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -286,7 +287,10 @@ export async function executeJobLocally(
     await flush();
     await client.finalizeRun(workflowRunId, { ...result.finalize, tokensUsed, sessionId: runSessionId ?? null });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Redact any GitHub token before it reaches stderr, journalctl, or the
+    // cockpit: `execFile` clone/fetch failures carry the token-bearing URL in
+    // `err.message` (`Command failed: git clone https://x-access-token:…@…`).
+    const message = redactToken(err instanceof Error ? err.message : String(err));
     console.error(`[runner] job ${job.id} failed:`, message);
     await flush().catch(() => {});
     await client.finalizeRun(workflowRunId, { status: 'failed', reason: message, tokensUsed }).catch((e) => {
