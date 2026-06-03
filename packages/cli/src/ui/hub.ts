@@ -41,15 +41,26 @@ export async function launchHub(store: IssueStore | null, config: Config): Promi
     if (choice === 'exit') return;
 
     if (choice === 'sync') {
-      await syncCommand({}, config);
-      const reloaded = await IssueStore.loadOrNull(config.store.path);
-      if (!reloaded) return;
-      store = reloaded;
+      try {
+        await syncCommand({}, config);
+        const reloaded = await IssueStore.loadOrNull(config.store.path);
+        if (reloaded) store = reloaded;
+      } catch (err) {
+        if ((err as Error).name === 'ExitPromptError') throw err;
+        console.error(chalk.red(`\n  sync failed: ${(err as Error).message}`));
+        console.log(chalk.dim('\n  Press Enter to continue.'));
+        await input({ message: '' }).catch(() => '');
+      }
       continue;
     }
 
     if (choice === 'run') {
-      await runActionFlow(config);
+      try {
+        await runActionFlow(config);
+      } catch (err) {
+        if ((err as Error).name === 'ExitPromptError') throw err;
+        console.error(chalk.red(`\n  action failed: ${(err as Error).message}`));
+      }
       console.log(chalk.dim('\n  Press Enter to continue.'));
       await input({ message: '' }).catch(() => '');
     }
