@@ -97,13 +97,39 @@ export async function discoverSkills(
 }
 
 /**
+ * Module-scoped cache of the built-in catalog. The built-in skills ship with
+ * the package and only change on deploy, so we read+parse them once per
+ * process and reuse the result across every triage pass / cron sweep. Set
+ * `CEZAR_SKILLS_NOCACHE=1` to bypass the cache for dev iteration.
+ */
+let builtinCache: Promise<Skill[]> | null = null;
+
+/**
  * Discover ONLY the built-in catalog. Useful for seeding actions on initial
  * workspace creation, before any repo has been cloned.
+ *
+ * The result is cached at module scope — the built-in catalog is bundled with
+ * the package and never changes at runtime, so re-reading every `.md` file on
+ * every call is pure overhead.
  */
-export async function discoverBuiltinSkills(): Promise<Skill[]> {
-  const skills = await readMarkdownSkills(builtinSkillsDir(), 'built-in');
-  skills.sort((a, b) => a.name.localeCompare(b.name));
-  return skills;
+export function discoverBuiltinSkills(): Promise<Skill[]> {
+  if (process.env.CEZAR_SKILLS_NOCACHE === '1') {
+    return loadBuiltinSkills();
+  }
+  if (!builtinCache) {
+    // On a transient failure we don't want to pin a rejected promise forever.
+    builtinCache = loadBuiltinSkills().catch((err) => {
+      builtinCache = null;
+      throw err;
+    });
+  }
+  return builtinCache;
+}
+
+function loadBuiltinSkills(): Promise<Skill[]> {
+  return readMarkdownSkills(builtinSkillsDir(), 'built-in').then((skills) =>
+    skills.sort((a, b) => a.name.localeCompare(b.name)),
+  );
 }
 
 /** Partition skills by whether their `suggestedStages` includes `stageId`. */
