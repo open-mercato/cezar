@@ -30,7 +30,9 @@ export async function GET(request: NextRequest) {
     );
 
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) {
+    if (error) {
+      console.error('[auth/callback] exchangeCodeForSession failed:', error);
+    } else {
       const providerToken = data.session?.provider_token;
       if (providerToken && data.user) {
         await supabase.from('user_github_tokens').upsert({

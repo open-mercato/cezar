@@ -1,10 +1,11 @@
 import { signInWithGitHub } from '@/app/auth/actions';
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
+  const { error } = await searchParams;
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg">
       <div className="w-full max-w-sm rounded-xl border border-border bg-bg-elevated p-8">
@@ -12,6 +13,14 @@ export default function LoginPage({
           <h1 className="text-2xl font-semibold tracking-tight">CEZAR</h1>
           <p className="mt-1 text-sm text-fg-muted">AI-powered issue intelligence</p>
         </div>
+        {error && (
+          <div
+            role="alert"
+            className="mb-4 rounded-md border border-error/40 bg-error/10 px-3 py-2 text-sm text-error"
+          >
+            Sign-in failed. Please try again or contact support if the problem persists.
+          </div>
+        )}
         <form action={signInWithGitHub}>
           <button
             type="submit"
