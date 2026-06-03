@@ -5,6 +5,7 @@
 import type { RootCause } from './prompts/analyzer.js';
 import type { FixReport } from './prompts/fixer.js';
 import type { ReviewVerdict } from './prompts/reviewer.js';
+import { normalizeTitle } from './prompts/untrusted.js';
 
 export interface CiFollowupTextInput {
   issueNumber: number;
@@ -43,7 +44,7 @@ export function buildCiFollowupNotes(input: CiFollowupTextInput): string {
 }
 
 export function buildCiFollowupCommitMessage(input: CiFollowupTextInput, title: string, report: FixReport): string {
-  return `fix: CI follow-up for ${title} (#${input.issueNumber})
+  return `fix: CI follow-up for ${normalizeTitle(title)} (#${input.issueNumber})
 
 ${report.approach}
 
@@ -86,7 +87,7 @@ A human reviewer should still confirm correctness before merge.`;
 }
 
 export function buildCommitMessage(issueNumber: number, title: string, report: FixReport): string {
-  return `fix: ${title} (#${issueNumber})
+  return `fix: ${normalizeTitle(title)} (#${issueNumber})
 
 ${report.approach}
 

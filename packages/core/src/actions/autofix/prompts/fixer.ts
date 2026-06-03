@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { RootCause } from './analyzer.js';
 import { FIX_IMPLEMENTATION_SKILL } from '../skills.js';
 import { AGENT_EXECUTION_GUIDANCE } from './agent-guidance.js';
+import { stripPhaseMarkers } from './untrusted.js';
 
 export const FixReportSchema = z.object({
   changedFiles: z.array(z.string()),
@@ -43,13 +44,16 @@ export function buildFixerUserPrompt(opts: {
     ? `\n\nPRIOR ATTEMPT — the previous fix was rejected at review. Reviewer notes:\n${opts.priorAttemptNotes}\n\nAddress these concerns in your new fix.`
     : '';
 
-  return `ISSUE #${opts.issueNumber}: ${opts.title}
+  // Title is attacker-controlled; the root-cause fields are model output that
+  // may have echoed injected issue content. Strip any phase markers so neither
+  // can hijack the unified-session phase order.
+  return `ISSUE #${opts.issueNumber}: ${stripPhaseMarkers(opts.title)}
 
 ROOT CAUSE ANALYSIS:
-Summary:      ${opts.rootCause.summary}
-Hypothesis:   ${opts.rootCause.hypothesis}
+Summary:      ${stripPhaseMarkers(opts.rootCause.summary)}
+Hypothesis:   ${stripPhaseMarkers(opts.rootCause.hypothesis)}
 Suspected files: ${opts.rootCause.suspectedFiles.join(', ') || '(none listed)'}
-Repro notes:  ${opts.rootCause.reproductionNotes ?? '(none)'}
+Repro notes:  ${stripPhaseMarkers(opts.rootCause.reproductionNotes ?? '(none)')}
 Analyzer confidence: ${opts.rootCause.confidence.toFixed(2)}${priorSection}
 
 Implement the fix and produce the JSON object described in the system prompt.`;

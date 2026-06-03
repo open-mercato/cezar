@@ -23,6 +23,7 @@ import {
   type ReviewVerdict,
 } from '../../actions/autofix/prompts/reviewer.js';
 import { buildCommitMessage, buildPrBody } from '../../actions/autofix/messages.js';
+import { normalizeTitle } from '../../actions/autofix/prompts/untrusted.js';
 import { AGENT_EXECUTION_GUIDANCE } from '../../actions/autofix/prompts/agent-guidance.js';
 import { agentStep, type Workflow, type WorkflowStep, type CommentSection } from '../workflow.js';
 import { tailLines, type ShellResult } from '../../provision/run-env.js';
@@ -387,7 +388,7 @@ const openPrStep: WorkflowStep<AutofixBlackboard> = {
     const v = ctx.blackboard.verdict;
     if (!rc || !fr || !v) throw new Error('open-pr ran without root cause / fix report / verdict on the blackboard');
     return {
-      title: `fix: ${ctx.issue.title} (#${ctx.issue.number})`,
+      title: `fix: ${normalizeTitle(ctx.issue.title)} (#${ctx.issue.number})`,
       body: buildPrBody(ctx.issue.number, rc, fr, v),
     };
   },
