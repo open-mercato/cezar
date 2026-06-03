@@ -141,10 +141,22 @@ export async function runTriagePassJob(params: RunTriagePassJobParams): Promise<
     message: `triage-pass: ran ${pass.results.length} actions (${pass.results.filter((r) => r.ok).length} ok)`,
   });
 
-  const anyFailed = pass.results.some((r) => !r.ok);
+  const failed = pass.results.filter((r) => !r.ok);
+  // `workflow_runs.status` is binary (`succeeded` | `failed`), so a partial
+  // failure stays `succeeded` but carries a non-null `reason`; only an
+  // all-actions-failed run is recorded as `failed`. Surface the failed action
+  // names in a lifecycle event so the cockpit drill-down can show them.
+  const allFailed = pass.results.length > 0 && failed.length === pass.results.length;
+  if (failed.length > 0) {
+    await persister.recordEvent('lifecycle', {
+      message: `triage-pass: ${failed.length}/${pass.results.length} actions failed (${failed
+        .map((r) => r.actionName)
+        .join(', ')})`,
+    });
+  }
   return {
-    status: anyFailed && pass.results.every((r) => !r.ok) ? 'failed' : 'succeeded',
-    reason: anyFailed ? 'one or more triage actions failed' : undefined,
+    status: allFailed ? 'failed' : 'succeeded',
+    reason: failed.length > 0 ? `${failed.length}/${pass.results.length} triage actions failed` : undefined,
     tokensUsed: pass.totalUsage.inputTokens + pass.totalUsage.outputTokens,
     outcome: {
       results: pass.results.map((r) => ({
