@@ -15,14 +15,20 @@ interface ActivityItem {
   timestamp: string;
 }
 
+/** Only surface activity from the last 30 days so the queries stay bounded as
+ *  `agent_run_events` grows. */
+const ACTIVITY_WINDOW_DAYS = 30;
+
 async function loadActivity(workspaceId: string): Promise<ActivityItem[]> {
   const supabase = await createSupabaseServerClient();
+  const since = new Date(Date.now() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
   const [{ data: runs }, { data: events }] = await Promise.all([
     supabase
       .from('workflow_runs')
       .select('id, workflow, issue_number, status, outcome, started_at, finished_at, pr_url, reason')
       .eq('workspace_id', workspaceId)
+      .gte('started_at', since)
       .order('started_at', { ascending: false })
       .limit(50),
     supabase
@@ -30,6 +36,7 @@ async function loadActivity(workspaceId: string): Promise<ActivityItem[]> {
       .select('id, workflow_run_id, type, payload, created_at')
       .eq('workspace_id', workspaceId)
       .eq('type', 'lifecycle')
+      .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(100),
   ]);
@@ -74,16 +81,18 @@ async function loadActivity(workspaceId: string): Promise<ActivityItem[]> {
   for (const e of (events ?? []) as EventRow[]) {
     const payload = e.payload as { message?: string } | null;
     const msg = payload?.message;
+    // Lifecycle messages arrive in two shapes — the workflow engine prefixes
+    // `[#<issue>] …`, while triage-pass and action jobs emit a plain string.
+    // Surface any non-empty message rather than gating on the `[#` prefix,
+    // which silently dropped the triage events.
     if (!msg || typeof msg !== 'string') continue;
-    if (msg.startsWith('[#')) {
-      items.push({
-        id: `event-${e.id}`,
-        type: 'lifecycle',
-        message: msg,
-        runId: e.workflow_run_id ?? undefined,
-        timestamp: e.created_at,
-      });
-    }
+    items.push({
+      id: `event-${e.id}`,
+      type: 'lifecycle',
+      message: msg,
+      runId: e.workflow_run_id ?? undefined,
+      timestamp: e.created_at,
+    });
   }
 
   items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
