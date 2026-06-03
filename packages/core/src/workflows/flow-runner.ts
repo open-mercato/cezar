@@ -224,6 +224,7 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
       baseBranch: params.config.autofix?.baseBranch ?? 'main',
       remote: params.config.autofix?.remote ?? 'origin',
       fetchRemote: params.config.autofix?.fetchBeforeAttempt ?? true,
+      authArgs: params.github.gitAuthArgs(),
       onWarn: (m: string) => params.onEvent(m),
     });
     worktreePath = wt.path;

@@ -263,6 +263,7 @@ export class AutofixOrchestrator {
           baseBranch: cfg.baseBranch,
           remote: cfg.remote,
           fetchRemote: cfg.fetchBeforeAttempt,
+          authArgs: this.github.gitAuthArgs(),
           // Always start fresh: local branches with this name are always
           // stale work from a prior run (cezar only pushes on review-pass).
           // Inheriting them lets the previous run's autosave commits leak
@@ -710,7 +711,7 @@ export class AutofixOrchestrator {
     // fetched PR tip when none exists yet.
     let prRef: string;
     try {
-      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch);
+      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch, this.github.gitAuthArgs());
     } catch (err) {
       return { status: 'failed', reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`, branch: input.branch };
     }
@@ -724,6 +725,7 @@ export class AutofixOrchestrator {
         remote: cfg.remote,
         fetchRemote: cfg.fetchBeforeAttempt,
         startRef: prRef,
+        authArgs: this.github.gitAuthArgs(),
         resetBranch: false,
       });
     } catch (err) {
@@ -929,6 +931,7 @@ export class AutofixOrchestrator {
         baseBranch: cfg.baseBranch,
         remote: cfg.remote,
         fetchRemote: cfg.fetchBeforeAttempt,
+        authArgs: this.github.gitAuthArgs(),
         // Always start fresh — see the matching call site above.
         resetBranch: true,
         onWarn: (m) => opts.onEvent?.(`[#${issueNumber}] ${m}`),
@@ -1041,7 +1044,7 @@ export class AutofixOrchestrator {
     opts.onEvent?.(`[#${input.issueNumber}] CI-FIX ${input.attemptIndex}/${input.attemptMax} — fetching branch ${input.branch}`);
     let prRef: string;
     try {
-      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch);
+      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch, this.github.gitAuthArgs());
     } catch (err) {
       return { status: 'failed', reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`, branch: input.branch };
     }
@@ -1055,6 +1058,7 @@ export class AutofixOrchestrator {
         remote: cfg.remote,
         fetchRemote: cfg.fetchBeforeAttempt,
         startRef: prRef,
+        authArgs: this.github.gitAuthArgs(),
         resetBranch: false,
         onWarn: (m) => opts.onEvent?.(`[#${input.issueNumber}] ${m}`),
       });

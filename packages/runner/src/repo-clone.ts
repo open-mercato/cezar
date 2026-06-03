@@ -46,17 +46,22 @@ export async function prepareJobWorktree(
 ): Promise<JobWorktree> {
   await mkdir(REPOS_DIR, { recursive: true });
   const barePath = barePathFor(owner, repo);
-  const cloneUrl = `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`;
+  // Persist only the plain URL in `<bare>/config`; the short-lived token is
+  // supplied at command time via `-c http.extraheader=…` so it never lands on
+  // disk (where it would survive between jobs, long past its 15-min lifetime).
+  const plainUrl = `https://github.com/${owner}/${repo}.git`;
+  const authHeader = `Authorization: Basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}`;
+  const auth = ['-c', `http.extraheader=${authHeader}`];
 
   if (existsSync(barePath)) {
-    await exec('git', ['--git-dir', barePath, 'remote', 'set-url', 'origin', cloneUrl]);
-    await exec('git', ['--git-dir', barePath, 'fetch', '--prune', 'origin']);
+    await exec('git', ['--git-dir', barePath, 'remote', 'set-url', 'origin', plainUrl]);
+    await exec('git', [...auth, '--git-dir', barePath, 'fetch', '--prune', 'origin']);
   } else {
-    await exec('git', ['clone', '--bare', cloneUrl, barePath]);
+    await exec('git', [...auth, 'clone', '--bare', plainUrl, barePath]);
     // Default `--bare` only fetches `refs/heads/<single>`; broaden so future
     // fetches mirror every remote head (matches `git clone` defaults).
     await exec('git', ['--git-dir', barePath, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*']);
-    await exec('git', ['--git-dir', barePath, 'fetch', '--prune', 'origin']);
+    await exec('git', [...auth, '--git-dir', barePath, 'fetch', '--prune', 'origin']);
   }
 
   const safeJobId = jobId.replace(/[^a-zA-Z0-9-]/g, '_');

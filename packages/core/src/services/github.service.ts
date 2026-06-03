@@ -111,6 +111,7 @@ export class GitHubService {
   private octokit: Octokit;
   private owner: string;
   private repo: string;
+  private token: string;
 
   constructor(config: Config) {
     if (!config.github.token) {
@@ -119,6 +120,7 @@ export class GitHubService {
     this.octokit = new Octokit({ auth: config.github.token });
     this.owner = config.github.owner;
     this.repo = config.github.repo;
+    this.token = config.github.token;
   }
 
   async fetchAllIssues(includeClosed = false, maxItems?: number): Promise<RawIssue[]> {
@@ -581,9 +583,20 @@ export class GitHubService {
     }
   }
 
+  /**
+   * Command-time git config args that authenticate HTTPS operations against
+   * GitHub via an `http.extraheader` Authorization header. Preferred over
+   * baking the token into a remote URL — the secret then never lands in
+   * `.git/config` on disk (see `@cezar/runner`'s `repo-clone.ts`).
+   */
+  gitAuthArgs(): string[] {
+    const authHeader = `Authorization: Basic ${Buffer.from(`x-access-token:${this.token}`).toString('base64')}`;
+    return ['-c', `http.extraheader=${authHeader}`];
+  }
+
   async pushBranch(branch: string, localRepoPath: string, remote = 'origin'): Promise<void> {
     try {
-      await execFileAsync('git', ['push', '--set-upstream', remote, branch], {
+      await execFileAsync('git', [...this.gitAuthArgs(), 'push', '--set-upstream', remote, branch], {
         cwd: localRepoPath,
       });
     } catch (error) {

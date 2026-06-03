@@ -38,10 +38,14 @@ export interface WorktreeHandle {
   dispose(): Promise<void>;
 }
 
-export async function fetchBaseBranch(repoRoot: string, remote: string, baseBranch: string): Promise<void> {
+// `authArgs` are command-time `git -c …` flags (e.g. from
+// `GitHubService.gitAuthArgs()`) that authenticate the HTTPS fetch without the
+// token being persisted in the remote URL. Defaults to none for callers whose
+// `origin` already carries credentials (e.g. the host's git config).
+export async function fetchBaseBranch(repoRoot: string, remote: string, baseBranch: string, authArgs: string[] = []): Promise<void> {
   // Intentionally narrow: we only need the base branch up to date. Avoids
   // touching unrelated refs in a large monorepo, and keeps the fetch cheap.
-  await runGit(repoRoot, ['fetch', '--prune', '--no-tags', remote, baseBranch]);
+  await runGit(repoRoot, [...authArgs, 'fetch', '--prune', '--no-tags', remote, baseBranch]);
 }
 
 // Private ref namespace cezar fetches PR branches into. Kept out of
@@ -60,9 +64,12 @@ export function cezarAutofixRef(branch: string): string {
 // `refs/heads/<branch>` so that, when the workspace points autofix.repoRoot at
 // a user's real checkout that happens to hold a local branch of the same name,
 // any unpushed local commits on `refs/heads/<branch>` are never destroyed.
-export async function fetchRemoteBranch(repoRoot: string, remote: string, branch: string): Promise<string> {
+//
+// `authArgs` are command-time `git -c …` flags (see fetchBaseBranch) that
+// authenticate the HTTPS fetch without persisting the token in the remote URL.
+export async function fetchRemoteBranch(repoRoot: string, remote: string, branch: string, authArgs: string[] = []): Promise<string> {
   const ref = cezarAutofixRef(branch);
-  await runGit(repoRoot, ['fetch', '--no-tags', remote, `+refs/heads/${branch}:${ref}`]);
+  await runGit(repoRoot, [...authArgs, 'fetch', '--no-tags', remote, `+refs/heads/${branch}:${ref}`]);
   return ref;
 }
 
@@ -187,6 +194,8 @@ export async function createWorktree(opts: {
   resetBranch?: boolean;
   /** Optional warn callback for non-fatal conditions (e.g. fetch fallback). */
   onWarn?: (message: string) => void;
+  /** Command-time `git -c …` auth flags for the base-branch fetch (see fetchBaseBranch). */
+  authArgs?: string[];
 }): Promise<WorktreeHandle> {
   await assertIsGitRepo(opts.repoRoot);
   await assertNotCezarCheckout(opts.repoRoot);
@@ -210,7 +219,7 @@ export async function createWorktree(opts: {
       let startingRef = opts.startRef ?? opts.baseBranch;
       if (!opts.startRef && opts.fetchRemote) {
         try {
-          await fetchBaseBranch(opts.repoRoot, opts.remote, opts.baseBranch);
+          await fetchBaseBranch(opts.repoRoot, opts.remote, opts.baseBranch, opts.authArgs);
           startingRef = `${opts.remote}/${opts.baseBranch}`;
         } catch (err) {
           // Fall back to local baseBranch if the fetch fails (offline, auth issue,
