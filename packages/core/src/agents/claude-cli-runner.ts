@@ -515,11 +515,14 @@ function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | nu
     const fin = (code: number | null) => {
       if (done) return;
       done = true;
+      clearTimeout(safety);
       resolve(code);
     };
     child.once('close', (code) => fin(code));
     child.once('exit', (code) => fin(code));
-    child.once('error', () => fin(null));
+    // Don't swallow a late error as a clean null exit — fall back to the
+    // child's own exit code (which is non-null/non-zero on failure).
+    child.once('error', () => fin(child.exitCode ?? null));
     // A SIGKILLed process may never emit 'close' through some edge cases.
     const safety = setTimeout(() => fin(child.exitCode ?? null), KILL_GRACE_MS + 5_000);
     if (typeof safety.unref === 'function') safety.unref();
