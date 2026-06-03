@@ -205,30 +205,43 @@ export function ActionRowMenu({
     item.onSelect?.();
   }
 
+  function menuButtons(): HTMLButtonElement[] {
+    return Array.from(
+      popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [],
+    );
+  }
+
   function handleTriggerKey(e: React.KeyboardEvent<HTMLButtonElement>) {
-    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      const toLast = e.key === 'ArrowUp';
       setOpen(true);
-      // Defer focus to the first item until after the popover renders.
+      // Defer focus until after the popover renders. ArrowDown/Enter/Space land
+      // on the first item; ArrowUp opens to the last (ARIA APG menu pattern).
       requestAnimationFrame(() => {
-        popoverRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus();
+        const buttons = menuButtons();
+        (toLast ? buttons[buttons.length - 1] : buttons[0])?.focus();
       });
     }
   }
 
   function handleMenuKey(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    if (e.key === 'Tab') {
+      // Tab moves focus out of the menu — close it (ARIA APG menu pattern).
+      setOpen(false);
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
     e.preventDefault();
-    const buttons = Array.from(
-      popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [],
-    );
+    const buttons = menuButtons();
     if (buttons.length === 0) return;
     const active = document.activeElement as HTMLButtonElement | null;
     const idx = active ? buttons.indexOf(active) : -1;
-    const next =
-      e.key === 'ArrowDown'
-        ? buttons[(idx + 1) % buttons.length]
-        : buttons[(idx - 1 + buttons.length) % buttons.length];
+    let next: HTMLButtonElement;
+    if (e.key === 'Home') next = buttons[0];
+    else if (e.key === 'End') next = buttons[buttons.length - 1];
+    else if (e.key === 'ArrowDown') next = buttons[(idx + 1) % buttons.length];
+    else next = buttons[(idx - 1 + buttons.length) % buttons.length];
     next.focus();
   }
 
@@ -268,7 +281,7 @@ export function ActionRowMenu({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={open ? menuId : undefined}
         aria-label={`${name} actions`}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={handleTriggerKey}
