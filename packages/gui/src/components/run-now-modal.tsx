@@ -19,6 +19,7 @@ export interface RunNowModalProps {
 export function RunNowModal({ actionId, actionName, target, onClose }: RunNowModalProps) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const selectRef = useRef<HTMLSelectElement>(null);
   const lastFocused = useRef<HTMLElement | null>(null);
   const [issues, setIssues] = useState<RunNowIssue[]>([]);
   const [issuesLoading, setIssuesLoading] = useState(target === 'issue');
@@ -87,6 +88,13 @@ export function RunNowModal({ actionId, actionName, target, onClose }: RunNowMod
     };
   }, [target]);
 
+  // Once the issue list finishes loading and the select becomes enabled,
+  // move focus to it so keyboard users land on the intended "pick from list" control.
+  useEffect(() => {
+    if (target !== 'issue' || useManual || issuesLoading) return;
+    selectRef.current?.focus();
+  }, [target, useManual, issuesLoading]);
+
   function resolveNumber(): number | null {
     if (useManual) {
       const n = Number.parseInt(manualNumber.trim(), 10);
@@ -143,6 +151,7 @@ export function RunNowModal({ actionId, actionName, target, onClose }: RunNowMod
                 Issue
               </span>
               <select
+                ref={selectRef}
                 value={selectedNumber ?? ''}
                 onChange={(e) => setSelectedNumber(Number(e.target.value))}
                 disabled={issuesLoading || pending}
