@@ -130,6 +130,14 @@ export class PersistentClaudeSession {
    */
   start(): void {
     if (this.child) return;
+    // Reset all per-child state before spawning a fresh child. A prior child
+    // (e.g. closed by `closeIfIdle`) may have left a partial NDJSON line in
+    // `outBuffer` or a half-resolved phase; carrying that over into the new
+    // child corrupts its first parse / trips the in-flight guard.
+    this.outBuffer = '';
+    this.sawTerminal = false;
+    this.resultResolver = null;
+    this.resultRejecter = null;
     this.closedIdle = false;
     this.resumed = this.opts.resume === true;
     const args = this.buildArgs();
@@ -241,6 +249,10 @@ export class PersistentClaudeSession {
    * the conversation prefix is preserved.
    */
   closeIfIdle(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
     if (!this.child || this.resultResolver) return;
     this.closedIdle = true;
     const child = this.child;
