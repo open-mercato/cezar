@@ -102,7 +102,12 @@ async function sweepOne(
       payload: { trigger: 'sweep' },
     });
     if (error) {
-      console.error(`[triage-sweep] enqueue failed for ws ${ws.id} #${issue.number}:`, error.message);
+      // The webhook (or a concurrent sweep tick) already enqueued a triage job
+      // for this issue; the partial unique index `jobs_triage_open_uniq`
+      // (migration 0029) rejects the duplicate with 23505 — benign no-op.
+      if (error.code !== '23505' && !/duplicate key/i.test(error.message)) {
+        console.error(`[triage-sweep] enqueue failed for ws ${ws.id} #${issue.number}:`, error.message);
+      }
       continue;
     }
     enqueued++;

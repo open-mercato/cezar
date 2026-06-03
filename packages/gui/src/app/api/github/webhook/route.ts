@@ -128,6 +128,18 @@ function verifySignature(rawBody: string, headerValue: string, secret: string): 
   }
 }
 
+// ─── enqueue dedup ──────────────────────────────────────────────────────────
+
+/**
+ * True when a Supabase insert failed because a partial unique index
+ * (`jobs_triage_open_uniq` / `jobs_flow_open_uniq` / `jobs_cifollowup_open_uniq`,
+ * migration 0029) already has an in-flight job for this dedup key. That means a
+ * concurrent delivery won the enqueue race — a benign no-op, not an error.
+ */
+function isUniqueViolation(error: { code?: string; message?: string }): boolean {
+  return error.code === '23505' || /duplicate key/i.test(error.message ?? '');
+}
+
 // ─── payload shapes (the slices we touch) ───────────────────────────────────
 
 interface WebhookPayload {
@@ -227,7 +239,12 @@ async function handleIssues(admin: SupabaseAdmin, payload: WebhookPayload): Prom
           payload: { trigger: 'webhook', action },
         });
         if (error) {
-          console.error(`[github-webhook] triage enqueue failed for ws ${ws.id}:`, error.message);
+          // A concurrent delivery (opened+edited, webhook+sweep) may have
+          // enqueued first; the partial unique index then rejects this insert
+          // with 23505 — treat that as a benign no-op, not a failure.
+          if (!isUniqueViolation(error)) {
+            console.error(`[github-webhook] triage enqueue failed for ws ${ws.id}:`, error.message);
+          }
         } else {
           triageEnqueued++;
         }
@@ -321,7 +338,11 @@ async function enqueueFlowsForIssueEvent(
       },
     });
     if (error) {
-      console.error(`[github-webhook] flow '${flow.name}' enqueue failed:`, error.message);
+      // A concurrent delivery already enqueued this flow for this issue; the
+      // partial unique index rejects the duplicate with 23505 — benign.
+      if (!isUniqueViolation(error)) {
+        console.error(`[github-webhook] flow '${flow.name}' enqueue failed:`, error.message);
+      }
       continue;
     }
     enqueued++;
@@ -454,7 +475,13 @@ async function handleCheckRun(admin: SupabaseAdmin, payload: WebhookPayload): Pr
       ...preferred,
     });
     if (error) {
-      console.error(`[github-webhook] ci-followup enqueue failed for ws ${ws.id}:`, error.message);
+      // A concurrent failing check_run already enqueued a ci-followup for this
+      // PR; the partial unique index rejects the duplicate with 23505. This is
+      // also what serializes the attempt-cap check above — without it two
+      // concurrent deliveries could both pass `priorAttempts < attemptMax`.
+      if (!isUniqueViolation(error)) {
+        console.error(`[github-webhook] ci-followup enqueue failed for ws ${ws.id}:`, error.message);
+      }
       continue;
     }
     enqueued++;
