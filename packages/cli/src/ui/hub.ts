@@ -44,7 +44,13 @@ export async function launchHub(store: IssueStore | null, config: Config): Promi
       try {
         await syncCommand({}, config);
         const reloaded = await IssueStore.loadOrNull(config.store.path);
-        if (reloaded) store = reloaded;
+        if (!reloaded) {
+          console.error(
+            chalk.red('  Store disappeared after sync. Run `cezar init` to recreate it.'),
+          );
+          return;
+        }
+        store = reloaded;
       } catch (err) {
         if ((err as Error).name === 'ExitPromptError') throw err;
         console.error(chalk.red(`\n  sync failed: ${(err as Error).message}`));
