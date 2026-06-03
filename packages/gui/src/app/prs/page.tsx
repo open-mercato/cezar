@@ -3,6 +3,16 @@ import { getActiveWorkspace } from '@/lib/workspace';
 import { fetchRecentActionRuns } from '@/lib/action-runs-loader';
 import { PrsView, type PrRow } from './prs-view';
 
+/**
+ * Upper bound on PR rows shipped to the client. `PrsView` does its own
+ * filtering, sorting, and 10/25/50/100 pagination over this set, plus the
+ * TOTAL/OPEN/DRAFT/RUNNING stat counts — all of which need the rows in hand —
+ * so we cap rather than `.range()`-paginate (which would scope those features
+ * to a single page). Newest PRs win the cap via the `number desc` order.
+ * Mirrors the capped-listing convention in `cockpit/page.tsx`.
+ */
+const PR_FETCH_CAP = 500;
+
 export default async function PrsPage() {
   const workspace = await getActiveWorkspace();
 
@@ -31,7 +41,8 @@ export default async function PrsPage() {
           'number, title, state, draft, labels, author, html_url, head_ref, base_ref, pr_created_at, pr_updated_at, updated_at',
         )
         .eq('workspace_id', workspace.id)
-        .order('number', { ascending: false }),
+        .order('number', { ascending: false })
+        .limit(PR_FETCH_CAP),
       fetchRecentActionRuns(workspace.id, 'pr'),
     ]);
     if (prErr) throw new Error(prErr.message);
