@@ -61,6 +61,16 @@ export interface WorkflowRunContext {
   /** Pre-prepared worktree path for repo-backed workflows. */
   worktreePath?: string;
   /**
+   * The commit sha the worktree branch was created from (`WorktreeHandle.baseSha`).
+   * The commit step squashes autosaver commits back onto *this* fixed sha rather
+   * than the live `baseBranch` ref — `origin/main` is a moving target, and a
+   * concurrent fetch advancing it between worktree creation and the squash would
+   * otherwise make `git reset --soft origin/main` drag every unrelated commit
+   * `origin/main` gained in the meantime into the squashed commit as a revert.
+   * When omitted the engine falls back to `config.autofix.baseBranch`.
+   */
+  baseSha?: string;
+  /**
    * Pre-existing Claude session id for this workflow run, set on a re-claim
    * after a runner crash (the SaaS reads `workflow_runs.session_id` from the
    * previous attempt and threads it back here). The engine reuses it for
@@ -517,6 +527,12 @@ export class WorkflowEngine {
         } else if (step.kind === 'commit') {
           const wt = this.requireWorktree(worktreePath, step.id);
           const baseRef = ctx.config.autofix?.baseBranch ?? 'main';
+          // Squash against the fixed sha the branch was created from, not the
+          // live base ref. `origin/main` can move under us between worktree
+          // creation and this step (a concurrent fetch); resetting to it would
+          // drag everything it gained into the squash as a revert. Fall back to
+          // `baseRef` only when the caller didn't thread the captured sha.
+          const squashBase = ctx.baseSha ?? baseRef;
           const message = step.buildMessage(stepCtx);
           let sha = await gitOps.commitAll(wt, message);
           // `commitAll` returns null when the working tree is clean. That can
@@ -525,7 +541,7 @@ export class WorkflowEngine {
           // (fix)`. Squash autosave commits into one clean commit when (b);
           // only declare "no changes" when there's truly no diff against base.
           if (!sha && gitOps.squashCommitsToBase) {
-            sha = await gitOps.squashCommitsToBase(wt, baseRef, message);
+            sha = await gitOps.squashCommitsToBase(wt, squashBase, message);
           }
           if (!sha) {
             if (step.failOnNoChanges) {
@@ -534,7 +550,10 @@ export class WorkflowEngine {
               outcome = { kind: 'skip-run', reason: 'fixer made no file changes — CI failure may no longer reproduce' };
             }
           } else {
-            const diff = await gitOps.getDiffAgainstBase(wt, baseRef);
+            // Diff against the same fixed branch point we squashed onto, so the
+            // reviewed/displayed diff matches the committed change exactly even
+            // if the live base ref moved during the run.
+            const diff = await gitOps.getDiffAgainstBase(wt, squashBase);
             headSha = sha;
             outcome = step.onCommitted({ commitSha: sha, diff }, stepCtx);
             if (step.commentSection) await living.appendSection(step.id, step.commentSection({ commitSha: sha }, stepCtx));

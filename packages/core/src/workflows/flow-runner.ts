@@ -210,6 +210,7 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
   // injects `projectEnv.envVars` into every command.
   let worktreePath: string | undefined;
   let branchName: string | undefined;
+  let baseSha: string | undefined;
   let disposeWorktree: (() => Promise<void>) | undefined;
   let runEnv: RunEnv | undefined;
 
@@ -226,6 +227,7 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
       onWarn: (m: string) => params.onEvent(m),
     });
     worktreePath = wt.path;
+    baseSha = wt.baseSha;
     disposeWorktree = wt.dispose;
 
     try {
@@ -263,6 +265,7 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
         extraTools: [],
       })),
       worktreePath,
+      baseSha,
       branch: branchName,
       runEnv,
       onEvent: params.onEvent,
