@@ -16,11 +16,13 @@ interface ActionGridProps {
 
 export function ActionGrid({ badges }: ActionGridProps) {
   const [activeRun, setActiveRun] = useState<{ runId: string; actionId: string; label: string } | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   async function handleRun(tile: ActionTile) {
     const result = await startAction(tile.id);
     if (result.ok && result.runId) {
       setActiveRun({ runId: result.runId, actionId: tile.id, label: tile.label });
+      setDrawerOpen(true);
     }
   }
 
@@ -43,7 +45,9 @@ export function ActionGrid({ badges }: ActionGridProps) {
                     badge={badges?.[tile.id]}
                     isRunning={activeRun?.actionId === tile.id}
                     onRun={() => handleRun(tile)}
-                    onViewLogs={() => activeRun?.actionId === tile.id && setActiveRun((r) => r)}
+                    onViewLogs={() => {
+                      if (activeRun?.actionId === tile.id) setDrawerOpen(true);
+                    }}
                   />
                 ))}
               </div>
@@ -52,11 +56,11 @@ export function ActionGrid({ badges }: ActionGridProps) {
         })}
       </div>
 
-      {activeRun && (
+      {activeRun && drawerOpen && (
         <RunDrawer
           runId={activeRun.runId}
           actionLabel={activeRun.label}
-          onClose={() => setActiveRun(null)}
+          onClose={() => setDrawerOpen(false)}
         />
       )}
     </>
