@@ -673,11 +673,14 @@ export class AutofixOrchestrator {
 
     opts.onEvent?.(`[#${input.issueNumber}] CI-FIX ${input.attemptIndex}/${input.attemptMax} — fetching branch ${input.branch}`);
 
-    // Materialise the PR branch locally. The follow-up worktree attaches to
-    // the existing branch (resetBranch:false) so the prior autofix commits
-    // stay — we're extending the PR, not replacing it.
+    // Materialise the PR branch into cezar's private ref namespace. The
+    // follow-up worktree attaches to the existing local branch
+    // (resetBranch:false) so the prior autofix commits stay — we're extending
+    // the PR, not replacing it — or starts a fresh local branch from the
+    // fetched PR tip when none exists yet.
+    let prRef: string;
     try {
-      await fetchRemoteBranch(repoRoot, cfg.remote, input.branch);
+      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch);
     } catch (err) {
       return { status: 'failed', reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`, branch: input.branch };
     }
@@ -690,6 +693,7 @@ export class AutofixOrchestrator {
         baseBranch: cfg.baseBranch,
         remote: cfg.remote,
         fetchRemote: cfg.fetchBeforeAttempt,
+        startRef: prRef,
         resetBranch: false,
       });
     } catch (err) {
@@ -993,8 +997,9 @@ export class AutofixOrchestrator {
     const repoRoot = resolve(cfg.repoRoot);
 
     opts.onEvent?.(`[#${input.issueNumber}] CI-FIX ${input.attemptIndex}/${input.attemptMax} — fetching branch ${input.branch}`);
+    let prRef: string;
     try {
-      await fetchRemoteBranch(repoRoot, cfg.remote, input.branch);
+      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch);
     } catch (err) {
       return { status: 'failed', reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`, branch: input.branch };
     }
@@ -1007,6 +1012,7 @@ export class AutofixOrchestrator {
         baseBranch: cfg.baseBranch,
         remote: cfg.remote,
         fetchRemote: cfg.fetchBeforeAttempt,
+        startRef: prRef,
         resetBranch: false,
         onWarn: (m) => opts.onEvent?.(`[#${input.issueNumber}] ${m}`),
       });

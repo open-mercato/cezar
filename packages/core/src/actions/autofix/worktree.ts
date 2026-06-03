@@ -21,12 +21,26 @@ export async function fetchBaseBranch(repoRoot: string, remote: string, baseBran
   await runGit(repoRoot, ['fetch', '--prune', '--no-tags', remote, baseBranch]);
 }
 
-// Fetch a specific remote branch and create (or fast-forward) a local ref
-// that tracks it. Used by the CI follow-up flow: the PR branch exists on
-// origin but may not be present in the cron worker's fresh clone, so we
-// materialise a local branch here before createWorktree can attach to it.
-export async function fetchRemoteBranch(repoRoot: string, remote: string, branch: string): Promise<void> {
-  await runGit(repoRoot, ['fetch', '--no-tags', remote, `+refs/heads/${branch}:refs/heads/${branch}`]);
+// Private ref namespace cezar fetches PR branches into. Kept out of
+// `refs/heads/` so a force-update here can never clobber a user's local
+// branch of the same name (see issue #38).
+export function cezarAutofixRef(branch: string): string {
+  return `refs/cezar-autofix/${branch}`;
+}
+
+// Fetch a specific remote branch into cezar's private ref namespace and return
+// that ref. Used by the CI follow-up flow: the PR branch exists on origin but
+// may not be present in the cron worker's fresh clone, so we materialise it
+// here before createWorktree starts a worktree from it.
+//
+// We force-update (`+`) into `refs/cezar-autofix/<branch>` rather than
+// `refs/heads/<branch>` so that, when the workspace points autofix.repoRoot at
+// a user's real checkout that happens to hold a local branch of the same name,
+// any unpushed local commits on `refs/heads/<branch>` are never destroyed.
+export async function fetchRemoteBranch(repoRoot: string, remote: string, branch: string): Promise<string> {
+  const ref = cezarAutofixRef(branch);
+  await runGit(repoRoot, ['fetch', '--no-tags', remote, `+refs/heads/${branch}:${ref}`]);
+  return ref;
 }
 
 async function runGit(cwd: string, args: string[]): Promise<string> {
@@ -109,6 +123,13 @@ export async function createWorktree(opts: {
   remote: string;
   /** If true, fetch the remote and start from `<remote>/<baseBranch>` (latest origin state). */
   fetchRemote?: boolean;
+  /**
+   * Explicit ref to start a freshly-created `branch` from, overriding `baseBranch`.
+   * Used by the CI follow-up flow to start from the fetched PR tip
+   * (`refs/cezar-autofix/<branch>`) when no local branch exists yet. Ignored
+   * when the local branch already exists and `resetBranch` is false.
+   */
+  startRef?: string;
   /** If true, delete any existing local branch so the new worktree starts fresh. Used on retry. */
   resetBranch?: boolean;
   /** Optional warn callback for non-fatal conditions (e.g. fetch fallback). */
@@ -126,8 +147,8 @@ export async function createWorktree(opts: {
   // baseBranch is behind origin, building on it guarantees PR merge conflicts
   // against the current GitHub state. Branching from <remote>/<baseBranch>
   // sidesteps the user's working copy entirely.
-  let startingRef = opts.baseBranch;
-  if (opts.fetchRemote) {
+  let startingRef = opts.startRef ?? opts.baseBranch;
+  if (!opts.startRef && opts.fetchRemote) {
     try {
       await fetchBaseBranch(opts.repoRoot, opts.remote, opts.baseBranch);
       startingRef = `${opts.remote}/${opts.baseBranch}`;
