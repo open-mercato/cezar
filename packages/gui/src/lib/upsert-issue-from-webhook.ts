@@ -29,6 +29,18 @@ function labelNames(labels: WebhookIssue['labels']): string[] {
  * `digest`/`analysis` (those are owned by the pipeline). `content_hash` is
  * computed the same way `GitHubService` does so the store's change-detection
  * keeps working.
+ *
+ * We deliberately write only the columns the webhook payload authoritatively
+ * carries. In particular:
+ *  - `reactions` is never written here — the webhook `issue` object has no
+ *    reaction count, so the periodic `api/cron/issue-sync` reconcile owns it.
+ *    (Previously this was hardcoded to `0`, zeroing the synced value on every
+ *    `edited` delivery.)
+ *  - `comment_count` is only written when the payload actually includes the
+ *    `comments` field. On events like `issues.assigned` it can be absent, and
+ *    `?? 0` would otherwise regress the synced count back to `0`.
+ * On the initial INSERT of a brand-new issue these columns fall back to their
+ * schema defaults (`0`), which `issue-sync` then reconciles to real values.
  */
 export async function upsertIssueFromWebhook(
   adminSupabase: SupabaseClient<Database>,
@@ -41,7 +53,7 @@ export async function upsertIssueFromWebhook(
   // Mirrors api/cron/issue-sync's row shape — we intentionally omit `digest` /
   // `analysis` so an `edited` upsert doesn't clobber pipeline-owned data
   // (PostgREST `ON CONFLICT DO UPDATE` only sets the columns present here).
-  const row = {
+  const row: Record<string, unknown> = {
     workspace_id: workspaceId,
     number: issue.number,
     title,
@@ -52,9 +64,10 @@ export async function upsertIssueFromWebhook(
     author: issue.user?.login ?? '',
     html_url: issue.html_url,
     content_hash: core.contentHash(title, body),
-    comment_count: issue.comments ?? 0,
-    reactions: 0,
   };
+  // Only write `comment_count` when the payload actually carries it; otherwise
+  // an event that omits `comments` would clobber the synced value with `0`.
+  if (issue.comments != null) row.comment_count = issue.comments;
   const { error } = await adminSupabase
     .from('issues')
     .upsert(row as Database['public']['Tables']['issues']['Insert'], { onConflict: 'workspace_id,number' });
