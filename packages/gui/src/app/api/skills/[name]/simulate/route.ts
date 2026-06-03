@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import { checkRateLimit, isPromptTooLarge, MAX_PROMPT_BYTES } from '@/lib/simulate-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,6 +45,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
   const workspace = await getActiveWorkspace();
   if (!workspace) return new Response('No workspace selected', { status: 400 });
 
+  const rate = checkRateLimit(user.id);
+  if (!rate.ok) {
+    return new Response('Too many simulations — slow down and try again shortly.', {
+      status: 429,
+      headers: { 'retry-after': String(rate.retryAfterSec) },
+    });
+  }
+
   const { name: rawName } = await ctx.params;
   const skillName = decodeURIComponent(rawName);
 
@@ -81,6 +90,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
       status: 400,
     });
   }
+  if (isPromptTooLarge(systemPrompt)) {
+    return new Response(
+      `Skill prompt is too large to simulate (max ${MAX_PROMPT_BYTES / 1024} KiB).`,
+      { status: 413 },
+    );
+  }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -95,6 +110,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
       messages: {
         stream: (input: unknown) => AsyncIterable<unknown> & {
           on: (event: string, cb: (data: unknown) => void) => void;
+          controller?: { abort: () => void };
         };
       };
     };
@@ -129,6 +145,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
           max_tokens: MAX_TOKENS,
           system: systemPrompt,
           messages: [{ role: 'user', content: userPrompt }],
+        });
+
+        // If the client disconnects, cancel the upstream Anthropic call so we
+        // stop paying for tokens no one will read.
+        req.signal.addEventListener('abort', () => {
+          try {
+            sdkStream.controller?.abort();
+          } catch {
+            /* best-effort */
+          }
         });
 
         sdkStream.on('text', (delta: unknown) => {
