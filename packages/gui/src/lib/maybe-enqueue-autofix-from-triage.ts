@@ -83,18 +83,12 @@ export async function maybeEnqueueAutofixFromTriage(
       return { enqueued: false, reason: `bugConfidence ${confidence.toFixed(2)} < threshold ${threshold.toFixed(2)}` };
     }
 
-    // ── dedupe ──
+    // ── dedupe (best-effort early-outs) ──
+    // The open-jobs check is enforced atomically at INSERT time by the
+    // `enqueue_autofix_if_not_open` RPC below (migration 0029) — these two
+    // remaining checks are cheap early-outs that aren't part of the jobs-row
+    // TOCTOU race.
     {
-      const { data: openJobs } = await adminSupabase
-        .from('jobs')
-        .select('id')
-        .eq('workspace_id', workspaceId)
-        .eq('kind', 'autofix')
-        .eq('issue_number', issueNumber)
-        .in('status', ['queued', 'claimed', 'running'])
-        .limit(1);
-      if (openJobs && openJobs.length > 0) return { enqueued: false, reason: 'an autofix job is already queued/running for this issue' };
-
       const { data: openRuns } = await adminSupabase
         .from('workflow_runs')
         .select('id')
@@ -118,25 +112,25 @@ export async function maybeEnqueueAutofixFromTriage(
     // Phase 4 soft affinity — prefer the runner that handled the parent
     // triage when one is known (cron-path parents leave it null, which
     // means "no preference; any matching runner may claim").
-    const preferred = parentRunnerId
-      ? {
-          preferred_runner_id: parentRunnerId,
-          preferred_until: new Date(Date.now() + SOFT_AFFINITY_WINDOW_MS).toISOString(),
-        }
-      : {};
-    const { error: insErr } = await adminSupabase.from('jobs').insert({
-      workspace_id: workspaceId,
-      repo,
-      kind: 'autofix',
-      issue_number: issueNumber,
-      pr_number: null,
-      priority: 10,
-      status: 'queued',
-      max_attempts: 1,
-      payload: { trigger: 'triage' },
-      ...preferred,
+    const preferredUntil = parentRunnerId
+      ? new Date(Date.now() + SOFT_AFFINITY_WINDOW_MS).toISOString()
+      : null;
+    // Atomic enqueue: the RPC's `INSERT … WHERE NOT EXISTS` (migration 0029)
+    // closes the TOCTOU race against the open-jobs check — two concurrent
+    // triage finalizations can't both queue an autofix for the same issue.
+    // Returns the new job id, or null when an open autofix job already exists.
+    const { data: jobId, error: insErr } = await adminSupabase.rpc('enqueue_autofix_if_not_open', {
+      p_workspace_id: workspaceId,
+      p_repo: repo,
+      p_issue_number: issueNumber,
+      p_payload: { trigger: 'triage' },
+      p_priority: 10,
+      p_max_attempts: 1,
+      p_preferred_runner_id: parentRunnerId ?? null,
+      p_preferred_until: preferredUntil,
     });
     if (insErr) return { enqueued: false, reason: `enqueue failed: ${insErr.message}` };
+    if (!jobId) return { enqueued: false, reason: 'an autofix job is already queued/running for this issue' };
     return { enqueued: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
