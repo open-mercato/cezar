@@ -423,6 +423,21 @@ export class WorkflowEngine {
       for (const sid of loop.stepIds) loopOfStep.set(sid, loop);
     }
 
+    // Validate loops up front: a typo'd or stale `stepIds` entry would otherwise
+    // make `findIndex` return -1 and the cursor walk `steps[-1]` (undefined),
+    // dying as "step 'undefined' threw…" with no hint at the real cause. Catch
+    // it here and precompute each loop's first-step index so the jumps below are
+    // a guaranteed-valid map lookup rather than a re-scan that can return -1.
+    const loopFirstIndex = new Map<string, number>();
+    for (const loop of effectiveLoops) {
+      for (const sid of loop.stepIds) {
+        if (!workflow.steps.some((s) => s.id === sid)) {
+          throw new Error(`workflow '${workflow.id}' loop '${loop.id}' references unknown step '${sid}'`);
+        }
+      }
+      loopFirstIndex.set(loop.id, workflow.steps.findIndex((s) => s.id === loop.stepIds[0]));
+    }
+
     // Engine main loop. We walk `workflow.steps` by index; when a loop body
     // step fails-retriable (or returns goto-loop) we jump the cursor back to
     // the loop's first step and bump the iteration counter.
@@ -661,7 +676,7 @@ export class WorkflowEngine {
         }
         loopIterations.set(loop.id, next);
         ctx.onEvent?.(`[#${ctx.issueNumber}] loop '${loop.id}' — retry ${next}/${loop.maxIterations}: ${outcome.reason}`);
-        i = workflow.steps.findIndex((s) => s.id === loop.stepIds[0]);
+        i = loopFirstIndex.get(loop.id)!;
         continue;
       }
 
@@ -673,7 +688,7 @@ export class WorkflowEngine {
           return finishRun('failed', `loop '${targetLoop.id}' exhausted ${targetLoop.maxIterations} iteration(s)`);
         }
         loopIterations.set(targetLoop.id, next);
-        i = workflow.steps.findIndex((s) => s.id === targetLoop.stepIds[0]);
+        i = loopFirstIndex.get(targetLoop.id)!;
         continue;
       }
 
@@ -687,7 +702,7 @@ export class WorkflowEngine {
           }
           loopIterations.set(loop.id, next);
           ctx.onEvent?.(`[#${ctx.issueNumber}] loop '${loop.id}' — iteration ${next}/${loop.maxIterations}`);
-          i = workflow.steps.findIndex((s) => s.id === loop.stepIds[0]);
+          i = loopFirstIndex.get(loop.id)!;
           continue;
         }
       }
