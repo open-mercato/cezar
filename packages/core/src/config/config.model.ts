@@ -46,6 +46,12 @@ export const ConfigSchema = z.object({
     tokenBudgetPerAttempt: z.number().default(250_000),
     ciFixMax: z.number().default(2),
     ciFixTokenBudget: z.number().default(120_000),
+    // Wall-clock ceiling for a single agent session (analyzer / fixer /
+    // reviewer). A session is bounded by maxTurns + tokenBudget, but neither
+    // catches a network/server-side stall, so without this an attempt can
+    // block forever. On timeout the session rejects, the worktree is disposed
+    // and the attempt is recorded as failed. Default: 20 min.
+    attemptTimeoutMs: z.number().default(20 * 60 * 1000),
     requireReviewPass: z.boolean().default(true),
     minBugConfidence: z.number().min(0).max(1).default(0.7),
     minAnalyzerConfidence: z.number().min(0).max(1).default(0.5),

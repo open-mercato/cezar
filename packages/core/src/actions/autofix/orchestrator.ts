@@ -33,6 +33,35 @@ import {
 } from './messages.js';
 
 /**
+ * Raised when a single agent session exceeds `autofix.attemptTimeoutMs`.
+ * Carries the configured limit so callers can surface it in the failure reason.
+ */
+export class AgentSessionTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super(`attempt timed out after ${Math.round(timeoutMs / 60000)} min`);
+    this.name = 'AgentSessionTimeoutError';
+  }
+}
+
+/**
+ * Bound an agent session by wall-clock time. `runAgentSession` is otherwise
+ * limited only by `maxTurns` and the `TokenBudget`, neither of which catches a
+ * stalled network / server-side hang — so a single attempt could block forever
+ * (issue #26). On timeout the returned promise rejects with
+ * `AgentSessionTimeoutError`; the in-flight session is left to be GC'd (its
+ * worktree is disposed by the caller's catch block). A non-positive timeout
+ * disables the bound entirely.
+ */
+function withAttemptTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new AgentSessionTimeoutError(timeoutMs)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+/**
  * Phase 3a: the workflow engine streams the *normalized* runner `AgentEvent`,
  * but `OrchestratorOptions.onAgentEvent` (and its GUI/CLI consumers) speak the
  * legacy `AgentEvent` shape. Map between the two so the engine path is
@@ -484,7 +513,7 @@ export class AutofixOrchestrator {
       builtinTools: ['Read', 'Grep', 'Glob', 'Bash'],
       bindings, skills, onEvent: args.onEvent, issueNumber,
     });
-    const analyzer = await runAgentSession({
+    const analyzer = await withAttemptTimeout(runAgentSession({
       systemPrompt: analyzerStep.systemPrompt,
       userPrompt: buildAnalyzerUserPrompt({
         issueNumber,
@@ -508,7 +537,7 @@ export class AutofixOrchestrator {
       maxTurns: cfg.maxTurns.analyzer,
       tokenBudget: budget,
       onEvent: args.onAgentEvent,
-    });
+    }), cfg.attemptTimeoutMs);
 
     if (analyzer.budgetExceeded) return { kind: 'hard-failed', reason: 'token budget exceeded during analysis' };
     if (!analyzer.parsed) {
@@ -547,7 +576,7 @@ export class AutofixOrchestrator {
       builtinTools: cfg.allowedTools,
       bindings, skills, onEvent: args.onEvent, issueNumber,
     });
-    const fixer = await runAgentSession({
+    const fixer = await withAttemptTimeout(runAgentSession({
       systemPrompt: fixStep.systemPrompt,
       userPrompt: buildFixerUserPrompt({
         issueNumber,
@@ -563,7 +592,7 @@ export class AutofixOrchestrator {
       maxTurns: cfg.maxTurns.fixer,
       tokenBudget: budget,
       onEvent: args.onAgentEvent,
-    });
+    }), cfg.attemptTimeoutMs);
 
     if (fixer.budgetExceeded) return { kind: 'hard-failed', reason: 'token budget exceeded during fix', rootCause };
     if (!fixer.parsed) return { kind: 'hard-failed', reason: 'fixer did not return a valid FixReport', rootCause };
@@ -584,7 +613,7 @@ export class AutofixOrchestrator {
       builtinTools: ['Read', 'Grep', 'Glob'],
       bindings, skills, onEvent: args.onEvent, issueNumber,
     });
-    const reviewer = await runAgentSession({
+    const reviewer = await withAttemptTimeout(runAgentSession({
       systemPrompt: reviewStep.systemPrompt,
       userPrompt: buildReviewerUserPrompt({
         issueNumber,
@@ -601,7 +630,7 @@ export class AutofixOrchestrator {
       maxTurns: cfg.maxTurns.reviewer,
       tokenBudget: budget,
       onEvent: args.onAgentEvent,
-    });
+    }), cfg.attemptTimeoutMs);
 
     // If the reviewer emitted prose instead of JSON we recover what we can so
     // the retry loop keeps its signal. Worst case: synthetic fail that tells
@@ -736,23 +765,29 @@ export class AutofixOrchestrator {
     const priorAttemptNotes = buildCiFollowupNotes(input);
 
     opts.onEvent?.(`[#${input.issueNumber}] CI-FIX FIX — implementing adjustment`);
-    const fixer = await runAgentSession({
-      systemPrompt: FIXER_SYSTEM_PROMPT,
-      userPrompt: buildFixerUserPrompt({
-        issueNumber: input.issueNumber,
-        title: issueData.issue.title,
-        rootCause,
-        priorAttemptNotes,
-      }),
-      cwd: worktree.path,
-      allowedTools: cfg.allowedTools,
-      bashAllowlist: cfg.bashAllowlist,
-      responseSchema: FixReportSchema,
-      model: cfg.models.fixer,
-      maxTurns: cfg.maxTurns.fixer,
-      tokenBudget: budget,
-      onEvent: opts.onAgentEvent,
-    });
+    let fixer;
+    try {
+      fixer = await withAttemptTimeout(runAgentSession({
+        systemPrompt: FIXER_SYSTEM_PROMPT,
+        userPrompt: buildFixerUserPrompt({
+          issueNumber: input.issueNumber,
+          title: issueData.issue.title,
+          rootCause,
+          priorAttemptNotes,
+        }),
+        cwd: worktree.path,
+        allowedTools: cfg.allowedTools,
+        bashAllowlist: cfg.bashAllowlist,
+        responseSchema: FixReportSchema,
+        model: cfg.models.fixer,
+        maxTurns: cfg.maxTurns.fixer,
+        tokenBudget: budget,
+        onEvent: opts.onAgentEvent,
+      }), cfg.attemptTimeoutMs);
+    } catch (err) {
+      await worktree.dispose().catch(() => {});
+      return { status: 'failed', reason: `CI follow-up fix ${(err as Error).message}`, branch: input.branch };
+    }
 
     if (fixer.budgetExceeded) {
       await worktree.dispose().catch(() => {});
@@ -775,24 +810,30 @@ export class AutofixOrchestrator {
     const diff = await getDiffAgainstBase(worktree.path, cfg.baseBranch);
 
     opts.onEvent?.(`[#${input.issueNumber}] CI-FIX REVIEW — running code review`);
-    const reviewer = await runAgentSession({
-      systemPrompt: REVIEWER_SYSTEM_PROMPT,
-      userPrompt: buildReviewerUserPrompt({
-        issueNumber: input.issueNumber,
-        title: issueData.issue.title,
-        rootCause,
-        fixReport,
-        diff,
-        baseBranch: cfg.baseBranch,
-      }),
-      cwd: worktree.path,
-      allowedTools: ['Read', 'Grep', 'Glob'],
-      responseSchema: ReviewVerdictSchema,
-      model: cfg.models.reviewer,
-      maxTurns: cfg.maxTurns.reviewer,
-      tokenBudget: budget,
-      onEvent: opts.onAgentEvent,
-    });
+    let reviewer;
+    try {
+      reviewer = await withAttemptTimeout(runAgentSession({
+        systemPrompt: REVIEWER_SYSTEM_PROMPT,
+        userPrompt: buildReviewerUserPrompt({
+          issueNumber: input.issueNumber,
+          title: issueData.issue.title,
+          rootCause,
+          fixReport,
+          diff,
+          baseBranch: cfg.baseBranch,
+        }),
+        cwd: worktree.path,
+        allowedTools: ['Read', 'Grep', 'Glob'],
+        responseSchema: ReviewVerdictSchema,
+        model: cfg.models.reviewer,
+        maxTurns: cfg.maxTurns.reviewer,
+        tokenBudget: budget,
+        onEvent: opts.onAgentEvent,
+      }), cfg.attemptTimeoutMs);
+    } catch (err) {
+      await worktree.dispose().catch(() => {});
+      return { status: 'failed', reason: `CI follow-up review ${(err as Error).message}`, branch: input.branch, fixReport };
+    }
 
     const verdict: Required<ReviewVerdict> = reviewer.parsed
       ? normalizeVerdict(reviewer.parsed)
