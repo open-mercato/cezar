@@ -301,11 +301,19 @@ export async function executeJobLocally(
 }
 
 /**
- * Phase 5 autosave. Stages every change and commits with `--allow-empty` so
- * even a "nothing changed since last tick" iteration still leaves a heartbeat
- * commit. `commit.gpgsign=false` is set inline so a host with signing on by
- * default doesn't prompt; the author is hardcoded so we never depend on the
- * operator's git identity (and so the commits stand out in `git log`).
+ * Phase 5 autosave. Stages changes to *already-tracked* files (`git add -u`)
+ * and commits with `--allow-empty` so even a "nothing changed since last tick"
+ * iteration still leaves a heartbeat commit. `commit.gpgsign=false` is set
+ * inline so a host with signing on by default doesn't prompt; the author is
+ * hardcoded so we never depend on the operator's git identity (and so the
+ * commits stand out in `git log`).
+ *
+ * We deliberately use `-u` rather than `-A`: `-A` would stage *new* untracked
+ * files too — including `.env` / `credentials.json` an agent may have written
+ * while debugging, or large build/fixture blobs — and these autosave commits
+ * are published by the Phase 4 push-to-PR step without the agent reviewing
+ * them. Staging tracked files only loses some recoverable brand-new WIP but
+ * eliminates the secret-leak / diff-noise class (see issue #62).
  *
  * A `running` guard skips overlapping ticks — git is generally fast enough
  * that 90s gives plenty of slack, but a slow disk shouldn't queue stale
@@ -316,7 +324,7 @@ async function autosaveWorktree(cwd: string): Promise<void> {
   if (autosaveRunning) return;
   autosaveRunning = true;
   try {
-    await execFileAsync('git', ['add', '-A'], { cwd });
+    await execFileAsync('git', ['add', '-u'], { cwd });
     await execFileAsync(
       'git',
       [
