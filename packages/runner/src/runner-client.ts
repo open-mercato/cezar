@@ -173,6 +173,29 @@ const MAX_RETRIES = 4;
  * with exponential backoff; throws hard on 401 (bad/revoked token). */
 export class RunnerClient {
   constructor(private readonly baseUrl: string, private readonly token: string) {
+    // Refuse to send the long-lived runner bearer token over a non-TLS
+    // transport. A prod typo (`http://…`) or a local-dev URL pasted into a
+    // deployment would otherwise leak the credential in plaintext on every
+    // claim/heartbeat/finalize call. Localhost stays painless; opt out with
+    // CEZAR_RUNNER_ALLOW_INSECURE=1 for non-localhost dev setups.
+    let parsed: URL;
+    try {
+      parsed = new URL(baseUrl);
+    } catch {
+      throw new Error(`cezar-runner: invalid --url / CEZAR_RUNNER_URL: '${baseUrl}'`);
+    }
+    const isLoopback =
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '127.0.0.1' ||
+      parsed.hostname === '[::1]' ||
+      parsed.hostname === '::1';
+    const allowInsecure = process.env.CEZAR_RUNNER_ALLOW_INSECURE === '1';
+    if (parsed.protocol !== 'https:' && !isLoopback && !allowInsecure) {
+      throw new Error(
+        `cezar-runner: refusing to send the runner token over ${parsed.protocol} ` +
+          `(${parsed.host}). Use an https:// URL, or set CEZAR_RUNNER_ALLOW_INSECURE=1 for local dev.`,
+      );
+    }
     this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
