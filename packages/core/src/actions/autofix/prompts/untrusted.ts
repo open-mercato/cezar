@@ -31,9 +31,11 @@ export function fenceUntrusted(name: string, text: string): string {
 /**
  * Normalize a GitHub-supplied title for a single-line git surface (commit
  * subject, PR title). Collapses all whitespace (newlines included — a newline
- * in a title would otherwise split the commit subject from its body) and caps
- * length so the subject stays within conventional limits.
+ * in a title would otherwise split the commit subject from its body), strips a
+ * leading `#`/`##…` (a markdown heading or literal issue-number prefix that
+ * would otherwise read as a comment in some git contexts), and caps length so
+ * the subject stays within conventional limits.
  */
 export function normalizeTitle(title: string): string {
-  return title.replace(/\s+/g, ' ').trim().slice(0, 72);
+  return title.replace(/\s+/g, ' ').trim().replace(/^#+\s*/, '').slice(0, 72);
 }
