@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { createSupabaseServerClient } from './supabase/server';
 import type { Database, WorkspaceRole } from './supabase/types';
@@ -22,7 +23,7 @@ export interface WorkspaceListItem {
   role: WorkspaceRole;
 }
 
-export async function getActiveWorkspace(): Promise<ActiveWorkspace | null> {
+export const getActiveWorkspace = cache(async (): Promise<ActiveWorkspace | null> => {
   const cookieStore = await cookies();
   const stored = cookieStore.get(WORKSPACE_COOKIE)?.value;
   const supabase = await createSupabaseServerClient();
@@ -50,9 +51,9 @@ export async function getActiveWorkspace(): Promise<ActiveWorkspace | null> {
     repoName: ws.repo_name,
     role: chosen.role,
   };
-}
+});
 
-export async function listWorkspaces(): Promise<WorkspaceListItem[]> {
+export const listWorkspaces = cache(async (): Promise<WorkspaceListItem[]> => {
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('workspace_members')
@@ -75,7 +76,7 @@ export async function listWorkspaces(): Promise<WorkspaceListItem[]> {
       };
     })
     .filter((w): w is WorkspaceListItem => w !== null);
-}
+});
 
 export async function setActiveWorkspace(workspaceId: string) {
   const cookieStore = await cookies();
