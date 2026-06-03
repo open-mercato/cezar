@@ -270,6 +270,11 @@ export class WorkflowEngine {
     const settings: WorkspaceWorkflowSettings = ctx.settings ?? DEFAULT_WORKSPACE_WORKFLOW_SETTINGS;
     const runnerFactory = ctx.runnerFactory ?? ((backend) => createAgentRunner(backend, { config: ctx.config }));
     const bindings = ctx.bindings ?? ctx.config.workflow?.bindings ?? [];
+    // The workspace's effective default backend, used to stamp non-agent steps'
+    // synthetic records so the cockpit's per-row backend icon matches where the
+    // run actually executes (claude-cli / codex-cli) instead of always reading
+    // 'anthropic-api'. Falls back to the API path when no default is configured.
+    const workspaceBackend: AgentBackend = ctx.config.autofix?.runner?.backend ?? 'anthropic-api';
 
     // Issue data — repo-less workflows still want title/body for prompts.
     let issueTitle = `#${ctx.issueNumber}`;
@@ -471,7 +476,7 @@ export class WorkflowEngine {
       // from inside runAgentStep — after binding resolution — so the record
       // carries the real backend/model instead of placeholders.
       if (step.kind !== 'agent') {
-        record = this.syntheticRecord(workflow.id, step.id, step.kind, iteration, 'running');
+        record = this.syntheticRecord(workflow.id, step.id, step.kind, iteration, 'running', workspaceBackend);
         ctx.onStepStart?.(record);
       }
 
@@ -613,7 +618,7 @@ export class WorkflowEngine {
       // Record the step (non-agent steps get a synthetic record too so the
       // cockpit shows every step; agent steps already have theirs).
       if (!record) {
-        record = this.syntheticRecord(workflow.id, step.id, step.kind, iteration, 'succeeded');
+        record = this.syntheticRecord(workflow.id, step.id, step.kind, iteration, 'succeeded', workspaceBackend);
       }
       if (outcome.kind === 'skip-run') {
         record.status = 'skipped';
@@ -816,15 +821,27 @@ export class WorkflowEngine {
     };
   }
 
-  private syntheticRecord(workflow: string, stepId: string, kind: AgentRunRecord['kind'], iteration: number, status: StepRunStatus): AgentRunRecord {
+  private syntheticRecord(
+    workflow: string,
+    stepId: string,
+    kind: AgentRunRecord['kind'],
+    iteration: number,
+    status: StepRunStatus,
+    // The workspace's effective default backend — non-agent steps (effect,
+    // commit, open-pr, push, shell-check, dev-server, human-gate) run wherever
+    // the workflow itself runs, so they should report that backend rather than
+    // a hardcoded 'anthropic-api' (which mislabels CLI runs in the cockpit).
+    workspaceBackend: AgentBackend = 'anthropic-api',
+  ): AgentRunRecord {
     return {
       id: randomUUID(),
       workflow,
       stepId,
       kind,
       iteration,
-      backend: 'anthropic-api',
-      model: '(none)',
+      backend: workspaceBackend,
+      // Non-agent steps have no model; render neutrally rather than "(none)".
+      model: '—',
       status,
       startedAt: new Date().toISOString(),
       tokensUsed: 0,
