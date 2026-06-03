@@ -115,9 +115,29 @@ export class GitHubService {
     this.repo = config.github.repo;
   }
 
-  async fetchAllIssues(includeClosed = false): Promise<RawIssue[]> {
+  async fetchAllIssues(includeClosed = false, maxItems?: number): Promise<RawIssue[]> {
     const state = includeClosed ? 'all' : 'open';
     try {
+      if (maxItems != null) {
+        const collected: RawIssue[] = [];
+        const iterator = this.octokit.paginate.iterator(this.octokit.rest.issues.listForRepo, {
+          owner: this.owner,
+          repo: this.repo,
+          state,
+          per_page: 100,
+          sort: 'created',
+          direction: 'asc',
+        });
+        for await (const { data } of iterator) {
+          for (const i of data) {
+            if (i.pull_request) continue; // exclude PRs
+            collected.push(this.mapIssue(i));
+            if (collected.length >= maxItems) return collected;
+          }
+        }
+        return collected;
+      }
+
       const issues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
         owner: this.owner,
         repo: this.repo,
@@ -160,34 +180,55 @@ export class GitHubService {
     }
   }
 
-  async listOpenPullRequests(): Promise<RawPullRequest[]> {
+  async listOpenPullRequests(maxItems?: number): Promise<RawPullRequest[]> {
+    const mapPr = (
+      p: Awaited<ReturnType<Octokit['rest']['pulls']['list']>>['data'][number],
+    ): RawPullRequest => ({
+      number: p.number,
+      title: p.title,
+      body: p.body ?? '',
+      state: p.state === 'closed' ? 'closed' : 'open',
+      draft: p.draft ?? false,
+      labels: Array.isArray(p.labels)
+        ? p.labels
+            .map((l) => (typeof l === 'string' ? l : l?.name ?? null))
+            .filter((n): n is string => typeof n === 'string' && n.length > 0)
+        : [],
+      author: p.user?.login ?? 'unknown',
+      htmlUrl: p.html_url,
+      headSha: p.head?.sha ?? null,
+      headRef: p.head?.ref ?? null,
+      baseRef: p.base?.ref ?? null,
+      referencedIssues: extractReferencedIssues(`${p.title}\n${p.body ?? ''}`),
+      createdAt: p.created_at,
+      updatedAt: p.updated_at,
+    });
+
     try {
+      if (maxItems != null) {
+        const collected: RawPullRequest[] = [];
+        const iterator = this.octokit.paginate.iterator(this.octokit.rest.pulls.list, {
+          owner: this.owner,
+          repo: this.repo,
+          state: 'open',
+          per_page: 100,
+        });
+        for await (const { data } of iterator) {
+          for (const p of data) {
+            collected.push(mapPr(p));
+            if (collected.length >= maxItems) return collected;
+          }
+        }
+        return collected;
+      }
+
       const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, {
         owner: this.owner,
         repo: this.repo,
         state: 'open',
         per_page: 100,
       });
-      return prs.map(p => ({
-        number: p.number,
-        title: p.title,
-        body: p.body ?? '',
-        state: p.state === 'closed' ? 'closed' : 'open',
-        draft: p.draft ?? false,
-        labels: Array.isArray(p.labels)
-          ? p.labels
-              .map((l) => (typeof l === 'string' ? l : l?.name ?? null))
-              .filter((n): n is string => typeof n === 'string' && n.length > 0)
-          : [],
-        author: p.user?.login ?? 'unknown',
-        htmlUrl: p.html_url,
-        headSha: p.head?.sha ?? null,
-        headRef: p.head?.ref ?? null,
-        baseRef: p.base?.ref ?? null,
-        referencedIssues: extractReferencedIssues(`${p.title}\n${p.body ?? ''}`),
-        createdAt: p.created_at,
-        updatedAt: p.updated_at,
-      }));
+      return prs.map(mapPr);
     } catch (error) {
       this.handleError(error);
       throw error;

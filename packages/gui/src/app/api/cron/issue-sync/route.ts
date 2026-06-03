@@ -6,12 +6,29 @@ export const runtime = 'nodejs';
 
 // Cap per-tick work so one oversized repo can't blow the cron timeout.
 const MAX_WORKSPACES_PER_TICK = 10;
+// Per-workspace wall-clock budget — one slow GitHub API call (or its retry
+// window) must not hold the whole tick hostage.
+const PER_WORKSPACE_TIMEOUT_MS = 20_000;
+// Bound how many issues a single tick pulls into memory so a mega-repo with
+// thousands of open issues can't OOM/timeout the cron.
+const MAX_ISSUES_PER_TICK = 1_000;
 
 type Workspace = {
   id: string;
   repo_owner: string;
   repo_name: string;
 };
+
+// Reject (without unwinding the underlying work) once `ms` elapses so one
+// stuck GitHub call can't pin the request.
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
 
 /**
  * GitHub → store reconcile cron. The webhook receiver covers new-issue events
@@ -52,11 +69,17 @@ export async function GET(req: Request) {
   const results = await Promise.all(
     (workspaces as Workspace[]).map(async (ws) => {
       try {
-        return await syncOne(ws, supabase, core);
+        return await withTimeout(
+          syncOne(ws, supabase, core),
+          PER_WORKSPACE_TIMEOUT_MS,
+          'issue sync',
+        );
       } catch (err) {
+        // Log the full error server-side; never echo raw GitHub/Octokit error
+        // text to the caller (it can carry tokens or other internals).
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[issue-sync] workspace ${ws.id} failed:`, msg);
-        return { workspaceId: ws.id, ok: false, error: msg };
+        return { workspaceId: ws.id, ok: false, error: 'sync_failed' };
       }
     }),
   );
@@ -76,7 +99,7 @@ async function syncOne(
     github: { owner: ws.repo_owner, repo: ws.repo_name, token },
   } as any);
 
-  const openIssues = await github.fetchAllIssues(false);
+  const openIssues = await github.fetchAllIssues(false, MAX_ISSUES_PER_TICK);
 
   if (openIssues.length > 0) {
     const rows = openIssues.map(i => ({
