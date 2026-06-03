@@ -19,7 +19,12 @@ export async function startAutofix(issueNumber: number): Promise<void> {
 
   const supabase = createSupabaseAdminClient();
 
-  // Dedupe — don't double-enqueue if there's already one in flight.
+  // Dedupe — don't double-enqueue if there's already one in flight. The
+  // SELECT below is a fast path for the common (no in-flight job) case, but
+  // it's racy on its own: two concurrent clicks both see zero rows. The
+  // authoritative guard is the `jobs_autofix_inflight_unique` partial unique
+  // index (migration 0029), which lets the database reject the second insert
+  // with 23505 — caught below and treated as a benign no-op.
   const { data: open } = await supabase
     .from('jobs')
     .select('id')
@@ -40,7 +45,12 @@ export async function startAutofix(issueNumber: number): Promise<void> {
       max_attempts: 1,
       payload: { trigger: 'manual' },
     });
-    if (error) throw new Error(`enqueue failed: ${error.message}`);
+    // 23505 = unique_violation: another concurrent request already enqueued
+    // an in-flight autofix for this issue. That's exactly the outcome we want
+    // (one job, not two), so swallow it instead of surfacing an error.
+    if (error && error.code !== '23505') {
+      throw new Error(`enqueue failed: ${error.message}`);
+    }
   }
 
   revalidatePath('/issues');
