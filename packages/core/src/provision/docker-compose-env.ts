@@ -73,13 +73,13 @@ export class DockerComposeEnv implements RunEnv {
           'services:',
           `  ${this.opts.service}:`,
           '    volumes:',
-          `      - ${this.opts.worktreePath}:${this.opts.workdir}`,
+          `      - ${yamlString(`${this.opts.worktreePath}:${this.opts.workdir}`)}`,
         ];
         // Publish the dev-server container port to an ephemeral host port so
         // concurrent runs don't collide. Only affects `up` (run --rm ignores it).
         if (ds.enabled && ds.port) {
           lines.push('    ports:', `      - "${ds.port}"`);
-          if (ds.command.trim()) lines.push(`    command: ${ds.command}`);
+          if (ds.command.trim()) lines.push(`    command: ${yamlString(ds.command)}`);
         }
         lines.push('');
         await writeFile(this.overrideFile, lines.join('\n'), 'utf8');
@@ -169,6 +169,16 @@ export class DockerComposeEnv implements RunEnv {
       this.overrideFile = null;
     }
   }
+}
+
+/**
+ * Quote a string as a YAML double-quoted scalar so values containing `:`, `#`,
+ * leading `-`, or other YAML-significant characters (e.g. worktree paths on
+ * macOS/Windows/CI temp dirs, or a dev-server command with a colon) survive
+ * the override file intact instead of producing malformed YAML.
+ */
+export function yamlString(s: string): string {
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /** Parse `docker compose port` output (e.g. `0.0.0.0:54213` / `[::]:54213`) → the host port. */
