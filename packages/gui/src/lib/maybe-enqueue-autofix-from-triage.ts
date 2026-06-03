@@ -136,7 +136,13 @@ export async function maybeEnqueueAutofixFromTriage(
       payload: { trigger: 'triage' },
       ...preferred,
     });
-    if (insErr) return { enqueued: false, reason: `enqueue failed: ${insErr.message}` };
+    // 23505 = a concurrent path already enqueued this autofix job (partial
+    // UNIQUE index from migration 0029) — treat as "already in flight", not a
+    // hard failure.
+    if (insErr) {
+      if (insErr.code === '23505') return { enqueued: false, reason: 'an autofix job is already queued/running for this issue' };
+      return { enqueued: false, reason: `enqueue failed: ${insErr.message}` };
+    }
     return { enqueued: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

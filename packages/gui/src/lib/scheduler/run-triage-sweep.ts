@@ -101,8 +101,12 @@ async function sweepOne(
       max_attempts: 1,
       payload: { trigger: 'sweep' },
     });
+    // 23505 = a concurrent webhook/sweep already enqueued this triage job
+    // (partial UNIQUE index from migration 0029) — benign, not a failure.
     if (error) {
-      console.error(`[triage-sweep] enqueue failed for ws ${ws.id} #${issue.number}:`, error.message);
+      if (error.code !== '23505') {
+        console.error(`[triage-sweep] enqueue failed for ws ${ws.id} #${issue.number}:`, error.message);
+      }
       continue;
     }
     enqueued++;

@@ -191,9 +191,13 @@ async function handleIssues(admin: SupabaseAdmin, payload: WebhookPayload): Prom
           max_attempts: 1,
           payload: { trigger: 'webhook', action },
         });
-        if (error) {
+        // The partial UNIQUE index (migration 0029) is the real dedup guard —
+        // the SELECT above just avoids the round-trip in the common case. A
+        // 23505 here means a concurrent delivery won the race, which is the
+        // intended outcome (one job), not a failure.
+        if (error && error.code !== '23505') {
           console.error(`[github-webhook] triage enqueue failed for ws ${ws.id}:`, error.message);
-        } else {
+        } else if (!error) {
           triageEnqueued++;
         }
       }
@@ -285,8 +289,12 @@ async function enqueueFlowsForIssueEvent(
         flowInput: String(args.issueNumber),
       },
     });
+    // 23505 = a concurrent delivery already enqueued this (flow, issue) job
+    // (partial UNIQUE index from migration 0029) — benign, not a failure.
     if (error) {
-      console.error(`[github-webhook] flow '${flow.name}' enqueue failed:`, error.message);
+      if (error.code !== '23505') {
+        console.error(`[github-webhook] flow '${flow.name}' enqueue failed:`, error.message);
+      }
       continue;
     }
     enqueued++;
@@ -418,8 +426,12 @@ async function handleCheckRun(admin: SupabaseAdmin, payload: WebhookPayload): Pr
       payload: { trigger: 'webhook', ciFollowup: ciFollowupSeed },
       ...preferred,
     });
+    // 23505 = a concurrent delivery already enqueued this ci-followup job
+    // (partial UNIQUE index from migration 0029) — benign, not a failure.
     if (error) {
-      console.error(`[github-webhook] ci-followup enqueue failed for ws ${ws.id}:`, error.message);
+      if (error.code !== '23505') {
+        console.error(`[github-webhook] ci-followup enqueue failed for ws ${ws.id}:`, error.message);
+      }
       continue;
     }
     enqueued++;
