@@ -111,7 +111,7 @@ export interface Database {
           name: string;
           repo_owner: string;
           repo_name: string;
-          installation_id: string | null;
+          installation_id: number | null;
           config: Json;
           meta: Json;
           auto_triage_enabled: boolean;

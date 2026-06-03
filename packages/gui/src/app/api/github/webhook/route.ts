@@ -501,13 +501,13 @@ async function handleInstallation(admin: SupabaseAdmin, payload: WebhookPayload)
       if (installationId != null && repo) {
         await admin
           .from('workspaces')
-          .update({ installation_id: String(installationId) })
+          .update({ installation_id: installationId })
           .eq('repo_owner', repo.owner.login)
           .eq('repo_name', repo.name);
       }
     } else if (action === 'deleted' || action === 'removed') {
       if (installationId != null) {
-        await admin.from('workspaces').update({ installation_id: null }).eq('installation_id', String(installationId));
+        await admin.from('workspaces').update({ installation_id: null }).eq('installation_id', installationId);
       } else if (repo) {
         await admin.from('workspaces').update({ installation_id: null }).eq('repo_owner', repo.owner.login).eq('repo_name', repo.name);
       }
@@ -534,7 +534,7 @@ async function resolveWorkspaces(
     const { data } = await admin
       .from('workspaces')
       .select('id, auto_triage_enabled')
-      .eq('installation_id', String(installationId));
+      .eq('installation_id', installationId);
     if (data && data.length > 0) return data;
   }
   const { data } = await admin
