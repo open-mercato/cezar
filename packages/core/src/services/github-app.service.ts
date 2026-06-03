@@ -20,8 +20,11 @@ export class GitHubAppService {
     return Boolean(process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY);
   }
 
-  // Cache installation tokens per owner with their absolute expiry (ms epoch).
-  private static tokenCache = new Map<string, { token: string; expiresAt: number }>();
+  // Cache installation tokens with their absolute expiry (ms epoch). Owner-keyed
+  // and install-id-keyed caches are kept in separate Maps so the two key spaces
+  // can never collide (a lowercased owner login vs. a numeric installation id).
+  private static tokenCacheByOwner = new Map<string, { token: string; expiresAt: number }>();
+  private static tokenCacheByInstallId = new Map<number, { token: string; expiresAt: number }>();
 
   /**
    * Returns an installation access token for a specific GitHub App install id.
@@ -29,8 +32,8 @@ export class GitHubAppService {
    * `runners.github_installation_id` set — we skip the owner→install lookup
    * and mint directly. Throws if no App is configured.
    *
-   * Cache key is `install:<id>` so it doesn't collide with the owner-keyed
-   * tokens produced by {@link getInstallationToken}.
+   * Cached in {@link tokenCacheByInstallId}, a separate Map from the owner-keyed
+   * cache used by {@link getInstallationToken}, so the key spaces never collide.
    */
   async getInstallationTokenById(installationId: number): Promise<string> {
     if (!GitHubAppService.isConfigured()) {
@@ -39,8 +42,7 @@ export class GitHubAppService {
       );
     }
 
-    const cacheKey = `install:${installationId}`;
-    const cached = GitHubAppService.tokenCache.get(cacheKey);
+    const cached = GitHubAppService.tokenCacheByInstallId.get(installationId);
     if (cached && cached.expiresAt - Date.now() > 60_000) {
       return cached.token;
     }
@@ -54,9 +56,11 @@ export class GitHubAppService {
       installation_id: installationId,
     });
     const token = tokenRes.data.token;
-    const expiresAt = tokenRes.data.expires_at ? Date.parse(tokenRes.data.expires_at) : Date.now() + 9 * 60_000;
+    // GitHub installation tokens last 60 min; keep a 10-min safety margin when
+    // the response omits `expires_at` (Date.parse on an absent value is NaN).
+    const expiresAt = tokenRes.data.expires_at ? Date.parse(tokenRes.data.expires_at) : Date.now() + 50 * 60_000;
 
-    GitHubAppService.tokenCache.set(cacheKey, { token, expiresAt });
+    GitHubAppService.tokenCacheByInstallId.set(installationId, { token, expiresAt });
     return token;
   }
 
@@ -73,7 +77,7 @@ export class GitHubAppService {
     }
 
     const cacheKey = owner.toLowerCase();
-    const cached = GitHubAppService.tokenCache.get(cacheKey);
+    const cached = GitHubAppService.tokenCacheByOwner.get(cacheKey);
     // 60s safety margin so we don't hand back a token that's about to expire.
     if (cached && cached.expiresAt - Date.now() > 60_000) {
       return cached.token;
@@ -113,9 +117,11 @@ export class GitHubAppService {
       installation_id: installationId,
     });
     const token = tokenRes.data.token;
-    const expiresAt = tokenRes.data.expires_at ? Date.parse(tokenRes.data.expires_at) : Date.now() + 9 * 60_000;
+    // GitHub installation tokens last 60 min; keep a 10-min safety margin when
+    // the response omits `expires_at` (Date.parse on an absent value is NaN).
+    const expiresAt = tokenRes.data.expires_at ? Date.parse(tokenRes.data.expires_at) : Date.now() + 50 * 60_000;
 
-    GitHubAppService.tokenCache.set(cacheKey, { token, expiresAt });
+    GitHubAppService.tokenCacheByOwner.set(cacheKey, { token, expiresAt });
     return token;
   }
 }
