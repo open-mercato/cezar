@@ -74,7 +74,13 @@ export async function POST(req: Request): Promise<NextResponse> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[github-webhook] ${event} handler failed:`, msg);
-    return NextResponse.json({ error: 'handler error' }, { status: 500 });
+    // Ack with 200 even on a downstream failure: a 5xx makes GitHub retry the
+    // same delivery (~8 times / 24h), which — combined with the upsert/enqueue
+    // dedup not yet running — turns one flaky Supabase call into a storm of
+    // duplicate triage/flow jobs. We accepted the delivery and own the
+    // recovery (the triage-sweep poll is the safety net), so don't hand GitHub
+    // the retry queue.
+    return NextResponse.json({ ok: false, error: 'handler error' }, { status: 200 });
   }
 }
 
