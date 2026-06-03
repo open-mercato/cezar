@@ -1,3 +1,4 @@
+import { DEFAULT_AUTO_ACCEPT_ABOVE } from './action.js';
 import type {
   AcceptanceMode,
   ActionDef,
@@ -102,11 +103,11 @@ function parseConfidenceConfig(value: unknown): ConfidenceConfig {
     if (!Number.isFinite(n)) return fallback;
     return Math.max(0, Math.min(100, Math.round(n)));
   };
-  const high = clamp(obj.autoAcceptAbove, 0);
+  const high = clamp(obj.autoAcceptAbove, DEFAULT_AUTO_ACCEPT_ABOVE);
   if ('autoDenyBelow' in obj) {
     return {
       autoAcceptAbove: high,
-      autoDenyBelow: Math.min(clamp(obj.autoDenyBelow, 0), high - 1),
+      autoDenyBelow: Math.max(0, Math.min(clamp(obj.autoDenyBelow, 0), high - 1)),
     };
   }
   return { autoAcceptAbove: high };

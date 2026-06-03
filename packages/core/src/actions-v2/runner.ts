@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { DEFAULT_AUTO_ACCEPT_ABOVE } from './action.js';
 import type { ActionDef, ActionRunResult } from './action.js';
 import type { Skill } from '../skills/skill-catalog.js';
 import {
@@ -381,9 +382,13 @@ async function runToolUseMode(
  *                           ≥ autoDenyBelow   : defer,
  *                           <                 : drop
  *
- * When no confidence is provided on the call, treats it as 100 (fully
- * confident) so existing actions that don't emit confidence keep applying
- * everything.
+ * When neither the model emits a confidence on the call nor the action
+ * configures a `confidenceConfig`, the effect is treated as fully confident so
+ * legacy actions that never emit confidence keep applying everything. As soon
+ * as the model self-reports a confidence, or the action configures a threshold,
+ * the effect is routed against `DEFAULT_AUTO_ACCEPT_ABOVE` (when unconfigured) —
+ * so a model that emits `_confidence: 0` to signal uncertainty is no longer
+ * auto-applied.
  */
 async function applyOrDefer(
   call: EffectCall,
@@ -391,9 +396,23 @@ async function applyOrDefer(
   ctx: EffectContext,
   deferSink: DeferSink | undefined,
 ): Promise<{ outcome: 'applied' | 'deferred' | 'dropped' | 'error'; summary: string }> {
-  const confidence = call.confidence ?? 100;
   const mode = action.acceptanceMode ?? 'auto';
-  const cfg = action.confidenceConfig ?? { autoAcceptAbove: 0 };
+
+  // Legacy escape hatch: an action with no threshold processing whatsoever
+  // (no configured confidenceConfig) AND a call carrying no model confidence is
+  // applied unconditionally — that's the pre-confidence contract.
+  if (action.confidenceConfig === undefined && call.confidence === undefined) {
+    try {
+      const summary = await executeEffect(call, ctx);
+      return { outcome: 'applied', summary };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { outcome: 'error', summary: `error: ${message}` };
+    }
+  }
+
+  const confidence = call.confidence ?? 100;
+  const cfg = action.confidenceConfig ?? { autoAcceptAbove: DEFAULT_AUTO_ACCEPT_ABOVE };
   const acceptAbove = cfg.autoAcceptAbove;
   const denyBelow = 'autoDenyBelow' in cfg ? cfg.autoDenyBelow : 0;
 

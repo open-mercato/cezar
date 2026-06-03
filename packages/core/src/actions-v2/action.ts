@@ -53,6 +53,15 @@ export interface HitlConfidenceConfig {
 
 export type ConfidenceConfig = AutoConfidenceConfig | HitlConfidenceConfig;
 
+/**
+ * Default `autoAcceptAbove` threshold used when an action's `confidence_config`
+ * is absent or malformed. A model that explicitly self-reports confidence below
+ * this bar is no longer auto-applied; effects that emit no confidence at all are
+ * still treated as fully confident (see the runner's `applyOrDefer`), preserving
+ * legacy actions that never emit confidence.
+ */
+export const DEFAULT_AUTO_ACCEPT_ABOVE = 80;
+
 export type ActionTrigger =
   | 'manual'
   | 'on-issue-opened'
