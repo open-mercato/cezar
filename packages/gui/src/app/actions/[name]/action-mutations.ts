@@ -58,13 +58,14 @@ function revalidateAction(name: string) {
 interface ResolvedRow {
   id: string;
   kind: 'built-in' | 'user';
+  enabled: boolean;
 }
 
 async function loadCurrentRows(workspaceId: string, name: string): Promise<{ user: ResolvedRow | null; builtin: ResolvedRow | null }> {
   const supabase = createSupabaseAdminClient();
   const { data } = await supabase
     .from('actions')
-    .select('id, kind')
+    .select('id, kind, enabled')
     .eq('workspace_id', workspaceId)
     .eq('name', name);
   const rows = (data ?? []) as ResolvedRow[];
@@ -114,6 +115,11 @@ export async function saveAction(
   const supabase = createSupabaseAdminClient();
   const current = await loadCurrentRows(workspace.id, name);
 
+  // When the caller omits `enable`, preserve the current effective enabled
+  // state instead of force-writing `true` — otherwise editing any field would
+  // silently re-enable a disabled action.
+  const currentEnabled = current.user?.enabled ?? current.builtin?.enabled ?? true;
+
   const baseFields = {
     description: payload.description ?? null,
     system_prompt: payload.systemPrompt,
@@ -122,7 +128,7 @@ export async function saveAction(
     triggers: payload.triggers,
     effects: payload.effects,
     output_schema: schemaParse.value,
-    enabled: options.enable ?? true,
+    enabled: options.enable ?? currentEnabled,
     updated_by: user.id,
     model: payload.model,
     acceptance_mode: payload.acceptanceMode,
