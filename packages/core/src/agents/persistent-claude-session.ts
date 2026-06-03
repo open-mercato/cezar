@@ -483,6 +483,13 @@ function wrapSpawnError(err: unknown, bin: string): Error {
   if (code === 'ENOENT') {
     return new Error(`${bin} CLI not found on PATH — install claude or fall back to staged mode`);
   }
+  if (code === 'E2BIG') {
+    // The system prompt passed via --append-system-prompt blew past the OS
+    // ARG_MAX limit. Surface an actionable message instead of `spawn E2BIG`.
+    return new Error(
+      `${bin}: prompt too large for argv (E2BIG) — shorten the system prompt or the bound skill body`,
+    );
+  }
   return err instanceof Error ? err : new Error(String(err));
 }
 

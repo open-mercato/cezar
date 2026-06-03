@@ -173,6 +173,15 @@ describe('ClaudeCodeCliRunner', () => {
     ).rejects.toThrow(/claude CLI not found on PATH/);
   });
 
+  it('throws a clear error when the prompt exceeds ARG_MAX (E2BIG)', async () => {
+    const e2big: NodeJS.ErrnoException = Object.assign(new Error('spawn claude E2BIG'), { code: 'E2BIG' });
+    const { spawnFn } = makeFakeSpawn({ error: e2big });
+    const runner = new ClaudeCodeCliRunner({ spawnFn });
+    await expect(
+      runner.run({ systemPrompt: 's', userPrompt: 'u', cwd: '/tmp', allowedTools: ['Read'] }),
+    ).rejects.toThrow(/prompt too large for argv \(E2BIG\)/);
+  });
+
   it('throws when the CLI exits non-zero', async () => {
     const { spawnFn } = makeFakeSpawn({
       stdoutLines: [JSON.stringify({ type: 'system', subtype: 'init' })],

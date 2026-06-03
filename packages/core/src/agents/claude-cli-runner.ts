@@ -533,6 +533,14 @@ function wrapSpawnError(err: unknown, bin: string): Error {
       `${bin} CLI not found on PATH — install Claude Code or use the anthropic-api backend`,
     );
   }
+  if (code === 'E2BIG') {
+    // The combined argv (system prompt in --append-system-prompt, plus the
+    // user prompt in -p under print transport) blew past the OS ARG_MAX
+    // limit. Surface an actionable message instead of a bare `spawn E2BIG`.
+    return new Error(
+      `${bin}: prompt too large for argv (E2BIG) — use the stream-json transport (default; set CEZAR_CLI_TRANSPORT=stream-json) or shorten the system prompt`,
+    );
+  }
   return err instanceof Error ? err : new Error(String(err));
 }
 
