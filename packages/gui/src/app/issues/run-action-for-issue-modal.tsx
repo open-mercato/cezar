@@ -29,6 +29,8 @@ export function RunActionForIssueModal({ issueNumber, issueTitle, onClose }: Run
   const [selectedId, setSelectedId] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const pendingRef = useRef(false);
+  pendingRef.current = pending;
 
   useEffect(() => {
     lastFocused.current = document.activeElement as HTMLElement | null;
@@ -41,6 +43,7 @@ export function RunActionForIssueModal({ issueNumber, issueTitle, onClose }: Run
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.stopPropagation();
+        if (pendingRef.current) return;
         onClose();
         return;
       }
@@ -105,6 +108,7 @@ export function RunActionForIssueModal({ issueNumber, issueTitle, onClose }: Run
     <div
       role="presentation"
       onClick={(e) => {
+        if (pending) return;
         if (e.target === e.currentTarget) onClose();
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
