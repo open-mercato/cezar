@@ -278,6 +278,10 @@ function StepReview({
   onError: (msg: string) => void;
 }) {
   const [pending, startTransition] = useTransition();
+  // Per-list validity from the LabelListEditor's inline validation; accept
+  // stays disabled while either list has a blank/duplicate name.
+  const [issueLabelsValid, setIssueLabelsValid] = useState<boolean>(true);
+  const [prLabelsValid, setPrLabelsValid] = useState<boolean>(true);
 
   const accept = (): void => {
     startTransition(async () => {
@@ -308,6 +312,7 @@ function StepReview({
         subtitle="Applied to GitHub issues."
         drafts={draft.issue_labels}
         onChange={(issue_labels) => onDraftChange({ ...draft, issue_labels })}
+        onValidityChange={setIssueLabelsValid}
       />
 
       <LabelListEditor
@@ -315,13 +320,14 @@ function StepReview({
         subtitle="Applied to pull requests."
         drafts={draft.pr_labels}
         onChange={(pr_labels) => onDraftChange({ ...draft, pr_labels })}
+        onValidityChange={setPrLabelsValid}
       />
 
       <div className="flex items-center gap-3 border-t border-outline-variant pt-4">
         <button
           type="button"
           onClick={accept}
-          disabled={pending}
+          disabled={pending || !issueLabelsValid || !prLabelsValid}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           {pending ? 'Saving…' : 'Accept and finish'}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LabelAnalysisDraft } from '@/lib/supabase/types';
 
 export interface LabelListEditorProps {
@@ -9,18 +9,71 @@ export interface LabelListEditorProps {
   onChange: (drafts: LabelAnalysisDraft[]) => void;
   /** Shows under the title; useful for "for issues" / "for PRs" subtext. */
   subtitle?: string;
+  /**
+   * Called whenever the list's validity changes. `false` means at least one
+   * row is blank/whitespace-only or a case-insensitive duplicate of another;
+   * parents should disable their Save button while invalid.
+   */
+  onValidityChange?: (valid: boolean) => void;
+}
+
+/** A per-row validation problem, surfaced inline below the name input. */
+type RowError = 'blank' | 'duplicate' | null;
+
+/**
+ * Validates a list of label drafts row-by-row. Names are NFC-normalised and
+ * trimmed before comparison so that visually-identical names (and trailing
+ * whitespace) collapse together; duplicate detection is case-insensitive to
+ * match GitHub's case-insensitive label semantics. Returns one error slot per
+ * input row plus a flag for any mixed-script (Latin + Cyrillic) names, which
+ * are a confusable-duplicate hazard but only warned about, not blocked.
+ */
+function validateDrafts(drafts: LabelAnalysisDraft[]): {
+  errors: RowError[];
+  mixedScript: boolean[];
+} {
+  const keys = drafts.map((d) => d.name.normalize('NFC').trim().toLowerCase());
+  const seen = new Map<string, number>();
+  const errors: RowError[] = drafts.map((_, idx) => {
+    const key = keys[idx];
+    if (key.length === 0) return 'blank';
+    if (seen.has(key)) return 'duplicate';
+    seen.set(key, idx);
+    return null;
+  });
+  // A duplicate makes both rows offenders, not just the later one.
+  drafts.forEach((_, idx) => {
+    if (errors[idx] === null && keys[idx].length > 0) {
+      const occurrences = keys.filter((k) => k === keys[idx]).length;
+      if (occurrences > 1) errors[idx] = 'duplicate';
+    }
+  });
+  const mixedScript = drafts.map((d) => {
+    const n = d.name.normalize('NFC');
+    return /\p{Script=Latin}/u.test(n) && /\p{Script=Cyrillic}/u.test(n);
+  });
+  return { errors, mixedScript };
 }
 
 /**
  * Editable list of label drafts. Each row is collapsible; expanded rows
  * expose every field of the draft for editing. The list supports add / remove
- * but does not enforce uniqueness — accept-time validation (in the server
- * action) handles the workspace_labels unique(workspace_id, name, scope)
- * constraint by returning a postgres error to the user.
+ * and validates inline: names are NFC-normalised + trimmed, blank/whitespace-only
+ * names and case-insensitive duplicates are flagged per row, and mixed-script
+ * names are warned about. `onValidityChange` lets the parent disable Save while
+ * any row is invalid, so users don't hit the workspace_labels
+ * unique(workspace_id, name, scope) constraint only after submit.
  *
- * Shared between the /workspaces/new wizard and (Phase 2) /settings/labels.
+ * Shared between the /workspaces/new wizard and /settings/labels.
  */
-export function LabelListEditor({ title, subtitle, drafts, onChange }: LabelListEditorProps) {
+export function LabelListEditor({ title, subtitle, drafts, onChange, onValidityChange }: LabelListEditorProps) {
+  const { errors, mixedScript } = useMemo(() => validateDrafts(drafts), [drafts]);
+  const valid = errors.every((e) => e === null);
+
+  useEffect(() => {
+    onValidityChange?.(valid);
+  }, [valid, onValidityChange]);
+
   const update = (idx: number, patch: Partial<LabelAnalysisDraft>): void => {
     onChange(drafts.map((d, i) => (i === idx ? { ...d, ...patch } : d)));
   };
@@ -61,6 +114,8 @@ export function LabelListEditor({ title, subtitle, drafts, onChange }: LabelList
             <LabelRow
               key={`${d.name}-${idx}`}
               draft={d}
+              error={errors[idx]}
+              mixedScript={mixedScript[idx]}
               onChange={(patch) => update(idx, patch)}
               onRemove={() => remove(idx)}
             />
@@ -83,10 +138,14 @@ export function LabelListEditor({ title, subtitle, drafts, onChange }: LabelList
 
 function LabelRow({
   draft,
+  error,
+  mixedScript,
   onChange,
   onRemove,
 }: {
   draft: LabelAnalysisDraft;
+  error: RowError;
+  mixedScript: boolean;
   onChange: (patch: Partial<LabelAnalysisDraft>) => void;
   onRemove: () => void;
 }) {
@@ -101,7 +160,12 @@ function LabelRow({
           value={draft.name}
           onChange={(e) => onChange({ name: e.target.value })}
           placeholder="label-name"
-          className="flex-1 rounded-md border border-outline-variant bg-bg px-2 py-1 font-mono text-sm text-on-surface focus:border-primary focus:outline-none"
+          aria-invalid={error !== null}
+          className={`flex-1 rounded-md border bg-bg px-2 py-1 font-mono text-sm text-on-surface focus:outline-none ${
+            error !== null
+              ? 'border-error focus:border-error'
+              : 'border-outline-variant focus:border-primary'
+          }`}
         />
         {!draft.exists_on_github && (
           <span className="rounded-md border border-tertiary/40 bg-tertiary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-tertiary">
@@ -123,6 +187,20 @@ function LabelRow({
           Remove
         </button>
       </div>
+
+      {error !== null && (
+        <p className="ml-7 mt-1 text-xs text-error">
+          {error === 'blank'
+            ? 'Name is required and cannot be only whitespace.'
+            : 'Duplicate name — labels must be unique (case-insensitive).'}
+        </p>
+      )}
+
+      {error === null && mixedScript && (
+        <p className="ml-7 mt-1 text-xs text-tertiary">
+          Mixed Latin/Cyrillic characters — this may create a confusable duplicate label on GitHub.
+        </p>
+      )}
 
       {!expanded && draft.description && (
         <p className="ml-7 mt-1 line-clamp-1 text-xs text-on-surface-variant">{draft.description}</p>

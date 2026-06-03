@@ -96,6 +96,10 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
   }, [state.analysis, acceptedLabels]);
 
   const [draft, setDraft] = useState<LabelAnalysisResult | null>(editorDraft);
+  // Per-list validity, reported by the LabelListEditor's inline validation.
+  // Save stays disabled while either list has a blank/duplicate name.
+  const [issueLabelsValid, setIssueLabelsValid] = useState<boolean>(true);
+  const [prLabelsValid, setPrLabelsValid] = useState<boolean>(true);
   // Re-sync the editor's draft when the upstream snapshot changes (e.g. when
   // polling transitions from running → completed).
   useEffect(() => {
@@ -296,18 +300,20 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
             subtitle="Applied to GitHub issues."
             drafts={draft.issue_labels}
             onChange={(issue_labels) => setDraft({ ...draft, issue_labels })}
+            onValidityChange={setIssueLabelsValid}
           />
           <LabelListEditor
             title="PR labels"
             subtitle="Applied to pull requests."
             drafts={draft.pr_labels}
             onChange={(pr_labels) => setDraft({ ...draft, pr_labels })}
+            onValidityChange={setPrLabelsValid}
           />
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={saveDraft}
-              disabled={readOnly || pending}
+              disabled={readOnly || pending || !issueLabelsValid || !prLabelsValid}
               className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
               {pending ? 'Saving…' : a.status === 'completed' ? 'Accept and save catalog' : 'Save changes'}
