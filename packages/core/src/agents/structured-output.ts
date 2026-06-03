@@ -37,7 +37,10 @@ export function costWeightedTokens(usage: RawUsage | undefined | null): number {
  * recover (retry, prose fallback, hard fail).
  */
 export function parseStructured<T>(raw: string, schema: z.ZodSchema<T>): T | null {
-  const cleaned = raw.replace(/^```json?\s*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+  const cleaned = raw
+    .replace(/^```(?:json|javascript|js|jsonl)?\s*\n?/im, '')
+    .replace(/\n?```\s*$/m, '')
+    .trim();
   try {
     return schema.parse(JSON.parse(cleaned));
   } catch {
