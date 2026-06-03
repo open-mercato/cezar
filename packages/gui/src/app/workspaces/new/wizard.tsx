@@ -1,7 +1,7 @@
 'use client';
 
-import { useActionState, useEffect, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useActionState, useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   acceptLabelAnalysis,
   createWorkspace,
@@ -32,13 +32,77 @@ interface StatusResponse {
 
 const TERMINAL: LabelAnalysisStatus[] = ['completed', 'accepted', 'failed', 'cancelled'];
 
+const VALID_STEPS: WizardStep[] = ['create', 'analyze', 'review'];
+
 export function WorkspaceWizard() {
   const router = useRouter();
-  const [step, setStep] = useState<WizardStep>('create');
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+
+  // Hydrate navigation state from the URL so a refresh resumes the in-flight
+  // wizard instead of dropping the user back on the create form (where the
+  // already-committed workspace would fail re-submit with a 23505). The URL is
+  // the source of truth for step/workspace/analysis; resubmitting an existing
+  // workspace is therefore never required to get back to the analysis.
+  const urlStepRaw = searchParams.get('step');
+  const urlStep: WizardStep = VALID_STEPS.includes(urlStepRaw as WizardStep)
+    ? (urlStepRaw as WizardStep)
+    : 'create';
+  const urlWorkspaceId = searchParams.get('workspace');
+  const urlAnalysisId = searchParams.get('analysis');
+
+  // Only honour analyze/review if we actually have the workspace id to resume.
+  const initialStep: WizardStep = urlStep !== 'create' && urlWorkspaceId ? urlStep : 'create';
+
+  const [step, setStep] = useState<WizardStep>(initialStep);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(
+    initialStep !== 'create' ? urlWorkspaceId : null,
+  );
   const [analysis, setAnalysis] = useState<AnalysisSnapshot | null>(null);
   const [draft, setDraft] = useState<LabelAnalysisResult | null>(null);
   const [stepError, setStepError] = useState<string | null>(null);
+
+  // Push the current navigation state into the URL (replace, so the browser
+  // back button doesn't walk every wizard transition).
+  const syncUrl = useCallback(
+    (next: { step: WizardStep; workspaceId?: string | null; analysisId?: string | null }): void => {
+      const params = new URLSearchParams();
+      if (next.step !== 'create') params.set('step', next.step);
+      if (next.workspaceId) params.set('workspace', next.workspaceId);
+      if (next.analysisId) params.set('analysis', next.analysisId);
+      const query = params.toString();
+      router.replace(query ? `/workspaces/new?${query}` : '/workspaces/new');
+    },
+    [router],
+  );
+
+  // If we land directly on the review step from a refresh, the snapshot lives
+  // only in the DB — pull it back so StepReview has something to render.
+  useEffect(() => {
+    if (step !== 'review' || analysis || !urlAnalysisId) return;
+    let cancelled = false;
+    (async (): Promise<void> => {
+      try {
+        const res = await fetch('/api/labels/status', { cache: 'no-store' });
+        if (!res.ok) return;
+        const body = (await res.json()) as StatusResponse;
+        if (cancelled || !body.analysis || body.analysis.id !== urlAnalysisId) return;
+        if (body.analysis.status !== 'completed' && body.analysis.status !== 'accepted') {
+          // Not actually reviewable yet — fall back to the polling step.
+          setStep('analyze');
+          syncUrl({ step: 'analyze', workspaceId: urlWorkspaceId, analysisId: urlAnalysisId });
+          return;
+        }
+        if (!body.analysis.result) return;
+        setAnalysis(body.analysis);
+        setDraft(body.analysis.result);
+      } catch {
+        /* leave the user on the review step with the inline error surface */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, analysis, urlAnalysisId, urlWorkspaceId, syncUrl]);
 
   return (
     <div className="mx-auto max-w-[920px] px-8 py-6">
@@ -63,16 +127,19 @@ export function WorkspaceWizard() {
           onCreated={(id) => {
             setWorkspaceId(id);
             setStep('analyze');
+            syncUrl({ step: 'analyze', workspaceId: id });
           }}
         />
       )}
       {step === 'analyze' && workspaceId && (
         <StepAnalyze
           workspaceId={workspaceId}
+          onStarted={(analysisId) => syncUrl({ step: 'analyze', workspaceId, analysisId })}
           onCompleted={(snap) => {
             setAnalysis(snap);
             setDraft(snap.result);
             setStep('review');
+            syncUrl({ step: 'review', workspaceId, analysisId: snap.id });
           }}
           onSkip={() => router.push('/dashboard')}
           onError={(msg) => setStepError(msg)}
@@ -87,6 +154,11 @@ export function WorkspaceWizard() {
           onSkip={() => router.push('/dashboard')}
           onError={(msg) => setStepError(msg)}
         />
+      )}
+      {step === 'review' && !(analysis && draft) && (
+        <div className="flex items-center gap-3 text-sm text-on-surface-variant">
+          <Spinner /> Restoring your draft…
+        </div>
       )}
     </div>
   );
@@ -143,11 +215,13 @@ function Field({ label, name, placeholder }: { label: string; name: string; plac
 
 function StepAnalyze({
   workspaceId,
+  onStarted,
   onCompleted,
   onSkip,
   onError,
 }: {
   workspaceId: string;
+  onStarted: (analysisId: string) => void;
   onCompleted: (snap: AnalysisSnapshot) => void;
   onSkip: () => void;
   onError: (msg: string) => void;
@@ -155,9 +229,14 @@ function StepAnalyze({
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(null);
   const [starting, setStarting] = useState<boolean>(false);
+  const startedFor = useRef<string | null>(null);
 
-  // Kick off the analysis once per workspace.
+  // Kick off the analysis once per workspace. Guarded by a ref so the URL-sync
+  // callbacks (whose identity changes on every router.replace) can't re-trigger
+  // it; the server action dedupes anyway, but this avoids redundant calls.
   useEffect(() => {
+    if (startedFor.current === workspaceId) return;
+    startedFor.current = workspaceId;
     let cancelled = false;
     setStarting(true);
     (async (): Promise<void> => {
@@ -165,15 +244,17 @@ function StepAnalyze({
       if (cancelled) return;
       setStarting(false);
       if (!res.ok || !res.analysisId) {
+        startedFor.current = null;
         onError(res.error ?? 'Failed to start analysis');
         return;
       }
       setAnalysisId(res.analysisId);
+      onStarted(res.analysisId);
     })();
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, onError]);
+  }, [workspaceId, onStarted, onError]);
 
   // Poll status. The status route reads from the active workspace cookie,
   // which `createWorkspace` set on step 1, so this works without an explicit
