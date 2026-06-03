@@ -53,9 +53,15 @@ export interface RawPullRequest {
 export function extractReferencedIssues(text: string): number[] {
   if (!text) return [];
   const refs = new Set<number>();
-  const re = /(?<![A-Za-z0-9_])(?:GH-)?#(\d+)\b/gi;
+  // Two passes — bare `GH-123` and `[owner/repo]#123` / `#123`.
+  const bareGh = /(?<![A-Za-z0-9_])GH-(\d+)\b/gi;
+  const hash = /(?<![A-Za-z0-9_])(?:[\w.-]+\/[\w.-]+)?#(\d+)\b/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = bareGh.exec(text)) !== null) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > 0) refs.add(n);
+  }
+  while ((m = hash.exec(text)) !== null) {
     const n = Number(m[1]);
     if (Number.isFinite(n) && n > 0) refs.add(n);
   }
