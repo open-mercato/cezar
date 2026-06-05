@@ -19,6 +19,23 @@
 
 -- Dedup: at most one pending decision per
 -- (workspace, action, target, effect, effect_args hash).
+-- Pre-clean: environments already exhibiting the duplicate-inbox bug hold
+-- duplicate *pending* rows, which would make the unique index below fail to
+-- build (plain CREATE INDEX, not CONCURRENTLY). Collapse each dedup-key group
+-- to its earliest row first so the index can apply everywhere.
+delete from pending_decisions p
+using (
+  select id, row_number() over (
+    partition by workspace_id, action_id, target_kind,
+                 coalesce(issue_number, 0), coalesce(pr_number, 0),
+                 effect, md5(effect_args::text)
+    order by created_at, id
+  ) as rn
+  from pending_decisions
+  where status = 'pending'
+) d
+where p.id = d.id and d.rn > 1;
+
 create unique index pending_decisions_dedup_idx
   on pending_decisions (
     workspace_id, action_id, target_kind,
