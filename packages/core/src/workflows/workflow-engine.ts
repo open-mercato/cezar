@@ -283,8 +283,10 @@ export class WorkflowEngine {
     // The workspace's effective default backend, used to stamp non-agent steps'
     // synthetic records so the cockpit's per-row backend icon matches where the
     // run actually executes (claude-cli / codex-cli) instead of always reading
-    // 'anthropic-api'. Falls back to the API path when no default is configured.
-    const workspaceBackend: AgentBackend = ctx.config.autofix?.runner?.backend ?? 'anthropic-api';
+    // 'anthropic-api'. Derived from the per-step bindings — the same source the
+    // agent steps resolve their backend from (see resolveStepConfig) — using the
+    // first binding that pins one. Falls back to the API path when none do.
+    const workspaceBackend: AgentBackend = bindings.find((b) => b.backend != null)?.backend ?? 'anthropic-api';
 
     // Issue data — repo-less workflows still want title/body for prompts.
     let issueTitle = `#${ctx.issueNumber}`;
