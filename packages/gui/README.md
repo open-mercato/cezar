@@ -32,6 +32,9 @@ materializes a CEZAR `Store` from Postgres.
 
 4. Enable GitHub OAuth in **Supabase → Authentication → Providers → GitHub**
    (this is the Auth path used in Phase 1 — Phase 0 doesn't yet block on auth).
+   For the **local docker stack** (`yarn db:start`) the provider lives in
+   `infra/supabase/.env` instead — see
+   [GitHub login for local dev](../../docs/DEVELOPMENT.md#github-login-for-local-dev).
 
 5. Install and run:
    ```bash
