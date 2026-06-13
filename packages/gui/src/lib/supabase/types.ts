@@ -161,6 +161,10 @@ export interface Database {
           autofix_enabled: boolean;
           separate_comment_per_step: boolean;
           action_auto_comment: boolean;
+          /** Issue #262 — once true, the GUI has already seeded this workspace
+           *  with all built-in skills enabled, so the lazy seed won't undo any
+           *  disables the user made afterwards. */
+          skill_states_seeded: boolean;
           sync_mode: 'auto' | 'manual';
           sync_interval_minutes: number;
           last_webhook_received_at: string | null;
@@ -174,7 +178,7 @@ export interface Database {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['workspaces']['Row'], 'id' | 'created_at' | 'updated_at' | 'auto_triage_action_id' | 'action_auto_comment' | 'sync_mode' | 'sync_interval_minutes' | 'last_webhook_received_at' | 'last_webhook_event' | 'digest_mode' | 'digest_interval_minutes' | 'last_digested_at'> & {
+        Insert: Omit<Database['public']['Tables']['workspaces']['Row'], 'id' | 'created_at' | 'updated_at' | 'auto_triage_action_id' | 'action_auto_comment' | 'sync_mode' | 'sync_interval_minutes' | 'last_webhook_received_at' | 'last_webhook_event' | 'digest_mode' | 'digest_interval_minutes' | 'last_digested_at' | 'skill_states_seeded'> & {
           id?: string;
           auto_triage_action_id?: string | null;
           action_auto_comment?: boolean;
@@ -185,6 +189,7 @@ export interface Database {
           digest_mode?: DigestMode;
           digest_interval_minutes?: number;
           last_digested_at?: string | null;
+          skill_states_seeded?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -453,6 +458,31 @@ export interface Database {
           updated_by?: string | null;
         };
         Update: Partial<Database['public']['Tables']['skill_overrides']['Insert']>;
+      };
+      workspace_skill_states: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          skill_name: string;
+          enabled: boolean;
+          /** Forward-looking: pin a skill to a specific source (PR 2–4 add more
+           *  sources). NULL = follow default priority. */
+          pinned_source: string | null;
+          created_at: string;
+          updated_at: string;
+          created_by: string | null;
+          updated_by: string | null;
+        };
+        Insert: Omit<Database['public']['Tables']['workspace_skill_states']['Row'], 'id' | 'enabled' | 'pinned_source' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by'> & {
+          id?: string;
+          enabled?: boolean;
+          pinned_source?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          created_by?: string | null;
+          updated_by?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['workspace_skill_states']['Insert']>;
       };
       jobs: {
         Row: {

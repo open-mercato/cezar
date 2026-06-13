@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { discoverSkills, skillsForStage } from '../../src/skills/skill-catalog.js';
+import {
+  discoverSkills,
+  skillsForStage,
+  SKILL_SOURCE_PRIORITY,
+  type SkillSource,
+} from '../../src/skills/skill-catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRepoRoot = join(here, '..', 'fixtures', 'skills-repo');
@@ -10,7 +15,7 @@ const fixtureRepoRoot = join(here, '..', 'fixtures', 'skills-repo');
 // with @cezar/core plus repo `.ai/skills/`. These tests intentionally assert
 // repo-side discovery only by filtering by source.
 function repoSkills(s: Awaited<ReturnType<typeof discoverSkills>>) {
-  return s.filter((x) => x.source === 'repo');
+  return s.filter((x) => x.source === 'workspace-repo');
 }
 
 describe('discoverSkills', () => {
@@ -48,6 +53,32 @@ describe('discoverSkills', () => {
     const skills = await discoverSkills(join(here, '..', 'fixtures', 'no-such-repo'));
     // At least one built-in (bug-classification) ships with @cezar/core.
     expect(skills.some((s) => s.source === 'built-in' && s.name === 'bug-classification')).toBe(true);
+  });
+});
+
+describe('SkillSource', () => {
+  it('reports the renamed `workspace-repo` provenance for repo-side skills', async () => {
+    const skills = await discoverSkills(fixtureRepoRoot);
+    const repo = skills.filter((s) => s.name === 'deep-root-cause' || s.name === 'house-style');
+    expect(repo.length).toBeGreaterThan(0);
+    for (const s of repo) {
+      // Legacy literal `'repo'` is gone; readers must accept the new value.
+      expect(s.source).toBe('workspace-repo');
+    }
+  });
+
+  it('lists every source kind in priority order', () => {
+    // The order matters — later PRs use it to resolve cross-source collisions.
+    const expected: SkillSource[] = [
+      'built-in',
+      'workspace-repo',
+      'external-repo',
+      'disk',
+      'skills-sh',
+    ];
+    expect(SKILL_SOURCE_PRIORITY).toEqual(expected);
+    // No duplicates.
+    expect(new Set(SKILL_SOURCE_PRIORITY).size).toBe(SKILL_SOURCE_PRIORITY.length);
   });
 });
 

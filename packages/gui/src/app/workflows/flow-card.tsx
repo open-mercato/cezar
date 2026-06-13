@@ -339,6 +339,12 @@ function StepRow(props: {
     [props.availableSkills, step.skill],
   );
 
+  // Issue #262 — a skill name persisted on the binding may no longer be in the
+  // active list (the user disabled it on /skills). Flag it so the user knows
+  // the step won't run as configured.
+  const skillIsInactive =
+    !!step.skill && !props.availableSkills.some((s) => s.name === step.skill);
+
   const lintWarnings = useMemo(
     () => lintArgsTemplate(step.argsTemplate, idx, props.steps),
     [step.argsTemplate, idx, props.steps],
@@ -381,9 +387,16 @@ function StepRow(props: {
               {step.skill && skillDescription && (
                 <p className="mt-1 text-[11px] leading-snug text-fg-muted/80">{skillDescription}</p>
               )}
-              {step.skill && !skillDescription && (
+              {step.skill && !skillDescription && !skillIsInactive && (
                 <p className="mt-1 text-[11px] text-fg-muted/50">
                   (no description — add one in the skill&apos;s frontmatter)
+                </p>
+              )}
+              {skillIsInactive && (
+                <p className="mt-1 text-[11px] leading-snug text-amber-300/90">
+                  ⚠ <span className="font-mono">{step.skill}</span> is not in the workspace&apos;s active skills.
+                  This step will fall back to the built-in prompt. Enable it on{' '}
+                  <a href="/skills" className="underline underline-offset-2">/skills</a>.
                 </p>
               )}
             </Field>

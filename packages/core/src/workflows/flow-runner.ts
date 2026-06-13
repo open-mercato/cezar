@@ -92,6 +92,13 @@ export interface RunFlowParams {
    * re-claims fall back to a fresh start under the same id.
    */
   resumeSessionId?: string;
+  /**
+   * Issue #262 — pre-resolved active skill catalog. When set, the runner
+   * skips the in-repo `discoverSkills` call and uses this list verbatim.
+   * Lets the SaaS dispatcher feed only enabled skills (filtered by
+   * `workspace_skill_states`).
+   */
+  skills?: Awaited<ReturnType<typeof discoverSkills>>;
 }
 
 interface FlowBlackboard extends Record<string, unknown> {
@@ -123,14 +130,17 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
   }
 
   // Discover skills so resolveStepConfig (called by the engine) can find each
-  // step's skill body and append it to the system prompt.
+  // step's skill body and append it to the system prompt. Issue #262: the SaaS
+  // dispatcher passes a pre-filtered active list — fall back to a fresh
+  // in-repo discovery only when the caller didn't supply one.
   const repoRoot = params.config.autofix?.repoRoot;
-  const skills = repoRoot
-    ? await discoverSkills(repoRoot, params.config.autofix?.skillsDir ?? '.ai/skills').catch((err: Error) => {
-        params.onEvent(`[flow] skill discovery failed: ${err.message}`);
-        return [];
-      })
-    : [];
+  const skills = params.skills
+    ?? (repoRoot
+      ? await discoverSkills(repoRoot, params.config.autofix?.skillsDir ?? '.ai/skills').catch((err: Error) => {
+          params.onEvent(`[flow] skill discovery failed: ${err.message}`);
+          return [];
+        })
+      : []);
 
   // Closure-captured state the engine updates between steps. We need this so
   // each step's `buildUserPrompt` sees the freshest `previousTaskId` (which

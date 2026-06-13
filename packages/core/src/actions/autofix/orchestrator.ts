@@ -175,6 +175,15 @@ export interface OrchestratorOptions {
    * same id. Engine-only path; ignored by the legacy hand-rolled orchestrator.
    */
   resumeSessionId?: string;
+  /**
+   * Issue #262 — pre-resolved skill catalog. When set, the orchestrator skips
+   * the in-repo `discoverSkills` call and uses this list verbatim. Used by the
+   * SaaS dispatcher to feed *only the workspace's active skills* (catalog
+   * filtered by `workspace_skill_states.enabled`) so disabled skills never
+   * surface in workflow step bindings. CLI callers leave it undefined to keep
+   * the legacy "discover everything in the repo" behaviour.
+   */
+  skills?: Skill[];
 }
 
 export class AutofixOrchestrator {
@@ -232,7 +241,9 @@ export class AutofixOrchestrator {
 
     // Repo-discovered skills (Phase 1a). Discovery failure must never break
     // autofix — log and continue with no skills (built-in prompts unchanged).
-    const skills = await this.discoverSkillsSafe(repoRoot, cfg.skillsDir, opts, issueNumber);
+    // Issue #262: when the caller supplied a pre-filtered catalog (SaaS path
+    // with workspace_skill_states applied) use it instead of touching disk.
+    const skills = opts.skills ?? await this.discoverSkillsSafe(repoRoot, cfg.skillsDir, opts, issueNumber);
 
     const preflightSkip = await this.runAlreadyFixedPreflight(issue, opts);
     if (preflightSkip) {
@@ -987,6 +998,7 @@ export class AutofixOrchestrator {
         bindings: this.config.workflow?.bindings,
         settings: this.config.workflow?.settings,
         labels: opts.labels,
+        skills: opts.skills,
         resumeSessionId: opts.resumeSessionId,
         loopMaxIterations: { 'fix-review': cfg.maxAttemptsPerIssue },
         tokenBudgetPerAttempt: cfg.tokenBudgetPerAttempt,
@@ -1121,6 +1133,7 @@ export class AutofixOrchestrator {
         bindings: this.config.workflow?.bindings,
         settings: this.config.workflow?.settings,
         labels: opts.labels,
+        skills: opts.skills,
         resumeSessionId: opts.resumeSessionId,
         tokenBudgetPerAttempt: cfg.ciFixTokenBudget ?? cfg.tokenBudgetPerAttempt,
         onEvent: opts.onEvent,

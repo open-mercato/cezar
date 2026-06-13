@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { CiFollowupInput, WorkspaceLabel } from '@cezar/core';
+import type { CiFollowupInput, Skill, WorkspaceLabel } from '@cezar/core';
 import { SupabaseStoreAdapter } from './adapters/supabase-store';
 import { loadWorkspaceConfig } from './load-workspace-config';
 import { loadWorkspaceLabels } from './load-workspace-labels';
 import { createWorkflowRunPersister, type WorkflowRunPersister } from './persist-workflow-run';
 import { acquireRepoLock, ensureRepoClone } from './repo-clone';
 import { parseTriageTrigger, runTriagePassJob } from './run-triage-pass-job';
+import { loadActiveSkillCatalog } from './workflow-config';
 import type { Database } from './supabase/types';
 
 type WorkflowKind = 'autofix' | 'ci-followup' | 'triage' | 'flow';
@@ -112,6 +113,11 @@ export async function executeWorkflowJob(
     // Loaded once per job to avoid an extra round-trip per step.
     const labels: WorkspaceLabel[] = await loadWorkspaceLabels(adminSupabase, workspaceId);
 
+    // Issue #262 — narrow the catalog to skills the workspace has marked
+    // active. Resolved here once per job and threaded into the orchestrator
+    // so the legacy + engine paths skip in-repo discovery.
+    let activeSkills: Skill[] = [];
+
     if (!config.autofix.repoRoot) {
       // Serialize on the shared per-repo worktree before the clone, and hold
       // the lock until the run finishes (released in the finally below) so a
@@ -125,6 +131,13 @@ export async function executeWorkflowJob(
       );
       config.autofix.repoRoot = repoRoot;
     }
+
+    activeSkills = await loadActiveSkillCatalog(
+      workspaceId,
+      config.autofix.repoRoot,
+      config.autofix.skillsDir ?? '.ai/skills',
+      adminSupabase,
+    );
 
     const github = new core.GitHubService(config);
     const repoSlug = config.github.owner && config.github.repo ? `${config.github.owner}/${config.github.repo}` : params.repo ?? null;
@@ -208,6 +221,7 @@ export async function executeWorkflowJob(
         github,
         issueNumber: runIssueNumber,
         labels,
+        skills: activeSkills,
         onEvent,
         onAgentEvent,
         onStepStart,
@@ -233,6 +247,7 @@ export async function executeWorkflowJob(
         apply: true,
         confirmBeforeFix: undefined, // dispatcher = autonomous
         labels,
+        skills: activeSkills,
         onEvent,
         onAgentEvent,
         onStepStart,
@@ -257,6 +272,7 @@ export async function executeWorkflowJob(
       const outcome = await orch.processCiFollowup(ciFollowupSeed, {
         apply: true,
         labels,
+        skills: activeSkills,
         onEvent,
         onAgentEvent,
         onStepStart,
@@ -292,6 +308,7 @@ export async function executeWorkflowJob(
         persister,
         trigger: parseTriageTrigger(triageTrigger),
         labels,
+        skills: activeSkills,
         actionAutoComment: workspaceRow?.action_auto_comment ?? null,
         deferSink: async ({ call, confidence, summary, action, target }) => {
           // Write the deferred effect to pending_decisions for the inbox.

@@ -3,20 +3,46 @@ import { join, resolve, basename, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * A discovered skill. `source` records provenance:
- *   - 'built-in' — shipped with Cezar (packages/core/skills/*.md)
- *   - 'repo'     — discovered from the workspace's <repo>/.ai/skills/
+ * Provenance of a discovered skill. Issue #262 expands this from the original
+ * built-in/repo split to a five-source enum; PR 1 (this commit) wires up the
+ * type and renames the existing `'repo'` value to `'workspace-repo'`. The other
+ * source kinds become real in follow-up PRs:
+ *   - 'built-in'      — shipped with Cezar (packages/core/skills/*.md)
+ *   - 'workspace-repo'— the workspace's <repo>/.ai/skills/ (was: 'repo')
+ *   - 'external-repo' — PR 2: an arbitrary owner/repo/folder added by the user
+ *   - 'disk'          — PR 3: a markdown file uploaded directly into Cezar
+ *   - 'skills-sh'     — PR 4: a skill installed from the skills.sh registry
  *
- * Overrides (workspace-scoped DB copies) are layered on top of either source
- * at consumer side; the catalog itself only enumerates origins.
+ * Overrides (workspace-scoped DB copies) are layered on top of any source at
+ * consumer side; the catalog itself only enumerates origins.
  */
+export type SkillSource =
+  | 'built-in'
+  | 'workspace-repo'
+  | 'external-repo'
+  | 'disk'
+  | 'skills-sh';
+
+/**
+ * Order in which sources win collisions on the same skill name (highest
+ * priority first). The legacy `discoverSkills` only knows the first two; later
+ * PRs use this priority to resolve cross-source collisions in their loaders.
+ */
+export const SKILL_SOURCE_PRIORITY: SkillSource[] = [
+  'built-in',
+  'workspace-repo',
+  'external-repo',
+  'disk',
+  'skills-sh',
+];
+
 export interface Skill {
   name: string;
   description?: string;
   body: string;
   path: string;
   suggestedStages: string[];
-  source: 'built-in' | 'repo';
+  source: SkillSource;
 }
 
 /**
@@ -86,7 +112,7 @@ export async function discoverSkills(
 ): Promise<Skill[]> {
   const [builtin, repo] = await Promise.all([
     readMarkdownSkills(builtinSkillsDir(), 'built-in'),
-    readMarkdownSkills(resolve(repoRoot, skillsDir), 'repo'),
+    readMarkdownSkills(resolve(repoRoot, skillsDir), 'workspace-repo'),
   ]);
 
   // Repo skills win on name collisions; built-in fills the gaps.

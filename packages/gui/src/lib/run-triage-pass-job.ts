@@ -4,6 +4,7 @@ import type {
   ActionTarget,
   AgentRunRecord,
   GitHubService,
+  Skill,
   TriagePassActionResult,
   TriagePassDeferSink,
   WorkspaceLabel,
@@ -50,6 +51,12 @@ export interface RunTriagePassJobParams {
    * `null`), the per-job `SELECT action_auto_comment FROM workspaces` is skipped.
    */
   actionAutoComment?: boolean | null;
+  /**
+   * Issue #262 — pre-filtered active skill catalog. When set, the triage
+   * runner uses it instead of pulling the full built-in catalog so disabled
+   * skills don't appear in `skill_refs` resolution.
+   */
+  skills?: Skill[];
 }
 
 export interface RunTriagePassJobResult {
@@ -129,6 +136,7 @@ export async function runTriagePassJob(params: RunTriagePassJobParams): Promise<
       deferSink,
       labels,
       contextProviders: buildOpenIssuesContextProviders(supabase, workspaceId, issueNumber),
+      skills: params.skills,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

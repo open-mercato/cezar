@@ -25,15 +25,29 @@ import {
 import { ActionSheet, type ActionSheetItem } from '@/components/ui/action-sheet';
 import { RowMenuPortal } from '@/components/row-menu-portal';
 import { refreshRepoSkills } from './skills-action';
+import { setSkillEnabled } from './state-actions';
+
+/** Issue #262 — provenance values surfaced in the UI. `override` keeps its
+ *  special meaning ("the workspace forked this skill") and shadows whatever
+ *  source the upstream came from. */
+export type SkillRowSource =
+  | 'override'
+  | 'built-in'
+  | 'workspace-repo'
+  | 'external-repo'
+  | 'disk'
+  | 'skills-sh';
 
 export interface SkillRow {
   name: string;
   description: string | null;
   path: string;
-  source: 'override' | 'repo' | 'built-in';
+  source: SkillRowSource;
   mode: 'framed' | 'inline';
   trigger: 'on-sync' | 'cron' | 'manual';
-  status: 'enabled' | 'disabled';
+  /** Issue #262 — true ⇒ skill is in the Active list and surfaces in pickers /
+   *  workflow runs; false ⇒ catalog-only. Replaces the old `status` field. */
+  active: boolean;
   lastRunIso: string | null;
   stages: string[];
 }
@@ -48,11 +62,18 @@ interface SkillsViewProps {
 
 type SortKey = 'name' | 'source' | 'mode' | 'trigger' | 'status' | 'lastRun';
 type SortDir = 'asc' | 'desc';
+type SkillTab = 'catalog' | 'active';
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
 
-export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnly }: SkillsViewProps) {
+export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedAt, readOnly }: SkillsViewProps) {
+  // Keep an optimistic local mirror so a toggle reflects in the table before
+  // `revalidatePath` lands the server-side refresh.
+  const [rows, setRows] = useState<SkillRow[]>(rowsProp);
+  useEffect(() => { setRows(rowsProp); }, [rowsProp]);
+
+  const [tab, setTab] = useState<SkillTab>('catalog');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<PageSize>(10);
   const [search, setSearch] = useState('');
@@ -65,20 +86,35 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
   const [refreshState, setRefreshState] = useState<{ ok?: boolean; error?: string; count?: number } | null>(null);
   const [refreshing, startRefresh] = useTransition();
 
+  function handleToggleActive(name: string, nextActive: boolean) {
+    // Optimistic: flip the row right away, roll back if the server says no.
+    setRows((prev) => prev.map((r) => (r.name === name ? { ...r, active: nextActive } : r)));
+    void setSkillEnabled(name, nextActive).then((res) => {
+      if (!res.ok) {
+        setRows((prev) => prev.map((r) => (r.name === name ? { ...r, active: !nextActive } : r)));
+        setRefreshState({ ok: false, error: res.error ?? 'Could not update skill state' });
+      }
+    });
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
+      if (tab === 'active' && !r.active) return false;
       if (sourceFilter.length > 0 && !sourceFilter.includes(r.source)) return false;
       if (modeFilter.length > 0 && !modeFilter.includes(r.mode)) return false;
       if (triggerFilter.length > 0 && !triggerFilter.includes(r.trigger)) return false;
-      if (statusFilter.length > 0 && !statusFilter.includes(r.status)) return false;
+      if (statusFilter.length > 0) {
+        const statusValue = r.active ? 'enabled' : 'disabled';
+        if (!statusFilter.includes(statusValue)) return false;
+      }
       if (q.length > 0) {
         const hay = `${r.name} ${r.description ?? ''} ${r.stages.join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [rows, search, sourceFilter, modeFilter, triggerFilter, statusFilter]);
+  }, [rows, search, sourceFilter, modeFilter, triggerFilter, statusFilter, tab]);
 
   const sorted = useMemo(() => {
     const out = [...filtered];
@@ -101,7 +137,8 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
   );
 
   const totalSkills = rows.length;
-  const activeRuns = rows.filter((r) => r.status === 'enabled' && r.trigger !== 'manual').length;
+  const activeSkills = rows.filter((r) => r.active).length;
+  const activeRuns = rows.filter((r) => r.active && r.trigger !== 'manual').length;
   const avgSuccess = totalSkills === 0 ? null : 98.2; // Placeholder until run-history aggregates land.
 
   const filtersActive =
@@ -137,6 +174,11 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
     setPage(1);
   }
 
+  function handleTabChange(next: SkillTab) {
+    setTab(next);
+    setPage(1);
+  }
+
   return (
     <PageContainer>
       {/* Page header */}
@@ -157,6 +199,7 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
             <RefreshIcon className="h-4 w-4" />
             {refreshing ? 'Syncing…' : 'Sync from repo'}
           </button>
+          <AddSkillSourceMenu disabled={readOnly} />
           <Link
             href="/settings/workflows"
             aria-disabled={readOnly}
@@ -170,6 +213,34 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
           </Link>
         </div>
       </header>
+
+      {/* Catalog / Active tabs — issue #262 two-list model */}
+      <div className="mb-4 inline-flex items-center rounded-md border border-outline-variant bg-surface-container-low p-0.5 text-sm">
+        {(
+          [
+            { id: 'catalog', label: 'Catalog', count: totalSkills },
+            { id: 'active', label: 'Active', count: activeSkills },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => handleTabChange(t.id)}
+            className={cn(
+              'inline-flex h-7 items-center gap-2 rounded-[5px] px-3 font-medium transition-colors',
+              tab === t.id
+                ? 'bg-surface text-on-surface shadow-sm'
+                : 'text-on-surface-variant hover:text-on-surface',
+            )}
+            aria-pressed={tab === t.id}
+          >
+            <span>{t.label}</span>
+            <span className="rounded-full bg-surface-container px-1.5 py-px font-mono text-[11px] text-on-surface-variant">
+              {t.count}
+            </span>
+          </button>
+        ))}
+      </div>
 
       {/* Inline status banners */}
       {refreshState?.ok && (
@@ -185,8 +256,8 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
 
       {/* KPI stats */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="TOTAL SKILLS" value={String(totalSkills)} tone="default" />
-        <StatCard label="ACTIVE RUNS" value={String(activeRuns)} tone="primary" />
+        <StatCard label="ACTIVE SKILLS" value={`${activeSkills} / ${totalSkills}`} tone="primary" />
+        <StatCard label="ACTIVE RUNS" value={String(activeRuns)} tone="default" />
         <StatCard label="OVERRIDES" value={String(overridesCount)} tone="tertiary" />
         <StatCard label="AVG SUCCESS" value={avgSuccess === null ? '—' : `${avgSuccess}%`} tone="default" />
       </div>
@@ -220,8 +291,11 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
               },
               options: [
                 { value: 'override', label: 'Override' },
-                { value: 'repo', label: 'Repo' },
                 { value: 'built-in', label: 'Built-in' },
+                { value: 'workspace-repo', label: 'Workspace repo' },
+                { value: 'external-repo', label: 'External repo' },
+                { value: 'disk', label: 'Disk upload' },
+                { value: 'skills-sh', label: 'skills.sh' },
               ],
             },
             {
@@ -281,7 +355,7 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
                 <SortableTh sortKey="source"  sortDir={sortDir} active={sortKey === 'source'}  onClick={handleSort}>SOURCE</SortableTh>
                 <SortableTh sortKey="mode"    sortDir={sortDir} active={sortKey === 'mode'}    onClick={handleSort}>MODE</SortableTh>
                 <SortableTh sortKey="trigger" sortDir={sortDir} active={sortKey === 'trigger'} onClick={handleSort}>TRIGGER</SortableTh>
-                <SortableTh sortKey="status"  sortDir={sortDir} active={sortKey === 'status'}  onClick={handleSort}>STATUS</SortableTh>
+                <SortableTh sortKey="status"  sortDir={sortDir} active={sortKey === 'status'}  onClick={handleSort}>ENABLED</SortableTh>
                 <SortableTh sortKey="lastRun" sortDir={sortDir} active={sortKey === 'lastRun'} onClick={handleSort}>LAST RUN</SortableTh>
                 <Th className="text-right pr-6">ACTIONS</Th>
               </tr>
@@ -304,6 +378,18 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
                         )}{' '}
                         once your repo has skill manifests.
                       </>
+                    ) : tab === 'active' ? (
+                      <>
+                        No skills are active yet. Switch to the{' '}
+                        <button
+                          type="button"
+                          onClick={() => handleTabChange('catalog')}
+                          className="underline underline-offset-2 hover:text-on-surface"
+                        >
+                          Catalog
+                        </button>{' '}
+                        tab to enable skills from your sources.
+                      </>
                     ) : (
                       <>
                         No skills match these filters.{' '}
@@ -319,7 +405,14 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
                   </td>
                 </tr>
                   ) : (
-                    pageRows.map((row) => <SkillTableRow key={row.name} row={row} />)
+                    pageRows.map((row) => (
+                      <SkillTableRow
+                        key={row.name}
+                        row={row}
+                        readOnly={readOnly}
+                        onToggle={handleToggleActive}
+                      />
+                    ))
                   )}
                 </tbody>
               </table>
@@ -343,6 +436,18 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
                   )}{' '}
                   once your repo has skill manifests.
                 </>
+              ) : tab === 'active' ? (
+                <>
+                  No skills are active yet. Switch to{' '}
+                  <button
+                    type="button"
+                    onClick={() => handleTabChange('catalog')}
+                    className="underline underline-offset-2 hover:text-on-surface"
+                  >
+                    Catalog
+                  </button>{' '}
+                  to enable some.
+                </>
               ) : (
                 <>
                   No skills match these filters.{' '}
@@ -357,7 +462,14 @@ export function SkillsView({ rows, overridesCount, commitSha, fetchedAt, readOnl
               )}
             </div>
           ) : (
-            pageRows.map((row) => <SkillCard key={row.name} row={row} />)
+            pageRows.map((row) => (
+              <SkillCard
+                key={row.name}
+                row={row}
+                readOnly={readOnly}
+                onToggle={handleToggleActive}
+              />
+            ))
           )
         }
       />
@@ -503,13 +615,29 @@ function compareByKey(a: SkillRow, b: SkillRow, key: SortKey): number {
     if (ta === tb) return a.name.localeCompare(b.name);
     return ta - tb;
   }
-  const av = String(a[key]);
-  const bv = String(b[key]);
+  if (key === 'status') {
+    // Sort active first when ascending, disabled first when descending — gives
+    // the user a natural "show me what's running" toggle off the header.
+    const av = a.active ? 0 : 1;
+    const bv = b.active ? 0 : 1;
+    if (av === bv) return a.name.localeCompare(b.name);
+    return av - bv;
+  }
+  const av = String(a[key as Exclude<SortKey, 'lastRun' | 'status'>]);
+  const bv = String(b[key as Exclude<SortKey, 'lastRun' | 'status'>]);
   const cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
   return cmp === 0 ? a.name.localeCompare(b.name) : cmp;
 }
 
-function SkillTableRow({ row }: { row: SkillRow }) {
+function SkillTableRow({
+  row,
+  readOnly,
+  onToggle,
+}: {
+  row: SkillRow;
+  readOnly: boolean;
+  onToggle: (name: string, next: boolean) => void;
+}) {
   const href = `/skills/${encodeURIComponent(row.name)}`;
   return (
     <tr className="border-t border-outline-variant/60 hover:bg-surface-container/60">
@@ -529,10 +657,12 @@ function SkillTableRow({ row }: { row: SkillRow }) {
         <span className="font-mono text-[13px] text-on-surface-variant">{row.trigger}</span>
       </td>
       <td className="px-6 py-4 align-middle">
-        <span className="inline-flex items-center gap-2 text-on-surface">
-          <StatusDotIcon className="h-2.5 w-2.5" tone={row.status === 'enabled' ? 'enabled' : 'disabled'} />
-          <span className="font-mono text-[13px]">{row.status}</span>
-        </span>
+        <EnabledToggle
+          active={row.active}
+          disabled={readOnly}
+          name={row.name}
+          onChange={(next) => onToggle(row.name, next)}
+        />
       </td>
       <td className="px-6 py-4 align-middle">
         <span className="font-mono text-[13px] text-on-surface-variant">{formatLastRun(row.lastRunIso)}</span>
@@ -543,6 +673,40 @@ function SkillTableRow({ row }: { row: SkillRow }) {
         </div>
       </td>
     </tr>
+  );
+}
+
+/** Tri-state-feel toggle for issue #262 — flips `workspace_skill_states.enabled`. */
+function EnabledToggle({
+  active,
+  disabled,
+  name,
+  onChange,
+}: {
+  active: boolean;
+  disabled: boolean;
+  name: string;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={active}
+      aria-label={`${active ? 'Disable' : 'Enable'} ${name}`}
+      disabled={disabled}
+      onClick={() => onChange(!active)}
+      className={cn(
+        'inline-flex items-center gap-2 rounded-full px-2 py-1 text-[12px] font-medium transition-colors',
+        active
+          ? 'bg-primary-container/40 text-primary hover:bg-primary-container/60'
+          : 'bg-surface-container text-on-surface-variant hover:bg-surface-container/80',
+        disabled && 'cursor-not-allowed opacity-60',
+      )}
+    >
+      <StatusDotIcon className="h-2.5 w-2.5" tone={active ? 'enabled' : 'disabled'} />
+      <span className="font-mono">{active ? 'enabled' : 'disabled'}</span>
+    </button>
   );
 }
 
@@ -656,7 +820,15 @@ function SkillRowMenu({ name }: { name: string }) {
   );
 }
 
-function SkillCard({ row }: { row: SkillRow }) {
+function SkillCard({
+  row,
+  readOnly,
+  onToggle,
+}: {
+  row: SkillRow;
+  readOnly: boolean;
+  onToggle: (name: string, next: boolean) => void;
+}) {
   const href = `/skills/${encodeURIComponent(row.name)}`;
   return (
     <EntityCard
@@ -667,10 +839,12 @@ function SkillCard({ row }: { row: SkillRow }) {
         </Link>
       }
       badge={
-        <span className="inline-flex items-center gap-1.5 text-on-surface">
-          <StatusDotIcon className="h-2.5 w-2.5" tone={row.status === 'enabled' ? 'enabled' : 'disabled'} />
-          <span className="font-mono text-xs">{row.status}</span>
-        </span>
+        <EnabledToggle
+          active={row.active}
+          disabled={readOnly}
+          name={row.name}
+          onChange={(next) => onToggle(row.name, next)}
+        />
       }
       actions={
         <CardActions>
@@ -701,13 +875,32 @@ function SkillCard({ row }: { row: SkillRow }) {
   );
 }
 
+const SOURCE_LABELS: Record<SkillRow['source'], string> = {
+  override: 'OVERRIDE',
+  'built-in': 'BUILT-IN',
+  'workspace-repo': 'WORKSPACE',
+  'external-repo': 'EXT REPO',
+  disk: 'DISK',
+  'skills-sh': 'SKILLS.SH',
+};
+
 function SourceBadge({ source }: { source: SkillRow['source'] }) {
-  const classes =
-    source === 'override'
-      ? 'border-primary/40 bg-primary-container/30 text-primary'
-      : source === 'repo'
-        ? 'border-tertiary-container/60 bg-tertiary-container/30 text-tertiary'
-        : 'border-outline-variant bg-surface-container text-on-surface-variant';
+  const classes = (() => {
+    switch (source) {
+      case 'override':
+        return 'border-primary/40 bg-primary-container/30 text-primary';
+      case 'workspace-repo':
+        return 'border-tertiary-container/60 bg-tertiary-container/30 text-tertiary';
+      case 'external-repo':
+        return 'border-amber-400/40 bg-amber-400/10 text-amber-300';
+      case 'disk':
+        return 'border-sky-400/40 bg-sky-400/10 text-sky-300';
+      case 'skills-sh':
+        return 'border-violet-400/40 bg-violet-400/10 text-violet-300';
+      default:
+        return 'border-outline-variant bg-surface-container text-on-surface-variant';
+    }
+  })();
   return (
     <span
       className={cn(
@@ -715,8 +908,57 @@ function SourceBadge({ source }: { source: SkillRow['source'] }) {
         classes,
       )}
     >
-      {source === 'built-in' ? 'BUILT-IN' : source.toUpperCase()}
+      {SOURCE_LABELS[source]}
     </span>
+  );
+}
+
+/** Issue #262 — placeholder dropdown for adding additional skill sources. The
+ *  three non-workspace options ship in PR 2 (external-repo), PR 3 (disk), and
+ *  PR 4 (skills-sh); they're listed here so the IA settles in PR 1 without a
+ *  follow-up nav refactor. */
+function AddSkillSourceMenu({ disabled }: { disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface-container-low px-3 text-sm font-medium text-on-surface transition-colors hover:border-primary hover:bg-surface-container disabled:opacity-50"
+      >
+        Add skill source
+        <span aria-hidden className="text-on-surface-variant">▾</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-outline-variant bg-surface-container py-1 shadow-lg"
+          onMouseLeave={() => setOpen(false)}
+        >
+          {[
+            { label: 'Another repo', note: 'Coming soon' },
+            { label: 'Upload from disk', note: 'Coming soon' },
+            { label: 'skills.sh registry', note: 'Coming soon' },
+          ].map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              disabled
+              className="flex w-full cursor-not-allowed items-center justify-between px-3 py-2 text-left text-sm text-on-surface-variant"
+            >
+              <span>{item.label}</span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.05em] text-on-surface-variant/60">
+                {item.note}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

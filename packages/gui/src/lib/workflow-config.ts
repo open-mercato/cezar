@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { WorkflowBinding, WorkspaceWorkflowSettings } from '@cezar/core';
+import type { Skill, WorkflowBinding, WorkspaceWorkflowSettings } from '@cezar/core';
 import { DEFAULT_WORKSPACE_WORKFLOW_SETTINGS } from '@cezar/core';
+import { filterActiveSkills, getWorkspaceSkillStates } from './skill-state';
 import type { Database, WorkflowBackend } from './supabase/types';
 
 const VALID_BACKENDS: WorkflowBackend[] = ['anthropic-api', 'claude-cli', 'codex-cli'];
@@ -84,4 +85,42 @@ export async function loadWorkflowSettings(
     separateCommentPerStep:
       data.separate_comment_per_step ?? DEFAULT_WORKSPACE_WORKFLOW_SETTINGS.separateCommentPerStep,
   };
+}
+
+/**
+ * Issue #262 — discover the workspace's full skill catalog, then narrow it to
+ * the skills the user has marked active in `workspace_skill_states`. The
+ * returned list is what the orchestrator/engine see at run time — disabled
+ * skills are silently dropped (even when an old binding still references them).
+ *
+ * Returns an empty list on discovery failure rather than throwing — the engine
+ * tolerates missing skills (built-in prompts run on their own).
+ */
+export async function loadActiveSkillCatalog(
+  workspaceId: string,
+  repoRoot: string | null | undefined,
+  skillsDir: string,
+  supabase: SupabaseClient<Database>,
+): Promise<Skill[]> {
+  const core = await import('@cezar/core');
+  let catalog: Skill[];
+  try {
+    catalog = repoRoot
+      ? await core.discoverSkills(repoRoot, skillsDir)
+      : await core.discoverBuiltinSkills();
+  } catch (err) {
+    console.warn('[workflow-config] discoverSkills failed:', err instanceof Error ? err.message : err);
+    catalog = [];
+  }
+
+  const [states, { data: workspaceRow }] = await Promise.all([
+    getWorkspaceSkillStates(workspaceId, supabase),
+    supabase
+      .from('workspaces')
+      .select('skill_states_seeded')
+      .eq('id', workspaceId)
+      .maybeSingle<{ skill_states_seeded: boolean }>(),
+  ]);
+
+  return filterActiveSkills(catalog, states, workspaceRow?.skill_states_seeded ?? false);
 }
