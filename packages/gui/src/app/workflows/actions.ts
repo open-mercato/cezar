@@ -421,41 +421,86 @@ export async function runFlowOnIssue(params: {
  * `workspace_skill_states`) are returned. A workspace that hasn't been seeded
  * yet falls back to "every skill in the cached catalog is active" so an
  * unmigrated workspace doesn't suddenly see an empty picker.
+ *
+ * PR 2: external repo sources contribute too — their cached `skills` jsonb is
+ * folded in via `external_repo_skills` (joined on the workspace's
+ * `skill_sources` rows). The dedup-by-name policy from PR 1 still applies.
  */
 export async function listAvailableSkills(): Promise<SkillSummary[]> {
   const workspace = await getActiveWorkspace();
   if (!workspace) return [];
   const supabase = createSupabaseAdminClient();
-  const [{ data }, activation] = await Promise.all([
+  const [{ data }, activation, externalRows] = await Promise.all([
     supabase.from('repo_skills').select('skills').eq('workspace_id', workspace.id),
     getSkillActivationContext(workspace.id, supabase),
+    listExternalRepoSkills(workspace.id, supabase),
   ]);
   if (!data) return [];
   const { states, seeded: workspaceSeeded } = activation;
   const byName = new Map<string, SkillSummary>();
+
+  function pushIfActive(name: string, description: string, source: string) {
+    if (byName.has(name)) return;
+    // Use the canonical predicate so the picker can't drift from
+    // `filterActiveSkills` (the runtime). The cache may hold a legacy
+    // `'repo'` value, so bridge it through `normalizeSkillSource` first.
+    if (!isSkillActive(states.get(name), normalizeSkillSource(source), workspaceSeeded)) return;
+    byName.set(name, { name, description });
+  }
+
   for (const row of data) {
     const arr = (row.skills as Array<Record<string, unknown>> | null) ?? [];
     for (const s of arr) {
       if (!s || typeof s.name !== 'string' || !s.name.trim()) continue;
-      // Use the canonical predicate so the picker can't drift from
-      // `filterActiveSkills` (the runtime). The cache may hold a legacy
-      // `'repo'` value, so bridge it through `normalizeSkillSource` first.
-      const active = isSkillActive(
-        states.get(s.name),
-        normalizeSkillSource(s.source),
-        workspaceSeeded,
-      );
-      if (!active) continue;
       const description =
         typeof s.description === 'string'
           ? s.description.split('\n')[0].trim().slice(0, 240)
           : '';
-      // First write wins (repo_skills is one row per repo; for multi-repo
-      // workspaces, skills across repos with the same name are de-duped here).
-      if (!byName.has(s.name)) byName.set(s.name, { name: s.name, description });
+      const source = typeof s.source === 'string' ? s.source : 'built-in';
+      pushIfActive(s.name, description, source);
     }
   }
+
+  for (const ext of externalRows) {
+    pushIfActive(ext.name, ext.description, 'external-repo');
+  }
+
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+interface ExternalSkillSummary {
+  name: string;
+  description: string;
+}
+
+async function listExternalRepoSkills(
+  workspaceId: string,
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+): Promise<ExternalSkillSummary[]> {
+  const { data: sourceRows } = await supabase
+    .from('skill_sources')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .eq('kind', 'external-repo');
+  if (!sourceRows || sourceRows.length === 0) return [];
+  const { data: cacheRows } = await supabase
+    .from('external_repo_skills')
+    .select('skills')
+    .in('source_id', sourceRows.map((r) => r.id));
+  if (!cacheRows) return [];
+  const out: ExternalSkillSummary[] = [];
+  for (const row of cacheRows) {
+    const arr = (row.skills as Array<Record<string, unknown>> | null) ?? [];
+    for (const s of arr) {
+      if (!s || typeof s.name !== 'string' || !s.name.trim()) continue;
+      const description =
+        typeof s.description === 'string'
+          ? s.description.split('\n')[0].trim().slice(0, 240)
+          : '';
+      out.push({ name: s.name, description });
+    }
+  }
+  return out;
 }
 
 // ─── Prompt preview ─────────────────────────────────────────────────────────

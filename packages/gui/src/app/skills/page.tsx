@@ -9,6 +9,7 @@ import {
   seedBuiltinSkillStatesIfNeeded,
 } from '@/lib/skill-state';
 import { SkillsView, type SkillRow } from './skills-view';
+import type { ExternalRepoSourceRow } from './external-sources-section';
 
 interface RepoSkillsRow {
   commit_sha: string | null;
@@ -21,6 +22,40 @@ interface OverrideRow {
   enabled: boolean;
   execution_mode: string;
   updated_at: string | null;
+}
+
+interface ExternalSourceRow {
+  id: string;
+  name: string;
+  config: unknown;
+  last_synced_at: string | null;
+  last_sync_error: string | null;
+}
+
+interface ExternalCacheRow {
+  source_id: string;
+  skills: unknown;
+}
+
+interface ExternalRepoConfig {
+  owner: string;
+  repo: string;
+  branch: string;
+  folder: string;
+}
+
+function parseExternalConfig(raw: unknown): ExternalRepoConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const owner = typeof o.owner === 'string' ? o.owner : null;
+  const repo = typeof o.repo === 'string' ? o.repo : null;
+  if (!owner || !repo) return null;
+  return {
+    owner,
+    repo,
+    branch: typeof o.branch === 'string' && o.branch ? o.branch : 'main',
+    folder: typeof o.folder === 'string' && o.folder ? o.folder : '.ai/skills',
+  };
 }
 
 interface ParsedSkill {
@@ -85,12 +120,15 @@ export default async function SkillsPage() {
 
   const supabase = createSupabaseAdminClient();
 
-  // Pull everything in parallel — repo_skills cache, overrides, and the
-  // activation context (per-skill state map + workspace seed marker).
+  // Pull everything in parallel — repo_skills cache, overrides, the activation
+  // context (per-skill state map + workspace seed marker), and any external
+  // skill sources + their cached catalogs (issue #262 PR 2).
   const [
     { data: skillsRow },
     { data: overrideRows },
     { states, seeded: workspaceSeeded },
+    { data: externalSourceRows },
+    { data: externalCacheRows },
   ] = await Promise.all([
     supabase
       .from('repo_skills')
@@ -104,6 +142,16 @@ export default async function SkillsPage() {
       .eq('workspace_id', workspace.id)
       .returns<OverrideRow[]>(),
     getSkillActivationContext(workspace.id, supabase),
+    supabase
+      .from('skill_sources')
+      .select('id, name, config, last_synced_at, last_sync_error')
+      .eq('workspace_id', workspace.id)
+      .eq('kind', 'external-repo')
+      .returns<ExternalSourceRow[]>(),
+    supabase
+      .from('external_repo_skills')
+      .select('source_id, skills')
+      .returns<ExternalCacheRow[]>(),
   ]);
 
   // `refreshRepoSkills` caches the merged catalog (built-in + repo) into
@@ -123,6 +171,29 @@ export default async function SkillsPage() {
       }));
     } catch {
       parsed = [];
+    }
+  }
+
+  // Issue #262 (PR 2) — fold external repo cached catalogs into the workspace
+  // catalog. Workspace + built-in entries win on name collisions because they
+  // sit higher in `SKILL_SOURCE_PRIORITY`. External rows that survive the
+  // dedupe show up with their own `source: 'external-repo'` badge.
+  const cacheBySourceId = new Map<string, ExternalCacheRow>(
+    (externalCacheRows ?? []).map((row) => [row.source_id, row]),
+  );
+  const externalSourceMeta = new Map<string, ExternalSourceRow>(
+    (externalSourceRows ?? []).map((row) => [row.id, row]),
+  );
+  const seenNames = new Set(parsed.map((p) => p.name));
+  const externalSkillCounts = new Map<string, number>();
+  for (const sourceRow of externalSourceRows ?? []) {
+    const cache = cacheBySourceId.get(sourceRow.id);
+    const externalSkills = parseSkills(cache?.skills);
+    externalSkillCounts.set(sourceRow.id, externalSkills.length);
+    for (const skill of externalSkills) {
+      if (seenNames.has(skill.name)) continue;
+      seenNames.add(skill.name);
+      parsed.push({ ...skill, source: 'external-repo' });
     }
   }
 
@@ -180,6 +251,27 @@ export default async function SkillsPage() {
 
   const isAdmin = workspace.role === 'admin';
 
+  const externalSources: ExternalRepoSourceRow[] = (externalSourceRows ?? [])
+    .map((row): ExternalRepoSourceRow | null => {
+      const cfg = parseExternalConfig(row.config);
+      if (!cfg) return null;
+      return {
+        id: row.id,
+        name: row.name,
+        owner: cfg.owner,
+        repo: cfg.repo,
+        branch: cfg.branch,
+        folder: cfg.folder,
+        lastSyncedAt: row.last_synced_at,
+        lastSyncError: row.last_sync_error,
+        skillCount: externalSkillCounts.get(row.id) ?? 0,
+      };
+    })
+    .filter((row): row is ExternalRepoSourceRow => row !== null);
+  // Keep `externalSourceMeta` reference for a possible future "show name" column
+  // — silence unused-var until then.
+  void externalSourceMeta;
+
   return (
     <SkillsView
       rows={rows}
@@ -187,6 +279,7 @@ export default async function SkillsPage() {
       commitSha={skillsRow?.commit_sha ?? null}
       fetchedAt={skillsRow?.fetched_at ?? null}
       readOnly={!isAdmin}
+      externalSources={externalSources}
     />
   );
 }

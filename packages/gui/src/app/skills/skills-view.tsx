@@ -27,6 +27,10 @@ import { ActionSheet, type ActionSheetItem } from '@/components/ui/action-sheet'
 import { RowMenuPortal } from '@/components/row-menu-portal';
 import { refreshRepoSkills } from './skills-action';
 import { setSkillEnabled } from './state-actions';
+import {
+  ExternalSourcesSection,
+  type ExternalRepoSourceRow,
+} from './external-sources-section';
 
 /** Issue #262 — provenance values surfaced in the UI. `override` keeps its
  *  special meaning ("the workspace forked this skill") and shadows whatever
@@ -64,6 +68,8 @@ interface SkillsViewProps {
   commitSha: string | null;
   fetchedAt: string | null;
   readOnly: boolean;
+  /** Issue #262 (PR 2) — registered external repos for the workspace. */
+  externalSources?: ExternalRepoSourceRow[];
 }
 
 type SortKey = 'name' | 'source' | 'mode' | 'trigger' | 'status' | 'lastRun';
@@ -73,7 +79,17 @@ type SkillTab = 'catalog' | 'active';
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
 
-export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedAt, readOnly }: SkillsViewProps) {
+export function SkillsView({
+  rows: rowsProp,
+  overridesCount,
+  commitSha,
+  fetchedAt,
+  readOnly,
+  externalSources = [],
+}: SkillsViewProps) {
+  // Issue #262 (PR 2) — controlled open state for the "Add external repo" modal,
+  // toggled from the page-header "Add skill source ▾" menu.
+  const [addExternalOpen, setAddExternalOpen] = useState(false);
   // Keep an optimistic local mirror so a toggle reflects in the table before
   // `revalidatePath` lands the server-side refresh.
   const [rows, setRows] = useState<SkillRow[]>(rowsProp);
@@ -205,7 +221,10 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
             <RefreshIcon className="h-4 w-4" />
             {refreshing ? 'Syncing…' : 'Sync from repo'}
           </button>
-          <AddSkillSourceMenu disabled={readOnly} />
+          <AddSkillSourceMenu
+            disabled={readOnly}
+            onAddExternalRepo={() => setAddExternalOpen(true)}
+          />
           <Link
             href="/settings/workflows"
             aria-disabled={readOnly}
@@ -259,6 +278,14 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
           {refreshState.error}
         </div>
       )}
+
+      {/* Issue #262 (PR 2) — external repo sources */}
+      <ExternalSourcesSection
+        sources={externalSources}
+        readOnly={readOnly}
+        addModalOpen={addExternalOpen}
+        onCloseAddModal={() => setAddExternalOpen(false)}
+      />
 
       {/* KPI stats */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -899,12 +926,22 @@ function SourceBadge({ source }: { source: SkillRow['source'] }) {
   );
 }
 
-/** Issue #262 — placeholder dropdown for adding additional skill sources. The
- *  three non-workspace options ship in PR 2 (external-repo), PR 3 (disk), and
- *  PR 4 (skills-sh); they're listed here so the IA settles in PR 1 without a
- *  follow-up nav refactor. */
-function AddSkillSourceMenu({ disabled }: { disabled: boolean }) {
+/** Issue #262 — dropdown for adding additional skill sources. "Another repo"
+ *  lands in PR 2 (this); the rest stay marked _Coming soon_ until their PRs. */
+function AddSkillSourceMenu({
+  disabled,
+  onAddExternalRepo,
+}: {
+  disabled: boolean;
+  onAddExternalRepo: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  type Entry = { label: string; note: string; onClick?: () => void };
+  const entries: Entry[] = [
+    { label: 'Another repo', note: 'External', onClick: onAddExternalRepo },
+    { label: 'Upload from disk', note: 'Coming soon' },
+    { label: 'skills.sh registry', note: 'Coming soon' },
+  ];
   return (
     <div className="relative">
       <button
@@ -924,24 +961,33 @@ function AddSkillSourceMenu({ disabled }: { disabled: boolean }) {
           className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-outline-variant bg-surface-container py-1 shadow-lg"
           onMouseLeave={() => setOpen(false)}
         >
-          {[
-            { label: 'Another repo', note: 'Coming soon' },
-            { label: 'Upload from disk', note: 'Coming soon' },
-            { label: 'skills.sh registry', note: 'Coming soon' },
-          ].map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              disabled
-              className="flex w-full cursor-not-allowed items-center justify-between px-3 py-2 text-left text-sm text-on-surface-variant"
-            >
-              <span>{item.label}</span>
-              <span className="font-mono text-[10px] uppercase tracking-[0.05em] text-on-surface-variant/60">
-                {item.note}
-              </span>
-            </button>
-          ))}
+          {entries.map((item) => {
+            const enabled = !!item.onClick;
+            return (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                disabled={!enabled}
+                onClick={() => {
+                  if (!item.onClick) return;
+                  setOpen(false);
+                  item.onClick();
+                }}
+                className={cn(
+                  'flex w-full items-center justify-between px-3 py-2 text-left text-sm',
+                  enabled
+                    ? 'text-on-surface transition-colors hover:bg-surface-container/80'
+                    : 'cursor-not-allowed text-on-surface-variant',
+                )}
+              >
+                <span>{item.label}</span>
+                <span className="font-mono text-[10px] uppercase tracking-[0.05em] text-on-surface-variant/60">
+                  {item.note}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

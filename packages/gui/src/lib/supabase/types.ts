@@ -484,6 +484,50 @@ export interface Database {
         };
         Update: Partial<Database['public']['Tables']['workspace_skill_states']['Insert']>;
       };
+      skill_sources: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          /** PR 4 will widen this to `'external-repo' | 'skills-sh'`. */
+          kind: 'external-repo';
+          name: string;
+          /** For `kind='external-repo'`: `{ owner, repo, branch, folder }`. */
+          config: Json;
+          last_synced_at: string | null;
+          last_sync_error: string | null;
+          created_at: string;
+          updated_at: string;
+          created_by: string | null;
+          updated_by: string | null;
+        };
+        Insert: Omit<Database['public']['Tables']['skill_sources']['Row'], 'id' | 'config' | 'last_synced_at' | 'last_sync_error' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by'> & {
+          id?: string;
+          config?: Json;
+          last_synced_at?: string | null;
+          last_sync_error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          created_by?: string | null;
+          updated_by?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['skill_sources']['Insert']>;
+      };
+      external_repo_skills: {
+        Row: {
+          source_id: string;
+          commit_sha: string | null;
+          /** Array of `{ name, description, suggestedStages, path, source, body }`
+           *  — body inline so the dispatcher works without a local clone. */
+          skills: Json;
+          fetched_at: string;
+        };
+        Insert: Omit<Database['public']['Tables']['external_repo_skills']['Row'], 'commit_sha' | 'skills' | 'fetched_at'> & {
+          commit_sha?: string | null;
+          skills?: Json;
+          fetched_at?: string;
+        };
+        Update: Partial<Database['public']['Tables']['external_repo_skills']['Insert']>;
+      };
       jobs: {
         Row: {
           id: string;

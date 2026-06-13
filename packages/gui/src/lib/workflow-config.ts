@@ -97,6 +97,10 @@ export async function loadWorkflowSettings(
  * orchestrator's `opts.skills ?? discoverSkillsSafe(...)` fallback fires and
  * the per-issue event stream sees a real failure log instead of a silent
  * zero-skill run.
+ *
+ * PR 2: also folds in cached external repo catalogs from `external_repo_skills`.
+ * External rows hydrate from the DB only (body inline), so dispatch never
+ * needs a clone of the external repo.
  */
 export async function loadActiveSkillCatalog(
   workspaceId: string,
@@ -115,11 +119,85 @@ export async function loadActiveSkillCatalog(
     return undefined;
   }
 
-  const activation = await getSkillActivationContext(workspaceId, supabase);
+  const [activation, externalSkills] = await Promise.all([
+    getSkillActivationContext(workspaceId, supabase),
+    loadExternalRepoSkills(workspaceId, supabase),
+  ]);
   if (activation.error) {
     // Surface the failure to the orchestrator so its `??` fallback to
     // `discoverSkillsSafe` fires (per-issue onEvent logging, no silent run).
     return undefined;
   }
+
+  // SKILL_SOURCE_PRIORITY: built-in > workspace-repo > external-repo > disk > skills-sh.
+  // The repo-side catalog already covers the first two; external rows are
+  // appended only when their name isn't already taken.
+  const taken = new Set(catalog.map((s) => s.name));
+  for (const s of externalSkills) {
+    if (taken.has(s.name)) continue;
+    taken.add(s.name);
+    catalog.push(s);
+  }
+
   return filterActiveSkills(catalog, activation.states, activation.seeded);
+}
+
+interface CachedExternalSkill {
+  name?: unknown;
+  description?: unknown;
+  suggestedStages?: unknown;
+  path?: unknown;
+  body?: unknown;
+}
+
+/**
+ * Hydrate the `external_repo_skills.skills` jsonb into proper `Skill` objects.
+ * Filters out any cached row whose source has since been removed (RLS-joined
+ * via the `skill_sources.workspace_id` predicate). Bodies live inline, so the
+ * engine doesn't need an on-disk clone of the external repo.
+ */
+async function loadExternalRepoSkills(
+  workspaceId: string,
+  supabase: SupabaseClient<Database>,
+): Promise<Skill[]> {
+  const { data: sourceRows } = await supabase
+    .from('skill_sources')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .eq('kind', 'external-repo');
+  if (!sourceRows || sourceRows.length === 0) return [];
+
+  const sourceIds = sourceRows.map((r) => r.id);
+  const { data: cacheRows } = await supabase
+    .from('external_repo_skills')
+    .select('source_id, skills')
+    .in('source_id', sourceIds);
+  if (!cacheRows) return [];
+
+  const skills: Skill[] = [];
+  const seen = new Set<string>();
+  for (const row of cacheRows) {
+    if (!Array.isArray(row.skills)) continue;
+    for (const raw of row.skills as CachedExternalSkill[]) {
+      if (!raw || typeof raw !== 'object') continue;
+      const name = typeof raw.name === 'string' ? raw.name : null;
+      const body = typeof raw.body === 'string' ? raw.body : null;
+      if (!name || body === null) continue;
+      // Two sources in the same workspace can ship the same skill name; first
+      // hit wins. The /skills surface already disambiguates by source badge.
+      if (seen.has(name)) continue;
+      seen.add(name);
+      skills.push({
+        name,
+        description: typeof raw.description === 'string' ? raw.description : undefined,
+        body,
+        path: typeof raw.path === 'string' ? raw.path : '',
+        suggestedStages: Array.isArray(raw.suggestedStages)
+          ? (raw.suggestedStages as unknown[]).filter((x): x is string => typeof x === 'string')
+          : [],
+        source: 'external-repo',
+      });
+    }
+  }
+  return skills;
 }
