@@ -555,6 +555,38 @@ export interface Database {
         };
         Update: Partial<Database['public']['Tables']['uploaded_skills']['Insert']>;
       };
+      skills_sh_skills: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          /** API identifier — `{source}/{slug}` (e.g. `vercel-labs/skills/find-skills`). */
+          source_slug: string;
+          name: string;
+          body: string;
+          description: string | null;
+          suggested_stages: Json;
+          /** API snapshot fingerprint — Refresh compares against this. */
+          content_hash: string | null;
+          install_url: string | null;
+          imported_at: string;
+          last_synced_at: string;
+          last_sync_error: string | null;
+          imported_by: string | null;
+        };
+        Insert: Omit<Database['public']['Tables']['skills_sh_skills']['Row'], 'id' | 'body' | 'description' | 'suggested_stages' | 'content_hash' | 'install_url' | 'imported_at' | 'last_synced_at' | 'last_sync_error' | 'imported_by'> & {
+          id?: string;
+          body?: string;
+          description?: string | null;
+          suggested_stages?: Json;
+          content_hash?: string | null;
+          install_url?: string | null;
+          imported_at?: string;
+          last_synced_at?: string;
+          last_sync_error?: string | null;
+          imported_by?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['skills_sh_skills']['Insert']>;
+      };
       jobs: {
         Row: {
           id: string;

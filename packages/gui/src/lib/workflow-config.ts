@@ -119,10 +119,11 @@ export async function loadActiveSkillCatalog(
     return undefined;
   }
 
-  const [activation, externalSkills, uploadedSkills] = await Promise.all([
+  const [activation, externalSkills, uploadedSkills, skillsShSkills] = await Promise.all([
     getSkillActivationContext(workspaceId, supabase),
     loadExternalRepoSkills(workspaceId, supabase),
     loadUploadedSkills(workspaceId, supabase),
+    loadSkillsShSkills(workspaceId, supabase),
   ]);
   if (activation.error) {
     // Surface the failure to the orchestrator so its `??` fallback to
@@ -131,8 +132,9 @@ export async function loadActiveSkillCatalog(
   }
 
   // SKILL_SOURCE_PRIORITY: built-in > workspace-repo > external-repo > disk > skills-sh.
-  // The repo-side catalog already covers the first two; external rows go
-  // before disk uploads. Each tier dedupes against the names already taken.
+  // The repo-side catalog already covers the first two; external rows go next,
+  // then disk uploads, then skills.sh imports last. Each tier dedupes against
+  // the names already taken.
   const taken = new Set(catalog.map((s) => s.name));
   for (const s of externalSkills) {
     if (taken.has(s.name)) continue;
@@ -140,6 +142,11 @@ export async function loadActiveSkillCatalog(
     catalog.push(s);
   }
   for (const s of uploadedSkills) {
+    if (taken.has(s.name)) continue;
+    taken.add(s.name);
+    catalog.push(s);
+  }
+  for (const s of skillsShSkills) {
     if (taken.has(s.name)) continue;
     taken.add(s.name);
     catalog.push(s);
@@ -161,6 +168,40 @@ interface UploadedSkillDbRow {
   body: string;
   description: string | null;
   suggested_stages: unknown;
+}
+
+interface SkillsShDbRow {
+  name: string;
+  body: string;
+  description: string | null;
+  suggested_stages: unknown;
+}
+
+/**
+ * Hydrate `skills_sh_skills` into `Skill` objects. Bodies live inline (the
+ * skills.sh API returns them with the metadata), so dispatch never has to
+ * call the registry at run time.
+ */
+async function loadSkillsShSkills(
+  workspaceId: string,
+  supabase: SupabaseClient<Database>,
+): Promise<Skill[]> {
+  const { data, error } = await supabase
+    .from('skills_sh_skills')
+    .select('name, body, description, suggested_stages')
+    .eq('workspace_id', workspaceId)
+    .returns<SkillsShDbRow[]>();
+  if (error || !data) return [];
+  return data.map<Skill>((row) => ({
+    name: row.name,
+    description: row.description ?? undefined,
+    body: row.body ?? '',
+    path: '',
+    suggestedStages: Array.isArray(row.suggested_stages)
+      ? (row.suggested_stages as unknown[]).filter((x): x is string => typeof x === 'string')
+      : [],
+    source: 'skills-sh',
+  }));
 }
 
 /**

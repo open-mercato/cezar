@@ -65,6 +65,16 @@ interface UploadedSkillRow {
   updated_at: string;
 }
 
+interface SkillsShRow {
+  name: string;
+  source_slug: string;
+  body: string;
+  description: string | null;
+  suggested_stages: unknown;
+  install_url: string | null;
+  last_synced_at: string;
+}
+
 function parseSkills(raw: unknown): ParsedSkill[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -124,6 +134,7 @@ export default async function SkillDetailPage({
     activation,
     { data: externalSourceRows },
     { data: uploadedRow },
+    { data: skillsShRow },
   ] = await Promise.all([
     supabase
       .from('repo_skills')
@@ -165,6 +176,13 @@ export default async function SkillDetailPage({
       .eq('workspace_id', workspace.id)
       .eq('name', name)
       .maybeSingle<UploadedSkillRow>(),
+    // Issue #262 (PR 4) — same fallback for skills.sh imports.
+    supabase
+      .from('skills_sh_skills')
+      .select('name, source_slug, body, description, suggested_stages, install_url, last_synced_at')
+      .eq('workspace_id', workspace.id)
+      .eq('name', name)
+      .maybeSingle<SkillsShRow>(),
   ]);
 
   let parsed = parseSkills(skillsRow?.skills);
@@ -193,8 +211,7 @@ export default async function SkillDetailPage({
     }
   }
 
-  // Issue #262 PR3 — disk uploads are the last fallback when the name isn't
-  // anywhere else in the catalog.
+  // Issue #262 PR3 — disk uploads come next in the fallback chain.
   const isDisk = !skill && uploadedRow !== null;
   if (isDisk) {
     skill = {
@@ -206,19 +223,31 @@ export default async function SkillDetailPage({
     };
   }
 
+  // Issue #262 PR4 — skills.sh registry imports are the last fallback.
+  const isSkillsSh = !skill && skillsShRow !== null;
+  if (isSkillsSh) {
+    skill = {
+      name: skillsShRow!.name,
+      description: skillsShRow!.description,
+      suggestedStages: parseStringArray(skillsShRow!.suggested_stages),
+      path: '',
+      source: 'skills-sh',
+    };
+  }
+
   if (!skill) notFound();
 
-  // Resolve the body source per provenance: disk + external inline it in the
-  // DB cache; everything else still flows through `readSkillBody` against
-  // the workspace clone.
-  const upstreamBody = isDisk
+  // Resolve the body source per provenance: disk / skills.sh / external all
+  // inline the body in their DB cache; the legacy workspace/built-in/override
+  // path still flows through `readSkillBody` against the workspace clone.
+  const upstreamBody = isDisk || isSkillsSh
     ? null
     : skill.source === 'external-repo'
       ? skill.body ?? null
       : await readSkillBody(workspace.repoOwner, workspace.repoName, skill.path);
 
   const bindings = (bindingRows ?? []).filter((b) => b.skill_name === skill.name);
-  const isOverride = !isDisk && overrideRow !== null;
+  const isOverride = !isDisk && !isSkillsSh && overrideRow !== null;
 
   // Issue #262 — runtime activation lives in `workspace_skill_states`, not
   // `skill_overrides.enabled`. Use the canonical predicate so the detail page
@@ -236,15 +265,29 @@ export default async function SkillDetailPage({
     name: skill.name,
     description: skill.description,
     path: skill.path,
-    body: isDisk ? uploadedRow!.body : isOverride ? overrideRow!.body : upstreamBody,
+    body: isDisk
+      ? uploadedRow!.body
+      : isSkillsSh
+        ? skillsShRow!.body
+        : isOverride
+          ? overrideRow!.body
+          : upstreamBody,
     upstreamBody,
-    source: isDisk ? 'disk' : isOverride ? 'override' : 'repo',
+    source: isDisk
+      ? 'disk'
+      : isSkillsSh
+        ? 'skills-sh'
+        : isOverride
+          ? 'override'
+          : 'repo',
     enabled,
     overrideUpdatedAt: isDisk
       ? uploadedRow!.updated_at
-      : isOverride
-        ? overrideRow!.updated_at
-        : null,
+      : isSkillsSh
+        ? skillsShRow!.last_synced_at
+        : isOverride
+          ? overrideRow!.updated_at
+          : null,
     metadata: {
       executionMode: isOverride ? overrideRow!.execution_mode : 'continuous',
       triggers: isOverride ? parseStringArray(overrideRow!.triggers) : ['issue-created'],

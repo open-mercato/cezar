@@ -36,6 +36,11 @@ import {
   UploadedSkillsSection,
   type UploadedSkillRow,
 } from './uploaded-skills-section';
+import { SkillsShModal } from './skills-sh-modal';
+import {
+  SkillsShSection,
+  type SkillsShImportRow,
+} from './skills-sh-section';
 
 /** Issue #262 — provenance values surfaced in the UI. `override` keeps its
  *  special meaning ("the workspace forked this skill") and shadows whatever
@@ -77,6 +82,11 @@ interface SkillsViewProps {
   externalSources?: ExternalRepoSourceRow[];
   /** Issue #262 (PR 3) — disk-uploaded skills for the workspace. */
   uploadedSkills?: UploadedSkillRow[];
+  /** Issue #262 (PR 4) — skills.sh imports for the workspace. */
+  skillsShImports?: SkillsShImportRow[];
+  /** Issue #262 (PR 4) — whether the deployment has `SKILLS_SH_TOKEN` set.
+   *  Drives whether Install / Refresh buttons are clickable. */
+  skillsShConfigured?: boolean;
 }
 
 type SortKey = 'name' | 'source' | 'mode' | 'trigger' | 'status' | 'lastRun';
@@ -94,12 +104,16 @@ export function SkillsView({
   readOnly,
   externalSources = [],
   uploadedSkills = [],
+  skillsShImports = [],
+  skillsShConfigured = false,
 }: SkillsViewProps) {
   // Issue #262 (PR 2) — controlled open state for the "Add external repo" modal,
   // toggled from the page-header "Add skill source ▾" menu.
   const [addExternalOpen, setAddExternalOpen] = useState(false);
   // Issue #262 (PR 3) — same pattern for the disk upload modal.
   const [uploadOpen, setUploadOpen] = useState(false);
+  // Issue #262 (PR 4) — same pattern for the skills.sh install modal.
+  const [skillsShOpen, setSkillsShOpen] = useState(false);
   // Keep an optimistic local mirror so a toggle reflects in the table before
   // `revalidatePath` lands the server-side refresh.
   const [rows, setRows] = useState<SkillRow[]>(rowsProp);
@@ -235,6 +249,7 @@ export function SkillsView({
             disabled={readOnly}
             onAddExternalRepo={() => setAddExternalOpen(true)}
             onUploadFromDisk={() => setUploadOpen(true)}
+            onInstallSkillsSh={() => setSkillsShOpen(true)}
           />
           <Link
             href="/settings/workflows"
@@ -305,6 +320,19 @@ export function SkillsView({
         onOpenUpload={() => setUploadOpen(true)}
       />
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
+
+      {/* Issue #262 (PR 4) — skills.sh imports */}
+      <SkillsShSection
+        imports={skillsShImports}
+        readOnly={readOnly}
+        configured={skillsShConfigured}
+        onOpenInstall={() => setSkillsShOpen(true)}
+      />
+      <SkillsShModal
+        open={skillsShOpen}
+        onClose={() => setSkillsShOpen(false)}
+        configured={skillsShConfigured}
+      />
 
       {/* KPI stats */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -945,24 +973,26 @@ function SourceBadge({ source }: { source: SkillRow['source'] }) {
   );
 }
 
-/** Issue #262 — dropdown for adding additional skill sources. "Another repo"
- *  landed in PR 2, "Upload from disk" lands here in PR 3; the skills.sh entry
- *  stays marked _Coming soon_ until PR 4. */
+/** Issue #262 — dropdown for adding additional skill sources. PR 2 added
+ *  "Another repo", PR 3 added "Upload from disk", PR 4 adds the skills.sh
+ *  registry entry; all three are now live. */
 function AddSkillSourceMenu({
   disabled,
   onAddExternalRepo,
   onUploadFromDisk,
+  onInstallSkillsSh,
 }: {
   disabled: boolean;
   onAddExternalRepo: () => void;
   onUploadFromDisk: () => void;
+  onInstallSkillsSh: () => void;
 }) {
   const [open, setOpen] = useState(false);
   type Entry = { label: string; note: string; onClick?: () => void };
   const entries: Entry[] = [
     { label: 'Another repo', note: 'External', onClick: onAddExternalRepo },
     { label: 'Upload from disk', note: 'Disk', onClick: onUploadFromDisk },
-    { label: 'skills.sh registry', note: 'Coming soon' },
+    { label: 'skills.sh registry', note: 'Registry', onClick: onInstallSkillsSh },
   ];
   return (
     <div className="relative">

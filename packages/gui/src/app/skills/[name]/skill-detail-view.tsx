@@ -26,6 +26,10 @@ import {
   autosaveUploadedSkillBody,
   deleteUploadedSkill,
 } from './uploaded-actions';
+import {
+  refreshSkillsShSkillByName,
+  removeSkillsShSkillByName,
+} from './skills-sh-actions';
 
 export interface SkillDetail {
   name: string;
@@ -33,7 +37,7 @@ export interface SkillDetail {
   path: string;
   body: string | null;
   upstreamBody: string | null;
-  source: 'override' | 'repo' | 'built-in' | 'disk';
+  source: 'override' | 'repo' | 'built-in' | 'disk' | 'skills-sh';
   enabled: boolean;
   overrideUpdatedAt: string | null;
   metadata: {
@@ -86,10 +90,14 @@ export function SkillDetailView({ skill, readOnly }: Props) {
   // `uploaded_skills`, so they bypass the "fork upstream → override" handshake
   // entirely. `isDisk` toggles those branches throughout the component.
   const isDisk = skill.source === 'disk';
-  // Disk skills have no metadata save path — execution-mode / triggers /
-  // outputs / capabilities are derived from the uploaded file's frontmatter.
-  // Lock the controls so the user can't dirty state that has nowhere to land.
-  const metaReadOnly = readOnly || isDisk;
+  // Issue #262 (PR 4) — skills.sh imports are read-only mirrors of the
+  // remote registry; we expose Refresh + Remove instead of any save handshake.
+  const isSkillsSh = skill.source === 'skills-sh';
+  // Disk + skills.sh skills have no metadata save path — execution-mode /
+  // triggers / outputs / capabilities are derived from upstream (uploaded
+  // file's frontmatter or the registry payload). Lock the controls so the
+  // user can't dirty state that has nowhere to land.
+  const metaReadOnly = readOnly || isDisk || isSkillsSh;
   const router = useRouter();
   const [executionMode, setExecutionMode] = useState(skill.metadata.executionMode);
   const [triggers, setTriggers] = useState<Set<string>>(() => new Set(skill.metadata.triggers));
@@ -146,6 +154,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
   const bodyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!bodyDirty || readOnly) return;
+    if (isSkillsSh) return; // skills.sh imports are read-only mirrors.
     if (!isDisk && !hasOverride) return;
     if (bodyTimerRef.current) clearTimeout(bodyTimerRef.current);
     bodyTimerRef.current = setTimeout(async () => {
@@ -169,7 +178,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
     return () => {
       if (bodyTimerRef.current) clearTimeout(bodyTimerRef.current);
     };
-  }, [body, bodyDirty, readOnly, hasOverride, isDisk, skill.name]);
+  }, [body, bodyDirty, readOnly, hasOverride, isDisk, isSkillsSh, skill.name]);
 
   const buildPayload = useCallback(
     (): OverridePayload => ({
@@ -202,6 +211,22 @@ export function SkillDetailView({ skill, readOnly }: Props) {
 
   async function handleDiscard() {
     if (readOnly) return;
+    // skills.sh imports — Discard means uninstall. Re-install brings them back.
+    if (isSkillsSh) {
+      const ok = window.confirm(
+        `Remove the skills.sh import "${skill.name}"? Re-install it from /skills to bring it back.`,
+      );
+      if (!ok) return;
+      setSaveState('saving');
+      const result = await removeSkillsShSkillByName(skill.name);
+      if (result.ok) {
+        router.push('/skills');
+      } else {
+        setSaveState('error');
+        setSaveError(result.error ?? 'Could not remove skills.sh import');
+      }
+      return;
+    }
     // Disk uploads have no upstream to fall back to — "Discard" deletes the
     // skill outright (no recovery from this side; user can re-upload).
     if (isDisk) {
@@ -340,13 +365,15 @@ export function SkillDetailView({ skill, readOnly }: Props) {
   }
 
   const dirty = bodyDirty || metaDirty;
-  const headerBadge: { label: string; tone: 'tertiary' | 'primary' | 'muted' } = isDisk
-    ? { label: 'DISK · UPLOADED', tone: 'tertiary' }
-    : hasOverride
-      ? enabled
-        ? { label: 'OVERRIDE · ACTIVE', tone: 'primary' }
-        : { label: 'OVERRIDE · DISABLED', tone: 'muted' }
-      : { label: 'AI_ASSISTED', tone: 'tertiary' };
+  const headerBadge: { label: string; tone: 'tertiary' | 'primary' | 'muted' } = isSkillsSh
+    ? { label: 'SKILLS.SH · SYNCED', tone: 'tertiary' }
+    : isDisk
+      ? { label: 'DISK · UPLOADED', tone: 'tertiary' }
+      : hasOverride
+        ? enabled
+          ? { label: 'OVERRIDE · ACTIVE', tone: 'primary' }
+          : { label: 'OVERRIDE · DISABLED', tone: 'muted' }
+        : { label: 'AI_ASSISTED', tone: 'tertiary' };
 
   return (
     <div className="flex min-h-[calc(100vh-56px)] flex-col">
@@ -636,16 +663,46 @@ export function SkillDetailView({ skill, readOnly }: Props) {
         <button
           type="button"
           onClick={handleDiscard}
-          disabled={readOnly || (!dirty && !hasOverride && !isDisk)}
+          disabled={readOnly || (!dirty && !hasOverride && !isDisk && !isSkillsSh)}
           className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface px-3 text-sm text-on-surface-variant transition-colors hover:border-primary hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isDisk ? 'Delete uploaded skill' : hasOverride ? 'Delete override' : 'Discard changes'}
+          {isSkillsSh
+            ? 'Remove import'
+            : isDisk
+              ? 'Delete uploaded skill'
+              : hasOverride
+                ? 'Delete override'
+                : 'Discard changes'}
         </button>
         <div className="flex flex-wrap items-center gap-2">
           {saveError && <span className="text-xs text-error">{saveError}</span>}
+          {isSkillsSh && (
+            <button
+              type="button"
+              onClick={async () => {
+                setSaveState('saving');
+                const result = await refreshSkillsShSkillByName(skill.name);
+                if (result.ok) {
+                  setSaveState('saved');
+                  setSaveError(null);
+                  // The page-level loader will re-fetch on revalidatePath;
+                  // body state stays mirrored from the latest snapshot.
+                } else {
+                  setSaveState('error');
+                  setSaveError(result.error ?? 'Refresh failed');
+                }
+              }}
+              disabled={readOnly || saveState === 'saving'}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface px-3 text-sm font-medium text-on-surface transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RotateLeftIcon className="h-4 w-4" />
+              Refresh from skills.sh
+            </button>
+          )}
           {/* Save handshake only makes sense for repo/built-in skills — disk
-              uploads autosave directly into their own table. */}
-          {!isDisk && (
+              uploads autosave directly into their own table; skills.sh imports
+              are read-only mirrors. */}
+          {!isDisk && !isSkillsSh && (
             <>
               <button
                 type="button"

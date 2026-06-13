@@ -8,9 +8,11 @@ import {
   isSkillDefaultActive,
   seedBuiltinSkillStatesIfNeeded,
 } from '@/lib/skill-state';
+import { isSkillsShConfigured } from '@/lib/skills-sh-api';
 import { SkillsView, type SkillRow } from './skills-view';
 import type { ExternalRepoSourceRow } from './external-sources-section';
 import type { UploadedSkillRow } from './uploaded-skills-section';
+import type { SkillsShImportRow } from './skills-sh-section';
 
 interface RepoSkillsRow {
   commit_sha: string | null;
@@ -45,6 +47,17 @@ interface UploadedSkillsDbRow {
   suggested_stages: unknown;
   uploaded_at: string;
   updated_at: string;
+}
+
+interface SkillsShDbRow {
+  id: string;
+  name: string;
+  source_slug: string;
+  description: string | null;
+  suggested_stages: unknown;
+  install_url: string | null;
+  last_synced_at: string;
+  last_sync_error: string | null;
 }
 
 interface ExternalRepoConfig {
@@ -141,6 +154,7 @@ export default async function SkillsPage() {
     { states, seeded: workspaceSeeded },
     { data: externalSourceRows },
     { data: uploadedRows },
+    { data: skillsShRows },
   ] = await Promise.all([
     supabase
       .from('repo_skills')
@@ -166,6 +180,12 @@ export default async function SkillsPage() {
       .eq('workspace_id', workspace.id)
       .order('uploaded_at', { ascending: false })
       .returns<UploadedSkillsDbRow[]>(),
+    supabase
+      .from('skills_sh_skills')
+      .select('id, name, source_slug, description, suggested_stages, install_url, last_synced_at, last_sync_error')
+      .eq('workspace_id', workspace.id)
+      .order('imported_at', { ascending: false })
+      .returns<SkillsShDbRow[]>(),
   ]);
 
   const externalSourceIds = (externalSourceRows ?? []).map((row) => row.id);
@@ -236,6 +256,23 @@ export default async function SkillsPage() {
         : [],
       path: '',
       source: 'disk',
+    });
+  }
+
+  // Issue #262 (PR 4) — skills.sh imports. Lowest priority — only surface in
+  // the main catalog if nothing higher claimed the name. The Imports section
+  // shows shadowed entries so they can still be managed (Refresh / Remove).
+  for (const row of skillsShRows ?? []) {
+    if (seenNames.has(row.name)) continue;
+    seenNames.add(row.name);
+    parsed.push({
+      name: row.name,
+      description: row.description,
+      suggestedStages: Array.isArray(row.suggested_stages)
+        ? (row.suggested_stages as unknown[]).filter((x): x is string => typeof x === 'string')
+        : [],
+      path: '',
+      source: 'skills-sh',
     });
   }
 
@@ -321,6 +358,15 @@ export default async function SkillsPage() {
     updatedAt: row.updated_at,
   }));
 
+  const skillsShImports: SkillsShImportRow[] = (skillsShRows ?? []).map((row) => ({
+    id: row.id,
+    name: row.name,
+    sourceSlug: row.source_slug,
+    installUrl: row.install_url,
+    lastSyncedAt: row.last_synced_at,
+    lastSyncError: row.last_sync_error,
+  }));
+
   return (
     <SkillsView
       rows={rows}
@@ -330,6 +376,8 @@ export default async function SkillsPage() {
       readOnly={!isAdmin}
       externalSources={externalSources}
       uploadedSkills={uploadedSkills}
+      skillsShImports={skillsShImports}
+      skillsShConfigured={isSkillsShConfigured()}
     />
   );
 }
