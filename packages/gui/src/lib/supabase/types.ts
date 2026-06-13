@@ -528,6 +528,33 @@ export interface Database {
         };
         Update: Partial<Database['public']['Tables']['external_repo_skills']['Insert']>;
       };
+      uploaded_skills: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          name: string;
+          body: string;
+          description: string | null;
+          /** Array of stage ids (`'verify-in-repo' | 'fix' | …`) — same shape as
+           *  the YAML `cezar-stages` frontmatter list. */
+          suggested_stages: Json;
+          uploaded_at: string;
+          updated_at: string;
+          uploaded_by: string | null;
+          updated_by: string | null;
+        };
+        Insert: Omit<Database['public']['Tables']['uploaded_skills']['Row'], 'id' | 'body' | 'description' | 'suggested_stages' | 'uploaded_at' | 'updated_at' | 'uploaded_by' | 'updated_by'> & {
+          id?: string;
+          body?: string;
+          description?: string | null;
+          suggested_stages?: Json;
+          uploaded_at?: string;
+          updated_at?: string;
+          uploaded_by?: string | null;
+          updated_by?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['uploaded_skills']['Insert']>;
+      };
       jobs: {
         Row: {
           id: string;

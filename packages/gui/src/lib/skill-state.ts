@@ -124,12 +124,12 @@ export async function setSkillEnabled(
 }
 
 /**
- * Sources the workspace implicitly consents to: shipped built-ins and skills
- * the user authored inside their own repo. Sources requiring explicit opt-in
- * (external-repo, disk, skills-sh) are intentionally excluded — those are
- * adversarial-by-default and stay off until a row says otherwise.
+ * Sources the workspace implicitly consents to: shipped built-ins, skills the
+ * user authored inside their own repo, and skills they uploaded directly
+ * (PR 3). Sources requiring explicit opt-in (external-repo, skills-sh) stay
+ * off until a row says otherwise — those are adversarial-by-default.
  */
-const DEFAULT_ON_SOURCES = new Set<SkillSource>(['built-in', 'workspace-repo']);
+const DEFAULT_ON_SOURCES = new Set<SkillSource>(['built-in', 'workspace-repo', 'disk']);
 
 /**
  * Canonical "default-on" rule for skills without an explicit state row: the

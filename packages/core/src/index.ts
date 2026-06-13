@@ -129,9 +129,11 @@ export {
   discoverBuiltinSkills,
   skillsForStage,
   normalizeSkillSource,
+  parseSkillMarkdown,
   SKILL_SOURCE_PRIORITY,
   type Skill,
   type SkillSource,
+  type ParsedSkillMarkdown,
 } from './skills/skill-catalog.js';
 
 // Data-driven actions runtime — system prompt + skill_refs + effects/tools.

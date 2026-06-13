@@ -119,9 +119,10 @@ export async function loadActiveSkillCatalog(
     return undefined;
   }
 
-  const [activation, externalSkills] = await Promise.all([
+  const [activation, externalSkills, uploadedSkills] = await Promise.all([
     getSkillActivationContext(workspaceId, supabase),
     loadExternalRepoSkills(workspaceId, supabase),
+    loadUploadedSkills(workspaceId, supabase),
   ]);
   if (activation.error) {
     // Surface the failure to the orchestrator so its `??` fallback to
@@ -130,10 +131,15 @@ export async function loadActiveSkillCatalog(
   }
 
   // SKILL_SOURCE_PRIORITY: built-in > workspace-repo > external-repo > disk > skills-sh.
-  // The repo-side catalog already covers the first two; external rows are
-  // appended only when their name isn't already taken.
+  // The repo-side catalog already covers the first two; external rows go
+  // before disk uploads. Each tier dedupes against the names already taken.
   const taken = new Set(catalog.map((s) => s.name));
   for (const s of externalSkills) {
+    if (taken.has(s.name)) continue;
+    taken.add(s.name);
+    catalog.push(s);
+  }
+  for (const s of uploadedSkills) {
     if (taken.has(s.name)) continue;
     taken.add(s.name);
     catalog.push(s);
@@ -148,6 +154,39 @@ interface CachedExternalSkill {
   suggestedStages?: unknown;
   path?: unknown;
   body?: unknown;
+}
+
+interface UploadedSkillDbRow {
+  name: string;
+  body: string;
+  description: string | null;
+  suggested_stages: unknown;
+}
+
+/**
+ * Hydrate `uploaded_skills` into `Skill` objects. Bodies live inline in this
+ * table — no on-disk clone is ever consulted for disk skills.
+ */
+async function loadUploadedSkills(
+  workspaceId: string,
+  supabase: SupabaseClient<Database>,
+): Promise<Skill[]> {
+  const { data, error } = await supabase
+    .from('uploaded_skills')
+    .select('name, body, description, suggested_stages')
+    .eq('workspace_id', workspaceId)
+    .returns<UploadedSkillDbRow[]>();
+  if (error || !data) return [];
+  return data.map<Skill>((row) => ({
+    name: row.name,
+    description: row.description ?? undefined,
+    body: row.body ?? '',
+    path: '',
+    suggestedStages: Array.isArray(row.suggested_stages)
+      ? (row.suggested_stages as unknown[]).filter((x): x is string => typeof x === 'string')
+      : [],
+    source: 'disk',
+  }));
 }
 
 /**

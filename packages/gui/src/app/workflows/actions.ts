@@ -430,10 +430,11 @@ export async function listAvailableSkills(): Promise<SkillSummary[]> {
   const workspace = await getActiveWorkspace();
   if (!workspace) return [];
   const supabase = createSupabaseAdminClient();
-  const [{ data }, activation, externalRows] = await Promise.all([
+  const [{ data }, activation, externalRows, uploadedRows] = await Promise.all([
     supabase.from('repo_skills').select('skills').eq('workspace_id', workspace.id),
     getSkillActivationContext(workspace.id, supabase),
     listExternalRepoSkills(workspace.id, supabase),
+    listUploadedSkillSummaries(workspace.id, supabase),
   ]);
   // Don't early-return on `!data` — repo_skills failures are independent of
   // external sources. Falling back to `[]` keeps the external loop below
@@ -469,12 +470,37 @@ export async function listAvailableSkills(): Promise<SkillSummary[]> {
     pushIfActive(ext.name, ext.description, 'external-repo');
   }
 
+  for (const up of uploadedRows) {
+    pushIfActive(up.name, up.description, 'disk');
+  }
+
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 interface ExternalSkillSummary {
   name: string;
   description: string;
+}
+
+interface UploadedSkillSummaryRow {
+  name: string;
+  description: string | null;
+}
+
+async function listUploadedSkillSummaries(
+  workspaceId: string,
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+): Promise<ExternalSkillSummary[]> {
+  const { data } = await supabase
+    .from('uploaded_skills')
+    .select('name, description')
+    .eq('workspace_id', workspaceId)
+    .returns<UploadedSkillSummaryRow[]>();
+  if (!data) return [];
+  return data.map((row) => ({
+    name: row.name,
+    description: row.description?.split('\n')[0].trim().slice(0, 240) ?? '',
+  }));
 }
 
 async function listExternalRepoSkills(

@@ -57,6 +57,14 @@ interface ExternalCacheRow {
   skills: unknown;
 }
 
+interface UploadedSkillRow {
+  name: string;
+  body: string;
+  description: string | null;
+  suggested_stages: unknown;
+  updated_at: string;
+}
+
 function parseSkills(raw: unknown): ParsedSkill[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -115,6 +123,7 @@ export default async function SkillDetailPage({
     { data: issueRows },
     activation,
     { data: externalSourceRows },
+    { data: uploadedRow },
   ] = await Promise.all([
     supabase
       .from('repo_skills')
@@ -148,6 +157,14 @@ export default async function SkillDetailPage({
       .eq('workspace_id', workspace.id)
       .eq('kind', 'external-repo')
       .returns<ExternalSourceRow[]>(),
+    // Issue #262 (PR 3) — disk uploads can shadow workspace skills on
+    // collision-free names; check if this `name` came from disk.
+    supabase
+      .from('uploaded_skills')
+      .select('name, body, description, suggested_stages, updated_at')
+      .eq('workspace_id', workspace.id)
+      .eq('name', name)
+      .maybeSingle<UploadedSkillRow>(),
   ]);
 
   let parsed = parseSkills(skillsRow?.skills);
@@ -176,16 +193,32 @@ export default async function SkillDetailPage({
     }
   }
 
+  // Issue #262 PR3 — disk uploads are the last fallback when the name isn't
+  // anywhere else in the catalog.
+  const isDisk = !skill && uploadedRow !== null;
+  if (isDisk) {
+    skill = {
+      name: uploadedRow!.name,
+      description: uploadedRow!.description,
+      suggestedStages: parseStringArray(uploadedRow!.suggested_stages),
+      path: '',
+      source: 'disk',
+    };
+  }
+
   if (!skill) notFound();
 
-  // External-repo skills inline their body in the cache — no workspace clone
-  // to read from. Other sources still flow through readSkillBody.
-  const upstreamBody = skill.source === 'external-repo'
-    ? skill.body ?? null
-    : await readSkillBody(workspace.repoOwner, workspace.repoName, skill.path);
+  // Resolve the body source per provenance: disk + external inline it in the
+  // DB cache; everything else still flows through `readSkillBody` against
+  // the workspace clone.
+  const upstreamBody = isDisk
+    ? null
+    : skill.source === 'external-repo'
+      ? skill.body ?? null
+      : await readSkillBody(workspace.repoOwner, workspace.repoName, skill.path);
 
   const bindings = (bindingRows ?? []).filter((b) => b.skill_name === skill.name);
-  const isOverride = overrideRow !== null;
+  const isOverride = !isDisk && overrideRow !== null;
 
   // Issue #262 — runtime activation lives in `workspace_skill_states`, not
   // `skill_overrides.enabled`. Use the canonical predicate so the detail page
@@ -203,11 +236,15 @@ export default async function SkillDetailPage({
     name: skill.name,
     description: skill.description,
     path: skill.path,
-    body: isOverride ? overrideRow!.body : upstreamBody,
+    body: isDisk ? uploadedRow!.body : isOverride ? overrideRow!.body : upstreamBody,
     upstreamBody,
-    source: isOverride ? 'override' : 'repo',
+    source: isDisk ? 'disk' : isOverride ? 'override' : 'repo',
     enabled,
-    overrideUpdatedAt: isOverride ? overrideRow!.updated_at : null,
+    overrideUpdatedAt: isDisk
+      ? uploadedRow!.updated_at
+      : isOverride
+        ? overrideRow!.updated_at
+        : null,
     metadata: {
       executionMode: isOverride ? overrideRow!.execution_mode : 'continuous',
       triggers: isOverride ? parseStringArray(overrideRow!.triggers) : ['issue-created'],

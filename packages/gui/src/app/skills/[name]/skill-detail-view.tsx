@@ -14,6 +14,7 @@ import {
   ChevronDownIcon,
   ChevronLeftIcon,
 } from '@/components/icons';
+import { useRouter } from 'next/navigation';
 import {
   saveSkillOverride,
   autosaveSkillOverrideBody,
@@ -21,6 +22,10 @@ import {
   deleteSkillOverride,
   type OverridePayload,
 } from './override-actions';
+import {
+  autosaveUploadedSkillBody,
+  deleteUploadedSkill,
+} from './uploaded-actions';
 
 export interface SkillDetail {
   name: string;
@@ -28,7 +33,7 @@ export interface SkillDetail {
   path: string;
   body: string | null;
   upstreamBody: string | null;
-  source: 'override' | 'repo' | 'built-in';
+  source: 'override' | 'repo' | 'built-in' | 'disk';
   enabled: boolean;
   overrideUpdatedAt: string | null;
   metadata: {
@@ -77,6 +82,11 @@ const AUTOSAVE_DEBOUNCE_MS = 800;
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 export function SkillDetailView({ skill, readOnly }: Props) {
+  // Issue #262 (PR 3) — disk-uploaded skills edit their body directly in
+  // `uploaded_skills`, so they bypass the "fork upstream → override" handshake
+  // entirely. `isDisk` toggles those branches throughout the component.
+  const isDisk = skill.source === 'disk';
+  const router = useRouter();
   const [executionMode, setExecutionMode] = useState(skill.metadata.executionMode);
   const [triggers, setTriggers] = useState<Set<string>>(() => new Set(skill.metadata.triggers));
   const [outputs, setOutputs] = useState<string[]>(skill.metadata.outputs);
@@ -125,23 +135,28 @@ export function SkillDetailView({ skill, readOnly }: Props) {
     skill.metadata.capabilities,
   ]);
 
-  // Debounced body autosave. Only runs once an override already exists —
-  // editing an upstream (repo/built-in) skill must NOT silently fork it on the
-  // first keystroke. Until then the body stays "Unsaved" and the user opts in
-  // explicitly via "Save as override" / "Save & Enable Skill".
+  // Debounced body autosave. For overrides, only runs once an override already
+  // exists — editing an upstream (repo/built-in) skill must NOT silently fork
+  // it on the first keystroke. For disk uploads, the skill *is* the canonical
+  // version, so we autosave from the first keystroke.
   const bodyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!bodyDirty || readOnly || !hasOverride) return;
+    if (!bodyDirty || readOnly) return;
+    if (!isDisk && !hasOverride) return;
     if (bodyTimerRef.current) clearTimeout(bodyTimerRef.current);
     bodyTimerRef.current = setTimeout(async () => {
       setSaveState('saving');
-      const result = await autosaveSkillOverrideBody(skill.name, body);
+      const result = isDisk
+        ? await autosaveUploadedSkillBody(skill.name, body)
+        : await autosaveSkillOverrideBody(skill.name, body);
       if (result.ok) {
         setSaveState('saved');
         setSaveError(null);
         setBodyDirty(false);
         if (result.updatedAt) setOverrideUpdatedAt(result.updatedAt);
-        if (typeof result.enabled === 'boolean') setEnabled(result.enabled);
+        if (!isDisk && 'enabled' in result && typeof result.enabled === 'boolean') {
+          setEnabled(result.enabled);
+        }
       } else {
         setSaveState('error');
         setSaveError(result.error ?? 'Save failed');
@@ -150,7 +165,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
     return () => {
       if (bodyTimerRef.current) clearTimeout(bodyTimerRef.current);
     };
-  }, [body, bodyDirty, readOnly, hasOverride, skill.name]);
+  }, [body, bodyDirty, readOnly, hasOverride, isDisk, skill.name]);
 
   const buildPayload = useCallback(
     (): OverridePayload => ({
@@ -183,6 +198,23 @@ export function SkillDetailView({ skill, readOnly }: Props) {
 
   async function handleDiscard() {
     if (readOnly) return;
+    // Disk uploads have no upstream to fall back to — "Discard" deletes the
+    // skill outright (no recovery from this side; user can re-upload).
+    if (isDisk) {
+      const ok = window.confirm(
+        `Delete the uploaded skill "${skill.name}"? You'll need to re-upload it to bring it back.`,
+      );
+      if (!ok) return;
+      setSaveState('saving');
+      const result = await deleteUploadedSkill(skill.name);
+      if (result.ok) {
+        router.push('/skills');
+      } else {
+        setSaveState('error');
+        setSaveError(result.error ?? 'Could not delete uploaded skill');
+      }
+      return;
+    }
     // If we have an override, "Discard" should revert to upstream entirely.
     if (hasOverride) {
       const ok = window.confirm(
@@ -304,11 +336,13 @@ export function SkillDetailView({ skill, readOnly }: Props) {
   }
 
   const dirty = bodyDirty || metaDirty;
-  const headerBadge: { label: string; tone: 'tertiary' | 'primary' | 'muted' } = hasOverride
-    ? enabled
-      ? { label: 'OVERRIDE · ACTIVE', tone: 'primary' }
-      : { label: 'OVERRIDE · DISABLED', tone: 'muted' }
-    : { label: 'AI_ASSISTED', tone: 'tertiary' };
+  const headerBadge: { label: string; tone: 'tertiary' | 'primary' | 'muted' } = isDisk
+    ? { label: 'DISK · UPLOADED', tone: 'tertiary' }
+    : hasOverride
+      ? enabled
+        ? { label: 'OVERRIDE · ACTIVE', tone: 'primary' }
+        : { label: 'OVERRIDE · DISABLED', tone: 'muted' }
+      : { label: 'AI_ASSISTED', tone: 'tertiary' };
 
   return (
     <div className="flex min-h-[calc(100vh-56px)] flex-col">
@@ -598,31 +632,37 @@ export function SkillDetailView({ skill, readOnly }: Props) {
         <button
           type="button"
           onClick={handleDiscard}
-          disabled={readOnly || (!dirty && !hasOverride)}
+          disabled={readOnly || (!dirty && !hasOverride && !isDisk)}
           className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface px-3 text-sm text-on-surface-variant transition-colors hover:border-primary hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {hasOverride ? 'Delete override' : 'Discard changes'}
+          {isDisk ? 'Delete uploaded skill' : hasOverride ? 'Delete override' : 'Discard changes'}
         </button>
         <div className="flex flex-wrap items-center gap-2">
           {saveError && <span className="text-xs text-error">{saveError}</span>}
-          <button
-            type="button"
-            onClick={() => handleSave(false)}
-            disabled={readOnly || saveState === 'saving'}
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface px-3 text-sm font-medium text-on-surface transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <RotateLeftIcon className="h-4 w-4" />
-            Save as override
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSave(true)}
-            disabled={readOnly || saveState === 'saving'}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-on transition-colors hover:bg-primary-container hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <CheckIcon className="h-4 w-4" />
-            Save &amp; Enable Skill
-          </button>
+          {/* Save handshake only makes sense for repo/built-in skills — disk
+              uploads autosave directly into their own table. */}
+          {!isDisk && (
+            <>
+              <button
+                type="button"
+                onClick={() => handleSave(false)}
+                disabled={readOnly || saveState === 'saving'}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface px-3 text-sm font-medium text-on-surface transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RotateLeftIcon className="h-4 w-4" />
+                Save as override
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSave(true)}
+                disabled={readOnly || saveState === 'saving'}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-on transition-colors hover:bg-primary-container hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <CheckIcon className="h-4 w-4" />
+                Save &amp; Enable Skill
+              </button>
+            </>
+          )}
         </div>
       </footer>
     </div>

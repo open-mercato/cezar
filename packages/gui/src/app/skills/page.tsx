@@ -10,6 +10,7 @@ import {
 } from '@/lib/skill-state';
 import { SkillsView, type SkillRow } from './skills-view';
 import type { ExternalRepoSourceRow } from './external-sources-section';
+import type { UploadedSkillRow } from './uploaded-skills-section';
 
 interface RepoSkillsRow {
   commit_sha: string | null;
@@ -35,6 +36,15 @@ interface ExternalSourceRow {
 interface ExternalCacheRow {
   source_id: string;
   skills: unknown;
+}
+
+interface UploadedSkillsDbRow {
+  name: string;
+  body: string;
+  description: string | null;
+  suggested_stages: unknown;
+  uploaded_at: string;
+  updated_at: string;
 }
 
 interface ExternalRepoConfig {
@@ -130,6 +140,7 @@ export default async function SkillsPage() {
     { data: overrideRows },
     { states, seeded: workspaceSeeded },
     { data: externalSourceRows },
+    { data: uploadedRows },
   ] = await Promise.all([
     supabase
       .from('repo_skills')
@@ -149,6 +160,12 @@ export default async function SkillsPage() {
       .eq('workspace_id', workspace.id)
       .eq('kind', 'external-repo')
       .returns<ExternalSourceRow[]>(),
+    supabase
+      .from('uploaded_skills')
+      .select('name, body, description, suggested_stages, uploaded_at, updated_at')
+      .eq('workspace_id', workspace.id)
+      .order('uploaded_at', { ascending: false })
+      .returns<UploadedSkillsDbRow[]>(),
   ]);
 
   const externalSourceIds = (externalSourceRows ?? []).map((row) => row.id);
@@ -201,6 +218,25 @@ export default async function SkillsPage() {
       seenNames.add(skill.name);
       parsed.push({ ...skill, source: 'external-repo' });
     }
+  }
+
+  // Issue #262 (PR 3) — disk uploads. Sit below external in
+  // `SKILL_SOURCE_PRIORITY`, so they get dedup-shadowed by anything already
+  // surfaced above. UI still lists them in the dedicated Uploaded section so
+  // the user can manage shadowed uploads even when they don't show up in the
+  // main catalog.
+  for (const row of uploadedRows ?? []) {
+    if (seenNames.has(row.name)) continue;
+    seenNames.add(row.name);
+    parsed.push({
+      name: row.name,
+      description: row.description,
+      suggestedStages: Array.isArray(row.suggested_stages)
+        ? (row.suggested_stages as unknown[]).filter((x): x is string => typeof x === 'string')
+        : [],
+      path: '',
+      source: 'disk',
+    });
   }
 
   // Lazy seed: first time a workspace opens /skills, populate `enabled=true`
@@ -278,6 +314,13 @@ export default async function SkillsPage() {
   // — silence unused-var until then.
   void externalSourceMeta;
 
+  const uploadedSkills: UploadedSkillRow[] = (uploadedRows ?? []).map((row) => ({
+    name: row.name,
+    description: row.description,
+    uploadedAt: row.uploaded_at,
+    updatedAt: row.updated_at,
+  }));
+
   return (
     <SkillsView
       rows={rows}
@@ -286,6 +329,7 @@ export default async function SkillsPage() {
       fetchedAt={skillsRow?.fetched_at ?? null}
       readOnly={!isAdmin}
       externalSources={externalSources}
+      uploadedSkills={uploadedSkills}
     />
   );
 }
