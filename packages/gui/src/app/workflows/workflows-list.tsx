@@ -242,7 +242,7 @@ function NewFlowMenu({ onPick, busy }: { onPick: (t: FlowTemplate) => void; busy
       </button>
 
       {open && !isMobile && (
-        <div className="absolute left-0 top-full z-popover mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border bg-bg-elevated shadow-ambient">
+        <div className="absolute right-0 top-full z-popover mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border bg-bg-elevated shadow-ambient">
           <div className="border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Start from a template
           </div>

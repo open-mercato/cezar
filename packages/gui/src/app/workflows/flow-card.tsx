@@ -650,7 +650,7 @@ function ArgsTemplateInput({
         className="w-full rounded-md border border-border bg-bg-subtle px-3 py-2 font-mono text-base text-fg focus:border-accent/50 focus:outline-none lg:text-xs"
       />
       {showAutocomplete && (
-        <div className="absolute left-0 top-full z-20 mt-1 w-full max-w-[calc(100vw-2rem)] rounded-md border border-border bg-bg-elevated shadow-lg">
+        <div className="absolute right-0 top-full z-20 mt-1 w-full max-w-[calc(100vw-2rem)] rounded-md border border-border bg-bg-elevated shadow-lg">
           {TEMPLATE_VARS.map((v, i) => (
             <button
               key={v.name}
