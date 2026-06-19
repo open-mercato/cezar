@@ -4,7 +4,7 @@ import type { AgentEvent as RunnerAgentEvent } from '../agents/agent-runner.js';
 import type { Config } from '../config/config.model.js';
 import type { GitHubService } from '../services/github.service.js';
 import type { IssueStore } from '../store/store.js';
-import { discoverSkills } from '../skills/skill-catalog.js';
+import { discoverSkills, type Skill } from '../skills/skill-catalog.js';
 import { createWorktree } from '../actions/autofix/worktree.js';
 import { createRunEnv } from '../provision/create-run-env.js';
 import type { RunEnv } from '../provision/run-env.js';
@@ -98,7 +98,7 @@ export interface RunFlowParams {
    * Lets the SaaS dispatcher feed only enabled skills (filtered by
    * `workspace_skill_states`).
    */
-  skills?: Awaited<ReturnType<typeof discoverSkills>>;
+  skills?: Skill[];
 }
 
 interface FlowBlackboard extends Record<string, unknown> {

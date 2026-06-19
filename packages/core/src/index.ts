@@ -128,6 +128,7 @@ export {
   discoverSkills,
   discoverBuiltinSkills,
   skillsForStage,
+  normalizeSkillSource,
   SKILL_SOURCE_PRIORITY,
   type Skill,
   type SkillSource,

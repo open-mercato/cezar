@@ -36,6 +36,23 @@ export const SKILL_SOURCE_PRIORITY: SkillSource[] = [
   'skills-sh',
 ];
 
+const KNOWN_SOURCES = new Set<string>(SKILL_SOURCE_PRIORITY);
+
+/**
+ * Bridge a raw, possibly-legacy `source` value onto the #262 vocabulary.
+ * Pre-#262 `repo_skills` rows wrote `'repo'`; map it to `'workspace-repo'`.
+ * Unknown / missing values fall back to `'workspace-repo'` — they self-heal
+ * on the next `refreshRepoSkills` (which rewrites the cache with canonical
+ * sources), so this is transitional rather than permanent. PR 2–4 loaders
+ * reuse this bridge instead of re-implementing it per source kind.
+ */
+export function normalizeSkillSource(raw: unknown): SkillSource {
+  if (raw === 'repo') return 'workspace-repo';
+  return typeof raw === 'string' && KNOWN_SOURCES.has(raw)
+    ? (raw as SkillSource)
+    : 'workspace-repo';
+}
+
 export interface Skill {
   name: string;
   description?: string;

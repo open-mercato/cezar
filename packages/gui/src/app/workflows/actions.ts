@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import {
   discoverSkills,
+  normalizeSkillSource,
   renderTemplate,
   FLOW_STEP_SCAFFOLDING,
   DEFAULT_STEP_NOTES,
@@ -12,7 +13,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { loadWorkspaceConfig } from '@/lib/load-workspace-config';
 import { ensureRepoClone, withRepoLock } from '@/lib/repo-clone';
-import { getWorkspaceSkillStates } from '@/lib/skill-state';
+import { getSkillActivationContext, isSkillActive } from '@/lib/skill-state';
 import type { Database } from '@/lib/supabase/types';
 
 /**
@@ -425,30 +426,25 @@ export async function listAvailableSkills(): Promise<SkillSummary[]> {
   const workspace = await getActiveWorkspace();
   if (!workspace) return [];
   const supabase = createSupabaseAdminClient();
-  const [{ data }, states, { data: workspaceRow }] = await Promise.all([
+  const [{ data }, activation] = await Promise.all([
     supabase.from('repo_skills').select('skills').eq('workspace_id', workspace.id),
-    getWorkspaceSkillStates(workspace.id, supabase),
-    supabase
-      .from('workspaces')
-      .select('skill_states_seeded')
-      .eq('id', workspace.id)
-      .maybeSingle<{ skill_states_seeded: boolean }>(),
+    getSkillActivationContext(workspace.id, supabase),
   ]);
   if (!data) return [];
-  const workspaceSeeded = workspaceRow?.skill_states_seeded ?? false;
+  const { states, seeded: workspaceSeeded } = activation;
   const byName = new Map<string, SkillSummary>();
   for (const row of data) {
     const arr = (row.skills as Array<Record<string, unknown>> | null) ?? [];
     for (const s of arr) {
       if (!s || typeof s.name !== 'string' || !s.name.trim()) continue;
-      const state = states.get(s.name);
-      // Match the canonical default-on policy in `filterActiveSkills`: an
-      // unrecorded skill is active only when the workspace is fresh AND the
-      // skill is a built-in. Defaulting every cached skill to active here
-      // surfaces repo skills that the runtime then silently drops at dispatch.
-      const active = state
-        ? state.enabled
-        : !workspaceSeeded && s.source === 'built-in';
+      // Use the canonical predicate so the picker can't drift from
+      // `filterActiveSkills` (the runtime). The cache may hold a legacy
+      // `'repo'` value, so bridge it through `normalizeSkillSource` first.
+      const active = isSkillActive(
+        states.get(s.name),
+        normalizeSkillSource(s.source),
+        workspaceSeeded,
+      );
       if (!active) continue;
       const description =
         typeof s.description === 'string'

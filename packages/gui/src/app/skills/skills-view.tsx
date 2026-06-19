@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import type { SkillSource } from '@cezar/core';
 import { cn } from '@/components/ui/cn';
 import {
   RefreshIcon,
@@ -29,14 +30,19 @@ import { setSkillEnabled } from './state-actions';
 
 /** Issue #262 — provenance values surfaced in the UI. `override` keeps its
  *  special meaning ("the workspace forked this skill") and shadows whatever
- *  source the upstream came from. */
-export type SkillRowSource =
-  | 'override'
-  | 'built-in'
-  | 'workspace-repo'
-  | 'external-repo'
-  | 'disk'
-  | 'skills-sh';
+ *  source the upstream came from; everything else mirrors `SkillSource`. */
+export type SkillRowSource = SkillSource | 'override';
+
+/** Single source of truth for human-readable source labels — drives both the
+ *  filter dropdown and the `<SourceBadge>` (badge CSS-uppercases the label). */
+const SOURCE_LABELS: Record<SkillRowSource, string> = {
+  override: 'Override',
+  'built-in': 'Built-in',
+  'workspace-repo': 'Workspace repo',
+  'external-repo': 'External repo',
+  disk: 'Disk upload',
+  'skills-sh': 'skills.sh',
+};
 
 export interface SkillRow {
   name: string;
@@ -289,14 +295,7 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
                 setSourceFilter(v);
                 setPage(1);
               },
-              options: [
-                { value: 'override', label: 'Override' },
-                { value: 'built-in', label: 'Built-in' },
-                { value: 'workspace-repo', label: 'Workspace repo' },
-                { value: 'external-repo', label: 'External repo' },
-                { value: 'disk', label: 'Disk upload' },
-                { value: 'skills-sh', label: 'skills.sh' },
-              ],
+              options: Object.entries(SOURCE_LABELS).map(([value, label]) => ({ value, label })),
             },
             {
               id: 'mode',
@@ -379,17 +378,7 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
                         once your repo has skill manifests.
                       </>
                     ) : tab === 'active' ? (
-                      <>
-                        No skills are active yet. Switch to the{' '}
-                        <button
-                          type="button"
-                          onClick={() => handleTabChange('catalog')}
-                          className="underline underline-offset-2 hover:text-on-surface"
-                        >
-                          Catalog
-                        </button>{' '}
-                        tab to enable skills from your sources.
-                      </>
+                      <ActiveTabEmptyState onSwitch={() => handleTabChange('catalog')} />
                     ) : (
                       <>
                         No skills match these filters.{' '}
@@ -437,17 +426,7 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
                   once your repo has skill manifests.
                 </>
               ) : tab === 'active' ? (
-                <>
-                  No skills are active yet. Switch to{' '}
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('catalog')}
-                    className="underline underline-offset-2 hover:text-on-surface"
-                  >
-                    Catalog
-                  </button>{' '}
-                  to enable some.
-                </>
+                <ActiveTabEmptyState onSwitch={() => handleTabChange('catalog')} />
               ) : (
                 <>
                   No skills match these filters.{' '}
@@ -676,7 +655,7 @@ function SkillTableRow({
   );
 }
 
-/** Tri-state-feel toggle for issue #262 — flips `workspace_skill_states.enabled`. */
+/** Binary on/off toggle for issue #262 — flips `workspace_skill_states.enabled`. */
 function EnabledToggle({
   active,
   disabled,
@@ -875,14 +854,21 @@ function SkillCard({
   );
 }
 
-const SOURCE_LABELS: Record<SkillRow['source'], string> = {
-  override: 'OVERRIDE',
-  'built-in': 'BUILT-IN',
-  'workspace-repo': 'WORKSPACE',
-  'external-repo': 'EXT REPO',
-  disk: 'DISK',
-  'skills-sh': 'SKILLS.SH',
-};
+function ActiveTabEmptyState({ onSwitch }: { onSwitch: () => void }) {
+  return (
+    <>
+      No skills are active yet. Switch to the{' '}
+      <button
+        type="button"
+        onClick={onSwitch}
+        className="underline underline-offset-2 hover:text-on-surface"
+      >
+        Catalog
+      </button>{' '}
+      tab to enable skills from your sources.
+    </>
+  );
+}
 
 function SourceBadge({ source }: { source: SkillRow['source'] }) {
   const classes = (() => {

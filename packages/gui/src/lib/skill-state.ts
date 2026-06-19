@@ -36,6 +36,28 @@ export async function getWorkspaceSkillStates(
   return out;
 }
 
+/**
+ * Fetch everything the activation predicates need in one round-trip: the per-
+ * skill state map AND the workspace's `skill_states_seeded` flag. Three call
+ * sites (`/skills` page, `listAvailableSkills`, `loadActiveSkillCatalog`) used
+ * to pair these two queries by hand — collapsing them removes the duplication
+ * and keeps the "what's the default-on rule" logic in one place.
+ */
+export async function getSkillActivationContext(
+  workspaceId: string,
+  supabase: SupabaseClient<Database>,
+): Promise<{ states: Map<string, SkillState>; seeded: boolean }> {
+  const [states, { data }] = await Promise.all([
+    getWorkspaceSkillStates(workspaceId, supabase),
+    supabase
+      .from('workspaces')
+      .select('skill_states_seeded')
+      .eq('id', workspaceId)
+      .maybeSingle<{ skill_states_seeded: boolean }>(),
+  ]);
+  return { states, seeded: data?.skill_states_seeded ?? false };
+}
+
 /** Admin-only — flip the enabled flag for a single skill. Caller revalidates UI paths. */
 export async function setSkillEnabled(
   workspaceId: string,
@@ -81,29 +103,42 @@ export async function setSkillEnabled(
 }
 
 /**
+ * Canonical "default-on" rule for skills without an explicit state row: only
+ * built-ins default-on, and only until the workspace has been seeded. Lifted
+ * to its own helper so the page picker, the runtime filter, and the workflow
+ * picker can't drift the way they did in #270 review finding #1.
+ */
+export function isSkillDefaultActive(source: SkillSource, workspaceSeeded: boolean): boolean {
+  return !workspaceSeeded && source === 'built-in';
+}
+
+/**
+ * Full activation predicate: a recorded `enabled` value wins; otherwise apply
+ * the default-on rule. Used by `filterActiveSkills` (runtime) and
+ * `listAvailableSkills` (workflow picker) — same answer in both places.
+ */
+export function isSkillActive(
+  state: SkillState | undefined,
+  source: SkillSource,
+  workspaceSeeded: boolean,
+): boolean {
+  if (state) return state.enabled;
+  return isSkillDefaultActive(source, workspaceSeeded);
+}
+
+/**
  * Filter a catalog down to the workspace's *active* skills. Used by the
  * workflow executor and the skill picker — keeps disabled skills from leaking
  * into runs even if a binding still references them.
- *
- * A skill is active when either:
- *   - there is a `workspace_skill_states` row for it with `enabled=true`, or
- *   - the workspace is fresh (`skill_states_seeded=false`) AND the skill is a
- *     built-in (the default-on policy for never-touched workspaces).
  */
 export function filterActiveSkills(
   catalog: Skill[],
   states: Map<string, SkillState>,
   workspaceSeeded: boolean,
 ): Skill[] {
-  return catalog.filter((skill) => {
-    const state = states.get(skill.name);
-    if (state) return state.enabled;
-    // Unrecorded skill: only built-ins are "on by default" — and only until the
-    // workspace has been seeded. After seeding, an unrecorded skill is silently
-    // disabled (the user explicitly cleared its row).
-    if (!workspaceSeeded && skill.source === 'built-in') return true;
-    return false;
-  });
+  return catalog.filter((skill) =>
+    isSkillActive(states.get(skill.name), skill.source, workspaceSeeded),
+  );
 }
 
 /**
@@ -111,13 +146,14 @@ export function filterActiveSkills(
  * built-in skill, then marks the workspace as seeded so the lazy default
  * doesn't keep re-enabling skills the user later disabled.
  *
- * Idempotent: a workspace already marked seeded is a no-op. Caller passes the
- * full discovered catalog so we don't re-import core here for path resolution.
+ * Idempotent: a workspace already marked seeded is a no-op. The param only
+ * needs `name` + `source` — the body/path of each skill is irrelevant here,
+ * so callers don't have to fabricate empty `Skill` objects.
  */
 export async function seedBuiltinSkillStatesIfNeeded(
   workspaceId: string,
   workspaceSeeded: boolean,
-  catalog: Skill[],
+  catalog: Array<{ name: string; source: SkillSource }>,
   supabase: SupabaseClient<Database>,
 ): Promise<{ seeded: boolean }> {
   if (workspaceSeeded) return { seeded: false };

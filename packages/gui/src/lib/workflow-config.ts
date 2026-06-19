@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Skill, WorkflowBinding, WorkspaceWorkflowSettings } from '@cezar/core';
 import { DEFAULT_WORKSPACE_WORKFLOW_SETTINGS } from '@cezar/core';
-import { filterActiveSkills, getWorkspaceSkillStates } from './skill-state';
+import { filterActiveSkills, getSkillActivationContext } from './skill-state';
 import type { Database, WorkflowBackend } from './supabase/types';
 
 const VALID_BACKENDS: WorkflowBackend[] = ['anthropic-api', 'claude-cli', 'codex-cli'];
@@ -113,14 +113,6 @@ export async function loadActiveSkillCatalog(
     catalog = [];
   }
 
-  const [states, { data: workspaceRow }] = await Promise.all([
-    getWorkspaceSkillStates(workspaceId, supabase),
-    supabase
-      .from('workspaces')
-      .select('skill_states_seeded')
-      .eq('id', workspaceId)
-      .maybeSingle<{ skill_states_seeded: boolean }>(),
-  ]);
-
-  return filterActiveSkills(catalog, states, workspaceRow?.skill_states_seeded ?? false);
+  const { states, seeded } = await getSkillActivationContext(workspaceId, supabase);
+  return filterActiveSkills(catalog, states, seeded);
 }
