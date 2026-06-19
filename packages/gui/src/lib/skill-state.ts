@@ -44,21 +44,39 @@ export async function setSkillEnabled(
   supabase: SupabaseClient<Database>,
   userId: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { error } = await supabase
+  // Split insert vs update so `created_by` is set only on the first insert —
+  // a single `.upsert()` would `ON CONFLICT DO UPDATE SET created_by = …` and
+  // overwrite the audit field with the last toggler on every flip.
+  const update = await supabase
     .from('workspace_skill_states')
-    .upsert(
-      {
-        workspace_id: workspaceId,
-        skill_name: skillName,
-        enabled,
-        updated_by: userId,
-        // `created_by` only on the very first insert. Postgres ignores it on
-        // conflicts but we still want it populated when the row is brand new.
-        created_by: userId,
-      },
-      { onConflict: 'workspace_id,skill_name' },
-    );
-  if (error) return { ok: false, error: error.message };
+    .update({ enabled, updated_by: userId })
+    .eq('workspace_id', workspaceId)
+    .eq('skill_name', skillName)
+    .select('id')
+    .maybeSingle();
+  if (update.error) return { ok: false, error: update.error.message };
+  if (update.data) return { ok: true };
+
+  const insert = await supabase.from('workspace_skill_states').insert({
+    workspace_id: workspaceId,
+    skill_name: skillName,
+    enabled,
+    created_by: userId,
+    updated_by: userId,
+  });
+  if (insert.error) {
+    // 23505 = unique_violation: a parallel insert won the race — retry as update.
+    if (insert.error.code === '23505') {
+      const retry = await supabase
+        .from('workspace_skill_states')
+        .update({ enabled, updated_by: userId })
+        .eq('workspace_id', workspaceId)
+        .eq('skill_name', skillName);
+      if (retry.error) return { ok: false, error: retry.error.message };
+      return { ok: true };
+    }
+    return { ok: false, error: insert.error.message };
+  }
   return { ok: true };
 }
 
@@ -104,21 +122,24 @@ export async function seedBuiltinSkillStatesIfNeeded(
 ): Promise<{ seeded: boolean }> {
   if (workspaceSeeded) return { seeded: false };
   const builtins = catalog.filter((s) => s.source === 'built-in');
-  if (builtins.length > 0) {
-    const rows = builtins.map((s) => ({
-      workspace_id: workspaceId,
-      skill_name: s.name,
-      enabled: true,
-    }));
-    // Don't clobber a state the user may have already written (race with toggle).
-    const { error: insertError } = await supabase
-      .from('workspace_skill_states')
-      .upsert(rows, { onConflict: 'workspace_id,skill_name', ignoreDuplicates: true });
-    if (insertError) {
-      // Surfacing this here would block the page render for a non-fatal seed; log instead.
-      console.warn('[skill-state] built-in seed failed:', insertError.message);
-      return { seeded: false };
-    }
+  // Skip the flag flip when the catalog carries no built-ins — a stale
+  // `repo_skills` row (or a pre-`source` rebuild) would otherwise lock the
+  // workspace into a "seeded" state with zero default-on skills. Next page
+  // load will reach here again once the canonical built-ins are discovered.
+  if (builtins.length === 0) return { seeded: false };
+  const rows = builtins.map((s) => ({
+    workspace_id: workspaceId,
+    skill_name: s.name,
+    enabled: true,
+  }));
+  // Don't clobber a state the user may have already written (race with toggle).
+  const { error: insertError } = await supabase
+    .from('workspace_skill_states')
+    .upsert(rows, { onConflict: 'workspace_id,skill_name', ignoreDuplicates: true });
+  if (insertError) {
+    // Surfacing this here would block the page render for a non-fatal seed; log instead.
+    console.warn('[skill-state] built-in seed failed:', insertError.message);
+    return { seeded: false };
   }
   const { error: flagError } = await supabase
     .from('workspaces')

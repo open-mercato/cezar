@@ -442,9 +442,13 @@ export async function listAvailableSkills(): Promise<SkillSummary[]> {
     for (const s of arr) {
       if (!s || typeof s.name !== 'string' || !s.name.trim()) continue;
       const state = states.get(s.name);
-      // Active iff: explicit state says enabled, OR the workspace hasn't been
-      // seeded yet (legacy / brand-new — show everything).
-      const active = state ? state.enabled : !workspaceSeeded;
+      // Match the canonical default-on policy in `filterActiveSkills`: an
+      // unrecorded skill is active only when the workspace is fresh AND the
+      // skill is a built-in. Defaulting every cached skill to active here
+      // surfaces repo skills that the runtime then silently drops at dispatch.
+      const active = state
+        ? state.enabled
+        : !workspaceSeeded && s.source === 'built-in';
       if (!active) continue;
       const description =
         typeof s.description === 'string'
