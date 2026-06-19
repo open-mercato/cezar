@@ -606,7 +606,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                   setBodyDirty(true);
                   setSaveState('idle');
                 }}
-                readOnly={readOnly}
+                readOnly={readOnly || isSkillsSh}
                 spellCheck={false}
                 className="block h-full min-h-[240px] w-full resize-none bg-surface-container-lowest p-5 font-mono text-base leading-[20px] text-on-surface focus:outline-none lg:min-h-[420px] lg:text-[13px]"
               />
@@ -685,8 +685,12 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                 if (result.ok) {
                   setSaveState('saved');
                   setSaveError(null);
-                  // The page-level loader will re-fetch on revalidatePath;
-                  // body state stays mirrored from the latest snapshot.
+                  // `revalidatePath` invalidates the server cache, but our
+                  // local `body`/`description` state lives in client useState
+                  // and won't re-hydrate without an explicit router refresh.
+                  // Without this the textarea keeps showing the pre-refresh
+                  // snapshot even though the badge says 'saved'.
+                  router.refresh();
                 } else {
                   setSaveState('error');
                   setSaveError(result.error ?? 'Refresh failed');

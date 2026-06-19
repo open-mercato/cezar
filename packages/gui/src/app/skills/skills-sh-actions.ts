@@ -2,15 +2,19 @@
 
 import { revalidatePath } from 'next/cache';
 import { parseSkillMarkdown } from '@cezar/core';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import type { Database } from '@/lib/supabase/types';
 import {
   fetchSkillsShSkill,
   parseSkillsShIdentifier,
   SkillsShAuthError,
   SkillsShNotConfiguredError,
   SkillsShNotFoundError,
+  SkillsShPayloadTooLargeError,
+  SkillsShTimeoutError,
   type SkillsShSkill,
 } from '@/lib/skills-sh-api';
 
@@ -26,6 +30,7 @@ import {
 export type ActionResult<T = {}> = (T & { ok: true }) | { ok: false; error: string };
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/i;
+const MAX_BODY_BYTES = 100 * 1024;
 
 interface InstallSummary {
   slug: string;
@@ -43,7 +48,61 @@ function describeError(err: unknown): string {
   if (err instanceof SkillsShNotFoundError) {
     return err.message;
   }
+  if (err instanceof SkillsShTimeoutError || err instanceof SkillsShPayloadTooLargeError) {
+    return err.message;
+  }
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Revalidate every surface that consumes the skills.sh catalog:
+ *   - `/skills` list
+ *   - `/skills/[name]` detail page
+ *   - `/workflows` layout (covers the dynamic `/workflows/[id]` editor whose
+ *     `listAvailableSkills` picker now folds in skills.sh imports)
+ */
+function revalidateSkillsShSurfaces(name?: string) {
+  revalidatePath('/skills');
+  if (name) revalidatePath(`/skills/${encodeURIComponent(name)}`);
+  revalidatePath('/workflows', 'layout');
+}
+
+/**
+ * Match Postgres unique_violation (23505) to a friendly message. The table
+ * declares unique constraints on BOTH (workspace_id, source_slug) AND
+ * (workspace_id, name); persistSkill resolves conflicts on source_slug only,
+ * so a cross-slug name collision still surfaces as a raw 23505.
+ */
+function describeUpsertError(err: { code?: string; message?: string }, finalName: string): string {
+  if (err.code === '23505' && err.message?.includes('workspace_id_name')) {
+    return `a skill named "${finalName}" is already imported from a different skills.sh source — remove the existing one first`;
+  }
+  return err.message ?? 'database upsert failed';
+}
+
+/**
+ * First-install seed for `workspace_skill_states` so a freshly imported
+ * skills.sh skill is immediately visible in the workflow picker and dispatch.
+ * Skipped on Refresh — `existed === true` means the admin already chose an
+ * enabled/disabled state at some point, which we must preserve.
+ */
+async function enableSkillsShSkillState(
+  supabase: SupabaseClient<Database>,
+  workspaceId: string,
+  skillName: string,
+  userId: string,
+) {
+  await supabase.from('workspace_skill_states').upsert(
+    {
+      workspace_id: workspaceId,
+      skill_name: skillName,
+      enabled: true,
+      pinned_source: 'skills-sh',
+      created_by: userId,
+      updated_by: userId,
+    },
+    { onConflict: 'workspace_id,skill_name', ignoreDuplicates: true },
+  );
 }
 
 async function persistSkill(
@@ -51,7 +110,7 @@ async function persistSkill(
   userId: string,
   slug: string,
   api: SkillsShSkill,
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
+  supabase: SupabaseClient<Database>,
 ): Promise<ActionResult<InstallSummary>> {
   // Pull `cezar-stages` and a friendlier name out of the body's frontmatter,
   // falling back to the API's name if the body has none.
@@ -59,6 +118,15 @@ async function persistSkill(
   const finalName = (parsed.name ?? api.name).trim();
   if (!NAME_PATTERN.test(finalName)) {
     return { ok: false, error: `name "${finalName}" must be alphanumeric + \`-\`/\`_\` (max 63 chars)` };
+  }
+  // Belt-and-braces against a compromised / oversized registry response —
+  // mirrors the PR3 cap on disk uploads. Buffer.byteLength counts UTF-8
+  // bytes, not UTF-16 code units, so multi-byte glyphs can't slip past.
+  if (Buffer.byteLength(api.body, 'utf8') > MAX_BODY_BYTES) {
+    return {
+      ok: false,
+      error: `skill body exceeds ${MAX_BODY_BYTES / 1024}KB — skills.sh payload too large`,
+    };
   }
 
   const { data: existing } = await supabase
@@ -84,7 +152,13 @@ async function persistSkill(
     },
     { onConflict: 'workspace_id,source_slug' },
   );
-  if (error) return { ok: false, error: error.message };
+  if (error) return { ok: false, error: describeUpsertError(error, finalName) };
+
+  // Only seed the activation row on first install. On Refresh we must
+  // preserve whatever enabled/disabled state the admin set in the meantime.
+  if (!existing) {
+    await enableSkillsShSkillState(supabase, workspaceId, finalName, userId);
+  }
 
   return { ok: true, slug, name: finalName, replaced: existing !== null };
 }
@@ -113,7 +187,7 @@ export async function addSkillsShSkill(input: {
 
   const supabase = createSupabaseAdminClient();
   const persisted = await persistSkill(workspace.id, user.id, slug, api, supabase);
-  if (persisted.ok) revalidatePath('/skills');
+  if (persisted.ok) revalidateSkillsShSurfaces(persisted.name);
   return persisted;
 }
 
@@ -131,7 +205,7 @@ export async function refreshSkillsShSkill(
   const supabase = createSupabaseAdminClient();
   const { data: row, error: loadError } = await supabase
     .from('skills_sh_skills')
-    .select('source_slug, content_hash')
+    .select('source_slug, content_hash, name')
     .eq('id', id)
     .eq('workspace_id', workspace.id)
     .single();
@@ -158,13 +232,18 @@ export async function refreshSkillsShSkill(
       .update({ last_synced_at: new Date().toISOString(), last_sync_error: null })
       .eq('id', id)
       .eq('workspace_id', workspace.id);
-    revalidatePath('/skills');
+    revalidateSkillsShSurfaces(row.name);
     return { ok: true, slug: row.source_slug, changed: false };
   }
 
   const persisted = await persistSkill(workspace.id, user.id, row.source_slug, api, supabase);
   if (!persisted.ok) return persisted;
-  revalidatePath('/skills');
+  // Surface both the old and the new name (rename case) so revalidatePath
+  // hits the right detail route after an upstream rename.
+  revalidateSkillsShSurfaces(persisted.name);
+  if (persisted.name !== row.name) {
+    revalidatePath(`/skills/${encodeURIComponent(row.name)}`);
+  }
   return { ok: true, slug: row.source_slug, changed: true };
 }
 
@@ -178,12 +257,18 @@ export async function removeSkillsShSkill(id: string): Promise<ActionResult> {
   }
 
   const supabase = createSupabaseAdminClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('skills_sh_skills')
     .delete()
     .eq('id', id)
-    .eq('workspace_id', workspace.id);
+    .eq('workspace_id', workspace.id)
+    .select('name')
+    .maybeSingle<{ name: string }>();
   if (error) return { ok: false, error: error.message };
-  revalidatePath('/skills');
+  // Stale id or cross-workspace target: predicate matched zero rows. Surface
+  // as a real error so the UI doesn't show 'removed' on a silent no-op.
+  if (!data) return { ok: false, error: 'skills.sh import not found' };
+
+  revalidateSkillsShSurfaces(data.name);
   return { ok: true };
 }
