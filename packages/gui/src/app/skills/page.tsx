@@ -121,14 +121,15 @@ export default async function SkillsPage() {
   const supabase = createSupabaseAdminClient();
 
   // Pull everything in parallel — repo_skills cache, overrides, the activation
-  // context (per-skill state map + workspace seed marker), and any external
-  // skill sources + their cached catalogs (issue #262 PR 2).
+  // context (per-skill state map + workspace seed marker), and the workspace's
+  // external skill sources (issue #262 PR 2). The external cache is fetched in
+  // a second step so it can be scoped by source_id — without that scoping the
+  // service-role client would dump every workspace's cached bodies into memory.
   const [
     { data: skillsRow },
     { data: overrideRows },
     { states, seeded: workspaceSeeded },
     { data: externalSourceRows },
-    { data: externalCacheRows },
   ] = await Promise.all([
     supabase
       .from('repo_skills')
@@ -148,11 +149,16 @@ export default async function SkillsPage() {
       .eq('workspace_id', workspace.id)
       .eq('kind', 'external-repo')
       .returns<ExternalSourceRow[]>(),
-    supabase
-      .from('external_repo_skills')
-      .select('source_id, skills')
-      .returns<ExternalCacheRow[]>(),
   ]);
+
+  const externalSourceIds = (externalSourceRows ?? []).map((row) => row.id);
+  const { data: externalCacheRows } = externalSourceIds.length > 0
+    ? await supabase
+        .from('external_repo_skills')
+        .select('source_id, skills')
+        .in('source_id', externalSourceIds)
+        .returns<ExternalCacheRow[]>()
+    : { data: [] as ExternalCacheRow[] };
 
   // `refreshRepoSkills` caches the merged catalog (built-in + repo) into
   // `repo_skills.skills`. For never-synced workspaces, fall back to the

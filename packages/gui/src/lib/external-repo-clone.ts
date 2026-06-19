@@ -8,6 +8,28 @@ import { homedir } from 'node:os';
 const exec = promisify(execFile);
 
 /**
+ * Build env vars that inject `http.extraHeader: Authorization: Bearer <token>`
+ * into one git invocation via `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` /
+ * `GIT_CONFIG_VALUE_<n>`. The token stays out of argv (no leakage in `ps` or
+ * execFile error messages) AND out of `.git/config` on disk — the clone uses
+ * the clean public URL and the header is only present for the duration of the
+ * child process.
+ */
+function gitTokenEnv(token: string): Record<string, string> {
+  return {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.extraHeader',
+    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+  };
+}
+
+/** Redact a token from a stringified git error so it can't surface in `last_sync_error`. */
+export function redactTokenFromMessage(message: string, token: string | null): string {
+  if (!token) return message;
+  return message.split(token).join('***');
+}
+
+/**
  * Issue #262 (PR 2) — external skill sources clone management.
  *
  * Workspace repos already live under `~/.cezar/repos/<owner>-<repo>/` (see
@@ -40,14 +62,20 @@ export async function acquireExternalRepoLock(sourceId: string): Promise<() => v
   const next = new Promise<void>((resolve) => {
     release = resolve;
   });
-  externalLocks.set(sourceId, prev.then(() => next, () => next));
+  // Store the chained promise (`prev.then(...)`) — NOT `next` — and compare
+  // against the same reference on cleanup. The original code compared against
+  // `next`, which is a different object identity than the value stored in the
+  // Map (the .then() always returns a new Promise), so the delete branch was
+  // unreachable and the Map grew without bound on long-lived workers.
+  const chained = prev.then(() => next, () => next);
+  externalLocks.set(sourceId, chained);
   await prev.catch(() => {});
   let released = false;
   return () => {
     if (released) return;
     released = true;
     release();
-    if (externalLocks.get(sourceId) === next) externalLocks.delete(sourceId);
+    if (externalLocks.get(sourceId) === chained) externalLocks.delete(sourceId);
   };
 }
 
@@ -87,19 +115,27 @@ export async function ensureExternalRepoClone(
   await mkdir(EXTERNAL_REPOS_DIR, { recursive: true });
 
   const repoDir = join(EXTERNAL_REPOS_DIR, sourceId);
-  const cloneUrl = githubToken
-    ? `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`
-    : `https://github.com/${owner}/${repo}.git`;
+  // Always use the clean public URL — auth flows via env-injected
+  // `http.extraHeader`, so the token never lands in argv (visible in `ps` and
+  // execFile error messages) nor in `.git/config` on disk.
+  const cloneUrl = `https://github.com/${owner}/${repo}.git`;
+  const tokenEnv = githubToken
+    ? { ...process.env, ...gitTokenEnv(githubToken) }
+    : process.env;
 
   if (existsSync(join(repoDir, '.git'))) {
+    // Heal any pre-existing clone that may have a token-bearing URL persisted
+    // from before the env-extraHeader switch.
     await exec('git', ['remote', 'set-url', 'origin', cloneUrl], { cwd: repoDir });
-    await exec('git', ['fetch', 'origin'], { cwd: repoDir });
+    await exec('git', ['fetch', 'origin'], { cwd: repoDir, env: tokenEnv });
     await exec('git', ['checkout', branch], { cwd: repoDir }).catch(() =>
       exec('git', ['checkout', '-b', branch, `origin/${branch}`], { cwd: repoDir }),
     );
     await exec('git', ['reset', '--hard', `origin/${branch}`], { cwd: repoDir });
   } else {
-    await exec('git', ['clone', '--depth', '50', '--branch', branch, cloneUrl, repoDir]);
+    await exec('git', ['clone', '--depth', '50', '--branch', branch, cloneUrl, repoDir], {
+      env: tokenEnv,
+    });
   }
 
   return repoDir;

@@ -435,7 +435,11 @@ export async function listAvailableSkills(): Promise<SkillSummary[]> {
     getSkillActivationContext(workspace.id, supabase),
     listExternalRepoSkills(workspace.id, supabase),
   ]);
-  if (!data) return [];
+  // Don't early-return on `!data` — repo_skills failures are independent of
+  // external sources. Falling back to `[]` keeps the external loop below
+  // reachable so the picker degrades gracefully (workflows pointing at
+  // external-only skills still see them during a transient repo_skills blip).
+  const repoSkillRows = data ?? [];
   const { states, seeded: workspaceSeeded } = activation;
   const byName = new Map<string, SkillSummary>();
 
@@ -448,7 +452,7 @@ export async function listAvailableSkills(): Promise<SkillSummary[]> {
     byName.set(name, { name, description });
   }
 
-  for (const row of data) {
+  for (const row of repoSkillRows) {
     const arr = (row.skills as Array<Record<string, unknown>> | null) ?? [];
     for (const s of arr) {
       if (!s || typeof s.name !== 'string' || !s.name.trim()) continue;

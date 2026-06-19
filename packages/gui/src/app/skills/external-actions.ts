@@ -1,5 +1,6 @@
 'use server';
 
+import { resolve, sep } from 'node:path';
 import { revalidatePath } from 'next/cache';
 import type { Skill } from '@cezar/core';
 import { getSessionUser } from '@/lib/auth';
@@ -8,6 +9,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import {
   ensureExternalRepoClone,
   readExternalRepoHead,
+  redactTokenFromMessage,
   withExternalRepoLock,
 } from '@/lib/external-repo-clone';
 
@@ -35,8 +37,12 @@ const DEFAULT_FOLDER = '.ai/skills';
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/i;
 const OWNER_PATTERN = /^[a-z0-9][a-z0-9-]{0,38}$/i;
 const REPO_PATTERN = /^[a-z0-9._-]{1,100}$/i;
-const BRANCH_PATTERN = /^[^\s~^:?*\\]{1,250}$/;
-const FOLDER_PATTERN = /^[^\s\\]{1,250}$/;
+// Reject leading `-` so `git checkout <branch>` can't interpret it as a flag.
+const BRANCH_PATTERN = /^(?!-)[^\s~^:?*\\]{1,250}$/;
+// Repo-relative subpath: ASCII alnum + `._-/`, no leading `/`, no `..` segments.
+// Forbids both absolute paths and traversal so `resolve(repoRoot, folder)` can
+// never climb out of the cloned worktree.
+const FOLDER_PATTERN = /^[A-Za-z0-9._/-]{1,250}$/;
 
 function validateInput(
   name: string,
@@ -54,10 +60,14 @@ function validateInput(
   const branch = (config.branch ?? DEFAULT_BRANCH).trim() || DEFAULT_BRANCH;
   const folder = (config.folder ?? DEFAULT_FOLDER).trim() || DEFAULT_FOLDER;
   if (!BRANCH_PATTERN.test(branch)) {
-    return { ok: false, error: 'branch contains invalid characters' };
+    return { ok: false, error: 'branch contains invalid characters or starts with `-`' };
   }
   if (!FOLDER_PATTERN.test(folder)) {
-    return { ok: false, error: 'folder contains invalid characters' };
+    return { ok: false, error: 'folder must be a repo-relative subpath (ASCII alnum + `._-/`)' };
+  }
+  // Belt-and-braces against `..` segments slipping past the regex.
+  if (folder.startsWith('/') || folder.split('/').some((seg) => seg === '..')) {
+    return { ok: false, error: 'folder cannot be absolute or contain `..` segments' };
   }
   return {
     ok: true,
@@ -97,6 +107,7 @@ export async function addExternalRepoSource(params: {
     return { ok: false, error: error?.message ?? 'insert failed' };
   }
   revalidatePath('/skills');
+  revalidatePath('/workflows', 'layout');
   return { ok: true, id: data.id };
 }
 
@@ -117,7 +128,7 @@ export async function updateExternalRepoSource(params: {
   if (!validated.ok) return validated;
 
   const supabase = createSupabaseAdminClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('skill_sources')
     .update({
       name: params.name,
@@ -125,9 +136,15 @@ export async function updateExternalRepoSource(params: {
       updated_by: user.id,
     })
     .eq('id', params.id)
-    .eq('workspace_id', workspace.id);
+    .eq('workspace_id', workspace.id)
+    .select('id')
+    .maybeSingle();
   if (error) return { ok: false, error: error.message };
+  // Stale ID or cross-workspace target: predicate matched zero rows. Surface
+  // it as a real error so the UI doesn't show 'updated' on a silent no-op.
+  if (!data) return { ok: false, error: 'skill source not found' };
   revalidatePath('/skills');
+  revalidatePath('/workflows', 'layout');
   return { ok: true };
 }
 
@@ -141,13 +158,26 @@ export async function removeExternalRepoSource(id: string): Promise<ActionResult
   }
 
   const supabase = createSupabaseAdminClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('skill_sources')
     .delete()
     .eq('id', id)
-    .eq('workspace_id', workspace.id);
+    .eq('workspace_id', workspace.id)
+    .select('id')
+    .maybeSingle();
   if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: 'skill source not found' };
+
+  // NOTE: workspace_skill_states rows whose skill_name was only in this
+  // source's cache survive the delete (no FK). They're at worst inactive
+  // cruft; the runtime ignores them when no skill of that name is loaded.
+  // Cross-source cleanup is intentionally deferred — naively dropping the
+  // names would also wipe legitimate state for built-in/workspace-repo
+  // skills that happen to share the name. A future migration with a
+  // source_id-aware state model is the right place for this cleanup.
+
   revalidatePath('/skills');
+  revalidatePath('/workflows', 'layout');
   return { ok: true };
 }
 
@@ -212,6 +242,14 @@ export async function refreshExternalRepoSource(
     ({ commitSha, skills } = await withExternalRepoLock(id, async () => {
       const repoRoot = await ensureExternalRepoClone(id, { owner, repo, branch }, token);
       const sha = await readExternalRepoHead(id);
+      // Belt-and-braces containment check: regex above already forbids absolute
+      // paths and `..` segments, but assert the resolved path is still inside
+      // the clone before handing it to `discoverSkills` (which uses
+      // `resolve(repoRoot, folder)`).
+      const resolvedFolder = resolve(repoRoot, folder);
+      if (resolvedFolder !== repoRoot && !resolvedFolder.startsWith(repoRoot + sep)) {
+        throw new Error('folder escapes the clone root');
+      }
       const discovered = await core.discoverSkills(repoRoot, folder);
       // Force the external-repo source label — `discoverSkills` defaults to
       // 'workspace-repo' for anything it finds outside the built-in dir.
@@ -221,7 +259,12 @@ export async function refreshExternalRepoSource(
       return { commitSha: sha, skills: tagged };
     }));
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Defense in depth — `gitTokenEnv` keeps the token out of argv, so it
+    // shouldn't appear in execFile's error message. Scrub anyway in case a
+    // pre-fix clone left a token-bearing URL in `.git/config` that surfaces
+    // through git's stderr.
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const message = redactTokenFromMessage(rawMessage, token);
     await supabase
       .from('skill_sources')
       .update({ last_sync_error: message, updated_by: user.id })
@@ -263,5 +306,6 @@ export async function refreshExternalRepoSource(
     .eq('workspace_id', workspace.id);
 
   revalidatePath('/skills');
+  revalidatePath('/workflows', 'layout');
   return { ok: true, count: skills.length };
 }
