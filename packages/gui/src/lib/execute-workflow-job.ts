@@ -115,8 +115,11 @@ export async function executeWorkflowJob(
 
     // Issue #262 — narrow the catalog to skills the workspace has marked
     // active. Resolved here once per job and threaded into the orchestrator
-    // so the legacy + engine paths skip in-repo discovery.
-    let activeSkills: Skill[] = [];
+    // so the legacy + engine paths skip in-repo discovery. `undefined` means
+    // discovery or the activation context failed — the orchestrator then
+    // falls back to its legacy `discoverSkillsSafe` path which emits a
+    // per-issue event on failure (observability vs. silent zero-skill run).
+    let activeSkills: Skill[] | undefined;
 
     if (!config.autofix.repoRoot) {
       // Serialize on the shared per-repo worktree before the clone, and hold

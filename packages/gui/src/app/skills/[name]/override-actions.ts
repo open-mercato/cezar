@@ -5,6 +5,7 @@ import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { readSkillBody } from '@/lib/skill-body';
+import { setSkillEnabled as setStateEnabled } from '@/lib/skill-state';
 
 export interface OverridePayload {
   executionMode: string;
@@ -93,7 +94,16 @@ export async function saveSkillOverride(
     .single();
 
   if (error) return { ok: false, error: error.message };
+
+  // Mirror the override's enabled bit into workspace_skill_states — that
+  // table is the runtime source of truth (used by `isSkillActive` /
+  // `filterActiveSkills`). Without this mirror, "Save & Enable" on the
+  // detail page is a no-op for the workflow runtime and the picker.
+  const stateMirror = await setStateEnabled(workspace.id, skillName, row.enabled, supabase, user.id);
+  if (!stateMirror.ok) return { ok: false, error: stateMirror.error };
+
   revalidateSkill(skillName);
+  revalidatePath('/workflows');
   return { ok: true, updatedAt: data?.updated_at ?? undefined, enabled: data?.enabled ?? row.enabled };
 }
 
@@ -157,7 +167,13 @@ export async function setSkillOverrideEnabled(
     .select('updated_at, enabled')
     .single();
   if (error) return { ok: false, error: error.message };
+
+  // Mirror to workspace_skill_states — runtime activation lives there.
+  const stateMirror = await setStateEnabled(workspace.id, skillName, enabled, supabase, user.id);
+  if (!stateMirror.ok) return { ok: false, error: stateMirror.error };
+
   revalidateSkill(skillName);
+  revalidatePath('/workflows');
   return { ok: true, updatedAt: data?.updated_at ?? undefined, enabled: data?.enabled ?? enabled };
 }
 

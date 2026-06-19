@@ -1,8 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { SkillSource } from '@cezar/core';
+import { normalizeSkillSource } from '@cezar/core';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { readSkillBody } from '@/lib/skill-body';
+import { getSkillActivationContext, isSkillActive } from '@/lib/skill-state';
 import { SkillDetailView, type SkillDetail } from './skill-detail-view';
 
 interface RepoSkillsRow {
@@ -39,6 +42,7 @@ interface ParsedSkill {
   description: string | null;
   suggestedStages: string[];
   path: string;
+  source: SkillSource;
 }
 
 function parseSkills(raw: unknown): ParsedSkill[] {
@@ -56,6 +60,7 @@ function parseSkills(raw: unknown): ParsedSkill[] {
           ? (o.suggestedStages as unknown[]).filter((x): x is string => typeof x === 'string')
           : [],
         path: typeof o.path === 'string' ? o.path : '',
+        source: normalizeSkillSource(o.source),
       };
     })
     .filter((s): s is ParsedSkill => s !== null);
@@ -90,7 +95,13 @@ export default async function SkillDetailPage({
   }
 
   const supabase = createSupabaseAdminClient();
-  const [{ data: skillsRow }, { data: bindingRows }, { data: overrideRow }, { data: issueRows }] = await Promise.all([
+  const [
+    { data: skillsRow },
+    { data: bindingRows },
+    { data: overrideRow },
+    { data: issueRows },
+    activation,
+  ] = await Promise.all([
     supabase
       .from('repo_skills')
       .select('commit_sha, skills, fetched_at')
@@ -116,6 +127,7 @@ export default async function SkillDetailPage({
       .order('updated_at', { ascending: false })
       .limit(20)
       .returns<IssueRow[]>(),
+    getSkillActivationContext(workspace.id, supabase),
   ]);
 
   const parsed = parseSkills(skillsRow?.skills);
@@ -127,6 +139,15 @@ export default async function SkillDetailPage({
   const bindings = (bindingRows ?? []).filter((b) => b.skill_name === skill.name);
   const isOverride = overrideRow !== null;
 
+  // Issue #262 — runtime activation lives in `workspace_skill_states`, not
+  // `skill_overrides.enabled`. Use the canonical predicate so the detail page
+  // agrees with the catalog, the workflow picker, and the workflow runtime.
+  const enabled = isSkillActive(
+    activation.states.get(skill.name),
+    skill.source,
+    activation.seeded,
+  );
+
   // When an override exists, its body/metadata wins. Otherwise we surface the
   // upstream body and the metadata defaults (which the user can edit and save
   // to *create* the override).
@@ -137,7 +158,7 @@ export default async function SkillDetailPage({
     body: isOverride ? overrideRow!.body : upstreamBody,
     upstreamBody,
     source: isOverride ? 'override' : 'repo',
-    enabled: isOverride ? overrideRow!.enabled : true,
+    enabled,
     overrideUpdatedAt: isOverride ? overrideRow!.updated_at : null,
     metadata: {
       executionMode: isOverride ? overrideRow!.execution_mode : 'continuous',

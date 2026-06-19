@@ -16,7 +16,14 @@ export interface SkillState {
   pinnedSource: SkillSource | null;
 }
 
-/** Batch lookup keyed by skill name. Missing rows mean "no state recorded". */
+/**
+ * Batch lookup keyed by skill name. Missing rows mean "no state recorded".
+ * Throws on a DB error so callers can either tolerate it (page render: catch
+ * and fall through to the default-on rule, which is still a safe surface)
+ * or surface it (the workflow dispatcher: drop back to the legacy
+ * `discoverSkillsSafe` path so the per-issue event stream sees the failure
+ * instead of silently running with zero skills).
+ */
 export async function getWorkspaceSkillStates(
   workspaceId: string,
   supabase: SupabaseClient<Database>,
@@ -25,9 +32,11 @@ export async function getWorkspaceSkillStates(
     .from('workspace_skill_states')
     .select('skill_name, enabled, pinned_source')
     .eq('workspace_id', workspaceId);
-  if (error || !data) return new Map();
+  if (error) {
+    throw new Error(`workspace_skill_states fetch failed: ${error.message}`);
+  }
   const out = new Map<string, SkillState>();
-  for (const row of data) {
+  for (const row of data ?? []) {
     out.set(row.skill_name, {
       enabled: row.enabled,
       pinnedSource: (row.pinned_source as SkillSource | null) ?? null,
@@ -42,20 +51,32 @@ export async function getWorkspaceSkillStates(
  * sites (`/skills` page, `listAvailableSkills`, `loadActiveSkillCatalog`) used
  * to pair these two queries by hand — collapsing them removes the duplication
  * and keeps the "what's the default-on rule" logic in one place.
+ *
+ * `error` is populated when either query failed. Pages tolerate it (the empty
+ * states + seeded=false combo falls through to the default-on rule, which is
+ * the safe surface). The workflow dispatcher checks it and bails to the
+ * legacy `discoverSkillsSafe` fallback so a transient DB blip doesn't turn
+ * into a silent zero-skill autofix run.
  */
 export async function getSkillActivationContext(
   workspaceId: string,
   supabase: SupabaseClient<Database>,
-): Promise<{ states: Map<string, SkillState>; seeded: boolean }> {
-  const [states, { data }] = await Promise.all([
-    getWorkspaceSkillStates(workspaceId, supabase),
-    supabase
-      .from('workspaces')
-      .select('skill_states_seeded')
-      .eq('id', workspaceId)
-      .maybeSingle<{ skill_states_seeded: boolean }>(),
-  ]);
-  return { states, seeded: data?.skill_states_seeded ?? false };
+): Promise<{ states: Map<string, SkillState>; seeded: boolean; error: string | null }> {
+  try {
+    const [states, { data }] = await Promise.all([
+      getWorkspaceSkillStates(workspaceId, supabase),
+      supabase
+        .from('workspaces')
+        .select('skill_states_seeded')
+        .eq('id', workspaceId)
+        .maybeSingle<{ skill_states_seeded: boolean }>(),
+    ]);
+    return { states, seeded: data?.skill_states_seeded ?? false, error: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[skill-state] activation context fetch failed:', message);
+    return { states: new Map(), seeded: false, error: message };
+  }
 }
 
 /** Admin-only — flip the enabled flag for a single skill. Caller revalidates UI paths. */
@@ -103,13 +124,21 @@ export async function setSkillEnabled(
 }
 
 /**
- * Canonical "default-on" rule for skills without an explicit state row: only
- * built-ins default-on, and only until the workspace has been seeded. Lifted
- * to its own helper so the page picker, the runtime filter, and the workflow
- * picker can't drift the way they did in #270 review finding #1.
+ * Sources the workspace implicitly consents to: shipped built-ins and skills
+ * the user authored inside their own repo. Sources requiring explicit opt-in
+ * (external-repo, disk, skills-sh) are intentionally excluded — those are
+ * adversarial-by-default and stay off until a row says otherwise.
+ */
+const DEFAULT_ON_SOURCES = new Set<SkillSource>(['built-in', 'workspace-repo']);
+
+/**
+ * Canonical "default-on" rule for skills without an explicit state row: the
+ * implicit-consent sources default-on until the workspace has been seeded.
+ * Lifted to its own helper so the page picker, the runtime filter, and the
+ * workflow picker can't drift the way they did in #270 review finding #1.
  */
 export function isSkillDefaultActive(source: SkillSource, workspaceSeeded: boolean): boolean {
-  return !workspaceSeeded && source === 'built-in';
+  return !workspaceSeeded && DEFAULT_ON_SOURCES.has(source);
 }
 
 /**
@@ -143,8 +172,9 @@ export function filterActiveSkills(
 
 /**
  * One-shot seed for fresh workspaces: writes an `enabled=true` row for every
- * built-in skill, then marks the workspace as seeded so the lazy default
- * doesn't keep re-enabling skills the user later disabled.
+ * implicit-consent skill (built-in + workspace-repo) currently in the
+ * catalog, then marks the workspace as seeded so the lazy default doesn't
+ * keep re-enabling skills the user later disabled.
  *
  * Idempotent: a workspace already marked seeded is a no-op. The param only
  * needs `name` + `source` — the body/path of each skill is irrelevant here,
@@ -157,13 +187,14 @@ export async function seedBuiltinSkillStatesIfNeeded(
   supabase: SupabaseClient<Database>,
 ): Promise<{ seeded: boolean }> {
   if (workspaceSeeded) return { seeded: false };
-  const builtins = catalog.filter((s) => s.source === 'built-in');
-  // Skip the flag flip when the catalog carries no built-ins — a stale
-  // `repo_skills` row (or a pre-`source` rebuild) would otherwise lock the
-  // workspace into a "seeded" state with zero default-on skills. Next page
-  // load will reach here again once the canonical built-ins are discovered.
-  if (builtins.length === 0) return { seeded: false };
-  const rows = builtins.map((s) => ({
+  const defaults = catalog.filter((s) => DEFAULT_ON_SOURCES.has(s.source));
+  // Skip the flag flip when the catalog carries no default-on skills — a
+  // stale `repo_skills` row (or a pre-`source` rebuild whose entries all
+  // normalize to a non-default source) would otherwise lock the workspace
+  // into a "seeded" state with zero default-on skills. Next page load will
+  // reach here again once the canonical sources are discovered.
+  if (defaults.length === 0) return { seeded: false };
+  const rows = defaults.map((s) => ({
     workspace_id: workspaceId,
     skill_name: s.name,
     enabled: true,
@@ -174,7 +205,7 @@ export async function seedBuiltinSkillStatesIfNeeded(
     .upsert(rows, { onConflict: 'workspace_id,skill_name', ignoreDuplicates: true });
   if (insertError) {
     // Surfacing this here would block the page render for a non-fatal seed; log instead.
-    console.warn('[skill-state] built-in seed failed:', insertError.message);
+    console.warn('[skill-state] default skill seed failed:', insertError.message);
     return { seeded: false };
   }
   const { error: flagError } = await supabase

@@ -93,15 +93,17 @@ export async function loadWorkflowSettings(
  * returned list is what the orchestrator/engine see at run time — disabled
  * skills are silently dropped (even when an old binding still references them).
  *
- * Returns an empty list on discovery failure rather than throwing — the engine
- * tolerates missing skills (built-in prompts run on their own).
+ * Returns `undefined` on discovery or DB failure (NOT an empty array) so the
+ * orchestrator's `opts.skills ?? discoverSkillsSafe(...)` fallback fires and
+ * the per-issue event stream sees a real failure log instead of a silent
+ * zero-skill run.
  */
 export async function loadActiveSkillCatalog(
   workspaceId: string,
   repoRoot: string | null | undefined,
   skillsDir: string,
   supabase: SupabaseClient<Database>,
-): Promise<Skill[]> {
+): Promise<Skill[] | undefined> {
   const core = await import('@cezar/core');
   let catalog: Skill[];
   try {
@@ -110,9 +112,14 @@ export async function loadActiveSkillCatalog(
       : await core.discoverBuiltinSkills();
   } catch (err) {
     console.warn('[workflow-config] discoverSkills failed:', err instanceof Error ? err.message : err);
-    catalog = [];
+    return undefined;
   }
 
-  const { states, seeded } = await getSkillActivationContext(workspaceId, supabase);
-  return filterActiveSkills(catalog, states, seeded);
+  const activation = await getSkillActivationContext(workspaceId, supabase);
+  if (activation.error) {
+    // Surface the failure to the orchestrator so its `??` fallback to
+    // `discoverSkillsSafe` fires (per-issue onEvent logging, no silent run).
+    return undefined;
+  }
+  return filterActiveSkills(catalog, activation.states, activation.seeded);
 }

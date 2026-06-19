@@ -136,8 +136,13 @@ export default async function SkillsPage() {
       supabase,
     );
     if (seed.seeded) {
+      // Mirror what the seed wrote — built-in AND workspace-repo are the
+      // implicit-consent sources (see `DEFAULT_ON_SOURCES` in skill-state.ts).
       for (const p of parsed) {
-        if (p.source === 'built-in' && !states.has(p.name)) {
+        if (
+          (p.source === 'built-in' || p.source === 'workspace-repo') &&
+          !states.has(p.name)
+        ) {
           states.set(p.name, { enabled: true, pinnedSource: null });
         }
       }

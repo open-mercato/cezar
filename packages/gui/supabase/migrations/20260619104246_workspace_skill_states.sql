@@ -38,19 +38,24 @@ create index workspace_skill_states_workspace_idx on workspace_skill_states(work
 alter table workspaces
   add column skill_states_seeded boolean not null default false;
 
--- Backfill from skill_overrides — every override row implied an enabled state
--- under the old model. Don't overwrite anything that's already there (no rows
--- exist yet but keep the upsert form for safety).
+-- Backfill from skill_overrides — every override row carried an explicit
+-- enabled value under the old model. Mirror it into state so an explicit
+-- disable survives the migration. Don't overwrite anything already there
+-- (the table is new but keep the upsert form for safety).
 insert into workspace_skill_states (workspace_id, skill_name, enabled)
 select workspace_id, skill_name, enabled
 from skill_overrides
 on conflict (workspace_id, skill_name) do nothing;
 
--- Workspaces that had at least one override before this migration already had a
--- "curated" surface; mark them seeded so the lazy seed doesn't undo a disable.
-update workspaces
-set skill_states_seeded = true
-where id in (select distinct workspace_id from skill_overrides);
+-- Intentionally leave `workspaces.skill_states_seeded = false` for every
+-- workspace. The previous draft flipped it to true for any workspace with at
+-- least one override row, which silently dropped every non-overridden
+-- built-in (and every workspace-repo skill) from `loadActiveSkillCatalog` /
+-- `listAvailableSkills` after migration — a hard regression vs. the pre-PR
+-- "default-on" rule. The lazy seed in `seedBuiltinSkillStatesIfNeeded` flips
+-- the flag on first /skills visit AND writes explicit enabled=true rows for
+-- the default-on sources, so existing overrides continue to win and nothing
+-- defaults-off behind the user's back.
 
 -- Keep updated_at fresh on every UPDATE.
 create or replace function workspace_skill_states_set_updated_at()
