@@ -2,9 +2,11 @@
 
 import { revalidatePath } from 'next/cache';
 import { parseSkillMarkdown } from '@cezar/core';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import type { Database } from '@/lib/supabase/types';
 
 /**
  * Issue #262 (PR 3) — disk uploads as a skill source.
@@ -29,6 +31,48 @@ export interface UploadFilesSummary {
   added: number;
   replaced: number;
   failed: UploadFailure[];
+}
+
+/**
+ * Revalidate every surface that consumes uploaded skills:
+ *   - `/skills` (list)
+ *   - `/skills/[name]` (detail page — stale across tabs after re-upload)
+ *   - `/workflows` layout (covers the dynamic `/workflows/[id]` editor whose
+ *     `listAvailableSkills` picker now folds uploaded skills in)
+ */
+function revalidateUploadSurfaces(name?: string) {
+  revalidatePath('/skills');
+  if (name) revalidatePath(`/skills/${encodeURIComponent(name)}`);
+  revalidatePath('/workflows', 'layout');
+}
+
+/**
+ * Upsert an `enabled=true` row in `workspace_skill_states` so the freshly
+ * uploaded skill shows up in the workflow picker and the dispatch catalog
+ * immediately — without this the runtime would default-off for any workspace
+ * that's already been seeded (the common case), and the admin would have to
+ * toggle the new skill on at `/skills` before it does anything.
+ */
+async function enableUploadedSkillState(
+  supabase: SupabaseClient<Database>,
+  workspaceId: string,
+  skillName: string,
+  userId: string,
+) {
+  // Upsert with `ignoreDuplicates: false` so we re-enable a previously-disabled
+  // state row when the admin replaces the file. `created_by` is only set on
+  // first insert (the unique constraint takes the existing value otherwise).
+  await supabase.from('workspace_skill_states').upsert(
+    {
+      workspace_id: workspaceId,
+      skill_name: skillName,
+      enabled: true,
+      pinned_source: 'disk',
+      created_by: userId,
+      updated_by: userId,
+    },
+    { onConflict: 'workspace_id,skill_name' },
+  );
 }
 
 /**
@@ -61,6 +105,12 @@ export async function uploadSkillsFromFiles(
     .select('name')
     .eq('workspace_id', workspace.id);
   const existingNames = new Set((existingRows ?? []).map((r) => r.name));
+
+  // Track names already upserted in THIS batch so a second file with the same
+  // resolved name doesn't silently clobber the first (and we surface a
+  // 'duplicate within batch' failure on the second file).
+  const batchNames = new Set<string>();
+  const upsertedNames: string[] = [];
 
   for (const file of files) {
     const filename = file.name || 'untitled.md';
@@ -96,6 +146,21 @@ export async function uploadSkillsFromFiles(
       summary.failed.push({ filename, error: 'body is empty' });
       continue;
     }
+    // After-parse byte-size check: frontmatter is stripped but the body still
+    // needs to fit. `Buffer.byteLength` measures real UTF-8 bytes — `.length`
+    // would let multi-byte glyphs (emoji, CJK) blow past the cap.
+    if (Buffer.byteLength(parsed.body, 'utf8') > MAX_BODY_BYTES) {
+      summary.failed.push({ filename, error: `body exceeds ${MAX_BODY_BYTES / 1024}KB limit` });
+      continue;
+    }
+    if (batchNames.has(parsed.name)) {
+      summary.failed.push({
+        filename,
+        error: `duplicate of "${parsed.name}" already in this batch — only the first file was uploaded`,
+      });
+      continue;
+    }
+    batchNames.add(parsed.name);
 
     const wasExisting = existingNames.has(parsed.name);
     const { error: upsertError } = await supabase.from('uploaded_skills').upsert(
@@ -114,6 +179,8 @@ export async function uploadSkillsFromFiles(
       summary.failed.push({ filename, error: upsertError.message });
       continue;
     }
+    await enableUploadedSkillState(supabase, workspace.id, parsed.name, user.id);
+    upsertedNames.push(parsed.name);
     if (wasExisting) summary.replaced += 1;
     else {
       summary.added += 1;
@@ -121,7 +188,10 @@ export async function uploadSkillsFromFiles(
     }
   }
 
-  revalidatePath('/skills');
+  revalidateUploadSurfaces();
+  for (const name of upsertedNames) {
+    revalidatePath(`/skills/${encodeURIComponent(name)}`);
+  }
   return { ok: true, ...summary };
 }
 
@@ -148,7 +218,9 @@ export async function uploadSkillFromText(
   }
 
   if (!input.body || !input.body.trim()) return { ok: false, error: 'body is empty' };
-  if (input.body.length > MAX_BODY_BYTES) {
+  // Use UTF-8 byte length — `.length` counts code units, so a body packed with
+  // 4-byte glyphs could be 4× the intended size before tripping the cap.
+  if (Buffer.byteLength(input.body, 'utf8') > MAX_BODY_BYTES) {
     return { ok: false, error: `body exceeds ${MAX_BODY_BYTES / 1024}KB limit` };
   }
 
@@ -163,6 +235,9 @@ export async function uploadSkillFromText(
     return { ok: false, error: 'name must be alphanumeric + `-`/`_` (max 63 chars)' };
   }
   if (!parsed.body.trim()) return { ok: false, error: 'body is empty' };
+  if (Buffer.byteLength(parsed.body, 'utf8') > MAX_BODY_BYTES) {
+    return { ok: false, error: `body exceeds ${MAX_BODY_BYTES / 1024}KB limit` };
+  }
 
   const supabase = createSupabaseAdminClient();
   const { data: existing } = await supabase
@@ -185,8 +260,9 @@ export async function uploadSkillFromText(
     { onConflict: 'workspace_id,name' },
   );
   if (upsertError) return { ok: false, error: upsertError.message };
+  await enableUploadedSkillState(supabase, workspace.id, parsed.name, user.id);
 
-  revalidatePath('/skills');
+  revalidateUploadSurfaces(parsed.name);
   return { ok: true, name: parsed.name, replaced: existing !== null };
 }
 
@@ -207,6 +283,6 @@ export async function removeUploadedSkill(name: string): Promise<ActionResult> {
     .eq('workspace_id', workspace.id)
     .eq('name', name);
   if (error) return { ok: false, error: error.message };
-  revalidatePath('/skills');
+  revalidateUploadSurfaces(name);
   return { ok: true };
 }

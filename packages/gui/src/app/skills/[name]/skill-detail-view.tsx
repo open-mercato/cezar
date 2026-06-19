@@ -86,6 +86,10 @@ export function SkillDetailView({ skill, readOnly }: Props) {
   // `uploaded_skills`, so they bypass the "fork upstream → override" handshake
   // entirely. `isDisk` toggles those branches throughout the component.
   const isDisk = skill.source === 'disk';
+  // Disk skills have no metadata save path — execution-mode / triggers /
+  // outputs / capabilities are derived from the uploaded file's frontmatter.
+  // Lock the controls so the user can't dirty state that has nowhere to land.
+  const metaReadOnly = readOnly || isDisk;
   const router = useRouter();
   const [executionMode, setExecutionMode] = useState(skill.metadata.executionMode);
   const [triggers, setTriggers] = useState<Set<string>>(() => new Set(skill.metadata.triggers));
@@ -407,7 +411,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                 setExecutionMode(v);
                 setMetaDirty(true);
               }}
-              disabled={readOnly}
+              disabled={metaReadOnly}
               options={EXECUTION_MODES}
             />
           </Field>
@@ -420,7 +424,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                   className={cn(
                     'flex cursor-pointer items-center justify-between px-3 py-2 text-sm text-on-surface',
                     i !== 0 && 'border-t border-outline-variant/60',
-                    readOnly && 'cursor-not-allowed opacity-60',
+                    metaReadOnly && 'cursor-not-allowed opacity-60',
                   )}
                 >
                   <span>{t.label}</span>
@@ -428,7 +432,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                     type="checkbox"
                     checked={triggers.has(t.id)}
                     onChange={() => toggleTrigger(t.id)}
-                    disabled={readOnly}
+                    disabled={metaReadOnly}
                     className="h-4 w-4 accent-primary"
                   />
                 </label>
@@ -447,7 +451,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                     <CodeIcon className="h-4 w-4 text-on-surface-variant" />
                     {o}
                   </span>
-                  {!readOnly && (
+                  {!metaReadOnly && (
                     <button
                       type="button"
                       onClick={() => removeOutput(o)}
@@ -459,7 +463,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                   )}
                 </div>
               ))}
-              {!readOnly && (
+              {!metaReadOnly && (
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -498,7 +502,7 @@ export function SkillDetailView({ skill, readOnly }: Props) {
                     key={cap.id}
                     type="button"
                     onClick={() => toggleCapability(cap.id)}
-                    disabled={readOnly}
+                    disabled={metaReadOnly}
                     className={cn(
                       'flex flex-col items-center justify-center gap-2 rounded-md border bg-surface px-3 py-4 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-60',
                       active

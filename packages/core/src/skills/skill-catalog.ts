@@ -235,7 +235,10 @@ function parseFrontmatter(
   raw: string,
   sourcePath?: string,
 ): { frontmatter: Record<string, FrontmatterValue>; body: string } {
-  const text = raw.replace(/\r\n/g, '\n');
+  // Normalize CRLF AND lone CR (legacy-Mac line endings) — otherwise a file
+  // with `\r`-only newlines fails `text.startsWith('---\n')`, frontmatter is
+  // silently dropped, and the whole document ends up dumped into `body`.
+  const text = raw.replace(/\r\n?/g, '\n');
   if (!text.startsWith('---\n')) return { frontmatter: {}, body: raw };
 
   // Match the closing delimiter only on its own line (`\n---\n`, or `\n---` at
