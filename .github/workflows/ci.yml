@@ -31,27 +31,31 @@ jobs:
       - name: Migration naming sanity
         # New migrations must use a UTC timestamp prefix (YYYYMMDDHHMMSS_) so two
         # branches never collide on a number — see docs/DEVELOPMENT.md. The legacy
-        # zero-padded 00xx_ files (<= 0044, four of them sharing 0029) predate the
-        # convention and are grandfathered. This step fails on (a) any new prefix
-        # that is neither a 14-digit timestamp nor a grandfathered legacy number,
-        # and (b) any two migrations sharing a numeric prefix (0029 allowlisted).
+        # zero-padded 00xx_ files (<= 0044) predate the convention and are
+        # grandfathered. The four historical collisions on `0029_` are now
+        # disambiguated to `0029a_…d_` by chronological commit order. This step
+        # fails on (a) any new prefix that is neither a 14-digit timestamp nor a
+        # grandfathered legacy number (optionally with a single-letter suffix for
+        # the 0029 set), and (b) ANY duplicate prefix (no allowlist anymore).
         run: |
-          prefixes=$(ls packages/gui/supabase/migrations/*.sql | sed -E 's/.*\/([0-9]+)_.*/\1/')
+          prefixes=$(ls packages/gui/supabase/migrations/*.sql | sed -E 's/.*\/([0-9]+[a-z]?)_.*/\1/')
 
           # (a) format: 14-digit timestamp, or legacy 4-digit number <= 0044
+          # (with an optional `a-z` disambiguating suffix for the 0029 set).
           for p in $prefixes; do
             if echo "$p" | grep -qE '^[0-9]{14}$'; then
               continue
             fi
-            if echo "$p" | grep -qE '^[0-9]{4}$' && [ "$((10#$p))" -le 44 ]; then
+            base=${p%[a-z]}
+            if echo "$p" | grep -qE '^[0-9]{4}[a-z]?$' && [ "$((10#$base))" -le 44 ]; then
               continue
             fi
             echo "Bad migration prefix '$p' — new migrations must be a UTC timestamp (run: date -u +%Y%m%d%H%M%S)."
             exit 1
           done
 
-          # (b) duplicate prefixes (legacy 0029 set allowlisted)
-          dups=$(echo "$prefixes" | sort | uniq -d | grep -v '^0029$' || true)
+          # (b) duplicate prefixes — after the 0029 disambiguation, none allowed.
+          dups=$(echo "$prefixes" | sort | uniq -d || true)
           if [ -n "$dups" ]; then
             echo "Duplicate migration prefixes: $dups"
             exit 1

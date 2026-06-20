@@ -171,10 +171,16 @@ YYYYMMDDHHMMSS_short_description.sql      e.g. 20260618143000_add_foo_index.sql
 Generate the prefix with `date -u +%Y%m%d%H%M%S`. Timestamps sort correctly
 (every `2026…` file runs after every legacy `00xx_` file) and never collide
 across branches — the old zero-padded `0001`–`0044` scheme produced merge
-conflicts whenever two PRs grabbed the same number (see the four legacy
-`0029_*` files). Existing numbered migrations are left as-is; only **new**
-migrations use the timestamp form.
+conflicts whenever two PRs grabbed the same number. Existing numbered
+migrations are left as-is; only **new** migrations use the timestamp form.
 
-CI's "Migration numbering sanity" step fails the build on any two migrations
-that share a numeric prefix (the legacy `0029` set is allowlisted), so a
-duplicate prefix is caught before merge.
+The four historical collisions on `0029_` (parent-ownership RLS check,
+sync-status feature, autofix-enqueue dedupe, installation-id bigint) were
+disambiguated to `0029a_…d_` in commit order. Environments that already
+applied the original colliding names need a one-shot
+`supabase migration repair --status applied <new-version>` per renamed file
+before the next migration run.
+
+CI's "Migration naming sanity" step fails the build on any duplicate prefix
+(no allowlist anymore — the `0029` set has been disambiguated), so a future
+collision is caught before merge.

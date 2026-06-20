@@ -121,7 +121,13 @@ go through `lib/persist-workflow-run.ts`. New Supabase migrations
 (`packages/gui/supabase/migrations/`) use a UTC timestamp prefix —
 `YYYYMMDDHHMMSS_desc.sql` (`date -u +%Y%m%d%H%M%S`) — not a sequential number, so
 branches never collide; legacy `00xx_` files (≤ `0044`) are grandfathered. CI's
-"Migration naming sanity" step enforces this. See `docs/DEVELOPMENT.md`.
+"Migration naming sanity" step enforces this. See `docs/DEVELOPMENT.md`. Four
+historical files shared the `0029_` prefix (parent-ownership RLS check, sync-
+status feature, autofix-enqueue dedupe, installation-id bigint) and were
+disambiguated to `0029a_…d_` by chronological commit order. Any environment
+that applied the original colliding names needs a one-shot
+`supabase migration repair --status applied <new-version>` per file before the
+next migration run.
 
 **Webhook receiver** (`packages/gui/src/app/api/github/webhook/`): GitHub App deliveries —
 `issues.opened`/`reopened`/`edited` enqueue a deduped `triage` job; `check_run.completed`
