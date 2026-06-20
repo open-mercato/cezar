@@ -65,7 +65,9 @@ export async function saveSkillOverride(
       .eq('workspace_id', workspace.id)
       .eq('repo', workspace.repoName)
       .maybeSingle();
-    const skills = Array.isArray(skillsRow?.skills) ? (skillsRow!.skills as Array<{ name?: unknown; path?: unknown }>) : [];
+    const skills = Array.isArray(skillsRow?.skills)
+      ? (skillsRow!.skills as Array<{ name?: unknown; path?: unknown }>)
+      : [];
     const match = skills.find((s) => typeof s?.name === 'string' && s.name === skillName);
     const path = typeof match?.path === 'string' ? match.path : null;
     if (path) {
@@ -99,12 +101,22 @@ export async function saveSkillOverride(
   // table is the runtime source of truth (used by `isSkillActive` /
   // `filterActiveSkills`). Without this mirror, "Save & Enable" on the
   // detail page is a no-op for the workflow runtime and the picker.
-  const stateMirror = await setStateEnabled(workspace.id, skillName, row.enabled, supabase, user.id);
+  const stateMirror = await setStateEnabled(
+    workspace.id,
+    skillName,
+    row.enabled,
+    supabase,
+    user.id,
+  );
   if (!stateMirror.ok) return { ok: false, error: stateMirror.error };
 
   revalidateSkill(skillName);
   revalidatePath('/workflows');
-  return { ok: true, updatedAt: data?.updated_at ?? undefined, enabled: data?.enabled ?? row.enabled };
+  return {
+    ok: true,
+    updatedAt: data?.updated_at ?? undefined,
+    enabled: data?.enabled ?? row.enabled,
+  };
 }
 
 /**

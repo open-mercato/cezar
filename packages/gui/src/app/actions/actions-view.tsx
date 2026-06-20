@@ -78,7 +78,8 @@ export function ActionsView({ rows, readOnly, autoTriageActionId }: ActionsViewP
       if (kindFilter.length > 0 && !kindFilter.includes(r.kind)) return false;
       if (targetFilter.length > 0 && !targetFilter.includes(r.target)) return false;
       if (statusFilter.length > 0 && !statusFilter.includes(r.status)) return false;
-      if (triggerFilter.length > 0 && !triggerFilter.some((t) => r.triggers.includes(t))) return false;
+      if (triggerFilter.length > 0 && !triggerFilter.some((t) => r.triggers.includes(t)))
+        return false;
       if (q.length > 0) {
         const hay = `${r.name} ${r.description ?? ''} ${r.triggers.join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -148,7 +149,9 @@ export function ActionsView({ rows, readOnly, autoTriageActionId }: ActionsViewP
     <PageContainer>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-[24px] font-semibold leading-tight tracking-tight text-on-surface">Actions</h1>
+          <h1 className="text-[24px] font-semibold leading-tight tracking-tight text-on-surface">
+            Actions
+          </h1>
           <p className="mt-1 text-sm text-on-surface-variant">
             Configurable AI actions that operate on issues and PRs.
           </p>
@@ -273,49 +276,101 @@ export function ActionsView({ rows, readOnly, autoTriageActionId }: ActionsViewP
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
-              <tr className="bg-surface-container">
-                <SortableTh sortKey="name"      sortDir={sortDir} active={sortKey === 'name'}      onClick={handleSort}>NAME</SortableTh>
-                <SortableTh sortKey="kind"      sortDir={sortDir} active={sortKey === 'kind'}      onClick={handleSort}>KIND</SortableTh>
-                <SortableTh sortKey="target"    sortDir={sortDir} active={sortKey === 'target'}    onClick={handleSort}>TARGET</SortableTh>
-                <SortableTh sortKey="triggers"  sortDir={sortDir} active={sortKey === 'triggers'}  onClick={handleSort}>TRIGGERS</SortableTh>
-                <SortableTh sortKey="effects"   sortDir={sortDir} active={sortKey === 'effects'}   onClick={handleSort}>EFFECTS</SortableTh>
-                <SortableTh sortKey="status"    sortDir={sortDir} active={sortKey === 'status'}    onClick={handleSort}>STATUS</SortableTh>
-                <SortableTh sortKey="updatedAt" sortDir={sortDir} active={sortKey === 'updatedAt'} onClick={handleSort}>LAST UPDATED</SortableTh>
-                <Th className="text-right pr-6">ACTIONS</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {pageRows.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-sm text-on-surface-variant">
-                    {totalActions === 0 ? (
-                      <>
-                        No actions in this workspace yet.{' '}
-                        {!readOnly && (
-                          <button
-                            type="button"
-                            onClick={handleSeed}
-                            className="underline underline-offset-2 hover:text-on-surface"
-                          >
-                            Sync defaults
-                          </button>
-                        )}{' '}
-                        to seed the built-in catalog.
-                      </>
-                    ) : (
-                      <>
-                        No actions match these filters.{' '}
-                        <button
-                          type="button"
-                          onClick={resetFilters}
-                          className="underline underline-offset-2 hover:text-on-surface"
-                        >
-                          Clear filters
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
+                  <tr className="bg-surface-container">
+                    <SortableTh
+                      sortKey="name"
+                      sortDir={sortDir}
+                      active={sortKey === 'name'}
+                      onClick={handleSort}
+                    >
+                      NAME
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="kind"
+                      sortDir={sortDir}
+                      active={sortKey === 'kind'}
+                      onClick={handleSort}
+                    >
+                      KIND
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="target"
+                      sortDir={sortDir}
+                      active={sortKey === 'target'}
+                      onClick={handleSort}
+                    >
+                      TARGET
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="triggers"
+                      sortDir={sortDir}
+                      active={sortKey === 'triggers'}
+                      onClick={handleSort}
+                    >
+                      TRIGGERS
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="effects"
+                      sortDir={sortDir}
+                      active={sortKey === 'effects'}
+                      onClick={handleSort}
+                    >
+                      EFFECTS
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="status"
+                      sortDir={sortDir}
+                      active={sortKey === 'status'}
+                      onClick={handleSort}
+                    >
+                      STATUS
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="updatedAt"
+                      sortDir={sortDir}
+                      active={sortKey === 'updatedAt'}
+                      onClick={handleSort}
+                    >
+                      LAST UPDATED
+                    </SortableTh>
+                    <Th className="text-right pr-6">ACTIONS</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-6 py-12 text-center text-sm text-on-surface-variant"
+                      >
+                        {totalActions === 0 ? (
+                          <>
+                            No actions in this workspace yet.{' '}
+                            {!readOnly && (
+                              <button
+                                type="button"
+                                onClick={handleSeed}
+                                className="underline underline-offset-2 hover:text-on-surface"
+                              >
+                                Sync defaults
+                              </button>
+                            )}{' '}
+                            to seed the built-in catalog.
+                          </>
+                        ) : (
+                          <>
+                            No actions match these filters.{' '}
+                            <button
+                              type="button"
+                              onClick={resetFilters}
+                              className="underline underline-offset-2 hover:text-on-surface"
+                            >
+                              Clear filters
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
                   ) : (
                     pageRows.map((row) => (
                       <ActionTableRow
@@ -378,8 +433,10 @@ export function ActionsView({ rows, readOnly, autoTriageActionId }: ActionsViewP
         <div className="flex flex-wrap items-center gap-3">
           <span>
             Showing {pageRows.length === 0 ? 0 : (page - 1) * pageSize + 1}
-            {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of {totalFiltered}
-            {filtersActive && <> filtered (of {totalActions})</>} action{totalFiltered === 1 ? '' : 's'}
+            {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of{' '}
+            {totalFiltered}
+            {filtersActive && <> filtered (of {totalActions})</>} action
+            {totalFiltered === 1 ? '' : 's'}
           </span>
           <span className="hidden h-4 w-px bg-outline-variant sm:inline-block" aria-hidden />
           <label className="flex items-center gap-2">
@@ -402,9 +459,7 @@ export function ActionsView({ rows, readOnly, autoTriageActionId }: ActionsViewP
             </select>
           </label>
         </div>
-        {totalPages > 1 && (
-          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
-        )}
+        {totalPages > 1 && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
       </div>
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -413,8 +468,9 @@ export function ActionsView({ rows, readOnly, autoTriageActionId }: ActionsViewP
           title="Built-in actions"
           body={
             <>
-              These ship with Cezar and apply to every workspace by default. Override by editing — your edits
-              become a new <span className="font-medium text-on-surface">user</span> action with the same name.
+              These ship with Cezar and apply to every workspace by default. Override by editing —
+              your edits become a new <span className="font-medium text-on-surface">user</span>{' '}
+              action with the same name.
             </>
           }
         />
@@ -423,9 +479,12 @@ export function ActionsView({ rows, readOnly, autoTriageActionId }: ActionsViewP
           title="Auto-triage"
           body={
             <>
-              Your workspace&apos;s auto-triage action runs once per new issue/PR. Set or change it from the
-              action&apos;s detail page, or pick from the list at{' '}
-              <Link href="/settings" className="text-primary hover:underline">/settings</Link>.
+              Your workspace&apos;s auto-triage action runs once per new issue/PR. Set or change it
+              from the action&apos;s detail page, or pick from the list at{' '}
+              <Link href="/settings" className="text-primary hover:underline">
+                /settings
+              </Link>
+              .
             </>
           }
         />
@@ -489,10 +548,17 @@ function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
   return (
     <span
       aria-hidden
-      className={cn('inline-flex flex-col text-[8px] leading-[8px]', active ? 'text-primary' : 'text-outline-variant')}
+      className={cn(
+        'inline-flex flex-col text-[8px] leading-[8px]',
+        active ? 'text-primary' : 'text-outline-variant',
+      )}
     >
-      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>▲</span>
-      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>▼</span>
+      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>
+        ▲
+      </span>
+      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>
+        ▼
+      </span>
     </span>
   );
 }
@@ -539,7 +605,11 @@ function ActionTableRow({
     <tr className="border-t border-outline-variant/60 hover:bg-surface-container/60">
       <td className="px-6 py-4 align-middle">
         <Link href={href} className="flex items-center gap-2 text-on-surface hover:text-primary">
-          {row.hasBuiltinShadow && <span className="text-tertiary" aria-hidden>*</span>}
+          {row.hasBuiltinShadow && (
+            <span className="text-tertiary" aria-hidden>
+              *
+            </span>
+          )}
           <span className="font-medium">{row.name}</span>
           {isAutoTriage && (
             <span className="ml-1 inline-flex items-center rounded-md border border-primary/40 bg-primary-container/20 px-1.5 py-0.5 font-display text-[10px] font-semibold uppercase tracking-[0.05em] text-primary">
@@ -548,7 +618,9 @@ function ActionTableRow({
           )}
         </Link>
         {row.description && (
-          <div className="mt-1 max-w-[420px] truncate text-xs text-on-surface-variant">{row.description}</div>
+          <div className="mt-1 max-w-[420px] truncate text-xs text-on-surface-variant">
+            {row.description}
+          </div>
         )}
       </td>
       <td className="px-6 py-4 align-middle">
@@ -572,7 +644,9 @@ function ActionTableRow({
         </span>
       </td>
       <td className="px-6 py-4 align-middle">
-        <span className="font-mono text-[13px] text-on-surface-variant">{formatRelative(row.updatedAt)}</span>
+        <span className="font-mono text-[13px] text-on-surface-variant">
+          {formatRelative(row.updatedAt)}
+        </span>
       </td>
       <td className="relative px-6 py-4 align-middle">
         <div className="flex items-center justify-end pr-2">
@@ -613,8 +687,15 @@ function ActionCard({
   return (
     <EntityCard
       title={
-        <Link href={href} className="flex flex-wrap items-center gap-2 text-on-surface hover:text-primary">
-          {row.hasBuiltinShadow && <span className="text-tertiary" aria-hidden>*</span>}
+        <Link
+          href={href}
+          className="flex flex-wrap items-center gap-2 text-on-surface hover:text-primary"
+        >
+          {row.hasBuiltinShadow && (
+            <span className="text-tertiary" aria-hidden>
+              *
+            </span>
+          )}
           <span className="font-medium">{row.name}</span>
           {isAutoTriage && (
             <span className="inline-flex items-center rounded-md border border-primary/40 bg-primary-container/20 px-1.5 py-0.5 font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-primary">
@@ -645,9 +726,7 @@ function ActionCard({
         </CardActions>
       }
     >
-      {row.description && (
-        <div className="text-xs text-on-surface-variant">{row.description}</div>
-      )}
+      {row.description && <div className="text-xs text-on-surface-variant">{row.description}</div>}
       <MetaRow>
         <MetaItem label="Kind">
           <KindBadge kind={row.kind} />
@@ -706,9 +785,7 @@ function TriggersChips({ triggers }: { triggers: string[] }) {
           {t}
         </span>
       ))}
-      {extra > 0 && (
-        <span className="font-mono text-[11px] text-on-surface-variant">+{extra}</span>
-      )}
+      {extra > 0 && <span className="font-mono text-[11px] text-on-surface-variant">+{extra}</span>}
     </span>
   );
 }
@@ -729,12 +806,22 @@ function StatCard({
       <div className="font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-on-surface-variant">
         {label}
       </div>
-      <div className={cn('mt-2 text-[28px] font-semibold leading-none tracking-tight', valueColor)}>{value}</div>
+      <div className={cn('mt-2 text-[28px] font-semibold leading-none tracking-tight', valueColor)}>
+        {value}
+      </div>
     </div>
   );
 }
 
-function CalloutCard({ title, body, tone }: { title: string; body: React.ReactNode; tone: 'primary' | 'tertiary' }) {
+function CalloutCard({
+  title,
+  body,
+  tone,
+}: {
+  title: string;
+  body: React.ReactNode;
+  tone: 'primary' | 'tertiary';
+}) {
   const rail = tone === 'primary' ? 'bg-primary' : 'bg-tertiary';
   return (
     <div className="relative overflow-hidden rounded-lg border border-outline-variant bg-surface-container-low p-5 pl-6">
@@ -759,20 +846,32 @@ function Pagination({
     <>
       {/* Compact phone variant: Prev · "N / M" · Next. */}
       <div className="flex items-center gap-2 sm:hidden">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         <span className="text-sm tabular-nums text-on-surface-variant">
           {page} / {totalPages}
         </span>
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>
 
       {/* Full numeric variant: sm+. */}
       <div className="hidden items-center gap-1 sm:flex">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         {pages.map((p) => (
@@ -790,7 +889,11 @@ function Pagination({
             {p}
           </button>
         ))}
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>

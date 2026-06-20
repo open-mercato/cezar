@@ -36,7 +36,10 @@ export function Sidebar({ user, workspace, workspaces }: SidebarProps) {
           <title>Cezar</title>
           <path fillRule="evenodd" d="M20 20H180V180H20ZM52 52H148V148H52ZM76 70L76 130L126 100Z" />
           <g transform="translate(127 0)">
-            <path fillRule="evenodd" d="M73 20H183V52H105V148H183V180H73ZM209 20H319V52H241V84H297V116H241V148H319V180H209ZM345 20H455V52L385 148H455V180H345V148L415 52H345ZM481 180L511 20H561L591 180ZM520 110L530 50H542L552 110ZM513 180L525 130H547L559 180ZM617 20H727V102H649V180H617ZM649 42H705V80H649ZM649 102H681L727 180H695Z" />
+            <path
+              fillRule="evenodd"
+              d="M73 20H183V52H105V148H183V180H73ZM209 20H319V52H241V84H297V116H241V148H319V180H209ZM345 20H455V52L385 148H455V180H345V148L415 52H345ZM481 180L511 20H561L591 180ZM520 110L530 50H542L552 110ZM513 180L525 130H547L559 180ZM617 20H727V102H649V180H617ZM649 42H705V80H649ZM649 102H681L727 180H695Z"
+            />
           </g>
         </svg>
         <div className="mt-2 text-xs text-on-surface-variant">
@@ -86,9 +89,11 @@ export function Sidebar({ user, workspace, workspaces }: SidebarProps) {
             </div>
           )}
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-on-surface">{user.name || 'Cezar User'}</div>
+            <div className="truncate text-sm font-medium text-on-surface">
+              {user.name || 'Cezar User'}
+            </div>
             <div className="truncate text-xs text-on-surface-variant">
-              {workspace?.role === 'admin' ? 'Admin Account' : workspace?.role ?? user.email}
+              {workspace?.role === 'admin' ? 'Admin Account' : (workspace?.role ?? user.email)}
             </div>
           </div>
         </div>

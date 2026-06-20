@@ -16,10 +16,7 @@ export {
 export { IssueStore, type IssueFilter } from './store/store.js';
 
 // Config
-export {
-  ConfigSchema,
-  type Config,
-} from './config/config.model.js';
+export { ConfigSchema, type Config } from './config/config.model.js';
 export { loadConfig } from './config/loader.js';
 
 // Services
@@ -87,7 +84,11 @@ export { costWeightedTokens } from './agents/structured-output.js';
 export { AnthropicApiRunner } from './agents/anthropic-api-runner.js';
 export { ClaudeCodeCliRunner, type SpawnFn } from './agents/claude-cli-runner.js';
 export { CodexCliRunner } from './agents/codex-cli-runner.js';
-export { createAgentRunner, DEFAULT_AGENT_BACKEND, type CreateAgentRunnerOptions } from './agents/runner-factory.js';
+export {
+  createAgentRunner,
+  DEFAULT_AGENT_BACKEND,
+  type CreateAgentRunnerOptions,
+} from './agents/runner-factory.js';
 
 // Autofix internals (orchestrator + agent session). The CLI still owns the
 // terminal-facing AutofixRunner + verbose toggle.

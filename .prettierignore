@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+.yarn
+coverage
+**/coverage
+**/*.tsbuildinfo
+yarn.lock
+packages/gui/supabase/migrations
+packages/gui/next-env.d.ts
+packages/core/scripts
+**/*.md

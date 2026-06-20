@@ -104,8 +104,8 @@ function autofixSteps(): FlowStep[] {
         'Be specific about blockers vs nits. Read-only: do NOT push further commits.\n\n' +
         'If `{{previousPullRequestNumber}}` is empty, the upstream open-pr step did not open a PR — ' +
         'end with `Status: blocked` and a one-line reason. Do not invent a PR number.\n\n' +
-        'After posting the review, emit ONE final line so the issue\'s `cezar:pr-link` marker ' +
-        'reflects the PR\'s new state:\n' +
+        "After posting the review, emit ONE final line so the issue's `cezar:pr-link` marker " +
+        "reflects the PR's new state:\n" +
         '  PR_STATE=review              ← clean review, no blockers\n' +
         '  PR_STATE=changes-requested   ← blockers found / changes needed\n' +
         '  PR_STATE=approved            ← LGTM\n' +
@@ -141,7 +141,8 @@ export const FLOW_TEMPLATES: FlowTemplate[] = [
   {
     id: 'fix-and-review',
     label: 'Fix → Review PR (5 steps)',
-    description: 'Decomposed autofix: verify → analyze → fix → open PR → review. Each step gets its own token budget.',
+    description:
+      'Decomposed autofix: verify → analyze → fix → open PR → review. Each step gets its own token budget.',
     build: () => ({
       name: 'fix github issue',
       steps: autofixSteps(),
@@ -151,7 +152,8 @@ export const FLOW_TEMPLATES: FlowTemplate[] = [
   {
     id: 'triage-and-label',
     label: 'Triage → Label',
-    description: 'Read an incoming issue and apply triage labels. Stops cleanly if no action is needed.',
+    description:
+      'Read an incoming issue and apply triage labels. Stops cleanly if no action is needed.',
     build: () => ({
       name: 'triage incoming',
       steps: [
@@ -167,7 +169,8 @@ export const FLOW_TEMPLATES: FlowTemplate[] = [
   {
     id: 'on-label-fix',
     label: 'Label trigger → Fix (5 steps)',
-    description: 'Auto-fix any issue that gets the `auto-fix` label, using the decomposed verify → analyze → fix → open PR → review pipeline.',
+    description:
+      'Auto-fix any issue that gets the `auto-fix` label, using the decomposed verify → analyze → fix → open PR → review pipeline.',
     build: () => ({
       name: 'fix on label',
       steps: autofixSteps(),

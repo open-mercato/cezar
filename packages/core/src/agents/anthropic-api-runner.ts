@@ -1,4 +1,9 @@
-import { query, type SDKMessage, type QueryOptions, type QueryResult } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  type SDKMessage,
+  type QueryOptions,
+  type QueryResult,
+} from '@anthropic-ai/claude-agent-sdk';
 import { TokenBudgetExceededError } from '../actions/autofix/token-budget.js';
 import {
   type AgentRunner,
@@ -137,7 +142,10 @@ export class AnthropicApiRunner implements AgentRunner {
             } catch (err) {
               if (err instanceof TokenBudgetExceededError) {
                 budgetExceeded = true;
-                onEvent?.({ type: 'note', message: `token budget exceeded: used ${err.used} of ${err.limit}` });
+                onEvent?.({
+                  type: 'note',
+                  message: `token budget exceeded: used ${err.used} of ${err.limit}`,
+                });
                 // Only call interrupt() if the stream hasn't already finished.
                 // Interrupt writes to the subprocess stdin; doing so after the
                 // terminal 'result' message causes ERR_STREAM_WRITE_AFTER_END.
@@ -188,7 +196,11 @@ export class AnthropicApiRunner implements AgentRunner {
 
 function processMessage(
   msg: SDKMessage,
-  ctx: { toolCalls: AgentToolCallRecord[]; textChunks: string[]; onEvent?: (e: AgentEvent) => void },
+  ctx: {
+    toolCalls: AgentToolCallRecord[];
+    textChunks: string[];
+    onEvent?: (e: AgentEvent) => void;
+  },
 ): void {
   const m = msg as { type: string; message?: { content?: unknown[]; role?: string } };
   if (!m.message?.content) return;

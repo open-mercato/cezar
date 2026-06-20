@@ -18,7 +18,11 @@ export interface CreateRunEnvOpts {
 
 /** Sanitize a run id into a compose-project-safe slug (lowercase alnum + dashes). */
 function composeProjectName(runId: string): string {
-  const slug = runId.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 24) || 'run';
+  const slug =
+    runId
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '')
+      .slice(0, 24) || 'run';
   return `cezar-${slug}`;
 }
 
@@ -66,7 +70,7 @@ export async function createRunEnv(opts: CreateRunEnvOpts): Promise<RunEnv> {
   if (!composeFileRel) {
     throw new Error(
       `projectEnv.kind is 'compose' but no compose file was found in the repo. ` +
-      `Add a docker-compose.yml or set autofix.projectEnv.compose.file.`,
+        `Add a docker-compose.yml or set autofix.projectEnv.compose.file.`,
     );
   }
 
@@ -78,13 +82,13 @@ export async function createRunEnv(opts: CreateRunEnvOpts): Promise<RunEnv> {
       // Docker; compose runs belong on a self-hosted runner.)
       opts.onWarn?.(
         `[run-env] found ${composeFileRel} but Docker is not available here; falling back to the native shell env. ` +
-        `Run this workspace on a self-hosted runner to use the compose env.`,
+          `Run this workspace on a self-hosted runner to use the compose env.`,
       );
       return new NativeShellEnv(worktreePath, spec);
     }
     throw new Error(
       `projectEnv.kind is 'compose' but Docker is not available on this runner. ` +
-      `Compose-based runs require a self-hosted runner with a Docker daemon.`,
+        `Compose-based runs require a self-hosted runner with a Docker daemon.`,
     );
   }
 
@@ -92,7 +96,7 @@ export async function createRunEnv(opts: CreateRunEnvOpts): Promise<RunEnv> {
   if (!service) {
     throw new Error(
       `could not determine the app service in ${composeFileRel}. ` +
-      `Set autofix.projectEnv.compose.service to the service install/build/test should run in.`,
+        `Set autofix.projectEnv.compose.service to the service install/build/test should run in.`,
     );
   }
 

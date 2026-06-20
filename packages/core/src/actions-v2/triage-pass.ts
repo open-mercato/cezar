@@ -74,7 +74,10 @@ export async function runTriagePass(opts: TriagePassOptions): Promise<TriagePass
   };
 
   const autoTriage = await loadAutoTriageAction(opts.supabase, opts.workspaceId).catch((err) => {
-    console.error('[triage-pass] loadAutoTriageAction failed:', err instanceof Error ? err.message : err);
+    console.error(
+      '[triage-pass] loadAutoTriageAction failed:',
+      err instanceof Error ? err.message : err,
+    );
     return null;
   });
 
@@ -82,7 +85,10 @@ export async function runTriagePass(opts: TriagePassOptions): Promise<TriagePass
     target: opts.target.kind,
     trigger: opts.trigger,
   }).catch((err) => {
-    console.error('[triage-pass] listEnabledActions failed:', err instanceof Error ? err.message : err);
+    console.error(
+      '[triage-pass] listEnabledActions failed:',
+      err instanceof Error ? err.message : err,
+    );
     return [];
   });
 
@@ -98,8 +104,7 @@ export async function runTriagePass(opts: TriagePassOptions): Promise<TriagePass
   for (const action of ordered) {
     // Wrap the caller's sink to capture per-action context the GUI needs.
     const innerDeferSink = opts.deferSink
-      ? async (item: DeferredEffect) =>
-          opts.deferSink!({ ...item, action, target: opts.target })
+      ? async (item: DeferredEffect) => opts.deferSink!({ ...item, action, target: opts.target })
       : undefined;
     try {
       const res = await runAction(action, opts.target, {

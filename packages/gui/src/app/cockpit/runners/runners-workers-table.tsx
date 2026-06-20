@@ -48,7 +48,12 @@ export function RunnersWorkersTable({
       .channel(`cockpit-runners-${workspaceId}`)
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'runners', filter: `workspace_id=eq.${workspaceId}` },
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'runners',
+          filter: `workspace_id=eq.${workspaceId}`,
+        },
         (msg) => applyUpdate(msg.new as RunnerDbShape, setRows),
       )
       .on(
@@ -66,7 +71,9 @@ export function RunnersWorkersTable({
     return (
       <div className="rounded-md border border-dashed border-border bg-bg-elevated p-8 text-center text-sm text-fg-muted">
         No runners registered yet. See{' '}
-        <a href="/settings/runners" className="text-accent hover:underline">Settings → Runners</a>{' '}
+        <a href="/settings/runners" className="text-accent hover:underline">
+          Settings → Runners
+        </a>{' '}
         to register one.
       </div>
     );
@@ -74,33 +81,38 @@ export function RunnersWorkersTable({
 
   return (
     <>
-    <div className="hidden overflow-x-auto rounded-md border border-border bg-bg-elevated md:block">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b border-border bg-bg text-xs uppercase tracking-wider text-fg-subtle">
-          <tr>
-            <th className="px-4 py-2 font-medium">Name</th>
-            <th className="px-4 py-2 font-medium">Backends</th>
-            <th className="px-4 py-2 font-medium">Status</th>
-            <th className="px-4 py-2 font-medium">Heartbeat</th>
-            <th className="px-4 py-2 font-medium">Utilization</th>
-            <th className="px-4 py-2 font-medium">GitHub identity</th>
-            <th className="px-4 py-2 font-medium" title="50th / 95th percentile step duration over the last 24h">p50 / p95 (24h)</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {rows.map((r) => (
-            <RunnerRow key={r.id} row={r} />
-          ))}
-        </tbody>
-      </table>
-    </div>
+      <div className="hidden overflow-x-auto rounded-md border border-border bg-bg-elevated md:block">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b border-border bg-bg text-xs uppercase tracking-wider text-fg-subtle">
+            <tr>
+              <th className="px-4 py-2 font-medium">Name</th>
+              <th className="px-4 py-2 font-medium">Backends</th>
+              <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium">Heartbeat</th>
+              <th className="px-4 py-2 font-medium">Utilization</th>
+              <th className="px-4 py-2 font-medium">GitHub identity</th>
+              <th
+                className="px-4 py-2 font-medium"
+                title="50th / 95th percentile step duration over the last 24h"
+              >
+                p50 / p95 (24h)
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rows.map((r) => (
+              <RunnerRow key={r.id} row={r} />
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-    {/* Phone: stacked cards (P1). */}
-    <div className="space-y-3 md:hidden">
-      {rows.map((r) => (
-        <RunnerCard key={r.id} row={r} />
-      ))}
-    </div>
+      {/* Phone: stacked cards (P1). */}
+      <div className="space-y-3 md:hidden">
+        {rows.map((r) => (
+          <RunnerCard key={r.id} row={r} />
+        ))}
+      </div>
     </>
   );
 }
@@ -126,7 +138,10 @@ function RunnerCard({ row }: { row: RunnerWorkerRow }) {
         <MetaItem label="Backends">
           <span className="flex flex-wrap gap-1">
             {(row.managed ? ['anthropic-api'] : row.backends).map((b) => (
-              <span key={b} className="rounded border border-border bg-bg px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">
+              <span
+                key={b}
+                className="rounded border border-border bg-bg px-1.5 py-0.5 font-mono text-[11px] text-fg-muted"
+              >
                 {b}
               </span>
             ))}
@@ -135,7 +150,11 @@ function RunnerCard({ row }: { row: RunnerWorkerRow }) {
       </MetaRow>
       <MetaRow>
         <MetaItem label="Heartbeat">
-          {row.lastHeartbeatAt ? timeAgo(row.lastHeartbeatAt) : <span className="text-fg-subtle">never</span>}
+          {row.lastHeartbeatAt ? (
+            timeAgo(row.lastHeartbeatAt)
+          ) : (
+            <span className="text-fg-subtle">never</span>
+          )}
         </MetaItem>
         <MetaItem label="Identity">
           <span className="font-mono">{row.ghIdentity}</span>
@@ -182,7 +201,10 @@ function RunnerRow({ row }: { row: RunnerWorkerRow }) {
       <td className="px-4 py-2 align-top">
         <div className="flex flex-wrap gap-1">
           {(row.managed ? ['anthropic-api'] : row.backends).map((b) => (
-            <span key={b} className="rounded border border-border bg-bg px-1.5 py-0.5 font-mono text-[10px] text-fg-muted">
+            <span
+              key={b}
+              className="rounded border border-border bg-bg px-1.5 py-0.5 font-mono text-[10px] text-fg-muted"
+            >
               {b}
             </span>
           ))}
@@ -192,7 +214,11 @@ function RunnerRow({ row }: { row: RunnerWorkerRow }) {
         <StatusBadge status={row.displayStatus} />
       </td>
       <td className="px-4 py-2 align-top text-xs text-fg-muted">
-        {row.lastHeartbeatAt ? timeAgo(row.lastHeartbeatAt) : <span className="text-fg-subtle">never</span>}
+        {row.lastHeartbeatAt ? (
+          timeAgo(row.lastHeartbeatAt)
+        ) : (
+          <span className="text-fg-subtle">never</span>
+        )}
       </td>
       <td className="px-4 py-2 align-top text-xs text-fg-muted">
         {u ? <UtilizationCell utilization={u} /> : <span className="text-fg-subtle">—</span>}
@@ -214,8 +240,12 @@ function RunnerRow({ row }: { row: RunnerWorkerRow }) {
 }
 
 function UtilizationCell({ utilization }: { utilization: RunnerUtilization }) {
-  const pct = utilization.capacity > 0 ? Math.round((utilization.inflight / utilization.capacity) * 100) : 0;
-  const freePct = utilization.totalMemMb > 0 ? Math.round((utilization.freeMemMb / utilization.totalMemMb) * 100) : 0;
+  const pct =
+    utilization.capacity > 0 ? Math.round((utilization.inflight / utilization.capacity) * 100) : 0;
+  const freePct =
+    utilization.totalMemMb > 0
+      ? Math.round((utilization.freeMemMb / utilization.totalMemMb) * 100)
+      : 0;
   return (
     <div className="space-y-0.5">
       <div>
@@ -237,7 +267,12 @@ function StatusBadge({ status }: { status: 'online' | 'stale' | 'offline' }) {
     offline: 'bg-fg-subtle/20 text-fg-subtle',
   };
   return (
-    <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider', colors[status])}>
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider',
+        colors[status],
+      )}
+    >
       <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-current" />
       {status}
     </span>
@@ -271,7 +306,10 @@ interface RunnerDbShape {
 const ONLINE_WINDOW_MS = 2 * 60_000;
 const STALE_WINDOW_MS = 30 * 60_000;
 
-function applyUpdate(next: RunnerDbShape, setRows: React.Dispatch<React.SetStateAction<RunnerWorkerRow[]>>): void {
+function applyUpdate(
+  next: RunnerDbShape,
+  setRows: React.Dispatch<React.SetStateAction<RunnerWorkerRow[]>>,
+): void {
   setRows((prev) => {
     const idx = prev.findIndex((r) => r.id === next.id);
     if (idx === -1) return prev;

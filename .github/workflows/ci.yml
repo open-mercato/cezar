@@ -28,6 +28,18 @@ jobs:
       - name: Install
         run: yarn install --immutable
 
+      - name: Lint
+        run: yarn lint
+
+      - name: Format check
+        run: yarn format:check
+
+      - name: Lint GitHub Actions workflows
+        uses: reviewdog/action-actionlint@v1
+        with:
+          reporter: github-check
+          fail_on_error: true
+
       - name: Migration naming sanity
         # New migrations must use a UTC timestamp prefix (YYYYMMDDHHMMSS_) so two
         # branches never collide on a number — see docs/DEVELOPMENT.md. The legacy

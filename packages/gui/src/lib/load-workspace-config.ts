@@ -1,7 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Config } from '@cezar/core';
 import type { Database } from './supabase/types';
-import { loadWorkflowBindings, loadWorkflowSettings, type WorkspaceWorkflowRow } from './workflow-config';
+import {
+  loadWorkflowBindings,
+  loadWorkflowSettings,
+  type WorkspaceWorkflowRow,
+} from './workflow-config';
 
 /**
  * The subset of `workspaces` columns `loadWorkspaceConfig` reads. A caller that
@@ -50,7 +54,9 @@ export async function loadWorkspaceConfig(
   } else {
     ({ data: ws } = await supabase
       .from('workspaces')
-      .select('config, repo_owner, repo_name, auto_triage_enabled, autofix_enabled, separate_comment_per_step')
+      .select(
+        'config, repo_owner, repo_name, auto_triage_enabled, autofix_enabled, separate_comment_per_step',
+      )
       .eq('id', workspaceId)
       .single());
   }
@@ -113,7 +119,11 @@ export async function loadWorkspaceConfig(
     process.env.CEZAR_USE_WORKFLOW_ENGINE === 'true' || wWorkflow.useEngine === true;
   baseConfig.workflow = {
     useEngine,
-    bindings: await loadWorkflowBindings(workspaceId, supabase, baseConfig.github.repo || undefined),
+    bindings: await loadWorkflowBindings(
+      workspaceId,
+      supabase,
+      baseConfig.github.repo || undefined,
+    ),
     settings: await loadWorkflowSettings(workspaceId, supabase, ws),
   };
 

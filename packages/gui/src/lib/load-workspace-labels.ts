@@ -16,7 +16,9 @@ export async function loadWorkspaceLabels(
 ): Promise<WorkspaceLabel[]> {
   const { data, error } = await supabase
     .from('workspace_labels')
-    .select('name, scope, color, description, when_to_add, when_to_remove, add_meaning, remove_meaning')
+    .select(
+      'name, scope, color, description, when_to_add, when_to_remove, add_meaning, remove_meaning',
+    )
     .eq('workspace_id', workspaceId);
   if (error) {
     console.error('[labels] loadWorkspaceLabels failed:', error.message);

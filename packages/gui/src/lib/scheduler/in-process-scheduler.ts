@@ -39,7 +39,8 @@ const JOBS: CronJob[] = [
     formatLog: (b) => {
       const r = b as { claimed?: number; requeued?: number; error?: string };
       if (r.error) return `error: ${r.error}`;
-      if ((r.claimed ?? 0) > 0 || (r.requeued ?? 0) > 0) return `claimed ${r.claimed ?? 0}, requeued ${r.requeued ?? 0}`;
+      if ((r.claimed ?? 0) > 0 || (r.requeued ?? 0) > 0)
+        return `claimed ${r.claimed ?? 0}, requeued ${r.requeued ?? 0}`;
       return null;
     },
   },
@@ -50,7 +51,8 @@ const JOBS: CronJob[] = [
     formatLog: (b) => {
       const r = b as { enqueued?: number; workspaces?: number; error?: string };
       if (r.error) return `error: ${r.error}`;
-      if ((r.enqueued ?? 0) > 0) return `enqueued ${r.enqueued} across ${r.workspaces} workspace(s)`;
+      if ((r.enqueued ?? 0) > 0)
+        return `enqueued ${r.enqueued} across ${r.workspaces} workspace(s)`;
       return null;
     },
   },
@@ -61,7 +63,8 @@ const JOBS: CronJob[] = [
     formatLog: (b) => {
       const r = b as { enqueued?: number; workspaces?: number; error?: string };
       if (r.error) return `error: ${r.error}`;
-      if ((r.enqueued ?? 0) > 0) return `enqueued ${r.enqueued} across ${r.workspaces} workspace(s)`;
+      if ((r.enqueued ?? 0) > 0)
+        return `enqueued ${r.enqueued} across ${r.workspaces} workspace(s)`;
       return null;
     },
   },
@@ -81,7 +84,11 @@ function getState(): SchedulerState {
 }
 
 class CronHttpError extends Error {
-  constructor(readonly status: number, readonly path: string, readonly snippet: string) {
+  constructor(
+    readonly status: number,
+    readonly path: string,
+    readonly snippet: string,
+  ) {
     super(`${path} → ${status}: ${snippet}`);
     this.name = 'CronHttpError';
   }
@@ -95,8 +102,7 @@ function resolveBaseUrl(): string {
   // `CEZAR_INPROCESS_CRON_BASE_URL` is the explicit escape hatch for the rare
   // reverse-proxy case.
   return (
-    process.env.CEZAR_INPROCESS_CRON_BASE_URL ||
-    `http://127.0.0.1:${process.env.PORT || '3000'}`
+    process.env.CEZAR_INPROCESS_CRON_BASE_URL || `http://127.0.0.1:${process.env.PORT || '3000'}`
   );
 }
 
@@ -116,7 +122,11 @@ async function hit(path: string, baseUrl: string, secret?: string): Promise<unkn
   const res = await fetch(url, { headers });
   const text = await res.text();
   let body: unknown;
-  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
   if (!res.ok) throw new CronHttpError(res.status, path, text.slice(0, 200));
   return body;
 }
@@ -130,12 +140,15 @@ export function startInProcessScheduler(): void {
   const secret = process.env.CRON_SECRET;
   const disabled = disabledPaths();
 
-  const active = JOBS
-    .filter((j) => !disabled.has(j.path))
-    .map((j) => ({ job: j, intervalMs: Number(process.env[j.envOverride]) || j.defaultIntervalMs }));
+  const active = JOBS.filter((j) => !disabled.has(j.path)).map((j) => ({
+    job: j,
+    intervalMs: Number(process.env[j.envOverride]) || j.defaultIntervalMs,
+  }));
 
   const summary = active.map((a) => `${a.job.path}@${a.intervalMs}ms`).join(', ');
-  console.log(`[scheduler] starting — base ${baseUrl}; ${active.length} job(s): ${summary || '(none)'}`);
+  console.log(
+    `[scheduler] starting — base ${baseUrl}; ${active.length} job(s): ${summary || '(none)'}`,
+  );
 
   for (const { job, intervalMs } of active) {
     const tick = async () => {
@@ -148,9 +161,7 @@ export function startInProcessScheduler(): void {
           console.log(`[scheduler] ${job.path} — recovered (2xx)`);
           state.failing.set(job.path, false);
         }
-        const line = job.formatLog
-          ? job.formatLog(body)
-          : `ok`; // generic: legacy routes return varied shapes — only log when something noteworthy
+        const line = job.formatLog ? job.formatLog(body) : `ok`; // generic: legacy routes return varied shapes — only log when something noteworthy
         if (line !== null && line !== 'ok') console.log(`[scheduler] ${job.path} — ${line}`);
       } catch (err) {
         // Log the first failure of each path prominently (with the status code
@@ -163,9 +174,14 @@ export function startInProcessScheduler(): void {
               err.status === 401
                 ? ' — the cron route rejected the request; check that CRON_SECRET matches the value the route reads'
                 : '';
-            console.error(`[scheduler] ${job.path} failing — HTTP ${err.status}${hint}: ${err.snippet}`);
+            console.error(
+              `[scheduler] ${job.path} failing — HTTP ${err.status}${hint}: ${err.snippet}`,
+            );
           } else {
-            console.error(`[scheduler] ${job.path} failing —`, err instanceof Error ? err.message : err);
+            console.error(
+              `[scheduler] ${job.path} failing —`,
+              err instanceof Error ? err.message : err,
+            );
           }
         }
       } finally {

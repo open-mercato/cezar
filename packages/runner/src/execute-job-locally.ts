@@ -47,17 +47,28 @@ export async function executeJobLocally(
   controls: ExecuteJobControls,
   opts: ExecuteJobOptions = {},
 ): Promise<void> {
-  const { workflowRunId, job, workspace, githubToken, ciFollowupSeed, flow, labels, resumeSessionId } = claimed;
+  const {
+    workflowRunId,
+    job,
+    workspace,
+    githubToken,
+    ciFollowupSeed,
+    flow,
+    labels,
+    resumeSessionId,
+  } = claimed;
   // The runner-daemon substitutes the host token before calling us when
   // `ghIdentitySource === 'host'`. Any path that reaches here without a
   // token is a misconfiguration — surface it as a failed run instead of
   // letting GitHub-service ops fail with confusing 401s.
   if (!githubToken) {
-    await client.finalizeRun(workflowRunId, {
-      status: 'failed',
-      reason: `no GitHub token available for this job (ghIdentitySource=${claimed.ghIdentitySource ?? 'unknown'})`,
-      tokensUsed: 0,
-    }).catch(() => {});
+    await client
+      .finalizeRun(workflowRunId, {
+        status: 'failed',
+        reason: `no GitHub token available for this job (ghIdentitySource=${claimed.ghIdentitySource ?? 'unknown'})`,
+        tokensUsed: 0,
+      })
+      .catch(() => {});
     return;
   }
 
@@ -75,12 +86,17 @@ export async function executeJobLocally(
       // Re-queue so we don't silently drop them; if the API is down the daemon
       // will eventually surface it elsewhere.
       buffer.unshift(...batch);
-      console.error(`[runner] postEvents failed (${batch.length} buffered):`, err instanceof Error ? err.message : err);
+      console.error(
+        `[runner] postEvents failed (${batch.length} buffered):`,
+        err instanceof Error ? err.message : err,
+      );
     } finally {
       flushing = false;
     }
   };
-  const timer = setInterval(() => { void flush(); }, FLUSH_INTERVAL_MS);
+  const timer = setInterval(() => {
+    void flush();
+  }, FLUSH_INTERVAL_MS);
   const emit = (e: RunnerEvent): void => {
     if (typeof e.tokensUsed === 'number') tokensUsed += e.tokensUsed;
     buffer.push(e);
@@ -91,8 +107,13 @@ export async function executeJobLocally(
   const onAgentEvent = (evt: { type: string; [k: string]: unknown }): void => {
     // The orchestrator/engine path emits the legacy agent-session event shape.
     if (evt.type === 'text') emit({ type: 'agent-text', payload: { text: evt.text } });
-    else if (evt.type === 'tool') emit({ type: 'tool-call', payload: { tool: evt.tool, input: evt.input } });
-    else if (evt.type === 'tool-result') emit({ type: 'tool-result', payload: { toolUseId: evt.toolUseId, result: evt.result, isError: evt.isError } });
+    else if (evt.type === 'tool')
+      emit({ type: 'tool-call', payload: { tool: evt.tool, input: evt.input } });
+    else if (evt.type === 'tool-result')
+      emit({
+        type: 'tool-result',
+        payload: { toolUseId: evt.toolUseId, result: evt.result, isError: evt.isError },
+      });
     else emit({ type: 'note', payload: evt });
   };
   // Fired at the moment the engine begins a step (before the agent launches).
@@ -169,10 +190,21 @@ export async function executeJobLocally(
 
     // Build the runtime Config from the SaaS-supplied merged config.
     const config: Config = claimed.config;
-    config.github = { ...config.github, owner: workspace.owner, repo: workspace.repo, token: githubToken };
+    config.github = {
+      ...config.github,
+      owner: workspace.owner,
+      repo: workspace.repo,
+      token: githubToken,
+    };
     config.workflow = { ...(config.workflow ?? {}), useEngine: true };
     if (!config.autofix.repoRoot) {
-      worktree = await prepareJobWorktree(workspace.owner, workspace.repo, githubToken, job.id, config.autofix.baseBranch);
+      worktree = await prepareJobWorktree(
+        workspace.owner,
+        workspace.repo,
+        githubToken,
+        job.id,
+        config.autofix.baseBranch,
+      );
       config.autofix.repoRoot = worktree.worktreePath;
       // Phase 5 — autosave WIP on the worktree branch every 90s. If the runner
       // crashes mid-step the branch carries recoverable changes; a re-claim
@@ -207,40 +239,75 @@ export async function executeJobLocally(
 
     if (job.kind === 'autofix') {
       if (job.issueNumber == null) throw new Error('autofix job has no issue_number');
-      const outcome = await new core.AutofixOrchestrator(store, config, github).processIssue(job.issueNumber, {
-        apply: true, labels, onEvent, onAgentEvent, onStepStart, onRunRecord, pauseRequested, cancelRequested,
-        resumeSessionId: resumeSessionId ?? undefined,
-      });
-      const ok = outcome.status === 'pr-opened' || outcome.status === 'dry-run' || outcome.status === 'skipped';
+      const outcome = await new core.AutofixOrchestrator(store, config, github).processIssue(
+        job.issueNumber,
+        {
+          apply: true,
+          labels,
+          onEvent,
+          onAgentEvent,
+          onStepStart,
+          onRunRecord,
+          pauseRequested,
+          cancelRequested,
+          resumeSessionId: resumeSessionId ?? undefined,
+        },
+      );
+      const ok =
+        outcome.status === 'pr-opened' ||
+        outcome.status === 'dry-run' ||
+        outcome.status === 'skipped';
       result = {
         status: ok ? 'succeeded' : 'failed',
         finalize: {
-          status: outcome.status === 'pr-opened' ? 'pr-opened' : outcome.status === 'dry-run' ? 'dry-run' : outcome.status === 'skipped' ? 'skipped' : 'failed',
+          status:
+            outcome.status === 'pr-opened'
+              ? 'pr-opened'
+              : outcome.status === 'dry-run'
+                ? 'dry-run'
+                : outcome.status === 'skipped'
+                  ? 'skipped'
+                  : 'failed',
           outcome,
           reason: 'reason' in outcome ? outcome.reason : null,
           prUrl: 'prUrl' in outcome ? outcome.prUrl : null,
           prNumber: 'prNumber' in outcome ? outcome.prNumber : (job.prNumber ?? null),
-          branch: 'branch' in outcome ? outcome.branch ?? null : null,
-          headSha: 'headSha' in outcome ? outcome.headSha ?? null : null,
+          branch: 'branch' in outcome ? (outcome.branch ?? null) : null,
+          headSha: 'headSha' in outcome ? (outcome.headSha ?? null) : null,
           tokensUsed,
         },
       };
     } else if (job.kind === 'ci-followup') {
       if (!ciFollowupSeed) throw new Error('ci-followup job is missing payload.ciFollowup seed');
-      const outcome = await new core.AutofixOrchestrator(store, config, github).processCiFollowup(ciFollowupSeed, {
-        apply: true, labels, onEvent, onAgentEvent, onStepStart, onRunRecord, pauseRequested, cancelRequested,
-        resumeSessionId: resumeSessionId ?? undefined,
-      });
+      const outcome = await new core.AutofixOrchestrator(store, config, github).processCiFollowup(
+        ciFollowupSeed,
+        {
+          apply: true,
+          labels,
+          onEvent,
+          onAgentEvent,
+          onStepStart,
+          onRunRecord,
+          pauseRequested,
+          cancelRequested,
+          resumeSessionId: resumeSessionId ?? undefined,
+        },
+      );
       const ok = outcome.status === 'pushed' || outcome.status === 'skipped';
       result = {
         status: ok ? 'succeeded' : 'failed',
         finalize: {
-          status: outcome.status === 'pushed' ? 'pushed' : outcome.status === 'skipped' ? 'skipped' : 'failed',
+          status:
+            outcome.status === 'pushed'
+              ? 'pushed'
+              : outcome.status === 'skipped'
+                ? 'skipped'
+                : 'failed',
           outcome,
           reason: 'reason' in outcome ? outcome.reason : null,
-          branch: 'branch' in outcome ? outcome.branch ?? null : (ciFollowupSeed.branch ?? null),
-          headSha: 'headSha' in outcome ? outcome.headSha ?? null : null,
-          prNumber: ciFollowupSeed.prNumber ?? (job.prNumber ?? null),
+          branch: 'branch' in outcome ? (outcome.branch ?? null) : (ciFollowupSeed.branch ?? null),
+          headSha: 'headSha' in outcome ? (outcome.headSha ?? null) : null,
+          prNumber: ciFollowupSeed.prNumber ?? job.prNumber ?? null,
           tokensUsed,
         },
       };
@@ -250,23 +317,37 @@ export async function executeJobLocally(
       const flowOutcome = await core.runFlow({
         flow: { name: flow.name, steps: flow.steps },
         input: flow.input || String(job.issueNumber),
-        store, config, github,
+        store,
+        config,
+        github,
         issueNumber: job.issueNumber,
         labels,
-        onEvent, onAgentEvent, onStepStart, onRunRecord,
-        pauseRequested, cancelRequested,
+        onEvent,
+        onAgentEvent,
+        onStepStart,
+        onRunRecord,
+        pauseRequested,
+        cancelRequested,
         resumeSessionId: resumeSessionId ?? undefined,
       });
-      const status = flowOutcome.status === 'succeeded' ? 'succeeded'
-        : flowOutcome.status === 'paused' ? 'paused'
-        : flowOutcome.status === 'cancelled' ? 'cancelled'
-        : 'failed';
+      const status =
+        flowOutcome.status === 'succeeded'
+          ? 'succeeded'
+          : flowOutcome.status === 'paused'
+            ? 'paused'
+            : flowOutcome.status === 'cancelled'
+              ? 'cancelled'
+              : 'failed';
       // FinalizeRunBody.status is a narrow union — map our workflow status onto
       // it. The cockpit uses `outcome` for the rich detail anyway.
-      const finalizeStatus = status === 'succeeded' ? 'succeeded'
-        : status === 'paused' ? 'paused'
-        : status === 'cancelled' ? 'cancelled'
-        : 'failed';
+      const finalizeStatus =
+        status === 'succeeded'
+          ? 'succeeded'
+          : status === 'paused'
+            ? 'paused'
+            : status === 'cancelled'
+              ? 'cancelled'
+              : 'failed';
       result = {
         status,
         finalize: {
@@ -274,7 +355,7 @@ export async function executeJobLocally(
           outcome: flowOutcome,
           reason: flowOutcome.reason ?? null,
           prUrl: flowOutcome.prUrl ?? null,
-          prNumber: flowOutcome.prNumber ?? (job.prNumber ?? null),
+          prNumber: flowOutcome.prNumber ?? job.prNumber ?? null,
           branch: flowOutcome.branch ?? null,
           headSha: flowOutcome.headSha ?? null,
           tokensUsed,
@@ -285,7 +366,8 @@ export async function executeJobLocally(
       // runner. Triage is repo-less and rare on self-hosted runners; until the
       // CLI/runner is rewritten on the new action model, skip the job so the
       // SaaS doesn't keep handing it back.
-      const reason = 'triage on self-hosted runners is not supported yet — re-run from the GUI or wait for 2b3';
+      const reason =
+        'triage on self-hosted runners is not supported yet — re-run from the GUI or wait for 2b3';
       onEvent(`[runner] ${reason}`);
       result = {
         status: 'succeeded',
@@ -294,7 +376,11 @@ export async function executeJobLocally(
     }
 
     await flush();
-    await client.finalizeRun(workflowRunId, { ...result.finalize, tokensUsed, sessionId: runSessionId ?? null });
+    await client.finalizeRun(workflowRunId, {
+      ...result.finalize,
+      tokensUsed,
+      sessionId: runSessionId ?? null,
+    });
   } catch (err) {
     // Redact any GitHub token before it reaches stderr, journalctl, or the
     // cockpit: `execFile` clone/fetch failures carry the token-bearing URL in
@@ -302,9 +388,14 @@ export async function executeJobLocally(
     const message = redactToken(err instanceof Error ? err.message : String(err));
     console.error(`[runner] job ${job.id} failed:`, message);
     await flush().catch(() => {});
-    await client.finalizeRun(workflowRunId, { status: 'failed', reason: message, tokensUsed }).catch((e) => {
-      console.error(`[runner] finalizeRun(failed) also failed:`, e instanceof Error ? e.message : e);
-    });
+    await client
+      .finalizeRun(workflowRunId, { status: 'failed', reason: message, tokensUsed })
+      .catch((e) => {
+        console.error(
+          `[runner] finalizeRun(failed) also failed:`,
+          e instanceof Error ? e.message : e,
+        );
+      });
   } finally {
     clearInterval(timer);
     if (autosaveTimer) clearInterval(autosaveTimer);
@@ -339,13 +430,23 @@ async function autosaveWorktree(cwd: string): Promise<void> {
     await execFileAsync(
       'git',
       [
-        '-c', 'commit.gpgsign=false',
+        '-c',
+        'commit.gpgsign=false',
         'commit',
         '--allow-empty',
-        '-m', 'wip: cezar autosave [skip ci]',
-        '--author', AUTOSAVE_AUTHOR,
+        '-m',
+        'wip: cezar autosave [skip ci]',
+        '--author',
+        AUTOSAVE_AUTHOR,
       ],
-      { cwd, env: { ...process.env, GIT_COMMITTER_NAME: 'Cezar Autosave', GIT_COMMITTER_EMAIL: 'autosave@cezar.local' } },
+      {
+        cwd,
+        env: {
+          ...process.env,
+          GIT_COMMITTER_NAME: 'Cezar Autosave',
+          GIT_COMMITTER_EMAIL: 'autosave@cezar.local',
+        },
+      },
     );
   } catch (err) {
     // Autosave failures are best-effort — never abort the job. Common causes

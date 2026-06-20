@@ -26,7 +26,7 @@ export class ConsoleEventAdapter implements EventPort {
   }
 
   lifecycle(message: string): void {
-    if (this.permanentLogPatterns.some(re => re.test(message))) {
+    if (this.permanentLogPatterns.some((re) => re.test(message))) {
       this.spinner.clear();
       process.stdout.write(`  ${chalk.dim(message)}\n`);
       this.spinner.render();

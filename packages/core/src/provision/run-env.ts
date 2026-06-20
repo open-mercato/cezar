@@ -60,11 +60,18 @@ export interface RunEnv {
  * response" (even a 4xx/5xx) means the server is listening — good enough for a
  * readiness gate. Returns the final status, or `null` on timeout.
  */
-export async function waitForHttp(url: string, timeoutMs: number, intervalMs = 750): Promise<number | null> {
+export async function waitForHttp(
+  url: string,
+  timeoutMs: number,
+  intervalMs = 750,
+): Promise<number | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      const res = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(Math.min(5000, intervalMs * 4)) });
+      const res = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(Math.min(5000, intervalMs * 4)),
+      });
       return res.status;
     } catch {
       if (Date.now() >= deadline) return null;

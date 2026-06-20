@@ -35,7 +35,7 @@ export const getActiveWorkspace = cache(async (): Promise<ActiveWorkspace | null
 
   if (!memberships || memberships.length === 0) return null;
 
-  type MemberRow = typeof memberships[number];
+  type MemberRow = (typeof memberships)[number];
   const match = stored
     ? memberships.find((m: MemberRow) => (m.workspaces as any)?.id === stored)
     : undefined;

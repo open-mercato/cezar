@@ -22,8 +22,14 @@ describe('buildAutoCommentBody', () => {
       actionName: 'auto-triage',
       text: 'Classified as a bug with high confidence.',
       effectsApplied: [
-        { call: { effect: 'label.add', args: { label: 'bug' } }, summary: 'added label "bug" to #42' },
-        { call: { effect: 'set-priority', args: { priority: 'high' } }, summary: 'set priority/high on #42' },
+        {
+          call: { effect: 'label.add', args: { label: 'bug' } },
+          summary: 'added label "bug" to #42',
+        },
+        {
+          call: { effect: 'set-priority', args: { priority: 'high' } },
+          summary: 'set priority/high on #42',
+        },
       ],
       meta: baseMeta,
     };
@@ -43,7 +49,10 @@ describe('buildAutoCommentBody', () => {
       actionName: 'security',
       text: 'Potential auth bypass in the session handler.\n\nLong rambling detail paragraph.',
       effectsApplied: [
-        { call: { effect: 'label.add', args: { label: 'security' } }, summary: 'added label "security" to #88' },
+        {
+          call: { effect: 'label.add', args: { label: 'security' } },
+          summary: 'added label "security" to #88',
+        },
       ],
       meta: { ...baseMeta, actionName: 'security' },
     });
@@ -69,7 +78,10 @@ describe('buildAutoCommentBody', () => {
       actionName: 'auto-triage',
       text: '',
       effectsApplied: [
-        { call: { effect: 'label.add', args: { label: 'bug' } }, summary: 'added label "bug" to #1' },
+        {
+          call: { effect: 'label.add', args: { label: 'bug' } },
+          summary: 'added label "bug" to #1',
+        },
       ],
       meta: baseMeta,
     });
@@ -105,7 +117,9 @@ describe('actionAlreadyCommented', () => {
   });
 
   it('returns false when only non-comment effects fired', () => {
-    expect(actionAlreadyCommented([make('label.add'), make('set-priority'), make('close')])).toBe(false);
+    expect(actionAlreadyCommented([make('label.add'), make('set-priority'), make('close')])).toBe(
+      false,
+    );
   });
 
   it('returns false on an empty list', () => {
@@ -126,7 +140,8 @@ describe('actionPreviouslyCommented', () => {
   });
 
   it('matches a comment from the pre-minimal format (heading + audit footer)', () => {
-    const legacy = '**Cezar · auto-triage**\n\nClassified.\n\n---\n🤖 *Cezar · auto-triage · manual · claude-sonnet-4-6 · 2026-05-16T14:02:03.000Z*';
+    const legacy =
+      '**Cezar · auto-triage**\n\nClassified.\n\n---\n🤖 *Cezar · auto-triage · manual · claude-sonnet-4-6 · 2026-05-16T14:02:03.000Z*';
     expect(actionPreviouslyCommented('auto-triage', [{ body: legacy }])).toBe(true);
   });
 

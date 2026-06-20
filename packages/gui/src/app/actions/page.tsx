@@ -44,7 +44,9 @@ export default async function ActionsPage() {
   const [{ data: actionRows }, { data: workspaceRow }] = await Promise.all([
     supabase
       .from('actions')
-      .select('id, name, kind, description, target, triggers, effects, enabled, replaces_built_in, updated_at')
+      .select(
+        'id, name, kind, description, target, triggers, effects, enabled, replaces_built_in, updated_at',
+      )
       .eq('workspace_id', workspace.id)
       .order('name', { ascending: true })
       .returns<DbActionRow[]>(),
@@ -80,7 +82,8 @@ export default async function ActionsPage() {
     const preferred = user ?? list[0];
     const hasBuiltinShadow = user !== undefined && list.some((r) => r.kind === 'built-in');
     const hasUserOverride =
-      preferred.kind === 'built-in' && (list.some((r) => r.kind === 'user') || overrideTargets.has(name));
+      preferred.kind === 'built-in' &&
+      (list.some((r) => r.kind === 'user') || overrideTargets.has(name));
     rows.push({
       id: preferred.id,
       name,

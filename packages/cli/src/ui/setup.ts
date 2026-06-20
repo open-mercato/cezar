@@ -9,7 +9,7 @@ import { progressBar } from './components/progress.js';
 import { printDigestSummary } from '../utils/formatter.js';
 
 export async function runSetupWizard(config: Config): Promise<IssueStore | null> {
-  console.log(chalk.bold('\n  Welcome! Let\'s connect to your GitHub repo.\n'));
+  console.log(chalk.bold("\n  Welcome! Let's connect to your GitHub repo.\n"));
 
   const owner = await input({
     message: 'GitHub owner (org or username):',
@@ -27,7 +27,9 @@ export async function runSetupWizard(config: Config): Promise<IssueStore | null>
   config.github.repo = repo.trim();
 
   if (!config.github.token) {
-    console.log(chalk.yellow('\n  No GITHUB_TOKEN found. Set it in .env or export it in your shell.'));
+    console.log(
+      chalk.yellow('\n  No GITHUB_TOKEN found. Set it in .env or export it in your shell.'),
+    );
     return null;
   }
 
@@ -58,7 +60,10 @@ export async function runSetupWizard(config: Config): Promise<IssueStore | null>
   }
 
   // Initialize store
-  const store = await IssueStore.init(config.store.path, { owner: owner.trim(), repo: repo.trim() });
+  const store = await IssueStore.init(config.store.path, {
+    owner: owner.trim(),
+    repo: repo.trim(),
+  });
   let created = 0;
   for (const issue of issues) {
     const result = store.upsertIssue(issue);
@@ -79,9 +84,11 @@ export async function runSetupWizard(config: Config): Promise<IssueStore | null>
     try {
       const llm = new LLMService(config);
       const digests = await llm.generateDigests(
-        toDigest.map(i => ({ number: i.number, title: i.title, body: i.body })),
+        toDigest.map((i) => ({ number: i.number, title: i.title, body: i.body })),
         config.sync.digestBatchSize,
-        (done, total) => { digestSpinner.text = `Generating digests  ${progressBar(done, total)}`; },
+        (done, total) => {
+          digestSpinner.text = `Generating digests  ${progressBar(done, total)}`;
+        },
       );
 
       let digestCount = 0;

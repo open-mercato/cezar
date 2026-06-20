@@ -19,7 +19,7 @@ export interface AuditFooterMeta {
  */
 export function formatAuditComment(actions: string[]): string {
   const timestamp = new Date().toISOString();
-  const actionList = actions.map(a => `- ${a}`).join('\n');
+  const actionList = actions.map((a) => `- ${a}`).join('\n');
   return `🤖 **CEZAR update** — ${timestamp}\n\n${actionList}`;
 }
 
@@ -38,7 +38,7 @@ export function withAuditFooter(body: string, meta: AuditFooterMeta): string;
 export function withAuditFooter(body: string, actionsOrMeta: string[] | AuditFooterMeta): string {
   if (Array.isArray(actionsOrMeta)) {
     const timestamp = new Date().toISOString();
-    const actionList = actionsOrMeta.map(a => `- ${a}`).join('\n');
+    const actionList = actionsOrMeta.map((a) => `- ${a}`).join('\n');
     return `${body}\n\n---\n🤖 **CEZAR update** — ${timestamp}\n\n${actionList}`;
   }
   return `${body}\n\n---\n${renderMetaLine(actionsOrMeta)}`;

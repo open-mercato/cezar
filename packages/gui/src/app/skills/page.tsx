@@ -56,10 +56,20 @@ function parseSkills(raw: unknown): ParsedSkill[] {
 
 function inferTrigger(stages: string[]): SkillRow['trigger'] {
   const triageish = new Set([
-    'bug-detector', 'priority', 'categorize', 'security', 'quality',
-    'good-first-issue', 'missing-info', 'claim-detector',
-    'contributor-welcome', 'recurring-questions', 'duplicates',
-    'stale', 'done-detector', 'auto-label',
+    'bug-detector',
+    'priority',
+    'categorize',
+    'security',
+    'quality',
+    'good-first-issue',
+    'missing-info',
+    'claim-detector',
+    'contributor-welcome',
+    'recurring-questions',
+    'duplicates',
+    'stale',
+    'done-detector',
+    'auto-label',
   ]);
   return stages.some((s) => triageish.has(s)) ? 'on-sync' : 'cron';
 }
@@ -87,24 +97,21 @@ export default async function SkillsPage() {
 
   // Pull everything in parallel — repo_skills cache, overrides, and the
   // activation context (per-skill state map + workspace seed marker).
-  const [
-    { data: skillsRow },
-    { data: overrideRows },
-    { states, seeded: workspaceSeeded },
-  ] = await Promise.all([
-    supabase
-      .from('repo_skills')
-      .select('commit_sha, skills, fetched_at')
-      .eq('workspace_id', workspace.id)
-      .eq('repo', workspace.repoName)
-      .maybeSingle<RepoSkillsRow>(),
-    supabase
-      .from('skill_overrides')
-      .select('skill_name, enabled, execution_mode, updated_at')
-      .eq('workspace_id', workspace.id)
-      .returns<OverrideRow[]>(),
-    getSkillActivationContext(workspace.id, supabase),
-  ]);
+  const [{ data: skillsRow }, { data: overrideRows }, { states, seeded: workspaceSeeded }] =
+    await Promise.all([
+      supabase
+        .from('repo_skills')
+        .select('commit_sha, skills, fetched_at')
+        .eq('workspace_id', workspace.id)
+        .eq('repo', workspace.repoName)
+        .maybeSingle<RepoSkillsRow>(),
+      supabase
+        .from('skill_overrides')
+        .select('skill_name, enabled, execution_mode, updated_at')
+        .eq('workspace_id', workspace.id)
+        .returns<OverrideRow[]>(),
+      getSkillActivationContext(workspace.id, supabase),
+    ]);
 
   // `refreshRepoSkills` caches the merged catalog (built-in + repo) into
   // `repo_skills.skills`. For never-synced workspaces, fall back to the
@@ -129,20 +136,12 @@ export default async function SkillsPage() {
   // Lazy seed: first time a workspace opens /skills, populate `enabled=true`
   // rows for every built-in so the Active list isn't empty out of the box.
   if (!workspaceSeeded && parsed.length > 0) {
-    const seed = await seedBuiltinSkillStatesIfNeeded(
-      workspace.id,
-      false,
-      parsed,
-      supabase,
-    );
+    const seed = await seedBuiltinSkillStatesIfNeeded(workspace.id, false, parsed, supabase);
     if (seed.seeded) {
       // Mirror what the seed wrote — built-in AND workspace-repo are the
       // implicit-consent sources (see `DEFAULT_ON_SOURCES` in skill-state.ts).
       for (const p of parsed) {
-        if (
-          (p.source === 'built-in' || p.source === 'workspace-repo') &&
-          !states.has(p.name)
-        ) {
+        if ((p.source === 'built-in' || p.source === 'workspace-repo') && !states.has(p.name)) {
           states.set(p.name, { enabled: true, pinnedSource: null });
         }
       }
@@ -173,7 +172,7 @@ export default async function SkillsPage() {
       mode: inferMode(s.suggestedStages),
       trigger: inferTrigger(s.suggestedStages),
       active,
-      lastRunIso: isOverridden ? override.updated_at ?? null : null,
+      lastRunIso: isOverridden ? (override.updated_at ?? null) : null,
       stages: s.suggestedStages,
     };
   });

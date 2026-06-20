@@ -59,13 +59,19 @@ export async function saveAutomationToggles(
   if (rawInterval != null) {
     const parsed = Number(rawInterval);
     if (Number.isFinite(parsed)) {
-      update.sync_interval_minutes = Math.min(SYNC_INTERVAL_MAX, Math.max(SYNC_INTERVAL_MIN, Math.round(parsed)));
+      update.sync_interval_minutes = Math.min(
+        SYNC_INTERVAL_MAX,
+        Math.max(SYNC_INTERVAL_MIN, Math.round(parsed)),
+      );
     }
   }
 
   // ── AI-digest cadence (spec §5) ──
   const rawDigestMode = formData.get('digestMode');
-  if (typeof rawDigestMode === 'string' && (DIGEST_MODES as readonly string[]).includes(rawDigestMode)) {
+  if (
+    typeof rawDigestMode === 'string' &&
+    (DIGEST_MODES as readonly string[]).includes(rawDigestMode)
+  ) {
     update.digest_mode = rawDigestMode;
   }
   // The digest-interval field is only rendered in `auto` mode; clamp when
@@ -83,10 +89,7 @@ export async function saveAutomationToggles(
   }
 
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase
-    .from('workspaces')
-    .update(update)
-    .eq('id', workspace.id);
+  const { error } = await supabase.from('workspaces').update(update).eq('id', workspace.id);
   if (error) return { error: error.message };
 
   revalidatePath('/settings');

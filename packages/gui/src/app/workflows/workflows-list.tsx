@@ -49,7 +49,11 @@ export function WorkflowsList({ workspaceName, workspaceRole, initialFlows }: Pr
     if (creating) return;
     setCreating(true);
     const built = template.build();
-    const result = await upsertFlow({ name: built.name, steps: built.steps, triggers: built.triggers });
+    const result = await upsertFlow({
+      name: built.name,
+      steps: built.steps,
+      triggers: built.triggers,
+    });
     if (!result.ok) {
       setCreating(false);
       alert(`Create failed: ${result.error}`);
@@ -86,7 +90,9 @@ export function WorkflowsList({ workspaceName, workspaceRole, initialFlows }: Pr
             <p className="mt-1 max-w-2xl text-sm text-fg-muted">
               Chain named skill steps into reusable workflows. Open one to edit its steps, triggers,
               and run it.
-              <span className="ml-1 text-fg-muted/60">— workspace: <span className="text-fg">{workspaceName}</span></span>
+              <span className="ml-1 text-fg-muted/60">
+                — workspace: <span className="text-fg">{workspaceName}</span>
+              </span>
             </p>
           </div>
           {canWrite && <NewFlowMenu onPick={createFromTemplate} busy={creating} />}
@@ -129,23 +135,39 @@ function WorkflowListItem({
   const triggerText = flow.triggers.length === 0 ? 'Manual only' : describeTriggers(flow.triggers);
 
   return (
-    <li className={cn('rounded-lg border bg-bg-elevated p-4', flow.paused ? 'border-border/60' : 'border-border')}>
+    <li
+      className={cn(
+        'rounded-lg border bg-bg-elevated p-4',
+        flow.paused ? 'border-border/60' : 'border-border',
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <Link href={`/workflows/${flow.id}`} className="group min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold text-fg group-hover:text-accent">{flow.name}</span>
+            <span className="truncate text-sm font-semibold text-fg group-hover:text-accent">
+              {flow.name}
+            </span>
             <span
               className={cn(
                 'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium',
-                flow.paused ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-400',
+                flow.paused
+                  ? 'bg-amber-500/15 text-amber-300'
+                  : 'bg-emerald-500/15 text-emerald-400',
               )}
             >
-              <span className={cn('h-1.5 w-1.5 rounded-full', flow.paused ? 'bg-amber-400' : 'bg-emerald-400')} />
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  flow.paused ? 'bg-amber-400' : 'bg-emerald-400',
+                )}
+              />
               {flow.paused ? 'Paused' : 'Active'}
             </span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-fg-muted">
-            <span>{stepCount} step{stepCount === 1 ? '' : 's'}</span>
+            <span>
+              {stepCount} step{stepCount === 1 ? '' : 's'}
+            </span>
             <span className="text-fg-muted/40">·</span>
             <span className="truncate">{triggerText}</span>
           </div>
@@ -170,7 +192,10 @@ function WorkflowListItem({
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/50 pt-3">
           {flow.stats.totalLast7d > 0 && (
             <span className="rounded bg-bg-subtle px-1.5 py-0.5 text-[11px] text-fg-muted">
-              ✓ <span className="text-fg">{flow.stats.succeededLast7d}/{flow.stats.totalLast7d}</span>{' '}
+              ✓{' '}
+              <span className="text-fg">
+                {flow.stats.succeededLast7d}/{flow.stats.totalLast7d}
+              </span>{' '}
               <span className="text-fg-muted/60">(7d)</span>
             </span>
           )}
@@ -215,7 +240,9 @@ function NewFlowMenu({ onPick, busy }: { onPick: (t: FlowTemplate) => void; busy
       const t = e.target as HTMLElement;
       if (!t.closest('[data-newflow-menu]')) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
     return () => {
@@ -238,7 +265,11 @@ function NewFlowMenu({ onPick, busy }: { onPick: (t: FlowTemplate) => void; busy
         className="inline-flex items-center gap-1.5 rounded-md border border-accent/50 bg-accent/10 px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:bg-accent/20 disabled:opacity-50"
       >
         <span className="text-base leading-none">+</span> {busy ? 'Creating…' : 'Flow'}
-        {!busy && <span aria-hidden className="text-fg-muted">▾</span>}
+        {!busy && (
+          <span aria-hidden className="text-fg-muted">
+            ▾
+          </span>
+        )}
       </button>
 
       {open && !isMobile && (
@@ -254,7 +285,12 @@ function NewFlowMenu({ onPick, busy }: { onPick: (t: FlowTemplate) => void; busy
         </div>
       )}
 
-      <Sheet open={open && isMobile} onClose={() => setOpen(false)} side="bottom" title="Start from a template">
+      <Sheet
+        open={open && isMobile}
+        onClose={() => setOpen(false)}
+        side="bottom"
+        title="Start from a template"
+      >
         <div className="px-2 py-2">
           {FLOW_TEMPLATES.map((t) => (
             <TemplateRow key={t.id} template={t} onPick={pick} large />
@@ -304,7 +340,16 @@ function PlayIcon() {
 
 function TrashIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
     </svg>
   );

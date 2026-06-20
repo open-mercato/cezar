@@ -89,22 +89,34 @@ export class RunnerDaemon {
   }
 
   async start(): Promise<void> {
-    process.on('SIGINT', () => { void this.shutdown('SIGINT'); });
-    process.on('SIGTERM', () => { void this.shutdown('SIGTERM'); });
+    process.on('SIGINT', () => {
+      void this.shutdown('SIGINT');
+    });
+    process.on('SIGTERM', () => {
+      void this.shutdown('SIGTERM');
+    });
 
     // Global safety nets: a stray rejection/exception must never leave the
     // daemon "online but mute" (heartbeat still reporting green while the
     // pump is dead and jobs queue indefinitely). An unhandled rejection is
     // logged but tolerated; an uncaught exception is fatal, so we shut down.
     process.on('unhandledRejection', (reason) => {
-      console.error('[runner] unhandledRejection:', reason instanceof Error ? reason.stack ?? reason.message : reason);
+      console.error(
+        '[runner] unhandledRejection:',
+        reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+      );
     });
     process.on('uncaughtException', (err) => {
-      console.error('[runner] uncaughtException:', err instanceof Error ? err.stack ?? err.message : err);
+      console.error(
+        '[runner] uncaughtException:',
+        err instanceof Error ? (err.stack ?? err.message) : err,
+      );
       void this.shutdown('uncaught-exception');
     });
 
-    console.log(`[runner] starting — kind=${this.cfg.kind} backends=${this.cfg.backends.join(',')} concurrency=${this.concurrency}`);
+    console.log(
+      `[runner] starting — kind=${this.cfg.kind} backends=${this.cfg.backends.join(',')} concurrency=${this.concurrency}`,
+    );
 
     // Phase 4 — prime the host GH token cache before the first heartbeat so
     // a claim landing seconds after startup already has a token to substitute.
@@ -120,7 +132,9 @@ export class RunnerDaemon {
         process.exit(1);
       }
       console.log('[runner] inherit-host-github: cached host GitHub token');
-      this.hostTokenTimer = setInterval(() => { void this.refreshHostGithubToken(); }, HOST_TOKEN_REFRESH_MS);
+      this.hostTokenTimer = setInterval(() => {
+        void this.refreshHostGithubToken();
+      }, HOST_TOKEN_REFRESH_MS);
     }
 
     await this.heartbeat('online');
@@ -129,7 +143,9 @@ export class RunnerDaemon {
     // SaaS sees ~30 renewals per window — plenty of slack for a hiccup. Lease
     // renewal lives in the heartbeat (carries `inflightJobIds`), so the
     // cadence is now lease-critical and MUST NOT be loosened.
-    this.heartbeatTimer = setInterval(() => { void this.heartbeat('online'); }, this.pollMs * 2);
+    this.heartbeatTimer = setInterval(() => {
+      void this.heartbeat('online');
+    }, this.pollMs * 2);
 
     // Pump loop: replaces the 1s setInterval short-poll with a long-poll
     // (LISTEN/NOTIFY on the SaaS side, migration 0025). After every response
@@ -149,7 +165,10 @@ export class RunnerDaemon {
             if (this.idleTicks >= MAINTENANCE_TICKS) {
               this.idleTicks = 0;
               void maintainBareClones().catch((err) => {
-                console.error('[runner] bare-clone maintenance failed:', err instanceof Error ? err.message : err);
+                console.error(
+                  '[runner] bare-clone maintenance failed:',
+                  err instanceof Error ? err.message : err,
+                );
               });
             }
           } else {
@@ -157,7 +176,10 @@ export class RunnerDaemon {
           }
         } catch (err) {
           console.error('[runner] claim tick failed:', err instanceof Error ? err.message : err);
-          if (err instanceof Error && err.message.includes('(401)')) { await this.shutdown('auth-error'); return; }
+          if (err instanceof Error && err.message.includes('(401)')) {
+            await this.shutdown('auth-error');
+            return;
+          }
           // Back off briefly on unexpected errors so we don't hot-spin if the
           // SaaS is returning 5xx.
           await sleep(this.pollMs);
@@ -170,12 +192,17 @@ export class RunnerDaemon {
     // daemon alive-but-dead. Catch it here and shut down cleanly so the
     // heartbeat goes `offline` and the SaaS stops dispatching to us.
     void pump().catch((err) => {
-      console.error('[runner] pump loop crashed — shutting down:', err instanceof Error ? err.stack ?? err.message : err);
+      console.error(
+        '[runner] pump loop crashed — shutting down:',
+        err instanceof Error ? (err.stack ?? err.message) : err,
+      );
       return this.shutdown('pump-crash');
     });
 
     // Keep the process alive until shutdown resolves.
-    await new Promise<void>((resolve) => { this.resolveExit = resolve; });
+    await new Promise<void>((resolve) => {
+      this.resolveExit = resolve;
+    });
   }
 
   private resolveExit: (() => void) | null = null;
@@ -217,7 +244,9 @@ export class RunnerDaemon {
         // Should not happen — we hard-fail at startup if inherit-host is on
         // and no token is reachable. Belt-and-braces: refuse the claim
         // cleanly so the watchdog re-queues it for another runner.
-        console.error(`[runner] job ${claimed.job.id} requires host GH token but none cached; aborting`);
+        console.error(
+          `[runner] job ${claimed.job.id} requires host GH token but none cached; aborting`,
+        );
         entry.cancel = true;
       } else {
         claimed.githubToken = this.hostGithubToken;
@@ -226,27 +255,34 @@ export class RunnerDaemon {
     console.log(
       `[runner] running job ${claimed.job.id} (${claimed.job.kind} #${claimed.job.issueNumber ?? '?'}) — identity=${idSource}`,
     );
-    entry.done = executeJobLocally(this.client, claimed, {
-      shouldPause: () => entry.pause, // shutdown does NOT pause — in-flight jobs run to completion
-      // A lost lease is treated like a cancel: the SaaS has already re-queued
-      // the job (or it's about to), so we abort to avoid double-execution
-      // when another runner picks it up.
-      shouldCancel: () => entry.cancel || entry.leaseLost,
-    }, {
-      // Phase 5 — stamp this runner's UUID on `step-start` events so the
-      // central populates `agent_runs.runner_id`. Null on the first claim
-      // before the heartbeat reply has echoed our id back; the column then
-      // stays NULL for those rows (no attribution, no error).
-      runnerId: this.runnerId,
-    }).catch((err) => {
-      console.error(
-        `[runner] job ${claimed.job.id} crashed:`,
-        redactToken(err instanceof Error ? err.message : String(err)),
-      );
-    }).finally(() => {
-      this.inFlight.delete(claimed.job.id);
-      console.log(`[runner] job ${claimed.job.id} finished (${this.inFlight.size} in flight)`);
-    });
+    entry.done = executeJobLocally(
+      this.client,
+      claimed,
+      {
+        shouldPause: () => entry.pause, // shutdown does NOT pause — in-flight jobs run to completion
+        // A lost lease is treated like a cancel: the SaaS has already re-queued
+        // the job (or it's about to), so we abort to avoid double-execution
+        // when another runner picks it up.
+        shouldCancel: () => entry.cancel || entry.leaseLost,
+      },
+      {
+        // Phase 5 — stamp this runner's UUID on `step-start` events so the
+        // central populates `agent_runs.runner_id`. Null on the first claim
+        // before the heartbeat reply has echoed our id back; the column then
+        // stays NULL for those rows (no attribution, no error).
+        runnerId: this.runnerId,
+      },
+    )
+      .catch((err) => {
+        console.error(
+          `[runner] job ${claimed.job.id} crashed:`,
+          redactToken(err instanceof Error ? err.message : String(err)),
+        );
+      })
+      .finally(() => {
+        this.inFlight.delete(claimed.job.id);
+        console.log(`[runner] job ${claimed.job.id} finished (${this.inFlight.size} in flight)`);
+      });
   }
 
   /**
@@ -263,7 +299,10 @@ export class RunnerDaemon {
         console.log('[runner] inherit-host-github: refreshed host GitHub token');
       }
     } catch (err) {
-      console.error('[runner] host GitHub token refresh failed:', err instanceof Error ? err.message : err);
+      console.error(
+        '[runner] host GitHub token refresh failed:',
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
@@ -310,11 +349,17 @@ export class RunnerDaemon {
       }
       for (const jobId of reply.cancelJobIds ?? []) {
         const e = this.inFlight.get(jobId);
-        if (e && !e.cancel) { e.cancel = true; console.log(`[runner] cancel requested for job ${jobId}`); }
+        if (e && !e.cancel) {
+          e.cancel = true;
+          console.log(`[runner] cancel requested for job ${jobId}`);
+        }
       }
       for (const runId of reply.pauseRunIds ?? []) {
         for (const e of this.inFlight.values()) {
-          if (e.workflowRunId === runId && !e.pause) { e.pause = true; console.log(`[runner] pause requested for run ${runId}`); }
+          if (e.workflowRunId === runId && !e.pause) {
+            e.pause = true;
+            console.log(`[runner] pause requested for run ${runId}`);
+          }
         }
       }
       // Phase 3 lease accounting. An older SaaS omits `renewedJobIds` entirely
@@ -328,7 +373,9 @@ export class RunnerDaemon {
           const e = this.inFlight.get(jobId);
           if (e && !e.leaseLost) {
             e.leaseLost = true;
-            console.warn(`[runner] lost lease for job ${jobId} — aborting (likely watchdog reclaim)`);
+            console.warn(
+              `[runner] lost lease for job ${jobId} — aborting (likely watchdog reclaim)`,
+            );
           }
         }
       }
@@ -351,12 +398,11 @@ export class RunnerDaemon {
     // Grace period for in-flight jobs.
     const GRACE_MS = 5 * 60_000;
     const pending = [...this.inFlight.values()].map((e) => e.done);
-    await Promise.race([
-      Promise.allSettled(pending),
-      new Promise((r) => setTimeout(r, GRACE_MS)),
-    ]);
+    await Promise.race([Promise.allSettled(pending), new Promise((r) => setTimeout(r, GRACE_MS))]);
     if (this.inFlight.size > 0) {
-      console.warn(`[runner] ${this.inFlight.size} job(s) still running at grace timeout — leaving them for the watchdog`);
+      console.warn(
+        `[runner] ${this.inFlight.size} job(s) still running at grace timeout — leaving them for the watchdog`,
+      );
     }
     await this.heartbeat('offline').catch(() => {});
     this.resolveExit?.();
@@ -388,4 +434,3 @@ async function readHostGithubToken(): Promise<string | null> {
   const env = (process.env.GITHUB_TOKEN ?? '').trim();
   return env.length > 0 ? env : null;
 }
-

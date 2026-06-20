@@ -47,7 +47,13 @@ export async function acquireRepoLock(owner: string, repo: string): Promise<() =
   // Chain so the next waiter starts only after this one releases. Swallow a
   // prior rejection (there shouldn't be one — `next` only ever resolves) so the
   // chain never gets stuck.
-  repoLocks.set(key, prev.then(() => next, () => next));
+  repoLocks.set(
+    key,
+    prev.then(
+      () => next,
+      () => next,
+    ),
+  );
   await prev.catch(() => {});
   let released = false;
   return () => {

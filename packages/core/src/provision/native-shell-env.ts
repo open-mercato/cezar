@@ -42,24 +42,40 @@ export class NativeShellEnv implements RunEnv {
       });
       let stdout = '';
       let stderr = '';
-      const onChunk = (kind: 'out' | 'err') => (chunk: Buffer): void => {
-        const text = chunk.toString();
-        if (kind === 'out') stdout += text;
-        else stderr += text;
-        if (onLine) {
-          for (const line of text.split('\n')) {
-            const trimmed = line.trimEnd();
-            if (trimmed) onLine(trimmed);
+      const onChunk =
+        (kind: 'out' | 'err') =>
+        (chunk: Buffer): void => {
+          const text = chunk.toString();
+          if (kind === 'out') stdout += text;
+          else stderr += text;
+          if (onLine) {
+            for (const line of text.split('\n')) {
+              const trimmed = line.trimEnd();
+              if (trimmed) onLine(trimmed);
+            }
           }
-        }
-      };
+        };
       child.stdout?.on('data', onChunk('out'));
       child.stderr?.on('data', onChunk('err'));
       child.on('error', (err) => {
-        resolve({ command, ok: false, exitCode: null, stdout, stderr: `${stderr}\n${err.message}`, durationMs: Date.now() - started });
+        resolve({
+          command,
+          ok: false,
+          exitCode: null,
+          stdout,
+          stderr: `${stderr}\n${err.message}`,
+          durationMs: Date.now() - started,
+        });
       });
       child.on('close', (code) => {
-        resolve({ command, ok: code === 0, exitCode: code, stdout, stderr, durationMs: Date.now() - started });
+        resolve({
+          command,
+          ok: code === 0,
+          exitCode: code,
+          stdout,
+          stderr,
+          durationMs: Date.now() - started,
+        });
       });
     });
   }
@@ -68,7 +84,8 @@ export class NativeShellEnv implements RunEnv {
     if (this.devServer) return this.devServer.handle;
     const ds = this.spec.devServer;
     if (!ds.enabled || !ds.command.trim()) return null;
-    if (!ds.port) throw new Error('projectEnv.devServer.port is required for the native dev server');
+    if (!ds.port)
+      throw new Error('projectEnv.devServer.port is required for the native dev server');
 
     // detached so we can signal the whole process group on stop (yarn → node → …).
     const child = spawn(ds.command, {
@@ -88,7 +105,11 @@ export class NativeShellEnv implements RunEnv {
       ready: status != null,
       stop: async () => {
         if (this.devServer?.child.pid && !this.devServer.child.killed) {
-          try { process.kill(-this.devServer.child.pid, 'SIGTERM'); } catch { /* group may be gone */ }
+          try {
+            process.kill(-this.devServer.child.pid, 'SIGTERM');
+          } catch {
+            /* group may be gone */
+          }
         }
         this.devServer = null;
       },

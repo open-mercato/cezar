@@ -4,7 +4,11 @@ import { dirname, resolve as resolvePath } from 'node:path';
 import type { AgentEvent, AgentToolCallRecord } from './agent-runner.js';
 import { costWeightedTokens, type RawUsage } from './structured-output.js';
 import type { SpawnFn } from './claude-cli-runner.js';
-import { DEFAULT_RUN_TIMEOUT_MS, KILL_GRACE_MS, DEFAULT_USD_PER_MILLION_TOKENS } from './claude-cli-runner.js';
+import {
+  DEFAULT_RUN_TIMEOUT_MS,
+  KILL_GRACE_MS,
+  DEFAULT_USD_PER_MILLION_TOKENS,
+} from './claude-cli-runner.js';
 
 /**
  * One long-lived `claude --input-format stream-json` child that the
@@ -169,9 +173,11 @@ export class PersistentClaudeSession {
     // start under the same id.
     child.once('exit', (code) => {
       if (code != null && code !== 0 && this.resumed && !this.closedIdle) {
-        this.resultRejecter?.(new ResumeFailedError(
-          `claude --resume ${this.sessionId} exited with code ${code} — likely cross-host re-claim`,
-        ));
+        this.resultRejecter?.(
+          new ResumeFailedError(
+            `claude --resume ${this.sessionId} exited with code ${code} — likely cross-host re-claim`,
+          ),
+        );
       }
     });
 
@@ -209,7 +215,10 @@ export class PersistentClaudeSession {
     // Lazy re-open after `closeIfIdle` — same id, with resume so the
     // prior conversation prefix survives.
     if (!this.child && this.closedIdle) {
-      this.opts.onEvent?.({ type: 'note', message: `claude session ${this.sessionId} reopening after idle close` });
+      this.opts.onEvent?.({
+        type: 'note',
+        message: `claude session ${this.sessionId} reopening after idle close`,
+      });
       this.resumed = true;
       this.closedIdle = false;
       this.start();
@@ -226,7 +235,10 @@ export class PersistentClaudeSession {
 
     const userMsg = {
       type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text: `## PHASE: ${phase.toUpperCase()}\n\n${payload}` }] },
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: `## PHASE: ${phase.toUpperCase()}\n\n${payload}` }],
+      },
       session_id: this.sessionId,
     };
 
@@ -257,7 +269,11 @@ export class PersistentClaudeSession {
     this.closedIdle = true;
     const child = this.child;
     this.child = null;
-    try { child.stdin.end(); } catch { /* ignore */ }
+    try {
+      child.stdin.end();
+    } catch {
+      /* ignore */
+    }
     // Give the child a short grace period to exit on its own; SIGTERM
     // anything still hanging around.
     const grace = setTimeout(() => {
@@ -318,11 +334,15 @@ export class PersistentClaudeSession {
       ? ['--resume', this.sessionId]
       : ['--session-id', this.sessionId];
     const args: string[] = [
-      '--input-format', 'stream-json',
-      '--output-format', 'stream-json',
+      '--input-format',
+      'stream-json',
+      '--output-format',
+      'stream-json',
       '--verbose',
-      '--append-system-prompt', this.opts.systemPrompt,
-      '--permission-mode', 'acceptEdits',
+      '--append-system-prompt',
+      this.opts.systemPrompt,
+      '--permission-mode',
+      'acceptEdits',
       ...sessionArg,
     ];
     if (this.opts.model) args.push('--model', this.opts.model);
@@ -383,7 +403,10 @@ export class PersistentClaudeSession {
         const msg = JSON.parse(line) as ClaudeStreamMessage;
         this.handleMessage(msg);
       } catch {
-        this.opts.onEvent?.({ type: 'note', message: `claude: skipped unparseable line: ${truncate(line)}` });
+        this.opts.onEvent?.({
+          type: 'note',
+          message: `claude: skipped unparseable line: ${truncate(line)}`,
+        });
       }
     }
   }
@@ -391,7 +414,13 @@ export class PersistentClaudeSession {
   private handleMessage(msg: ClaudeStreamMessage): void {
     if (msg.type === 'assistant' && msg.message?.content) {
       for (const block of msg.message.content) {
-        const b = block as { type?: string; text?: string; id?: string; name?: string; input?: unknown };
+        const b = block as {
+          type?: string;
+          text?: string;
+          id?: string;
+          name?: string;
+          input?: unknown;
+        };
         if (b.type === 'text' && typeof b.text === 'string') {
           this.phaseText += b.text;
           this.opts.onEvent?.({ type: 'text', text: b.text });
@@ -410,7 +439,12 @@ export class PersistentClaudeSession {
 
     if (msg.type === 'user' && msg.message?.content) {
       for (const block of msg.message.content) {
-        const b = block as { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean };
+        const b = block as {
+          type?: string;
+          tool_use_id?: string;
+          content?: unknown;
+          is_error?: boolean;
+        };
         if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
           this.opts.onEvent?.({
             type: 'tool-result',
@@ -473,15 +507,17 @@ function truncate(s: string, max = 200): string {
 function stringifyContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    return content.map((c) => {
-      const b = c as { type?: string; text?: string };
-      if (b.type === 'text' && typeof b.text === 'string') return b.text;
-      try {
-        return JSON.stringify(b);
-      } catch {
-        return String(b);
-      }
-    }).join('\n');
+    return content
+      .map((c) => {
+        const b = c as { type?: string; text?: string };
+        if (b.type === 'text' && typeof b.text === 'string') return b.text;
+        try {
+          return JSON.stringify(b);
+        } catch {
+          return String(b);
+        }
+      })
+      .join('\n');
   }
   try {
     return JSON.stringify(content);

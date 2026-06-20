@@ -57,7 +57,14 @@ export interface EntityCardProps {
   className?: string;
 }
 
-export function EntityCard({ title, leading, badge, children, actions, className }: EntityCardProps) {
+export function EntityCard({
+  title,
+  leading,
+  badge,
+  children,
+  actions,
+  className,
+}: EntityCardProps) {
   return (
     <div
       className={cn(
@@ -78,7 +85,9 @@ export function EntityCard({ title, leading, badge, children, actions, className
 
 /** A wrapping row of meta items (key/value pairs). */
 export function MetaRow({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1', className)}>{children}</div>;
+  return (
+    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1', className)}>{children}</div>
+  );
 }
 
 /** A single key/value meta item. Label is optional (omit for a bare chip). */
@@ -92,7 +101,9 @@ export function MetaItem({
   className?: string;
 }) {
   return (
-    <span className={cn('inline-flex items-center gap-1 text-xs text-on-surface-variant', className)}>
+    <span
+      className={cn('inline-flex items-center gap-1 text-xs text-on-surface-variant', className)}
+    >
       {label && (
         <span className="font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-outline">
           {label}

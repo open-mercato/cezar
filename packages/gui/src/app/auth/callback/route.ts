@@ -9,9 +9,7 @@ export async function GET(request: NextRequest) {
   // Reject protocol-relative (`//evil.com`) and backslash (`/\evil.com`) values.
   const rawNext = searchParams.get('next') ?? '/dashboard';
   const next =
-    rawNext.startsWith('/') &&
-    !rawNext.startsWith('//') &&
-    !rawNext.startsWith('/\\')
+    rawNext.startsWith('/') && !rawNext.startsWith('//') && !rawNext.startsWith('/\\')
       ? rawNext
       : '/dashboard';
   // Use the configured public app URL — `request.nextUrl.origin` is

@@ -73,7 +73,9 @@ describe('PersistentClaudeSession', () => {
   });
 
   it('cleans up when start() throws (binary missing) so no zombie state leaks', () => {
-    const enoent: NodeJS.ErrnoException = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
+    const enoent: NodeJS.ErrnoException = Object.assign(new Error('spawn claude ENOENT'), {
+      code: 'ENOENT',
+    });
     const { spawnFn } = makeFakeSpawn({ error: enoent });
     const session = new PersistentClaudeSession({
       systemPrompt: 's',

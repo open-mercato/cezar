@@ -61,7 +61,7 @@ services:
         condition: service_completed_successfully
     environment:
       NODE_ENV: production
-      PORT: "3000"
+      PORT: '3000'
 
       # ── Supabase (required) ────────────────────────────────────────────────
       # NEXT_PUBLIC_SUPABASE_URL is the public URL baked into the browser
@@ -82,7 +82,7 @@ services:
       CRON_SECRET: ${CRON_SECRET}
 
       # ── In-process cron scheduler (required on self-hosted) ────────────────
-      CEZAR_INPROCESS_CRON: "true"
+      CEZAR_INPROCESS_CRON: 'true'
       CEZAR_INPROCESS_CRON_BASE_URL: http://127.0.0.1:3000
 
       # ── GitHub App (required for webhooks + autofix) ───────────────────────
@@ -100,7 +100,7 @@ services:
       # Host 3333 → container 3000. Dokploy/Traefik routes to the container
       # over the Docker network, so this bind is purely for debug
       # (`curl 127.0.0.1:3333/api/health` on the host).
-      - "127.0.0.1:3333:3000"
+      - '127.0.0.1:3333:3000'
     networks:
       - cezar
 
@@ -116,13 +116,13 @@ services:
       CEZAR_RUNNER_URL: ${CEZAR_RUNNER_URL:-http://gui:3000}
       CEZAR_RUNNER_TOKEN: ${CEZAR_RUNNER_TOKEN}
     command:
-      - "start"
-      - "--kind"
-      - "self-hosted"
-      - "--backends"
-      - "claude-cli,codex-cli"
-      - "--concurrency"
-      - "1"
+      - 'start'
+      - '--kind'
+      - 'self-hosted'
+      - '--backends'
+      - 'claude-cli,codex-cli'
+      - '--concurrency'
+      - '1'
     volumes:
       # Persists `~/.claude` and `~/.codex` so the one-time interactive
       # login survives container restarts and rebuilds.
@@ -163,9 +163,9 @@ services:
       - ./infra/supabase/init:/docker-entrypoint-initdb.d:ro
     ports:
       # Debug-only: direct psql access from the host loopback.
-      - "127.0.0.1:54322:5432"
+      - '127.0.0.1:54322:5432'
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d postgres']
       interval: 2s
       timeout: 5s
       retries: 30
@@ -180,17 +180,17 @@ services:
         condition: service_healthy
     environment:
       GOTRUE_API_HOST: 0.0.0.0
-      GOTRUE_API_PORT: "9999"
+      GOTRUE_API_PORT: '9999'
       # Public-facing URLs — GoTrue puts these in OAuth redirects + magic links.
       API_EXTERNAL_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       GOTRUE_SITE_URL: ${NEXT_PUBLIC_APP_URL}
-      GOTRUE_URI_ALLOW_LIST: "${NEXT_PUBLIC_APP_URL}"
+      GOTRUE_URI_ALLOW_LIST: '${NEXT_PUBLIC_APP_URL}'
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:-postgres}@db:5432/postgres?search_path=auth
       DB_NAMESPACE: auth
-      GOTRUE_DISABLE_SIGNUP: "${GOTRUE_DISABLE_SIGNUP:-false}"
+      GOTRUE_DISABLE_SIGNUP: '${GOTRUE_DISABLE_SIGNUP:-false}'
       GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
-      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_EXP: '3600'
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
@@ -200,15 +200,15 @@ services:
       # GoTrue rejects an empty string for the bool, so we default to "false"
       # rather than the older `${GOTRUE_GITHUB_CLIENT_ID:+true}` trick (which
       # evaluated to "" when the client id was blank).
-      GOTRUE_EXTERNAL_GITHUB_ENABLED: "${GOTRUE_GITHUB_ENABLED:-false}"
-      GOTRUE_EXTERNAL_GITHUB_CLIENT_ID: "${GOTRUE_GITHUB_CLIENT_ID:-}"
-      GOTRUE_EXTERNAL_GITHUB_SECRET: "${GOTRUE_GITHUB_CLIENT_SECRET:-}"
-      GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI: "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/callback"
-      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
-      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_EXTERNAL_GITHUB_ENABLED: '${GOTRUE_GITHUB_ENABLED:-false}'
+      GOTRUE_EXTERNAL_GITHUB_CLIENT_ID: '${GOTRUE_GITHUB_CLIENT_ID:-}'
+      GOTRUE_EXTERNAL_GITHUB_SECRET: '${GOTRUE_GITHUB_CLIENT_SECRET:-}'
+      GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI: '${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/callback'
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      GOTRUE_MAILER_AUTOCONFIRM: 'true'
       GOTRUE_SMTP_ADMIN_EMAIL: ${GOTRUE_SMTP_ADMIN_EMAIL:-admin@local.dev}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9999/health"]
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9999/health']
       interval: 3s
       timeout: 5s
       retries: 30
@@ -225,8 +225,8 @@ services:
     volumes:
       - ./packages/gui/supabase/migrations:/migrations:ro
       - ./infra/supabase/migrate.sh:/migrate.sh:ro
-    entrypoint: ["/bin/sh", "/migrate.sh"]
-    restart: "no"
+    entrypoint: ['/bin/sh', '/migrate.sh']
+    restart: 'no'
     networks:
       - cezar
 
@@ -241,7 +241,7 @@ services:
       PGRST_DB_SCHEMAS: public,storage
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET}
-      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_DB_USE_LEGACY_GUCS: 'false'
     networks:
       - cezar
 
@@ -252,9 +252,9 @@ services:
       migrator:
         condition: service_completed_successfully
     environment:
-      PORT: "4000"
+      PORT: '4000'
       DB_HOST: db
-      DB_PORT: "5432"
+      DB_PORT: '5432'
       DB_USER: supabase_admin
       DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       DB_NAME: postgres
@@ -265,12 +265,12 @@ services:
       FLY_APP_NAME: realtime
       SECRET_KEY_BASE: ${SUPABASE_REALTIME_SECRET_KEY_BASE}
       ERL_AFLAGS: -proto_dist inet_tcp
-      ENABLE_TAILSCALE: "false"
+      ENABLE_TAILSCALE: 'false'
       DNS_NODES: "''"
-      RLIMIT_NOFILE: "10000"
+      RLIMIT_NOFILE: '10000'
       APP_NAME: realtime
-      SEED_SELF_HOST: "true"
-      RUN_JANITOR: "true"
+      SEED_SELF_HOST: 'true'
+      RUN_JANITOR: 'true'
     networks:
       - cezar
 
@@ -284,10 +284,10 @@ services:
     # kong-entrypoint.sh substitutes JWT keys from env into the template, then
     # exec's kong via its stock /docker-entrypoint.sh. KONG_DECLARATIVE_CONFIG
     # points at the rendered file (/tmp/kong.yml), not the template.
-    entrypoint: ["/bin/sh", "/docker-entrypoint-cezar.sh"]
-    command: ["kong", "docker-start"]
+    entrypoint: ['/bin/sh', '/docker-entrypoint-cezar.sh']
+    command: ['kong', 'docker-start']
     environment:
-      KONG_DATABASE: "off"
+      KONG_DATABASE: 'off'
       KONG_DECLARATIVE_CONFIG: /tmp/kong.yml
       KONG_DNS_ORDER: LAST,A,CNAME
       KONG_PLUGINS: request-transformer,cors,key-auth,acl
@@ -301,7 +301,7 @@ services:
     ports:
       # Debug-only host bind. Dokploy/Traefik routes to port 8000 over the
       # Docker network for the supabase.<yourdomain> domain.
-      - "127.0.0.1:54321:8000"
+      - '127.0.0.1:54321:8000'
     networks:
       - cezar
 

@@ -21,7 +21,9 @@ export async function initCommand(opts: InitOptions, config: Config): Promise<vo
   const repo = opts.repo || config.github.repo;
 
   if (!owner || !repo) {
-    console.error(chalk.red('Missing --owner and --repo. Provide via CLI flags or .issuemanagerrc.json'));
+    console.error(
+      chalk.red('Missing --owner and --repo. Provide via CLI flags or .issuemanagerrc.json'),
+    );
     process.exit(1);
   }
 
@@ -76,9 +78,11 @@ export async function initCommand(opts: InitOptions, config: Config): Promise<vo
     try {
       const llm = new LLMService(config);
       const digests = await llm.generateDigests(
-        toDigest.map(i => ({ number: i.number, title: i.title, body: i.body })),
+        toDigest.map((i) => ({ number: i.number, title: i.title, body: i.body })),
         config.sync.digestBatchSize,
-        (done, total) => { digestSpinner.text = `Generating digests  ${progressBar(done, total)}`; },
+        (done, total) => {
+          digestSpinner.text = `Generating digests  ${progressBar(done, total)}`;
+        },
       );
 
       let digestCount = 0;
@@ -99,14 +103,23 @@ export async function initCommand(opts: InitOptions, config: Config): Promise<vo
   }
 
   // Fetch comments for issues that have them
-  const needsComments = store.getIssues()
-    .filter(i => i.commentCount > 0 && (i.commentsFetchedAt === null || i.comments.length !== i.commentCount));
+  const needsComments = store
+    .getIssues()
+    .filter(
+      (i) =>
+        i.commentCount > 0 &&
+        (i.commentsFetchedAt === null || i.comments.length !== i.commentCount),
+    );
   if (needsComments.length > 0) {
-    const commentSpinner = ora(`Fetching comments  ${progressBar(0, needsComments.length)}`).start();
+    const commentSpinner = ora(
+      `Fetching comments  ${progressBar(0, needsComments.length)}`,
+    ).start();
     try {
       const commentMap = await github.fetchCommentsForIssues(
-        needsComments.map(i => i.number),
-        (done, total) => { commentSpinner.text = `Fetching comments  ${progressBar(done, total)}`; },
+        needsComments.map((i) => i.number),
+        (done, total) => {
+          commentSpinner.text = `Fetching comments  ${progressBar(done, total)}`;
+        },
       );
       let commentCount = 0;
       for (const [number, comments] of commentMap) {

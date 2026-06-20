@@ -52,7 +52,9 @@ describe('discoverSkills', () => {
   it('returns built-in skills regardless of the repo state', async () => {
     const skills = await discoverSkills(join(here, '..', 'fixtures', 'no-such-repo'));
     // At least one built-in (bug-classification) ships with @cezar/core.
-    expect(skills.some((s) => s.source === 'built-in' && s.name === 'bug-classification')).toBe(true);
+    expect(skills.some((s) => s.source === 'built-in' && s.name === 'bug-classification')).toBe(
+      true,
+    );
   });
 });
 

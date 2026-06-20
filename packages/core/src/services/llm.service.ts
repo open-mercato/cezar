@@ -5,22 +5,26 @@ import type { StoredIssue, IssueDigest } from '../store/store.model.js';
 import { chunkArray } from '../utils/chunker.js';
 
 const DigestResponseSchema = z.object({
-  digests: z.array(z.object({
-    number: z.number(),
-    summary: z.string(),
-    category: z.enum(['bug', 'feature', 'docs', 'chore', 'question', 'other']),
-    affectedArea: z.string(),
-    keywords: z.array(z.string()),
-  })),
+  digests: z.array(
+    z.object({
+      number: z.number(),
+      summary: z.string(),
+      category: z.enum(['bug', 'feature', 'docs', 'chore', 'question', 'other']),
+      affectedArea: z.string(),
+      keywords: z.array(z.string()),
+    }),
+  ),
 });
 
 export const DuplicateResponseSchema = z.object({
-  duplicates: z.array(z.object({
-    number: z.number(),
-    duplicateOf: z.number(),
-    confidence: z.number().min(0).max(1),
-    reason: z.string(),
-  })),
+  duplicates: z.array(
+    z.object({
+      number: z.number(),
+      duplicateOf: z.number(),
+      confidence: z.number().min(0).max(1),
+      reason: z.string(),
+    }),
+  ),
 });
 
 export type DuplicateMatch = z.infer<typeof DuplicateResponseSchema>['duplicates'][number];
@@ -75,7 +79,10 @@ export class LLMService {
     return results;
   }
 
-  async detectDuplicates(candidates: StoredIssue[], knowledgeBase: StoredIssue[]): Promise<DuplicateMatch[]> {
+  async detectDuplicates(
+    candidates: StoredIssue[],
+    knowledgeBase: StoredIssue[],
+  ): Promise<DuplicateMatch[]> {
     const prompt = this.buildDuplicatePrompt(candidates, knowledgeBase);
     const raw = await this.callLLM(prompt);
     const parsed = this.parseJSON(raw, DuplicateResponseSchema);
@@ -91,10 +98,12 @@ export class LLMService {
     return this.parseJSON(raw, schema);
   }
 
-  private buildDigestPrompt(issues: Array<{ number: number; title: string; body: string }>): string {
-    const issueList = issues.map(i =>
-      `#${i.number}: ${i.title}\n${i.body.slice(0, 2000)}`
-    ).join('\n\n---\n\n');
+  private buildDigestPrompt(
+    issues: Array<{ number: number; title: string; body: string }>,
+  ): string {
+    const issueList = issues
+      .map((i) => `#${i.number}: ${i.title}\n${i.body.slice(0, 2000)}`)
+      .join('\n\n---\n\n');
 
     return `Analyze the following GitHub issues and generate a compact digest for each.
 
@@ -164,19 +173,19 @@ Respond ONLY with valid JSON — no markdown, no explanation:
         messages: [{ role: 'user', content: prompt }],
       });
 
-      const textBlock = response.content.find(b => b.type === 'text');
+      const textBlock = response.content.find((b) => b.type === 'text');
       return textBlock?.text ?? '';
     } catch (err: any) {
       // Retry transient Anthropic errors with exponential backoff:
       // 429 rate_limit_error, 529 overloaded_error, and 5xx server errors.
       const status: number | undefined = err?.status;
-      const retryable = status === 429 || status === 529 || (typeof status === 'number' && status >= 500);
+      const retryable =
+        status === 429 || status === 529 || (typeof status === 'number' && status >= 500);
       if (retryable && attempt < LLMService.MAX_RETRIES) {
         const retryAfter = Number(err?.headers?.['retry-after']) * 1000;
-        const delay = Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter
-          : (2 ** attempt) * 1000;
-        await new Promise(r => setTimeout(r, delay));
+        const delay =
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2 ** attempt * 1000;
+        await new Promise((r) => setTimeout(r, delay));
         return this.callLLM(prompt, attempt + 1);
       }
       throw err;
@@ -186,7 +195,10 @@ Respond ONLY with valid JSON — no markdown, no explanation:
   private parseJSON<T>(raw: string, schema: z.ZodSchema<T>): T | null {
     try {
       // Strip markdown code fences if present
-      const cleaned = raw.replace(/^```json?\s*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+      const cleaned = raw
+        .replace(/^```json?\s*\n?/m, '')
+        .replace(/\n?```\s*$/m, '')
+        .trim();
       const parsed = JSON.parse(cleaned);
       return schema.parse(parsed);
     } catch (firstError) {

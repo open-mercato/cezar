@@ -10,7 +10,10 @@
     "build": "yarn workspaces foreach -A --topological-dev run build",
     "test": "yarn workspaces foreach -A run test",
     "typecheck": "yarn workspaces foreach -A run typecheck",
-    "lint": "yarn workspaces foreach -A run lint",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "dev": "yarn workspace cezar dev",
     "db:start": "docker compose -f infra/supabase/docker-compose.yml up -d",
     "db:stop": "docker compose -f infra/supabase/docker-compose.yml down",
@@ -19,9 +22,15 @@
     "db:psql": "docker compose -f infra/supabase/docker-compose.yml exec db psql -U postgres -d postgres"
   },
   "devDependencies": {
+    "@eslint/js": "^9",
     "@types/node": "^20.0.0",
+    "eslint": "^9",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.6.0",
+    "prettier": "^3",
     "tsx": "^4.0.0",
     "typescript": "^5.4.0",
+    "typescript-eslint": "^8",
     "vitest": "^4.0.18"
   },
   "packageManager": "yarn@4.12.0"

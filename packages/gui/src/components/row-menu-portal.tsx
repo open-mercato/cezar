@@ -60,7 +60,9 @@ export function RowMenuPortal({
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
     const estimatedHeight = 8 * 36; // rough cap — actual menu shrinks/grows; only matters for the flip decision
-    const wantsAbove = rect.bottom + estimatedHeight + VIEWPORT_MARGIN > window.innerHeight && rect.top > estimatedHeight;
+    const wantsAbove =
+      rect.bottom + estimatedHeight + VIEWPORT_MARGIN > window.innerHeight &&
+      rect.top > estimatedHeight;
     const top = wantsAbove ? rect.top - estimatedHeight - 4 : rect.bottom + 4;
     const rawLeft = rect.right - MENU_WIDTH;
     const left = Math.min(

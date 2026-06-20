@@ -30,9 +30,13 @@ interface RunnersSectionProps {
 // one — a self-hosted runner *may* register for it (it just needs an API key
 // in its env) but it's the unusual case, so it's offered as secondary.
 const BACKEND_OPTIONS: { value: string; label: string; secondary?: boolean }[] = [
-  { value: 'claude-cli',    label: 'claude-cli — Claude Code subscription' },
-  { value: 'codex-cli',     label: 'codex-cli — OpenAI Codex subscription' },
-  { value: 'anthropic-api', label: 'anthropic-api — uses ANTHROPIC_API_KEY (usually the managed cloud)', secondary: true },
+  { value: 'claude-cli', label: 'claude-cli — Claude Code subscription' },
+  { value: 'codex-cli', label: 'codex-cli — OpenAI Codex subscription' },
+  {
+    value: 'anthropic-api',
+    label: 'anthropic-api — uses ANTHROPIC_API_KEY (usually the managed cloud)',
+    secondary: true,
+  },
 ];
 
 const STATUS_TONE: Record<RunnerDisplayStatus, 'enabled' | 'warning' | 'queued'> = {
@@ -47,14 +51,24 @@ const STATUS_LABEL_CLASS: Record<RunnerDisplayStatus, string> = {
   offline: 'text-on-surface-variant',
 };
 
-export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: RunnersSectionProps) {
-  const [state, formAction, pending] = useActionState<RunnerActionState, FormData>(registerRunner, {});
+export function RunnersSection({
+  ownRunners,
+  managedRunners,
+  isAdmin,
+  appUrl,
+}: RunnersSectionProps) {
+  const [state, formAction, pending] = useActionState<RunnerActionState, FormData>(
+    registerRunner,
+    {},
+  );
 
   // Mirror the one-shot token into local state so we can wipe it from memory:
   // useActionState keeps its own result around (and can replay it on a
   // back/forward navigation), so we never render `state.token` directly — we
   // surface a copy that we clear on a timeout or an explicit dismiss.
-  const [revealedToken, setRevealedToken] = useState<{ token: string; backends: string[] } | null>(null);
+  const [revealedToken, setRevealedToken] = useState<{ token: string; backends: string[] } | null>(
+    null,
+  );
   useEffect(() => {
     if (state.token && state.runnerId) {
       setRevealedToken({ token: state.token, backends: state.backends ?? [] });
@@ -64,7 +78,10 @@ export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: 
   return (
     <div className="space-y-6">
       {/* This workspace's runners */}
-      <Card title="This workspace" subtitle={`${ownRunners.length} self-hosted runner${ownRunners.length === 1 ? '' : 's'}`}>
+      <Card
+        title="This workspace"
+        subtitle={`${ownRunners.length} self-hosted runner${ownRunners.length === 1 ? '' : 's'}`}
+      >
         {ownRunners.length === 0 ? (
           <EmptyState
             body={
@@ -83,7 +100,10 @@ export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: 
       </Card>
 
       {/* Managed / global runners (read-only) */}
-      <Card title="Managed — Cezar cloud" subtitle="anthropic-api jobs are handled by Cezar's own infrastructure">
+      <Card
+        title="Managed — Cezar cloud"
+        subtitle="anthropic-api jobs are handled by Cezar's own infrastructure"
+      >
         {managedRunners.length === 0 ? (
           <EmptyState body="No managed runners configured. The dispatcher cron handles anthropic-api jobs directly — no self-hosted runner needed." />
         ) : (
@@ -113,7 +133,10 @@ export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: 
                 </div>
               )}
               <div>
-                <label htmlFor="runner-name" className="mb-1 block text-xs font-medium text-on-surface-variant">
+                <label
+                  htmlFor="runner-name"
+                  className="mb-1 block text-xs font-medium text-on-surface-variant"
+                >
                   Name
                 </label>
                 <input
@@ -127,7 +150,9 @@ export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: 
                 />
               </div>
               <div>
-                <span className="mb-1 block text-xs font-medium text-on-surface-variant">Backends</span>
+                <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                  Backends
+                </span>
                 <div className="space-y-2">
                   {BACKEND_OPTIONS.map((b) => (
                     <label
@@ -166,11 +191,21 @@ export function RunnersSection({ ownRunners, managedRunners, isAdmin, appUrl }: 
   );
 }
 
-function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Card({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
   return (
     <section className="rounded-lg border border-outline-variant bg-surface-container-low">
       <header className="border-b border-outline-variant/60 px-6 py-4">
-        <h2 className="font-display text-[15px] font-semibold tracking-tight text-on-surface">{title}</h2>
+        <h2 className="font-display text-[15px] font-semibold tracking-tight text-on-surface">
+          {title}
+        </h2>
         {subtitle && <p className="mt-1 text-xs text-on-surface-variant">{subtitle}</p>}
       </header>
       <div className="px-6 py-5">{children}</div>
@@ -190,33 +225,34 @@ function RunnerRow({ runner, canRevoke }: { runner: RunnerRowView; canRevoke: bo
   return (
     <li className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:gap-4">
       <div className="flex min-w-0 flex-1 items-start gap-4">
-      <StatusDotIcon className="mt-0.5 h-3 w-3 shrink-0 sm:mt-0" tone={STATUS_TONE[runner.displayStatus]} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="truncate font-medium text-on-surface">{runner.name}</span>
-          <span
-            className={cn(
-              'font-display text-[10.5px] font-semibold uppercase tracking-wider',
-              STATUS_LABEL_CLASS[runner.displayStatus],
-            )}
-          >
-            {runner.displayStatus}
-          </span>
-          {runner.managed && (
-            <span className="font-mono text-[11px] text-outline">managed</span>
-          )}
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          {(runner.managed ? ['anthropic-api'] : runner.backends).map((b) => (
+        <StatusDotIcon
+          className="mt-0.5 h-3 w-3 shrink-0 sm:mt-0"
+          tone={STATUS_TONE[runner.displayStatus]}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="truncate font-medium text-on-surface">{runner.name}</span>
             <span
-              key={b}
-              className="rounded border border-outline-variant bg-surface-container px-1.5 py-0.5 font-mono text-[10.5px] text-on-surface-variant"
+              className={cn(
+                'font-display text-[10.5px] font-semibold uppercase tracking-wider',
+                STATUS_LABEL_CLASS[runner.displayStatus],
+              )}
             >
-              {b}
+              {runner.displayStatus}
             </span>
-          ))}
+            {runner.managed && <span className="font-mono text-[11px] text-outline">managed</span>}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {(runner.managed ? ['anthropic-api'] : runner.backends).map((b) => (
+              <span
+                key={b}
+                className="rounded border border-outline-variant bg-surface-container px-1.5 py-0.5 font-mono text-[10.5px] text-on-surface-variant"
+              >
+                {b}
+              </span>
+            ))}
+          </div>
         </div>
-      </div>
       </div>
       <div className="flex items-center justify-between gap-3 pl-7 sm:pl-0">
         <div className="shrink-0 text-left text-[11px] text-outline sm:text-right">
@@ -235,7 +271,8 @@ function RevokeButton({ runnerId, name }: { runnerId: string; name: string }) {
     <form
       action={action}
       onSubmit={(e) => {
-        if (!confirm(`Revoke runner "${name}"? Its token stops working immediately.`)) e.preventDefault();
+        if (!confirm(`Revoke runner "${name}"? Its token stops working immediately.`))
+          e.preventDefault();
       }}
       className="shrink-0"
     >
@@ -282,12 +319,20 @@ function TokenReveal({
   return (
     <div className="space-y-3 rounded-md border border-primary/40 bg-primary/10 p-4">
       <p className="text-sm text-on-surface">
-        Runner registered. <strong className="text-primary">Copy the token now — it won&apos;t be shown again.</strong>
+        Runner registered.{' '}
+        <strong className="text-primary">Copy the token now — it won&apos;t be shown again.</strong>
       </p>
-      <CopyBox label="Token" value={token} secret revealed={revealed} onToggleReveal={() => setRevealed((v) => !v)} />
+      <CopyBox
+        label="Token"
+        value={token}
+        secret
+        revealed={revealed}
+        onToggleReveal={() => setRevealed((v) => !v)}
+      />
       <CopyBox label="Start command" value={command} secret revealed={revealed} />
       <p className="text-xs text-on-surface-variant" role="status" aria-live="polite">
-        The token hides itself in {TOKEN_AUTO_CLEAR_MS / 1000}s. It is never stored in plaintext — only a hash is kept.
+        The token hides itself in {TOKEN_AUTO_CLEAR_MS / 1000}s. It is never stored in plaintext —
+        only a hash is kept.
       </p>
       <div className="flex justify-end">
         <button
@@ -324,7 +369,11 @@ function CopyBox({
         <span className="text-xs font-medium text-on-surface-variant">{label}</span>
         <div className="flex items-center gap-3">
           {secret && onToggleReveal && (
-            <button type="button" onClick={onToggleReveal} className="text-xs text-primary hover:underline">
+            <button
+              type="button"
+              onClick={onToggleReveal}
+              className="text-xs text-primary hover:underline"
+            >
               {revealed ? 'Hide' : 'Reveal'}
             </button>
           )}
@@ -346,7 +395,7 @@ function CopyBox({
         className="overflow-x-auto rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 font-mono text-xs text-on-surface"
         aria-live="polite"
       >
-{display}
+        {display}
       </pre>
     </div>
   );

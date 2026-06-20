@@ -83,7 +83,9 @@ export function FilterBar({ search, filters, onClearAll, className }: FilterBarP
     });
 
   const toggleValue = (f: FilterControl, value: string) => {
-    f.onChange(f.values.includes(value) ? f.values.filter((v) => v !== value) : [...f.values, value]);
+    f.onChange(
+      f.values.includes(value) ? f.values.filter((v) => v !== value) : [...f.values, value],
+    );
   };
 
   return (
@@ -159,7 +161,12 @@ export function FilterBar({ search, filters, onClearAll, className }: FilterBarP
                         </span>
                       )}
                     </span>
-                    <ChevronIcon className={cn('h-4 w-4 text-on-surface-variant transition-transform', open && 'rotate-180')} />
+                    <ChevronIcon
+                      className={cn(
+                        'h-4 w-4 text-on-surface-variant transition-transform',
+                        open && 'rotate-180',
+                      )}
+                    />
                   </button>
 
                   {open && (
@@ -180,7 +187,9 @@ export function FilterBar({ search, filters, onClearAll, className }: FilterBarP
                             <span
                               className={cn(
                                 'flex h-5 w-5 shrink-0 items-center justify-center rounded border',
-                                checked ? 'border-primary bg-primary text-primary-on' : 'border-outline-variant',
+                                checked
+                                  ? 'border-primary bg-primary text-primary-on'
+                                  : 'border-outline-variant',
                               )}
                             >
                               {checked && <CheckIcon className="h-3.5 w-3.5" />}
@@ -223,7 +232,14 @@ export function FilterBar({ search, filters, onClearAll, className }: FilterBarP
 
 function FilterIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden
+    >
       <path d="M3 5h18M6 12h12M10 19h4" strokeLinecap="round" />
     </svg>
   );
@@ -231,7 +247,14 @@ function FilterIcon({ className }: { className?: string }) {
 
 function ChevronIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden
+    >
       <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -239,7 +262,14 @@ function ChevronIcon({ className }: { className?: string }) {
 
 function CheckIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} aria-hidden>
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={3}
+      aria-hidden
+    >
       <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );

@@ -42,7 +42,10 @@ export async function GET(req: Request) {
   // double-write here was pure overhead per claim tick.
 
   const url = new URL(req.url);
-  const requested = (url.searchParams.get('backends') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const requested = (url.searchParams.get('backends') ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const backends = requested.length ? requested : runner.backends;
   if (backends.length === 0) return NextResponse.json({ job: null });
 
@@ -63,7 +66,10 @@ export async function GET(req: Request) {
   try {
     job = await claimOnce();
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
   }
 
   // Long-poll path: nothing claimable right now — wait for a NOTIFY (or
@@ -73,8 +79,14 @@ export async function GET(req: Request) {
   if (!job && waitSec > 0 && canAcquireListener(runner.id)) {
     const woke = await waitForJobsQueuedNotify(waitSec * 1000, req.signal, runner.id);
     if (woke && !req.signal.aborted) {
-      try { job = await claimOnce(); }
-      catch (err) { return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 }); }
+      try {
+        job = await claimOnce();
+      } catch (err) {
+        return NextResponse.json(
+          { error: err instanceof Error ? err.message : String(err) },
+          { status: 500 },
+        );
+      }
     }
   }
 
@@ -88,19 +100,25 @@ export async function GET(req: Request) {
   let insertedRunRowId: string | null = null;
   const releaseJob = async () => {
     if (insertedRunRowId) {
-      await admin.from('workflow_runs').update({
-        status: 'failed',
-        finished_at: new Date().toISOString(),
-        reason: 'claim aborted before runner ack',
-        updated_at: new Date().toISOString(),
-      }).eq('id', insertedRunRowId);
+      await admin
+        .from('workflow_runs')
+        .update({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          reason: 'claim aborted before runner ack',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', insertedRunRowId);
     }
-    await admin.from('jobs').update({
-      status: 'queued',
-      claimed_by_runner: null,
-      claim_expires_at: null,
-      updated_at: new Date().toISOString(),
-    }).eq('id', job.id);
+    await admin
+      .from('jobs')
+      .update({
+        status: 'queued',
+        claimed_by_runner: null,
+        claim_expires_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', job.id);
   };
 
   // Disconnect race: a claim can land AFTER the runner walked away (it timed
@@ -119,7 +137,11 @@ export async function GET(req: Request) {
     const core = await import('@cezar/core');
 
     // ── workspace + github token ──
-    const { data: ws } = await admin.from('workspaces').select('repo_owner, repo_name').eq('id', job.workspace_id).single();
+    const { data: ws } = await admin
+      .from('workspaces')
+      .select('repo_owner, repo_name')
+      .eq('id', job.workspace_id)
+      .single();
     if (!ws) throw new Error(`workspace ${job.workspace_id} not found`);
     const owner = ws.repo_owner;
     const repo = ws.repo_name;
@@ -158,16 +180,28 @@ export async function GET(req: Request) {
         );
         ghIdentitySource = `workspace:${job.workspace_id} (runner-install:${installId} failed)`;
         if (owner && core.GitHubAppService.isConfigured()) {
-          try { githubToken = await new core.GitHubAppService().getInstallationToken(owner); }
-          catch (e) { console.error(`[runner-api] workspace install token also failed for ${owner}:`, e instanceof Error ? e.message : e); }
+          try {
+            githubToken = await new core.GitHubAppService().getInstallationToken(owner);
+          } catch (e) {
+            console.error(
+              `[runner-api] workspace install token also failed for ${owner}:`,
+              e instanceof Error ? e.message : e,
+            );
+          }
         }
         if (!githubToken) githubToken = await resolveWorkspaceToken(job.workspace_id, admin);
       }
     } else {
       ghIdentitySource = `workspace:${job.workspace_id}`;
       if (owner && core.GitHubAppService.isConfigured()) {
-        try { githubToken = await new core.GitHubAppService().getInstallationToken(owner); }
-        catch (err) { console.error(`[runner-api] installation token failed for ${owner}:`, err instanceof Error ? err.message : err); }
+        try {
+          githubToken = await new core.GitHubAppService().getInstallationToken(owner);
+        } catch (err) {
+          console.error(
+            `[runner-api] installation token failed for ${owner}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
       if (!githubToken) githubToken = await resolveWorkspaceToken(job.workspace_id, admin);
     }
@@ -197,9 +231,11 @@ export async function GET(req: Request) {
     const store = await core.IssueStore.fromPort(adapter);
     const storeSnapshot = store.getAllData();
 
-    const runIssueNumber = job.kind === 'ci-followup'
-      ? ((job.payload as { ciFollowup?: { issueNumber?: number } })?.ciFollowup?.issueNumber ?? job.issue_number)
-      : job.issue_number;
+    const runIssueNumber =
+      job.kind === 'ci-followup'
+        ? ((job.payload as { ciFollowup?: { issueNumber?: number } })?.ciFollowup?.issueNumber ??
+          job.issue_number)
+        : job.issue_number;
 
     // ── flow lookup ── For `kind='flow'` jobs the runner needs the flow's
     //   name + steps so it can build a Workflow and call runFlow. Load the
@@ -207,7 +243,8 @@ export async function GET(req: Request) {
     //   `workflow_runs.workflow` becomes `flow:<name>` so the cockpit labels
     //   runner-driven flow runs the same way cron-driven ones look.
     type FlowPayload = { flowId?: string; flowInput?: string };
-    let flowOut: { name: string; steps: import('@cezar/core').FlowStep[]; input: string } | null = null;
+    let flowOut: { name: string; steps: import('@cezar/core').FlowStep[]; input: string } | null =
+      null;
     let workflowLabel: string = job.kind;
     if (job.kind === 'flow') {
       const payload = (job.payload ?? {}) as FlowPayload;
@@ -218,7 +255,8 @@ export async function GET(req: Request) {
         .eq('id', payload.flowId)
         .eq('workspace_id', job.workspace_id)
         .single();
-      if (fErr || !flowRow) throw new Error(`flow ${payload.flowId} not found: ${fErr?.message ?? 'no row'}`);
+      if (fErr || !flowRow)
+        throw new Error(`flow ${payload.flowId} not found: ${fErr?.message ?? 'no row'}`);
       const parsedSteps = parseFlowSteps(flowRow.steps);
       flowOut = {
         name: flowRow.name,
@@ -245,7 +283,12 @@ export async function GET(req: Request) {
 
     let runRowId: string;
     let resumeSessionId: string | null = null;
-    if (existingRun && (existingRun.status === 'running' || existingRun.status === 'paused' || existingRun.status === 'queued')) {
+    if (
+      existingRun &&
+      (existingRun.status === 'running' ||
+        existingRun.status === 'paused' ||
+        existingRun.status === 'queued')
+    ) {
       runRowId = existingRun.id;
       resumeSessionId = existingRun.session_id ?? null;
       // Mark the row running again so the cockpit reflects the re-claim.
@@ -273,11 +316,15 @@ export async function GET(req: Request) {
       insertedRunRowId = runRowId;
     }
 
-    await admin.from('jobs').update({ status: 'running', updated_at: new Date().toISOString() }).eq('id', job.id);
+    await admin
+      .from('jobs')
+      .update({ status: 'running', updated_at: new Date().toISOString() })
+      .eq('id', job.id);
 
-    const ciFollowupSeed = job.kind === 'ci-followup'
-      ? (job.payload as { ciFollowup?: unknown })?.ciFollowup ?? null
-      : null;
+    const ciFollowupSeed =
+      job.kind === 'ci-followup'
+        ? ((job.payload as { ciFollowup?: unknown })?.ciFollowup ?? null)
+        : null;
 
     return NextResponse.json({
       job: {
@@ -334,8 +381,10 @@ function parseFlowSteps(raw: unknown): import('@cezar/core').FlowStep[] {
         skill: typeof obj.skill === 'string' ? obj.skill : '',
         argsTemplate: typeof obj.argsTemplate === 'string' ? obj.argsTemplate : '',
       };
-      if (typeof obj.stopChainIfContains === 'string' && obj.stopChainIfContains) step.stopChainIfContains = obj.stopChainIfContains;
-      if (typeof obj.systemNotes === 'string' && obj.systemNotes) step.systemNotes = obj.systemNotes;
+      if (typeof obj.stopChainIfContains === 'string' && obj.stopChainIfContains)
+        step.stopChainIfContains = obj.stopChainIfContains;
+      if (typeof obj.systemNotes === 'string' && obj.systemNotes)
+        step.systemNotes = obj.systemNotes;
       return step;
     })
     .filter((x): x is import('@cezar/core').FlowStep => x !== null);
@@ -346,10 +395,18 @@ async function resolveWorkspaceToken(
   workspaceId: string,
   admin: SupabaseClient<Database>,
 ): Promise<string | null> {
-  const { data: admins } = await admin.from('workspace_members').select('user_id').eq('workspace_id', workspaceId).eq('role', 'admin');
+  const { data: admins } = await admin
+    .from('workspace_members')
+    .select('user_id')
+    .eq('workspace_id', workspaceId)
+    .eq('role', 'admin');
   if (admins && admins.length > 0) {
     const ids = admins.map((a) => a.user_id);
-    const { data: tokens } = await admin.from('user_github_tokens').select('provider_token').in('user_id', ids).limit(1);
+    const { data: tokens } = await admin
+      .from('user_github_tokens')
+      .select('provider_token')
+      .in('user_id', ids)
+      .limit(1);
     const token = tokens?.[0]?.provider_token;
     if (token) return token;
   }

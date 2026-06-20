@@ -56,7 +56,11 @@ export function createAgentRunner(
         transport,
       });
     case 'codex-cli':
-      return new CodexCliRunner({ spawnFn: opts.spawnFn, bin: opts.bin, timeoutMs: opts.timeoutMs });
+      return new CodexCliRunner({
+        spawnFn: opts.spawnFn,
+        bin: opts.bin,
+        timeoutMs: opts.timeoutMs,
+      });
     default: {
       const exhaustive: never = backend;
       throw new Error(`Unknown agent backend: ${String(exhaustive)}`);

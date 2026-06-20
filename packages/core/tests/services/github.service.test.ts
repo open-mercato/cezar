@@ -55,9 +55,19 @@ function makeConfig(overrides: Partial<Config['github']> = {}): Config {
     llm: { model: 'claude-sonnet-4-20250514', maxTokens: 4096, apiKey: '' },
     store: { path: '.issue-store' },
     sync: {
-      digestBatchSize: 20, duplicateBatchSize: 30, minDuplicateConfidence: 0.80, includeClosed: false,
-      labelBatchSize: 20, missingInfoBatchSize: 15, recurringBatchSize: 15,
-      priorityBatchSize: 20, securityBatchSize: 20, staleDaysThreshold: 90, staleCloseDays: 14, doneDetectorBatchSize: 10, needsResponseBatchSize: 15,
+      digestBatchSize: 20,
+      duplicateBatchSize: 30,
+      minDuplicateConfidence: 0.8,
+      includeClosed: false,
+      labelBatchSize: 20,
+      missingInfoBatchSize: 15,
+      recurringBatchSize: 15,
+      priorityBatchSize: 20,
+      securityBatchSize: 20,
+      staleDaysThreshold: 90,
+      staleCloseDays: 14,
+      doneDetectorBatchSize: 10,
+      needsResponseBatchSize: 15,
     },
   };
 }
@@ -84,7 +94,7 @@ describe('GitHubService', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    const mod = await import('@octokit/rest') as unknown as {
+    const mod = (await import('@octokit/rest')) as unknown as {
       __mockPaginate: ReturnType<typeof vi.fn>;
     };
     mockPaginate = mod.__mockPaginate;
@@ -131,9 +141,7 @@ describe('GitHubService', () => {
     });
 
     it('handles null body', async () => {
-      mockPaginate.mockResolvedValue([
-        makeGitHubIssue(1, { body: null }),
-      ]);
+      mockPaginate.mockResolvedValue([makeGitHubIssue(1, { body: null })]);
 
       const service = new GitHubService(makeConfig());
       const issues = await service.fetchAllIssues();
@@ -143,9 +151,7 @@ describe('GitHubService', () => {
 
   describe('fetchIssuesSince', () => {
     it('passes since parameter and filters PRs', async () => {
-      mockPaginate.mockResolvedValue([
-        makeGitHubIssue(3),
-      ]);
+      mockPaginate.mockResolvedValue([makeGitHubIssue(3)]);
 
       const service = new GitHubService(makeConfig());
       const issues = await service.fetchIssuesSince('2024-01-01T00:00:00Z');
@@ -185,7 +191,10 @@ describe('GitHubService', () => {
     it('reports a primary rate limit (x-ratelimit-remaining: 0) distinctly', async () => {
       mockPaginate.mockRejectedValue({
         status: 403,
-        response: { headers: { 'x-ratelimit-remaining': '0' }, data: { message: 'API rate limit exceeded' } },
+        response: {
+          headers: { 'x-ratelimit-remaining': '0' },
+          data: { message: 'API rate limit exceeded' },
+        },
       });
 
       const service = new GitHubService(makeConfig());
@@ -200,7 +209,11 @@ describe('GitHubService', () => {
         __mockCreateLabel: ReturnType<typeof vi.fn>;
         __mockAddLabels: ReturnType<typeof vi.fn>;
       };
-      return { getLabel: mod.__mockGetLabel, createLabel: mod.__mockCreateLabel, addLabels: mod.__mockAddLabels };
+      return {
+        getLabel: mod.__mockGetLabel,
+        createLabel: mod.__mockCreateLabel,
+        addLabels: mod.__mockAddLabels,
+      };
     }
 
     it('adds a label in a single request when it already exists (no getLabel probe)', async () => {
@@ -245,9 +258,14 @@ describe('GitHubService', () => {
 
     it('does NOT retry a permission 403 and surfaces a permission error', async () => {
       const { addLabels } = await labelMocks();
-      addLabels.mockRejectedValue({ status: 403, response: { headers: {}, data: { message: 'Resource not accessible by integration' } } });
+      addLabels.mockRejectedValue({
+        status: 403,
+        response: { headers: {}, data: { message: 'Resource not accessible by integration' } },
+      });
 
-      await expect(new GitHubService(makeConfig()).addLabel(7, 'priority-high')).rejects.toThrow(/GitHub App installation lacks permission/);
+      await expect(new GitHubService(makeConfig()).addLabel(7, 'priority-high')).rejects.toThrow(
+        /GitHub App installation lacks permission/,
+      );
       // One real attempt — permission denials are fatal, not retried.
       expect(addLabels).toHaveBeenCalledTimes(1);
     });

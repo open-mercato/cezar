@@ -103,12 +103,16 @@ export async function runDispatch(supabase: SupabaseClient<Database>): Promise<D
   // ── watchdog ──
   let requeued = 0;
   {
-    const { data, error } = await supabase.rpc('requeue_stalled_jobs', { p_stale_minutes: STALE_MINUTES });
+    const { data, error } = await supabase.rpc('requeue_stalled_jobs', {
+      p_stale_minutes: STALE_MINUTES,
+    });
     if (error) console.error('[dispatch] requeue_stalled_jobs failed:', error.message);
     else requeued = typeof data === 'number' ? data : 0;
   }
   {
-    const { data, error } = await supabase.rpc('requeue_jobs_for_offline_runners', { p_stale_minutes: OFFLINE_RUNNER_MINUTES });
+    const { data, error } = await supabase.rpc('requeue_jobs_for_offline_runners', {
+      p_stale_minutes: OFFLINE_RUNNER_MINUTES,
+    });
     if (error) console.error('[dispatch] requeue_jobs_for_offline_runners failed:', error.message);
     else requeued += typeof data === 'number' ? data : 0;
   }
@@ -166,10 +170,16 @@ export async function runDispatch(supabase: SupabaseClient<Database>): Promise<D
     if (job.kind === 'action') {
       const number = job.pr_number ?? job.issue_number;
       if (!payload.actionId || !payload.runId || number == null) {
-        console.error(`[dispatch] action job ${job.id} missing payload.actionId/runId or target number`);
+        console.error(
+          `[dispatch] action job ${job.id} missing payload.actionId/runId or target number`,
+        );
         await supabase
           .from('jobs')
-          .update({ status: 'failed', claim_expires_at: null, updated_at: new Date().toISOString() })
+          .update({
+            status: 'failed',
+            claim_expires_at: null,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', job.id);
         continue;
       }
@@ -195,7 +205,11 @@ export async function runDispatch(supabase: SupabaseClient<Database>): Promise<D
         console.error(`[dispatch] label-analysis job ${job.id} missing payload.analysisId`);
         await supabase
           .from('jobs')
-          .update({ status: 'failed', claim_expires_at: null, updated_at: new Date().toISOString() })
+          .update({
+            status: 'failed',
+            claim_expires_at: null,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', job.id);
         continue;
       }

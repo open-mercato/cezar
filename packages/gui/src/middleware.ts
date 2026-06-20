@@ -47,7 +47,9 @@ export async function middleware(request: NextRequest) {
     },
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   // Any response we return INSTEAD of `supabaseResponse` (e.g. a redirect) must
   // carry over the Set-Cookie headers `getAll()` may have refreshed onto

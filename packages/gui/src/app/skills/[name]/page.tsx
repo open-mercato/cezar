@@ -71,11 +71,7 @@ function parseStringArray(raw: unknown): string[] {
   return raw.filter((s): s is string => typeof s === 'string');
 }
 
-export default async function SkillDetailPage({
-  params,
-}: {
-  params: Promise<{ name: string }>;
-}) {
+export default async function SkillDetailPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: rawName } = await params;
   const name = decodeURIComponent(rawName);
 
@@ -142,11 +138,7 @@ export default async function SkillDetailPage({
   // Issue #262 — runtime activation lives in `workspace_skill_states`, not
   // `skill_overrides.enabled`. Use the canonical predicate so the detail page
   // agrees with the catalog, the workflow picker, and the workflow runtime.
-  const enabled = isSkillActive(
-    activation.states.get(skill.name),
-    skill.source,
-    activation.seeded,
-  );
+  const enabled = isSkillActive(activation.states.get(skill.name), skill.source, activation.seeded);
 
   // When an override exists, its body/metadata wins. Otherwise we surface the
   // upstream body and the metadata defaults (which the user can edit and save

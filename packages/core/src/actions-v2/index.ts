@@ -12,12 +12,7 @@ export type {
   ConfidenceConfig,
   EffectRoutingMode,
 } from './action.js';
-export type {
-  ActionTarget,
-  RunActionDeps,
-  DeferredEffect,
-  DeferSink,
-} from './runner.js';
+export type { ActionTarget, RunActionDeps, DeferredEffect, DeferSink } from './runner.js';
 export { runAction } from './runner.js';
 export {
   buildAutoCommentBody,

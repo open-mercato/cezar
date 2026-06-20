@@ -108,10 +108,12 @@ export function WorkspaceWizard() {
   return (
     <PageContainer max="max-w-[920px]">
       <header className="mb-6 border-b border-outline-variant pb-5">
-        <h1 className="font-display text-xl sm:text-[28px] font-semibold tracking-tight text-on-surface">Create Workspace</h1>
+        <h1 className="font-display text-xl sm:text-[28px] font-semibold tracking-tight text-on-surface">
+          Create Workspace
+        </h1>
         <p className="mt-1 text-sm text-on-surface-variant">
-          One workspace = one GitHub repository. After creation we&apos;ll analyse your label usage so
-          Cezar knows when to add and remove each label.
+          One workspace = one GitHub repository. After creation we&apos;ll analyse your label usage
+          so Cezar knows when to add and remove each label.
         </p>
       </header>
 
@@ -180,7 +182,9 @@ function StepCreate({ onCreated }: { onCreated: (id: string) => void }) {
   return (
     <form action={formAction} className="w-full sm:max-w-md space-y-5">
       {state.error && (
-        <div className="rounded-md border border-error/40 bg-error/10 px-4 py-2 text-sm text-error">{state.error}</div>
+        <div className="rounded-md border border-error/40 bg-error/10 px-4 py-2 text-sm text-error">
+          {state.error}
+        </div>
       )}
       <Field label="Workspace name" name="name" placeholder="Open Mercato" />
       <Field label="Repository owner" name="repo_owner" placeholder="comerito" />
@@ -199,7 +203,9 @@ function StepCreate({ onCreated }: { onCreated: (id: string) => void }) {
 function Field({ label, name, placeholder }: { label: string; name: string; placeholder: string }) {
   return (
     <div>
-      <label htmlFor={name} className="mb-1 block text-xs font-medium text-on-surface-variant">{label}</label>
+      <label htmlFor={name} className="mb-1 block text-xs font-medium text-on-surface-variant">
+        {label}
+      </label>
       <input
         id={name}
         name={name}
@@ -295,18 +301,21 @@ function StepAnalyze({
     <div className="w-full sm:max-w-2xl space-y-4">
       <p className="text-sm text-on-surface-variant">
         Cezar is pulling every label, scanning your codebase, walking the last 100 issues and PRs
-        (timeline events + comments), and asking Claude to draft a labeling guide. This usually takes
-        2–5 minutes for a typical repo.
+        (timeline events + comments), and asking Claude to draft a labeling guide. This usually
+        takes 2–5 minutes for a typical repo.
       </p>
 
       <div className="rounded-md border border-outline-variant bg-surface-container-low p-5">
         <div className="flex items-center gap-3">
           {!isTerminal && <Spinner />}
           <div>
-            <p className="text-sm font-medium text-on-surface">Status: <span className="font-mono">{status}</span></p>
+            <p className="text-sm font-medium text-on-surface">
+              Status: <span className="font-mono">{status}</span>
+            </p>
             {snapshot?.inputs_summary && (
               <p className="text-xs text-on-surface-variant">
-                {snapshot.inputs_summary.github_labels} labels · {snapshot.inputs_summary.issues_scanned} issues ·{' '}
+                {snapshot.inputs_summary.github_labels} labels ·{' '}
+                {snapshot.inputs_summary.issues_scanned} issues ·{' '}
                 {snapshot.inputs_summary.prs_scanned} PRs ·{' '}
                 {snapshot.inputs_summary.codebase_files.length === 0
                   ? 'no codebase guides'
@@ -326,7 +335,8 @@ function StepAnalyze({
           Skip for now
         </button>
         <p className="self-center text-xs text-on-surface-variant">
-          You can review and accept the draft later from <span className="font-mono">Settings → Labels</span>.
+          You can review and accept the draft later from{' '}
+          <span className="font-mono">Settings → Labels</span>.
         </p>
       </div>
     </div>
@@ -379,9 +389,10 @@ function StepReview({
   return (
     <div className="space-y-6">
       <div className="rounded-md border border-outline-variant/60 bg-surface-container/40 px-5 py-4 text-sm text-on-surface-variant">
-        Claude proposed {draft.issue_labels.length} issue label{draft.issue_labels.length === 1 ? '' : 's'} and{' '}
-        {draft.pr_labels.length} PR label{draft.pr_labels.length === 1 ? '' : 's'}. Edit anything that doesn&apos;t
-        match your team&apos;s practice, then accept to save the catalog.
+        Claude proposed {draft.issue_labels.length} issue label
+        {draft.issue_labels.length === 1 ? '' : 's'} and {draft.pr_labels.length} PR label
+        {draft.pr_labels.length === 1 ? '' : 's'}. Edit anything that doesn&apos;t match your
+        team&apos;s practice, then accept to save the catalog.
         {analysis.result?.notes && (
           <p className="mt-2 text-xs text-on-surface-variant">
             <span className="font-medium text-on-surface">Notes:</span> {analysis.result.notes}

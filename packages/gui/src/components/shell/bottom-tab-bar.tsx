@@ -2,13 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  InboxIcon,
-  IssuesIcon,
-  PullRequestIcon,
-  TerminalIcon,
-  MoreIcon,
-} from '../icons';
+import { InboxIcon, IssuesIcon, PullRequestIcon, TerminalIcon, MoreIcon } from '../icons';
 import { cn } from '../ui/cn';
 
 interface BottomTabBarProps {
@@ -17,10 +11,10 @@ interface BottomTabBarProps {
 }
 
 const TABS = [
-  { href: '/inbox',   label: 'Inbox',  Icon: InboxIcon },
-  { href: '/issues',  label: 'Issues', Icon: IssuesIcon },
-  { href: '/prs',     label: 'PRs',    Icon: PullRequestIcon },
-  { href: '/cockpit', label: 'Runs',   Icon: TerminalIcon },
+  { href: '/inbox', label: 'Inbox', Icon: InboxIcon },
+  { href: '/issues', label: 'Issues', Icon: IssuesIcon },
+  { href: '/prs', label: 'PRs', Icon: PullRequestIcon },
+  { href: '/cockpit', label: 'Runs', Icon: TerminalIcon },
 ] as const;
 
 /**
@@ -50,7 +44,12 @@ export function BottomTabBar({ onOpenNav }: BottomTabBarProps) {
       {TABS.map(({ href, label, Icon }) => {
         const active = isActive(href);
         return (
-          <Link key={href} href={href} className={itemClass(active)} aria-current={active ? 'page' : undefined}>
+          <Link
+            key={href}
+            href={href}
+            className={itemClass(active)}
+            aria-current={active ? 'page' : undefined}
+          >
             <Icon className="h-5 w-5" />
             <span>{label}</span>
           </Link>

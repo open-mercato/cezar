@@ -22,11 +22,12 @@ export function buildAutoCommentBody(args: BuildAutoCommentArgs): string {
   const text = (args.text ?? '').trim();
   const effects = args.effectsApplied;
 
-  const summary = text.length > 0
-    ? (text.split('\n').find((l) => l.trim().length > 0) ?? '').trim()
-    : effects.length > 0
-      ? `Ran ${args.actionName} — applied ${effects.length} effect${effects.length === 1 ? '' : 's'}.`
-      : `Ran ${args.actionName} — no changes applied.`;
+  const summary =
+    text.length > 0
+      ? (text.split('\n').find((l) => l.trim().length > 0) ?? '').trim()
+      : effects.length > 0
+        ? `Ran ${args.actionName} — applied ${effects.length} effect${effects.length === 1 ? '' : 's'}.`
+        : `Ran ${args.actionName} — no changes applied.`;
 
   const lines: string[] = [summary];
   for (const e of effects) lines.push(`- ${e.summary}`);

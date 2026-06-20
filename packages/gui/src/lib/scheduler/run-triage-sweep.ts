@@ -17,7 +17,9 @@ export interface TriageSweepResult {
   error?: string;
 }
 
-export async function runTriageSweep(supabase: SupabaseClient<Database>): Promise<TriageSweepResult> {
+export async function runTriageSweep(
+  supabase: SupabaseClient<Database>,
+): Promise<TriageSweepResult> {
   const SWEEP_BATCH = Number(process.env.CEZAR_TRIAGE_SWEEP_BATCH) || 10;
   const MAX_WORKSPACES_PER_TICK = Number(process.env.CEZAR_TRIAGE_SWEEP_MAX_WORKSPACES) || 25;
 
@@ -37,7 +39,10 @@ export async function runTriageSweep(supabase: SupabaseClient<Database>): Promis
     try {
       totalEnqueued += await sweepOne(ws, supabase, SWEEP_BATCH);
     } catch (err) {
-      console.error(`[triage-sweep] workspace ${ws.id} failed:`, err instanceof Error ? err.message : err);
+      console.error(
+        `[triage-sweep] workspace ${ws.id} failed:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
   return { enqueued: totalEnqueued, workspaces: workspaces.length };
@@ -109,7 +114,10 @@ async function sweepOne(
       // for this issue; the partial unique index `jobs_triage_open_uniq`
       // (migration 0029) rejects the duplicate with 23505 — benign no-op.
       if (error.code !== '23505' && !/duplicate key/i.test(error.message)) {
-        console.error(`[triage-sweep] enqueue failed for ws ${ws.id} #${issue.number}:`, error.message);
+        console.error(
+          `[triage-sweep] enqueue failed for ws ${ws.id} #${issue.number}:`,
+          error.message,
+        );
       }
       continue;
     }

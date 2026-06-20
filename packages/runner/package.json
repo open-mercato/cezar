@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@cezar/core": "workspace:*"

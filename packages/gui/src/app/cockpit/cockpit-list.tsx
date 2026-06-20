@@ -16,13 +16,28 @@ import {
   githubUrlForRun,
   runRefLabel,
 } from './cockpit-ui';
-import { pauseRun, resumeRun, cancelRun, cancelRuns, retryRun, deleteRun, deleteRuns } from './actions';
+import {
+  pauseRun,
+  resumeRun,
+  cancelRun,
+  cancelRuns,
+  retryRun,
+  deleteRun,
+  deleteRuns,
+} from './actions';
 import { EnqueueRunButton } from './enqueue-run-button';
 import type { CockpitCounts } from './page';
 
 type WorkflowRunRow = Database['public']['Tables']['workflow_runs']['Row'];
 
-const STATUS_PILLS: DbWorkflowRunStatus[] = ['running', 'paused', 'queued', 'failed', 'succeeded', 'cancelled'];
+const STATUS_PILLS: DbWorkflowRunStatus[] = [
+  'running',
+  'paused',
+  'queued',
+  'failed',
+  'succeeded',
+  'cancelled',
+];
 const WORKFLOW_OPTIONS = ['autofix', 'ci-followup', 'triage'] as const;
 
 // Keep the realtime list in step with the server-side `.limit(100)` cap.
@@ -83,7 +98,12 @@ export function CockpitList({
       .channel(`cockpit-runs-${workspaceId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'workflow_runs', filter: `workspace_id=eq.${workspaceId}` },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'workflow_runs',
+          filter: `workspace_id=eq.${workspaceId}`,
+        },
         (msg) => {
           if (msg.eventType === 'DELETE') {
             const oldId = (msg.old as { id?: string })?.id;
@@ -185,15 +205,29 @@ export function CockpitList({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Cockpit</h1>
-            <p className="mt-1 text-sm text-fg-muted">Agent workflow runs — autofix, CI follow-up, triage.</p>
+            <p className="mt-1 text-sm text-fg-muted">
+              Agent workflow runs — autofix, CI follow-up, triage.
+            </p>
           </div>
           <EnqueueRunButton disabled={role === 'viewer'} />
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-          <Count label="Running" value={counts.running} tone={counts.running > 0 ? 'blue' : 'muted'} />
-          <Count label="Paused" value={counts.paused} tone={counts.paused > 0 ? 'amber' : 'muted'} />
+          <Count
+            label="Running"
+            value={counts.running}
+            tone={counts.running > 0 ? 'blue' : 'muted'}
+          />
+          <Count
+            label="Paused"
+            value={counts.paused}
+            tone={counts.paused > 0 ? 'amber' : 'muted'}
+          />
           <Count label="Queued" value={counts.queued} tone="muted" />
-          <Count label="Failed (24h)" value={counts.failedLast24h} tone={counts.failedLast24h > 0 ? 'danger' : 'muted'} />
+          <Count
+            label="Failed (24h)"
+            value={counts.failedLast24h}
+            tone={counts.failedLast24h > 0 ? 'danger' : 'muted'}
+          />
         </div>
       </header>
 
@@ -208,7 +242,9 @@ export function CockpitList({
                 onClick={() => toggleStatus(s)}
                 className={cn(
                   'rounded-full border px-3 py-1 text-xs font-medium uppercase transition-colors',
-                  on ? 'border-accent/50 bg-bg-subtle text-fg' : 'border-border text-fg-muted hover:bg-bg-subtle',
+                  on
+                    ? 'border-accent/50 bg-bg-subtle text-fg'
+                    : 'border-border text-fg-muted hover:bg-bg-subtle',
                 )}
               >
                 {s}
@@ -245,7 +281,10 @@ export function CockpitList({
           )}
         </div>
         {(filters.statuses.length > 0 || filters.workflow || filters.repo) && (
-          <button onClick={() => router.push('/cockpit')} className="self-start text-xs text-fg-subtle hover:text-fg underline sm:self-auto">
+          <button
+            onClick={() => router.push('/cockpit')}
+            className="self-start text-xs text-fg-subtle hover:text-fg underline sm:self-auto"
+          >
             clear
           </button>
         )}
@@ -264,7 +303,12 @@ export function CockpitList({
               <button
                 disabled={pending}
                 onClick={() => {
-                  if (!window.confirm(`Delete ${deletableSelected.length} run record(s)? Step history and events go with it.`)) return;
+                  if (
+                    !window.confirm(
+                      `Delete ${deletableSelected.length} run record(s)? Step history and events go with it.`,
+                    )
+                  )
+                    return;
                   run(() => deleteRuns(deletableSelected));
                 }}
                 className="flex-1 rounded-md border border-danger/40 px-3 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50 sm:flex-none"
@@ -277,51 +321,146 @@ export function CockpitList({
       </div>
 
       {err && (
-        <div className="mb-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">{err}</div>
+        <div className="mb-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+          {err}
+        </div>
       )}
 
       {runs.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border bg-bg-elevated p-8 text-center text-sm text-fg-muted">
-          No agent runs yet. Runs appear here when you launch a workflow on an issue or auto-triage queues one.
+          No agent runs yet. Runs appear here when you launch a workflow on an issue or auto-triage
+          queues one.
           <div className="mt-2 text-xs text-fg-subtle">
             The workflow engine is gated behind a workspace setting until it&apos;s rolled out.
           </div>
         </div>
       ) : (
         <>
-        <div className="hidden overflow-hidden rounded-lg border border-border md:block">
-          <table className="w-full text-sm">
-            <thead className="bg-bg-elevated text-xs uppercase text-fg-subtle">
-              <tr>
-                <th className="w-8 px-3 py-2">
-                  <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
-                </th>
-                <th className="px-3 py-2 text-left font-medium">Issue / PR</th>
-                <th className="px-3 py-2 text-left font-medium">Workflow</th>
-                <th className="px-3 py-2 text-left font-medium">Current step</th>
-                <th className="px-3 py-2 text-left font-medium">Status</th>
-                <th className="px-3 py-2 text-right font-medium">Tokens</th>
-                <th className="px-3 py-2 text-left font-medium">Age</th>
-                <th className="px-3 py-2 text-right font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <div className="hidden overflow-hidden rounded-lg border border-border md:block">
+            <table className="w-full text-sm">
+              <thead className="bg-bg-elevated text-xs uppercase text-fg-subtle">
+                <tr>
+                  <th className="w-8 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      aria-label="Select all"
+                    />
+                  </th>
+                  <th className="px-3 py-2 text-left font-medium">Issue / PR</th>
+                  <th className="px-3 py-2 text-left font-medium">Workflow</th>
+                  <th className="px-3 py-2 text-left font-medium">Current step</th>
+                  <th className="px-3 py-2 text-left font-medium">Status</th>
+                  <th className="px-3 py-2 text-right font-medium">Tokens</th>
+                  <th className="px-3 py-2 text-left font-medium">Age</th>
+                  <th className="px-3 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((r) => {
+                  const gh = githubUrlForRun(r, repoOwner, repoName);
+                  const startedish = r.started_at ?? r.created_at;
+                  return (
+                    <tr key={r.id} className="border-t border-border hover:bg-bg-subtle/40">
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(r.id)}
+                          onChange={() => toggleOne(r.id)}
+                          aria-label={`Select run ${r.id}`}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/cockpit/${r.id}`}
+                            className="font-medium text-fg hover:text-accent"
+                          >
+                            {runRefLabel(r)}
+                          </Link>
+                          {gh && (
+                            <a
+                              href={gh}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-fg-subtle hover:text-accent"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              ↗
+                            </a>
+                          )}
+                        </div>
+                        {r.repo && <div className="text-xs text-fg-subtle">{r.repo}</div>}
+                      </td>
+                      <td className="px-3 py-2 text-fg-muted">{r.workflow}</td>
+                      <td className="px-3 py-2 text-fg-muted">{stepLabel(r.current_step_id)}</td>
+                      <td className="px-3 py-2">
+                        <RunStatusBadge status={r.status} />
+                        {r.pause_requested && r.status === 'running' && (
+                          <span
+                            className="ml-1 text-xs text-amber-400"
+                            title="Pause requested — will stop at the next step boundary"
+                          >
+                            ⏸ pending
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right text-fg-muted">
+                        {humanizeTokens(r.tokens_used)}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-fg-subtle">{timeAgo(startedish)}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-end gap-1">
+                          <RowActions
+                            run={r}
+                            canControl={canControl}
+                            pending={pending}
+                            run_={run}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Phone: stacked cards (P1). */}
+          <div className="md:hidden">
+            <label className="mb-3 flex min-h-11 items-center gap-2 text-sm text-fg-muted">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className="h-4 w-4"
+                aria-label="Select all"
+              />
+              Select all
+            </label>
+            <div className="space-y-3">
               {runs.map((r) => {
                 const gh = githubUrlForRun(r, repoOwner, repoName);
                 const startedish = r.started_at ?? r.created_at;
                 return (
-                  <tr key={r.id} className="border-t border-border hover:bg-bg-subtle/40">
-                    <td className="px-3 py-2">
+                  <EntityCard
+                    key={r.id}
+                    leading={
                       <input
                         type="checkbox"
                         checked={selected.has(r.id)}
                         onChange={() => toggleOne(r.id)}
+                        className="h-4 w-4"
                         aria-label={`Select run ${r.id}`}
                       />
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <Link href={`/cockpit/${r.id}`} className="font-medium text-fg hover:text-accent">
+                    }
+                    title={
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link
+                          href={`/cockpit/${r.id}`}
+                          className="font-medium text-fg hover:text-accent"
+                        >
                           {runRefLabel(r)}
                         </Link>
                         {gh && (
@@ -335,105 +474,48 @@ export function CockpitList({
                             ↗
                           </a>
                         )}
+                        {r.repo && <span className="text-xs text-fg-subtle">{r.repo}</span>}
                       </div>
-                      {r.repo && <div className="text-xs text-fg-subtle">{r.repo}</div>}
-                    </td>
-                    <td className="px-3 py-2 text-fg-muted">{r.workflow}</td>
-                    <td className="px-3 py-2 text-fg-muted">{stepLabel(r.current_step_id)}</td>
-                    <td className="px-3 py-2">
-                      <RunStatusBadge status={r.status} />
-                      {r.pause_requested && r.status === 'running' && (
-                        <span className="ml-1 text-xs text-amber-400" title="Pause requested — will stop at the next step boundary">
-                          ⏸ pending
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right text-fg-muted">{humanizeTokens(r.tokens_used)}</td>
-                    <td className="px-3 py-2 text-xs text-fg-subtle">{timeAgo(startedish)}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center justify-end gap-1">
-                        <RowActions run={r} canControl={canControl} pending={pending} run_={run} />
+                    }
+                    badge={
+                      <div className="flex items-center gap-1">
+                        <RunStatusBadge status={r.status} />
+                        {r.pause_requested && r.status === 'running' && (
+                          <span
+                            className="text-xs text-amber-400"
+                            title="Pause requested — will stop at the next step boundary"
+                          >
+                            ⏸
+                          </span>
+                        )}
                       </div>
-                    </td>
-                  </tr>
+                    }
+                    actions={
+                      canControl ? (
+                        <CardActions>
+                          <RowActions
+                            run={r}
+                            canControl={canControl}
+                            pending={pending}
+                            run_={run}
+                          />
+                        </CardActions>
+                      ) : undefined
+                    }
+                  >
+                    <MetaRow>
+                      <MetaItem label="Workflow">{r.workflow}</MetaItem>
+                      <MetaItem label="Step">{stepLabel(r.current_step_id)}</MetaItem>
+                    </MetaRow>
+                    <MetaRow>
+                      <MetaItem label="Tokens">{humanizeTokens(r.tokens_used)}</MetaItem>
+                      <MetaItem label="Age">{timeAgo(startedish)}</MetaItem>
+                    </MetaRow>
+                  </EntityCard>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Phone: stacked cards (P1). */}
-        <div className="md:hidden">
-          <label className="mb-3 flex min-h-11 items-center gap-2 text-sm text-fg-muted">
-            <input type="checkbox" checked={allSelected} onChange={toggleAll} className="h-4 w-4" aria-label="Select all" />
-            Select all
-          </label>
-          <div className="space-y-3">
-            {runs.map((r) => {
-              const gh = githubUrlForRun(r, repoOwner, repoName);
-              const startedish = r.started_at ?? r.created_at;
-              return (
-                <EntityCard
-                  key={r.id}
-                  leading={
-                    <input
-                      type="checkbox"
-                      checked={selected.has(r.id)}
-                      onChange={() => toggleOne(r.id)}
-                      className="h-4 w-4"
-                      aria-label={`Select run ${r.id}`}
-                    />
-                  }
-                  title={
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Link href={`/cockpit/${r.id}`} className="font-medium text-fg hover:text-accent">
-                        {runRefLabel(r)}
-                      </Link>
-                      {gh && (
-                        <a
-                          href={gh}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs text-fg-subtle hover:text-accent"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          ↗
-                        </a>
-                      )}
-                      {r.repo && <span className="text-xs text-fg-subtle">{r.repo}</span>}
-                    </div>
-                  }
-                  badge={
-                    <div className="flex items-center gap-1">
-                      <RunStatusBadge status={r.status} />
-                      {r.pause_requested && r.status === 'running' && (
-                        <span className="text-xs text-amber-400" title="Pause requested — will stop at the next step boundary">
-                          ⏸
-                        </span>
-                      )}
-                    </div>
-                  }
-                  actions={
-                    canControl ? (
-                      <CardActions>
-                        <RowActions run={r} canControl={canControl} pending={pending} run_={run} />
-                      </CardActions>
-                    ) : undefined
-                  }
-                >
-                  <MetaRow>
-                    <MetaItem label="Workflow">{r.workflow}</MetaItem>
-                    <MetaItem label="Step">{stepLabel(r.current_step_id)}</MetaItem>
-                  </MetaRow>
-                  <MetaRow>
-                    <MetaItem label="Tokens">{humanizeTokens(r.tokens_used)}</MetaItem>
-                    <MetaItem label="Age">{timeAgo(startedish)}</MetaItem>
-                  </MetaRow>
-                </EntityCard>
-              );
-            })}
+            </div>
           </div>
-        </div>
         </>
       )}
     </PageContainer>
@@ -495,7 +577,8 @@ function RowActions({
           danger
           title="Permanently removes this run and its step history and events."
           onClick={() => {
-            if (!window.confirm('Delete this run record? Step history and events go with it.')) return;
+            if (!window.confirm('Delete this run record? Step history and events go with it.'))
+              return;
             run_(() => deleteRun(run.id));
           }}
           disabled={pending}
@@ -535,8 +618,21 @@ function BtnAction({
   );
 }
 
-function Count({ label, value, tone }: { label: string; value: number; tone: 'blue' | 'amber' | 'danger' | 'muted' }) {
-  const colors = { blue: 'text-blue-400', amber: 'text-amber-400', danger: 'text-danger', muted: 'text-fg' };
+function Count({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'blue' | 'amber' | 'danger' | 'muted';
+}) {
+  const colors = {
+    blue: 'text-blue-400',
+    amber: 'text-amber-400',
+    danger: 'text-danger',
+    muted: 'text-fg',
+  };
   return (
     <div className="flex items-baseline gap-1.5">
       <span className={cn('text-lg font-semibold', colors[tone])}>{value}</span>

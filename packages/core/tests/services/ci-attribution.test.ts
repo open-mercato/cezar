@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { runBaseBranchControl, parseCheckRunUrl, type CheckRunSummary } from '@cezar/core';
 
-const check = (name: string, conclusion: string | null, status: CheckRunSummary['status'] = 'completed'): CheckRunSummary => ({
+const check = (
+  name: string,
+  conclusion: string | null,
+  status: CheckRunSummary['status'] = 'completed',
+): CheckRunSummary => ({
   name,
   status,
   conclusion,
@@ -28,7 +32,7 @@ describe('runBaseBranchControl', () => {
     );
     expect(result.allPreExisting).toBe(false);
     expect(result.preExistingChecks).toEqual(['lint']);
-    expect(result.nonPreExistingChecks.map(c => c.name)).toEqual(['test']);
+    expect(result.nonPreExistingChecks.map((c) => c.name)).toEqual(['test']);
   });
 
   it('base checks still pending are not considered pre-existing — pending is not a decisive signal', () => {
@@ -62,15 +66,24 @@ describe('runBaseBranchControl', () => {
 
 describe('parseCheckRunUrl', () => {
   it('parses standard Actions check-run URLs', () => {
-    expect(parseCheckRunUrl('https://github.com/o/r/actions/runs/123/job/456')).toEqual({ runId: 123, jobId: 456 });
+    expect(parseCheckRunUrl('https://github.com/o/r/actions/runs/123/job/456')).toEqual({
+      runId: 123,
+      jobId: 456,
+    });
   });
 
   it('tolerates the /jobs/ plural variant', () => {
-    expect(parseCheckRunUrl('https://github.com/o/r/actions/runs/123/jobs/456')).toEqual({ runId: 123, jobId: 456 });
+    expect(parseCheckRunUrl('https://github.com/o/r/actions/runs/123/jobs/456')).toEqual({
+      runId: 123,
+      jobId: 456,
+    });
   });
 
   it('strips deep-link fragments', () => {
-    expect(parseCheckRunUrl('https://github.com/o/r/actions/runs/999/job/1#step:2:10')).toEqual({ runId: 999, jobId: 1 });
+    expect(parseCheckRunUrl('https://github.com/o/r/actions/runs/999/job/1#step:2:10')).toEqual({
+      runId: 999,
+      jobId: 1,
+    });
   });
 
   it('returns null for non-Actions URLs (external CI providers)', () => {

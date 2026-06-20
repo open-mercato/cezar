@@ -45,7 +45,10 @@ export const IssueAnalysisSchema = z.object({
   securityAnalyzedAt: z.string().nullable().default(null),
 
   // Stale issue action
-  staleAction: z.enum(['close-resolved', 'close-wontfix', 'label-stale', 'keep-open']).nullable().default(null),
+  staleAction: z
+    .enum(['close-resolved', 'close-wontfix', 'label-stale', 'keep-open'])
+    .nullable()
+    .default(null),
   staleReason: z.string().nullable().default(null),
   staleDraftComment: z.string().nullable().default(null),
   staleAnalyzedAt: z.string().nullable().default(null),
@@ -74,10 +77,15 @@ export const IssueAnalysisSchema = z.object({
   doneConfidence: z.number().min(0).max(1).nullable().default(null),
   doneReason: z.string().nullable().default(null),
   doneDraftComment: z.string().nullable().default(null),
-  doneMergedPRs: z.array(z.object({
-    prNumber: z.number(),
-    prTitle: z.string(),
-  })).nullable().default(null),
+  doneMergedPRs: z
+    .array(
+      z.object({
+        prNumber: z.number(),
+        prTitle: z.string(),
+      }),
+    )
+    .nullable()
+    .default(null),
   doneAnalyzedAt: z.string().nullable().default(null),
 
   // Bug detector action
@@ -87,7 +95,10 @@ export const IssueAnalysisSchema = z.object({
   bugAnalyzedAt: z.string().nullable().default(null),
 
   // Autofix action
-  autofixStatus: z.enum(['pending', 'running', 'succeeded', 'failed', 'skipped', 'pr-opened']).nullable().default(null),
+  autofixStatus: z
+    .enum(['pending', 'running', 'succeeded', 'failed', 'skipped', 'pr-opened'])
+    .nullable()
+    .default(null),
   autofixAttempts: z.number().default(0),
   autofixLastRunAt: z.string().nullable().default(null),
   autofixBranch: z.string().nullable().default(null),

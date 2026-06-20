@@ -23,10 +23,11 @@ export function computeBadges(store: IssueStore, config: Config): Record<string,
     duplicates: {
       badge: (() => {
         const unanalyzed = allDigest.filter((i) => i.analysis.duplicatesAnalyzedAt === null).length;
-        const updated = allDigest.filter((i) =>
-          i.analysis.duplicatesAnalyzedAt !== null &&
-          i.commentsFetchedAt !== null &&
-          i.commentsFetchedAt > i.analysis.duplicatesAnalyzedAt,
+        const updated = allDigest.filter(
+          (i) =>
+            i.analysis.duplicatesAnalyzedAt !== null &&
+            i.commentsFetchedAt !== null &&
+            i.commentsFetchedAt > i.analysis.duplicatesAnalyzedAt,
         ).length;
         const total = unanalyzed + updated;
         if (total === 0) return 'up to date';
@@ -42,10 +43,11 @@ export function computeBadges(store: IssueStore, config: Config): Record<string,
       badge: (() => {
         const bugs = openDigest.filter((i) => i.digest?.category === 'bug');
         const unchecked = bugs.filter((i) => i.analysis.missingInfoAnalyzedAt === null).length;
-        const updated = bugs.filter((i) =>
-          i.analysis.missingInfoAnalyzedAt !== null &&
-          i.commentsFetchedAt !== null &&
-          i.commentsFetchedAt > i.analysis.missingInfoAnalyzedAt,
+        const updated = bugs.filter(
+          (i) =>
+            i.analysis.missingInfoAnalyzedAt !== null &&
+            i.commentsFetchedAt !== null &&
+            i.commentsFetchedAt > i.analysis.missingInfoAnalyzedAt,
         ).length;
         const total = unchecked + updated;
         if (total === 0) return 'up to date';
@@ -54,7 +56,9 @@ export function computeBadges(store: IssueStore, config: Config): Record<string,
         if (updated > 0) parts.push(`${updated} updated`);
         return parts.join(', ');
       })(),
-      available: openDigest.some((i) => i.digest?.category === 'bug') ? true : 'no bug reports with digest',
+      available: openDigest.some((i) => i.digest?.category === 'bug')
+        ? true
+        : 'no bug reports with digest',
     },
 
     'auto-label': {
@@ -90,7 +94,8 @@ export function computeBadges(store: IssueStore, config: Config): Record<string,
     'good-first-issue': {
       badge: (() => {
         const unchecked = openDigest.filter(
-          (i) => !i.labels.includes('good first issue') && i.analysis.goodFirstIssueAnalyzedAt === null,
+          (i) =>
+            !i.labels.includes('good first issue') && i.analysis.goodFirstIssueAnalyzedAt === null,
         ).length;
         return unchecked > 0 ? `${unchecked} unchecked` : 'up to date';
       })(),
@@ -155,7 +160,9 @@ export function computeBadges(store: IssueStore, config: Config): Record<string,
 
     categorize: {
       badge: (() => {
-        const uncategorized = openDigest.filter((i) => i.analysis.featureCategoryAnalyzedAt === null).length;
+        const uncategorized = openDigest.filter(
+          (i) => i.analysis.featureCategoryAnalyzedAt === null,
+        ).length;
         return uncategorized > 0 ? `${uncategorized} uncategorized` : 'up to date';
       })(),
       available: hasDigestIssues ? true : noDigest,

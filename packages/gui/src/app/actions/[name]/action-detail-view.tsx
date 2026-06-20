@@ -23,11 +23,7 @@ import {
   type SkillSuggestion,
 } from './action-mutations';
 import { AcceptanceSection } from './acceptance-section';
-import type {
-  AcceptanceMode,
-  ActionModel,
-  ConfidenceConfig,
-} from './acceptance-types';
+import type { AcceptanceMode, ActionModel, ConfidenceConfig } from './acceptance-types';
 
 export interface ActionDetail {
   id: string;
@@ -65,12 +61,7 @@ interface Props {
 
 // Only triggers with a real firing path (Phase 4 — trigger honesty). Existing
 // rows carrying retired trigger strings keep working; they just never fire.
-const ALL_TRIGGERS = [
-  'manual',
-  'on-issue-opened',
-  'on-issue-edited',
-  'on-issue-reopened',
-] as const;
+const ALL_TRIGGERS = ['manual', 'on-issue-opened', 'on-issue-edited', 'on-issue-reopened'] as const;
 
 const ALL_EFFECTS = [
   'label.add',
@@ -104,7 +95,9 @@ export function ActionDetailView({ action, readOnly }: Props) {
   const [systemPrompt, setSystemPrompt] = useState(action.systemPrompt);
   const [model, setModel] = useState<ActionModel>(action.model);
   const [acceptanceMode, setAcceptanceMode] = useState<AcceptanceMode>(action.acceptanceMode);
-  const [confidenceConfig, setConfidenceConfig] = useState<ConfidenceConfig>(action.confidenceConfig);
+  const [confidenceConfig, setConfidenceConfig] = useState<ConfidenceConfig>(
+    action.confidenceConfig,
+  );
   const [suggestedFlowId, setSuggestedFlowId] = useState<string | null>(action.suggestedFlowId);
   const [promptDirty, setPromptDirty] = useState(false);
   const [metaDirty, setMetaDirty] = useState(false);
@@ -423,7 +416,11 @@ export function ActionDetailView({ action, readOnly }: Props) {
                   ? 'cursor-not-allowed border-outline-variant bg-surface-container text-on-surface-variant'
                   : 'border-outline-variant bg-surface text-on-surface hover:border-primary',
               )}
-              title={isAutoTriage ? 'Already the workspace auto-triage action' : 'Use this as the workspace auto-triage action'}
+              title={
+                isAutoTriage
+                  ? 'Already the workspace auto-triage action'
+                  : 'Use this as the workspace auto-triage action'
+              }
             >
               {isAutoTriage ? 'Auto-triage' : 'Set as auto-triage'}
             </button>
@@ -561,7 +558,9 @@ export function ActionDetailView({ action, readOnly }: Props) {
                           >
                             <span className="font-medium">{s.name}</span>
                             {s.description && (
-                              <span className="block truncate text-xs text-on-surface-variant">{s.description}</span>
+                              <span className="block truncate text-xs text-on-surface-variant">
+                                {s.description}
+                              </span>
                             )}
                           </button>
                         </li>
@@ -658,9 +657,9 @@ export function ActionDetailView({ action, readOnly }: Props) {
               ]}
             />
             <p className="mt-1.5 text-xs text-on-surface-variant">
-              When set, the agent can suggest running this workflow on the target
-              (surfaces as a &quot;Run workflow&quot; item in the inbox). None = the
-              suggest-workflow tool is not exposed.
+              When set, the agent can suggest running this workflow on the target (surfaces as a
+              &quot;Run workflow&quot; item in the inbox). None = the suggest-workflow tool is not
+              exposed.
             </p>
           </Field>
 
@@ -776,7 +775,8 @@ export function ActionDetailView({ action, readOnly }: Props) {
               Simulation Output
             </div>
             <pre className="max-h-[200px] overflow-auto whitespace-pre-wrap font-mono text-[12px] leading-[18px] text-on-surface-variant">
-              {simOutput || (simRunning ? 'Streaming…' : 'Select a test issue and click Run Simulation.')}
+              {simOutput ||
+                (simRunning ? 'Streaming…' : 'Select a test issue and click Run Simulation.')}
             </pre>
           </div>
         </div>
@@ -799,7 +799,11 @@ export function ActionDetailView({ action, readOnly }: Props) {
             disabled={readOnly || saveState === 'saving'}
             className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-on transition-colors hover:bg-primary-container hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {showOverrideSave ? <RotateLeftIcon className="h-4 w-4" /> : <CheckIcon className="h-4 w-4" />}
+            {showOverrideSave ? (
+              <RotateLeftIcon className="h-4 w-4" />
+            ) : (
+              <CheckIcon className="h-4 w-4" />
+            )}
             {showOverrideSave ? 'Save as user override' : 'Save'}
           </button>
         </div>
@@ -824,7 +828,9 @@ function SkillRefsPreview({
     if (!open && refs.some((r) => bodies[r] === undefined)) {
       setLoading(true);
       try {
-        const resp = await fetch(`/api/actions/skill-bodies?names=${encodeURIComponent(refs.join(','))}`);
+        const resp = await fetch(
+          `/api/actions/skill-bodies?names=${encodeURIComponent(refs.join(','))}`,
+        );
         if (resp.ok) {
           const data = (await resp.json()) as { bodies?: Record<string, string> };
           setBodies({ ...bodies, ...(data.bodies ?? {}) });
@@ -867,7 +873,15 @@ function SkillRefsPreview({
   );
 }
 
-function AutosaveBadge({ state, dirty, error }: { state: SaveState; dirty: boolean; error: string | null }) {
+function AutosaveBadge({
+  state,
+  dirty,
+  error,
+}: {
+  state: SaveState;
+  dirty: boolean;
+  error: string | null;
+}) {
   if (state === 'error') return <Badge tone="error">{error ?? 'Save failed'}</Badge>;
   if (state === 'saving') return <Badge tone="muted">Saving…</Badge>;
   if (dirty) return <Badge tone="tertiary">Unsaved</Badge>;

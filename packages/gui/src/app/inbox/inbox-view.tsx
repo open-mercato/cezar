@@ -353,7 +353,9 @@ export function InboxView({
       const result = await acceptDecisions(ids);
       if (!result.ok) {
         const failed = result.results?.filter((r) => !r.ok).length ?? ids.length;
-        toast(`${ids.length - failed}/${ids.length} accepted · ${failed} failed`, { tone: 'error' });
+        toast(`${ids.length - failed}/${ids.length} accepted · ${failed} failed`, {
+          tone: 'error',
+        });
       } else {
         toast(`Accepted ${ids.length} finding${ids.length === 1 ? '' : 's'}`, { tone: 'success' });
       }
@@ -449,9 +451,21 @@ export function InboxView({
               <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 font-mono text-[12px] text-primary">
                 {pendingTotal} pending decisions
               </span>
-              <Metric value={counts.prs} label="PRs to review" tone={counts.prs > 0 ? 'accent' : 'muted'} />
-              <Metric value={counts.paused} label="paused" tone={counts.paused > 0 ? 'warn' : 'muted'} />
-              <Metric value={counts.failed} label="failed" tone={counts.failed > 0 ? 'danger' : 'muted'} />
+              <Metric
+                value={counts.prs}
+                label="PRs to review"
+                tone={counts.prs > 0 ? 'accent' : 'muted'}
+              />
+              <Metric
+                value={counts.paused}
+                label="paused"
+                tone={counts.paused > 0 ? 'warn' : 'muted'}
+              />
+              <Metric
+                value={counts.failed}
+                label="failed"
+                tone={counts.failed > 0 ? 'danger' : 'muted'}
+              />
               <span className="col-span-2 text-xs text-outline sm:col-span-1">
                 Queue synced <RelativeTime ts={syncedAt} />
               </span>
@@ -491,11 +505,29 @@ export function InboxView({
                   />
                 );
               case 'pr':
-                return <PrCard key={it.id} item={it} onReview={() => removeItem(it.id, 'Opened PR review')} />;
+                return (
+                  <PrCard
+                    key={it.id}
+                    item={it}
+                    onReview={() => removeItem(it.id, 'Opened PR review')}
+                  />
+                );
               case 'paused':
-                return <PausedCard key={it.id} item={it} onResolve={() => removeItem(it.id, 'Gate resolved')} />;
+                return (
+                  <PausedCard
+                    key={it.id}
+                    item={it}
+                    onResolve={() => removeItem(it.id, 'Gate resolved')}
+                  />
+                );
               case 'failed':
-                return <FailedCard key={it.id} item={it} onRetry={() => removeItem(it.id, 'Run retried')} />;
+                return (
+                  <FailedCard
+                    key={it.id}
+                    item={it}
+                    onRetry={() => removeItem(it.id, 'Run retried')}
+                  />
+                );
             }
           })}
         </div>
@@ -507,7 +539,10 @@ export function InboxView({
           <span className="font-medium text-tertiary">System health</span>
           {healthAlerts.map((alert) => (
             <span key={alert.id} className="inline-flex items-center gap-1.5">
-              <StatusDotIcon className="h-2.5 w-2.5" tone={alert.severity === 'error' ? 'error' : 'warning'} />
+              <StatusDotIcon
+                className="h-2.5 w-2.5"
+                tone={alert.severity === 'error' ? 'error' : 'warning'}
+              />
               {alert.text}
             </span>
           ))}
@@ -657,7 +692,11 @@ function FindingRow({
         selected ? 'bg-primary/[0.06]' : 'hover:bg-surface-container/60',
       )}
     >
-      <Checkbox checked={selected} onChange={onToggle} ariaLabel={`Select ${finding.skill} finding`} />
+      <Checkbox
+        checked={selected}
+        onChange={onToggle}
+        ariaLabel={`Select ${finding.skill} finding`}
+      />
       {/* Content column: line 1 = skill tag + body; line 2 = confidence + actions.
           On lg+ the children flow back into the parent's single row. */}
       <div className="flex min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:items-center lg:gap-3">
@@ -665,7 +704,12 @@ function FindingRow({
         <div className="flex min-w-0 items-start gap-2 lg:flex-1 lg:items-center">
           <div className="flex shrink-0 items-center gap-2 pt-0.5 lg:pt-0">
             <SparkleSmallIcon className={cn('h-3.5 w-3.5', style.tag)} />
-            <span className={cn('font-mono text-[11px] font-semibold uppercase tracking-wider lg:text-[10.5px]', style.tag)}>
+            <span
+              className={cn(
+                'font-mono text-[11px] font-semibold uppercase tracking-wider lg:text-[10.5px]',
+                style.tag,
+              )}
+            >
               {finding.skill}
             </span>
           </div>
@@ -820,7 +864,10 @@ function FindingBodyText({ finding }: { finding: Finding }) {
     case 'log':
       return (
         <>
-          Pattern <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">{b.pattern}</code>{' '}
+          Pattern{' '}
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            {b.pattern}
+          </code>{' '}
           observed across <span className="text-on-surface">{b.clusters}</span> clusters.
         </>
       );
@@ -828,15 +875,21 @@ function FindingBodyText({ finding }: { finding: Finding }) {
       return (
         <>
           {b.note}{' '}
-          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">{b.deployment}</code>.
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            {b.deployment}
+          </code>
+          .
         </>
       );
     case 'lint':
       return (
         <>
-          Proposed fix: change &quot;<span className="text-error/80 line-through">{b.from}</span>&quot; → &quot;
+          Proposed fix: change &quot;<span className="text-error/80 line-through">{b.from}</span>
+          &quot; → &quot;
           <span className="text-emerald-300">{b.to}</span>&quot; in{' '}
-          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">{b.file}</code>{' '}
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            {b.file}
+          </code>{' '}
           line {b.line}.
         </>
       );
@@ -854,7 +907,9 @@ function FindingBodyText({ finding }: { finding: Finding }) {
           Suggested labels:{' '}
           {b.labels.map((l, i) => (
             <span key={l}>
-              <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">{l}</code>
+              <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+                {l}
+              </code>
               {i < b.labels.length - 1 ? ' · ' : ''}
             </span>
           ))}
@@ -883,7 +938,11 @@ function PrCard({ item, onReview }: { item: PrItem; onReview: () => void }) {
           <span className="text-on-surface">{item.title}</span>
         </>
       }
-      meta={<>{item.agent} · opened <RelativeTime ts={Date.now() - item.ageMin * 60_000} /></>}
+      meta={
+        <>
+          {item.agent} · opened <RelativeTime ts={Date.now() - item.ageMin * 60_000} />
+        </>
+      }
       primary={{ label: 'Review', onClick: onReview, icon: <PlayIcon className="h-3.5 w-3.5" /> }}
     />
   );
@@ -899,11 +958,21 @@ function PausedCard({ item, onResolve }: { item: PausedItem; onResolve: () => vo
           <span className="font-mono text-xs text-outline">Run #{item.runNumber}</span>{' '}
           <span className="text-on-surface">{item.workflow}</span>{' '}
           <span className="text-on-surface-variant">· waiting at</span>{' '}
-          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">{item.step}</code>
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            {item.step}
+          </code>
         </>
       }
-      meta={<>paused <RelativeTime ts={Date.now() - item.ageMin * 60_000} /></>}
-      primary={{ label: 'Resolve', onClick: onResolve, icon: <CheckIcon className="h-3.5 w-3.5" /> }}
+      meta={
+        <>
+          paused <RelativeTime ts={Date.now() - item.ageMin * 60_000} />
+        </>
+      }
+      primary={{
+        label: 'Resolve',
+        onClick: onResolve,
+        icon: <CheckIcon className="h-3.5 w-3.5" />,
+      }}
     />
   );
 }
@@ -920,8 +989,16 @@ function FailedCard({ item, onRetry }: { item: FailedItem; onRetry: () => void }
           <span className="text-on-surface-variant">· {item.reason}</span>
         </>
       }
-      meta={<>failed <RelativeTime ts={Date.now() - item.ageMin * 60_000} /></>}
-      primary={{ label: 'Retry', onClick: onRetry, icon: <RotateLeftIcon className="h-3.5 w-3.5" /> }}
+      meta={
+        <>
+          failed <RelativeTime ts={Date.now() - item.ageMin * 60_000} />
+        </>
+      }
+      primary={{
+        label: 'Retry',
+        onClick: onRetry,
+        icon: <RotateLeftIcon className="h-3.5 w-3.5" />,
+      }}
     />
   );
 }
@@ -940,16 +1017,33 @@ function SingleRowCard({
   primary: { label: string; onClick: () => void; icon?: React.ReactNode };
 }) {
   const toneClass = {
-    success: { bar: 'bg-emerald-400', label: 'text-emerald-300', btn: 'border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/10' },
-    warn: { bar: 'bg-tertiary', label: 'text-tertiary', btn: 'border-tertiary/40 text-tertiary hover:bg-tertiary/10' },
-    danger: { bar: 'bg-error', label: 'text-error', btn: 'border-error/40 text-error hover:bg-error/10' },
+    success: {
+      bar: 'bg-emerald-400',
+      label: 'text-emerald-300',
+      btn: 'border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/10',
+    },
+    warn: {
+      bar: 'bg-tertiary',
+      label: 'text-tertiary',
+      btn: 'border-tertiary/40 text-tertiary hover:bg-tertiary/10',
+    },
+    danger: {
+      bar: 'bg-error',
+      label: 'text-error',
+      btn: 'border-error/40 text-error hover:bg-error/10',
+    },
   }[tone];
   return (
     <article className="group flex items-center gap-3 rounded-lg border border-outline-variant bg-surface-container-low px-4 py-3 transition-colors hover:border-outline">
       <span className={cn('h-8 w-1 rounded-full shrink-0', toneClass.bar)} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className={cn('font-mono text-[10.5px] font-semibold uppercase tracking-wider', toneClass.label)}>
+          <span
+            className={cn(
+              'font-mono text-[10.5px] font-semibold uppercase tracking-wider',
+              toneClass.label,
+            )}
+          >
             {eyebrow}
           </span>
           <span className="truncate text-sm text-on-surface-variant">{title}</span>

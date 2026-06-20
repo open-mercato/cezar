@@ -29,7 +29,8 @@ const PHASE_LABEL: Record<SyncPhase, string> = {
 function summarize(counts: SyncCounts | null | undefined): string | null {
   if (!counts) return null;
   const bits: string[] = [];
-  if (counts.issuesFetched) bits.push(`${counts.issuesFetched} issue${counts.issuesFetched === 1 ? '' : 's'}`);
+  if (counts.issuesFetched)
+    bits.push(`${counts.issuesFetched} issue${counts.issuesFetched === 1 ? '' : 's'}`);
   if (counts.digestsCreated) bits.push(`${counts.digestsCreated} digested`);
   if (counts.commentsFetched) bits.push(`${counts.commentsFetched} commented`);
   if (counts.prsUpdated) bits.push(`${counts.prsUpdated} PR${counts.prsUpdated === 1 ? '' : 's'}`);
@@ -92,7 +93,15 @@ interface SyncIndicatorProps {
  * is clickable to trigger a "sync now", and shows a tooltip with the last-sync
  * time + status + counts on hover.
  */
-export function SyncIndicator({ workspaceId, initialStatus, readOnly, syncMode, syncIntervalMinutes, webhookHealth, lastWebhookAt }: SyncIndicatorProps) {
+export function SyncIndicator({
+  workspaceId,
+  initialStatus,
+  readOnly,
+  syncMode,
+  syncIntervalMinutes,
+  webhookHealth,
+  lastWebhookAt,
+}: SyncIndicatorProps) {
   const router = useRouter();
   const [status, setStatus] = useState<SyncStatusRow | null>(initialStatus);
   const [pending, startKickoff] = useTransition();
@@ -193,7 +202,8 @@ export function SyncIndicator({ workspaceId, initialStatus, readOnly, syncMode, 
     return { fraction: 0, label: 'Importing your repo…', indeterminate: true };
   })();
 
-  const lastSyncedAt = status?.finished_at ?? (status?.status === 'done' ? status?.updated_at : null);
+  const lastSyncedAt =
+    status?.finished_at ?? (status?.status === 'done' ? status?.updated_at : null);
 
   // ── Staleness (spec §3): amber when the last successful sync is older than
   // max(2 × interval, 30 min) and nothing is in flight. Suppressed for manual
@@ -234,7 +244,10 @@ export function SyncIndicator({ workspaceId, initialStatus, readOnly, syncMode, 
   // ── Tooltip lines. ──
   // `cta` is an optional recovery action rendered as a real link below the
   // lines (spec §3 — e.g. an `auth` failure → "Reconnect").
-  const { lines: tooltip, cta } = ((): { lines: string[]; cta: { label: string; href: string } | null } => {
+  const { lines: tooltip, cta } = ((): {
+    lines: string[];
+    cta: { label: string; href: string } | null;
+  } => {
     const lines: string[] = [];
     if (syncing) {
       if (importProgress) lines.push(importProgress.label);
@@ -359,7 +372,15 @@ export function SyncIndicator({ workspaceId, initialStatus, readOnly, syncMode, 
         )}
       >
         <div className="font-medium text-on-surface">
-          {syncing ? 'Syncing' : isError ? 'Sync failed' : isStaleData ? 'Data may be stale' : readOnly ? 'Sync status' : 'Sync now'}
+          {syncing
+            ? 'Syncing'
+            : isError
+              ? 'Sync failed'
+              : isStaleData
+                ? 'Data may be stale'
+                : readOnly
+                  ? 'Sync status'
+                  : 'Sync now'}
         </div>
         {tooltip.map((line, i) => (
           <div
