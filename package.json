@@ -10,7 +10,10 @@
     "build": "yarn workspaces foreach -A --topological-dev run build",
     "test": "yarn workspaces foreach -A run test",
     "typecheck": "yarn workspaces foreach -A run typecheck",
-    "lint": "yarn workspaces foreach -A run lint",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "dev": "yarn workspace cezar dev",
     "db:start": "docker compose -f infra/supabase/docker-compose.yml up -d",
     "db:stop": "docker compose -f infra/supabase/docker-compose.yml down",
@@ -20,6 +23,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.70.0",
     "tsx": "^4.0.0",
     "typescript": "^5.4.0",
     "vitest": "^4.0.18"
