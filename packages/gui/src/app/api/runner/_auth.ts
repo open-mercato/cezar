@@ -29,7 +29,9 @@ const runnerAuthCache = new Map<string, { runner: RunnerRow; expiresAt: number }
 
 export async function authRunner(
   req: Request,
-): Promise<{ runner: RunnerRow; admin: ReturnType<typeof createSupabaseAdminClient> } | NextResponse> {
+): Promise<
+  { runner: RunnerRow; admin: ReturnType<typeof createSupabaseAdminClient> } | NextResponse
+> {
   const header = req.headers.get('authorization') ?? '';
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
   if (!match) return NextResponse.json({ error: 'missing bearer token' }, { status: 401 });
@@ -42,7 +44,11 @@ export async function authRunner(
     return { runner: cached.runner, admin };
   }
 
-  const { data: runner, error } = await admin.from('runners').select('*').eq('token_hash', tokenHash).maybeSingle();
+  const { data: runner, error } = await admin
+    .from('runners')
+    .select('*')
+    .eq('token_hash', tokenHash)
+    .maybeSingle();
   if (error) return NextResponse.json({ error: 'auth lookup failed' }, { status: 500 });
   if (!runner) {
     runnerAuthCache.delete(tokenHash);
@@ -59,7 +65,10 @@ export function invalidateRunnerAuth(tokenHash: string): void {
 
 /** True if `runner` may act on rows scoped to `workspaceId` (managed runners — null
  * `workspace_id` — may act on any; workspace-scoped runners only their own). */
-export function runnerScopesWorkspace(runner: RunnerRow, workspaceId: string | null | undefined): boolean {
+export function runnerScopesWorkspace(
+  runner: RunnerRow,
+  workspaceId: string | null | undefined,
+): boolean {
   if (runner.workspace_id == null) return true;
   return runner.workspace_id === workspaceId;
 }

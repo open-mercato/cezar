@@ -18,7 +18,11 @@ export interface RunFlowForIssueModalProps {
  * this issue. On success we redirect to /cockpit so the user sees the run
  * appear — matching `startAutofix`'s "redirect to /cockpit" pattern.
  */
-export function RunFlowForIssueModal({ issueNumber, issueTitle, onClose }: RunFlowForIssueModalProps) {
+export function RunFlowForIssueModal({
+  issueNumber,
+  issueTitle,
+  onClose,
+}: RunFlowForIssueModalProps) {
   const router = useRouter();
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,7 +104,9 @@ export function RunFlowForIssueModal({ issueNumber, issueTitle, onClose }: RunFl
         ) : flows.length === 0 ? (
           <p className="text-xs text-on-surface-variant">
             No runnable flows. Visit{' '}
-            <a className="text-primary hover:underline" href="/workflows">/workflows</a>{' '}
+            <a className="text-primary hover:underline" href="/workflows">
+              /workflows
+            </a>{' '}
             to create one.
           </p>
         ) : (

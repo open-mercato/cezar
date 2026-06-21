@@ -13,7 +13,9 @@ export default async function IssuesPage() {
     return (
       <PageContainer>
         <header className="mb-6">
-          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">Issues</h1>
+          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">
+            Issues
+          </h1>
         </header>
         <EmptyState title="No workspace connected" body="Create a workspace first." />
       </PageContainer>
@@ -43,7 +45,9 @@ export default async function IssuesPage() {
     return (
       <PageContainer>
         <header className="mb-6">
-          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">Issues</h1>
+          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">
+            Issues
+          </h1>
         </header>
         <EmptyState title="Load failed" body={loadError} tone="danger" />
       </PageContainer>

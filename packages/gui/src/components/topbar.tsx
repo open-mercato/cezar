@@ -18,7 +18,16 @@ interface TopBarProps {
   lastWebhookAt: string | null;
 }
 
-export function TopBar({ user, workspaceId, readOnly, initialSyncStatus, syncMode, syncIntervalMinutes, webhookHealth, lastWebhookAt }: TopBarProps) {
+export function TopBar({
+  user,
+  workspaceId,
+  readOnly,
+  initialSyncStatus,
+  syncMode,
+  syncIntervalMinutes,
+  webhookHealth,
+  lastWebhookAt,
+}: TopBarProps) {
   const initials = useMemo(
     () =>
       (user.name || user.email || '?')

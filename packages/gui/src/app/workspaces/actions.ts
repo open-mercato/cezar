@@ -33,7 +33,10 @@ export async function createWorkspace(
     return { error: 'All fields are required' };
   }
 
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
   if (!slug) return { error: 'Name must contain at least one alphanumeric character' };
 
   // Workspace creation uses the service-role client because the user isn't a
@@ -118,7 +121,8 @@ export async function startLabelAnalysisForWorkspace(
     .insert({ workspace_id: workspaceId, status: 'queued', created_by: user.id })
     .select('id')
     .single();
-  if (aErr || !analysis) return { ok: false, error: aErr?.message ?? 'failed to create analysis row' };
+  if (aErr || !analysis)
+    return { ok: false, error: aErr?.message ?? 'failed to create analysis row' };
 
   const { error: jErr } = await supabase.from('jobs').insert({
     workspace_id: workspaceId,

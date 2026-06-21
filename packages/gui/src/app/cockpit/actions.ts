@@ -204,7 +204,11 @@ export async function retryRun(runId: string): Promise<ActionResult> {
   }
 
   const kind: Database['public']['Tables']['jobs']['Row']['kind'] =
-    run.workflow === 'ci-followup' ? 'ci-followup' : run.workflow === 'triage' ? 'triage' : 'autofix';
+    run.workflow === 'ci-followup'
+      ? 'ci-followup'
+      : run.workflow === 'triage'
+        ? 'triage'
+        : 'autofix';
 
   const { error } = await ctx.supabase.from('jobs').insert({
     workspace_id: ctx.workspaceId,
@@ -249,15 +253,14 @@ export async function enqueueWorkflowRun(params: {
   ) {
     return { error: 'Invalid issue number' };
   }
-  if (
-    params.prNumber != null &&
-    (!Number.isInteger(params.prNumber) || params.prNumber <= 0)
-  ) {
+  if (params.prNumber != null && (!Number.isInteger(params.prNumber) || params.prNumber <= 0)) {
     return { error: 'Invalid PR number' };
   }
 
   const repo =
-    workspace.repoOwner && workspace.repoName ? `${workspace.repoOwner}/${workspace.repoName}` : null;
+    workspace.repoOwner && workspace.repoName
+      ? `${workspace.repoOwner}/${workspace.repoName}`
+      : null;
 
   const supabase = createSupabaseAdminClient();
 

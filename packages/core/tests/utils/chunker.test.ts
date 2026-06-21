@@ -19,7 +19,10 @@ describe('chunkArray', () => {
   });
 
   it('handles exact division', () => {
-    expect(chunkArray([1, 2, 3, 4], 2)).toEqual([[1, 2], [3, 4]]);
+    expect(chunkArray([1, 2, 3, 4], 2)).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
   });
 
   it('throws on non-positive size', () => {

@@ -25,10 +25,7 @@ const DEFAULT_CAP = 100;
  * (default 100) entries with a trailing "…and N more" line when truncated.
  * Returns '' for an empty list (the runner skips empty sections).
  */
-export function formatOpenIssuesKb(
-  issues: OpenIssueKbEntry[],
-  opts?: { cap?: number },
-): string {
+export function formatOpenIssuesKb(issues: OpenIssueKbEntry[], opts?: { cap?: number }): string {
   if (issues.length === 0) return '';
   const cap = opts?.cap ?? DEFAULT_CAP;
   const shown = issues.slice(0, cap);

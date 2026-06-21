@@ -162,8 +162,18 @@ describe('upsertMarkerComment', () => {
 
   it('ignores non-marker comments when searching', async () => {
     const gh = new FakeGateway();
-    gh.comments.push({ id: 500, author: 'human', body: 'This is just regular feedback.', createdAt: '2026-05-25T01:00:00Z' });
-    gh.comments.push({ id: 501, author: 'bot', body: '<!-- some-other-marker --> not us', createdAt: '2026-05-25T02:00:00Z' });
+    gh.comments.push({
+      id: 500,
+      author: 'human',
+      body: 'This is just regular feedback.',
+      createdAt: '2026-05-25T01:00:00Z',
+    });
+    gh.comments.push({
+      id: 501,
+      author: 'bot',
+      body: '<!-- some-other-marker --> not us',
+      createdAt: '2026-05-25T02:00:00Z',
+    });
 
     const result = await upsertMarkerComment(gh, 1704, {
       prNumber: 7,
@@ -190,7 +200,9 @@ describe('upsertMarkerComment', () => {
 describe('findMarkerComment', () => {
   it('returns null when listIssueCommentsWithIds is not provided (graceful fallback)', async () => {
     const gw: PrLinkGitHubGateway = {
-      async addComment() { return 0; },
+      async addComment() {
+        return 0;
+      },
       async updateComment() {},
     };
     expect(await findMarkerComment(gw, 1704)).toBeNull();

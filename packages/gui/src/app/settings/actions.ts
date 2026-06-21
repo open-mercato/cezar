@@ -38,7 +38,10 @@ export async function saveWorkspaceConfig(
       requireReviewPass: bool(formData, 'autofix.requireReviewPass'),
       retryOnReviewFailure: bool(formData, 'autofix.retryOnReviewFailure'),
       draftPr: bool(formData, 'autofix.draftPr'),
-      prLabels: str(formData, 'autofix.prLabels', 'cezar-autofix').split(',').map((s) => s.trim()).filter(Boolean),
+      prLabels: str(formData, 'autofix.prLabels', 'cezar-autofix')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
       setupCommands: ((formData.get('autofix.setupCommands') as string) ?? '')
         .split('\n')
         .map((s) => s.trim())
@@ -113,7 +116,12 @@ function str(fd: FormData, key: string, fallback: string): string {
 function rawStr(fd: FormData, key: string): string {
   return (fd.get(key) as string)?.trim() || '';
 }
-function enumStr<T extends string>(fd: FormData, key: string, allowed: readonly T[], fallback: T): T {
+function enumStr<T extends string>(
+  fd: FormData,
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
   const v = (fd.get(key) as string)?.trim();
   return allowed.includes(v as T) ? (v as T) : fallback;
 }

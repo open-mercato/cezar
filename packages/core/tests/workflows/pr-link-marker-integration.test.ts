@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { runWorkflow, type WorkflowGitHub } from '../../src/workflows/workflow-engine.js';
-import { autofixWorkflow, type AutofixBlackboard } from '../../src/workflows/definitions/autofix.workflow.js';
+import {
+  autofixWorkflow,
+  type AutofixBlackboard,
+} from '../../src/workflows/definitions/autofix.workflow.js';
 import {
   PR_LINK_MARKER_TAG,
   formatMarkerComment,
@@ -33,7 +36,15 @@ function makeConfig() {
 
 async function makeStore(): Promise<IssueStore> {
   const data: Store = {
-    meta: { owner: 'acme', repo: 'cezar', lastSyncedAt: null, totalFetched: 0, version: 1, orgMembers: [], orgMembersFetchedAt: null },
+    meta: {
+      owner: 'acme',
+      repo: 'cezar',
+      lastSyncedAt: null,
+      totalFetched: 0,
+      version: 1,
+      orgMembers: [],
+      orgMembersFetchedAt: null,
+    },
     issues: [],
   };
   return IssueStore.fromPort({ load: async () => data, save: async () => {} });
@@ -55,7 +66,11 @@ function makeFakeGitHub(seedComments: Array<{ id: number; body: string }> = []) 
   const pushed: Array<{ branch: string; path: string }> = [];
   let nextId = Math.max(2000, ...issueComments.map((c) => c.id + 1));
 
-  const gh: WorkflowGitHub & { issueComments: typeof issueComments; prsOpened: typeof prsOpened; pushed: typeof pushed } = {
+  const gh: WorkflowGitHub & {
+    issueComments: typeof issueComments;
+    prsOpened: typeof prsOpened;
+    pushed: typeof pushed;
+  } = {
     issueComments,
     prsOpened,
     pushed,
@@ -72,18 +87,29 @@ function makeFakeGitHub(seedComments: Array<{ id: number; body: string }> = []) 
       if (c) c.body = body;
     },
     async listIssueCommentsWithIds() {
-      return issueComments.map((c) => ({ id: c.id, author: c.author, body: c.body, createdAt: c.createdAt }));
+      return issueComments.map((c) => ({
+        id: c.id,
+        author: c.author,
+        body: c.body,
+        createdAt: c.createdAt,
+      }));
     },
     async getIssueWithComments(n) {
       return {
         issue: { number: n, title: `Password reset broken (#${n})`, body: 'It throws on /reset.' },
-        comments: issueComments.map((c) => ({ author: c.author, body: c.body, createdAt: c.createdAt })),
+        comments: issueComments.map((c) => ({
+          author: c.author,
+          body: c.body,
+          createdAt: c.createdAt,
+        })),
       };
     },
     async setLabels() {},
     async addLabel() {},
     async closeIssue() {},
-    async pushBranch(branch, path) { pushed.push({ branch, path }); },
+    async pushBranch(branch, path) {
+      pushed.push({ branch, path });
+    },
     async createPullRequest(opts) {
       prsOpened.push(opts);
       return { url: 'https://example.test/pr/42', number: 42 };
@@ -95,12 +121,21 @@ function makeFakeGitHub(seedComments: Array<{ id: number; body: string }> = []) 
 class SequencedRunner implements AgentRunner {
   readonly specs: AgentRunSpec<unknown>[] = [];
   private idx = 0;
-  constructor(readonly backend: AgentBackend, private readonly outputs: unknown[]) {}
+  constructor(
+    readonly backend: AgentBackend,
+    private readonly outputs: unknown[],
+  ) {}
   async run<T>(spec: AgentRunSpec<T>): Promise<AgentRunResult<T>> {
     this.specs.push(spec as AgentRunSpec<unknown>);
     const parsed = (this.outputs[this.idx] ?? null) as T | null;
     this.idx++;
-    return { text: JSON.stringify(parsed), parsed, toolCalls: [], tokensUsed: 100, budgetExceeded: false };
+    return {
+      text: JSON.stringify(parsed),
+      parsed,
+      toolCalls: [],
+      tokensUsed: 100,
+      budgetExceeded: false,
+    };
   }
   async interrupt(): Promise<void> {}
 }
@@ -113,27 +148,58 @@ function makeFakeGit() {
       commits.push(message);
       return `sha${commits.length}0000000`;
     },
-    async squashCommitsToBase(_wt: string, _base: string, _message: string): Promise<string | null> { return null; },
-    async getDiffAgainstBase(): Promise<string> { return 'diff --git a/x b/x\n+fix'; },
+    async squashCommitsToBase(
+      _wt: string,
+      _base: string,
+      _message: string,
+    ): Promise<string | null> {
+      return null;
+    },
+    async getDiffAgainstBase(): Promise<string> {
+      return 'diff --git a/x b/x\n+fix';
+    },
   };
 }
 
-const VERIFY_OK = { isRealUnfixedDefect: true, reason: 'reproduced /reset 500 on this branch', confidence: 0.9 };
-const ROOT_CAUSE = { summary: 'null deref in resetController', suspectedFiles: ['src/reset.ts'], hypothesis: 'token can be undefined', confidence: 0.85 };
-const FIX_REPORT = { changedFiles: ['src/reset.ts'], approach: 'guard the token before use', testCommandsRun: ['yarn test'] };
+const VERIFY_OK = {
+  isRealUnfixedDefect: true,
+  reason: 'reproduced /reset 500 on this branch',
+  confidence: 0.9,
+};
+const ROOT_CAUSE = {
+  summary: 'null deref in resetController',
+  suspectedFiles: ['src/reset.ts'],
+  hypothesis: 'token can be undefined',
+  confidence: 0.85,
+};
+const FIX_REPORT = {
+  changedFiles: ['src/reset.ts'],
+  approach: 'guard the token before use',
+  testCommandsRun: ['yarn test'],
+};
 const REVIEW_PASS = { verdict: 'pass' as const, summary: 'looks correct', issues: [] };
 
 describe('engine open-pr writes the pr-link marker', () => {
   it('adds a new marker comment on the issue when none exists', async () => {
     const store = await makeStore();
     const github = makeFakeGitHub();
-    const runner = new SequencedRunner('anthropic-api', [VERIFY_OK, ROOT_CAUSE, FIX_REPORT, REVIEW_PASS]);
+    const runner = new SequencedRunner('anthropic-api', [
+      VERIFY_OK,
+      ROOT_CAUSE,
+      FIX_REPORT,
+      REVIEW_PASS,
+    ]);
     const git = makeFakeGit();
 
     const result = await runWorkflow(autofixWorkflow, {
-      store, config: makeConfig(), github,
-      issueNumber: 1740, apply: true, worktreePath: '/tmp/wt',
-      runnerFactory: () => runner, gitOps: git,
+      store,
+      config: makeConfig(),
+      github,
+      issueNumber: 1740,
+      apply: true,
+      worktreePath: '/tmp/wt',
+      runnerFactory: () => runner,
+      gitOps: git,
       loopMaxIterations: { 'fix-review': 2 },
     });
 
@@ -141,7 +207,9 @@ describe('engine open-pr writes the pr-link marker', () => {
     expect((result.blackboard as AutofixBlackboard).verdict?.verdict).toBe('pass');
 
     // Find the marker comment among everything we wrote to the issue.
-    const markers = github.issueComments.filter((c) => c.body.includes(`<!-- ${PR_LINK_MARKER_TAG}`));
+    const markers = github.issueComments.filter((c) =>
+      c.body.includes(`<!-- ${PR_LINK_MARKER_TAG}`),
+    );
     expect(markers).toHaveLength(1);
     const parsed = parseMarkerComment(markers[0].body);
     expect(parsed).toMatchObject({
@@ -164,19 +232,31 @@ describe('engine open-pr writes the pr-link marker', () => {
       openedAt: '2026-05-20T00:00:00Z',
     });
     const github = makeFakeGitHub([{ id: 1500, body: stale }]);
-    const runner = new SequencedRunner('anthropic-api', [VERIFY_OK, ROOT_CAUSE, FIX_REPORT, REVIEW_PASS]);
+    const runner = new SequencedRunner('anthropic-api', [
+      VERIFY_OK,
+      ROOT_CAUSE,
+      FIX_REPORT,
+      REVIEW_PASS,
+    ]);
     const git = makeFakeGit();
 
     const result = await runWorkflow(autofixWorkflow, {
-      store: await makeStore(), config: makeConfig(), github,
-      issueNumber: 1740, apply: true, worktreePath: '/tmp/wt',
-      runnerFactory: () => runner, gitOps: git,
+      store: await makeStore(),
+      config: makeConfig(),
+      github,
+      issueNumber: 1740,
+      apply: true,
+      worktreePath: '/tmp/wt',
+      runnerFactory: () => runner,
+      gitOps: git,
       loopMaxIterations: { 'fix-review': 2 },
     });
 
     expect(result.status).toBe('succeeded');
     // Still exactly one marker comment.
-    const markers = github.issueComments.filter((c) => c.body.includes(`<!-- ${PR_LINK_MARKER_TAG}`));
+    const markers = github.issueComments.filter((c) =>
+      c.body.includes(`<!-- ${PR_LINK_MARKER_TAG}`),
+    );
     expect(markers).toHaveLength(1);
     expect(markers[0].id).toBe(1500); // edited in place
     const parsed = parseMarkerComment(markers[0].body);
@@ -188,19 +268,31 @@ describe('engine open-pr writes the pr-link marker', () => {
 
   it('does not write a marker on a dry-run (open-pr is skipped)', async () => {
     const github = makeFakeGitHub();
-    const runner = new SequencedRunner('anthropic-api', [VERIFY_OK, ROOT_CAUSE, FIX_REPORT, REVIEW_PASS]);
+    const runner = new SequencedRunner('anthropic-api', [
+      VERIFY_OK,
+      ROOT_CAUSE,
+      FIX_REPORT,
+      REVIEW_PASS,
+    ]);
     const git = makeFakeGit();
 
     const result = await runWorkflow(autofixWorkflow, {
-      store: await makeStore(), config: makeConfig(), github,
-      issueNumber: 1740, apply: false, worktreePath: '/tmp/wt',
-      runnerFactory: () => runner, gitOps: git,
+      store: await makeStore(),
+      config: makeConfig(),
+      github,
+      issueNumber: 1740,
+      apply: false,
+      worktreePath: '/tmp/wt',
+      runnerFactory: () => runner,
+      gitOps: git,
       loopMaxIterations: { 'fix-review': 2 },
     });
 
     expect(result.status).toBe('succeeded');
     expect(github.prsOpened).toHaveLength(0);
-    const markers = github.issueComments.filter((c) => c.body.includes(`<!-- ${PR_LINK_MARKER_TAG}`));
+    const markers = github.issueComments.filter((c) =>
+      c.body.includes(`<!-- ${PR_LINK_MARKER_TAG}`),
+    );
     expect(markers).toHaveLength(0);
   });
 });

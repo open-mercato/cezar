@@ -68,15 +68,21 @@ describe('audit', () => {
         addComment: vi.fn().mockResolvedValue(undefined),
       } as unknown as GitHubService;
 
-      await postAuditComment(mockGithub, 42, [
-        'Closed as resolved',
-        'Added `stale` label',
-      ]);
+      await postAuditComment(mockGithub, 42, ['Closed as resolved', 'Added `stale` label']);
 
       expect(mockGithub.addComment).toHaveBeenCalledOnce();
-      expect(mockGithub.addComment).toHaveBeenCalledWith(42, expect.stringContaining('**CEZAR update**'));
-      expect(mockGithub.addComment).toHaveBeenCalledWith(42, expect.stringContaining('- Closed as resolved'));
-      expect(mockGithub.addComment).toHaveBeenCalledWith(42, expect.stringContaining('- Added `stale` label'));
+      expect(mockGithub.addComment).toHaveBeenCalledWith(
+        42,
+        expect.stringContaining('**CEZAR update**'),
+      );
+      expect(mockGithub.addComment).toHaveBeenCalledWith(
+        42,
+        expect.stringContaining('- Closed as resolved'),
+      );
+      expect(mockGithub.addComment).toHaveBeenCalledWith(
+        42,
+        expect.stringContaining('- Added `stale` label'),
+      );
     });
   });
 });

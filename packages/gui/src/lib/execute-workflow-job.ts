@@ -52,22 +52,37 @@ export async function executeWorkflowJob(
   adminSupabase: SupabaseClient<Database>,
   params: ExecuteWorkflowJobParams,
 ): Promise<void> {
-  const { workspaceId, workflow, issueNumber, prNumber, jobId, ciFollowupSeed, flowId, flowInput, triageTrigger } = params;
+  const {
+    workspaceId,
+    workflow,
+    issueNumber,
+    prNumber,
+    jobId,
+    ciFollowupSeed,
+    flowId,
+    flowInput,
+    triageTrigger,
+  } = params;
   let persister: WorkflowRunPersister | null = null;
   // Held for the whole run: the engine clones into a per-repo shared worktree
   // and the agent edits it across steps, so concurrent jobs for the same repo
   // must be serialized (see withRepoLock in repo-clone). Released in finally.
   let releaseRepoLock: (() => void) | null = null;
 
-  const finishJob = async (status: Database['public']['Tables']['jobs']['Row']['status']): Promise<void> => {
+  const finishJob = async (
+    status: Database['public']['Tables']['jobs']['Row']['status'],
+  ): Promise<void> => {
     if (!jobId) return;
     // Drop the lease (migration 0025) so the watchdog doesn't see a stale
     // claim_expires_at on a row that's already done/failed.
-    await adminSupabase.from('jobs').update({
-      status,
-      claim_expires_at: null,
-      updated_at: new Date().toISOString(),
-    }).eq('id', jobId);
+    await adminSupabase
+      .from('jobs')
+      .update({
+        status,
+        claim_expires_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', jobId);
   };
 
   try {
@@ -95,7 +110,10 @@ export async function executeWorkflowJob(
       try {
         githubToken = await new core.GitHubAppService().getInstallationToken(owner);
       } catch (err) {
-        console.error(`[dispatch] installation token failed for ${owner}:`, err instanceof Error ? err.message : err);
+        console.error(
+          `[dispatch] installation token failed for ${owner}:`,
+          err instanceof Error ? err.message : err,
+        );
       }
     }
     if (!githubToken) githubToken = await resolveWorkspaceToken(workspaceId, adminSupabase);
@@ -143,14 +161,19 @@ export async function executeWorkflowJob(
     );
 
     const github = new core.GitHubService(config);
-    const repoSlug = config.github.owner && config.github.repo ? `${config.github.owner}/${config.github.repo}` : params.repo ?? null;
-    const runIssueNumber = workflow === 'ci-followup' ? ciFollowupSeed?.issueNumber ?? issueNumber : issueNumber;
+    const repoSlug =
+      config.github.owner && config.github.repo
+        ? `${config.github.owner}/${config.github.repo}`
+        : (params.repo ?? null);
+    const runIssueNumber =
+      workflow === 'ci-followup' ? (ciFollowupSeed?.issueNumber ?? issueNumber) : issueNumber;
     if (runIssueNumber == null) throw new Error(`workflow '${workflow}' job has no issue_number`);
 
     // ── flow workflow: load the flow row up-front so the `workflow_runs.workflow`
     //    column gets the flow's name (e.g. 'fix-github-issue') instead of the
     //    opaque 'flow' kind. Surfaces in the cockpit alongside the built-ins.
-    let flowRow: { name: string; steps: Array<{ skill: string; argsTemplate: string }> } | null = null;
+    let flowRow: { name: string; steps: Array<{ skill: string; argsTemplate: string }> } | null =
+      null;
     if (workflow === 'flow') {
       if (!flowId) throw new Error('flow job missing payload.flowId');
       const { data, error: fErr } = await adminSupabase
@@ -160,7 +183,10 @@ export async function executeWorkflowJob(
         .eq('workspace_id', workspaceId)
         .single();
       if (fErr || !data) throw new Error(`flow ${flowId} not found: ${fErr?.message ?? 'no row'}`);
-      flowRow = { name: data.name, steps: data.steps as Array<{ skill: string; argsTemplate: string }> };
+      flowRow = {
+        name: data.name,
+        steps: data.steps as Array<{ skill: string; argsTemplate: string }>,
+      };
     }
 
     // ── workflow_runs row + persistence (the shared persister) ──
@@ -172,22 +198,37 @@ export async function executeWorkflowJob(
       issueNumber: runIssueNumber,
       prNumber: prNumber ?? ciFollowupSeed?.prNumber ?? null,
       onPersistError: (label, err) =>
-        console.error(`[dispatch] persist ${label} failed:`, err instanceof Error ? err.message : err),
+        console.error(
+          `[dispatch] persist ${label} failed:`,
+          err instanceof Error ? err.message : err,
+        ),
     });
     if (!persister.id) throw new Error('workflow_runs insert failed');
 
     // ── persistence callbacks ──
-    const onEvent = (msg: string): void => { void persister!.recordEvent('lifecycle', { message: msg }); };
+    const onEvent = (msg: string): void => {
+      void persister!.recordEvent('lifecycle', { message: msg });
+    };
     const onAgentEvent = (evt: { type: string; [k: string]: unknown }): void => {
       // The orchestrator/engine path emits the legacy agent-session event
       // shape here; map it onto agent_run_events rows.
       if (evt.type === 'text') void persister!.recordEvent('agent-text', { text: evt.text });
-      else if (evt.type === 'tool') void persister!.recordEvent('tool-call', { tool: evt.tool, input: evt.input });
-      else if (evt.type === 'tool-result') void persister!.recordEvent('tool-result', { toolUseId: evt.toolUseId, result: evt.result, isError: evt.isError });
+      else if (evt.type === 'tool')
+        void persister!.recordEvent('tool-call', { tool: evt.tool, input: evt.input });
+      else if (evt.type === 'tool-result')
+        void persister!.recordEvent('tool-result', {
+          toolUseId: evt.toolUseId,
+          result: evt.result,
+          isError: evt.isError,
+        });
       else void persister!.recordEvent('note', evt);
     };
-    const onStepStart = (r: import('@cezar/core').AgentRunRecord): void => { void persister!.recordStepStart(r); };
-    const onRunRecord = (r: import('@cezar/core').AgentRunRecord): void => { void persister!.recordAgentRun(r); };
+    const onStepStart = (r: import('@cezar/core').AgentRunRecord): void => {
+      void persister!.recordStepStart(r);
+    };
+    const onRunRecord = (r: import('@cezar/core').AgentRunRecord): void => {
+      void persister!.recordAgentRun(r);
+    };
     const pauseRequested = () => persister!.isPauseRequested();
     const cancelRequested = () => persister!.isCancelled();
 
@@ -234,10 +275,14 @@ export async function executeWorkflowJob(
         resumeSessionId,
       });
       outcomeJson = result;
-      runStatus = result.status === 'succeeded' ? 'succeeded'
-        : result.status === 'paused' ? 'paused'
-        : result.status === 'cancelled' ? 'cancelled'
-        : 'failed';
+      runStatus =
+        result.status === 'succeeded'
+          ? 'succeeded'
+          : result.status === 'paused'
+            ? 'paused'
+            : result.status === 'cancelled'
+              ? 'cancelled'
+              : 'failed';
       reason = result.reason;
       prUrl = result.prUrl ?? null;
       outPrNumber = result.prNumber ?? outPrNumber;
@@ -261,14 +306,16 @@ export async function executeWorkflowJob(
       });
       outcomeJson = outcome;
       runStatus =
-        outcome.status === 'pr-opened' || outcome.status === 'dry-run' || outcome.status === 'skipped'
+        outcome.status === 'pr-opened' ||
+        outcome.status === 'dry-run' ||
+        outcome.status === 'skipped'
           ? 'succeeded'
           : 'failed';
       reason = 'reason' in outcome ? outcome.reason : undefined;
       prUrl = 'prUrl' in outcome ? outcome.prUrl : null;
       outPrNumber = 'prNumber' in outcome ? outcome.prNumber : outPrNumber;
-      branch = 'branch' in outcome ? outcome.branch ?? null : null;
-      headSha = 'headSha' in outcome ? outcome.headSha ?? null : null;
+      branch = 'branch' in outcome ? (outcome.branch ?? null) : null;
+      headSha = 'headSha' in outcome ? (outcome.headSha ?? null) : null;
     } else if (workflow === 'ci-followup') {
       if (!ciFollowupSeed) throw new Error('ci-followup job is missing payload.ciFollowup seed');
       const orch = new core.AutofixOrchestrator(store, config, github);
@@ -285,10 +332,11 @@ export async function executeWorkflowJob(
         resumeSessionId,
       });
       outcomeJson = outcome;
-      runStatus = outcome.status === 'pushed' || outcome.status === 'skipped' ? 'succeeded' : 'failed';
+      runStatus =
+        outcome.status === 'pushed' || outcome.status === 'skipped' ? 'succeeded' : 'failed';
       reason = 'reason' in outcome ? outcome.reason : undefined;
-      branch = 'branch' in outcome ? outcome.branch ?? null : ciFollowupSeed.branch ?? null;
-      headSha = 'headSha' in outcome ? outcome.headSha ?? null : null;
+      branch = 'branch' in outcome ? (outcome.branch ?? null) : (ciFollowupSeed.branch ?? null);
+      headSha = 'headSha' in outcome ? (outcome.headSha ?? null) : null;
       outPrNumber = ciFollowupSeed.prNumber ?? outPrNumber;
     } else {
       // Phase 2b1 soft cutover — triage runs the data-driven `runTriagePass`
@@ -324,7 +372,8 @@ export async function executeWorkflowJob(
             pr_number: target.kind === 'pr' ? target.number : null,
             target_title: target.title,
             effect: call.effect,
-            effect_args: (call.args ?? {}) as Database['public']['Tables']['pending_decisions']['Insert']['effect_args'],
+            effect_args: (call.args ??
+              {}) as Database['public']['Tables']['pending_decisions']['Insert']['effect_args'],
             summary,
             confidence,
           });
@@ -346,7 +395,10 @@ export async function executeWorkflowJob(
     // The engine path doesn't surface tokensUsed through the autofix outcome,
     // but the run records do; sum them as a best-effort total when unknown.
     if (tokensUsed === 0 && persister.id) {
-      const { data: runs } = await adminSupabase.from('agent_runs').select('tokens_used').eq('workflow_run_id', persister.id);
+      const { data: runs } = await adminSupabase
+        .from('agent_runs')
+        .select('tokens_used')
+        .eq('workflow_run_id', persister.id);
       tokensUsed = (runs ?? []).reduce((s, r) => s + (r.tokens_used ?? 0), 0);
     }
 
@@ -368,10 +420,13 @@ export async function executeWorkflowJob(
       ...(finalSessionId ? { session_id: finalSessionId } : {}),
     });
     await finishJob(
-      runStatus === 'succeeded' ? 'done'
-      : runStatus === 'paused' ? 'queued' // re-queue a paused run so it's picked up again
-      : runStatus === 'cancelled' ? 'cancelled'
-      : 'failed',
+      runStatus === 'succeeded'
+        ? 'done'
+        : runStatus === 'paused'
+          ? 'queued' // re-queue a paused run so it's picked up again
+          : runStatus === 'cancelled'
+            ? 'cancelled'
+            : 'failed',
     );
 
     await store.save().catch(() => {});

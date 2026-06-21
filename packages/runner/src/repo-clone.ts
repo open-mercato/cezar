@@ -60,7 +60,13 @@ export async function prepareJobWorktree(
     await exec('git', [...auth, 'clone', '--bare', plainUrl, barePath]);
     // Default `--bare` only fetches `refs/heads/<single>`; broaden so future
     // fetches mirror every remote head (matches `git clone` defaults).
-    await exec('git', ['--git-dir', barePath, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*']);
+    await exec('git', [
+      '--git-dir',
+      barePath,
+      'config',
+      'remote.origin.fetch',
+      '+refs/heads/*:refs/remotes/origin/*',
+    ]);
     await exec('git', [...auth, '--git-dir', barePath, 'fetch', '--prune', 'origin']);
   }
 
@@ -72,7 +78,16 @@ export async function prepareJobWorktree(
 
   // `-B` (re)creates the branch even if it already exists, resetting it to
   // `origin/<baseBranch>` — important when a previous run left a stale ref.
-  await exec('git', ['--git-dir', barePath, 'worktree', 'add', '-B', branchName, worktreePath, `origin/${baseBranch}`]);
+  await exec('git', [
+    '--git-dir',
+    barePath,
+    'worktree',
+    'add',
+    '-B',
+    branchName,
+    worktreePath,
+    `origin/${baseBranch}`,
+  ]);
 
   let cleaned = false;
   const cleanup = async (): Promise<void> => {
@@ -81,7 +96,10 @@ export async function prepareJobWorktree(
     try {
       await exec('git', ['--git-dir', barePath, 'worktree', 'remove', '--force', worktreePath]);
     } catch (err) {
-      console.warn(`[runner] worktree remove failed for ${worktreePath}:`, err instanceof Error ? err.message : err);
+      console.warn(
+        `[runner] worktree remove failed for ${worktreePath}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
     try {
       await exec('git', ['--git-dir', barePath, 'branch', '-D', branchName]);
@@ -111,12 +129,18 @@ export async function maintainBareClones(): Promise<void> {
     try {
       await exec('git', ['--git-dir', barePath, 'worktree', 'prune']);
     } catch (err) {
-      console.warn(`[runner] worktree prune failed for ${barePath}:`, err instanceof Error ? err.message : err);
+      console.warn(
+        `[runner] worktree prune failed for ${barePath}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
     try {
       await exec('git', ['--git-dir', barePath, 'gc', '--auto']);
     } catch (err) {
-      console.warn(`[runner] gc --auto failed for ${barePath}:`, err instanceof Error ? err.message : err);
+      console.warn(
+        `[runner] gc --auto failed for ${barePath}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 }

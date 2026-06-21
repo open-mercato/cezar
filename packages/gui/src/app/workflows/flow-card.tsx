@@ -44,11 +44,27 @@ export interface FlowCardProps {
 
 const TEMPLATE_VARS = [
   { name: 'input', label: '{{input}}', hint: 'value passed when the flow runs' },
-  { name: 'previousTaskId', label: '{{previousTaskId}}', hint: 'previous step\'s agent_runs.id' },
-  { name: 'previousOutput', label: '{{previousOutput}}', hint: 'previous step\'s text output (truncated to 8KB)' },
-  { name: 'previousPullRequestUrl', label: '{{previousPullRequestUrl}}', hint: 'PR url from previous step (if any)' },
-  { name: 'previousPullRequestNumber', label: '{{previousPullRequestNumber}}', hint: 'PR number from previous step (if any)' },
-  { name: 'existingCezarPr', label: '{{existingCezarPr}}', hint: 'one-line description of an open Cezar PR on the issue (empty when none)' },
+  { name: 'previousTaskId', label: '{{previousTaskId}}', hint: "previous step's agent_runs.id" },
+  {
+    name: 'previousOutput',
+    label: '{{previousOutput}}',
+    hint: "previous step's text output (truncated to 8KB)",
+  },
+  {
+    name: 'previousPullRequestUrl',
+    label: '{{previousPullRequestUrl}}',
+    hint: 'PR url from previous step (if any)',
+  },
+  {
+    name: 'previousPullRequestNumber',
+    label: '{{previousPullRequestNumber}}',
+    hint: 'PR number from previous step (if any)',
+  },
+  {
+    name: 'existingCezarPr',
+    label: '{{existingCezarPr}}',
+    hint: 'one-line description of an open Cezar PR on the issue (empty when none)',
+  },
 ] as const;
 
 const PR_CREATING_PATTERN = /(fix|open|create|pr|pull|merge|raise)/i;
@@ -80,10 +96,7 @@ export function FlowCard(props: FlowCardProps) {
         </div>
         {props.canWrite && (
           <>
-            <PauseToggle
-              paused={flow.paused}
-              onChange={props.onPausedChange}
-            />
+            <PauseToggle paused={flow.paused} onChange={props.onPausedChange} />
             <button
               onClick={props.onAddStep}
               className="inline-flex items-center gap-1 rounded-md border border-border bg-bg-subtle px-3 py-2 text-sm text-fg hover:bg-bg"
@@ -102,45 +115,49 @@ export function FlowCard(props: FlowCardProps) {
       </div>
 
       {/* Stats + history strip */}
-      {!flow.id.startsWith('__new__') && (flow.recentRuns.length > 0 || flow.stats.totalLast7d > 0) && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {flow.stats.totalLast7d > 0 && (
-            <span
-              className="rounded bg-bg-subtle px-1.5 py-0.5 text-[11px] text-fg-muted"
-              title="Successful runs in the last 7 days"
-            >
-              ✓ <span className="text-fg">{flow.stats.succeededLast7d}/{flow.stats.totalLast7d}</span>{' '}
-              <span className="text-fg-muted/60">(7d)</span>
-            </span>
-          )}
-          {flow.stats.avgTokens > 0 && (
-            <span
-              className="rounded bg-bg-subtle px-1.5 py-0.5 text-[11px] text-fg-muted"
-              title="Average cost-weighted tokens per run, last 7 days"
-            >
-              ~<span className="text-fg">{formatTokens(flow.stats.avgTokens)}</span> tokens/run
-            </span>
-          )}
-          {flow.recentRuns.length > 0 && (
-            <span className="ml-1 flex items-center gap-1">
-              <span className="text-[10px] uppercase tracking-wide text-fg-muted/60">recent</span>
-              {flow.recentRuns.map((r) => (
-                <a
-                  key={r.id}
-                  href={`/cockpit/${r.id}`}
-                  title={`${r.status}${r.issueNumber != null ? ` · #${r.issueNumber}` : ''} · ${new Date(r.startedAt).toLocaleString()}`}
-                  className={`inline-block h-3 w-3 rounded-sm ${historyDotClass(r.status)}`}
-                />
-              ))}
-            </span>
-          )}
-          {flow.paused && (
-            <span className="ml-auto rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
-              paused
-            </span>
-          )}
-        </div>
-      )}
+      {!flow.id.startsWith('__new__') &&
+        (flow.recentRuns.length > 0 || flow.stats.totalLast7d > 0) && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {flow.stats.totalLast7d > 0 && (
+              <span
+                className="rounded bg-bg-subtle px-1.5 py-0.5 text-[11px] text-fg-muted"
+                title="Successful runs in the last 7 days"
+              >
+                ✓{' '}
+                <span className="text-fg">
+                  {flow.stats.succeededLast7d}/{flow.stats.totalLast7d}
+                </span>{' '}
+                <span className="text-fg-muted/60">(7d)</span>
+              </span>
+            )}
+            {flow.stats.avgTokens > 0 && (
+              <span
+                className="rounded bg-bg-subtle px-1.5 py-0.5 text-[11px] text-fg-muted"
+                title="Average cost-weighted tokens per run, last 7 days"
+              >
+                ~<span className="text-fg">{formatTokens(flow.stats.avgTokens)}</span> tokens/run
+              </span>
+            )}
+            {flow.recentRuns.length > 0 && (
+              <span className="ml-1 flex items-center gap-1">
+                <span className="text-[10px] uppercase tracking-wide text-fg-muted/60">recent</span>
+                {flow.recentRuns.map((r) => (
+                  <a
+                    key={r.id}
+                    href={`/cockpit/${r.id}`}
+                    title={`${r.status}${r.issueNumber != null ? ` · #${r.issueNumber}` : ''} · ${new Date(r.startedAt).toLocaleString()}`}
+                    className={`inline-block h-3 w-3 rounded-sm ${historyDotClass(r.status)}`}
+                  />
+                ))}
+              </span>
+            )}
+            {flow.paused && (
+              <span className="ml-auto rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
+                paused
+              </span>
+            )}
+          </div>
+        )}
 
       {/* Triggers panel */}
       <TriggersPanel
@@ -212,7 +229,13 @@ export function FlowCard(props: FlowCardProps) {
 
 // ─── Pause toggle ───────────────────────────────────────────────────────────
 
-export function PauseToggle({ paused, onChange }: { paused: boolean; onChange: (v: boolean) => void }) {
+export function PauseToggle({
+  paused,
+  onChange,
+}: {
+  paused: boolean;
+  onChange: (v: boolean) => void;
+}) {
   return (
     <button
       type="button"
@@ -226,7 +249,9 @@ export function PauseToggle({ paused, onChange }: { paused: boolean; onChange: (
           : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15')
       }
     >
-      <span className={`inline-block h-2 w-2 rounded-full ${paused ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+      <span
+        className={`inline-block h-2 w-2 rounded-full ${paused ? 'bg-amber-400' : 'bg-emerald-400'}`}
+      />
       {paused ? 'Paused' : 'Active'}
     </button>
   );
@@ -262,7 +287,8 @@ function StepNotesPanel({
         className="block w-full resize-y rounded-md border border-border/60 bg-bg-subtle px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg placeholder:text-fg-muted/60 focus:border-accent/50 focus:outline-none"
       />
       <p className="mt-1 text-[10px] text-fg-muted/80">
-        Prepended to the skill body at run time. Leave empty to use the default (the `PR_URL=` / `PR_NUMBER=` marker contract).
+        Prepended to the skill body at run time. Leave empty to use the default (the `PR_URL=` /
+        `PR_NUMBER=` marker contract).
       </p>
     </div>
   );
@@ -288,7 +314,9 @@ function StopChainInput({
       placeholder="NO_ACTION_NEEDED — leave empty to never stop early"
       className={cn(
         'w-full rounded-md border bg-bg-subtle px-3 py-2 font-mono text-base text-fg focus:outline-none lg:text-xs',
-        value ? 'border-amber-500/40 focus:border-amber-400/60' : 'border-border focus:border-accent/50',
+        value
+          ? 'border-amber-500/40 focus:border-amber-400/60'
+          : 'border-border focus:border-accent/50',
       )}
     />
   );
@@ -342,8 +370,7 @@ function StepRow(props: {
   // Issue #262 — a skill name persisted on the binding may no longer be in the
   // active list (the user disabled it on /skills). Flag it so the user knows
   // the step won't run as configured.
-  const skillIsInactive =
-    !!step.skill && !props.availableSkills.some((s) => s.name === step.skill);
+  const skillIsInactive = !!step.skill && !props.availableSkills.some((s) => s.name === step.skill);
 
   const lintWarnings = useMemo(
     () => lintArgsTemplate(step.argsTemplate, idx, props.steps),
@@ -363,7 +390,11 @@ function StepRow(props: {
             <IconButton disabled={idx === 0} ariaLabel="Move step up" onClick={props.onMoveUp}>
               <ArrowUpIcon />
             </IconButton>
-            <IconButton disabled={idx === props.steps.length - 1} ariaLabel="Move step down" onClick={props.onMoveDown}>
+            <IconButton
+              disabled={idx === props.steps.length - 1}
+              ariaLabel="Move step down"
+              onClick={props.onMoveDown}
+            >
               <ArrowDownIcon />
             </IconButton>
             <IconButton ariaLabel="Remove step" tone="danger" onClick={props.onRemove}>
@@ -394,9 +425,12 @@ function StepRow(props: {
               )}
               {skillIsInactive && (
                 <p className="mt-1 text-[11px] leading-snug text-amber-300/90">
-                  ⚠ <span className="font-mono">{step.skill}</span> is not in the workspace&apos;s active skills.
-                  This step will fall back to the built-in prompt. Enable it on{' '}
-                  <a href="/skills" className="underline underline-offset-2">/skills</a>.
+                  ⚠ <span className="font-mono">{step.skill}</span> is not in the workspace&apos;s
+                  active skills. This step will fall back to the built-in prompt. Enable it on{' '}
+                  <a href="/skills" className="underline underline-offset-2">
+                    /skills
+                  </a>
+                  .
                 </p>
               )}
             </Field>
@@ -432,17 +466,34 @@ function StepRow(props: {
 
           {/* Tool toggles. */}
           <div className="flex flex-wrap items-center gap-2">
-            <ToolButton active={notesOpen || hasNotes} onClick={() => setNotesOpen((v) => !v)} icon={<PencilIcon />}>
+            <ToolButton
+              active={notesOpen || hasNotes}
+              onClick={() => setNotesOpen((v) => !v)}
+              icon={<PencilIcon />}
+            >
               Notes
-              {hasNotes && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-accent" aria-label="custom notes set" />}
+              {hasNotes && (
+                <span
+                  className="ml-0.5 h-1.5 w-1.5 rounded-full bg-accent"
+                  aria-label="custom notes set"
+                />
+              )}
             </ToolButton>
             {!isNew && (
-              <ToolButton active={previewOpen} onClick={() => setPreviewOpen((v) => !v)} icon={<EyeIcon />}>
+              <ToolButton
+                active={previewOpen}
+                onClick={() => setPreviewOpen((v) => !v)}
+                icon={<EyeIcon />}
+              >
                 Preview
               </ToolButton>
             )}
             {props.stepOutcome && (
-              <ToolButton active={outputOpen} onClick={() => setOutputOpen((v) => !v)} icon={<ChatIcon />}>
+              <ToolButton
+                active={outputOpen}
+                onClick={() => setOutputOpen((v) => !v)}
+                icon={<ChatIcon />}
+              >
                 Last output
                 <StatusBadge status={props.stepOutcome.status} />
               </ToolButton>
@@ -455,7 +506,9 @@ function StepRow(props: {
           <StepNotesPanel
             value={step.systemNotes ?? ''}
             disabled={!props.canWrite}
-            onChange={(systemNotes) => props.onChange({ systemNotes: systemNotes ? systemNotes : undefined })}
+            onChange={(systemNotes) =>
+              props.onChange({ systemNotes: systemNotes ? systemNotes : undefined })
+            }
           />
         )}
 
@@ -603,7 +656,10 @@ function ArgsTemplateInput({
     const openIdx = before.lastIndexOf('{{');
     const closeIdx = before.lastIndexOf('}}');
     const open = openIdx > closeIdx;
-    const hasCloser = open && after.indexOf('}}') !== -1 && after.indexOf('}}') < (after.indexOf('{{') === -1 ? Infinity : after.indexOf('{{'));
+    const hasCloser =
+      open &&
+      after.indexOf('}}') !== -1 &&
+      after.indexOf('}}') < (after.indexOf('{{') === -1 ? Infinity : after.indexOf('{{'));
     setShowAutocomplete(open && !hasCloser);
     setHighlight(0);
   };
@@ -710,7 +766,9 @@ function lintArgsTemplate(tpl: string, stepIdx: number, allSteps: FlowStep[]): s
   }
 
   const usesAnyPrevious =
-    refs.has('previousTaskId') || refs.has('previousPullRequestUrl') || refs.has('previousPullRequestNumber');
+    refs.has('previousTaskId') ||
+    refs.has('previousPullRequestUrl') ||
+    refs.has('previousPullRequestNumber');
   if (usesAnyPrevious && stepIdx === 0) {
     out.push("'previous*' references have no value in the first step");
   }
@@ -740,7 +798,9 @@ function TriggersPanel({
   onChange: (next: FlowTrigger[]) => void;
 }) {
   const openedOn = triggers.some((t) => t.kind === 'issue.opened');
-  const labelTriggers = triggers.filter((t): t is { kind: 'issue.labeled'; label: string } => t.kind === 'issue.labeled');
+  const labelTriggers = triggers.filter(
+    (t): t is { kind: 'issue.labeled'; label: string } => t.kind === 'issue.labeled',
+  );
   const [draftLabel, setDraftLabel] = useState('');
 
   const setOpenedOn = (on: boolean) => {
@@ -833,7 +893,8 @@ function TriggersPanel({
           </div>
         </div>
         <p className="text-[11px] text-fg-muted">
-          Triggers fire via the GitHub App webhook. The dispatcher dedupes against in-flight jobs for the same flow+issue.
+          Triggers fire via the GitHub App webhook. The dispatcher dedupes against in-flight jobs
+          for the same flow+issue.
         </p>
       </div>
     </details>
@@ -933,22 +994,31 @@ function StepPreview({ flowId, stepIdx }: { flowId: string; stepIdx: number }) {
       {preview && (
         <>
           <div>
-            <div className="text-[10px] uppercase tracking-wide text-fg-muted">User prompt sent to agent</div>
+            <div className="text-[10px] uppercase tracking-wide text-fg-muted">
+              User prompt sent to agent
+            </div>
             <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-border/60 bg-bg-subtle p-2 font-mono text-[11px] text-fg">
               {preview.userPrompt || '(empty)'}
             </pre>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-wide text-fg-muted">System prompt scaffolding</div>
+            <div className="text-[10px] uppercase tracking-wide text-fg-muted">
+              System prompt scaffolding
+            </div>
             <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-border/60 bg-bg-subtle p-2 font-mono text-[11px] text-fg-muted">
               {preview.scaffoldingSystemPrompt}
             </pre>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wide text-fg-muted">
-              Step notes
-              {' '}
-              <span className={preview.stepNotesIsDefault ? 'normal-case text-fg-muted/70' : 'normal-case text-accent'}>
+              Step notes{' '}
+              <span
+                className={
+                  preview.stepNotesIsDefault
+                    ? 'normal-case text-fg-muted/70'
+                    : 'normal-case text-accent'
+                }
+              >
                 — {preview.stepNotesIsDefault ? 'default (the marker contract)' : 'user override'}
               </span>
             </div>
@@ -966,7 +1036,8 @@ function StepPreview({ flowId, stepIdx }: { flowId: string; stepIdx: number }) {
               )}
             </div>
             <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border border-border/60 bg-bg-subtle p-2 font-mono text-[11px] text-fg/80">
-              {preview.skillBody || '(skill body unavailable — appended at runtime from .ai/skills/)'}
+              {preview.skillBody ||
+                '(skill body unavailable — appended at runtime from .ai/skills/)'}
             </pre>
           </div>
         </>
@@ -1018,12 +1089,17 @@ function RunOnIssue({ onRun }: { onRun: (issue: number) => void }) {
 
 export function StatusBadge({ status }: { status: string }) {
   const cls =
-    status === 'succeeded' ? 'text-emerald-400 bg-emerald-500/15'
-    : status === 'failed' ? 'text-rose-400 bg-rose-500/15'
-    : status === 'running' ? 'text-amber-300 bg-amber-500/15'
-    : status === 'cancelled' ? 'text-fg-muted bg-bg-subtle'
-    : status === 'skipped' ? 'text-fg-muted bg-bg-subtle'
-    : 'text-fg-muted bg-bg-subtle';
+    status === 'succeeded'
+      ? 'text-emerald-400 bg-emerald-500/15'
+      : status === 'failed'
+        ? 'text-rose-400 bg-rose-500/15'
+        : status === 'running'
+          ? 'text-amber-300 bg-amber-500/15'
+          : status === 'cancelled'
+            ? 'text-fg-muted bg-bg-subtle'
+            : status === 'skipped'
+              ? 'text-fg-muted bg-bg-subtle'
+              : 'text-fg-muted bg-bg-subtle';
   return <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${cls}`}>{status}</span>;
 }
 
@@ -1064,7 +1140,16 @@ function IconButton({
 
 function PlusIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 5v14M5 12h14" />
     </svg>
   );
@@ -1072,7 +1157,16 @@ function PlusIcon() {
 
 function TrashIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
     </svg>
   );
@@ -1080,7 +1174,16 @@ function TrashIcon() {
 
 function ArrowDownIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 5v14M5 12l7 7 7-7" />
     </svg>
   );
@@ -1088,7 +1191,16 @@ function ArrowDownIcon() {
 
 function ArrowUpIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 19V5M5 12l7-7 7 7" />
     </svg>
   );
@@ -1096,7 +1208,16 @@ function ArrowUpIcon() {
 
 function EyeIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -1105,7 +1226,16 @@ function EyeIcon() {
 
 function PencilIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z" />
     </svg>
@@ -1114,7 +1244,16 @@ function PencilIcon() {
 
 function ChatIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
     </svg>
   );

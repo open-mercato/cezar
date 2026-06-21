@@ -70,6 +70,8 @@ export async function upsertIssueFromWebhook(
   if (issue.comments != null) row.comment_count = issue.comments;
   const { error } = await adminSupabase
     .from('issues')
-    .upsert(row as Database['public']['Tables']['issues']['Insert'], { onConflict: 'workspace_id,number' });
+    .upsert(row as Database['public']['Tables']['issues']['Insert'], {
+      onConflict: 'workspace_id,number',
+    });
   if (error) throw new Error(`issue upsert failed: ${error.message}`);
 }

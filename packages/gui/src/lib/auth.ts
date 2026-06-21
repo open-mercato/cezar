@@ -10,10 +10,14 @@ export interface SessionUser {
 
 export async function getSessionUser(): Promise<SessionUser | null> {
   const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: { session } } = await supabase.auth.getSession();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
 
   let githubToken = session?.provider_token ?? null;
   if (githubToken) {

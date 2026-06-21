@@ -101,12 +101,7 @@ export function Sheet({
             </button>
           </div>
         )}
-        <div
-          className={cn(
-            'flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]',
-            className,
-          )}
-        >
+        <div className={cn('flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]', className)}>
           {children}
         </div>
       </div>

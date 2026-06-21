@@ -2,10 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_AUTO_ACCEPT_ABOVE } from './action.js';
 import type { ActionDef, ActionRunResult, EffectRoutingMode } from './action.js';
 import type { Skill } from '../skills/skill-catalog.js';
-import {
-  formatLabelCatalogPrompt,
-  type WorkspaceLabel,
-} from '../labels/label-catalog.js';
+import { formatLabelCatalogPrompt, type WorkspaceLabel } from '../labels/label-catalog.js';
 import {
   actionAlreadyCommented,
   actionPreviouslyCommented,
@@ -120,11 +117,7 @@ export async function runAction(
 
   const skillSection = resolveSkillContext(action.skillRefs, deps.skills);
   const labelCatalog = formatLabelCatalogPrompt(deps.labels ?? null, target.kind, target.kind);
-  const systemMessage = [
-    action.systemPrompt.trim(),
-    skillSection,
-    labelCatalog,
-  ]
+  const systemMessage = [action.systemPrompt.trim(), skillSection, labelCatalog]
     .filter((s) => s && s.length > 0)
     .join('\n\n---\n\n');
 
@@ -144,23 +137,24 @@ export async function runAction(
   }
   const model = action.model ?? deps.model ?? DEFAULT_MODEL;
 
-  const result = action.effects && action.effects.length > 0
-    ? await runDeclaredMode(action, target, {
-        client,
-        effectCtx: deps.effectCtx,
-        model,
-        systemMessage,
-        userMessage,
-        deferSink: deps.deferSink,
-      })
-    : await runToolUseMode(action, target, {
-        client,
-        effectCtx: deps.effectCtx,
-        model,
-        systemMessage,
-        userMessage,
-        deferSink: deps.deferSink,
-      });
+  const result =
+    action.effects && action.effects.length > 0
+      ? await runDeclaredMode(action, target, {
+          client,
+          effectCtx: deps.effectCtx,
+          model,
+          systemMessage,
+          userMessage,
+          deferSink: deps.deferSink,
+        })
+      : await runToolUseMode(action, target, {
+          client,
+          effectCtx: deps.effectCtx,
+          model,
+          systemMessage,
+          userMessage,
+          deferSink: deps.deferSink,
+        });
 
   if (deps.autoComment?.enabled && !actionAlreadyCommented(result.effectsApplied)) {
     // Cross-run dedupe: if a previous run of this action already posted its
@@ -476,9 +470,10 @@ async function applyOrDefer(
     if (!action.suggestedFlowId) {
       return { outcome: 'dropped', summary: 'dropped (no workflow configured)' };
     }
-    const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
-      ? (call.args as Record<string, unknown>)
-      : {};
+    const args =
+      call.args && typeof call.args === 'object' && !Array.isArray(call.args)
+        ? (call.args as Record<string, unknown>)
+        : {};
     call = { ...call, args: { ...args, flowId: action.suggestedFlowId } };
   }
 

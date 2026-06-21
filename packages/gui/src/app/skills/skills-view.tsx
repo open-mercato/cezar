@@ -73,11 +73,19 @@ type SkillTab = 'catalog' | 'active';
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
 
-export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedAt, readOnly }: SkillsViewProps) {
+export function SkillsView({
+  rows: rowsProp,
+  overridesCount,
+  commitSha,
+  fetchedAt,
+  readOnly,
+}: SkillsViewProps) {
   // Keep an optimistic local mirror so a toggle reflects in the table before
   // `revalidatePath` lands the server-side refresh.
   const [rows, setRows] = useState<SkillRow[]>(rowsProp);
-  useEffect(() => { setRows(rowsProp); }, [rowsProp]);
+  useEffect(() => {
+    setRows(rowsProp);
+  }, [rowsProp]);
 
   const [tab, setTab] = useState<SkillTab>('catalog');
   const [page, setPage] = useState(1);
@@ -89,7 +97,11 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [refreshState, setRefreshState] = useState<{ ok?: boolean; error?: string; count?: number } | null>(null);
+  const [refreshState, setRefreshState] = useState<{
+    ok?: boolean;
+    error?: string;
+    count?: number;
+  } | null>(null);
   const [refreshing, startRefresh] = useTransition();
 
   function handleToggleActive(name: string, nextActive: boolean) {
@@ -190,7 +202,9 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
       {/* Page header */}
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-[24px] font-semibold leading-tight tracking-tight text-on-surface">Skills</h1>
+          <h1 className="text-[24px] font-semibold leading-tight tracking-tight text-on-surface">
+            Skills
+          </h1>
           <p className="mt-1 text-sm text-on-surface-variant">
             Manage and monitor autonomous AI capabilities across your repositories.
           </p>
@@ -251,7 +265,8 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
       {/* Inline status banners */}
       {refreshState?.ok && (
         <div className="mb-4 rounded-md border border-primary/30 bg-primary-container/20 px-4 py-2 text-sm text-primary">
-          Synced {refreshState.count ?? 0} skill{(refreshState.count ?? 0) === 1 ? '' : 's'} from repo. Reload to see updates.
+          Synced {refreshState.count ?? 0} skill{(refreshState.count ?? 0) === 1 ? '' : 's'} from
+          repo. Reload to see updates.
         </div>
       )}
       {refreshState?.error && (
@@ -265,7 +280,11 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
         <StatCard label="ACTIVE SKILLS" value={`${activeSkills} / ${totalSkills}`} tone="primary" />
         <StatCard label="ACTIVE RUNS" value={String(activeRuns)} tone="default" />
         <StatCard label="OVERRIDES" value={String(overridesCount)} tone="tertiary" />
-        <StatCard label="AVG SUCCESS" value={avgSuccess === null ? '—' : `${avgSuccess}%`} tone="default" />
+        <StatCard
+          label="AVG SUCCESS"
+          value={avgSuccess === null ? '—' : `${avgSuccess}%`}
+          tone="default"
+        />
       </div>
 
       {/* Filter bar */}
@@ -349,50 +368,96 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
-              <tr className="bg-surface-container">
-                <SortableTh sortKey="name"    sortDir={sortDir} active={sortKey === 'name'}    onClick={handleSort}>NAME</SortableTh>
-                <SortableTh sortKey="source"  sortDir={sortDir} active={sortKey === 'source'}  onClick={handleSort}>SOURCE</SortableTh>
-                <SortableTh sortKey="mode"    sortDir={sortDir} active={sortKey === 'mode'}    onClick={handleSort}>MODE</SortableTh>
-                <SortableTh sortKey="trigger" sortDir={sortDir} active={sortKey === 'trigger'} onClick={handleSort}>TRIGGER</SortableTh>
-                <SortableTh sortKey="status"  sortDir={sortDir} active={sortKey === 'status'}  onClick={handleSort}>ENABLED</SortableTh>
-                <SortableTh sortKey="lastRun" sortDir={sortDir} active={sortKey === 'lastRun'} onClick={handleSort}>LAST RUN</SortableTh>
-                <Th className="text-right pr-6">ACTIONS</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {pageRows.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-sm text-on-surface-variant">
-                    {totalSkills === 0 ? (
-                      <>
-                        No skills found in <code className="font-mono text-on-surface">.ai/skills/</code>.{' '}
-                        {!readOnly && (
-                          <button
-                            type="button"
-                            onClick={handleRefresh}
-                            className="underline underline-offset-2 hover:text-on-surface"
-                          >
-                            Sync from repo
-                          </button>
-                        )}{' '}
-                        once your repo has skill manifests.
-                      </>
-                    ) : tab === 'active' ? (
-                      <ActiveTabEmptyState onSwitch={() => handleTabChange('catalog')} />
-                    ) : (
-                      <>
-                        No skills match these filters.{' '}
-                        <button
-                          type="button"
-                          onClick={resetFilters}
-                          className="underline underline-offset-2 hover:text-on-surface"
-                        >
-                          Clear filters
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
+                  <tr className="bg-surface-container">
+                    <SortableTh
+                      sortKey="name"
+                      sortDir={sortDir}
+                      active={sortKey === 'name'}
+                      onClick={handleSort}
+                    >
+                      NAME
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="source"
+                      sortDir={sortDir}
+                      active={sortKey === 'source'}
+                      onClick={handleSort}
+                    >
+                      SOURCE
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="mode"
+                      sortDir={sortDir}
+                      active={sortKey === 'mode'}
+                      onClick={handleSort}
+                    >
+                      MODE
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="trigger"
+                      sortDir={sortDir}
+                      active={sortKey === 'trigger'}
+                      onClick={handleSort}
+                    >
+                      TRIGGER
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="status"
+                      sortDir={sortDir}
+                      active={sortKey === 'status'}
+                      onClick={handleSort}
+                    >
+                      ENABLED
+                    </SortableTh>
+                    <SortableTh
+                      sortKey="lastRun"
+                      sortDir={sortDir}
+                      active={sortKey === 'lastRun'}
+                      onClick={handleSort}
+                    >
+                      LAST RUN
+                    </SortableTh>
+                    <Th className="text-right pr-6">ACTIONS</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="px-6 py-12 text-center text-sm text-on-surface-variant"
+                      >
+                        {totalSkills === 0 ? (
+                          <>
+                            No skills found in{' '}
+                            <code className="font-mono text-on-surface">.ai/skills/</code>.{' '}
+                            {!readOnly && (
+                              <button
+                                type="button"
+                                onClick={handleRefresh}
+                                className="underline underline-offset-2 hover:text-on-surface"
+                              >
+                                Sync from repo
+                              </button>
+                            )}{' '}
+                            once your repo has skill manifests.
+                          </>
+                        ) : tab === 'active' ? (
+                          <ActiveTabEmptyState onSwitch={() => handleTabChange('catalog')} />
+                        ) : (
+                          <>
+                            No skills match these filters.{' '}
+                            <button
+                              type="button"
+                              onClick={resetFilters}
+                              className="underline underline-offset-2 hover:text-on-surface"
+                            >
+                              Clear filters
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
                   ) : (
                     pageRows.map((row) => (
                       <SkillTableRow
@@ -458,8 +523,10 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
         <div className="flex flex-wrap items-center gap-3">
           <span>
             Showing {pageRows.length === 0 ? 0 : (page - 1) * pageSize + 1}
-            {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of {totalFiltered}
-            {filtersActive && <> filtered (of {totalSkills})</>} skill{totalFiltered === 1 ? '' : 's'}
+            {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of{' '}
+            {totalFiltered}
+            {filtersActive && <> filtered (of {totalSkills})</>} skill
+            {totalFiltered === 1 ? '' : 's'}
           </span>
           <span className="hidden h-4 w-px bg-outline-variant sm:inline-block" aria-hidden />
           <label className="flex items-center gap-2">
@@ -487,12 +554,12 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
             </span>
           )}
           {fetchedAt && (
-            <span className="hidden xl:inline">· refreshed {new Date(fetchedAt).toLocaleString()}</span>
+            <span className="hidden xl:inline">
+              · refreshed {new Date(fetchedAt).toLocaleString()}
+            </span>
           )}
         </div>
-        {totalPages > 1 && (
-          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
-        )}
+        {totalPages > 1 && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
       </div>
 
       {/* Info callout cards */}
@@ -502,9 +569,10 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
           title="Skill Overrides"
           body={
             <>
-              Overrides allow you to manually tune AI parameters for specific repositories. These take precedence over
-              built-in behaviors and repository-defined configurations. Use the <span className="font-medium text-on-surface">New override</span> button
-              to create a custom skill definition.
+              Overrides allow you to manually tune AI parameters for specific repositories. These
+              take precedence over built-in behaviors and repository-defined configurations. Use the{' '}
+              <span className="font-medium text-on-surface">New override</span> button to create a
+              custom skill definition.
             </>
           }
         />
@@ -513,9 +581,10 @@ export function SkillsView({ rows: rowsProp, overridesCount, commitSha, fetchedA
           title="Repository Sync"
           body={
             <>
-              Cezar automatically scans your <code className="font-mono text-on-surface">.cezar/skills</code> directory
-              for skill definitions. Ensure your manifest files are correctly formatted JSON to ensure they appear in
-              this directory after a sync.
+              Cezar automatically scans your{' '}
+              <code className="font-mono text-on-surface">.cezar/skills</code> directory for skill
+              definitions. Ensure your manifest files are correctly formatted JSON to ensure they
+              appear in this directory after a sync.
             </>
           }
         />
@@ -579,10 +648,17 @@ function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
   return (
     <span
       aria-hidden
-      className={cn('inline-flex flex-col text-[8px] leading-[8px]', active ? 'text-primary' : 'text-outline-variant')}
+      className={cn(
+        'inline-flex flex-col text-[8px] leading-[8px]',
+        active ? 'text-primary' : 'text-outline-variant',
+      )}
     >
-      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>▲</span>
-      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>▼</span>
+      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>
+        ▲
+      </span>
+      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>
+        ▼
+      </span>
     </span>
   );
 }
@@ -622,7 +698,11 @@ function SkillTableRow({
     <tr className="border-t border-outline-variant/60 hover:bg-surface-container/60">
       <td className="px-6 py-4 align-middle">
         <Link href={href} className="flex items-center gap-2 text-on-surface hover:text-primary">
-          {row.source === 'override' && <span className="text-tertiary" aria-hidden>*</span>}
+          {row.source === 'override' && (
+            <span className="text-tertiary" aria-hidden>
+              *
+            </span>
+          )}
           <span className="font-medium">{row.name}</span>
         </Link>
       </td>
@@ -644,7 +724,9 @@ function SkillTableRow({
         />
       </td>
       <td className="px-6 py-4 align-middle">
-        <span className="font-mono text-[13px] text-on-surface-variant">{formatLastRun(row.lastRunIso)}</span>
+        <span className="font-mono text-[13px] text-on-surface-variant">
+          {formatLastRun(row.lastRunIso)}
+        </span>
       </td>
       <td className="px-6 py-4 align-middle">
         <div className="flex items-center justify-end pr-2">
@@ -812,8 +894,15 @@ function SkillCard({
   return (
     <EntityCard
       title={
-        <Link href={href} className="flex flex-wrap items-center gap-2 text-on-surface hover:text-primary">
-          {row.source === 'override' && <span className="text-tertiary" aria-hidden>*</span>}
+        <Link
+          href={href}
+          className="flex flex-wrap items-center gap-2 text-on-surface hover:text-primary"
+        >
+          {row.source === 'override' && (
+            <span className="text-tertiary" aria-hidden>
+              *
+            </span>
+          )}
           <span className="font-medium">{row.name}</span>
         </Link>
       }
@@ -831,9 +920,7 @@ function SkillCard({
         </CardActions>
       }
     >
-      {row.description && (
-        <div className="text-xs text-on-surface-variant">{row.description}</div>
-      )}
+      {row.description && <div className="text-xs text-on-surface-variant">{row.description}</div>}
       <MetaRow>
         <MetaItem label="Source">
           <SourceBadge source={row.source} />
@@ -916,7 +1003,9 @@ function AddSkillSourceMenu({ disabled }: { disabled: boolean }) {
         className="inline-flex h-9 items-center gap-2 rounded-md border border-outline-variant bg-surface-container-low px-3 text-sm font-medium text-on-surface transition-colors hover:border-primary hover:bg-surface-container disabled:opacity-50"
       >
         Add skill source
-        <span aria-hidden className="text-on-surface-variant">▾</span>
+        <span aria-hidden className="text-on-surface-variant">
+          ▾
+        </span>
       </button>
       {open && (
         <div
@@ -964,12 +1053,22 @@ function StatCard({
       <div className="font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-on-surface-variant">
         {label}
       </div>
-      <div className={cn('mt-2 text-[28px] font-semibold leading-none tracking-tight', valueColor)}>{value}</div>
+      <div className={cn('mt-2 text-[28px] font-semibold leading-none tracking-tight', valueColor)}>
+        {value}
+      </div>
     </div>
   );
 }
 
-function CalloutCard({ title, body, tone }: { title: string; body: React.ReactNode; tone: 'primary' | 'tertiary' }) {
+function CalloutCard({
+  title,
+  body,
+  tone,
+}: {
+  title: string;
+  body: React.ReactNode;
+  tone: 'primary' | 'tertiary';
+}) {
   const rail = tone === 'primary' ? 'bg-primary' : 'bg-tertiary';
   return (
     <div className="relative overflow-hidden rounded-lg border border-outline-variant bg-surface-container-low p-5 pl-6">
@@ -994,20 +1093,32 @@ function Pagination({
     <>
       {/* Compact phone variant: Prev · "N / M" · Next. */}
       <div className="flex items-center gap-2 sm:hidden">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         <span className="text-sm tabular-nums text-on-surface-variant">
           {page} / {totalPages}
         </span>
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>
 
       {/* Full numeric variant: sm+. */}
       <div className="hidden items-center gap-1 sm:flex">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         {pages.map((p) => (
@@ -1025,7 +1136,11 @@ function Pagination({
             {p}
           </button>
         ))}
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>

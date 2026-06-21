@@ -24,9 +24,8 @@ export function formatCommentsForPrompt(
 
   for (const c of recent) {
     const date = c.createdAt.slice(0, 10);
-    const body = c.body.length > maxCharsPerComment
-      ? c.body.slice(0, maxCharsPerComment) + '...'
-      : c.body;
+    const body =
+      c.body.length > maxCharsPerComment ? c.body.slice(0, maxCharsPerComment) + '...' : c.body;
     // Collapse multiline comment bodies to single line for compactness
     const oneLine = body.replace(/\n+/g, ' ').trim();
     const line = `@${c.author} (${date}): ${oneLine}`;

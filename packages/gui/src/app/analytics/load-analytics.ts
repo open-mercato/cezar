@@ -44,8 +44,17 @@ export async function loadAnalytics(workspaceId: string): Promise<AnalyticsData 
     const since = new Date(Date.now() - 12 * 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const [{ data: issues }, { data: runs }] = await Promise.all([
-      supabase.from('issues').select('number, state, labels, analysis, created_at').eq('workspace_id', workspaceId).gte('created_at', since),
-      supabase.from('workflow_runs').select('id, workflow, issue_number, status, tokens_used, started_at').eq('workspace_id', workspaceId).order('started_at', { ascending: false }).limit(200),
+      supabase
+        .from('issues')
+        .select('number, state, labels, analysis, created_at')
+        .eq('workspace_id', workspaceId)
+        .gte('created_at', since),
+      supabase
+        .from('workflow_runs')
+        .select('id, workflow, issue_number, status, tokens_used, started_at')
+        .eq('workspace_id', workspaceId)
+        .order('started_at', { ascending: false })
+        .limit(200),
     ]);
 
     const allIssues = issues ?? [];
@@ -78,7 +87,8 @@ export async function loadAnalytics(workspaceId: string): Promise<AnalyticsData 
       const pri = (i.analysis as any)?.priority;
       if (pri) priCounts.set(pri, (priCounts.get(pri) ?? 0) + 1);
     }
-    const priorityDist = [...priCounts.entries()].map(([label, count]) => ({ label, count }))
+    const priorityDist = [...priCounts.entries()]
+      .map(([label, count]) => ({ label, count }))
       .sort((a, b) => b.count - a.count);
 
     // Type distribution
@@ -87,7 +97,8 @@ export async function loadAnalytics(workspaceId: string): Promise<AnalyticsData 
       const t = (i.analysis as any)?.issueType;
       if (t) typeCounts.set(t, (typeCounts.get(t) ?? 0) + 1);
     }
-    const typeDist = [...typeCounts.entries()].map(([label, count]) => ({ label, count }))
+    const typeDist = [...typeCounts.entries()]
+      .map(([label, count]) => ({ label, count }))
       .sort((a, b) => b.count - a.count);
 
     // Top labels
@@ -97,7 +108,8 @@ export async function loadAnalytics(workspaceId: string): Promise<AnalyticsData 
         labelCounts.set(l, (labelCounts.get(l) ?? 0) + 1);
       }
     }
-    const labelDist = [...labelCounts.entries()].map(([label, count]) => ({ label, count }))
+    const labelDist = [...labelCounts.entries()]
+      .map(([label, count]) => ({ label, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 12);
 

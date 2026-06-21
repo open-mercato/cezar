@@ -1,10 +1,7 @@
 // Shared types for the per-action model + acceptance configuration.
 // Used by the loader (page.tsx), the save mutations, and the form view.
 
-export type ActionModel =
-  | 'claude-opus-4-7'
-  | 'claude-sonnet-4-6'
-  | 'claude-haiku-4-5';
+export type ActionModel = 'claude-opus-4-7' | 'claude-sonnet-4-6' | 'claude-haiku-4-5';
 
 export type AcceptanceMode = 'auto' | 'human-in-the-loop';
 
@@ -48,10 +45,7 @@ export function isActionModel(v: unknown): v is ActionModel {
  * written under the other mode (lets the user toggle modes safely without
  * losing the runner's invariant).
  */
-export function coerceConfidenceConfig(
-  value: unknown,
-  mode: AcceptanceMode,
-): ConfidenceConfig {
+export function coerceConfidenceConfig(value: unknown, mode: AcceptanceMode): ConfidenceConfig {
   const obj = (value && typeof value === 'object' ? (value as Record<string, unknown>) : {}) ?? {};
   const clamp = (v: unknown, fallback: number): number => {
     const n = typeof v === 'number' ? v : Number(v);
@@ -100,6 +94,7 @@ export function validateConfidenceConfig(
 
   const low = toInt(obj.autoDenyBelow);
   if (low === null) return { ok: false, error: 'autoDenyBelow must be a number in 0..100' };
-  if (low >= high) return { ok: false, error: 'autoDenyBelow must be strictly less than autoAcceptAbove' };
+  if (low >= high)
+    return { ok: false, error: 'autoDenyBelow must be strictly less than autoAcceptAbove' };
   return { ok: true, value: { autoDenyBelow: low, autoAcceptAbove: high } };
 }

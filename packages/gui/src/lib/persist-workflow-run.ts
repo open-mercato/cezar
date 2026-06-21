@@ -105,7 +105,16 @@ export async function createWorkflowRunPersister(
   supabase: SupabaseClient<Database>,
   opts: CreateWorkflowRunOpts,
 ): Promise<WorkflowRunPersister> {
-  const { workspaceId, jobId, workflow, repo, issueNumber, prNumber, existingRunId, onPersistError } = opts;
+  const {
+    workspaceId,
+    jobId,
+    workflow,
+    repo,
+    issueNumber,
+    prNumber,
+    existingRunId,
+    onPersistError,
+  } = opts;
 
   let failedWrites = 0;
 
@@ -123,7 +132,10 @@ export async function createWorkflowRunPersister(
   ): Promise<void> => {
     const attempts = opts2?.critical ? PERSIST_MAX_ATTEMPTS : 1;
     for (let attempt = 0; attempt < attempts; attempt++) {
-      try { await fn(); return; } catch (err) {
+      try {
+        await fn();
+        return;
+      } catch (err) {
         if (attempt < attempts - 1) {
           await new Promise((r) => setTimeout(r, PERSIST_BACKOFF_MS * 2 ** attempt));
           continue;
@@ -133,13 +145,16 @@ export async function createWorkflowRunPersister(
         else {
           // Structured single-line log so an operator can grep by workspace /
           // run id and reconstruct the intended write from agent traces.
-          console.error('[persist-workflow-run] persist failed', JSON.stringify({
-            label,
-            workspaceId,
-            workflowRunId,
-            attempts,
-            error: err instanceof Error ? err.message : String(err),
-          }));
+          console.error(
+            '[persist-workflow-run] persist failed',
+            JSON.stringify({
+              label,
+              workspaceId,
+              workflowRunId,
+              attempts,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
         }
         return;
       }
@@ -156,42 +171,54 @@ export async function createWorkflowRunPersister(
     // and flip it to `running` — stamping started_at and the draining job id —
     // as this executor takes ownership.
     workflowRunId = existingRunId;
-    await safe('workflow_runs bind', async () => {
-      const { error } = await supabase
-        .from('workflow_runs')
-        .update({ status: 'running', started_at: new Date().toISOString(), job_id: jobId ?? null })
-        .eq('id', existingRunId);
-      if (error) throw error;
-    }, { critical: true });
+    await safe(
+      'workflow_runs bind',
+      async () => {
+        const { error } = await supabase
+          .from('workflow_runs')
+          .update({
+            status: 'running',
+            started_at: new Date().toISOString(),
+            job_id: jobId ?? null,
+          })
+          .eq('id', existingRunId);
+        if (error) throw error;
+      },
+      { critical: true },
+    );
   } else {
-  const candidateId = randomUUID();
-  await safe('workflow_runs insert', async () => {
-    const { data, error } = await supabase
-      .from('workflow_runs')
-      .upsert(
-        {
-          id: candidateId,
-          workspace_id: workspaceId,
-          job_id: jobId ?? null,
-          workflow,
-          repo,
-          issue_number: issueNumber,
-          pr_number: prNumber ?? null,
-          status: 'running',
-          started_at: new Date().toISOString(),
-        },
-        { onConflict: 'id', ignoreDuplicates: true },
-      )
-      .select('id')
-      // `maybeSingle`, not `single`: with `ignoreDuplicates` the conflict path
-      // returns zero rows, which `single` would surface as an error and falsely
-      // count as a failed write.
-      .maybeSingle();
-    if (error) throw error;
-    // No row means the conflict path was taken (a retry-after-success on the
-    // same `candidateId`) — that row already landed, so reuse the id we minted.
-    workflowRunId = data?.id ?? candidateId;
-  }, { critical: true });
+    const candidateId = randomUUID();
+    await safe(
+      'workflow_runs insert',
+      async () => {
+        const { data, error } = await supabase
+          .from('workflow_runs')
+          .upsert(
+            {
+              id: candidateId,
+              workspace_id: workspaceId,
+              job_id: jobId ?? null,
+              workflow,
+              repo,
+              issue_number: issueNumber,
+              pr_number: prNumber ?? null,
+              status: 'running',
+              started_at: new Date().toISOString(),
+            },
+            { onConflict: 'id', ignoreDuplicates: true },
+          )
+          .select('id')
+          // `maybeSingle`, not `single`: with `ignoreDuplicates` the conflict path
+          // returns zero rows, which `single` would surface as an error and falsely
+          // count as a failed write.
+          .maybeSingle();
+        if (error) throw error;
+        // No row means the conflict path was taken (a retry-after-success on the
+        // same `candidateId`) — that row already landed, so reuse the id we minted.
+        workflowRunId = data?.id ?? candidateId;
+      },
+      { critical: true },
+    );
   }
 
   const recordEvent: WorkflowRunPersister['recordEvent'] = async (type, payload, agentRunId) => {
@@ -242,7 +269,9 @@ export async function createWorkflowRunPersister(
         { stepId: r.stepId, iteration: r.iteration, sessionId: r.sessionId ?? null },
         data?.id,
       );
-      const updatePatch: Database['public']['Tables']['workflow_runs']['Update'] = { current_step_id: r.stepId };
+      const updatePatch: Database['public']['Tables']['workflow_runs']['Update'] = {
+        current_step_id: r.stepId,
+      };
       // First step that mints a session id seeds `workflow_runs.session_id`.
       // We only set it if it isn't already populated (the column has a
       // `coalesce`-style "first writer wins" semantic — same as the RPC).
@@ -282,10 +311,19 @@ export async function createWorkflowRunPersister(
       if (error) throw error;
       await recordEvent(
         'step-end',
-        { stepId: r.stepId, iteration: r.iteration, status: r.status, summary: r.summary, error: r.error, sessionId: r.sessionId ?? null },
+        {
+          stepId: r.stepId,
+          iteration: r.iteration,
+          status: r.status,
+          summary: r.summary,
+          error: r.error,
+          sessionId: r.sessionId ?? null,
+        },
         data?.id,
       );
-      const updatePatch: Database['public']['Tables']['workflow_runs']['Update'] = { current_step_id: r.stepId };
+      const updatePatch: Database['public']['Tables']['workflow_runs']['Update'] = {
+        current_step_id: r.stepId,
+      };
       if (r.sessionId) updatePatch.session_id = r.sessionId;
       await supabase.from('workflow_runs').update(updatePatch).eq('id', workflowRunId!);
     });
@@ -298,14 +336,22 @@ export async function createWorkflowRunPersister(
     // merge rather than clobber any caller-supplied outcome.
     const finalPatch: Database['public']['Tables']['workflow_runs']['Update'] = { ...patch };
     if (failedWrites > 0) {
-      const base = (patch.outcome && typeof patch.outcome === 'object' && !Array.isArray(patch.outcome))
-        ? (patch.outcome as Record<string, unknown>)
-        : {};
-      finalPatch.outcome = { ...base, failedWrites } as Database['public']['Tables']['workflow_runs']['Update']['outcome'];
+      const base =
+        patch.outcome && typeof patch.outcome === 'object' && !Array.isArray(patch.outcome)
+          ? (patch.outcome as Record<string, unknown>)
+          : {};
+      finalPatch.outcome = {
+        ...base,
+        failedWrites,
+      } as Database['public']['Tables']['workflow_runs']['Update']['outcome'];
     }
-    await safe('workflow_runs finalize', async () => {
-      await supabase.from('workflow_runs').update(finalPatch).eq('id', workflowRunId!);
-    }, { critical: true });
+    await safe(
+      'workflow_runs finalize',
+      async () => {
+        await supabase.from('workflow_runs').update(finalPatch).eq('id', workflowRunId!);
+      },
+      { critical: true },
+    );
   };
 
   const fail: WorkflowRunPersister['fail'] = async (reason) => {
@@ -334,8 +380,12 @@ export async function createWorkflowRunPersister(
   };
 
   return {
-    get id() { return workflowRunId; },
-    get failedWrites() { return failedWrites; },
+    get id() {
+      return workflowRunId;
+    },
+    get failedWrites() {
+      return failedWrites;
+    },
     recordStepStart,
     recordAgentRun,
     recordEvent,

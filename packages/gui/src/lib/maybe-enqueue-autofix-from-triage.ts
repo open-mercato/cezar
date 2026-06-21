@@ -66,7 +66,8 @@ export async function maybeEnqueueAutofixFromTriage(
 ): Promise<{ enqueued: boolean; reason?: string }> {
   const { workspaceId, repo, issueNumber, outcome, workspaceConfig, parentRunnerId } = params;
   try {
-    if (!outcome || outcome.route !== 'autofix') return { enqueued: false, reason: 'route is not autofix' };
+    if (!outcome || outcome.route !== 'autofix')
+      return { enqueued: false, reason: 'route is not autofix' };
 
     const { data: ws, error: wsErr } = await adminSupabase
       .from('workspaces')
@@ -76,11 +77,18 @@ export async function maybeEnqueueAutofixFromTriage(
     if (wsErr) return { enqueued: false, reason: `workspace lookup failed: ${wsErr.message}` };
     if (!ws?.autofix_enabled) return { enqueued: false, reason: 'autofix disabled for workspace' };
 
-    if (outcome.issueType !== 'bug') return { enqueued: false, reason: `issueType '${outcome.issueType ?? 'unknown'}' is not a bug` };
+    if (outcome.issueType !== 'bug')
+      return {
+        enqueued: false,
+        reason: `issueType '${outcome.issueType ?? 'unknown'}' is not a bug`,
+      };
     const threshold = workspaceConfig?.autofix?.minBugConfidence ?? DEFAULT_MIN_BUG_CONFIDENCE;
     const confidence = typeof outcome.bugConfidence === 'number' ? outcome.bugConfidence : 0;
     if (confidence < threshold) {
-      return { enqueued: false, reason: `bugConfidence ${confidence.toFixed(2)} < threshold ${threshold.toFixed(2)}` };
+      return {
+        enqueued: false,
+        reason: `bugConfidence ${confidence.toFixed(2)} < threshold ${threshold.toFixed(2)}`,
+      };
     }
 
     // ── dedupe (best-effort early-outs) ──
@@ -97,7 +105,8 @@ export async function maybeEnqueueAutofixFromTriage(
         .eq('issue_number', issueNumber)
         .in('status', ['queued', 'running', 'paused'])
         .limit(1);
-      if (openRuns && openRuns.length > 0) return { enqueued: false, reason: 'an autofix run is already in flight for this issue' };
+      if (openRuns && openRuns.length > 0)
+        return { enqueued: false, reason: 'an autofix run is already in flight for this issue' };
 
       const { data: issueRow } = await adminSupabase
         .from('issues')
@@ -106,7 +115,8 @@ export async function maybeEnqueueAutofixFromTriage(
         .eq('number', issueNumber)
         .maybeSingle();
       const analysis = (issueRow?.analysis ?? {}) as { autofixStatus?: string | null };
-      if (analysis.autofixStatus === 'pr-opened') return { enqueued: false, reason: 'issue already has an autofix PR open' };
+      if (analysis.autofixStatus === 'pr-opened')
+        return { enqueued: false, reason: 'issue already has an autofix PR open' };
     }
 
     // Phase 4 soft affinity — prefer the runner that handled the parent
@@ -130,7 +140,8 @@ export async function maybeEnqueueAutofixFromTriage(
       p_preferred_until: preferredUntil,
     });
     if (insErr) return { enqueued: false, reason: `enqueue failed: ${insErr.message}` };
-    if (!jobId) return { enqueued: false, reason: 'an autofix job is already queued/running for this issue' };
+    if (!jobId)
+      return { enqueued: false, reason: 'an autofix job is already queued/running for this issue' };
     return { enqueued: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

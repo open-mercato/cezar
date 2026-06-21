@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authRunner, runnerScopesWorkspace } from '../../_auth';
-import { maybeEnqueueAutofixFromTriage, type TriageOutcomeLike } from '@/lib/maybe-enqueue-autofix-from-triage';
+import {
+  maybeEnqueueAutofixFromTriage,
+  type TriageOutcomeLike,
+} from '@/lib/maybe-enqueue-autofix-from-triage';
 import { loadWorkspaceConfig } from '@/lib/load-workspace-config';
 import type { Database, DbWorkflowRunStatus, JobStatus } from '@/lib/supabase/types';
 
@@ -17,50 +20,66 @@ export async function GET(req: Request, { params }: { params: Promise<{ runId: s
   const { runner, admin } = auth;
   const { runId } = await params;
 
-  const { data: run } = await admin.from('workflow_runs').select('workspace_id, pause_requested, status').eq('id', runId).maybeSingle();
+  const { data: run } = await admin
+    .from('workflow_runs')
+    .select('workspace_id, pause_requested, status')
+    .eq('id', runId)
+    .maybeSingle();
   if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 });
-  if (!runnerScopesWorkspace(runner, run.workspace_id)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  if (!runnerScopesWorkspace(runner, run.workspace_id))
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   return NextResponse.json({ pause_requested: run.pause_requested, status: run.status });
 }
 
 /** The runner reports one of these run statuses; anything else is rejected
  *  (rather than silently mapped to `failed`, which a typo could trigger). */
 const RunStatus = z.enum([
-  'succeeded', 'failed', 'paused', 'cancelled', 'dry-run', 'pr-opened', 'pushed', 'skipped',
+  'succeeded',
+  'failed',
+  'paused',
+  'cancelled',
+  'dry-run',
+  'pr-opened',
+  'pushed',
+  'skipped',
 ]);
 
-const FinalizeBodySchema = z.object({
-  status: RunStatus,
-  // `outcome` is opaque cockpit JSONB whose shape varies by workflow (autofix /
-  // ci-followup / flow / triage). We keep it loose here (an object or null) and
-  // strictly validate the *triage*-influencing subset at the point of use below,
-  // where it actually gates the autofix enqueue.
-  outcome: z.union([z.record(z.unknown()), z.null()]).optional(),
-  prUrl: z.string().nullable().optional(),
-  prNumber: z.number().int().nullable().optional(),
-  branch: z.string().nullable().optional(),
-  headSha: z.string().nullable().optional(),
-  // Bounded so a buggy runner can't corrupt cockpit counters with a huge value.
-  tokensUsed: z.number().int().min(0).max(10_000_000).optional(),
-  reason: z.string().nullable().optional(),
-  /** Phase 2: claude session id for this run. Stamped on
-   *  `workflow_runs.session_id` if not already set so a future re-claim
-   *  can `claude --resume <id>`. */
-  sessionId: z.string().nullable().optional(),
-}).strict();
+const FinalizeBodySchema = z
+  .object({
+    status: RunStatus,
+    // `outcome` is opaque cockpit JSONB whose shape varies by workflow (autofix /
+    // ci-followup / flow / triage). We keep it loose here (an object or null) and
+    // strictly validate the *triage*-influencing subset at the point of use below,
+    // where it actually gates the autofix enqueue.
+    outcome: z.union([z.record(z.unknown()), z.null()]).optional(),
+    prUrl: z.string().nullable().optional(),
+    prNumber: z.number().int().nullable().optional(),
+    branch: z.string().nullable().optional(),
+    headSha: z.string().nullable().optional(),
+    // Bounded so a buggy runner can't corrupt cockpit counters with a huge value.
+    tokensUsed: z.number().int().min(0).max(10_000_000).optional(),
+    reason: z.string().nullable().optional(),
+    /** Phase 2: claude session id for this run. Stamped on
+     *  `workflow_runs.session_id` if not already set so a future re-claim
+     *  can `claude --resume <id>`. */
+    sessionId: z.string().nullable().optional(),
+  })
+  .strict();
 
 /** The triage-influencing subset of `outcome`. Bounded enums + a [0,1]
  *  confidence so a buggy/compromised runner can't force-trigger autofix via a
  *  junk `issueType`/`bugConfidence`. `.passthrough()` keeps any extra fields
  *  (e.g. `route`) flowing through to the enqueue helper. */
-const TriageOutcomeSchema = z.object({
-  route: z.string().nullable().optional(),
-  issueType: z.enum(['bug', 'feature', 'question', 'other']).nullable().optional(),
-  bugConfidence: z.number().min(0).max(1).nullable().optional(),
-  bugReason: z.string().nullable().optional(),
-  priority: z.string().nullable().optional(),
-  priorityReason: z.string().nullable().optional(),
-}).passthrough();
+const TriageOutcomeSchema = z
+  .object({
+    route: z.string().nullable().optional(),
+    issueType: z.enum(['bug', 'feature', 'question', 'other']).nullable().optional(),
+    bugConfidence: z.number().min(0).max(1).nullable().optional(),
+    bugReason: z.string().nullable().optional(),
+    priority: z.string().nullable().optional(),
+    priorityReason: z.string().nullable().optional(),
+  })
+  .passthrough();
 
 /** PATCH /api/runner/runs/:runId — the runner reports the final state. Updates
  * `workflow_runs` (+ `finished_at` on terminal) and the linked `jobs` row. */
@@ -70,18 +89,31 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
   const { runner, admin } = auth;
   const { runId } = await params;
 
-  const { data: run } = await admin.from('workflow_runs').select('id, job_id, workspace_id, workflow, repo, issue_number').eq('id', runId).maybeSingle();
+  const { data: run } = await admin
+    .from('workflow_runs')
+    .select('id, job_id, workspace_id, workflow, repo, issue_number')
+    .eq('id', runId)
+    .maybeSingle();
   if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 });
-  if (!runnerScopesWorkspace(runner, run.workspace_id)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  if (!runnerScopesWorkspace(runner, run.workspace_id))
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
   // Cap the request body so a buggy/hostile runner can't send a giant payload.
   const raw = await req.text();
-  if (raw.length > MAX_BODY_BYTES) return NextResponse.json({ error: 'payload too large' }, { status: 413 });
+  if (raw.length > MAX_BODY_BYTES)
+    return NextResponse.json({ error: 'payload too large' }, { status: 413 });
   let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return NextResponse.json({ error: 'invalid json' }, { status: 400 }); }
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
+  }
   const result = FinalizeBodySchema.safeParse(parsed);
   if (!result.success) {
-    return NextResponse.json({ error: 'invalid body', details: result.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: 'invalid body', details: result.error.flatten() },
+      { status: 400 },
+    );
   }
   const body = result.data;
 
@@ -89,7 +121,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
   const terminal = runStatus === 'succeeded' || runStatus === 'failed' || runStatus === 'cancelled';
   const patch: Database['public']['Tables']['workflow_runs']['Update'] = {
     status: runStatus,
-    outcome: (body.outcome ?? null) as Database['public']['Tables']['workflow_runs']['Update']['outcome'],
+    outcome: (body.outcome ??
+      null) as Database['public']['Tables']['workflow_runs']['Update']['outcome'],
     reason: body.reason ?? null,
     pr_url: body.prUrl ?? null,
     pr_number: body.prNumber ?? null,
@@ -106,17 +139,23 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
 
   if (run.job_id) {
     const jobStatus: JobStatus =
-      runStatus === 'paused' ? 'queued'         // re-queue a paused run
-      : runStatus === 'cancelled' ? 'cancelled'
-      : runStatus === 'failed' ? 'failed'
-      : 'done';
-    await admin.from('jobs').update({
-      status: jobStatus,
-      claimed_by_runner: null,
-      // Drop the lease — the job is no longer in-flight on this runner.
-      claim_expires_at: null,
-      updated_at: new Date().toISOString(),
-    }).eq('id', run.job_id);
+      runStatus === 'paused'
+        ? 'queued' // re-queue a paused run
+        : runStatus === 'cancelled'
+          ? 'cancelled'
+          : runStatus === 'failed'
+            ? 'failed'
+            : 'done';
+    await admin
+      .from('jobs')
+      .update({
+        status: jobStatus,
+        claimed_by_runner: null,
+        // Drop the lease — the job is no longer in-flight on this runner.
+        claim_expires_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', run.job_id);
   }
 
   // Phase 5 — a runner-driven `triage` run finalizes here; if it concluded
@@ -129,9 +168,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
     // here (treated as no triage outcome) rather than trusted.
     const triageParsed = body.outcome ? TriageOutcomeSchema.safeParse(body.outcome) : null;
     if (body.outcome && triageParsed && !triageParsed.success) {
-      console.error('[runner-finalize] invalid triage outcome, ignoring:', triageParsed.error.flatten());
+      console.error(
+        '[runner-finalize] invalid triage outcome, ignoring:',
+        triageParsed.error.flatten(),
+      );
     }
-    const triageOutcome: TriageOutcomeLike | null = triageParsed?.success ? triageParsed.data : null;
+    const triageOutcome: TriageOutcomeLike | null = triageParsed?.success
+      ? triageParsed.data
+      : null;
     // Mirror execute-workflow-job.ts: persist the classification back to
     // `issues.analysis` so the follow-up autofix dispatch passes its
     // `issue.analysis.issueType === 'bug'` gate. The runner reports the
@@ -158,11 +202,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
         };
         await admin
           .from('issues')
-          .update({ analysis: merged as Database['public']['Tables']['issues']['Update']['analysis'] })
+          .update({
+            analysis: merged as Database['public']['Tables']['issues']['Update']['analysis'],
+          })
           .eq('workspace_id', run.workspace_id)
           .eq('number', run.issue_number);
       } catch (err) {
-        console.error('[runner-finalize] persist triage analysis failed:', err instanceof Error ? err.message : err);
+        console.error(
+          '[runner-finalize] persist triage analysis failed:',
+          err instanceof Error ? err.message : err,
+        );
       }
     }
     try {
@@ -180,7 +229,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
         parentRunnerId: runner.id,
       });
     } catch (err) {
-      console.error('[runner-finalize] triage→autofix enqueue failed:', err instanceof Error ? err.message : err);
+      console.error(
+        '[runner-finalize] triage→autofix enqueue failed:',
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
@@ -199,8 +251,11 @@ function mapRunStatus(s: z.infer<typeof RunStatus>): DbWorkflowRunStatus {
     case 'dry-run':
     case 'skipped':
       return 'succeeded';
-    case 'paused': return 'paused';
-    case 'cancelled': return 'cancelled';
-    default: return 'failed';
+    case 'paused':
+      return 'paused';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      return 'failed';
   }
 }

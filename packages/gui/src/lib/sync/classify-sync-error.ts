@@ -56,7 +56,10 @@ export function classifySyncError(err: unknown): SyncErrorKind {
     return 'rate_limit';
   }
   // 404 → "… not found or is inaccessible." (legacy: "not found or inaccessible")
-  if (message.includes('not found or inaccessible') || message.includes('not found or is inaccessible')) {
+  if (
+    message.includes('not found or inaccessible') ||
+    message.includes('not found or is inaccessible')
+  ) {
     return 'not_found';
   }
   return 'unknown';

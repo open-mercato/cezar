@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { detectBugSignal } from '../../../src/actions/autofix/bug-signal.js';
 import type { StoredIssue } from '../../../src/store/store.model.js';
 
-function makeIssue(overrides: Partial<StoredIssue> & { analysis?: Partial<StoredIssue['analysis']> }): StoredIssue {
+function makeIssue(
+  overrides: Partial<StoredIssue> & { analysis?: Partial<StoredIssue['analysis']> },
+): StoredIssue {
   return {
     number: 1,
     title: 'something happened',
@@ -61,16 +63,21 @@ describe('detectBugSignal', () => {
       opts,
     );
     expect(r.isBug).toBe(true);
-    expect(r.reason).toContain("title prefix");
+    expect(r.reason).toContain('title prefix');
   });
 
   it('accepts `[BUG] ...` and `[Bug] -` prefixes', () => {
     expect(detectBugSignal(makeIssue({ title: '[BUG] crash on save' }), opts).isBug).toBe(true);
-    expect(detectBugSignal(makeIssue({ title: '[Bug] - unexpected logout' }), opts).isBug).toBe(true);
+    expect(detectBugSignal(makeIssue({ title: '[Bug] - unexpected logout' }), opts).isBug).toBe(
+      true,
+    );
   });
 
   it('rejects when nothing matches', () => {
-    const r = detectBugSignal(makeIssue({ title: 'add support for ...', labels: ['enhancement'] }), opts);
+    const r = detectBugSignal(
+      makeIssue({ title: 'add support for ...', labels: ['enhancement'] }),
+      opts,
+    );
     expect(r.isBug).toBe(false);
     expect(r.reason).toContain('not classified as a bug');
   });

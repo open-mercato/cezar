@@ -52,13 +52,18 @@ export class GitHubAppService {
     const jwt = buildAppJwt(appId, privateKey);
     const appOctokit = new Octokit({ auth: jwt });
 
-    const tokenRes = await appOctokit.request('POST /app/installations/{installation_id}/access_tokens', {
-      installation_id: installationId,
-    });
+    const tokenRes = await appOctokit.request(
+      'POST /app/installations/{installation_id}/access_tokens',
+      {
+        installation_id: installationId,
+      },
+    );
     const token = tokenRes.data.token;
     // GitHub installation tokens last 60 min; keep a 10-min safety margin when
     // the response omits `expires_at` (Date.parse on an absent value is NaN).
-    const expiresAt = tokenRes.data.expires_at ? Date.parse(tokenRes.data.expires_at) : Date.now() + 50 * 60_000;
+    const expiresAt = tokenRes.data.expires_at
+      ? Date.parse(tokenRes.data.expires_at)
+      : Date.now() + 50 * 60_000;
 
     GitHubAppService.tokenCacheByInstallId.set(installationId, { token, expiresAt });
     return token;
@@ -98,12 +103,17 @@ export class GitHubAppService {
       installationId = res.data.id;
     } catch {
       try {
-        const res = await appOctokit.request('GET /users/{username}/installation', { username: owner });
+        const res = await appOctokit.request('GET /users/{username}/installation', {
+          username: owner,
+        });
         installationId = res.data.id;
       } catch {
         const res = await appOctokit.request('GET /app/installations', { per_page: 100 });
         const match = res.data.find(
-          (inst) => inst.account && 'login' in inst.account && inst.account.login.toLowerCase() === cacheKey,
+          (inst) =>
+            inst.account &&
+            'login' in inst.account &&
+            inst.account.login.toLowerCase() === cacheKey,
         );
         installationId = match?.id;
       }
@@ -113,13 +123,18 @@ export class GitHubAppService {
       throw new Error(`GitHub App is not installed on "${owner}" — install it on the org/repo`);
     }
 
-    const tokenRes = await appOctokit.request('POST /app/installations/{installation_id}/access_tokens', {
-      installation_id: installationId,
-    });
+    const tokenRes = await appOctokit.request(
+      'POST /app/installations/{installation_id}/access_tokens',
+      {
+        installation_id: installationId,
+      },
+    );
     const token = tokenRes.data.token;
     // GitHub installation tokens last 60 min; keep a 10-min safety margin when
     // the response omits `expires_at` (Date.parse on an absent value is NaN).
-    const expiresAt = tokenRes.data.expires_at ? Date.parse(tokenRes.data.expires_at) : Date.now() + 50 * 60_000;
+    const expiresAt = tokenRes.data.expires_at
+      ? Date.parse(tokenRes.data.expires_at)
+      : Date.now() + 50 * 60_000;
 
     GitHubAppService.tokenCacheByOwner.set(cacheKey, { token, expiresAt });
     return token;

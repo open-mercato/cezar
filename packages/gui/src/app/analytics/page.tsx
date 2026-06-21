@@ -72,8 +72,12 @@ export default async function AnalyticsPage() {
 
         <Card title="Agent Cost Tracking">
           <div className="mb-3 flex items-baseline gap-2">
-            <span className="text-lg font-semibold text-fg">{data.totalTokens.toLocaleString()}</span>
-            <span className="text-xs text-fg-subtle">total tokens across {data.costs.length} runs</span>
+            <span className="text-lg font-semibold text-fg">
+              {data.totalTokens.toLocaleString()}
+            </span>
+            <span className="text-xs text-fg-subtle">
+              total tokens across {data.costs.length} runs
+            </span>
           </div>
           {data.costs.length > 0 ? (
             <div className="max-h-48 space-y-1 overflow-y-auto">
@@ -141,7 +145,13 @@ const TYPE_COLORS: Record<string, string> = {
   other: 'bg-fg-subtle',
 };
 
-function HBar({ entries, colorMap }: { entries: DistributionEntry[]; colorMap?: Record<string, string> }) {
+function HBar({
+  entries,
+  colorMap,
+}: {
+  entries: DistributionEntry[];
+  colorMap?: Record<string, string>;
+}) {
   const max = Math.max(1, ...entries.map((e) => e.count));
   return (
     <div className="space-y-2">
@@ -163,8 +173,10 @@ function HBar({ entries, colorMap }: { entries: DistributionEntry[]; colorMap?: 
 
 function StatusDot({ status }: { status: string }) {
   const color =
-    status === 'pr-opened' || status === 'succeeded' ? 'bg-accent'
-    : status === 'failed' ? 'bg-danger'
-    : 'bg-fg-subtle';
+    status === 'pr-opened' || status === 'succeeded'
+      ? 'bg-accent'
+      : status === 'failed'
+        ? 'bg-danger'
+        : 'bg-fg-subtle';
   return <span className={`inline-block h-2 w-2 rounded-full ${color}`} title={status} />;
 }

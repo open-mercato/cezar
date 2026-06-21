@@ -39,7 +39,7 @@ export interface EffectDef<TArgs = unknown> {
 
 const labelAdd: EffectDef<{ label: string }> = {
   name: 'label.add',
-  description: "Add a single label to the target issue or PR.",
+  description: 'Add a single label to the target issue or PR.',
   schema: z.object({ label: z.string().min(1) }),
   async execute({ label }, { github, targetNumber }) {
     await github.addLabel(targetNumber, label);
@@ -49,7 +49,7 @@ const labelAdd: EffectDef<{ label: string }> = {
 
 const labelRemove: EffectDef<{ label: string }> = {
   name: 'label.remove',
-  description: "Remove a label from the target issue or PR.",
+  description: 'Remove a label from the target issue or PR.',
   schema: z.object({ label: z.string().min(1) }),
   async execute({ label }, { github, targetNumber }) {
     await github.removeLabel(targetNumber, label);
@@ -60,7 +60,7 @@ const labelRemove: EffectDef<{ label: string }> = {
 const labelSet: EffectDef<{ labels: string[] }> = {
   name: 'label.set',
   description:
-    "Replace the full label set on the target with these labels (others are removed). Use sparingly — prefer label.add / label.remove.",
+    'Replace the full label set on the target with these labels (others are removed). Use sparingly — prefer label.add / label.remove.',
   schema: z.object({ labels: z.array(z.string().min(1)) }),
   async execute({ labels }, { github, targetNumber }) {
     await github.setLabels(targetNumber, labels);
@@ -71,7 +71,7 @@ const labelSet: EffectDef<{ labels: string[] }> = {
 const comment: EffectDef<{ body: string }> = {
   name: 'comment',
   description:
-    "Post a comment on the target. Keep it short and direct — state the point, no filler. Use sparingly, do not spam. Returns the new comment id.",
+    'Post a comment on the target. Keep it short and direct — state the point, no filler. Use sparingly, do not spam. Returns the new comment id.',
   schema: z.object({ body: z.string().min(1) }),
   async execute({ body }, { github, targetNumber }) {
     const commentId = await github.addComment(targetNumber, body);
@@ -94,7 +94,7 @@ const close: EffectDef<{ reason?: 'completed' | 'not_planned' }> = {
 
 const assign: EffectDef<{ assignees: string[] }> = {
   name: 'assign',
-  description: "Add one or more GitHub usernames as assignees on the target.",
+  description: 'Add one or more GitHub usernames as assignees on the target.',
   schema: z.object({ assignees: z.array(z.string().min(1)).min(1) }),
   async execute({ assignees }, { github, targetNumber }) {
     await github.addAssignees(targetNumber, assignees);
@@ -125,10 +125,7 @@ const linkDuplicate: EffectDef<{ duplicateOf: number; reason?: string }> = {
       // ignore — proceed to post.
     }
     const note = reason ? ` Reason: ${reason}` : '';
-    await github.addComment(
-      targetNumber,
-      `${marker}.${note}`,
-    );
+    await github.addComment(targetNumber, `${marker}.${note}`);
     await github.addLabel(targetNumber, 'duplicate');
     return `linked #${targetNumber} as duplicate of #${duplicateOf}`;
   },
@@ -137,7 +134,7 @@ const linkDuplicate: EffectDef<{ duplicateOf: number; reason?: string }> = {
 const setPriority: EffectDef<{ priority: 'critical' | 'high' | 'medium' | 'low' }> = {
   name: 'set-priority',
   description:
-    "Set a priority/<level> label on the target. Replaces any existing priority/* label.",
+    'Set a priority/<level> label on the target. Replaces any existing priority/* label.',
   schema: z.object({ priority: z.enum(['critical', 'high', 'medium', 'low']) }),
   async execute({ priority }, { github, targetNumber }) {
     // Best-effort: GitHub's API requires us to fetch+filter before re-setting
@@ -157,19 +154,40 @@ const setPriority: EffectDef<{ priority: 'critical' | 'high' | 'medium' | 'low' 
 interface SuggestFlowSupabase {
   from(table: 'flows'): {
     select(cols: 'id, name'): {
-      eq(col: 'id', value: string): {
-        eq(col: 'workspace_id', value: string): {
-          maybeSingle(): Promise<{ data: { id: string; name: string } | null; error: { message: string } | null }>;
+      eq(
+        col: 'id',
+        value: string,
+      ): {
+        eq(
+          col: 'workspace_id',
+          value: string,
+        ): {
+          maybeSingle(): Promise<{
+            data: { id: string; name: string } | null;
+            error: { message: string } | null;
+          }>;
         };
       };
     };
   };
   from(table: 'jobs'): {
     select(cols: 'id, payload'): {
-      eq(col: string, value: unknown): {
-        eq(col: string, value: unknown): {
-          eq(col: string, value: unknown): {
-            in(col: 'status', values: string[]): Promise<{
+      eq(
+        col: string,
+        value: unknown,
+      ): {
+        eq(
+          col: string,
+          value: unknown,
+        ): {
+          eq(
+            col: string,
+            value: unknown,
+          ): {
+            in(
+              col: 'status',
+              values: string[],
+            ): Promise<{
               data: Array<{ id: string; payload: unknown }> | null;
               error: { message: string } | null;
             }>;
@@ -177,7 +195,9 @@ interface SuggestFlowSupabase {
         };
       };
     };
-    insert(row: Record<string, unknown>): Promise<{ error: { message: string; code?: string } | null }>;
+    insert(
+      row: Record<string, unknown>,
+    ): Promise<{ error: { message: string; code?: string } | null }>;
   };
 }
 
@@ -291,10 +311,7 @@ export interface EffectCall<N extends EffectName = EffectName> {
  * / executor failure (the runner decides how to surface this in the agent
  * run log).
  */
-export async function executeEffect(
-  call: EffectCall,
-  ctx: EffectContext,
-): Promise<string> {
+export async function executeEffect(call: EffectCall, ctx: EffectContext): Promise<string> {
   const def = EFFECT_REGISTRY[call.effect] as EffectDef<unknown> | undefined;
   if (!def) throw new Error(`unknown effect: ${call.effect}`);
   const parsed = def.schema.safeParse(call.args);
@@ -429,14 +446,20 @@ export function zodToInputSchema(schema: z.ZodType<unknown>): Record<string, unk
       return { type: 'string', enum: values };
     }
     case 'ZodOptional':
-      return zodToInputSchema((schema as unknown as { _def: { innerType: z.ZodType<unknown> } })._def.innerType);
+      return zodToInputSchema(
+        (schema as unknown as { _def: { innerType: z.ZodType<unknown> } })._def.innerType,
+      );
     default:
       return {};
   }
 }
 
-function unwrapOptional(schema: z.ZodType<unknown>): { schema: z.ZodType<unknown>; optional: boolean } {
-  const def = (schema as unknown as { _def: { typeName: string; innerType?: z.ZodType<unknown> } })._def;
+function unwrapOptional(schema: z.ZodType<unknown>): {
+  schema: z.ZodType<unknown>;
+  optional: boolean;
+} {
+  const def = (schema as unknown as { _def: { typeName: string; innerType?: z.ZodType<unknown> } })
+    ._def;
   if (def.typeName === 'ZodOptional' && def.innerType) {
     return { schema: def.innerType, optional: true };
   }

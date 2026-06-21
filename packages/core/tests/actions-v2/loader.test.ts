@@ -112,7 +112,12 @@ describe('listEnabledActions', () => {
       makeRow({ id: 'stale', name: 'stale', triggers: ['on-cron'] }),
       makeRow({ id: 'pr-watch', name: 'pr-watch', triggers: ['on-pr-opened', 'on-check-failed'] }),
     ]);
-    for (const trigger of ['manual', 'on-issue-opened', 'on-issue-edited', 'on-issue-reopened'] as const) {
+    for (const trigger of [
+      'manual',
+      'on-issue-opened',
+      'on-issue-edited',
+      'on-issue-reopened',
+    ] as const) {
       const actions = await listEnabledActions(sb, 'ws-1', { trigger });
       expect(actions).toHaveLength(0);
     }

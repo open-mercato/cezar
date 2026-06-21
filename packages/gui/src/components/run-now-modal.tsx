@@ -93,7 +93,8 @@ export function RunNowModal({ actionId, actionName, target, onClose }: RunNowMod
       }
       description={
         <>
-          Queues this action against the chosen {target === 'pr' ? 'PR' : 'issue'}, applying any effects for real. Runs in the background — you&apos;ll land on its run page.
+          Queues this action against the chosen {target === 'pr' ? 'PR' : 'issue'}, applying any
+          effects for real. Runs in the background — you&apos;ll land on its run page.
         </>
       }
       footer={
@@ -139,7 +140,9 @@ export function RunNowModal({ actionId, actionName, target, onClose }: RunNowMod
               className="mt-1 h-9 w-full rounded-md border border-outline-variant bg-surface px-2 text-base text-on-surface focus:border-primary focus:outline-none lg:text-sm"
             >
               {issuesLoading && <option>Loading recent issues…</option>}
-              {!issuesLoading && issues.length === 0 && <option value="">No issues in cache</option>}
+              {!issuesLoading && issues.length === 0 && (
+                <option value="">No issues in cache</option>
+              )}
               {issues.map((i) => (
                 <option key={i.number} value={i.number}>
                   #{i.number} — {i.title || '(no title)'}

@@ -29,7 +29,10 @@ export function createDryRunGitHub(real: GitHubService): GitHubService {
       log(`comment #${issueNumber} "${preview}"`);
       return 0;
     },
-    async closeIssue(issueNumber: number, reason: 'completed' | 'not_planned' = 'completed'): Promise<void> {
+    async closeIssue(
+      issueNumber: number,
+      reason: 'completed' | 'not_planned' = 'completed',
+    ): Promise<void> {
       log(`close #${issueNumber} (${reason})`);
     },
     async addAssignees(issueNumber: number, assignees: string[]): Promise<void> {

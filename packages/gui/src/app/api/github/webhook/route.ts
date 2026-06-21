@@ -73,7 +73,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       if (!deliveryId) {
         return NextResponse.json({ error: 'missing delivery id' }, { status: 400 });
       }
-      const { error: dedupError } = await admin.from('webhook_deliveries').insert({ delivery_id: deliveryId });
+      const { error: dedupError } = await admin
+        .from('webhook_deliveries')
+        .insert({ delivery_id: deliveryId });
       if (dedupError) {
         if (dedupError.code === '23505') {
           return NextResponse.json({ ok: true, replay: true });
@@ -180,17 +182,27 @@ interface WebhookPullRequest {
 
 const TRIAGE_ACTIONS = new Set(['opened', 'reopened']);
 
-async function handleIssues(admin: SupabaseAdmin, payload: WebhookPayload, event: string): Promise<NextResponse> {
+async function handleIssues(
+  admin: SupabaseAdmin,
+  payload: WebhookPayload,
+  event: string,
+): Promise<NextResponse> {
   const action = payload.action ?? '';
   const isTriageRelevant =
     TRIAGE_ACTIONS.has(action) ||
-    (action === 'edited' && !!payload.changes && ('title' in payload.changes || 'body' in payload.changes));
+    (action === 'edited' &&
+      !!payload.changes &&
+      ('title' in payload.changes || 'body' in payload.changes));
   // Phase 4 (trigger honesty) — the real ActionTrigger rides in the job
   // payload so the triage pass matches actions on what actually happened.
   // Note the open-job dedup below means an 'edited' enqueue is dropped while
   // an 'opened' job is still in flight — acceptable; the opened pass covers it.
   const triageTrigger: 'on-issue-opened' | 'on-issue-reopened' | 'on-issue-edited' =
-    action === 'reopened' ? 'on-issue-reopened' : action === 'edited' ? 'on-issue-edited' : 'on-issue-opened';
+    action === 'reopened'
+      ? 'on-issue-reopened'
+      : action === 'edited'
+        ? 'on-issue-edited'
+        : 'on-issue-opened';
   const isFlowRelevant = action === 'opened' || action === 'labeled';
   if (!isTriageRelevant && !isFlowRelevant) {
     return NextResponse.json({ ok: true, ignored: `issues.${action}` });
@@ -198,10 +210,12 @@ async function handleIssues(admin: SupabaseAdmin, payload: WebhookPayload, event
 
   const issue = payload.issue;
   const repo = payload.repository;
-  if (!issue || !repo) return NextResponse.json({ ok: true, ignored: 'issues event missing issue/repository' });
+  if (!issue || !repo)
+    return NextResponse.json({ ok: true, ignored: 'issues event missing issue/repository' });
 
   const workspaces = await resolveWorkspaces(admin, payload, repo, event);
-  if (workspaces.length === 0) return NextResponse.json({ ok: true, ignored: 'no matching workspace' });
+  if (workspaces.length === 0)
+    return NextResponse.json({ ok: true, ignored: 'no matching workspace' });
 
   const repoSlug = `${repo.owner.login}/${repo.name}`;
   // GitHub puts the just-added label on `payload.label` for issues.labeled.
@@ -218,7 +232,10 @@ async function handleIssues(admin: SupabaseAdmin, payload: WebhookPayload, event
     try {
       await upsertIssueFromWebhook(admin, ws.id, issue);
     } catch (err) {
-      console.error(`[github-webhook] issue upsert failed for ws ${ws.id}:`, err instanceof Error ? err.message : err);
+      console.error(
+        `[github-webhook] issue upsert failed for ws ${ws.id}:`,
+        err instanceof Error ? err.message : err,
+      );
       continue;
     }
 
@@ -301,7 +318,9 @@ async function enqueueFlowsForIssueEvent(
 
   let enqueued = 0;
   for (const flow of flows) {
-    const triggers = Array.isArray(flow.triggers) ? (flow.triggers as Array<Record<string, unknown>>) : [];
+    const triggers = Array.isArray(flow.triggers)
+      ? (flow.triggers as Array<Record<string, unknown>>)
+      : [];
     const matches = triggers.some((t) => {
       if (!t || typeof t !== 'object') return false;
       if (args.action === 'opened' && t.kind === 'issue.opened') return true;
@@ -375,13 +394,25 @@ async function enqueueFlowsForIssueEvent(
  * `ci-followup` workflow's `attribute` step. We pass through the failed check
  * name(s) and the html_url (so the agent can fetch logs if it wants).
  */
-const CHECK_RUN_FAIL_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure']);
+const CHECK_RUN_FAIL_CONCLUSIONS = new Set([
+  'failure',
+  'timed_out',
+  'cancelled',
+  'action_required',
+  'startup_failure',
+]);
 
-async function handleCheckRun(admin: SupabaseAdmin, payload: WebhookPayload, event: string): Promise<NextResponse> {
-  if (payload.action !== 'completed') return NextResponse.json({ ok: true, ignored: `check_run.${payload.action}` });
+async function handleCheckRun(
+  admin: SupabaseAdmin,
+  payload: WebhookPayload,
+  event: string,
+): Promise<NextResponse> {
+  if (payload.action !== 'completed')
+    return NextResponse.json({ ok: true, ignored: `check_run.${payload.action}` });
   const cr = payload.check_run;
   const repo = payload.repository;
-  if (!cr || !repo) return NextResponse.json({ ok: true, ignored: 'check_run missing payload/repo' });
+  if (!cr || !repo)
+    return NextResponse.json({ ok: true, ignored: 'check_run missing payload/repo' });
   if (cr.conclusion == null || !CHECK_RUN_FAIL_CONCLUSIONS.has(cr.conclusion)) {
     return NextResponse.json({ ok: true, ignored: `check_run conclusion=${cr.conclusion}` });
   }
@@ -391,7 +422,8 @@ async function handleCheckRun(admin: SupabaseAdmin, payload: WebhookPayload, eve
   }
 
   const workspaces = await resolveWorkspaces(admin, payload, repo, event);
-  if (workspaces.length === 0) return NextResponse.json({ ok: true, ignored: 'no matching workspace' });
+  if (workspaces.length === 0)
+    return NextResponse.json({ ok: true, ignored: 'no matching workspace' });
 
   const repoSlug = `${repo.owner.login}/${repo.name}`;
   let enqueued = 0;
@@ -486,7 +518,10 @@ async function handleCheckRun(admin: SupabaseAdmin, payload: WebhookPayload, eve
       // also what serializes the attempt-cap check above — without it two
       // concurrent deliveries could both pass `priorAttempts < attemptMax`.
       if (!isUniqueViolation(error)) {
-        console.error(`[github-webhook] ci-followup enqueue failed for ws ${ws.id}:`, error.message);
+        console.error(
+          `[github-webhook] ci-followup enqueue failed for ws ${ws.id}:`,
+          error.message,
+        );
       }
       continue;
     }
@@ -510,21 +545,29 @@ const PR_UPSERT_ACTIONS = new Set([
 ]);
 const PR_CLOSE_ACTIONS = new Set(['closed']);
 
-async function handlePullRequest(admin: SupabaseAdmin, payload: WebhookPayload, event: string): Promise<NextResponse> {
+async function handlePullRequest(
+  admin: SupabaseAdmin,
+  payload: WebhookPayload,
+  event: string,
+): Promise<NextResponse> {
   const action = payload.action ?? '';
   const pr = payload.pull_request;
   const repo = payload.repository;
-  if (!pr || !repo) return NextResponse.json({ ok: true, ignored: 'pull_request missing payload/repo' });
+  if (!pr || !repo)
+    return NextResponse.json({ ok: true, ignored: 'pull_request missing payload/repo' });
 
   if (!PR_UPSERT_ACTIONS.has(action) && !PR_CLOSE_ACTIONS.has(action)) {
     return NextResponse.json({ ok: true, ignored: `pull_request.${action}` });
   }
 
   const workspaces = await resolveWorkspaces(admin, payload, repo, event);
-  if (workspaces.length === 0) return NextResponse.json({ ok: true, ignored: 'no matching workspace' });
+  if (workspaces.length === 0)
+    return NextResponse.json({ ok: true, ignored: 'no matching workspace' });
 
   const labels = Array.isArray(pr.labels)
-    ? pr.labels.map((l) => l?.name).filter((n): n is string => typeof n === 'string' && n.length > 0)
+    ? pr.labels
+        .map((l) => l?.name)
+        .filter((n): n is string => typeof n === 'string' && n.length > 0)
     : [];
 
   let upserts = 0;
@@ -560,7 +603,10 @@ async function handlePullRequest(admin: SupabaseAdmin, payload: WebhookPayload, 
 
 // ─── installation ───────────────────────────────────────────────────────────
 
-async function handleInstallation(admin: SupabaseAdmin, payload: WebhookPayload): Promise<NextResponse> {
+async function handleInstallation(
+  admin: SupabaseAdmin,
+  payload: WebhookPayload,
+): Promise<NextResponse> {
   const action = payload.action ?? '';
   const installationId = payload.installation?.id;
   const repo = payload.repository;
@@ -575,13 +621,23 @@ async function handleInstallation(admin: SupabaseAdmin, payload: WebhookPayload)
       }
     } else if (action === 'deleted' || action === 'removed') {
       if (installationId != null) {
-        await admin.from('workspaces').update({ installation_id: null }).eq('installation_id', installationId);
+        await admin
+          .from('workspaces')
+          .update({ installation_id: null })
+          .eq('installation_id', installationId);
       } else if (repo) {
-        await admin.from('workspaces').update({ installation_id: null }).eq('repo_owner', repo.owner.login).eq('repo_name', repo.name);
+        await admin
+          .from('workspaces')
+          .update({ installation_id: null })
+          .eq('repo_owner', repo.owner.login)
+          .eq('repo_name', repo.name);
       }
     }
   } catch (err) {
-    console.error('[github-webhook] installation update failed:', err instanceof Error ? err.message : err);
+    console.error(
+      '[github-webhook] installation update failed:',
+      err instanceof Error ? err.message : err,
+    );
   }
   return NextResponse.json({ ok: true });
 }
@@ -589,7 +645,10 @@ async function handleInstallation(admin: SupabaseAdmin, payload: WebhookPayload)
 // ─── workspace resolution ───────────────────────────────────────────────────
 
 type SupabaseAdmin = ReturnType<typeof createSupabaseAdminClient>;
-type WorkspaceMatch = Pick<Database['public']['Tables']['workspaces']['Row'], 'id' | 'auto_triage_enabled'>;
+type WorkspaceMatch = Pick<
+  Database['public']['Tables']['workspaces']['Row'],
+  'id' | 'auto_triage_enabled'
+>;
 
 /**
  * Match by `installation_id` first (preferred), else by `repo_owner`/`repo_name`.
@@ -635,7 +694,10 @@ async function resolveWorkspaces(
           matched.map((ws) => ws.id),
         );
     } catch (err) {
-      console.error('[github-webhook] webhook signal stamp failed:', err instanceof Error ? err.message : err);
+      console.error(
+        '[github-webhook] webhook signal stamp failed:',
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 

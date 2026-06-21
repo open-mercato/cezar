@@ -1,7 +1,17 @@
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { StoreSchema, StoredIssueSchema, IssueAnalysisSchema, type Store, type StoredIssue, type StoredComment, type IssueAnalysis, type IssueDigest, type StoreMeta } from './store.model.js';
+import {
+  StoreSchema,
+  StoredIssueSchema,
+  IssueAnalysisSchema,
+  type Store,
+  type StoredIssue,
+  type StoredComment,
+  type IssueAnalysis,
+  type IssueDigest,
+  type StoreMeta,
+} from './store.model.js';
 import type { StorePort } from '../ports/store.port.js';
 
 export interface IssueFilter {
@@ -44,7 +54,9 @@ export class IssueStore {
     const onSave = opts?.onSave;
     const port: StorePort = {
       load: async () => parsed,
-      save: async (d) => { if (onSave) await onSave(d); },
+      save: async (d) => {
+        if (onSave) await onSave(d);
+      },
     };
     return new IssueStore(parsed, '', port);
   }
@@ -126,8 +138,11 @@ export class IssueStore {
     }
   }
 
-  upsertIssue(issue: Omit<StoredIssue, 'digest' | 'analysis' | 'comments' | 'commentsFetchedAt'>): { action: 'created' | 'updated' | 'unchanged'; stateChanged?: boolean } {
-    const existing = this.data.issues.find(i => i.number === issue.number);
+  upsertIssue(issue: Omit<StoredIssue, 'digest' | 'analysis' | 'comments' | 'commentsFetchedAt'>): {
+    action: 'created' | 'updated' | 'unchanged';
+    stateChanged?: boolean;
+  } {
+    const existing = this.data.issues.find((i) => i.number === issue.number);
     if (!existing) {
       const full = StoredIssueSchema.parse({ ...issue, digest: null, analysis: {} });
       this.data.issues.push(full);
@@ -184,14 +199,14 @@ export class IssueStore {
   }
 
   setDigest(issueNumber: number, digest: IssueDigest): void {
-    const issue = this.data.issues.find(i => i.number === issueNumber);
+    const issue = this.data.issues.find((i) => i.number === issueNumber);
     if (!issue) throw new Error(`Issue #${issueNumber} not found in store`);
     issue.digest = digest;
     this.dirty.add(issueNumber);
   }
 
   setComments(issueNumber: number, comments: StoredComment[]): void {
-    const issue = this.data.issues.find(i => i.number === issueNumber);
+    const issue = this.data.issues.find((i) => i.number === issueNumber);
     if (!issue) throw new Error(`Issue #${issueNumber} not found in store`);
     issue.comments = comments;
     issue.commentsFetchedAt = new Date().toISOString();
@@ -199,7 +214,7 @@ export class IssueStore {
   }
 
   setAnalysis(issueNumber: number, analysis: Partial<IssueAnalysis>): void {
-    const issue = this.data.issues.find(i => i.number === issueNumber);
+    const issue = this.data.issues.find((i) => i.number === issueNumber);
     if (!issue) throw new Error(`Issue #${issueNumber} not found in store`);
     issue.analysis = { ...issue.analysis, ...analysis };
     this.dirty.add(issueNumber);
@@ -209,20 +224,20 @@ export class IssueStore {
     let result = this.data.issues;
 
     if (filter.state && filter.state !== 'all') {
-      result = result.filter(i => i.state === filter.state);
+      result = result.filter((i) => i.state === filter.state);
     }
 
     if (filter.hasDigest === true) {
-      result = result.filter(i => i.digest !== null);
+      result = result.filter((i) => i.digest !== null);
     } else if (filter.hasDigest === false) {
-      result = result.filter(i => i.digest === null);
+      result = result.filter((i) => i.digest === null);
     }
 
     return result;
   }
 
   getIssue(number: number): StoredIssue | undefined {
-    return this.data.issues.find(i => i.number === number);
+    return this.data.issues.find((i) => i.number === number);
   }
 
   getMeta(): StoreMeta {

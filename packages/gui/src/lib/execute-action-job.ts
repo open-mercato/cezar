@@ -35,7 +35,9 @@ export async function executeActionJob(
 ): Promise<void> {
   const { workspaceId, jobId, runId, actionId, number } = params;
 
-  const finishJob = async (status: Database['public']['Tables']['jobs']['Row']['status']): Promise<void> => {
+  const finishJob = async (
+    status: Database['public']['Tables']['jobs']['Row']['status'],
+  ): Promise<void> => {
     await supabase
       .from('jobs')
       .update({ status, claim_expires_at: null, updated_at: new Date().toISOString() })
@@ -52,7 +54,10 @@ export async function executeActionJob(
     repo: null,
     issueNumber: null,
     onPersistError: (label, err) =>
-      console.error(`[action-job] persist ${label} failed:`, err instanceof Error ? err.message : err),
+      console.error(
+        `[action-job] persist ${label} failed:`,
+        err instanceof Error ? err.message : err,
+      ),
   });
 
   try {
@@ -60,7 +65,9 @@ export async function executeActionJob(
 
     const { data: actionRow } = await supabase
       .from('actions')
-      .select('id, name, kind, description, system_prompt, skill_refs, context_refs, target, triggers, effects, output_schema, enabled, effect_routing, suggested_flow_id')
+      .select(
+        'id, name, kind, description, system_prompt, skill_refs, context_refs, target, triggers, effects, output_schema, enabled, effect_routing, suggested_flow_id',
+      )
       .eq('id', actionId)
       .eq('workspace_id', workspaceId)
       .maybeSingle();
@@ -68,7 +75,9 @@ export async function executeActionJob(
 
     const { data: workspaceRow } = await supabase
       .from('workspaces')
-      .select('config, repo_owner, repo_name, auto_triage_enabled, autofix_enabled, separate_comment_per_step, action_auto_comment')
+      .select(
+        'config, repo_owner, repo_name, auto_triage_enabled, autofix_enabled, separate_comment_per_step, action_auto_comment',
+      )
       .eq('id', workspaceId)
       .single();
     const autoCommentEnabled = workspaceRow?.action_auto_comment ?? true;
@@ -115,7 +124,10 @@ export async function executeActionJob(
       try {
         githubToken = await new core.GitHubAppService().getInstallationToken(owner);
       } catch (err) {
-        console.error(`[action-job] installation token failed for ${owner}:`, err instanceof Error ? err.message : err);
+        console.error(
+          `[action-job] installation token failed for ${owner}:`,
+          err instanceof Error ? err.message : err,
+        );
       }
     }
     if (!githubToken) githubToken = await resolveWorkspaceToken(workspaceId, supabase);
@@ -133,7 +145,9 @@ export async function executeActionJob(
 
     // Build an ActionTarget mirroring run-triage-pass-job.ts. Issues carry a
     // cached comments array; PRs don't (pull_requests has no comments column).
-    const labels = Array.isArray(targetRow.labels) ? targetRow.labels.filter((l): l is string => typeof l === 'string') : [];
+    const labels = Array.isArray(targetRow.labels)
+      ? targetRow.labels.filter((l): l is string => typeof l === 'string')
+      : [];
     const commentsArr = Array.isArray(targetRow.comments) ? targetRow.comments : [];
     type CommentLike = { author?: unknown; createdAt?: unknown; body?: unknown };
     const commentsText =
@@ -175,16 +189,22 @@ export async function executeActionJob(
         : [],
       target: actionRow.target as 'issue' | 'pr',
       triggers: Array.isArray(actionRow.triggers)
-        ? ((actionRow.triggers as unknown[]).filter((s): s is string => typeof s === 'string') as import('@cezar/core').ActionTrigger[])
+        ? ((actionRow.triggers as unknown[]).filter(
+            (s): s is string => typeof s === 'string',
+          ) as import('@cezar/core').ActionTrigger[])
         : [],
       effects:
         actionRow.effects == null
           ? null
           : Array.isArray(actionRow.effects)
-            ? ((actionRow.effects as unknown[]).filter((s): s is string => typeof s === 'string') as import('@cezar/core').EffectName[])
+            ? ((actionRow.effects as unknown[]).filter(
+                (s): s is string => typeof s === 'string',
+              ) as import('@cezar/core').EffectName[])
             : null,
       outputSchema:
-        actionRow.output_schema && typeof actionRow.output_schema === 'object' && !Array.isArray(actionRow.output_schema)
+        actionRow.output_schema &&
+        typeof actionRow.output_schema === 'object' &&
+        !Array.isArray(actionRow.output_schema)
           ? (actionRow.output_schema as Record<string, unknown>)
           : null,
       enabled: actionRow.enabled,
@@ -227,7 +247,8 @@ export async function executeActionJob(
             pr_number: target.kind === 'pr' ? target.number : null,
             target_title: target.title,
             effect: call.effect,
-            effect_args: (call.args ?? {}) as Database['public']['Tables']['pending_decisions']['Insert']['effect_args'],
+            effect_args: (call.args ??
+              {}) as Database['public']['Tables']['pending_decisions']['Insert']['effect_args'],
             summary,
             confidence,
           });
@@ -289,7 +310,11 @@ export async function executeActionJob(
       finished_at: finishedAt,
       outcome: {
         action: action.name,
-        effectsApplied: effectsApplied.map((e) => ({ effect: e.call.effect, args: e.call.args as never, summary: e.summary })),
+        effectsApplied: effectsApplied.map((e) => ({
+          effect: e.call.effect,
+          args: e.call.args as never,
+          summary: e.summary,
+        })),
       } as never,
     });
     await finishJob(runStatus === 'succeeded' ? 'done' : 'failed');
@@ -305,9 +330,7 @@ export async function executeActionJob(
  * Defensive map of the `effect_routing` jsonb column onto
  * `ActionDef.effectRouting` — keeps only entries with a valid routing mode.
  */
-function parseEffectRouting(
-  value: unknown,
-): import('@cezar/core').ActionDef['effectRouting'] {
+function parseEffectRouting(value: unknown): import('@cezar/core').ActionDef['effectRouting'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const out: NonNullable<import('@cezar/core').ActionDef['effectRouting']> = {};
   let any = false;

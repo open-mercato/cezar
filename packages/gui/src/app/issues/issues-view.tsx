@@ -2,20 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { cn } from '@/components/ui/cn';
-import {
-  SearchIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-} from '@/components/icons';
+import { SearchIcon, ChevronLeftIcon, ChevronRightIcon } from '@/components/icons';
 import { RunStatusDots } from '@/components/run-status-dots';
 import { PageContainer } from '@/components/ui/page-container';
 import { FilterBar } from '@/components/ui/filter-bar';
-import {
-  EntityCard,
-  MetaRow,
-  MetaItem,
-  CardActions,
-} from '@/components/ui/data-card-list';
+import { EntityCard, MetaRow, MetaItem, CardActions } from '@/components/ui/data-card-list';
 import type { ActionRunSummary, RunStatus } from '@/lib/action-runs-loader';
 import { IssueRowMenu } from './issue-row-menu';
 
@@ -95,12 +86,7 @@ function matchesRunStatus(row: IssueRow, value: RunStatusFilter): boolean {
   return top === value;
 }
 
-export function IssuesView({
-  rows,
-  repoLabel,
-  fetchedAt,
-  readOnly,
-}: IssuesViewProps) {
+export function IssuesView({ rows, repoLabel, fetchedAt, readOnly }: IssuesViewProps) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<PageSize>(10);
   const [search, setSearch] = useState('');
@@ -175,7 +161,11 @@ export function IssuesView({
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir(key === 'number' || key === 'comments' || key === 'priority' || key === 'runStatus' ? 'desc' : 'asc');
+      setSortDir(
+        key === 'number' || key === 'comments' || key === 'priority' || key === 'runStatus'
+          ? 'desc'
+          : 'asc',
+      );
     }
   }
 
@@ -192,9 +182,12 @@ export function IssuesView({
     <PageContainer>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">Issues</h1>
+          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">
+            Issues
+          </h1>
           <p className="mt-1 text-sm text-on-surface-variant">
-            <span className="font-mono">{repoLabel}</span> — {totalIssues} issue{totalIssues === 1 ? '' : 's'} synced
+            <span className="font-mono">{repoLabel}</span> — {totalIssues} issue
+            {totalIssues === 1 ? '' : 's'} synced
           </p>
         </div>
       </header>
@@ -327,22 +320,66 @@ export function IssuesView({
           <table className="min-w-full text-sm">
             <thead>
               <tr className="bg-surface-container">
-                <SortableTh sortKey="runStatus" sortDir={sortDir} active={sortKey === 'runStatus'} onClick={handleSort} className="w-[44px] pr-2">
+                <SortableTh
+                  sortKey="runStatus"
+                  sortDir={sortDir}
+                  active={sortKey === 'runStatus'}
+                  onClick={handleSort}
+                  className="w-[44px] pr-2"
+                >
                   <span className="sr-only">Run status</span>
                 </SortableTh>
-                <SortableTh sortKey="number"   sortDir={sortDir} active={sortKey === 'number'}   onClick={handleSort}>#</SortableTh>
-                <SortableTh sortKey="title"    sortDir={sortDir} active={sortKey === 'title'}    onClick={handleSort}>NAME</SortableTh>
-                <SortableTh sortKey="state"    sortDir={sortDir} active={sortKey === 'state'}    onClick={handleSort}>STATE</SortableTh>
-                <SortableTh sortKey="priority" sortDir={sortDir} active={sortKey === 'priority'} onClick={handleSort}>PRIORITY</SortableTh>
+                <SortableTh
+                  sortKey="number"
+                  sortDir={sortDir}
+                  active={sortKey === 'number'}
+                  onClick={handleSort}
+                >
+                  #
+                </SortableTh>
+                <SortableTh
+                  sortKey="title"
+                  sortDir={sortDir}
+                  active={sortKey === 'title'}
+                  onClick={handleSort}
+                >
+                  NAME
+                </SortableTh>
+                <SortableTh
+                  sortKey="state"
+                  sortDir={sortDir}
+                  active={sortKey === 'state'}
+                  onClick={handleSort}
+                >
+                  STATE
+                </SortableTh>
+                <SortableTh
+                  sortKey="priority"
+                  sortDir={sortDir}
+                  active={sortKey === 'priority'}
+                  onClick={handleSort}
+                >
+                  PRIORITY
+                </SortableTh>
                 <Th>LABELS</Th>
-                <SortableTh sortKey="comments" sortDir={sortDir} active={sortKey === 'comments'} onClick={handleSort}>COMMENTS</SortableTh>
+                <SortableTh
+                  sortKey="comments"
+                  sortDir={sortDir}
+                  active={sortKey === 'comments'}
+                  onClick={handleSort}
+                >
+                  COMMENTS
+                </SortableTh>
                 <Th className="text-right pr-6">ACTIONS</Th>
               </tr>
             </thead>
             <tbody>
               {pageRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-sm text-on-surface-variant">
+                  <td
+                    colSpan={8}
+                    className="px-6 py-12 text-center text-sm text-on-surface-variant"
+                  >
                     {totalIssues === 0 ? (
                       <>No issues in this workspace yet. Sync to pull them in from GitHub.</>
                     ) : (
@@ -360,7 +397,9 @@ export function IssuesView({
                   </td>
                 </tr>
               ) : (
-                pageRows.map((row) => <IssueTableRow key={row.number} row={row} readOnly={readOnly} />)
+                pageRows.map((row) => (
+                  <IssueTableRow key={row.number} row={row} readOnly={readOnly} />
+                ))
               )}
             </tbody>
           </table>
@@ -370,8 +409,10 @@ export function IssuesView({
           <div className="flex flex-wrap items-center gap-3">
             <span>
               Showing {pageRows.length === 0 ? 0 : (page - 1) * pageSize + 1}
-              {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of {totalFiltered}
-              {filtersActive && <> filtered (of {totalIssues})</>} issue{totalFiltered === 1 ? '' : 's'}
+              {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of{' '}
+              {totalFiltered}
+              {filtersActive && <> filtered (of {totalIssues})</>} issue
+              {totalFiltered === 1 ? '' : 's'}
             </span>
             <span className="hidden h-4 w-px bg-outline-variant sm:inline-block" aria-hidden />
             <label className="flex items-center gap-2">
@@ -394,7 +435,9 @@ export function IssuesView({
               </select>
             </label>
             {fetchedAt && (
-              <span className="hidden lg:inline">· refreshed {new Date(fetchedAt).toLocaleString()}</span>
+              <span className="hidden lg:inline">
+                · refreshed {new Date(fetchedAt).toLocaleString()}
+              </span>
             )}
           </div>
           {totalPages > 1 && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
@@ -459,10 +502,17 @@ function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
   return (
     <span
       aria-hidden
-      className={cn('inline-flex flex-col text-[8px] leading-[8px]', active ? 'text-primary' : 'text-outline-variant')}
+      className={cn(
+        'inline-flex flex-col text-[8px] leading-[8px]',
+        active ? 'text-primary' : 'text-outline-variant',
+      )}
     >
-      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>▲</span>
-      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>▼</span>
+      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>
+        ▲
+      </span>
+      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>
+        ▼
+      </span>
     </span>
   );
 }
@@ -479,8 +529,10 @@ function compareByKey(a: IssueRow, b: IssueRow, key: SortKey): number {
     return av - bv || a.number - b.number;
   }
   if (key === 'runStatus') {
-    return RUN_STATUS_RANK[topStatus(a.actionRuns)] - RUN_STATUS_RANK[topStatus(b.actionRuns)]
-      || a.number - b.number;
+    return (
+      RUN_STATUS_RANK[topStatus(a.actionRuns)] - RUN_STATUS_RANK[topStatus(b.actionRuns)] ||
+      a.number - b.number
+    );
   }
   const av = String(a[key as 'title' | 'state']);
   const bv = String(b[key as 'title' | 'state']);
@@ -489,9 +541,7 @@ function compareByKey(a: IssueRow, b: IssueRow, key: SortKey): number {
 }
 
 function IssueTableRow({ row, readOnly }: { row: IssueRow; readOnly: boolean }) {
-  const hasInflight = row.actionRuns.some(
-    (r) => r.status === 'running' || r.status === 'queued',
-  );
+  const hasInflight = row.actionRuns.some((r) => r.status === 'running' || r.status === 'queued');
   const autofixDisabled =
     row.state === 'closed' || row.autofixStatus === 'pr-opened' || hasInflight;
   return (
@@ -548,9 +598,7 @@ function IssueTableRow({ row, readOnly }: { row: IssueRow; readOnly: boolean }) 
 }
 
 function IssueCard({ row, readOnly }: { row: IssueRow; readOnly: boolean }) {
-  const hasInflight = row.actionRuns.some(
-    (r) => r.status === 'running' || r.status === 'queued',
-  );
+  const hasInflight = row.actionRuns.some((r) => r.status === 'running' || r.status === 'queued');
   const autofixDisabled =
     row.state === 'closed' || row.autofixStatus === 'pr-opened' || hasInflight;
   return (
@@ -564,7 +612,9 @@ function IssueCard({ row, readOnly }: { row: IssueRow; readOnly: boolean }) {
           className="flex min-w-0 items-baseline gap-2 hover:text-primary"
           title={row.title}
         >
-          <span className="shrink-0 font-mono text-[13px] text-on-surface-variant">#{row.number}</span>
+          <span className="shrink-0 font-mono text-[13px] text-on-surface-variant">
+            #{row.number}
+          </span>
           <span className="truncate">{row.title}</span>
         </a>
       }
@@ -696,20 +746,32 @@ function Pagination({
     <>
       {/* Phone: compact Prev · N / M · Next. */}
       <div className="flex items-center gap-2 sm:hidden">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         <span className="text-sm tabular-nums text-on-surface-variant">
           {page} / {totalPages}
         </span>
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>
 
       {/* Desktop: full numeric pager. */}
       <div className="hidden items-center gap-1 sm:flex">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         {pages.map((p) => (
@@ -727,7 +789,11 @@ function Pagination({
             {p}
           </button>
         ))}
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>

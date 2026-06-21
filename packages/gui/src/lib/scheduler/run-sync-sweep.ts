@@ -42,7 +42,10 @@ export async function runSyncSweep(supabase: SupabaseClient<Database>): Promise<
     try {
       totalEnqueued += await sweepOne(ws, supabase);
     } catch (err) {
-      console.error(`[sync-sweep] workspace ${ws.id} failed:`, err instanceof Error ? err.message : err);
+      console.error(
+        `[sync-sweep] workspace ${ws.id} failed:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
   return { enqueued: totalEnqueued, workspaces: workspaces.length };

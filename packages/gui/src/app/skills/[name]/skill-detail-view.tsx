@@ -81,14 +81,18 @@ export function SkillDetailView({ skill, readOnly }: Props) {
   const [triggers, setTriggers] = useState<Set<string>>(() => new Set(skill.metadata.triggers));
   const [outputs, setOutputs] = useState<string[]>(skill.metadata.outputs);
   const [newOutput, setNewOutput] = useState('');
-  const [capabilities, setCapabilities] = useState<Set<string>>(() => new Set(skill.metadata.capabilities));
+  const [capabilities, setCapabilities] = useState<Set<string>>(
+    () => new Set(skill.metadata.capabilities),
+  );
   const [body, setBody] = useState(skill.body ?? '');
   const [bodyDirty, setBodyDirty] = useState(false);
   const [metaDirty, setMetaDirty] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(skill.enabled);
-  const [overrideUpdatedAt, setOverrideUpdatedAt] = useState<string | null>(skill.overrideUpdatedAt);
+  const [overrideUpdatedAt, setOverrideUpdatedAt] = useState<string | null>(
+    skill.overrideUpdatedAt,
+  );
   const [hasOverride, setHasOverride] = useState(skill.source === 'override');
   const [, startTransition] = useTransition();
 
@@ -587,7 +591,8 @@ export function SkillDetailView({ skill, readOnly }: Props) {
               Simulation Output
             </div>
             <pre className="max-h-[200px] overflow-auto whitespace-pre-wrap font-mono text-[12px] leading-[18px] text-on-surface-variant">
-              {simOutput || (simRunning ? 'Streaming…' : `Select a test issue and click Run Simulation.`)}
+              {simOutput ||
+                (simRunning ? 'Streaming…' : `Select a test issue and click Run Simulation.`)}
             </pre>
           </div>
         </div>
@@ -629,7 +634,15 @@ export function SkillDetailView({ skill, readOnly }: Props) {
   );
 }
 
-function AutosaveBadge({ state, dirty, error }: { state: SaveState; dirty: boolean; error: string | null }) {
+function AutosaveBadge({
+  state,
+  dirty,
+  error,
+}: {
+  state: SaveState;
+  dirty: boolean;
+  error: string | null;
+}) {
   if (state === 'error') return <Badge tone="error">{error ?? 'Save failed'}</Badge>;
   if (state === 'saving') return <Badge tone="muted">Saving…</Badge>;
   if (dirty) return <Badge tone="tertiary">Unsaved</Badge>;

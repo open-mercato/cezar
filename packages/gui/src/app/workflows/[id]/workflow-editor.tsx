@@ -79,12 +79,17 @@ export function WorkflowEditor({ workspaceRole, initialFlow, availableSkills }: 
         availableSkills={availableSkills}
         onNameChange={(name) => update((f) => ({ ...f, name }))}
         onStepChange={(idx, patch) =>
-          update((f) => ({ ...f, steps: f.steps.map((s, i) => (i === idx ? { ...s, ...patch } : s)) }))
+          update((f) => ({
+            ...f,
+            steps: f.steps.map((s, i) => (i === idx ? { ...s, ...patch } : s)),
+          }))
         }
         onAddStep={() =>
           update((f) => ({ ...f, steps: [...f.steps, { skill: '', argsTemplate: '{{input}}' }] }))
         }
-        onRemoveStep={(idx) => update((f) => ({ ...f, steps: f.steps.filter((_, i) => i !== idx) }))}
+        onRemoveStep={(idx) =>
+          update((f) => ({ ...f, steps: f.steps.filter((_, i) => i !== idx) }))
+        }
         onMoveStepUp={(idx) =>
           update((f) => {
             if (idx <= 0) return f;
@@ -145,7 +150,9 @@ export function WorkflowEditor({ workspaceRole, initialFlow, availableSkills }: 
           </button>
           <span className="text-xs text-fg-muted">
             {savingState === 'saved' && 'Saved'}
-            {savingState === 'error' && saveError && <span className="text-rose-400">{saveError}</span>}
+            {savingState === 'error' && saveError && (
+              <span className="text-rose-400">{saveError}</span>
+            )}
             {savingState === 'idle' && (dirty ? 'Unsaved changes' : 'Saved')}
           </span>
         </div>
@@ -156,7 +163,16 @@ export function WorkflowEditor({ workspaceRole, initialFlow, availableSkills }: 
 
 function SaveIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
       <path d="M17 21v-8H7v8M7 3v5h8" />
     </svg>

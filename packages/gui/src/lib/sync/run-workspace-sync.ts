@@ -1,7 +1,14 @@
 import { SupabaseStoreAdapter } from '@/lib/adapters/supabase-store';
 import { loadWorkspaceConfig } from '@/lib/load-workspace-config';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Database, DigestMode, SyncCounts, SyncErrorKind, SyncPhase, SyncStatusState } from '@/lib/supabase/types';
+import type {
+  Database,
+  DigestMode,
+  SyncCounts,
+  SyncErrorKind,
+  SyncPhase,
+  SyncStatusState,
+} from '@/lib/supabase/types';
 import { classifySyncError } from './classify-sync-error';
 
 // ─────────────────────────────────────────────────────────────────────

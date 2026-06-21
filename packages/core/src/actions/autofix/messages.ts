@@ -23,7 +23,9 @@ export interface CiFollowupTextInput {
 
 export function buildCiFollowupNotes(input: CiFollowupTextInput): string {
   const parts: string[] = [];
-  parts.push('CI FAILURE CONTEXT — this is a follow-up adjustment. The prior autofix commit caused CI to fail.');
+  parts.push(
+    'CI FAILURE CONTEXT — this is a follow-up adjustment. The prior autofix commit caused CI to fail.',
+  );
   parts.push('');
   parts.push(`Attribution reasoning:\n${input.attribution.reasoning}`);
   if (input.attribution.suggestedFocus) {
@@ -39,11 +41,17 @@ export function buildCiFollowupNotes(input: CiFollowupTextInput): string {
       parts.push(`\n### ${t.checkName}\n\`\`\`\n${tail}\n\`\`\``);
     }
   }
-  parts.push('\nMake the minimum change that turns the failing checks green without breaking the existing fix.');
+  parts.push(
+    '\nMake the minimum change that turns the failing checks green without breaking the existing fix.',
+  );
   return parts.join('\n');
 }
 
-export function buildCiFollowupCommitMessage(input: CiFollowupTextInput, title: string, report: FixReport): string {
+export function buildCiFollowupCommitMessage(
+  input: CiFollowupTextInput,
+  title: string,
+  report: FixReport,
+): string {
   return `fix: CI follow-up for ${normalizeTitle(title)} (#${input.issueNumber})
 
 ${report.approach}
@@ -59,13 +67,17 @@ export function buildCiFollowupPrComment(
   fixReport: FixReport,
   verdict: Required<ReviewVerdict>,
 ): string {
-  const files = fixReport.changedFiles.length > 0
-    ? fixReport.changedFiles.map(f => `- \`${f}\``).join('\n')
-    : '_(none reported)_';
-  const tests = fixReport.testCommandsRun.length > 0
-    ? fixReport.testCommandsRun.map(c => `- \`${c}\``).join('\n')
-    : '_(none)_';
-  const focus = input.attribution.suggestedFocus ? `\n**Focus:** ${input.attribution.suggestedFocus}` : '';
+  const files =
+    fixReport.changedFiles.length > 0
+      ? fixReport.changedFiles.map((f) => `- \`${f}\``).join('\n')
+      : '_(none reported)_';
+  const tests =
+    fixReport.testCommandsRun.length > 0
+      ? fixReport.testCommandsRun.map((c) => `- \`${c}\``).join('\n')
+      : '_(none)_';
+  const focus = input.attribution.suggestedFocus
+    ? `\n**Focus:** ${input.attribution.suggestedFocus}`
+    : '';
   return `## 🤖 Cezar CI follow-up (attempt ${input.attemptIndex}/${input.attemptMax})
 
 Cezar re-ran against the failing CI and pushed an adjustment.${focus}
@@ -97,11 +109,23 @@ Co-authored-by: cezar-autofix <noreply@cezar>
 `;
 }
 
-export function buildPrBody(issueNumber: number, rootCause: RootCause, fixReport: FixReport, verdict: Required<ReviewVerdict>): string {
-  const concerns = (fixReport.remainingConcerns ?? []).map(c => `- ${c}`).join('\n') || '_(none)_';
-  const reviewIssues = verdict.issues.length === 0
-    ? '_(no issues raised)_'
-    : verdict.issues.map(i => `- **${i.severity}** ${i.file ? `\`${i.file}\`${i.line ? `:${i.line}` : ''}` : ''}: ${i.comment}`).join('\n');
+export function buildPrBody(
+  issueNumber: number,
+  rootCause: RootCause,
+  fixReport: FixReport,
+  verdict: Required<ReviewVerdict>,
+): string {
+  const concerns =
+    (fixReport.remainingConcerns ?? []).map((c) => `- ${c}`).join('\n') || '_(none)_';
+  const reviewIssues =
+    verdict.issues.length === 0
+      ? '_(no issues raised)_'
+      : verdict.issues
+          .map(
+            (i) =>
+              `- **${i.severity}** ${i.file ? `\`${i.file}\`${i.line ? `:${i.line}` : ''}` : ''}: ${i.comment}`,
+          )
+          .join('\n');
 
   return `## Automated fix for #${issueNumber}
 
@@ -118,11 +142,11 @@ ${rootCause.hypothesis}
 ${fixReport.approach}
 
 ### Files changed
-${fixReport.changedFiles.map(f => `- \`${f}\``).join('\n') || '_(none)_'}
+${fixReport.changedFiles.map((f) => `- \`${f}\``).join('\n') || '_(none)_'}
 
 ### Verification
 Commands run by the fixer:
-${fixReport.testCommandsRun.map(c => `- \`${c}\``).join('\n') || '_(none)_'}
+${fixReport.testCommandsRun.map((c) => `- \`${c}\``).join('\n') || '_(none)_'}
 
 ### Review (automated)
 **Verdict:** \`${verdict.verdict}\`

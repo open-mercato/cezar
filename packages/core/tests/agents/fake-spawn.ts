@@ -49,14 +49,18 @@ export function makeFakeSpawn(opts: {
       for (const l of lines) pt.write(`${l}\n`);
       // intentionally never `pt.end()`
     } else {
-      child.stdout = Readable.from((async function* () {
-        for (const l of lines) yield `${l}\n`;
-      })());
+      child.stdout = Readable.from(
+        (async function* () {
+          for (const l of lines) yield `${l}\n`;
+        })(),
+      );
     }
 
-    child.stderr = Readable.from((async function* () {
-      if (opts.stderr) yield opts.stderr;
-    })());
+    child.stderr = Readable.from(
+      (async function* () {
+        if (opts.stderr) yield opts.stderr;
+      })(),
+    );
     child.stdin = { write: () => true, end: () => {} };
     child.exitCode = null;
     child.killed = false;

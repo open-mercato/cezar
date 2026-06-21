@@ -18,7 +18,8 @@ export async function runsCommand(runId: string | undefined, config: Config): Pr
   }
 
   if (runId) {
-    const run = summaries.find((r) => r.id === runId) ?? summaries.find((r) => r.id.startsWith(runId));
+    const run =
+      summaries.find((r) => r.id === runId) ?? summaries.find((r) => r.id.startsWith(runId));
     if (!run) {
       console.error(chalk.red(`No run found matching '${runId}'.`));
       process.exit(1);
@@ -86,7 +87,8 @@ function printDetail(run: LocalRunSummary): void {
 }
 
 function colorStatus(status: string): string {
-  if (status === 'finished' || status === 'succeeded' || status === 'pr-opened') return chalk.green(status);
+  if (status === 'finished' || status === 'succeeded' || status === 'pr-opened')
+    return chalk.green(status);
   if (status === 'failed') return chalk.red(status);
   if (status === 'running' || status === 'paused') return chalk.yellow(status);
   return chalk.dim(status);

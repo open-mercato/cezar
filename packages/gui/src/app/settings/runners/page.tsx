@@ -86,8 +86,13 @@ export default async function RunnersPage() {
   return (
     <PageContainer max="max-w-[1080px]">
       <header className="mb-6">
-        <nav className="mb-2 flex items-center gap-2 text-xs text-on-surface-variant" aria-label="Breadcrumb">
-          <Link href="/settings" className="hover:text-on-surface">Settings</Link>
+        <nav
+          className="mb-2 flex items-center gap-2 text-xs text-on-surface-variant"
+          aria-label="Breadcrumb"
+        >
+          <Link href="/settings" className="hover:text-on-surface">
+            Settings
+          </Link>
           <span className="text-outline">›</span>
           <span className="text-on-surface">Runners</span>
         </nav>
@@ -96,16 +101,26 @@ export default async function RunnersPage() {
         </h1>
         <p className="mt-2 max-w-[820px] text-sm leading-relaxed text-on-surface-variant">
           Self-hosted runners pick up{' '}
-          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">claude-cli</code>{' '}
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            claude-cli
+          </code>{' '}
           /{' '}
-          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">codex-cli</code>{' '}
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            codex-cli
+          </code>{' '}
           jobs on your own infra under your own CLI login. The managed cloud handles{' '}
-          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">anthropic-api</code>{' '}
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            anthropic-api
+          </code>{' '}
           jobs. See{' '}
-          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">docs/runner-setup.md</code>{' '}
+          <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
+            docs/runner-setup.md
+          </code>{' '}
           for the full setup.
           {!isAdmin && (
-            <span className="ml-1 text-outline">— read-only, admin required to register or revoke.</span>
+            <span className="ml-1 text-outline">
+              — read-only, admin required to register or revoke.
+            </span>
           )}
         </p>
       </header>

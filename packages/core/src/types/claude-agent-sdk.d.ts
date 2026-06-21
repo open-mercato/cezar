@@ -43,7 +43,11 @@ declare module '@anthropic-ai/claude-agent-sdk' {
     subtype: string;
   }
 
-  export type SDKMessage = SDKAssistantMessage | SDKResultMessage | SDKSystemMessage | SDKMessageBase;
+  export type SDKMessage =
+    | SDKAssistantMessage
+    | SDKResultMessage
+    | SDKSystemMessage
+    | SDKMessageBase;
 
   export interface QueryOptions {
     cwd?: string;
@@ -55,7 +59,10 @@ declare module '@anthropic-ai/claude-agent-sdk' {
     maxTurns?: number;
     model?: string;
     settingSources?: Array<'user' | 'project' | 'local'>;
-    canUseTool?: (toolName: string, input: unknown) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>;
+    canUseTool?: (
+      toolName: string,
+      input: unknown,
+    ) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>;
     hooks?: Record<string, unknown>;
   }
 

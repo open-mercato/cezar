@@ -18,7 +18,8 @@ This is a gap where the backend functionality is implemented but the frontend pa
     expect(parseStructured(raw, AnalyzerResultSchema)).toEqual({
       summary: 'Password reset frontend page missing',
       suspectedFiles: ['packages/core/src/modules/portal/frontend/[orgSlug]/portal'],
-      hypothesis: 'The admin generates a reset URL that points to a frontend route that does not exist.',
+      hypothesis:
+        'The admin generates a reset URL that points to a frontend route that does not exist.',
       reproductionNotes: 'Open the reset link from the admin email flow.',
       confidence: 0.95,
     });

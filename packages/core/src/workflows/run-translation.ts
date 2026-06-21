@@ -36,7 +36,12 @@ export function workflowResultToAutofixOutcome(
         prNumber: result.prNumber ?? bb.prNumber ?? 0,
         branch: result.branch ?? '',
         headSha: result.headSha ?? bb.headSha ?? '',
-        rootCause: (rootCause ?? { summary: '', hypothesis: '', suspectedFiles: [], confidence: 0 }) as RootCause,
+        rootCause: (rootCause ?? {
+          summary: '',
+          hypothesis: '',
+          suspectedFiles: [],
+          confidence: 0,
+        }) as RootCause,
         verdict: fullVerdict(verdict),
       };
     }
@@ -65,7 +70,8 @@ export function workflowResultToAutofixOutcome(
   // failed | cancelled
   return {
     status: 'failed',
-    reason: result.reason ?? (result.status === 'cancelled' ? 'workflow cancelled' : 'workflow failed'),
+    reason:
+      result.reason ?? (result.status === 'cancelled' ? 'workflow cancelled' : 'workflow failed'),
     rootCause,
     fixReport: bb.fixReport,
     verdict,
@@ -101,7 +107,8 @@ export function workflowResultToCiFollowupOutcome(
   // failed | cancelled
   return {
     status: 'failed',
-    reason: result.reason ?? (result.status === 'cancelled' ? 'workflow cancelled' : 'workflow failed'),
+    reason:
+      result.reason ?? (result.status === 'cancelled' ? 'workflow cancelled' : 'workflow failed'),
     branch,
     verdict: bb.verdict,
     fixReport: bb.fixReport,

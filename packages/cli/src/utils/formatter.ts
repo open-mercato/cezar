@@ -21,8 +21,8 @@ export function printDigestSummary(store: IssueStore): void {
 
   const order = ['bug', 'feature', 'docs', 'chore', 'question', 'other'];
   const parts = order
-    .filter(c => counts[c])
-    .map(c => `${counts[c]} ${c}${counts[c] > 1 ? 's' : ''}`);
+    .filter((c) => counts[c])
+    .map((c) => `${counts[c]} ${c}${counts[c] > 1 ? 's' : ''}`);
 
   console.log(chalk.dim(`  Categories: ${parts.join(' · ')}`));
 }

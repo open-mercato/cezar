@@ -18,7 +18,9 @@ export async function GET(): Promise<NextResponse> {
   const supabase = createSupabaseAdminClient();
   const { data: analyses } = await supabase
     .from('workspace_label_analyses')
-    .select('id, status, started_at, finished_at, result, error, inputs_summary, created_at, updated_at')
+    .select(
+      'id, status, started_at, finished_at, result, error, inputs_summary, created_at, updated_at',
+    )
     .eq('workspace_id', workspace.id)
     .order('created_at', { ascending: false })
     .limit(1);

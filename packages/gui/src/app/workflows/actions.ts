@@ -42,9 +42,7 @@ export interface FlowStep {
   systemNotes?: string;
 }
 
-export type FlowTrigger =
-  | { kind: 'issue.opened' }
-  | { kind: 'issue.labeled'; label: string };
+export type FlowTrigger = { kind: 'issue.opened' } | { kind: 'issue.labeled'; label: string };
 
 export interface SkillSummary {
   name: string;
@@ -132,19 +130,24 @@ export async function listFlows(): Promise<FlowSummary[]> {
       for (const run of runs) {
         const key = run.workflow;
         const list = recentByWorkflow.get(key) ?? [];
-        if (list.length < 5) list.push({
-          id: run.id,
-          status: run.status,
-          issueNumber: run.issue_number,
-          startedAt: run.started_at,
-        });
+        if (list.length < 5)
+          list.push({
+            id: run.id,
+            status: run.status,
+            issueNumber: run.issue_number,
+            startedAt: run.started_at,
+          });
         recentByWorkflow.set(key, list);
         if (!seenLatest.has(key)) {
           seenLatest.add(key);
           latestRunIds.push(run.id);
         }
         if (run.started_at >= sevenDaysAgo) {
-          const cur = statsByWorkflow.get(key) ?? { totalLast7d: 0, succeededLast7d: 0, avgTokens: 0 };
+          const cur = statsByWorkflow.get(key) ?? {
+            totalLast7d: 0,
+            succeededLast7d: 0,
+            avgTokens: 0,
+          };
           cur.totalLast7d += 1;
           if (run.status === 'succeeded') cur.succeededLast7d += 1;
           // running average — we'll finalize by dividing once at the end.
@@ -158,7 +161,17 @@ export async function listFlows(): Promise<FlowSummary[]> {
 
       // Per-step output snippet — only fetched for the most-recent run per
       // workflow (everything else is "open in cockpit"). Keeps this query tight.
-      const stepRowsByRun = new Map<string, Array<{ id: string; stepId: string; status: string; iteration: number; summary: string | null; error: string | null }>>();
+      const stepRowsByRun = new Map<
+        string,
+        Array<{
+          id: string;
+          stepId: string;
+          status: string;
+          iteration: number;
+          summary: string | null;
+          error: string | null;
+        }>
+      >();
       const stepIdsForEventQuery: string[] = [];
       if (latestRunIds.length > 0) {
         const { data: ar } = await supabase
@@ -168,7 +181,14 @@ export async function listFlows(): Promise<FlowSummary[]> {
           .order('started_at', { ascending: true });
         for (const row of ar ?? []) {
           const list = stepRowsByRun.get(row.workflow_run_id) ?? [];
-          list.push({ id: row.id, stepId: row.step_id, status: row.status, iteration: row.iteration, summary: row.summary, error: row.error });
+          list.push({
+            id: row.id,
+            stepId: row.step_id,
+            status: row.status,
+            iteration: row.iteration,
+            summary: row.summary,
+            error: row.error,
+          });
           stepRowsByRun.set(row.workflow_run_id, list);
           stepIdsForEventQuery.push(row.id);
         }
@@ -185,7 +205,10 @@ export async function listFlows(): Promise<FlowSummary[]> {
         for (const ev of events ?? []) {
           const payload = (ev.payload ?? {}) as { text?: unknown };
           if (typeof payload.text !== 'string' || !ev.agent_run_id) continue;
-          textByAgentRun.set(ev.agent_run_id, (textByAgentRun.get(ev.agent_run_id) ?? '') + payload.text);
+          textByAgentRun.set(
+            ev.agent_run_id,
+            (textByAgentRun.get(ev.agent_run_id) ?? '') + payload.text,
+          );
         }
       }
 
@@ -291,7 +314,8 @@ export async function upsertFlow(params: {
     workspace_id: workspace.id,
     name: params.name.trim(),
     steps: params.steps as unknown as Database['public']['Tables']['flows']['Insert']['steps'],
-    triggers: params.triggers as unknown as Database['public']['Tables']['flows']['Insert']['triggers'],
+    triggers:
+      params.triggers as unknown as Database['public']['Tables']['flows']['Insert']['triggers'],
   };
   if (params.paused !== undefined) row.paused = params.paused;
 
@@ -306,11 +330,7 @@ export async function upsertFlow(params: {
     return { ok: true, id: params.id };
   }
 
-  const { data, error } = await supabase
-    .from('flows')
-    .insert(row)
-    .select('id')
-    .single();
+  const { data, error } = await supabase.from('flows').insert(row).select('id').single();
   if (error || !data) return { ok: false, error: error?.message ?? 'insert failed' };
   revalidatePath('/workflows');
   return { ok: true, id: data.id };
@@ -366,9 +386,10 @@ export async function runFlowOnIssue(params: {
     .single();
   if (!flow) return { ok: false, error: 'flow not found' };
 
-  const repo = workspace.repoOwner && workspace.repoName
-    ? `${workspace.repoOwner}/${workspace.repoName}`
-    : null;
+  const repo =
+    workspace.repoOwner && workspace.repoName
+      ? `${workspace.repoOwner}/${workspace.repoName}`
+      : null;
 
   // Dedupe: a double-click, network burst, or stale tab must not queue two
   // jobs for the same flow+issue. Key on payload->>flowId so different flows
@@ -447,9 +468,7 @@ export async function listAvailableSkills(): Promise<SkillSummary[]> {
       );
       if (!active) continue;
       const description =
-        typeof s.description === 'string'
-          ? s.description.split('\n')[0].trim().slice(0, 240)
-          : '';
+        typeof s.description === 'string' ? s.description.split('\n')[0].trim().slice(0, 240) : '';
       // First write wins (repo_skills is one row per repo; for multi-repo
       // workspaces, skills across repos with the same name are de-duped here).
       if (!byName.has(s.name)) byName.set(s.name, { name: s.name, description });
@@ -535,7 +554,10 @@ export async function renderStepPreview(params: {
             config.autofix.baseBranch,
           );
         }
-        const skills = await discoverSkills(config.autofix.repoRoot, config.autofix.skillsDir ?? '.ai/skills');
+        const skills = await discoverSkills(
+          config.autofix.repoRoot,
+          config.autofix.skillsDir ?? '.ai/skills',
+        );
         return skills.find((s) => s.name === step.skill);
       });
       if (hit) {

@@ -3,7 +3,12 @@
 import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
-import { STALE_SYNC_MS, buildSyncContext, runSyncPhases, writeSyncStatus } from '@/lib/sync/run-workspace-sync';
+import {
+  STALE_SYNC_MS,
+  buildSyncContext,
+  runSyncPhases,
+  writeSyncStatus,
+} from '@/lib/sync/run-workspace-sync';
 import type { Database } from '@/lib/supabase/types';
 
 // ─────────────────────────────────────────────────────────────────────
@@ -78,7 +83,10 @@ export async function syncAndDigest(): Promise<SyncResult> {
       token,
     });
   } catch (err) {
-    return { ok: false, error: `Config load failed: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      ok: false,
+      error: `Config load failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   // ── Flip the row to 'syncing' before we return, so the client sees the
@@ -97,17 +105,22 @@ export async function syncAndDigest(): Promise<SyncResult> {
   // "Sync now" is a metadata refresh: digests follow the workspace's digest
   // policy (auto cadence / manual / off), not forced. The dedicated
   // `generateDigestsNow` action is the explicit "spend now" path.
-  void runSyncPhases({ supabase, workspaceId: workspace.id, store: ctx.store, github: ctx.github, config: ctx.config, digestPolicy: ctx.digestPolicy }).catch(
-    async (err) => {
-      console.error('[syncAndDigest] background sync crashed:', err);
-      await writeSyncStatus(supabase, workspace.id, {
-        status: 'error',
-        phase: null,
-        error: err instanceof Error ? err.message : String(err),
-        finished_at: new Date().toISOString(),
-      });
-    },
-  );
+  void runSyncPhases({
+    supabase,
+    workspaceId: workspace.id,
+    store: ctx.store,
+    github: ctx.github,
+    config: ctx.config,
+    digestPolicy: ctx.digestPolicy,
+  }).catch(async (err) => {
+    console.error('[syncAndDigest] background sync crashed:', err);
+    await writeSyncStatus(supabase, workspace.id, {
+      status: 'error',
+      phase: null,
+      error: err instanceof Error ? err.message : String(err),
+      finished_at: new Date().toISOString(),
+    });
+  });
 
   return { ok: true };
 }
@@ -166,7 +179,10 @@ export async function generateDigestsNow(): Promise<SyncResult> {
       token,
     });
   } catch (err) {
-    return { ok: false, error: `Config load failed: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      ok: false,
+      error: `Config load failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   await writeSyncStatus(supabase, workspace.id, {
