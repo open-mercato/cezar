@@ -43,7 +43,12 @@ export function buildOpenIssuesContextProviders(
   };
 }
 
-function digestSummary(digest: Json | null): string | null {
+/**
+ * Pull a non-empty `summary` string out of a cached issue digest blob. Returns
+ * `null` for absent / non-object / array / missing / blank summaries so callers
+ * can fall back to the raw issue body. Exported for unit testing.
+ */
+export function digestSummary(digest: Json | null): string | null {
   if (digest && typeof digest === 'object' && !Array.isArray(digest)) {
     const summary = (digest as { summary?: unknown }).summary;
     if (typeof summary === 'string' && summary.trim().length > 0) return summary;

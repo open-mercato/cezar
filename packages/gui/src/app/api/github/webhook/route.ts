@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { upsertIssueFromWebhook, type WebhookIssue } from '@/lib/upsert-issue-from-webhook';
+import { deriveTriageTrigger } from '@/lib/derive-triage-trigger';
 import type { Database } from '@/lib/supabase/types';
 
 export const dynamic = 'force-dynamic';
@@ -189,8 +190,7 @@ async function handleIssues(admin: SupabaseAdmin, payload: WebhookPayload, event
   // payload so the triage pass matches actions on what actually happened.
   // Note the open-job dedup below means an 'edited' enqueue is dropped while
   // an 'opened' job is still in flight — acceptable; the opened pass covers it.
-  const triageTrigger: 'on-issue-opened' | 'on-issue-reopened' | 'on-issue-edited' =
-    action === 'reopened' ? 'on-issue-reopened' : action === 'edited' ? 'on-issue-edited' : 'on-issue-opened';
+  const triageTrigger = deriveTriageTrigger(action);
   const isFlowRelevant = action === 'opened' || action === 'labeled';
   if (!isTriageRelevant && !isFlowRelevant) {
     return NextResponse.json({ ok: true, ignored: `issues.${action}` });
