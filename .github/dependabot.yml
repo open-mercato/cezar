@@ -1,0 +1,30 @@
+version: 2
+
+updates:
+  # JavaScript/TypeScript deps — single Yarn 4 workspace at the repo root.
+  # One root yarn.lock covers every package (workspace ranges resolve here),
+  # so a single "/" entry updates the whole monorepo.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      # Batch all minor + patch bumps into one PR to cut review noise; majors
+      # still open individually so breaking changes get a dedicated review.
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions used by the workflows in .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        update-types:
+          - minor
+          - patch
