@@ -488,7 +488,10 @@ export interface Database {
         Row: {
           id: string;
           workspace_id: string;
-          /** PR 4 will widen this to `'external-repo' | 'skills-sh'`. */
+          /**
+           * Only `'external-repo'` today. skills.sh shipped as its own table
+           * (`skills_sh_skills`), so this column is not widened to `'skills-sh'`.
+           */
           kind: 'external-repo';
           name: string;
           /** For `kind='external-repo'`: `{ owner, repo, branch, folder }`. */

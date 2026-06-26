@@ -185,7 +185,7 @@ export default async function SkillDetailPage({
       .maybeSingle<SkillsShRow>(),
   ]);
 
-  let parsed = parseSkills(skillsRow?.skills);
+  const parsed = parseSkills(skillsRow?.skills);
   let skill = parsed.find((s) => s.name === name);
 
   // Issue #262 PR2 — fall back to external_repo_skills when the skill isn't in

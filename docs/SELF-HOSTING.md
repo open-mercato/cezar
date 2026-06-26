@@ -4,6 +4,7 @@ How to run Cezar on your own infrastructure — both the managed-runner side and
 the self-hosted-runner daemon.
 
 - [Self-hosted runner](#self-hosted-runner)
+- [Skill-source sync needs git + a writable home](#skill-source-sync-needs-git--a-writable-home)
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
 
@@ -47,6 +48,28 @@ stalled jobs are re-queued by the dispatcher.
 See also [`runner-setup.md`](runner-setup.md) and
 [`claude-subscription-runner.md`](claude-subscription-runner.md) for deeper
 runner notes.
+
+---
+
+## Skill-source sync needs git + a writable home
+
+Syncing a **workspace repo** or an **external skill repo** (the *Refresh* button
+on **/skills → Sources**) shells out to the `git` binary and writes a clone
+under `homedir()/.cezar/` (`repos/` for workspace repos, `external-skills/` for
+external sources). Both run inside a Next.js **server action**, so the host that
+serves the GUI must provide:
+
+- a **`git` binary** on PATH, and
+- a **writable home directory** (`$HOME`).
+
+This rules out a pure read-only / ephemeral serverless target (e.g. stock
+Vercel) **for that sync operation** — there is no `git` and the filesystem is
+read-only. Run the GUI on a host that satisfies the two requirements above
+(a long-lived container / VM, the same model `@cezar/runner` already assumes).
+
+Note this only affects the admin-triggered **sync**. Dispatch is unaffected:
+synced skill bodies are cached inline in the database (`external_repo_skills`,
+`repo_skills`), so agent runs never re-clone at dispatch time.
 
 ---
 
