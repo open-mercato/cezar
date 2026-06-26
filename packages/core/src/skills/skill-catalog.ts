@@ -166,6 +166,41 @@ function loadBuiltinSkills(): Promise<Skill[]> {
   );
 }
 
+/**
+ * Issue #262 (PR 3) — public adapter around the internal `parseFrontmatter`
+ * parser, used by GUI when ingesting markdown that didn't come through
+ * `discoverSkills`. Pasting a skill into the upload modal or dropping a
+ * `.md` file goes through this so the parsing rules stay identical to what
+ * the dispatcher applies when reading skills off disk.
+ *
+ * `fallbackName` is consulted only when the markdown's frontmatter omits a
+ * `name:` field — typically the filename (without `.md`) for file uploads, or
+ * a user-supplied label when pasting raw text.
+ */
+export interface ParsedSkillMarkdown {
+  name: string | null;
+  description?: string;
+  suggestedStages: string[];
+  body: string;
+}
+
+export function parseSkillMarkdown(raw: string, fallbackName?: string): ParsedSkillMarkdown {
+  const { frontmatter, body } = parseFrontmatter(raw);
+  const frontmatterName =
+    typeof frontmatter.name === 'string' && frontmatter.name.trim()
+      ? frontmatter.name.trim()
+      : null;
+  const description =
+    typeof frontmatter.description === 'string' && frontmatter.description.trim()
+      ? frontmatter.description.trim()
+      : undefined;
+  const suggestedStages = Array.isArray(frontmatter['cezar-stages'])
+    ? frontmatter['cezar-stages'].filter((s): s is string => typeof s === 'string')
+    : [];
+  const name = frontmatterName ?? (fallbackName?.trim() ? fallbackName.trim() : null);
+  return { name, description, suggestedStages, body };
+}
+
 /** Partition skills by whether their `suggestedStages` includes `stageId`. */
 export function skillsForStage(
   skills: Skill[],
@@ -191,7 +226,10 @@ function parseFrontmatter(
   raw: string,
   sourcePath?: string,
 ): { frontmatter: Record<string, FrontmatterValue>; body: string } {
-  const text = raw.replace(/\r\n/g, '\n');
+  // Normalize CRLF AND lone CR (legacy-Mac line endings) — otherwise a file
+  // with `\r`-only newlines fails `text.startsWith('---\n')`, frontmatter is
+  // silently dropped, and the whole document ends up dumped into `body`.
+  const text = raw.replace(/\r\n?/g, '\n');
   if (!text.startsWith('---\n')) return { frontmatter: {}, body: raw };
 
   // Match the closing delimiter only on its own line (`\n---\n`, or `\n---` at

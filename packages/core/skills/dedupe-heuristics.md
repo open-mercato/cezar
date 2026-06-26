@@ -3,7 +3,6 @@ name: dedupe-heuristics
 description: Heuristics for identifying duplicate issues against an open-issue knowledge base.
 cezar-stages:
   - duplicates
-  - dedupe-check
 ---
 
 # Duplicate-detection heuristics

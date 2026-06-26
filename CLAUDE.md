@@ -2,6 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Design & architecture guidelines live in [`AGENTS.md`](./AGENTS.md).** Read it before
+> writing or changing code — it codifies the patterns this project follows and the
+> anti-patterns to avoid, each tied to a concrete reference. The quick-reference rules
+> below are the non-negotiables; `AGENTS.md` is the full version.
+
+## Design & Architecture Guidelines (quick reference)
+
+The hard rules (full list + rationale + reference files in `AGENTS.md` §1):
+
+1. **`.js` suffix** on every relative import in ESM packages (`core`/`cli`/`runner`).
+2. **No `any`, no `@ts-ignore`/`@ts-expect-error`** — exceptional `any` needs a comment + tracking issue.
+3. **Validate all external / LLM / DB / config data with Zod at the boundary.**
+4. **`core` is a pure library** — no `console.*`, no `process.exit`, no host I/O ownership.
+5. **Narrow errors with `instanceof Error`**, never `(err as Error)`.
+6. **Cross-package wire shapes live in `@cezar/core`** — never hand-copy a type.
+7. **Dependency direction is one-way:** `cli`/`gui`/`runner` → `@cezar/core` only; no deep or cross-leaf imports.
+8. **Fail closed on missing secrets** (503, never fall open); compare with `timingSafeEqual`; verify webhook HMAC on the raw body.
+9. **Service-role key is server-only**; never in a client bundle or `NEXT_PUBLIC_*`.
+10. **Queue/side-effect code is idempotent** (dedup index + `23505`-as-no-op) and bounds its own lifetime.
+
+When designing something new, copy the cited reference implementation in `AGENTS.md` §2.
+Before a PR, run the checklist in `AGENTS.md` §4.
+
 ## Project Overview
 
 Cezar is a team SaaS for running AI coding agents on GitHub issues — a **cockpit**

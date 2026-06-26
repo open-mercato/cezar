@@ -554,6 +554,144 @@ export interface Database {
         };
         Update: Partial<Database['public']['Tables']['workspace_skill_states']['Insert']>;
       };
+      skill_sources: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          /** PR 4 will widen this to `'external-repo' | 'skills-sh'`. */
+          kind: 'external-repo';
+          name: string;
+          /** For `kind='external-repo'`: `{ owner, repo, branch, folder }`. */
+          config: Json;
+          last_synced_at: string | null;
+          last_sync_error: string | null;
+          created_at: string;
+          updated_at: string;
+          created_by: string | null;
+          updated_by: string | null;
+        };
+        Insert: Omit<
+          Database['public']['Tables']['skill_sources']['Row'],
+          | 'id'
+          | 'config'
+          | 'last_synced_at'
+          | 'last_sync_error'
+          | 'created_at'
+          | 'updated_at'
+          | 'created_by'
+          | 'updated_by'
+        > & {
+          id?: string;
+          config?: Json;
+          last_synced_at?: string | null;
+          last_sync_error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          created_by?: string | null;
+          updated_by?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['skill_sources']['Insert']>;
+      };
+      external_repo_skills: {
+        Row: {
+          source_id: string;
+          commit_sha: string | null;
+          /** Array of `{ name, description, suggestedStages, path, source, body }`
+           *  — body inline so the dispatcher works without a local clone. */
+          skills: Json;
+          fetched_at: string;
+        };
+        Insert: Omit<
+          Database['public']['Tables']['external_repo_skills']['Row'],
+          'commit_sha' | 'skills' | 'fetched_at'
+        > & {
+          commit_sha?: string | null;
+          skills?: Json;
+          fetched_at?: string;
+        };
+        Update: Partial<Database['public']['Tables']['external_repo_skills']['Insert']>;
+      };
+      uploaded_skills: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          name: string;
+          body: string;
+          description: string | null;
+          /** Array of stage ids (`'verify-in-repo' | 'fix' | …`) — same shape as
+           *  the YAML `cezar-stages` frontmatter list. */
+          suggested_stages: Json;
+          uploaded_at: string;
+          updated_at: string;
+          uploaded_by: string | null;
+          updated_by: string | null;
+        };
+        Insert: Omit<
+          Database['public']['Tables']['uploaded_skills']['Row'],
+          | 'id'
+          | 'body'
+          | 'description'
+          | 'suggested_stages'
+          | 'uploaded_at'
+          | 'updated_at'
+          | 'uploaded_by'
+          | 'updated_by'
+        > & {
+          id?: string;
+          body?: string;
+          description?: string | null;
+          suggested_stages?: Json;
+          uploaded_at?: string;
+          updated_at?: string;
+          uploaded_by?: string | null;
+          updated_by?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['uploaded_skills']['Insert']>;
+      };
+      skills_sh_skills: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          /** API identifier — `{source}/{slug}` (e.g. `vercel-labs/skills/find-skills`). */
+          source_slug: string;
+          name: string;
+          body: string;
+          description: string | null;
+          suggested_stages: Json;
+          /** API snapshot fingerprint — Refresh compares against this. */
+          content_hash: string | null;
+          install_url: string | null;
+          imported_at: string;
+          last_synced_at: string;
+          last_sync_error: string | null;
+          imported_by: string | null;
+        };
+        Insert: Omit<
+          Database['public']['Tables']['skills_sh_skills']['Row'],
+          | 'id'
+          | 'body'
+          | 'description'
+          | 'suggested_stages'
+          | 'content_hash'
+          | 'install_url'
+          | 'imported_at'
+          | 'last_synced_at'
+          | 'last_sync_error'
+          | 'imported_by'
+        > & {
+          id?: string;
+          body?: string;
+          description?: string | null;
+          suggested_stages?: Json;
+          content_hash?: string | null;
+          install_url?: string | null;
+          imported_at?: string;
+          last_synced_at?: string;
+          last_sync_error?: string | null;
+          imported_by?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['skills_sh_skills']['Insert']>;
+      };
       jobs: {
         Row: {
           id: string;

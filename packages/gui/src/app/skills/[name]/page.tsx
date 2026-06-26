@@ -43,6 +43,36 @@ interface ParsedSkill {
   suggestedStages: string[];
   path: string;
   source: SkillSource;
+  /** Inlined body for sources that don't have a workspace-clone path (external-repo PR2). */
+  body?: string;
+}
+
+interface ExternalSourceRow {
+  id: string;
+  name: string;
+}
+
+interface ExternalCacheRow {
+  source_id: string;
+  skills: unknown;
+}
+
+interface UploadedSkillRow {
+  name: string;
+  body: string;
+  description: string | null;
+  suggested_stages: unknown;
+  updated_at: string;
+}
+
+interface SkillsShRow {
+  name: string;
+  source_slug: string;
+  body: string;
+  description: string | null;
+  suggested_stages: unknown;
+  install_url: string | null;
+  last_synced_at: string;
 }
 
 function parseSkills(raw: unknown): ParsedSkill[] {
@@ -61,6 +91,7 @@ function parseSkills(raw: unknown): ParsedSkill[] {
           : [],
         path: typeof o.path === 'string' ? o.path : '',
         source: normalizeSkillSource(o.source),
+        body: typeof o.body === 'string' ? o.body : undefined,
       };
     })
     .filter((s): s is ParsedSkill => s !== null);
@@ -97,6 +128,9 @@ export default async function SkillDetailPage({ params }: { params: Promise<{ na
     { data: overrideRow },
     { data: issueRows },
     activation,
+    { data: externalSourceRows },
+    { data: uploadedRow },
+    { data: skillsShRow },
   ] = await Promise.all([
     supabase
       .from('repo_skills')
@@ -124,16 +158,93 @@ export default async function SkillDetailPage({ params }: { params: Promise<{ na
       .limit(20)
       .returns<IssueRow[]>(),
     getSkillActivationContext(workspace.id, supabase),
+    supabase
+      .from('skill_sources')
+      .select('id, name')
+      .eq('workspace_id', workspace.id)
+      .eq('kind', 'external-repo')
+      .returns<ExternalSourceRow[]>(),
+    // Issue #262 (PR 3) — disk uploads can shadow workspace skills on
+    // collision-free names; check if this `name` came from disk.
+    supabase
+      .from('uploaded_skills')
+      .select('name, body, description, suggested_stages, updated_at')
+      .eq('workspace_id', workspace.id)
+      .eq('name', name)
+      .maybeSingle<UploadedSkillRow>(),
+    // Issue #262 (PR 4) — same fallback for skills.sh imports.
+    supabase
+      .from('skills_sh_skills')
+      .select('name, source_slug, body, description, suggested_stages, install_url, last_synced_at')
+      .eq('workspace_id', workspace.id)
+      .eq('name', name)
+      .maybeSingle<SkillsShRow>(),
   ]);
 
-  const parsed = parseSkills(skillsRow?.skills);
-  const skill = parsed.find((s) => s.name === name);
+  let parsed = parseSkills(skillsRow?.skills);
+  let skill = parsed.find((s) => s.name === name);
+
+  // Issue #262 PR2 — fall back to external_repo_skills when the skill isn't in
+  // the workspace's repo_skills cache. Scoped by source_id so the service-role
+  // client doesn't bleed cross-tenant cache bodies into the Node process.
+  if (!skill) {
+    const externalSourceIds = (externalSourceRows ?? []).map((row) => row.id);
+    if (externalSourceIds.length > 0) {
+      const { data: externalCacheRows } = await supabase
+        .from('external_repo_skills')
+        .select('source_id, skills')
+        .in('source_id', externalSourceIds)
+        .returns<ExternalCacheRow[]>();
+      const seenNames = new Set(parsed.map((p) => p.name));
+      for (const row of externalCacheRows ?? []) {
+        for (const ext of parseSkills(row.skills)) {
+          if (seenNames.has(ext.name)) continue;
+          seenNames.add(ext.name);
+          parsed.push({ ...ext, source: 'external-repo' });
+        }
+      }
+      skill = parsed.find((s) => s.name === name);
+    }
+  }
+
+  // Issue #262 PR3 — disk uploads come next in the fallback chain.
+  const isDisk = !skill && uploadedRow !== null;
+  if (isDisk) {
+    skill = {
+      name: uploadedRow!.name,
+      description: uploadedRow!.description,
+      suggestedStages: parseStringArray(uploadedRow!.suggested_stages),
+      path: '',
+      source: 'disk',
+    };
+  }
+
+  // Issue #262 PR4 — skills.sh registry imports are the last fallback.
+  const isSkillsSh = !skill && skillsShRow !== null;
+  if (isSkillsSh) {
+    skill = {
+      name: skillsShRow!.name,
+      description: skillsShRow!.description,
+      suggestedStages: parseStringArray(skillsShRow!.suggested_stages),
+      path: '',
+      source: 'skills-sh',
+    };
+  }
+
   if (!skill) notFound();
 
-  const upstreamBody = await readSkillBody(workspace.repoOwner, workspace.repoName, skill.path);
+  // Resolve the body source per provenance: disk / skills.sh / external all
+  // inline the body in their DB cache; the legacy workspace/built-in/override
+  // path still flows through `readSkillBody` against the workspace clone.
+  const upstreamBody =
+    isDisk || isSkillsSh
+      ? null
+      : skill.source === 'external-repo'
+        ? (skill.body ?? null)
+        : await readSkillBody(workspace.repoOwner, workspace.repoName, skill.path);
 
   const bindings = (bindingRows ?? []).filter((b) => b.skill_name === skill.name);
-  const isOverride = overrideRow !== null;
+  const isOverride = !isDisk && !isSkillsSh && overrideRow !== null;
 
   // Issue #262 — runtime activation lives in `workspace_skill_states`, not
   // `skill_overrides.enabled`. Use the canonical predicate so the detail page
@@ -147,11 +258,23 @@ export default async function SkillDetailPage({ params }: { params: Promise<{ na
     name: skill.name,
     description: skill.description,
     path: skill.path,
-    body: isOverride ? overrideRow!.body : upstreamBody,
+    body: isDisk
+      ? uploadedRow!.body
+      : isSkillsSh
+        ? skillsShRow!.body
+        : isOverride
+          ? overrideRow!.body
+          : upstreamBody,
     upstreamBody,
-    source: isOverride ? 'override' : 'repo',
+    source: isDisk ? 'disk' : isSkillsSh ? 'skills-sh' : isOverride ? 'override' : 'repo',
     enabled,
-    overrideUpdatedAt: isOverride ? overrideRow!.updated_at : null,
+    overrideUpdatedAt: isDisk
+      ? uploadedRow!.updated_at
+      : isSkillsSh
+        ? skillsShRow!.last_synced_at
+        : isOverride
+          ? overrideRow!.updated_at
+          : null,
     metadata: {
       executionMode: isOverride ? overrideRow!.execution_mode : 'continuous',
       triggers: isOverride ? parseStringArray(overrideRow!.triggers) : ['issue-created'],

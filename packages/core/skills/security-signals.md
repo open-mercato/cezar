@@ -14,19 +14,43 @@ review than to miss a vulnerability.
 ## Detection categories
 
 - **Authentication bypass** — login or session issues that could allow
-  unauthorized access.
+  unauthorized access. Examples:
+    - Password-reset flow that doesn't invalidate the old session.
+    - JWT signature not being verified on a protected route.
+    - "Remember me" cookie that survives an explicit logout.
 - **Session hijacking** — session fixation, cookie theft, token leakage in
-  URLs / logs / referrers.
+  URLs / logs / referrers. Examples:
+    - Session id passed in a query string that ends up in HTTP referer.
+    - Cookie set without `Secure` / `HttpOnly` over HTTPS.
+    - Server reuses a pre-login session id after sign-in.
 - **Privilege escalation** — users gaining access beyond their assigned
-  role; horizontal or vertical.
+  role; horizontal (user A reads user B's data) or vertical (member acts
+  as admin). Examples:
+    - Endpoint accepting `?user_id=` overrides the session user.
+    - Admin-only feature gated only on the client.
+    - Role check that compares against a stale cached role.
 - **Injection** — SQL, command, path traversal, XSS, template injection,
-  prompt injection on AI features.
+  prompt injection on AI features. Examples:
+    - User input concatenated into a SQL query without parameterisation.
+    - File path built from user input without `..` containment.
+    - Markdown rendering that allows raw `<script>` tags.
+    - Prompt-injection content from a third-party tool steering a Claude
+      response — counts as injection even though there's no SQL.
 - **Data exposure** — API keys in logs, PII leakage, sensitive data in
-  error responses or 4xx bodies, secrets in URLs.
+  error responses or 4xx bodies, secrets in URLs. Examples:
+    - Stack trace returned to the client that names internal services.
+    - `/api/users/me` returning password hash or full address book.
+    - GitHub token included in a webhook payload echo.
 - **Credential logging** — passwords, tokens, or session cookies written
-  to logs / consoles / metrics.
+  to logs / consoles / metrics. Examples:
+    - `console.log(req.headers)` shipped to a hosted log pipeline.
+    - Stripe webhook secret included in a Sentry breadcrumb.
+    - Bearer tokens captured by a generic request middleware.
 - **Dependency vulnerabilities** — known CVEs in libraries, outdated
-  packages with public security fixes.
+  packages with public security fixes. Examples:
+    - `npm audit` calling out a high-severity advisory still open.
+    - Issue title mentioning a specific CVE id (e.g. `CVE-2024-…`).
+    - Bumping a transitive dep that ships a public exploit POC.
 
 ## Confidence and severity
 
