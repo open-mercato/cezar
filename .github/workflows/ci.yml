@@ -70,7 +70,7 @@ jobs:
           fi
 
       - name: Cache Next.js build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: packages/gui/.next/cache
           key: nextjs-${{ runner.os }}-${{ hashFiles('yarn.lock') }}-${{ hashFiles('packages/gui/src/**') }}
