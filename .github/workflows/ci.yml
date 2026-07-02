@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Enable corepack (yarn 4)
         run: corepack enable
@@ -116,7 +116,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Apply bootstrap + migrations + smoke asserts
         # A plain postgres:15 is NOT Supabase: it has no `auth` schema and none
