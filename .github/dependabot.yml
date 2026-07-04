@@ -5,7 +5,7 @@ updates:
   # One root yarn.lock covers every package (workspace ranges resolve here),
   # so a single "/" entry updates the whole monorepo.
   - package-ecosystem: npm
-    directory: "/"
+    directory: '/'
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
@@ -19,7 +19,7 @@ updates:
 
   # GitHub Actions used by the workflows in .github/workflows/.
   - package-ecosystem: github-actions
-    directory: "/"
+    directory: '/'
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

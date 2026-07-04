@@ -7,7 +7,7 @@ on:
     branches: [main]
   schedule:
     # Weekly scan (Mondays 06:17 UTC) to catch advisories in unchanged code.
-    - cron: "17 6 * * 1"
+    - cron: '17 6 * * 1'
 
 concurrency:
   group: codeql-${{ github.ref }}
@@ -40,4 +40,4 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
-          category: "/language:${{ matrix.language }}"
+          category: '/language:${{ matrix.language }}'
