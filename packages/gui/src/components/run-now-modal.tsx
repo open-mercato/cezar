@@ -6,9 +6,19 @@ import { cn } from '@/components/ui/cn';
 import { Modal } from '@/components/ui/modal';
 import {
   listRecentIssuesForRunNow,
+  listAvailableBackends,
   enqueueActionRun,
   type RunNowIssue,
+  type ActionBackend,
 } from '@/app/actions/[name]/run-now-action';
+
+/** User-facing labels for the backend dropdown. */
+const BACKEND_LABELS: Record<ActionBackend, string> = {
+  'anthropic-api': 'Anthropic API (managed)',
+  'claude-cli': 'Claude CLI (self-hosted runner)',
+  'codex-cli': 'Codex CLI (self-hosted runner)',
+};
+const ALL_BACKENDS: ActionBackend[] = ['anthropic-api', 'claude-cli', 'codex-cli'];
 
 export interface RunNowModalProps {
   actionId: string;
@@ -26,7 +36,22 @@ export function RunNowModal({ actionId, actionName, target, onClose }: RunNowMod
   const [manualNumber, setManualNumber] = useState('');
   const [useManual, setUseManual] = useState(target === 'pr');
   const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<ActionBackend>('anthropic-api');
+  const [availableBackends, setAvailableBackends] = useState<ActionBackend[]>(['anthropic-api']);
   const [pending, startTransition] = useTransition();
+
+  // Discover which backends have a live runner so we can grey out the rest.
+  useEffect(() => {
+    let cancelled = false;
+    listAvailableBackends()
+      .then((b) => {
+        if (!cancelled && b.length > 0) setAvailableBackends(b);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load top-20 recent issues for issue-targeted actions.
   useEffect(() => {
@@ -72,7 +97,7 @@ export function RunNowModal({ actionId, actionName, target, onClose }: RunNowMod
       return;
     }
     startTransition(async () => {
-      const r = await enqueueActionRun(actionId, number);
+      const r = await enqueueActionRun(actionId, number, backend);
       if (!r.ok || !r.workflowRunId) {
         setError(r.error ?? 'Could not queue action');
         return;
@@ -177,6 +202,33 @@ export function RunNowModal({ actionId, actionName, target, onClose }: RunNowMod
             {useManual ? 'Pick from recent issues instead' : 'Enter a number manually'}
           </button>
         )}
+        <label className="block">
+          <span className="font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-on-surface-variant">
+            Run on
+          </span>
+          <select
+            value={backend}
+            onChange={(e) => setBackend(e.target.value as ActionBackend)}
+            disabled={pending}
+            className="mt-1 h-9 w-full rounded-md border border-outline-variant bg-surface px-2 text-base text-on-surface focus:border-primary focus:outline-none lg:text-sm"
+          >
+            {ALL_BACKENDS.map((b) => {
+              const live = availableBackends.includes(b);
+              return (
+                <option key={b} value={b} disabled={!live}>
+                  {BACKEND_LABELS[b]}
+                  {live ? '' : ' — no live runner'}
+                </option>
+              );
+            })}
+          </select>
+          {backend !== 'anthropic-api' && (
+            <span className="mt-1 block text-xs text-on-surface-variant">
+              Runs on a self-hosted runner over the {backend === 'claude-cli' ? 'Claude' : 'Codex'}{' '}
+              CLI (subscription transport).
+            </span>
+          )}
+        </label>
         {error && (
           <p className="rounded-md border border-error/30 bg-error-container/30 px-3 py-2 text-sm text-error">
             {error}

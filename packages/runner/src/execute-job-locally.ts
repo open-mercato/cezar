@@ -197,7 +197,9 @@ export async function executeJobLocally(
       token: githubToken,
     };
     config.workflow = { ...(config.workflow ?? {}), useEngine: true };
-    if (!config.autofix.repoRoot) {
+    // Actions are repo-less — they classify an issue/PR and call GitHub effects,
+    // never touching a working tree. Skip the (expensive) clone for them.
+    if (job.kind !== 'action' && !config.autofix.repoRoot) {
       worktree = await prepareJobWorktree(
         workspace.owner,
         workspace.repo,
@@ -361,6 +363,103 @@ export async function executeJobLocally(
           tokensUsed,
         },
       };
+    } else if (job.kind === 'action') {
+      const action = claimed.action;
+      const target = claimed.target;
+      if (!action || !target) throw new Error('action job is missing action/target claim payload');
+
+      // The job's required_backend selects the LLM transport. A self-hosted
+      // runner only claims action jobs whose backend it serves, so this is a
+      // CLI backend (subscription, no API key). Fall back to claude-cli if the
+      // SaaS left it unstamped.
+      const KNOWN_BACKENDS: import('@cezar/core').AgentBackend[] = [
+        'anthropic-api',
+        'claude-cli',
+        'codex-cli',
+      ];
+      const backend = (KNOWN_BACKENDS as string[]).includes(job.requiredBackend ?? '')
+        ? (job.requiredBackend as import('@cezar/core').AgentBackend)
+        : 'claude-cli';
+
+      const skills = await core.discoverBuiltinSkills();
+      const deferred: import('./runner-client.js').DeferredEffectWire[] = [];
+      const startedAt = new Date().toISOString();
+      const model = action.model ?? 'claude-sonnet-4-6';
+      const stepBase = {
+        id: `${workflowRunId}:action`,
+        workflow: 'single-action',
+        stepId: action.name,
+        iteration: 0,
+        kind: 'agent' as const,
+        backend,
+        model,
+      };
+      onStepStart({ ...stepBase, status: 'running', startedAt, tokensUsed: 0 });
+
+      let runStatus: 'succeeded' | 'failed' = 'succeeded';
+      let summary: string | undefined;
+      let runError: string | undefined;
+      let effectsApplied: Array<{ effect: string; args: unknown; summary: string }> = [];
+      try {
+        const res = await core.runAction(action, target, {
+          backend,
+          config,
+          skills,
+          effectCtx: { github, targetNumber: target.number },
+          labels,
+          autoComment: {
+            enabled: claimed.actionAutoComment ?? true,
+            triggeredBy: 'runner · run now',
+          },
+          contextProviders: buildOpenIssuesContextProvidersFromStore(core, store, target.number),
+          deferSink: async ({ call, confidence, summary: deferSummary }) => {
+            deferred.push({
+              effect: call.effect,
+              args: call.args ?? {},
+              summary: deferSummary,
+              confidence,
+            });
+          },
+        });
+        summary = res.text ? res.text.slice(0, 500) : undefined;
+        effectsApplied = res.effectsApplied.map((e) => ({
+          effect: e.call.effect,
+          args: e.call.args,
+          summary: e.summary,
+        }));
+      } catch (err) {
+        runStatus = 'failed';
+        runError = err instanceof Error ? err.message : String(err);
+      }
+
+      // One tool-call event per applied effect so the cockpit timeline shows
+      // what the action did.
+      for (const ef of effectsApplied) {
+        emit({
+          type: 'tool-call',
+          payload: { action: action.name, effect: ef.effect, args: ef.args, summary: ef.summary },
+        });
+      }
+
+      onRunRecord({
+        ...stepBase,
+        status: runStatus,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        tokensUsed,
+        summary,
+        error: runError,
+      });
+
+      const outcome: import('./runner-client.js').ActionRunOutcome = {
+        action: action.name,
+        effectsApplied,
+        deferredEffects: deferred,
+      };
+      result = {
+        status: runStatus,
+        finalize: { status: runStatus, outcome, reason: runError ?? null, tokensUsed },
+      };
     } else {
       // TODO(2b3+): wire the data-driven `runTriagePass` for the self-hosted
       // runner. Triage is repo-less and rare on self-hosted runners; until the
@@ -402,6 +501,37 @@ export async function executeJobLocally(
     await flush().catch(() => {});
     if (worktree) await worktree.cleanup().catch(() => {});
   }
+}
+
+/**
+ * Runner-side `open-issues` context provider, built from the issue-store
+ * snapshot the SaaS ships in the claim (the cron path queries Supabase instead;
+ * see `gui/src/lib/open-issues-context.ts`). Same rule: open issues
+ * lower-numbered than the target, newest first, capped at 100, digest summary
+ * preferred over the body.
+ */
+function buildOpenIssuesContextProvidersFromStore(
+  core: typeof import('@cezar/core'),
+  store: import('@cezar/core').IssueStore,
+  targetNumber: number,
+): Record<string, () => Promise<string>> {
+  return {
+    'open-issues': async () => {
+      const open = store
+        .getIssues({ state: 'open' })
+        .filter((i) => i.number < targetNumber)
+        .sort((a, b) => b.number - a.number)
+        .slice(0, 100);
+      return core.formatOpenIssuesKb(
+        open.map((i) => ({
+          number: i.number,
+          title: i.title,
+          summary: i.digest?.summary ?? i.body,
+        })),
+        { cap: 100 },
+      );
+    },
+  };
 }
 
 /**

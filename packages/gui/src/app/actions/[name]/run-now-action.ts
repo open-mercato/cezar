@@ -12,6 +12,12 @@ export interface RunNowResult {
   workflowRunId?: string;
 }
 
+/** Where a run can execute. `anthropic-api` runs on the managed cron path; the
+ *  `*-cli` backends route the job to a self-hosted runner advertising that
+ *  backend (subscription transport, no API key). */
+export type ActionBackend = 'anthropic-api' | 'claude-cli' | 'codex-cli';
+const ACTION_BACKENDS: ActionBackend[] = ['anthropic-api', 'claude-cli', 'codex-cli'];
+
 /**
  * Queue a "run this action against this issue or PR" job and return
  * immediately so the modal can close and navigate to `/cockpit/[runId]`
@@ -27,9 +33,18 @@ export interface RunNowResult {
  * determined by `actionRow.target`. PRs live in `pull_requests` (synced by
  * /api/cron/sync), not `issues`.
  */
-export async function enqueueActionRun(actionId: string, number: number): Promise<RunNowResult> {
+export async function enqueueActionRun(
+  actionId: string,
+  number: number,
+  backend?: ActionBackend,
+): Promise<RunNowResult> {
   const user = await getSessionUser();
   if (!user) return { ok: false, error: 'Not authenticated' };
+
+  // Validate the backend against the known set — default to the managed API
+  // path so the prior behaviour is preserved when the caller omits it.
+  const requiredBackend: ActionBackend =
+    backend && ACTION_BACKENDS.includes(backend) ? backend : 'anthropic-api';
 
   const workspace = await getActiveWorkspace();
   if (!workspace) return { ok: false, error: 'No workspace selected' };
@@ -97,10 +112,10 @@ export async function enqueueActionRun(actionId: string, number: number): Promis
     priority: 5,
     status: 'queued',
     max_attempts: 1,
-    // Anthropic-API-only (like label-analysis): runs via `core.runAction`, which
-    // the cron dispatcher executes. Stamping the backend keeps self-hosted CLI
-    // runners — which only know the workflow kinds — from claiming it.
-    required_backend: 'anthropic-api',
+    // The backend selects where this action executes: `anthropic-api` is claimed
+    // by the cron dispatcher; a `*-cli` backend is claimed by a self-hosted
+    // runner advertising it, which runs `core.runAction` over that CLI transport.
+    required_backend: requiredBackend,
     payload: { trigger: 'manual', actionId, runId, target: actionRow.target },
   });
   if (jobErr) {
@@ -144,4 +159,33 @@ export async function listRecentIssuesForRunNow(): Promise<RunNowIssue[]> {
     .order('updated_at', { ascending: false })
     .limit(20);
   return (data ?? []).map((r) => ({ number: r.number, title: r.title ?? '' }));
+}
+
+/**
+ * Which backends can actually run an action right now: `anthropic-api` is always
+ * available (the managed cron path), plus any CLI backend advertised by a live
+ * self-hosted runner (status `online`, heartbeat within the last 5 minutes,
+ * scoped to this workspace or a managed/global runner). The "Run now" modal uses
+ * this to grey out backends with no runner so a job can't sit unclaimed.
+ */
+export async function listAvailableBackends(): Promise<ActionBackend[]> {
+  const available = new Set<ActionBackend>(['anthropic-api']);
+  const workspace = await getActiveWorkspace();
+  if (!workspace) return [...available];
+
+  const supabase = createSupabaseAdminClient();
+  const freshSince = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const { data } = await supabase
+    .from('runners')
+    .select('backends, workspace_id, status, last_heartbeat_at')
+    .eq('status', 'online')
+    .gte('last_heartbeat_at', freshSince)
+    .or(`workspace_id.eq.${workspace.id},workspace_id.is.null`);
+
+  for (const row of data ?? []) {
+    for (const b of row.backends ?? []) {
+      if ((ACTION_BACKENDS as string[]).includes(b)) available.add(b as ActionBackend);
+    }
+  }
+  return ACTION_BACKENDS.filter((b) => available.has(b));
 }

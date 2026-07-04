@@ -4,8 +4,20 @@ import { useCallback, useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/components/ui/cn';
 import { Modal } from '@/components/ui/modal';
-import { enqueueActionRun } from '@/app/actions/[name]/run-now-action';
+import {
+  enqueueActionRun,
+  listAvailableBackends,
+  type ActionBackend,
+} from '@/app/actions/[name]/run-now-action';
 import { listActionsForPrTarget, type PrTargetAction } from './prs-page-actions';
+
+/** User-facing labels for the backend dropdown. Mirrors `run-now-modal.tsx`. */
+const BACKEND_LABELS: Record<ActionBackend, string> = {
+  'anthropic-api': 'Anthropic API (managed)',
+  'claude-cli': 'Claude CLI (self-hosted runner)',
+  'codex-cli': 'Codex CLI (self-hosted runner)',
+};
+const ALL_BACKENDS: ActionBackend[] = ['anthropic-api', 'claude-cli', 'codex-cli'];
 
 export interface RunActionForPrModalProps {
   prNumber: number;
@@ -24,6 +36,8 @@ export function RunActionForPrModal({ prNumber, prTitle, onClose }: RunActionFor
   const [actionsLoading, setActionsLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<ActionBackend>('anthropic-api');
+  const [availableBackends, setAvailableBackends] = useState<ActionBackend[]>(['anthropic-api']);
   const [pending, startTransition] = useTransition();
 
   // Don't allow dismiss (Esc / backdrop) while a run is being queued.
@@ -31,6 +45,19 @@ export function RunActionForPrModal({ prNumber, prTitle, onClose }: RunActionFor
     if (pending) return;
     onClose();
   }, [pending, onClose]);
+
+  // Discover which backends have a live runner so we can grey out the rest.
+  useEffect(() => {
+    let cancelled = false;
+    listAvailableBackends()
+      .then((b) => {
+        if (!cancelled && b.length > 0) setAvailableBackends(b);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +80,7 @@ export function RunActionForPrModal({ prNumber, prTitle, onClose }: RunActionFor
       return;
     }
     startTransition(async () => {
-      const r = await enqueueActionRun(selectedId, prNumber);
+      const r = await enqueueActionRun(selectedId, prNumber, backend);
       if (!r.ok || !r.workflowRunId) {
         setError(r.error ?? 'Could not queue action');
         return;
@@ -136,6 +163,33 @@ export function RunActionForPrModal({ prNumber, prTitle, onClose }: RunActionFor
         {selected?.description && (
           <p className="text-xs text-on-surface-variant">{selected.description}</p>
         )}
+        <label className="block">
+          <span className="font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-on-surface-variant">
+            Run on
+          </span>
+          <select
+            value={backend}
+            onChange={(e) => setBackend(e.target.value as ActionBackend)}
+            disabled={pending}
+            className="mt-1 h-9 w-full rounded-md border border-outline-variant bg-surface px-2 text-base text-on-surface focus:border-primary focus:outline-none lg:text-sm"
+          >
+            {ALL_BACKENDS.map((b) => {
+              const live = availableBackends.includes(b);
+              return (
+                <option key={b} value={b} disabled={!live}>
+                  {BACKEND_LABELS[b]}
+                  {live ? '' : ' — no live runner'}
+                </option>
+              );
+            })}
+          </select>
+          {backend !== 'anthropic-api' && (
+            <span className="mt-1 block text-xs text-on-surface-variant">
+              Runs on a self-hosted runner over the {backend === 'claude-cli' ? 'Claude' : 'Codex'}{' '}
+              CLI (subscription transport).
+            </span>
+          )}
+        </label>
         {error && (
           <p className="rounded-md border border-error/30 bg-error-container/30 px-3 py-2 text-sm text-error">
             {error}

@@ -6,6 +6,8 @@ import {
   type TriageOutcomeLike,
 } from '@/lib/maybe-enqueue-autofix-from-triage';
 import { loadWorkspaceConfig } from '@/lib/load-workspace-config';
+import { insertPendingDecision } from '@/lib/map-action-row';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database, DbWorkflowRunStatus, JobStatus } from '@/lib/supabase/types';
 
 export const dynamic = 'force-dynamic';
@@ -81,6 +83,18 @@ const TriageOutcomeSchema = z
   })
   .passthrough();
 
+/** Human-review effects a `single-action` run streamed back in
+ *  `outcome.deferredEffects`. Only the effect payload + confidence is trusted
+ *  from the runner; workspace/action/target identity is re-derived server-side. */
+const DeferredEffectsSchema = z.array(
+  z.object({
+    effect: z.string().min(1),
+    args: z.unknown().optional(),
+    summary: z.string(),
+    confidence: z.number().int().min(0).max(100),
+  }),
+);
+
 /** PATCH /api/runner/runs/:runId — the runner reports the final state. Updates
  * `workflow_runs` (+ `finished_at` on terminal) and the linked `jobs` row. */
 export async function PATCH(req: Request, { params }: { params: Promise<{ runId: string }> }) {
@@ -91,7 +105,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
 
   const { data: run } = await admin
     .from('workflow_runs')
-    .select('id, job_id, workspace_id, workflow, repo, issue_number')
+    .select('id, job_id, workspace_id, workflow, repo, issue_number, pr_number')
     .eq('id', runId)
     .maybeSingle();
   if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 });
@@ -236,7 +250,86 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
     }
   }
 
+  // A runner-driven single-action run replays its human-review effects here so
+  // they land in `pending_decisions` (the runner has no Supabase access). Trust
+  // boundary: take only effect/args/summary/confidence from the runner and
+  // re-derive workspace / action / target identity server-side. Best-effort;
+  // never blocks the runner's response.
+  if (run.workflow === 'single-action' && runStatus === 'succeeded' && run.job_id) {
+    const deferredRaw =
+      (body.outcome as { deferredEffects?: unknown } | null)?.deferredEffects ?? [];
+    const deferredParsed = DeferredEffectsSchema.safeParse(deferredRaw);
+    if (!deferredParsed.success) {
+      console.error(
+        '[runner-finalize] invalid deferredEffects, skipping:',
+        deferredParsed.error.flatten(),
+      );
+    } else if (deferredParsed.data.length > 0) {
+      try {
+        const { data: jobRow } = await admin
+          .from('jobs')
+          .select('payload')
+          .eq('id', run.job_id)
+          .maybeSingle();
+        const actionId = (jobRow?.payload as { actionId?: string } | null)?.actionId;
+        const targetKind: 'issue' | 'pr' = run.pr_number != null ? 'pr' : 'issue';
+        const targetNumber = targetKind === 'pr' ? run.pr_number : run.issue_number;
+        if (!actionId || targetNumber == null) {
+          console.error(
+            '[runner-finalize] single-action missing actionId/target; skipping deferred effects',
+          );
+        } else {
+          const targetTitle = await resolveTargetTitle(
+            admin,
+            run.workspace_id,
+            targetKind,
+            targetNumber,
+          );
+          for (const d of deferredParsed.data) {
+            const { error } = await insertPendingDecision(admin, {
+              workspaceId: run.workspace_id,
+              actionId,
+              runId,
+              targetKind,
+              targetNumber,
+              targetTitle,
+              effect: d.effect,
+              effectArgs: d.args,
+              summary: d.summary,
+              confidence: d.confidence,
+            });
+            if (error) console.error('[runner-finalize] pending_decisions insert failed:', error);
+          }
+        }
+      } catch (err) {
+        console.error(
+          '[runner-finalize] replay deferred effects failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
   return NextResponse.json({ ok: true });
+}
+
+/** Resolve an issue/PR title for the `pending_decisions.target_title` column
+ *  (NOT NULL, cosmetic inbox label). Falls back to a synthetic label if the row
+ *  isn't cached locally. */
+async function resolveTargetTitle(
+  admin: SupabaseClient<Database>,
+  workspaceId: string,
+  kind: 'issue' | 'pr',
+  number: number,
+): Promise<string> {
+  const table = kind === 'pr' ? 'pull_requests' : 'issues';
+  const { data } = await admin
+    .from(table)
+    .select('title')
+    .eq('workspace_id', workspaceId)
+    .eq('number', number)
+    .maybeSingle();
+  return data?.title ?? `${kind === 'pr' ? 'PR' : 'Issue'} #${number}`;
 }
 
 /** Upper bound on the finalize request body (the runner only sends small JSON

@@ -4,6 +4,13 @@ import { SupabaseStoreAdapter } from '@/lib/adapters/supabase-store';
 import { loadWorkspaceConfig } from '@/lib/load-workspace-config';
 import { loadWorkspaceLabels } from '@/lib/load-workspace-labels';
 import { canAcquireListener, waitForJobsQueuedNotify } from '@/lib/pg-listen';
+import {
+  ACTION_ROW_COLUMNS,
+  ISSUE_TARGET_COLUMNS,
+  PR_TARGET_COLUMNS,
+  mapActionRow,
+  mapTargetRow,
+} from '@/lib/map-action-row';
 import { authRunner } from '../_auth';
 import type { Database } from '@/lib/supabase/types';
 
@@ -266,6 +273,64 @@ export async function GET(req: Request) {
       workflowLabel = `flow:${flowRow.name}`;
     }
 
+    // ── action lookup ── For `kind='action'` jobs the runner needs the full
+    //   ActionDef + the issue/PR target, mapped server-side from the store so
+    //   the runner doesn't need DB access. `enqueueActionRun` pre-created the
+    //   `workflow_runs` row (workflow='single-action') with its id in
+    //   `payload.runId` — captured here so we bind it below instead of inserting
+    //   a duplicate.
+    type ActionPayload = { actionId?: string; runId?: string };
+    let actionOut: import('@cezar/core').ActionDef | null = null;
+    let actionTarget: import('@cezar/core').ActionTarget | null = null;
+    let actionAutoComment = true;
+    let actionRunId: string | null = null;
+    if (job.kind === 'action') {
+      const payload = (job.payload ?? {}) as ActionPayload;
+      if (!payload.actionId) throw new Error('action job missing payload.actionId');
+      actionRunId = payload.runId ?? null;
+
+      const { data: actionRow } = await admin
+        .from('actions')
+        .select(ACTION_ROW_COLUMNS)
+        .eq('id', payload.actionId)
+        .eq('workspace_id', job.workspace_id)
+        .maybeSingle();
+      if (!actionRow) throw new Error(`action ${payload.actionId} not found`);
+      actionOut = mapActionRow(job.workspace_id, actionRow);
+
+      const isPr = actionOut.target === 'pr';
+      const targetNumber = isPr ? job.pr_number : job.issue_number;
+      if (targetNumber == null) throw new Error('action job has no target issue/PR number');
+      if (isPr) {
+        const { data: prRow } = await admin
+          .from('pull_requests')
+          .select(PR_TARGET_COLUMNS)
+          .eq('workspace_id', job.workspace_id)
+          .eq('number', targetNumber)
+          .maybeSingle();
+        if (!prRow) throw new Error(`PR #${targetNumber} not in the workspace's PR store`);
+        actionTarget = mapTargetRow('pr', prRow);
+      } else {
+        const { data: issueRow } = await admin
+          .from('issues')
+          .select(ISSUE_TARGET_COLUMNS)
+          .eq('workspace_id', job.workspace_id)
+          .eq('number', targetNumber)
+          .maybeSingle();
+        if (!issueRow) throw new Error(`issue #${targetNumber} not in the workspace's issue store`);
+        actionTarget = mapTargetRow('issue', issueRow);
+      }
+
+      const { data: wsRow } = await admin
+        .from('workspaces')
+        .select('action_auto_comment')
+        .eq('id', job.workspace_id)
+        .single();
+      actionAutoComment = wsRow?.action_auto_comment ?? true;
+      // enqueueActionRun stamped the run row 'single-action'; keep that label.
+      workflowLabel = 'single-action';
+    }
+
     // ── workflow_runs row ──
     // Phase 2: a watchdog-requeued job (claimed_by_runner was cleared after a
     // lease expiry) already has an in-flight `workflow_runs` row from the
@@ -283,7 +348,16 @@ export async function GET(req: Request) {
 
     let runRowId: string;
     let resumeSessionId: string | null = null;
-    if (
+    if (job.kind === 'action' && actionRunId) {
+      // Bind the run row `enqueueActionRun` created up front (no job_id yet) so
+      // the PATCH finalize route's `single-action` branch fires and we don't
+      // leak a second run row + an orphaned `queued` one.
+      runRowId = actionRunId;
+      await admin
+        .from('workflow_runs')
+        .update({ status: 'running', job_id: job.id, started_at: new Date().toISOString() })
+        .eq('id', runRowId);
+    } else if (
       existingRun &&
       (existingRun.status === 'running' ||
         existingRun.status === 'paused' ||
@@ -351,6 +425,10 @@ export async function GET(req: Request) {
       store: storeSnapshot,
       ciFollowupSeed,
       flow: flowOut,
+      // Action jobs only — the runner runs `core.runAction(action, target, …)`.
+      action: actionOut,
+      target: actionTarget,
+      actionAutoComment,
       labels,
       // Phase 2: re-claim resume. When non-null the runner asks the engine
       // to spawn `claude --resume <id>` for the first agent step so the

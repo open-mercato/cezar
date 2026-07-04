@@ -3,6 +3,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadWorkspaceConfig } from './load-workspace-config';
 import { buildOpenIssuesContextProviders } from './open-issues-context';
 import { createWorkflowRunPersister } from './persist-workflow-run';
+import {
+  ACTION_ROW_COLUMNS,
+  ISSUE_TARGET_COLUMNS,
+  PR_TARGET_COLUMNS,
+  mapActionRow,
+  mapTargetRow,
+  insertPendingDecision,
+} from './map-action-row';
 import type { Database } from './supabase/types';
 
 export interface ExecuteActionJobParams {
@@ -65,9 +73,7 @@ export async function executeActionJob(
 
     const { data: actionRow } = await supabase
       .from('actions')
-      .select(
-        'id, name, kind, description, system_prompt, skill_refs, context_refs, target, triggers, effects, output_schema, enabled, effect_routing, suggested_flow_id',
-      )
+      .select(ACTION_ROW_COLUMNS)
       .eq('id', actionId)
       .eq('workspace_id', workspaceId)
       .maybeSingle();
@@ -98,7 +104,7 @@ export async function executeActionJob(
     if (isPr) {
       const { data } = await supabase
         .from('pull_requests')
-        .select('number, title, body, state, labels, html_url')
+        .select(PR_TARGET_COLUMNS)
         .eq('workspace_id', workspaceId)
         .eq('number', number)
         .maybeSingle();
@@ -107,7 +113,7 @@ export async function executeActionJob(
     } else {
       const { data } = await supabase
         .from('issues')
-        .select('number, title, body, state, labels, html_url, comments')
+        .select(ISSUE_TARGET_COLUMNS)
         .eq('workspace_id', workspaceId)
         .eq('number', number)
         .maybeSingle();
@@ -143,75 +149,10 @@ export async function executeActionJob(
       message: `run-now: ${actionRow.name} on ${isPr ? 'PR' : 'issue'} #${number} (manual)`,
     });
 
-    // Build an ActionTarget mirroring run-triage-pass-job.ts. Issues carry a
-    // cached comments array; PRs don't (pull_requests has no comments column).
-    const labels = Array.isArray(targetRow.labels)
-      ? targetRow.labels.filter((l): l is string => typeof l === 'string')
-      : [];
-    const commentsArr = Array.isArray(targetRow.comments) ? targetRow.comments : [];
-    type CommentLike = { author?: unknown; createdAt?: unknown; body?: unknown };
-    const commentsText =
-      commentsArr.length > 0
-        ? commentsArr
-            .map((c) => {
-              const co = c as CommentLike;
-              const author = typeof co.author === 'string' ? co.author : 'unknown';
-              const createdAt = typeof co.createdAt === 'string' ? co.createdAt : '';
-              const body = typeof co.body === 'string' ? co.body : '';
-              return `- ${author} (${createdAt}): ${body.slice(0, 500)}`;
-            })
-            .join('\n')
-        : undefined;
-
-    const target: import('@cezar/core').ActionTarget = {
-      kind: actionRow.target,
-      number: targetRow.number,
-      title: targetRow.title ?? '',
-      body: targetRow.body ?? '',
-      state: targetRow.state ?? 'open',
-      labels,
-      htmlUrl: targetRow.html_url ?? '',
-      comments: commentsText,
-    };
-
-    const action: import('@cezar/core').ActionDef = {
-      id: actionRow.id,
-      workspaceId,
-      name: actionRow.name,
-      kind: actionRow.kind as 'built-in' | 'user',
-      description: actionRow.description,
-      systemPrompt: actionRow.system_prompt,
-      skillRefs: Array.isArray(actionRow.skill_refs)
-        ? (actionRow.skill_refs as unknown[]).filter((s): s is string => typeof s === 'string')
-        : [],
-      contextRefs: Array.isArray(actionRow.context_refs)
-        ? (actionRow.context_refs as unknown[]).filter((s): s is string => typeof s === 'string')
-        : [],
-      target: actionRow.target as 'issue' | 'pr',
-      triggers: Array.isArray(actionRow.triggers)
-        ? ((actionRow.triggers as unknown[]).filter(
-            (s): s is string => typeof s === 'string',
-          ) as import('@cezar/core').ActionTrigger[])
-        : [],
-      effects:
-        actionRow.effects == null
-          ? null
-          : Array.isArray(actionRow.effects)
-            ? ((actionRow.effects as unknown[]).filter(
-                (s): s is string => typeof s === 'string',
-              ) as import('@cezar/core').EffectName[])
-            : null,
-      outputSchema:
-        actionRow.output_schema &&
-        typeof actionRow.output_schema === 'object' &&
-        !Array.isArray(actionRow.output_schema)
-          ? (actionRow.output_schema as Record<string, unknown>)
-          : null,
-      enabled: actionRow.enabled,
-      effectRouting: parseEffectRouting(actionRow.effect_routing),
-      suggestedFlowId:
-        typeof actionRow.suggested_flow_id === 'string' ? actionRow.suggested_flow_id : null,
-    };
+    // Build the core ActionDef + ActionTarget via the shared mappers (also used
+    // by the runner claim route) so the two surfaces never drift.
+    const target = mapTargetRow(actionRow.target as 'issue' | 'pr', targetRow);
+    const action = mapActionRow(workspaceId, actionRow);
 
     const startedAt = new Date().toISOString();
     let runStatus: 'succeeded' | 'failed' = 'succeeded';
@@ -238,26 +179,19 @@ export async function executeActionJob(
         // surfaced as a 'tool-call' event via the effectsApplied loop below,
         // same as the triage path.
         deferSink: async ({ call, confidence, summary }) => {
-          const { error } = await supabase.from('pending_decisions').insert({
-            workspace_id: workspaceId,
-            action_id: action.id,
-            workflow_run_id: runId,
-            target_kind: target.kind,
-            issue_number: target.kind === 'issue' ? target.number : null,
-            pr_number: target.kind === 'pr' ? target.number : null,
-            target_title: target.title,
+          const { error } = await insertPendingDecision(supabase, {
+            workspaceId,
+            actionId: action.id,
+            runId,
+            targetKind: target.kind,
+            targetNumber: target.number,
+            targetTitle: target.title,
             effect: call.effect,
-            effect_args: (call.args ??
-              {}) as Database['public']['Tables']['pending_decisions']['Insert']['effect_args'],
+            effectArgs: call.args,
             summary,
             confidence,
           });
-          // 23505 = unique_violation against the pending-decisions dedup
-          // index: a pending decision for this (action, target, effect, args)
-          // already exists — intended dedup behaviour, not a failure.
-          if (error && error.code !== '23505') {
-            console.error('[action-job] pending_decisions insert failed:', error.message);
-          }
+          if (error) console.error('[action-job] pending_decisions insert failed:', error);
         },
       });
       summary = result.text?.slice(0, 500);
@@ -324,23 +258,6 @@ export async function executeActionJob(
     await persister.fail(message).catch(() => {});
     await finishJob('failed').catch(() => {});
   }
-}
-
-/**
- * Defensive map of the `effect_routing` jsonb column onto
- * `ActionDef.effectRouting` — keeps only entries with a valid routing mode.
- */
-function parseEffectRouting(value: unknown): import('@cezar/core').ActionDef['effectRouting'] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const out: NonNullable<import('@cezar/core').ActionDef['effectRouting']> = {};
-  let any = false;
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (v === 'auto' || v === 'always-defer') {
-      out[k as import('@cezar/core').EffectName] = v;
-      any = true;
-    }
-  }
-  return any ? out : undefined;
 }
 
 /**

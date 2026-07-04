@@ -1,4 +1,12 @@
-import type { Config, Store, CiFollowupInput, FlowStep, WorkspaceLabel } from '@cezar/core';
+import type {
+  Config,
+  Store,
+  CiFollowupInput,
+  FlowStep,
+  WorkspaceLabel,
+  ActionDef,
+  ActionTarget,
+} from '@cezar/core';
 
 // ─── wire shapes ────────────────────────────────────────────────────────
 // What `GET /api/runner/jobs` returns when there's work. The SaaS has already
@@ -9,7 +17,7 @@ export interface ClaimedJob {
     id: string;
     workspaceId: string;
     repo: string | null;
-    kind: 'triage' | 'autofix' | 'ci-followup' | 'flow';
+    kind: 'triage' | 'autofix' | 'ci-followup' | 'flow' | 'action';
     issueNumber: number | null;
     prNumber: number | null;
     requiredBackend: string | null;
@@ -42,6 +50,17 @@ export interface ClaimedJob {
   ciFollowupSeed: CiFollowupInput | null;
   /** For `flow` jobs only — the `flows` row referenced by `jobs.payload.flowId`. */
   flow: { name: string; steps: FlowStep[]; input: string } | null;
+  /** For `action` jobs only — the `actions` row mapped to an `ActionDef`. The
+   *  runner executes it via `core.runAction` using the job's `requiredBackend`
+   *  as the LLM transport (a CLI backend ⇒ subscription, no API key). */
+  action?: ActionDef | null;
+  /** For `action` jobs only — the issue/PR the action targets, mapped from the
+   *  store snapshot server-side so the runner doesn't refetch. */
+  target?: ActionTarget | null;
+  /** For `action` jobs only — `workspaces.action_auto_comment`. When true the
+   *  runner posts the Cezar-branded summary comment after a successful run.
+   *  Missing (older SaaS) ⇒ defaults to true to match the cron path. */
+  actionAutoComment?: boolean;
   /**
    * Workspace label catalog (the accepted `workspace_labels` rows for this
    * workspace). The runner forwards these into the engine so each agent step
@@ -95,6 +114,27 @@ export interface RunnerEvent {
   runnerId?: string;
 }
 
+/**
+ * One effect an `action` run routed to human review. Returned to the SaaS in
+ * `FinalizeRunBody.outcome.deferredEffects`; the PATCH `/api/runner/runs/:id`
+ * route inserts each into `pending_decisions`. The runner supplies only the
+ * effect payload + confidence — workspace/target identity is re-derived
+ * server-side from the run row (trust boundary).
+ */
+export interface DeferredEffectWire {
+  effect: string;
+  args: unknown;
+  summary: string;
+  confidence: number;
+}
+
+/** `FinalizeRunBody.outcome` shape for `single-action` runs. */
+export interface ActionRunOutcome {
+  action: string;
+  effectsApplied: Array<{ effect: string; args: unknown; summary: string }>;
+  deferredEffects: DeferredEffectWire[];
+}
+
 export interface FinalizeRunBody {
   status:
     | 'succeeded'
@@ -105,6 +145,8 @@ export interface FinalizeRunBody {
     | 'pr-opened'
     | 'pushed'
     | 'skipped';
+  /** Workflow-specific result blob. For `single-action` runs this is an
+   *  {@link ActionRunOutcome}; the PATCH route reads `deferredEffects` off it. */
   outcome?: unknown;
   prUrl?: string | null;
   prNumber?: number | null;

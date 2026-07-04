@@ -1,7 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import { DEFAULT_AUTO_ACCEPT_ABOVE } from './action.js';
 import type { ActionDef, ActionRunResult, EffectRoutingMode } from './action.js';
 import type { Skill } from '../skills/skill-catalog.js';
+import type { Config } from '../config/config.model.js';
+import { createAgentRunner } from '../agents/runner-factory.js';
+import type { AgentBackend, AgentRunner } from '../agents/agent-runner.js';
 import { formatLabelCatalogPrompt, type WorkspaceLabel } from '../labels/label-catalog.js';
 import {
   actionAlreadyCommented,
@@ -58,8 +62,24 @@ export interface ActionTarget {
 export interface RunActionDeps {
   /** Resolved skill catalog the runner uses to look up `skill_refs`. */
   skills: Skill[];
-  /** Anthropic client. Caller can pass a custom instance for testing. */
+  /** Anthropic client. Caller can pass a custom instance for testing.
+   *  Only consulted for the `anthropic-api` backend. */
   anthropic?: Anthropic;
+  /**
+   * Which agent transport executes the LLM call. `anthropic-api` (default)
+   * keeps the native `@anthropic-ai/sdk` path — including the real tool-use
+   * loop. The `*-cli` backends route the run through `createAgentRunner`
+   * (subscription CLIs, no API key) and use a single-shot JSON contract for
+   * both modes (CLI runners can't accept our effect tool definitions, so
+   * tool-use degrades to the declared/JSON shape).
+   */
+  backend?: AgentBackend;
+  /** Workspace config — forwarded to `createAgentRunner` for the CLI backends
+   *  (picks the transport / unified-mode lock). */
+  config?: Config;
+  /** Test seam mirroring the workflow engine: override how an `AgentRunner`
+   *  is built for a backend. Defaults to `createAgentRunner(backend, …)`. */
+  runnerFactory?: (backend: AgentBackend) => AgentRunner;
   /** Effect context — passed through to effect executors when they fire. */
   effectCtx: EffectContext;
   /** Override the model for this run. Defaults to claude-sonnet-4-6. */
@@ -111,9 +131,18 @@ export async function runAction(
   target: ActionTarget,
   deps: RunActionDeps,
 ): Promise<ActionRunResult> {
+  const backend: AgentBackend = deps.backend ?? 'anthropic-api';
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
-  const client = deps.anthropic ?? new Anthropic({ apiKey });
+  // Only the native API path needs a key; the CLI backends authenticate via the
+  // host's subscription. Build the client lazily so a CLI run never requires it.
+  if (backend === 'anthropic-api' && !apiKey) {
+    throw new Error('ANTHROPIC_API_KEY is not configured');
+  }
+  const client = deps.anthropic ?? (apiKey ? new Anthropic({ apiKey }) : undefined);
+  const agentRunner: AgentRunner | undefined =
+    backend === 'anthropic-api'
+      ? undefined
+      : (deps.runnerFactory ?? ((b) => createAgentRunner(b, { config: deps.config })))(backend);
 
   const skillSection = resolveSkillContext(action.skillRefs, deps.skills);
   const labelCatalog = formatLabelCatalogPrompt(deps.labels ?? null, target.kind, target.kind);
@@ -137,24 +166,23 @@ export async function runAction(
   }
   const model = action.model ?? deps.model ?? DEFAULT_MODEL;
 
-  const result =
-    action.effects && action.effects.length > 0
-      ? await runDeclaredMode(action, target, {
-          client,
-          effectCtx: deps.effectCtx,
-          model,
-          systemMessage,
-          userMessage,
-          deferSink: deps.deferSink,
-        })
-      : await runToolUseMode(action, target, {
-          client,
-          effectCtx: deps.effectCtx,
-          model,
-          systemMessage,
-          userMessage,
-          deferSink: deps.deferSink,
-        });
+  const mode: RunMode = {
+    client,
+    agentRunner,
+    effectCtx: deps.effectCtx,
+    model,
+    systemMessage,
+    userMessage,
+    deferSink: deps.deferSink,
+  };
+  const isDeclared = Boolean(action.effects && action.effects.length > 0);
+  // CLI backends can't be handed our effect tool definitions, so tool-use
+  // collapses to the same single-shot JSON contract as declared mode.
+  const result = agentRunner
+    ? await runViaAgentRunner(action, mode, agentRunner, isDeclared)
+    : isDeclared
+      ? await runDeclaredMode(action, target, mode)
+      : await runToolUseMode(action, target, mode);
 
   if (deps.autoComment?.enabled && !actionAlreadyCommented(result.effectsApplied)) {
     // Cross-run dedupe: if a previous run of this action already posted its
@@ -205,7 +233,10 @@ export async function runAction(
 // ─── Declared mode (structured JSON response) ──────────────────────────────
 
 interface RunMode {
-  client: Anthropic;
+  /** Set for the `anthropic-api` backend; undefined for the CLI backends. */
+  client?: Anthropic;
+  /** Set for the CLI backends; undefined for `anthropic-api`. */
+  agentRunner?: AgentRunner;
   effectCtx: EffectContext;
   model: string;
   systemMessage: string;
@@ -218,10 +249,12 @@ async function runDeclaredMode(
   _target: ActionTarget,
   mode: RunMode,
 ): Promise<ActionRunResult> {
+  const client = mode.client;
+  if (!client) throw new Error('runDeclaredMode requires the anthropic-api client');
   const effectNames = action.effects ?? [];
   const declaredEffectsHint = describeDeclaredEffects(effectNames);
 
-  const resp = await mode.client.messages.create({
+  const resp = await client.messages.create({
     model: mode.model,
     max_tokens: MAX_TOKENS,
     system: `${mode.systemMessage}\n\n${declaredEffectsHint}`,
@@ -265,10 +298,13 @@ function describeDeclaredEffects(effects: EffectName[]): string {
     '{',
     '  "summary": "one short sentence explaining what you decided",',
     '  "effects": [',
-    '    { "effect": "<one of the names below>", "args": { /* args matching that effect\'s schema */ } }',
+    '    { "effect": "<one of the names below>", "args": { /* args matching that effect\'s schema */ }, "confidence": 0 }',
     '  ]',
     '}',
     '```',
+    '',
+    '`confidence` is your 0–100 certainty that the effect is correct; emit it on',
+    'every effect so low-confidence ones can be routed to human review.',
     '',
     'Allowed effects (omit `effects` entirely if the right answer is "do nothing"):',
     ...lines,
@@ -293,6 +329,16 @@ function parseDeclaredResponse(text: string): DeclaredResponse {
   } catch {
     return { effects: [] };
   }
+  return coerceDeclared(parsed);
+}
+
+/**
+ * Normalize an already-parsed object into a `DeclaredResponse`, clamping each
+ * effect's `confidence` to 0–100. Shared by the native-API text path
+ * (`parseDeclaredResponse`) and the CLI path (which gets a Zod-validated
+ * object straight from the runner).
+ */
+function coerceDeclared(parsed: unknown): DeclaredResponse {
   if (!parsed || typeof parsed !== 'object') return { effects: [] };
   const obj = parsed as Record<string, unknown>;
   const effects = Array.isArray(obj.effects)
@@ -320,6 +366,77 @@ function parseDeclaredResponse(text: string): DeclaredResponse {
   };
 }
 
+/** Loose Zod contract for the single-shot JSON the CLI backends return. The
+ *  fine-grained clamping/coercion still happens in `coerceDeclared`. */
+const DeclaredResponseSchema = z.object({
+  summary: z.string().optional(),
+  effects: z
+    .array(
+      z.object({
+        effect: z.string(),
+        args: z.unknown().optional(),
+        confidence: z.number().optional(),
+      }),
+    )
+    .optional(),
+});
+
+/**
+ * CLI-backend execution path. Both declared and tool-use actions collapse to a
+ * single JSON turn here: the model is told the allowed-effect vocabulary and
+ * asked to return `{ summary, effects[] }`, which the runner validates against
+ * `DeclaredResponseSchema`. Effects are then routed through the same
+ * `applyOrDefer` chokepoint as the native path.
+ */
+async function runViaAgentRunner(
+  action: ActionDef,
+  mode: RunMode,
+  runner: AgentRunner,
+  isDeclared: boolean,
+): Promise<ActionRunResult> {
+  let allowedEffects: EffectName[];
+  if (isDeclared) {
+    allowedEffects = action.effects ?? [];
+  } else {
+    allowedEffects = ALL_EFFECT_NAMES.filter((n) => n !== 'suggest-workflow');
+    if (action.suggestedFlowId) allowedEffects.push('suggest-workflow');
+  }
+  const declaredEffectsHint = describeDeclaredEffects(allowedEffects);
+
+  const result = await runner.run<z.infer<typeof DeclaredResponseSchema>>({
+    systemPrompt: `${mode.systemMessage}\n\n${declaredEffectsHint}`,
+    userPrompt: mode.userMessage,
+    // Actions never touch the working tree — they only classify and call
+    // effects. Run in the host cwd with no tools so the CLI just answers.
+    cwd: process.cwd(),
+    allowedTools: [],
+    model: mode.model,
+    responseSchema: DeclaredResponseSchema,
+  });
+
+  // Prefer the runner's Zod-validated object; fall back to scraping JSON out of
+  // the raw text when the CLI wrapped its answer in prose.
+  const declared = result.parsed
+    ? coerceDeclared(result.parsed)
+    : parseDeclaredResponse(result.text);
+
+  const effectsApplied: Array<{ call: EffectCall; summary: string }> = [];
+  for (const call of declared.effects) {
+    if (!allowedEffects.includes(call.effect)) continue;
+    const outcome = await applyOrDefer(call, action, mode.effectCtx, mode.deferSink);
+    effectsApplied.push({ call, summary: outcome.summary });
+  }
+
+  return {
+    text: declared.summary ?? result.text,
+    effectsApplied,
+    // CLI backends report a single cost-weighted total, not an input/output
+    // split. Surface it as outputTokens so the cockpit's token counter is
+    // non-zero; subscription runs often report 0 here.
+    usage: { inputTokens: 0, outputTokens: result.tokensUsed },
+  };
+}
+
 // ─── Tool-use mode (agent calls effects mid-run) ───────────────────────────
 
 async function runToolUseMode(
@@ -329,6 +446,8 @@ async function runToolUseMode(
 ): Promise<ActionRunResult> {
   // suggest-workflow is only exposed when the action has a workflow
   // configured (`suggestedFlowId`) — no target, no tool.
+  const client = mode.client;
+  if (!client) throw new Error('runToolUseMode requires the anthropic-api client');
   const allowedEffects: EffectName[] = ALL_EFFECT_NAMES.filter((n) => n !== 'suggest-workflow');
   if (action.suggestedFlowId) allowedEffects.push('suggest-workflow');
   const tools = effectsAsAnthropicTools(allowedEffects);
@@ -347,7 +466,7 @@ async function runToolUseMode(
   let exhausted = true;
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const resp = await mode.client.messages.create({
+    const resp = await client.messages.create({
       model: mode.model,
       max_tokens: MAX_TOKENS,
       system: mode.systemMessage,
