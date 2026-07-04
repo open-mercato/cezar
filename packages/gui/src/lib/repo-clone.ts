@@ -53,7 +53,10 @@ export async function acquireRepoLock(owner: string, repo: string): Promise<() =
   // Promise, so comparing the stored value against `next` never matched and the
   // delete branch was unreachable, growing the Map without bound on long-lived
   // workers (mirrors the fix in `external-repo-clone.ts`; see issue #308).
-  const chained = prev.then(() => next, () => next);
+  const chained = prev.then(
+    () => next,
+    () => next,
+  );
   repoLocks.set(key, chained);
   await prev.catch(() => {});
   let released = false;

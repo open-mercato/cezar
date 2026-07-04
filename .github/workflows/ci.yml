@@ -130,7 +130,7 @@ jobs:
         env:
           PGPASSWORD: postgres
           PGHOST: localhost
-          PGPORT: "5432"
+          PGPORT: '5432'
           PGUSER: postgres
           PGDATABASE: cezar_migrations
         run: |
