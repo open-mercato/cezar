@@ -28,7 +28,12 @@ export function NavLink({ href, label, icon }: NavLinkProps) {
         <span className="absolute inset-y-1.5 right-0 w-0.5 rounded-full bg-primary" aria-hidden />
       )}
       {icon && (
-        <span className={cn('flex h-5 w-5 items-center justify-center', active ? 'text-primary' : 'text-on-surface-variant group-hover:text-on-surface')}>
+        <span
+          className={cn(
+            'flex h-5 w-5 items-center justify-center',
+            active ? 'text-primary' : 'text-on-surface-variant group-hover:text-on-surface',
+          )}
+        >
           {icon}
         </span>
       )}

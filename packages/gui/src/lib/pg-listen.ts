@@ -27,10 +27,7 @@ export const JOBS_QUEUED_CHANNEL = 'jobs_queued';
  */
 export function getPgConnectionString(): string | null {
   return (
-    process.env.SUPABASE_DB_URL
-    ?? process.env.POSTGRES_URL
-    ?? process.env.DATABASE_URL
-    ?? null
+    process.env.SUPABASE_DB_URL ?? process.env.POSTGRES_URL ?? process.env.DATABASE_URL ?? null
   );
 }
 
@@ -59,7 +56,10 @@ export function getActiveListenerCount(): number {
  * long-poll and short-poll on each request. */
 export function canAcquireListener(runnerId?: string): boolean {
   if (activeListeners >= MAX_CONCURRENT_LISTENERS) return false;
-  if (runnerId !== undefined && (perRunnerListeners.get(runnerId) ?? 0) >= MAX_LISTENERS_PER_RUNNER) {
+  if (
+    runnerId !== undefined &&
+    (perRunnerListeners.get(runnerId) ?? 0) >= MAX_LISTENERS_PER_RUNNER
+  ) {
     return false;
   }
   return true;
@@ -88,7 +88,8 @@ export async function waitForJobsQueuedNotify(
   // the helper just trusts whatever it gets.
   const client = new Client({ connectionString: conn });
   activeListeners += 1;
-  if (runnerId !== undefined) perRunnerListeners.set(runnerId, (perRunnerListeners.get(runnerId) ?? 0) + 1);
+  if (runnerId !== undefined)
+    perRunnerListeners.set(runnerId, (perRunnerListeners.get(runnerId) ?? 0) + 1);
 
   let notified = false;
   let timer: NodeJS.Timeout | null = null;
@@ -100,7 +101,10 @@ export async function waitForJobsQueuedNotify(
 
     notified = await new Promise<boolean>((resolve) => {
       const done = (value: boolean) => {
-        if (timer) { clearTimeout(timer); timer = null; }
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
         if (abortListener && abort) abort.removeEventListener('abort', abortListener);
         resolve(value);
       };
@@ -110,7 +114,10 @@ export async function waitForJobsQueuedNotify(
       client.on('error', () => done(false));
       timer = setTimeout(() => done(false), timeoutMs);
       if (abort) {
-        if (abort.aborted) { done(false); return; }
+        if (abort.aborted) {
+          done(false);
+          return;
+        }
         abortListener = () => done(false);
         abort.addEventListener('abort', abortListener);
       }
@@ -120,8 +127,16 @@ export async function waitForJobsQueuedNotify(
     console.warn('[pg-listen] connect/LISTEN failed:', err instanceof Error ? err.message : err);
     notified = false;
   } finally {
-    try { await client.query(`UNLISTEN ${JOBS_QUEUED_CHANNEL}`); } catch { /* terminal */ }
-    try { await client.end(); } catch { /* terminal */ }
+    try {
+      await client.query(`UNLISTEN ${JOBS_QUEUED_CHANNEL}`);
+    } catch {
+      /* terminal */
+    }
+    try {
+      await client.end();
+    } catch {
+      /* terminal */
+    }
     activeListeners -= 1;
     if (runnerId !== undefined) {
       const next = (perRunnerListeners.get(runnerId) ?? 1) - 1;

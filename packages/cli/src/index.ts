@@ -16,7 +16,8 @@ const program = new Command()
   .description('AI-powered GitHub issue management')
   .version(VERSION);
 
-program.command('init')
+program
+  .command('init')
   .description('Fetch all issues and generate digests')
   .option('-o, --owner <owner>', 'GitHub repository owner')
   .option('-r, --repo <repo>', 'GitHub repository name')
@@ -35,7 +36,8 @@ program.command('init')
     await initCommand(opts, config);
   });
 
-program.command('sync')
+program
+  .command('sync')
   .description('Pull new/updated issues from GitHub')
   .option('-t, --token <token>', 'GitHub token')
   .option('--include-closed', 'Include closed issues')
@@ -44,18 +46,23 @@ program.command('sync')
     await syncCommand(opts, config);
   });
 
-program.command('status')
+program
+  .command('status')
   .description('Show store summary')
   .action(async () => {
     const config = await loadConfig();
     await statusCommand(config);
   });
 
-program.command('run <action>')
+program
+  .command('run <action>')
   .description('Run a data-driven Action against issues in the local store')
   .option('--all', 'Run against every issue in the store')
-  .option('--unanalyzed', 'Run only against issues without prior analysis for this action (default)')
-  .option('--issue <n>', 'Target a single issue number', v => {
+  .option(
+    '--unanalyzed',
+    'Run only against issues without prior analysis for this action (default)',
+  )
+  .option('--issue <n>', 'Target a single issue number', (v) => {
     const n = Number.parseInt(v, 10);
     if (!Number.isInteger(n) || n <= 0 || String(n) !== v.trim()) {
       throw new InvalidArgumentError(`--issue must be a positive integer, got "${v}".`);
@@ -69,8 +76,11 @@ program.command('run <action>')
     await runCommand(actionName, opts, config);
   });
 
-program.command('runs [id]')
-  .description('List local workflow-engine runs (or show one in detail). Populated when workflow.useEngine is on; the web cockpit is the SaaS equivalent.')
+program
+  .command('runs [id]')
+  .description(
+    'List local workflow-engine runs (or show one in detail). Populated when workflow.useEngine is on; the web cockpit is the SaaS equivalent.',
+  )
   .action(async (id) => {
     const config = await loadConfig();
     await runsCommand(id, config);

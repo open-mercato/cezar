@@ -110,8 +110,8 @@ export default async function CockpitRunnersPage() {
       <header className="mb-6 border-b border-border pb-5">
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Runners</h1>
         <p className="mt-1 text-sm text-fg-muted">
-          Workers serving this workspace. Self-hosted runners appear when they heartbeat in;
-          managed entries handle the anthropic-api path through the dispatch cron.
+          Workers serving this workspace. Self-hosted runners appear when they heartbeat in; managed
+          entries handle the anthropic-api path through the dispatch cron.
         </p>
       </header>
       <RunnersWorkersTable rows={rows} workspaceId={workspace.id} />

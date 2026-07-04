@@ -37,5 +37,9 @@ export function fenceUntrusted(name: string, text: string): string {
  * the subject stays within conventional limits.
  */
 export function normalizeTitle(title: string): string {
-  return title.replace(/\s+/g, ' ').trim().replace(/^#+\s*/, '').slice(0, 72);
+  return title
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^#+\s*/, '')
+    .slice(0, 72);
 }

@@ -90,7 +90,9 @@ function rowToAction(row: ActionRow): ActionDef {
     triggers: asStringArray(row.triggers) as ActionTrigger[],
     effects: row.effects == null ? null : (asStringArray(row.effects) as EffectName[]),
     outputSchema:
-      row.output_schema && typeof row.output_schema === 'object' && !Array.isArray(row.output_schema)
+      row.output_schema &&
+      typeof row.output_schema === 'object' &&
+      !Array.isArray(row.output_schema)
         ? (row.output_schema as Record<string, unknown>)
         : null,
     enabled: row.enabled,
@@ -127,9 +129,10 @@ function parseAcceptanceMode(value: string | null): AcceptanceMode {
 }
 
 function parseConfidenceConfig(value: unknown): ConfidenceConfig {
-  const obj = value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  const obj =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
   const clamp = (v: unknown, fallback: number): number => {
     const n = typeof v === 'number' ? v : Number(v);
     if (!Number.isFinite(n)) return fallback;
@@ -176,7 +179,10 @@ export async function loadAutoTriageAction(
   const sb = supabase as unknown as {
     from(table: 'workspaces'): {
       select(cols: 'auto_triage_action_id'): {
-        eq(col: 'id', value: string): {
+        eq(
+          col: 'id',
+          value: string,
+        ): {
           maybeSingle(): Promise<QueryResult<{ auto_triage_action_id: string | null }>>;
         };
       };

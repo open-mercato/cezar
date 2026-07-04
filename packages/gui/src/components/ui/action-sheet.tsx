@@ -78,7 +78,11 @@ export function ActionSheet({ open, onClose, items, title }: ActionSheetProps) {
                 item.disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent',
               )}
             >
-              {item.icon && <span className="flex h-5 w-5 shrink-0 items-center justify-center">{item.icon}</span>}
+              {item.icon && (
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                  {item.icon}
+                </span>
+              )}
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
             </button>
           ))}

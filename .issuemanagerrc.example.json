@@ -13,7 +13,7 @@
   "sync": {
     "digestBatchSize": 20,
     "duplicateBatchSize": 30,
-    "minDuplicateConfidence": 0.80,
+    "minDuplicateConfidence": 0.8,
     "includeClosed": false
   }
 }

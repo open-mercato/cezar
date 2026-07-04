@@ -6,7 +6,14 @@ import { CockpitList } from './cockpit-list';
 
 type WorkflowRunRow = Database['public']['Tables']['workflow_runs']['Row'];
 
-const ALL_STATUSES: DbWorkflowRunStatus[] = ['queued', 'running', 'paused', 'succeeded', 'failed', 'cancelled'];
+const ALL_STATUSES: DbWorkflowRunStatus[] = [
+  'queued',
+  'running',
+  'paused',
+  'succeeded',
+  'failed',
+  'cancelled',
+];
 
 interface SearchParams {
   status?: string;
@@ -50,31 +57,36 @@ export default async function CockpitPage({
   if (repoFilter) query = query.eq('repo', repoFilter);
 
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const [{ data: runs }, { count: running }, { count: paused }, { count: queued }, { count: failedLast24h }] =
-    await Promise.all([
-      query,
-      supabase
-        .from('workflow_runs')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', workspace.id)
-        .eq('status', 'running'),
-      supabase
-        .from('workflow_runs')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', workspace.id)
-        .eq('status', 'paused'),
-      supabase
-        .from('workflow_runs')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', workspace.id)
-        .eq('status', 'queued'),
-      supabase
-        .from('workflow_runs')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', workspace.id)
-        .eq('status', 'failed')
-        .gte('created_at', since24h),
-    ]);
+  const [
+    { data: runs },
+    { count: running },
+    { count: paused },
+    { count: queued },
+    { count: failedLast24h },
+  ] = await Promise.all([
+    query,
+    supabase
+      .from('workflow_runs')
+      .select('*', { count: 'exact', head: true })
+      .eq('workspace_id', workspace.id)
+      .eq('status', 'running'),
+    supabase
+      .from('workflow_runs')
+      .select('*', { count: 'exact', head: true })
+      .eq('workspace_id', workspace.id)
+      .eq('status', 'paused'),
+    supabase
+      .from('workflow_runs')
+      .select('*', { count: 'exact', head: true })
+      .eq('workspace_id', workspace.id)
+      .eq('status', 'queued'),
+    supabase
+      .from('workflow_runs')
+      .select('*', { count: 'exact', head: true })
+      .eq('workspace_id', workspace.id)
+      .eq('status', 'failed')
+      .gte('created_at', since24h),
+  ]);
 
   // Repo dropdown options: distinct repos across the (unfiltered) recent set.
   const { data: repoRows } = await supabase

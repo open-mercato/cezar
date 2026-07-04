@@ -134,12 +134,15 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
   // dispatcher passes a pre-filtered active list — fall back to a fresh
   // in-repo discovery only when the caller didn't supply one.
   const repoRoot = params.config.autofix?.repoRoot;
-  const skills = params.skills
-    ?? (repoRoot
-      ? await discoverSkills(repoRoot, params.config.autofix?.skillsDir ?? '.ai/skills').catch((err: Error) => {
-          params.onEvent(`[flow] skill discovery failed: ${err.message}`);
-          return [];
-        })
+  const skills =
+    params.skills ??
+    (repoRoot
+      ? await discoverSkills(repoRoot, params.config.autofix?.skillsDir ?? '.ai/skills').catch(
+          (err: Error) => {
+            params.onEvent(`[flow] skill discovery failed: ${err.message}`);
+            return [];
+          },
+        )
       : []);
 
   // Closure-captured state the engine updates between steps. We need this so
@@ -160,10 +163,12 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
   //
   // `lastUpsertedPr` dedupes consecutive identical writes (e.g. the same PR
   // number echoed by review-pr's output).
-  const existingMarker = await findMarkerComment(params.github, params.issueNumber).catch((err: Error) => {
-    params.onEvent(`[flow] could not read pr-link marker: ${err.message}`);
-    return null;
-  });
+  const existingMarker = await findMarkerComment(params.github, params.issueNumber).catch(
+    (err: Error) => {
+      params.onEvent(`[flow] could not read pr-link marker: ${err.message}`);
+      return null;
+    },
+  );
   const initialExistingPr = existingMarker ? describeMarkerForPrompt(existingMarker.data) : '';
   const pendingMarkerWrites = new Set<Promise<unknown>>();
   let lastUpsertedPr: { number: number; state: string } | null = existingMarker
@@ -173,7 +178,12 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
   function scheduleMarkerUpsert(data: PrLinkData): void {
     // Skip when nothing changed — avoids spamming updateComment on every step
     // that echoes the PR number forward.
-    if (lastUpsertedPr && lastUpsertedPr.number === data.prNumber && lastUpsertedPr.state === data.prState) return;
+    if (
+      lastUpsertedPr &&
+      lastUpsertedPr.number === data.prNumber &&
+      lastUpsertedPr.state === data.prState
+    )
+      return;
     lastUpsertedPr = { number: data.prNumber, state: data.prState };
     const p = upsertMarkerComment(params.github, params.issueNumber, data)
       .catch((err: Error) => {
@@ -190,12 +200,15 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
   // otherwise the run behaves as before (agent steps only).
   const projectEnv = params.config.autofix?.projectEnv;
   const wantInstall = !!repoRoot && !!projectEnv?.install?.trim();
-  const wantDevServer = !!repoRoot && !!projectEnv?.devServer?.enabled && (projectEnv.devServer.port ?? 0) > 0;
+  const wantDevServer =
+    !!repoRoot && !!projectEnv?.devServer?.enabled && (projectEnv.devServer.port ?? 0) > 0;
   const prefixSteps: WorkflowStep<FlowBlackboard>[] = [];
   if (wantInstall) prefixSteps.push(makeInstallStep());
   if (wantDevServer) prefixSteps.push(makeDevServerStep());
 
-  const agentSteps = params.flow.steps.map((step, idx) => makeAgentStepForFlowStep(step, idx, params.config));
+  const agentSteps = params.flow.steps.map((step, idx) =>
+    makeAgentStepForFlowStep(step, idx, params.config),
+  );
 
   const workflow: Workflow<FlowBlackboard> = {
     id: `flow:${params.flow.name}`,
@@ -280,7 +293,8 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
       branch: branchName,
       runEnv,
       onEvent: params.onEvent,
-      onAgentEvent: (e: RunnerAgentEvent) => params.onAgentEvent(e as unknown as { type: string; [k: string]: unknown }),
+      onAgentEvent: (e: RunnerAgentEvent) =>
+        params.onAgentEvent(e as unknown as { type: string; [k: string]: unknown }),
       onStepStart: params.onStepStart,
       onRunRecord: (r: AgentRunRecord) => {
         lastAgentRunId = r.id;
@@ -379,7 +393,9 @@ export async function runFlow(params: RunFlowParams): Promise<WorkflowRunResult<
         // downstream steps that change the PR's state should emit their own
         // marker (e.g. `PR_STATE=changes-requested`) — see extractPrState.
         if (number != null && url) {
-          const state = extractPrState(rawText) ?? (lastUpsertedPr?.number === number ? lastUpsertedPr.state : 'draft');
+          const state =
+            extractPrState(rawText) ??
+            (lastUpsertedPr?.number === number ? lastUpsertedPr.state : 'draft');
           scheduleMarkerUpsert({
             prNumber: number,
             prUrl: url,

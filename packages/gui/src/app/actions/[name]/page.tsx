@@ -47,11 +47,7 @@ function asStringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === 'string');
 }
 
-export default async function ActionDetailPage({
-  params,
-}: {
-  params: Promise<{ name: string }>;
-}) {
+export default async function ActionDetailPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: rawName } = await params;
   const name = decodeURIComponent(rawName);
 
@@ -71,34 +67,35 @@ export default async function ActionDetailPage({
   }
 
   const supabase = createSupabaseAdminClient();
-  const [{ data: rows }, { data: workspaceRow }, { data: issueRows }, { data: flowRows }] = await Promise.all([
-    supabase
-      .from('actions')
-      .select(
-        'id, workspace_id, name, kind, description, system_prompt, skill_refs, target, triggers, effects, output_schema, enabled, replaces_built_in, updated_at, model, acceptance_mode, confidence_config, suggested_flow_id',
-      )
-      .eq('workspace_id', workspace.id)
-      .eq('name', name)
-      .returns<DbActionRow[]>(),
-    supabase
-      .from('workspaces')
-      .select('auto_triage_action_id')
-      .eq('id', workspace.id)
-      .maybeSingle<{ auto_triage_action_id: string | null }>(),
-    supabase
-      .from('issues')
-      .select('number, title')
-      .eq('workspace_id', workspace.id)
-      .order('updated_at', { ascending: false })
-      .limit(20)
-      .returns<IssueRow[]>(),
-    supabase
-      .from('flows')
-      .select('id, name')
-      .eq('workspace_id', workspace.id)
-      .order('name', { ascending: true })
-      .returns<FlowOptionRow[]>(),
-  ]);
+  const [{ data: rows }, { data: workspaceRow }, { data: issueRows }, { data: flowRows }] =
+    await Promise.all([
+      supabase
+        .from('actions')
+        .select(
+          'id, workspace_id, name, kind, description, system_prompt, skill_refs, target, triggers, effects, output_schema, enabled, replaces_built_in, updated_at, model, acceptance_mode, confidence_config, suggested_flow_id',
+        )
+        .eq('workspace_id', workspace.id)
+        .eq('name', name)
+        .returns<DbActionRow[]>(),
+      supabase
+        .from('workspaces')
+        .select('auto_triage_action_id')
+        .eq('id', workspace.id)
+        .maybeSingle<{ auto_triage_action_id: string | null }>(),
+      supabase
+        .from('issues')
+        .select('number, title')
+        .eq('workspace_id', workspace.id)
+        .order('updated_at', { ascending: false })
+        .limit(20)
+        .returns<IssueRow[]>(),
+      supabase
+        .from('flows')
+        .select('id, name')
+        .eq('workspace_id', workspace.id)
+        .order('name', { ascending: true })
+        .returns<FlowOptionRow[]>(),
+    ]);
 
   const allRows = rows ?? [];
   if (allRows.length === 0) notFound();

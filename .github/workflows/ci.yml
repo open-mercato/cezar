@@ -28,6 +28,18 @@ jobs:
       - name: Install
         run: yarn install --immutable
 
+      - name: Lint (oxlint)
+        run: yarn lint
+
+      - name: Format check (oxfmt)
+        run: yarn format:check
+
+      - name: Lint GitHub Actions workflows
+        uses: reviewdog/action-actionlint@v1
+        with:
+          reporter: github-check
+          fail_level: error
+
       - name: Migration naming sanity
         # New migrations must use a UTC timestamp prefix (YYYYMMDDHHMMSS_) so two
         # branches never collide on a number — see docs/DEVELOPMENT.md. The legacy
@@ -81,3 +93,58 @@ jobs:
 
       - name: Test
         run: yarn test
+
+  # Apply every Supabase migration, in lexicographic filename order, against a
+  # real Postgres — the same order Supabase applies them. This catches SQL that
+  # only fails on a clean database (bad ordering, dropped-then-referenced
+  # objects, typos) which `next build` / unit tests never exercise.
+  apply-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cezar_migrations
+        ports:
+          - 5432:5432
+        # Wait until Postgres accepts connections before the job's steps run.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply bootstrap + migrations + smoke asserts
+        # A plain postgres:15 is NOT Supabase: it has no `auth` schema and none
+        # of the `anon` / `authenticated` / `service_role` API roles that the
+        # migrations' FKs, RLS policies, and GRANTs depend on. ci-bootstrap.sql
+        # is a minimal CI-only stand-in for those (it lives outside
+        # migrations/ so the numbering-sanity check and this apply loop ignore
+        # it). The four legacy 0029_* files share a numeric prefix on purpose
+        # (see "Migration naming sanity" above) — we do NOT renumber them and
+        # rely solely on lexicographic filename sort for a deterministic order.
+        env:
+          PGPASSWORD: postgres
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGDATABASE: cezar_migrations
+        run: |
+          set -euo pipefail
+          cd packages/gui/supabase
+
+          psql -v ON_ERROR_STOP=1 -q -f ci-bootstrap.sql
+
+          for f in $(ls migrations/*.sql | sort); do
+            echo "--- applying ${f}"
+            psql -v ON_ERROR_STOP=1 -q -f "${f}"
+          done
+
+          echo "--- running smoke assertions"
+          psql -v ON_ERROR_STOP=1 -q -f ci-smoke-asserts.sql
+
+          echo "All migrations applied cleanly."

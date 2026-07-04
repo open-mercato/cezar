@@ -78,15 +78,15 @@ export function SkillsShModal({ open, onClose, configured }: Props) {
           <h2 className="text-base font-semibold text-on-surface">Install from skills.sh</h2>
           <p className="mt-1 text-xs text-on-surface-variant">
             Paste a <code className="font-mono">source/slug</code> identifier (e.g.{' '}
-            <code className="font-mono">vercel-labs/skills/find-skills</code>) or the full
-            skills.sh URL.
+            <code className="font-mono">vercel-labs/skills/find-skills</code>) or the full skills.sh
+            URL.
           </p>
         </header>
 
         {!configured && (
           <div className="mb-3 rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-300">
-            ⚠ Skills.sh integration is disabled — set <code className="font-mono">SKILLS_SH_TOKEN</code>{' '}
-            in the deployment environment.
+            ⚠ Skills.sh integration is disabled — set{' '}
+            <code className="font-mono">SKILLS_SH_TOKEN</code> in the deployment environment.
           </div>
         )}
 

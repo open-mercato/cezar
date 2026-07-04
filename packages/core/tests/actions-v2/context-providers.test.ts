@@ -122,7 +122,9 @@ const effectCtx: EffectContext = {
   targetNumber: 42,
 };
 
-function firstUserMessage(calls: Array<{ messages: Array<{ role: string; content: unknown }> }>): string {
+function firstUserMessage(
+  calls: Array<{ messages: Array<{ role: string; content: unknown }> }>,
+): string {
   expect(calls.length).toBeGreaterThan(0);
   const msg = calls[0].messages[0];
   expect(msg.role).toBe('user');
@@ -137,16 +139,12 @@ describe('runAction context injection', () => {
   it('appends declared context sections to the user message', async () => {
     const { client, calls } = fakeAnthropic();
     const section = '## Open-issue knowledge base\n\n- #12 — Login fails on Safari';
-    const result = await runAction(
-      makeAction({ contextRefs: ['open-issues'] }),
-      target,
-      {
-        skills: [],
-        anthropic: client,
-        effectCtx,
-        contextProviders: { 'open-issues': async () => section },
-      },
-    );
+    const result = await runAction(makeAction({ contextRefs: ['open-issues'] }), target, {
+      skills: [],
+      anthropic: client,
+      effectCtx,
+      contextProviders: { 'open-issues': async () => section },
+    });
 
     expect(result.text).toBe('done — no changes needed');
     const userMessage = firstUserMessage(calls);
@@ -208,11 +206,11 @@ describe('runAction context injection', () => {
 
   it('silently skips declared refs that have no provider', async () => {
     const { client, calls } = fakeAnthropic();
-    const result = await runAction(
-      makeAction({ contextRefs: ['open-issues'] }),
-      target,
-      { skills: [], anthropic: client, effectCtx },
-    );
+    const result = await runAction(makeAction({ contextRefs: ['open-issues'] }), target, {
+      skills: [],
+      anthropic: client,
+      effectCtx,
+    });
     expect(result.text).toBe('done — no changes needed');
     expect(firstUserMessage(calls)).not.toContain('Open-issue knowledge base');
   });

@@ -66,7 +66,13 @@ function validateDrafts(drafts: LabelAnalysisDraft[]): {
  *
  * Shared between the /workspaces/new wizard and /settings/labels.
  */
-export function LabelListEditor({ title, subtitle, drafts, onChange, onValidityChange }: LabelListEditorProps) {
+export function LabelListEditor({
+  title,
+  subtitle,
+  drafts,
+  onChange,
+  onValidityChange,
+}: LabelListEditorProps) {
   const { errors, mixedScript } = useMemo(() => validateDrafts(drafts), [drafts]);
   const valid = errors.every((e) => e === null);
 
@@ -103,7 +109,9 @@ export function LabelListEditor({ title, subtitle, drafts, onChange, onValidityC
           <h3 className="font-display text-[14px] font-semibold text-on-surface">{title}</h3>
           {subtitle && <p className="text-xs text-on-surface-variant">{subtitle}</p>}
         </div>
-        <span className="text-xs text-on-surface-variant">{drafts.length} label{drafts.length === 1 ? '' : 's'}</span>
+        <span className="text-xs text-on-surface-variant">
+          {drafts.length} label{drafts.length === 1 ? '' : 's'}
+        </span>
       </header>
 
       <div className="divide-y divide-outline-variant/60">
@@ -203,12 +211,18 @@ function LabelRow({
       )}
 
       {!expanded && draft.description && (
-        <p className="ml-0 mt-1 line-clamp-1 text-xs text-on-surface-variant sm:ml-7">{draft.description}</p>
+        <p className="ml-0 mt-1 line-clamp-1 text-xs text-on-surface-variant sm:ml-7">
+          {draft.description}
+        </p>
       )}
 
       {expanded && (
         <div className="ml-0 mt-3 grid gap-3 sm:ml-7 sm:grid-cols-2">
-          <Field label="Color (hex without #)" value={draft.color ?? ''} onChange={(v) => onChange({ color: v || null })} />
+          <Field
+            label="Color (hex without #)"
+            value={draft.color ?? ''}
+            onChange={(v) => onChange({ color: v || null })}
+          />
           <Field
             label="Description"
             value={draft.description}
@@ -264,7 +278,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-on-surface-variant">{label}</span>
+      <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-on-surface-variant">
+        {label}
+      </span>
       {multiline ? (
         <textarea
           value={value}

@@ -46,7 +46,11 @@ describe('IssueStore.fromData', () => {
 
   it('routes save() to onSave when provided', async () => {
     let saved: Store | null = null;
-    const store = IssueStore.fromData(snapshot, { onSave: async (d) => { saved = d; } });
+    const store = IssueStore.fromData(snapshot, {
+      onSave: async (d) => {
+        saved = d;
+      },
+    });
     store.updateMeta({ totalFetched: 3 });
     await store.save();
     expect(saved).not.toBeNull();
@@ -65,14 +69,26 @@ describe('IssueStore.fromPort concurrent save', () => {
   function makePort(initial: Store): StorePort & { state: Store } {
     return {
       state: structuredClone(initial),
-      async load() { return structuredClone(this.state); },
-      async save(d) { this.state = structuredClone(d); },
+      async load() {
+        return structuredClone(this.state);
+      },
+      async save(d) {
+        this.state = structuredClone(d);
+      },
     };
   }
 
   it('does not clobber a concurrent run that wrote a different issue', async () => {
     const backing: Store = {
-      meta: { owner: 'acme', repo: 'widgets', lastSyncedAt: null, totalFetched: 0, version: 1, orgMembers: [], orgMembersFetchedAt: null },
+      meta: {
+        owner: 'acme',
+        repo: 'widgets',
+        lastSyncedAt: null,
+        totalFetched: 0,
+        version: 1,
+        orgMembers: [],
+        orgMembersFetchedAt: null,
+      },
       issues: [makeIssue(1), makeIssue(2)],
     };
     const port = makePort(backing);
@@ -96,7 +112,15 @@ describe('IssueStore.fromPort concurrent save', () => {
 
   it('preserves an issue only the concurrent run added', async () => {
     const backing: Store = {
-      meta: { owner: 'acme', repo: 'widgets', lastSyncedAt: null, totalFetched: 0, version: 1, orgMembers: [], orgMembersFetchedAt: null },
+      meta: {
+        owner: 'acme',
+        repo: 'widgets',
+        lastSyncedAt: null,
+        totalFetched: 0,
+        version: 1,
+        orgMembers: [],
+        orgMembersFetchedAt: null,
+      },
       issues: [makeIssue(1)],
     };
     const port = makePort(backing);

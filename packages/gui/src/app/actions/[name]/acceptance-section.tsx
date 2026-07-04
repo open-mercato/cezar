@@ -46,7 +46,13 @@ const MODELS: { id: ActionModel; label: string; hint: string }[] = [
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', hint: 'Fast & cheap · high-volume triage' },
 ];
 
-export function AcceptanceSection({ model, acceptanceMode, confidenceConfig, onChange, readOnly }: Props) {
+export function AcceptanceSection({
+  model,
+  acceptanceMode,
+  confidenceConfig,
+  onChange,
+  readOnly,
+}: Props) {
   // Pull the threshold values out, falling back to the per-mode defaults
   // when the stored shape doesn't match the current mode (e.g. user just
   // toggled modes and the stored config was for the other one).
@@ -233,7 +239,11 @@ export function AcceptanceSection({ model, acceptanceMode, confidenceConfig, onC
           <div className="space-y-2">
             <BucketRow
               tone="success"
-              label={acceptanceMode === 'auto' ? `Accepted (≥ ${autoAccept}%)` : `Auto-accept (≥ ${autoAccept}%)`}
+              label={
+                acceptanceMode === 'auto'
+                  ? `Accepted (≥ ${autoAccept}%)`
+                  : `Auto-accept (≥ ${autoAccept}%)`
+              }
               items={buckets.accept}
               total={PREVIEW_SAMPLE.length}
             />
@@ -326,8 +336,14 @@ function SingleThreshold({
     <div className="space-y-2">
       <div className="relative h-8">
         <div className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 overflow-hidden rounded-full bg-surface-container">
-          <div className="absolute inset-y-0 left-0 bg-outline-variant/50" style={{ width: `${value}%` }} />
-          <div className="absolute inset-y-0 bg-emerald-500/40" style={{ left: `${value}%`, right: 0 }} />
+          <div
+            className="absolute inset-y-0 left-0 bg-outline-variant/50"
+            style={{ width: `${value}%` }}
+          />
+          <div
+            className="absolute inset-y-0 bg-emerald-500/40"
+            style={{ left: `${value}%`, right: 0 }}
+          />
         </div>
         <input
           type="range"
@@ -375,12 +391,18 @@ function DualThreshold({
     <div className="space-y-2">
       <div className="relative h-8">
         <div className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 overflow-hidden rounded-full bg-surface-container">
-          <div className="absolute inset-y-0 left-0 bg-outline-variant/50" style={{ width: `${low}%` }} />
+          <div
+            className="absolute inset-y-0 left-0 bg-outline-variant/50"
+            style={{ width: `${low}%` }}
+          />
           <div
             className="absolute inset-y-0 bg-primary/40"
             style={{ left: `${low}%`, width: `${Math.max(0, high - low)}%` }}
           />
-          <div className="absolute inset-y-0 bg-emerald-500/40" style={{ left: `${high}%`, right: 0 }} />
+          <div
+            className="absolute inset-y-0 bg-emerald-500/40"
+            style={{ left: `${high}%`, right: 0 }}
+          />
         </div>
         <input
           type="range"
@@ -407,7 +429,13 @@ function DualThreshold({
         <SliderStyles />
       </div>
       <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-3">
-        <ThresholdCell tone="muted" label="Auto-deny below" value={low} onChange={onLow} readOnly={readOnly} />
+        <ThresholdCell
+          tone="muted"
+          label="Auto-deny below"
+          value={low}
+          onChange={onLow}
+          readOnly={readOnly}
+        />
         <div className="flex items-center justify-center text-outline">
           <BucketDot tone="info" />
           <span className="ml-1.5">
@@ -417,7 +445,13 @@ function DualThreshold({
             </span>
           </span>
         </div>
-        <ThresholdCell tone="success" label="Auto-accept above" value={high} onChange={onHigh} readOnly={readOnly} />
+        <ThresholdCell
+          tone="success"
+          label="Auto-accept above"
+          value={high}
+          onChange={onHigh}
+          readOnly={readOnly}
+        />
       </div>
     </div>
   );
@@ -506,7 +540,10 @@ function BucketRow({
         {label}
       </div>
       <div className="relative h-6 overflow-hidden rounded-md border border-outline-variant/40 bg-surface-container">
-        <div className={cn('absolute inset-y-0 left-0 transition-all duration-200', barClass)} style={{ width: `${pct}%` }} />
+        <div
+          className={cn('absolute inset-y-0 left-0 transition-all duration-200', barClass)}
+          style={{ width: `${pct}%` }}
+        />
         <div className="absolute inset-0 flex items-center gap-1 overflow-hidden px-2">
           {items.slice(0, 6).map((it) => (
             <span

@@ -14,7 +14,11 @@ export default async function CockpitRunPage({ params }: { params: Promise<{ run
   if (!workspace) redirect('/workspaces');
 
   const supabase = await createSupabaseServerClient();
-  const { data: runRow } = await supabase.from('workflow_runs').select('*').eq('id', runId).maybeSingle();
+  const { data: runRow } = await supabase
+    .from('workflow_runs')
+    .select('*')
+    .eq('id', runId)
+    .maybeSingle();
   if (!runRow || runRow.workspace_id !== workspace.id) {
     return (
       <div className="flex items-center justify-center py-32 text-fg-muted">Run not found.</div>
@@ -22,7 +26,11 @@ export default async function CockpitRunPage({ params }: { params: Promise<{ run
   }
 
   const [{ data: steps }, { data: events }] = await Promise.all([
-    supabase.from('agent_runs').select('*').eq('workflow_run_id', runId).order('started_at', { ascending: true }),
+    supabase
+      .from('agent_runs')
+      .select('*')
+      .eq('workflow_run_id', runId)
+      .order('started_at', { ascending: true }),
     supabase
       .from('agent_run_events')
       .select('*')
@@ -46,20 +54,23 @@ export default async function CockpitRunPage({ params }: { params: Promise<{ run
       .select('id, name, status, last_heartbeat_at, github_inherit_host, github_installation_id')
       .in('id', runnerIds);
     runners = Object.fromEntries(
-      (runnerRows ?? []).map((r) => [r.id, {
-        id: r.id,
-        name: r.name,
-        status: r.status,
-        lastHeartbeatAt: r.last_heartbeat_at,
-        // Phase 4 — derive a human-readable identity-source label so the
-        // chip tooltip can show "inherit-host" / "install:123" / "workspace"
-        // at a glance without joining workspaces.
-        ghIdentity: r.github_inherit_host
-          ? 'inherit-host'
-          : r.github_installation_id != null
-            ? `install:${r.github_installation_id}`
-            : 'workspace',
-      }]),
+      (runnerRows ?? []).map((r) => [
+        r.id,
+        {
+          id: r.id,
+          name: r.name,
+          status: r.status,
+          lastHeartbeatAt: r.last_heartbeat_at,
+          // Phase 4 — derive a human-readable identity-source label so the
+          // chip tooltip can show "inherit-host" / "install:123" / "workspace"
+          // at a glance without joining workspaces.
+          ghIdentity: r.github_inherit_host
+            ? 'inherit-host'
+            : r.github_installation_id != null
+              ? `install:${r.github_installation_id}`
+              : 'workspace',
+        },
+      ]),
     );
   }
 

@@ -6,12 +6,7 @@ import { SearchIcon, ChevronLeftIcon, ChevronRightIcon } from '@/components/icon
 import { RunStatusDots } from '@/components/run-status-dots';
 import { PageContainer } from '@/components/ui/page-container';
 import { FilterBar } from '@/components/ui/filter-bar';
-import {
-  EntityCard,
-  MetaRow,
-  MetaItem,
-  CardActions,
-} from '@/components/ui/data-card-list';
+import { EntityCard, MetaRow, MetaItem, CardActions } from '@/components/ui/data-card-list';
 import type { ActionRunSummary, RunStatus } from '@/lib/action-runs-loader';
 import { PrRowMenu } from './pr-row-menu';
 
@@ -100,7 +95,8 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
         if (!runStatusFilter.some((v) => matchesRunStatus(r, v as RunStatusFilter))) return false;
       }
       if (q.length > 0) {
-        const hay = `${r.number} ${r.title} ${r.author} ${r.headRef ?? ''} ${r.baseRef ?? ''} ${r.labels.join(' ')}`.toLowerCase();
+        const hay =
+          `${r.number} ${r.title} ${r.author} ${r.headRef ?? ''} ${r.baseRef ?? ''} ${r.labels.join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -160,9 +156,12 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
     <PageContainer>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">Pull requests</h1>
+          <h1 className="text-xl font-semibold leading-tight tracking-tight text-on-surface sm:text-[24px]">
+            Pull requests
+          </h1>
           <p className="mt-1 text-sm text-on-surface-variant">
-            <span className="font-mono">{repoLabel}</span> — {totalPrs} PR{totalPrs === 1 ? '' : 's'} synced
+            <span className="font-mono">{repoLabel}</span> — {totalPrs} PR
+            {totalPrs === 1 ? '' : 's'} synced
           </p>
         </div>
       </header>
@@ -252,7 +251,11 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
           {pageRows.length === 0 ? (
             <div className="px-2 py-10 text-center text-sm text-on-surface-variant">
               {totalPrs === 0 ? (
-                <>No pull requests in this workspace yet. The <code className="font-mono text-on-surface">prs-sync</code> cron will populate them.</>
+                <>
+                  No pull requests in this workspace yet. The{' '}
+                  <code className="font-mono text-on-surface">prs-sync</code> cron will populate
+                  them.
+                </>
               ) : (
                 <>
                   No PRs match these filters.{' '}
@@ -276,25 +279,73 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
           <table className="min-w-full text-sm">
             <thead>
               <tr className="bg-surface-container">
-                <SortableTh sortKey="runStatus"    sortDir={sortDir} active={sortKey === 'runStatus'}    onClick={handleSort} className="w-[44px] pr-2">
+                <SortableTh
+                  sortKey="runStatus"
+                  sortDir={sortDir}
+                  active={sortKey === 'runStatus'}
+                  onClick={handleSort}
+                  className="w-[44px] pr-2"
+                >
                   <span className="sr-only">Run status</span>
                 </SortableTh>
-                <SortableTh sortKey="number"       sortDir={sortDir} active={sortKey === 'number'}       onClick={handleSort}>#</SortableTh>
-                <SortableTh sortKey="title"        sortDir={sortDir} active={sortKey === 'title'}        onClick={handleSort}>NAME</SortableTh>
-                <SortableTh sortKey="state"        sortDir={sortDir} active={sortKey === 'state'}        onClick={handleSort}>STATE</SortableTh>
-                <SortableTh sortKey="author"       sortDir={sortDir} active={sortKey === 'author'}       onClick={handleSort}>AUTHOR</SortableTh>
+                <SortableTh
+                  sortKey="number"
+                  sortDir={sortDir}
+                  active={sortKey === 'number'}
+                  onClick={handleSort}
+                >
+                  #
+                </SortableTh>
+                <SortableTh
+                  sortKey="title"
+                  sortDir={sortDir}
+                  active={sortKey === 'title'}
+                  onClick={handleSort}
+                >
+                  NAME
+                </SortableTh>
+                <SortableTh
+                  sortKey="state"
+                  sortDir={sortDir}
+                  active={sortKey === 'state'}
+                  onClick={handleSort}
+                >
+                  STATE
+                </SortableTh>
+                <SortableTh
+                  sortKey="author"
+                  sortDir={sortDir}
+                  active={sortKey === 'author'}
+                  onClick={handleSort}
+                >
+                  AUTHOR
+                </SortableTh>
                 <Th>BRANCH</Th>
                 <Th>LABELS</Th>
-                <SortableTh sortKey="prUpdatedAt"  sortDir={sortDir} active={sortKey === 'prUpdatedAt'}  onClick={handleSort}>UPDATED</SortableTh>
+                <SortableTh
+                  sortKey="prUpdatedAt"
+                  sortDir={sortDir}
+                  active={sortKey === 'prUpdatedAt'}
+                  onClick={handleSort}
+                >
+                  UPDATED
+                </SortableTh>
                 <Th className="text-right pr-6">ACTIONS</Th>
               </tr>
             </thead>
             <tbody>
               {pageRows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-sm text-on-surface-variant">
+                  <td
+                    colSpan={9}
+                    className="px-6 py-12 text-center text-sm text-on-surface-variant"
+                  >
                     {totalPrs === 0 ? (
-                      <>No pull requests in this workspace yet. The <code className="font-mono text-on-surface">prs-sync</code> cron will populate them.</>
+                      <>
+                        No pull requests in this workspace yet. The{' '}
+                        <code className="font-mono text-on-surface">prs-sync</code> cron will
+                        populate them.
+                      </>
                     ) : (
                       <>
                         No PRs match these filters.{' '}
@@ -320,7 +371,8 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
           <div className="flex flex-wrap items-center gap-3">
             <span>
               Showing {pageRows.length === 0 ? 0 : (page - 1) * pageSize + 1}
-              {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of {totalFiltered}
+              {pageRows.length > 0 && <>–{(page - 1) * pageSize + pageRows.length}</>} of{' '}
+              {totalFiltered}
               {filtersActive && <> filtered (of {totalPrs})</>} PR{totalFiltered === 1 ? '' : 's'}
             </span>
             <span className="hidden h-4 w-px bg-outline-variant sm:inline-block" aria-hidden />
@@ -344,7 +396,9 @@ export function PrsView({ rows, repoLabel, fetchedAt, readOnly }: PrsViewProps) 
               </select>
             </label>
             {fetchedAt && (
-              <span className="hidden lg:inline">· upstream updated {new Date(fetchedAt).toLocaleString()}</span>
+              <span className="hidden lg:inline">
+                · upstream updated {new Date(fetchedAt).toLocaleString()}
+              </span>
             )}
           </div>
           {totalPages > 1 && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
@@ -409,10 +463,17 @@ function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
   return (
     <span
       aria-hidden
-      className={cn('inline-flex flex-col text-[8px] leading-[8px]', active ? 'text-primary' : 'text-outline-variant')}
+      className={cn(
+        'inline-flex flex-col text-[8px] leading-[8px]',
+        active ? 'text-primary' : 'text-outline-variant',
+      )}
     >
-      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>▲</span>
-      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>▼</span>
+      <span className={cn(active && dir === 'asc' ? 'text-primary' : 'text-outline-variant')}>
+        ▲
+      </span>
+      <span className={cn(active && dir === 'desc' ? 'text-primary' : 'text-outline-variant')}>
+        ▼
+      </span>
     </span>
   );
 }
@@ -420,8 +481,10 @@ function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
 function compareByKey(a: PrRow, b: PrRow, key: SortKey): number {
   if (key === 'number') return a.number - b.number;
   if (key === 'runStatus') {
-    return RUN_STATUS_RANK[topStatus(a.actionRuns)] - RUN_STATUS_RANK[topStatus(b.actionRuns)]
-      || a.number - b.number;
+    return (
+      RUN_STATUS_RANK[topStatus(a.actionRuns)] - RUN_STATUS_RANK[topStatus(b.actionRuns)] ||
+      a.number - b.number
+    );
   }
   if (key === 'prUpdatedAt') {
     const ta = a.prUpdatedAt ? new Date(a.prUpdatedAt).getTime() : -Infinity;
@@ -468,7 +531,9 @@ function PrTableRow({ row, readOnly }: { row: PrRow; readOnly: boolean }) {
         <LabelChips labels={row.labels} />
       </td>
       <td className="px-6 py-4 align-middle">
-        <span className="font-mono text-[13px] text-on-surface-variant">{formatRelative(row.prUpdatedAt)}</span>
+        <span className="font-mono text-[13px] text-on-surface-variant">
+          {formatRelative(row.prUpdatedAt)}
+        </span>
       </td>
       <td className="relative px-6 py-4 align-middle">
         <div className="flex items-center justify-end pr-2">
@@ -484,7 +549,6 @@ function PrTableRow({ row, readOnly }: { row: PrRow; readOnly: boolean }) {
   );
 }
 
-
 function PrCard({ row, readOnly }: { row: PrRow; readOnly: boolean }) {
   return (
     <EntityCard
@@ -497,14 +561,21 @@ function PrCard({ row, readOnly }: { row: PrRow; readOnly: boolean }) {
           className="flex min-w-0 items-baseline gap-2 hover:text-primary"
           title={row.title}
         >
-          <span className="shrink-0 font-mono text-[13px] text-on-surface-variant">#{row.number}</span>
+          <span className="shrink-0 font-mono text-[13px] text-on-surface-variant">
+            #{row.number}
+          </span>
           <span className="truncate">{row.title}</span>
         </a>
       }
       badge={<StateBadge state={row.state} draft={row.draft} />}
       actions={
         <CardActions>
-          <PrRowMenu prNumber={row.number} prTitle={row.title} prUrl={row.htmlUrl} readOnly={readOnly} />
+          <PrRowMenu
+            prNumber={row.number}
+            prTitle={row.title}
+            prUrl={row.htmlUrl}
+            readOnly={readOnly}
+          />
         </CardActions>
       }
     >
@@ -556,7 +627,10 @@ function BranchCell({ head, base }: { head: string | null; base: string | null }
   // auto-layout, so a `max-width` on the <td> alone is ignored and a long head
   // ref would otherwise push into the labels column.
   return (
-    <span className="flex items-center gap-1 font-mono text-[12px] text-on-surface-variant" title={`${head ?? '?'} → ${base ?? '?'}`}>
+    <span
+      className="flex items-center gap-1 font-mono text-[12px] text-on-surface-variant"
+      title={`${head ?? '?'} → ${base ?? '?'}`}
+    >
       <span className="max-w-[150px] truncate">{head ?? '?'}</span>
       <span className="shrink-0 text-outline-variant">→</span>
       <span className="max-w-[90px] truncate">{base ?? '?'}</span>
@@ -631,20 +705,32 @@ function Pagination({
     <>
       {/* Phone: compact Prev · N / M · Next. */}
       <div className="flex items-center gap-2 sm:hidden">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         <span className="text-sm tabular-nums text-on-surface-variant">
           {page} / {totalPages}
         </span>
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>
 
       {/* Desktop: full numeric pager. */}
       <div className="hidden items-center gap-1 sm:flex">
-        <PagerButton onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Previous page">
+        <PagerButton
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
           <ChevronLeftIcon className="h-4 w-4" />
         </PagerButton>
         {pages.map((p) => (
@@ -662,7 +748,11 @@ function Pagination({
             {p}
           </button>
         ))}
-        <PagerButton onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} aria-label="Next page">
+        <PagerButton
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
           <ChevronRightIcon className="h-4 w-4" />
         </PagerButton>
       </div>

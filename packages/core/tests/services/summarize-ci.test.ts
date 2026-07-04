@@ -34,7 +34,7 @@ describe('summarizeCi', () => {
       check('test', 'in_progress', null),
     ]);
     expect(r.overall).toBe('failure');
-    expect(r.failedChecks.map(c => c.name)).toEqual(['lint']);
+    expect(r.failedChecks.map((c) => c.name)).toEqual(['lint']);
   });
 
   it('success when all completed and passed', () => {

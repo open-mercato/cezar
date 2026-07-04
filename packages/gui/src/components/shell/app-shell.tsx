@@ -60,51 +60,53 @@ export function AppShell({
 
   return (
     <Toaster>
-    <div className="flex min-h-screen min-h-dvh">
-      <Sidebar user={user} workspace={workspace} workspaces={workspaces} />
+      <div className="flex min-h-screen min-h-dvh">
+        <Sidebar user={user} workspace={workspace} workspaces={workspaces} />
 
-      <div className="flex min-h-screen min-h-dvh flex-1 flex-col overflow-x-hidden">
-        {/* Desktop top bar (hidden lg:flex inside the component) */}
-        <TopBar
-          user={topBarUser}
-          workspaceId={workspaceId}
-          readOnly={readOnly}
-          initialSyncStatus={initialSyncStatus}
-          syncMode={syncMode}
-          syncIntervalMinutes={syncIntervalMinutes}
-          webhookHealth={webhookHealth}
-          lastWebhookAt={lastWebhookAt}
-        />
+        <div className="flex min-h-screen min-h-dvh flex-1 flex-col overflow-x-hidden">
+          {/* Desktop top bar (hidden lg:flex inside the component) */}
+          <TopBar
+            user={topBarUser}
+            workspaceId={workspaceId}
+            readOnly={readOnly}
+            initialSyncStatus={initialSyncStatus}
+            syncMode={syncMode}
+            syncIntervalMinutes={syncIntervalMinutes}
+            webhookHealth={webhookHealth}
+            lastWebhookAt={lastWebhookAt}
+          />
 
-        {/* Mobile/tablet top bar (flex lg:hidden inside the component) */}
-        <MobileTopBar
-          onOpenNav={openNav}
-          user={topBarUser}
-          workspaceLabel={workspaceLabel}
-          workspaceId={workspaceId}
-          readOnly={readOnly}
-          initialSyncStatus={initialSyncStatus}
-          syncMode={syncMode}
-          syncIntervalMinutes={syncIntervalMinutes}
-          webhookHealth={webhookHealth}
-          lastWebhookAt={lastWebhookAt}
-        />
+          {/* Mobile/tablet top bar (flex lg:hidden inside the component) */}
+          <MobileTopBar
+            onOpenNav={openNav}
+            user={topBarUser}
+            workspaceLabel={workspaceLabel}
+            workspaceId={workspaceId}
+            readOnly={readOnly}
+            initialSyncStatus={initialSyncStatus}
+            syncMode={syncMode}
+            syncIntervalMinutes={syncIntervalMinutes}
+            webhookHealth={webhookHealth}
+            lastWebhookAt={lastWebhookAt}
+          />
 
-        {/* Bottom padding (`< sm`) keeps content clear of the BottomTabBar +
+          {/* Bottom padding (`< sm`) keeps content clear of the BottomTabBar +
             safe area; reset at `sm`. */}
-        <main className="flex-1 pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-0">{children}</main>
+          <main className="flex-1 pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-0">
+            {children}
+          </main>
+        </div>
+
+        <MobileNavDrawer
+          open={mobileNavOpen}
+          onClose={closeNav}
+          user={user}
+          workspace={workspace}
+          workspaces={workspaces}
+        />
+
+        <BottomTabBar onOpenNav={openNav} />
       </div>
-
-      <MobileNavDrawer
-        open={mobileNavOpen}
-        onClose={closeNav}
-        user={user}
-        workspace={workspace}
-        workspaces={workspaces}
-      />
-
-      <BottomTabBar onOpenNav={openNav} />
-    </div>
     </Toaster>
   );
 }

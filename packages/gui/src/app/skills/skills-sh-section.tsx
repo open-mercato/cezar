@@ -57,8 +57,8 @@ export function SkillsShSection({ imports, readOnly, configured, onOpenInstall }
         <div>
           <h2 className="text-sm font-semibold text-on-surface">skills.sh imports</h2>
           <p className="mt-0.5 text-xs text-on-surface-variant">
-            Skills installed from the public registry. Refresh pulls a new snapshot when the API&apos;s
-            content hash changes.
+            Skills installed from the public registry. Refresh pulls a new snapshot when the
+            API&apos;s content hash changes.
           </p>
         </div>
         <button
@@ -103,7 +103,9 @@ export function SkillsShSection({ imports, readOnly, configured, onOpenInstall }
                   >
                     {row.name}
                   </Link>
-                  <span className="font-mono text-[11px] text-on-surface-variant">{row.sourceSlug}</span>
+                  <span className="font-mono text-[11px] text-on-surface-variant">
+                    {row.sourceSlug}
+                  </span>
                 </div>
                 <div className="mt-0.5 text-[11px] text-on-surface-variant">
                   last synced {formatTimestamp(row.lastSyncedAt)}

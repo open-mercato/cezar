@@ -30,10 +30,12 @@ export default async function NewActionPage() {
           <span aria-hidden>›</span>
           <span className="font-medium text-on-surface">New</span>
         </nav>
-        <h1 className="mt-2 text-[24px] font-semibold leading-tight tracking-tight text-on-surface">New action</h1>
+        <h1 className="mt-2 text-[24px] font-semibold leading-tight tracking-tight text-on-surface">
+          New action
+        </h1>
         <p className="mt-1 text-sm text-on-surface-variant">
-          Creates an empty <code className="font-mono text-on-surface">user</code> action. You can fill in the
-          system prompt, skills, and effects on the detail page.
+          Creates an empty <code className="font-mono text-on-surface">user</code> action. You can
+          fill in the system prompt, skills, and effects on the detail page.
         </p>
       </header>
 

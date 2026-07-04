@@ -2,7 +2,13 @@ import { cn } from '@/components/ui/cn';
 import type { DbWorkflowRunStatus, AgentRunStatus } from '@/lib/supabase/types';
 
 /** Colored badge for a workflow_runs.status. */
-export function RunStatusBadge({ status, className }: { status: DbWorkflowRunStatus; className?: string }) {
+export function RunStatusBadge({
+  status,
+  className,
+}: {
+  status: DbWorkflowRunStatus;
+  className?: string;
+}) {
   const colors: Record<DbWorkflowRunStatus, string> = {
     queued: 'bg-fg-subtle/15 text-fg-subtle',
     running: 'bg-blue-500/20 text-blue-400',
@@ -12,14 +18,26 @@ export function RunStatusBadge({ status, className }: { status: DbWorkflowRunSta
     cancelled: 'bg-fg-subtle/20 text-fg-subtle',
   };
   return (
-    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium uppercase', colors[status], className)}>
+    <span
+      className={cn(
+        'rounded-full px-2 py-0.5 text-xs font-medium uppercase',
+        colors[status],
+        className,
+      )}
+    >
       {status}
     </span>
   );
 }
 
 /** Colored badge for an agent_runs.status (per-step). */
-export function StepStatusBadge({ status, className }: { status: AgentRunStatus; className?: string }) {
+export function StepStatusBadge({
+  status,
+  className,
+}: {
+  status: AgentRunStatus;
+  className?: string;
+}) {
   const colors: Record<AgentRunStatus, string> = {
     running: 'bg-blue-500/20 text-blue-400',
     succeeded: 'bg-accent/20 text-accent',
@@ -27,7 +45,13 @@ export function StepStatusBadge({ status, className }: { status: AgentRunStatus;
     skipped: 'bg-fg-subtle/20 text-fg-subtle',
   };
   return (
-    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium uppercase', colors[status], className)}>
+    <span
+      className={cn(
+        'rounded-full px-2 py-0.5 text-xs font-medium uppercase',
+        colors[status],
+        className,
+      )}
+    >
       {status}
     </span>
   );
@@ -80,12 +104,17 @@ export function githubUrlForRun(
   repoName: string,
 ): string | null {
   if (run.pr_url) return run.pr_url;
-  if (run.pr_number != null) return `https://github.com/${repoOwner}/${repoName}/pull/${run.pr_number}`;
-  if (run.issue_number != null) return `https://github.com/${repoOwner}/${repoName}/issues/${run.issue_number}`;
+  if (run.pr_number != null)
+    return `https://github.com/${repoOwner}/${repoName}/pull/${run.pr_number}`;
+  if (run.issue_number != null)
+    return `https://github.com/${repoOwner}/${repoName}/issues/${run.issue_number}`;
   return null;
 }
 
-export function runRefLabel(run: { pr_number: number | null; issue_number: number | null }): string {
+export function runRefLabel(run: {
+  pr_number: number | null;
+  issue_number: number | null;
+}): string {
   if (run.pr_number != null) return `PR #${run.pr_number}`;
   if (run.issue_number != null) return `Issue #${run.issue_number}`;
   return '—';

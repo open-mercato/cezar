@@ -55,7 +55,11 @@ export async function POST(req: Request) {
   const { runner, admin } = auth;
 
   let body: HeartbeatBody = {};
-  try { body = await req.json(); } catch { /* empty body is fine */ }
+  try {
+    body = await req.json();
+  } catch {
+    /* empty body is fine */
+  }
   const status: RunnerStatus = body.status ?? 'online';
   const inflight = body.inflightJobIds ?? body.currentJobIds ?? [];
 
@@ -77,7 +81,10 @@ export async function POST(req: Request) {
   if (body.githubInstallationId !== undefined && body.githubInstallationId !== null) {
     if (runner.workspace_id == null) {
       return NextResponse.json(
-        { error: 'managed runners cannot self-set github_installation_id; configure it in the admin GUI' },
+        {
+          error:
+            'managed runners cannot self-set github_installation_id; configure it in the admin GUI',
+        },
         { status: 403 },
       );
     }
@@ -90,7 +97,7 @@ export async function POST(req: Request) {
     // `workspaces.installation_id` is text; the runner reports a number.
     if (!ws?.installation_id || String(body.githubInstallationId) !== ws.installation_id) {
       return NextResponse.json(
-        { error: 'github_installation_id does not match this runner\'s workspace installation' },
+        { error: "github_installation_id does not match this runner's workspace installation" },
         { status: 403 },
       );
     }
@@ -139,7 +146,7 @@ export async function POST(req: Request) {
   // PostgREST returns `setof record` functions as an array of rows.
   const row = (Array.isArray(data) ? data[0] : data) as HeartbeatRpcRow | null | undefined;
   const cancelJobIds = row?.cancel_job_ids ?? [];
-  const pauseRunIds  = row?.pause_run_ids  ?? [];
+  const pauseRunIds = row?.pause_run_ids ?? [];
 
   // Bulk-renew leases. Only renews rows still claimed_by_runner = this runner
   // AND status ∈ ('claimed','running') — so a watchdog-reclaimed job won't be
@@ -161,5 +168,11 @@ export async function POST(req: Request) {
   // Phase 5 — echo the runner's own UUID so the daemon can stamp `runnerId`
   // on `step-start` events without an extra round-trip. Older daemons ignore
   // unrecognized fields, so this is backward-compatible.
-  return NextResponse.json({ ok: true, cancelJobIds, pauseRunIds, renewedJobIds, runnerId: runner.id });
+  return NextResponse.json({
+    ok: true,
+    cancelJobIds,
+    pauseRunIds,
+    renewedJobIds,
+    runnerId: runner.id,
+  });
 }

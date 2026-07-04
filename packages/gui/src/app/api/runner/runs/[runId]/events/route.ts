@@ -47,12 +47,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ runId: 
   const { runner, admin } = auth;
   const { runId } = await params;
 
-  const { data: run } = await admin.from('workflow_runs').select('id, workspace_id').eq('id', runId).maybeSingle();
+  const { data: run } = await admin
+    .from('workflow_runs')
+    .select('id, workspace_id')
+    .eq('id', runId)
+    .maybeSingle();
   if (!run) return NextResponse.json({ error: 'run not found' }, { status: 404 });
-  if (!runnerScopesWorkspace(runner, run.workspace_id)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  if (!runnerScopesWorkspace(runner, run.workspace_id))
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
   let body: { events?: IncomingEvent[] };
-  try { body = await req.json(); } catch { return NextResponse.json({ error: 'invalid json' }, { status: 400 }); }
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
+  }
   const events = Array.isArray(body.events) ? body.events : [];
   if (events.length === 0) return NextResponse.json({ ok: true });
 

@@ -1,10 +1,6 @@
 import { confirm, select } from '@inquirer/prompts';
 import chalk from 'chalk';
-import type {
-  ConfirmationPort,
-  PreflightSummary,
-  RootCausePrompt,
-} from '@cezar/core';
+import type { ConfirmationPort, PreflightSummary, RootCausePrompt } from '@cezar/core';
 
 /**
  * Terminal ConfirmationPort impl. Wraps @inquirer/prompts and prints

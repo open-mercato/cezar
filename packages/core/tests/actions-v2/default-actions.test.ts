@@ -37,7 +37,9 @@ describe('DEFAULT_ACTIONS catalog', () => {
     for (const action of DEFAULT_ACTIONS) {
       expect(action.triggers.length).toBeGreaterThan(0);
       for (const trigger of action.triggers) {
-        expect(VALID_TRIGGERS.has(trigger), `${action.name}: unknown trigger "${trigger}"`).toBe(true);
+        expect(VALID_TRIGGERS.has(trigger), `${action.name}: unknown trigger "${trigger}"`).toBe(
+          true,
+        );
       }
     }
   });
@@ -66,7 +68,9 @@ describe('DEFAULT_ACTIONS catalog', () => {
     const names = new Set(skills.map((s) => s.name));
     for (const action of DEFAULT_ACTIONS) {
       for (const ref of action.skillRefs) {
-        expect(names.has(ref), `${action.name}: skillRef "${ref}" has no built-in skill file`).toBe(true);
+        expect(names.has(ref), `${action.name}: skillRef "${ref}" has no built-in skill file`).toBe(
+          true,
+        );
       }
     }
   });

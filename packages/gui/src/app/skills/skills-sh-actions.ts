@@ -117,7 +117,10 @@ async function persistSkill(
   const parsed = parseSkillMarkdown(api.body, api.name);
   const finalName = (parsed.name ?? api.name).trim();
   if (!NAME_PATTERN.test(finalName)) {
-    return { ok: false, error: `name "${finalName}" must be alphanumeric + \`-\`/\`_\` (max 63 chars)` };
+    return {
+      ok: false,
+      error: `name "${finalName}" must be alphanumeric + \`-\`/\`_\` (max 63 chars)`,
+    };
   }
   // Belt-and-braces against a compromised / oversized registry response —
   // mirrors the PR3 cap on disk uploads. Buffer.byteLength counts UTF-8

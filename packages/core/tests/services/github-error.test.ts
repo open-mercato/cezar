@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { classifyGitHubError, toGitHubApiError, GitHubApiError, isAuthOrRateLimitError } from '@cezar/core';
+import {
+  classifyGitHubError,
+  toGitHubApiError,
+  GitHubApiError,
+  isAuthOrRateLimitError,
+} from '@cezar/core';
 
 // Octokit RequestError-shaped fixtures: `.status` plus `.response.headers` /
 // `.response.data.message`. These mirror the real signals GitHub sends so the
@@ -25,7 +30,11 @@ describe('classifyGitHubError', () => {
 
   it('classifies a secondary rate limit by message', () => {
     const c = classifyGitHubError(
-      ghError({ status: 403, message: 'You have exceeded a secondary rate limit', headers: { 'retry-after': '30' } }),
+      ghError({
+        status: 403,
+        message: 'You have exceeded a secondary rate limit',
+        headers: { 'retry-after': '30' },
+      }),
     );
     expect(c.kind).toBe('secondary-rate-limit');
     expect(c.retryAfterMs).toBe(30_000);
@@ -41,13 +50,19 @@ describe('classifyGitHubError', () => {
 
   it('classifies x-ratelimit-remaining: 0 as a primary rate limit', () => {
     const c = classifyGitHubError(
-      ghError({ status: 403, headers: { 'x-ratelimit-remaining': '0' }, message: 'API rate limit exceeded' }),
+      ghError({
+        status: 403,
+        headers: { 'x-ratelimit-remaining': '0' },
+        message: 'API rate limit exceeded',
+      }),
     );
     expect(c.kind).toBe('primary-rate-limit');
   });
 
   it('classifies a bare 403 (no rate-limit signal) as a permission denial', () => {
-    const c = classifyGitHubError(ghError({ status: 403, message: 'Resource not accessible by integration' }));
+    const c = classifyGitHubError(
+      ghError({ status: 403, message: 'Resource not accessible by integration' }),
+    );
     expect(c.kind).toBe('permission');
   });
 
@@ -60,7 +75,9 @@ describe('toGitHubApiError', () => {
   it('produces a permission message that does NOT mention rate limits', () => {
     const err = toGitHubApiError(
       ghError({ status: 403, message: 'Resource not accessible by integration' }),
-      classifyGitHubError(ghError({ status: 403, message: 'Resource not accessible by integration' })),
+      classifyGitHubError(
+        ghError({ status: 403, message: 'Resource not accessible by integration' }),
+      ),
       { owner: 'o', repo: 'r' },
     );
     expect(err).toBeInstanceOf(GitHubApiError);
@@ -84,7 +101,9 @@ describe('toGitHubApiError', () => {
   });
 
   it('preserves the classified kind + status for callers', () => {
-    const classified = classifyGitHubError(ghError({ status: 403, message: 'secondary rate limit' }));
+    const classified = classifyGitHubError(
+      ghError({ status: 403, message: 'secondary rate limit' }),
+    );
     const err = toGitHubApiError(new Error('x'), classified);
     expect(err.kind).toBe('secondary-rate-limit');
     expect(err.status).toBe(403);

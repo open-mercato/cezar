@@ -25,7 +25,13 @@ async function withRepoLock<T>(repoRoot: string, fn: () => Promise<T>): Promise<
   const next = prev.then(fn, fn);
   // Keep the chain alive (swallow rejections) so a failed holder doesn't break
   // the lock for subsequent callers.
-  repoLocks.set(repoRoot, next.then(() => {}, () => {}));
+  repoLocks.set(
+    repoRoot,
+    next.then(
+      () => {},
+      () => {},
+    ),
+  );
   return next;
 }
 
@@ -42,7 +48,12 @@ export interface WorktreeHandle {
 // `GitHubService.gitAuthArgs()`) that authenticate the HTTPS fetch without the
 // token being persisted in the remote URL. Defaults to none for callers whose
 // `origin` already carries credentials (e.g. the host's git config).
-export async function fetchBaseBranch(repoRoot: string, remote: string, baseBranch: string, authArgs: string[] = []): Promise<void> {
+export async function fetchBaseBranch(
+  repoRoot: string,
+  remote: string,
+  baseBranch: string,
+  authArgs: string[] = [],
+): Promise<void> {
   // Intentionally narrow: we only need the base branch up to date. Avoids
   // touching unrelated refs in a large monorepo, and keeps the fetch cheap.
   await runGit(repoRoot, [...authArgs, 'fetch', '--prune', '--no-tags', remote, baseBranch]);
@@ -67,9 +78,20 @@ export function cezarAutofixRef(branch: string): string {
 //
 // `authArgs` are command-time `git -c …` flags (see fetchBaseBranch) that
 // authenticate the HTTPS fetch without persisting the token in the remote URL.
-export async function fetchRemoteBranch(repoRoot: string, remote: string, branch: string, authArgs: string[] = []): Promise<string> {
+export async function fetchRemoteBranch(
+  repoRoot: string,
+  remote: string,
+  branch: string,
+  authArgs: string[] = [],
+): Promise<string> {
   const ref = cezarAutofixRef(branch);
-  await runGit(repoRoot, [...authArgs, 'fetch', '--no-tags', remote, `+refs/heads/${branch}:${ref}`]);
+  await runGit(repoRoot, [
+    ...authArgs,
+    'fetch',
+    '--no-tags',
+    remote,
+    `+refs/heads/${branch}:${ref}`,
+  ]);
   return ref;
 }
 
@@ -106,7 +128,10 @@ const CEZAR_REMOTE_RE = /(?:[/:])(?:comerito\/|open-mercato\/)?cezar(?:\.git)?$/
  * binary is missing from PATH). Used by guards that need to tell "git ran and
  * reported the key is absent" apart from "git itself failed".
  */
-async function tryRunGit(cwd: string, args: string[]): Promise<{ stdout: string; code: number | null }> {
+async function tryRunGit(
+  cwd: string,
+  args: string[],
+): Promise<{ stdout: string; code: number | null }> {
   try {
     const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
     return { stdout: stdout.trim(), code: 0 };
@@ -127,7 +152,7 @@ export async function assertNotCezarCheckout(repoRoot: string): Promise<void> {
   if (result.code !== 0 && result.code !== 1) {
     throw new Error(
       `Could not verify the target repo's git remotes (git config exited ${result.code}); ` +
-      `refusing to autofix until the cezar-checkout guard can run.`,
+        `refusing to autofix until the cezar-checkout guard can run.`,
     );
   }
 
@@ -136,7 +161,7 @@ export async function assertNotCezarCheckout(repoRoot: string): Promise<void> {
     if (url && CEZAR_REMOTE_RE.test(url)) {
       throw new Error(
         `Refusing to autofix inside the cezar checkout itself (remote: ${url}). ` +
-        `Set autofix.repoRoot to an external repository.`,
+          `Set autofix.repoRoot to an external repository.`,
       );
     }
   }
@@ -160,13 +185,16 @@ export async function branchExistsLocally(repoRoot: string, branch: string): Pro
  * out, or null if no such worktree exists. `git worktree list --porcelain`
  * prints repeating blocks of `worktree <path>\nHEAD <sha>\nbranch refs/heads/<name>`.
  */
-export async function findBusyWorktreePath(repoRoot: string, branch: string): Promise<string | null> {
+export async function findBusyWorktreePath(
+  repoRoot: string,
+  branch: string,
+): Promise<string | null> {
   const out = await runGit(repoRoot, ['worktree', 'list', '--porcelain']);
   const entries = out.split(/\n\n+/);
   for (const entry of entries) {
     const lines = entry.split('\n');
-    const pathLine = lines.find(l => l.startsWith('worktree '));
-    const branchLine = lines.find(l => l.startsWith('branch '));
+    const pathLine = lines.find((l) => l.startsWith('worktree '));
+    const branchLine = lines.find((l) => l.startsWith('branch '));
     if (!pathLine || !branchLine) continue;
     const ref = branchLine.slice('branch '.length).trim();
     if (ref === `refs/heads/${branch}`) {
@@ -224,7 +252,9 @@ export async function createWorktree(opts: {
         } catch (err) {
           // Fall back to local baseBranch if the fetch fails (offline, auth issue,
           // etc). The caller can disable this behavior via autofix.fetchBeforeAttempt=false.
-          opts.onWarn?.(`[autofix] fetch ${opts.remote}/${opts.baseBranch} failed; falling back to local ${opts.baseBranch}: ${(err as Error).message}`);
+          opts.onWarn?.(
+            `[autofix] fetch ${opts.remote}/${opts.baseBranch} failed; falling back to local ${opts.baseBranch}: ${(err as Error).message}`,
+          );
         }
       }
 
@@ -256,7 +286,14 @@ export async function createWorktree(opts: {
         // reset. Ignore startingRef in this case.
         await runGit(opts.repoRoot, ['worktree', 'add', worktreePath, opts.branch]);
       } else {
-        await runGit(opts.repoRoot, ['worktree', 'add', '-b', opts.branch, worktreePath, startingRef]);
+        await runGit(opts.repoRoot, [
+          'worktree',
+          'add',
+          '-b',
+          opts.branch,
+          worktreePath,
+          startingRef,
+        ]);
       }
 
       return { worktreePath, parent, startingRef, baseSha };
@@ -380,5 +417,8 @@ export async function squashCommitsToBase(
 
 export async function listChangedFiles(worktreePath: string, baseRef: string): Promise<string[]> {
   const out = await runGit(worktreePath, ['diff', '--name-only', `${baseRef}...HEAD`]);
-  return out.split('\n').map(s => s.trim()).filter(Boolean);
+  return out
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }

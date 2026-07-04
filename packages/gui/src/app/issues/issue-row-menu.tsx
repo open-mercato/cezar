@@ -169,7 +169,9 @@ export function IssueRowMenu({
       e.preventDefault();
       setOpen(true);
       requestAnimationFrame(() => {
-        popoverRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus();
+        popoverRef.current
+          ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not([aria-disabled="true"])')
+          ?.focus();
       });
     }
   }
@@ -178,7 +180,9 @@ export function IssueRowMenu({
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
     const buttons = Array.from(
-      popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [],
+      popoverRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]:not([aria-disabled="true"])',
+      ) ?? [],
     );
     if (buttons.length === 0) return;
     const active = document.activeElement as HTMLButtonElement | null;
@@ -194,7 +198,9 @@ export function IssueRowMenu({
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (i > 0 && items[i - 1].group !== item.group) {
-      rendered.push(<div key={`sep-${i}`} className="my-1 h-px bg-outline-variant/60" aria-hidden />);
+      rendered.push(
+        <div key={`sep-${i}`} className="my-1 h-px bg-outline-variant/60" aria-hidden />,
+      );
     }
     rendered.push(
       <button

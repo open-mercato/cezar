@@ -102,11 +102,7 @@ function parseStringArray(raw: unknown): string[] {
   return raw.filter((s): s is string => typeof s === 'string');
 }
 
-export default async function SkillDetailPage({
-  params,
-}: {
-  params: Promise<{ name: string }>;
-}) {
+export default async function SkillDetailPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: rawName } = await params;
   const name = decodeURIComponent(rawName);
 
@@ -240,11 +236,12 @@ export default async function SkillDetailPage({
   // Resolve the body source per provenance: disk / skills.sh / external all
   // inline the body in their DB cache; the legacy workspace/built-in/override
   // path still flows through `readSkillBody` against the workspace clone.
-  const upstreamBody = isDisk || isSkillsSh
-    ? null
-    : skill.source === 'external-repo'
-      ? skill.body ?? null
-      : await readSkillBody(workspace.repoOwner, workspace.repoName, skill.path);
+  const upstreamBody =
+    isDisk || isSkillsSh
+      ? null
+      : skill.source === 'external-repo'
+        ? (skill.body ?? null)
+        : await readSkillBody(workspace.repoOwner, workspace.repoName, skill.path);
 
   const bindings = (bindingRows ?? []).filter((b) => b.skill_name === skill.name);
   const isOverride = !isDisk && !isSkillsSh && overrideRow !== null;
@@ -252,11 +249,7 @@ export default async function SkillDetailPage({
   // Issue #262 — runtime activation lives in `workspace_skill_states`, not
   // `skill_overrides.enabled`. Use the canonical predicate so the detail page
   // agrees with the catalog, the workflow picker, and the workflow runtime.
-  const enabled = isSkillActive(
-    activation.states.get(skill.name),
-    skill.source,
-    activation.seeded,
-  );
+  const enabled = isSkillActive(activation.states.get(skill.name), skill.source, activation.seeded);
 
   // When an override exists, its body/metadata wins. Otherwise we surface the
   // upstream body and the metadata defaults (which the user can edit and save
@@ -273,13 +266,7 @@ export default async function SkillDetailPage({
           ? overrideRow!.body
           : upstreamBody,
     upstreamBody,
-    source: isDisk
-      ? 'disk'
-      : isSkillsSh
-        ? 'skills-sh'
-        : isOverride
-          ? 'override'
-          : 'repo',
+    source: isDisk ? 'disk' : isSkillsSh ? 'skills-sh' : isOverride ? 'override' : 'repo',
     enabled,
     overrideUpdatedAt: isDisk
       ? uploadedRow!.updated_at

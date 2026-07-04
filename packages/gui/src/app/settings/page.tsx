@@ -29,7 +29,9 @@ async function loadWorkspaceConfig(workspaceId: string): Promise<{
   const supabase = createSupabaseAdminClient();
   const { data } = await supabase
     .from('workspaces')
-    .select('config, auto_triage_enabled, autofix_enabled, separate_comment_per_step, action_auto_comment, sync_mode, sync_interval_minutes, digest_mode, digest_interval_minutes')
+    .select(
+      'config, auto_triage_enabled, autofix_enabled, separate_comment_per_step, action_auto_comment, sync_mode, sync_interval_minutes, digest_mode, digest_interval_minutes',
+    )
     .eq('id', workspaceId)
     .single();
   return {
@@ -61,11 +63,14 @@ async function loadMembers(workspaceId: string) {
 
   const { data: authUsers } = await supabase.auth.admin.listUsers();
   const userMap = new Map(
-    (authUsers?.users ?? []).map((u) => [u.id, {
-      email: u.email ?? '',
-      name: u.user_metadata?.full_name ?? u.user_metadata?.user_name ?? u.email ?? '',
-      avatarUrl: u.user_metadata?.avatar_url ?? '',
-    }]),
+    (authUsers?.users ?? []).map((u) => [
+      u.id,
+      {
+        email: u.email ?? '',
+        name: u.user_metadata?.full_name ?? u.user_metadata?.user_name ?? u.email ?? '',
+        avatarUrl: u.user_metadata?.avatar_url ?? '',
+      },
+    ]),
   );
 
   return (data as MemberRow[]).map((m) => {
@@ -98,7 +103,22 @@ export default async function SettingsPage() {
     );
   }
 
-  const [{ config, autoTriageEnabled, autofixEnabled, separateCommentPerStep, actionAutoComment, syncMode, syncIntervalMinutes, digestMode, digestIntervalMinutes }, members, labelsInitial, acceptedLabels] = await Promise.all([
+  const [
+    {
+      config,
+      autoTriageEnabled,
+      autofixEnabled,
+      separateCommentPerStep,
+      actionAutoComment,
+      syncMode,
+      syncIntervalMinutes,
+      digestMode,
+      digestIntervalMinutes,
+    },
+    members,
+    labelsInitial,
+    acceptedLabels,
+  ] = await Promise.all([
     loadWorkspaceConfig(workspace.id),
     loadMembers(workspace.id),
     loadLabelsInitial(workspace.id),
@@ -183,7 +203,9 @@ async function loadLabelsInitial(workspaceId: string): Promise<{
   const supabase = createSupabaseAdminClient();
   const { data: analyses } = await supabase
     .from('workspace_label_analyses')
-    .select('id, status, started_at, finished_at, result, error, inputs_summary, created_at, updated_at')
+    .select(
+      'id, status, started_at, finished_at, result, error, inputs_summary, created_at, updated_at',
+    )
     .eq('workspace_id', workspaceId)
     .order('created_at', { ascending: false })
     .limit(1);
@@ -201,7 +223,9 @@ async function loadAcceptedLabels(workspaceId: string): Promise<AcceptedLabelRow
   const supabase = createSupabaseAdminClient();
   const { data } = await supabase
     .from('workspace_labels')
-    .select('id, name, scope, color, description, when_to_add, when_to_remove, add_meaning, remove_meaning, exists_on_github, source')
+    .select(
+      'id, name, scope, color, description, when_to_add, when_to_remove, add_meaning, remove_meaning, exists_on_github, source',
+    )
     .eq('workspace_id', workspaceId)
     .order('scope', { ascending: true })
     .order('name', { ascending: true });

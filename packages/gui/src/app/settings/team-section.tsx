@@ -22,7 +22,10 @@ interface TeamSectionProps {
 }
 
 export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProps) {
-  const [inviteState, inviteAction, invitePending] = useActionState<TeamActionState, FormData>(inviteMember, {});
+  const [inviteState, inviteAction, invitePending] = useActionState<TeamActionState, FormData>(
+    inviteMember,
+    {},
+  );
   const router = useRouter();
   const [memberError, setMemberError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -102,7 +105,9 @@ export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProp
                   ) : (
                     <RoleChip role={m.role}>
                       {m.role}
-                      {m.userId === currentUserId && <span className="ml-1 text-outline">· you</span>}
+                      {m.userId === currentUserId && (
+                        <span className="ml-1 text-outline">· you</span>
+                      )}
                     </RoleChip>
                   )}
                 </td>
@@ -125,7 +130,10 @@ export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProp
             ))}
             {members.length === 0 && (
               <tr>
-                <td colSpan={isAdmin ? 3 : 2} className="px-4 py-6 text-center text-sm text-on-surface-variant">
+                <td
+                  colSpan={isAdmin ? 3 : 2}
+                  className="px-4 py-6 text-center text-sm text-on-surface-variant"
+                >
                   No members yet.
                 </td>
               </tr>
@@ -148,7 +156,11 @@ export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProp
             >
               <div className="flex items-center gap-3">
                 {m.avatarUrl ? (
-                  <img src={m.avatarUrl} alt="" className="h-9 w-9 shrink-0 rounded-md object-cover" />
+                  <img
+                    src={m.avatarUrl}
+                    alt=""
+                    className="h-9 w-9 shrink-0 rounded-md object-cover"
+                  />
                 ) : (
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary-container text-xs font-semibold text-primary-on-container">
                     {initialsOf(m.name || m.email)}
@@ -195,7 +207,10 @@ export function TeamSection({ members, isAdmin, currentUserId }: TeamSectionProp
 
       {/* Invite form */}
       {isAdmin && (
-        <form action={inviteAction} className="rounded-md border border-outline-variant bg-surface-container/40 p-4">
+        <form
+          action={inviteAction}
+          className="rounded-md border border-outline-variant bg-surface-container/40 p-4"
+        >
           <div className="mb-3 font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-on-surface-variant">
             Invite a member
           </div>
@@ -267,7 +282,12 @@ function RoleChip({ role, children }: { role: WorkspaceRole; children: React.Rea
         ? 'border-tertiary/30 bg-tertiary/10 text-tertiary'
         : 'border-outline-variant bg-surface-container text-on-surface-variant';
   return (
-    <span className={cn('inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-[11px]', tone)}>
+    <span
+      className={cn(
+        'inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-[11px]',
+        tone,
+      )}
+    >
       {children}
     </span>
   );

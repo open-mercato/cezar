@@ -39,9 +39,9 @@ export function normalizeVerdict(v: ReviewVerdict): Required<ReviewVerdict> {
  * so it doesn't re-enter the analyzer/fixer context on retry.
  */
 export function retryNotesFromVerdict(v: Required<ReviewVerdict>): string {
-  const blockers = v.issues.filter(i => i.severity === 'blocker');
+  const blockers = v.issues.filter((i) => i.severity === 'blocker');
   if (blockers.length === 0) return v.summary;
-  const lines = blockers.map(i => {
+  const lines = blockers.map((i) => {
     const loc = i.file ? `${i.file}${i.line ? `:${i.line}` : ''} — ` : '';
     return `- [blocker] ${loc}${i.comment}`;
   });
@@ -66,21 +66,29 @@ export function fallbackVerdictFromProse(rawText: string): Required<ReviewVerdic
   // around every BLOCKER mention so the fixer sees the actual finding.
   const blockerLines = extractBlockerContext(text);
 
-  const verdict: 'pass' | 'fail' = (mentionsBlocker || !mentionsPass) ? 'fail' : 'pass';
+  const verdict: 'pass' | 'fail' = mentionsBlocker || !mentionsPass ? 'fail' : 'pass';
 
   // Keep the raw prose (truncated) in the summary — that way retryNotesFromVerdict
   // hands real reviewer feedback to the fixer on the next attempt, instead of a
   // generic "reviewer emitted prose" tagline that carries no actionable signal.
-  const proseSnippet = text.length > 2000 ? `${text.slice(0, 2000)}\n[… truncated ${text.length - 2000} chars]` : text;
+  const proseSnippet =
+    text.length > 2000 ? `${text.slice(0, 2000)}\n[… truncated ${text.length - 2000} chars]` : text;
 
   return {
     verdict,
     summary: `Reviewer emitted prose (not JSON). Recovered verdict=${verdict}.\n\nRaw reviewer output:\n${proseSnippet}`,
-    issues: blockerLines.length > 0
-      ? blockerLines.map(comment => ({ severity: 'blocker' as const, comment }))
-      : (verdict === 'fail'
-          ? [{ severity: 'blocker' as const, comment: 'Reviewer output was unstructured; re-verify the fix against the root cause and re-read all files named in the diff to confirm correctness.' }]
-          : []),
+    issues:
+      blockerLines.length > 0
+        ? blockerLines.map((comment) => ({ severity: 'blocker' as const, comment }))
+        : verdict === 'fail'
+          ? [
+              {
+                severity: 'blocker' as const,
+                comment:
+                  'Reviewer output was unstructured; re-verify the fix against the root cause and re-read all files named in the diff to confirm correctness.',
+              },
+            ]
+          : [],
     suggestions: [],
   };
 }
@@ -104,7 +112,8 @@ function extractBlockerContext(text: string): string[] {
       if (inBlockerSection && buffer.length > 0) flush();
       continue;
     }
-    const startsBlockerSection = /\bBLOCKER\b/i.test(line) &&
+    const startsBlockerSection =
+      /\bBLOCKER\b/i.test(line) &&
       (/^#+\s/.test(line) || /^\s*\[?BLOCKER\]?[:\s]/i.test(line) || /\*\*BLOCKER\*\*/i.test(line));
     const startsNewItem = /^\s*(?:[-*]|\d+\.)\s+/.test(line);
 
@@ -170,9 +179,10 @@ export function buildReviewerUserPrompt(opts: {
   diff: string;
   baseBranch: string;
 }): string {
-  const truncatedDiff = opts.diff.length > 60_000
-    ? `${opts.diff.slice(0, 60_000)}\n\n[... diff truncated at 60k chars — read the changed files directly for the rest ...]`
-    : opts.diff;
+  const truncatedDiff =
+    opts.diff.length > 60_000
+      ? `${opts.diff.slice(0, 60_000)}\n\n[... diff truncated at 60k chars — read the changed files directly for the rest ...]`
+      : opts.diff;
 
   // Title and the diff both carry attacker-controlled text (issue title; an
   // injected change could add an "## PHASE:" line). Strip phase markers from

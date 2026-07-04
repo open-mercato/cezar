@@ -57,7 +57,8 @@ export class CodexCliRunner implements AgentRunner {
     // Codex has no per-tool allowlist; make the (coarser) sandbox visible.
     onEvent?.({
       type: 'note',
-      message: 'codex backend has no per-tool allowlist — sandbox = workspace-write within the worktree',
+      message:
+        'codex backend has no per-tool allowlist — sandbox = workspace-write within the worktree',
     });
 
     let child: ChildProcessWithoutNullStreams;
@@ -104,7 +105,10 @@ export class CodexCliRunner implements AgentRunner {
         try {
           evt = JSON.parse(line) as CodexEvent;
         } catch {
-          onEvent?.({ type: 'note', message: `codex: skipped unparseable stream line: ${truncate(line)}` });
+          onEvent?.({
+            type: 'note',
+            message: `codex: skipped unparseable stream line: ${truncate(line)}`,
+          });
           continue;
         }
 
@@ -112,7 +116,10 @@ export class CodexCliRunner implements AgentRunner {
         try {
           delta = handleCodexEvent(evt, { toolCalls, textChunks, onEvent });
         } catch (err) {
-          onEvent?.({ type: 'note', message: `codex: skipped malformed event: ${(err as Error).message}` });
+          onEvent?.({
+            type: 'note',
+            message: `codex: skipped malformed event: ${(err as Error).message}`,
+          });
           continue;
         }
         if (delta > 0) {
@@ -126,7 +133,10 @@ export class CodexCliRunner implements AgentRunner {
             } catch (err) {
               if (err instanceof TokenBudgetExceededError) {
                 budgetExceeded = true;
-                onEvent?.({ type: 'note', message: `token budget exceeded: used ${err.used} of ${err.limit}` });
+                onEvent?.({
+                  type: 'note',
+                  message: `token budget exceeded: used ${err.used} of ${err.limit}`,
+                });
                 await this.interrupt();
                 break;
               }
@@ -247,11 +257,16 @@ interface CodexEvent {
 
 function handleCodexEvent(
   evt: CodexEvent,
-  ctx: { toolCalls: AgentToolCallRecord[]; textChunks: string[]; onEvent?: (e: AgentEvent) => void },
+  ctx: {
+    toolCalls: AgentToolCallRecord[];
+    textChunks: string[];
+    onEvent?: (e: AgentEvent) => void;
+  },
 ): number {
   const inner = evt.msg && typeof evt.msg === 'object' ? evt.msg : evt;
   const type = String((inner as { type?: unknown }).type ?? evt.type ?? '');
-  const get = (k: string): unknown => (inner as Record<string, unknown>)[k] ?? (evt as Record<string, unknown>)[k];
+  const get = (k: string): unknown =>
+    (inner as Record<string, unknown>)[k] ?? (evt as Record<string, unknown>)[k];
 
   switch (type) {
     // Final / streamed assistant message text.
@@ -300,13 +315,20 @@ function handleCodexEvent(
     case 'apply_patch_begin': {
       const id = String(evt.id ?? `codex-patch-${ctx.toolCalls.length}`);
       ctx.toolCalls.push({ id, name: 'Edit', input: get('changes') ?? get('patch') ?? null });
-      ctx.onEvent?.({ type: 'tool-call', id, tool: 'Edit', input: get('changes') ?? get('patch') ?? null });
+      ctx.onEvent?.({
+        type: 'tool-call',
+        id,
+        tool: 'Edit',
+        input: get('changes') ?? get('patch') ?? null,
+      });
       return 0;
     }
 
     case 'token_count':
     case 'token_usage': {
-      const usage = (get('total_token_usage') ?? evt.total_token_usage ?? evt.info?.total_token_usage) as
+      const usage = (get('total_token_usage') ??
+        evt.total_token_usage ??
+        evt.info?.total_token_usage) as
         | { total_tokens?: number; input_tokens?: number; output_tokens?: number }
         | undefined;
       const total = usage?.total_tokens ?? Number(get('total_tokens') ?? 0);
@@ -316,7 +338,10 @@ function handleCodexEvent(
     case 'error':
     case 'stream_error': {
       const m = (get('message') ?? get('error')) as string | undefined;
-      ctx.onEvent?.({ type: 'error', message: m ? `codex: ${m}` : 'codex reported an error event' });
+      ctx.onEvent?.({
+        type: 'error',
+        message: m ? `codex: ${m}` : 'codex reported an error event',
+      });
       return 0;
     }
 

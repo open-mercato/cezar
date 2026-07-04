@@ -62,14 +62,19 @@ export function classifyActivity(state: string): PrLinkActivity {
     s === 'wip' ||
     s === 'wip-conflicts' ||
     s === 'in-review'
-  ) return 'active';
+  )
+    return 'active';
   return 'other';
 }
 
 /** Render a marker comment body. The visible portion is generated from the
  *  same data block so it can't drift out of sync. */
 export function formatMarkerComment(data: PrLinkData): string {
-  const fields: string[] = [`pr_number: ${data.prNumber}`, `pr_url: ${data.prUrl}`, `pr_state: ${data.prState}`];
+  const fields: string[] = [
+    `pr_number: ${data.prNumber}`,
+    `pr_url: ${data.prUrl}`,
+    `pr_state: ${data.prState}`,
+  ];
   if (data.branch) fields.push(`branch: ${data.branch}`);
   if (data.openedAt) fields.push(`opened_at: ${data.openedAt}`);
   if (data.lastEventAt) fields.push(`last_event_at: ${data.lastEventAt}`);

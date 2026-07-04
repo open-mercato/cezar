@@ -28,14 +28,20 @@ export interface SettingsTabsProps {
 type TabId = 'general' | 'automation' | 'labels' | 'team' | 'configuration';
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'general',       label: 'General' },
-  { id: 'automation',    label: 'Automation' },
-  { id: 'labels',        label: 'Labels' },
-  { id: 'team',          label: 'Team' },
+  { id: 'general', label: 'General' },
+  { id: 'automation', label: 'Automation' },
+  { id: 'labels', label: 'Labels' },
+  { id: 'team', label: 'Team' },
   { id: 'configuration', label: 'Configuration' },
 ];
 
-export function SettingsTabs({ workspace, automation, labels, team, configuration }: SettingsTabsProps) {
+export function SettingsTabs({
+  workspace,
+  automation,
+  labels,
+  team,
+  configuration,
+}: SettingsTabsProps) {
   const [active, setActive] = useState<TabId>('general');
   const roleLabel = useMemo(() => workspace.role.toUpperCase(), [workspace.role]);
 
@@ -49,7 +55,9 @@ export function SettingsTabs({ workspace, automation, labels, team, configuratio
               Settings
             </h1>
             <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-on-surface-variant">
-              <span className="font-mono text-on-surface">{workspace.repoOwner}/{workspace.repoName}</span>
+              <span className="font-mono text-on-surface">
+                {workspace.repoOwner}/{workspace.repoName}
+              </span>
               <span className="text-outline">·</span>
               <RoleBadge role={workspace.role}>{roleLabel}</RoleBadge>
               {workspace.role !== 'admin' && (
@@ -151,14 +159,22 @@ function QuickLink({
       <div className="mb-2 flex items-center gap-2 text-on-surface">
         <span className="text-primary">{icon}</span>
         <span className="text-sm font-medium">{title}</span>
-        <span className="ml-auto text-on-surface-variant transition-transform group-hover:translate-x-0.5">→</span>
+        <span className="ml-auto text-on-surface-variant transition-transform group-hover:translate-x-0.5">
+          →
+        </span>
       </div>
       <p className="text-xs leading-relaxed text-on-surface-variant">{body}</p>
     </Link>
   );
 }
 
-function RoleBadge({ role, children }: { role: 'admin' | 'actor' | 'viewer'; children: ReactNode }) {
+function RoleBadge({
+  role,
+  children,
+}: {
+  role: 'admin' | 'actor' | 'viewer';
+  children: ReactNode;
+}) {
   const tone =
     role === 'admin'
       ? 'border-primary/40 bg-primary/10 text-primary'
@@ -200,9 +216,7 @@ export function SettingsCard({
               {title}
             </h2>
           )}
-          {description && (
-            <p className="mt-1 text-sm text-on-surface-variant">{description}</p>
-          )}
+          {description && <p className="mt-1 text-sm text-on-surface-variant">{description}</p>}
         </header>
       )}
       <div className="p-4 lg:px-6 lg:py-5">{children}</div>
@@ -216,13 +230,7 @@ export function SettingsCard({
 }
 
 /** Small caps section sublabel used inside cards (Sync / Autofix / Models / …) */
-export function SettingsSubsection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
+export function SettingsSubsection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="border-t border-outline-variant/40 pt-6 first:border-t-0 first:pt-0">
       <h3 className="mb-4 font-display text-[11px] font-semibold uppercase tracking-[0.05em] text-on-surface-variant">

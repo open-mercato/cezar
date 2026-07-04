@@ -138,7 +138,10 @@ export function ActionRowMenu({
   }, [name, router]);
 
   const doReset = useCallback(() => {
-    if (!window.confirm(`Reset "${name}" to the built-in default? Your customisations will be lost.`)) return;
+    if (
+      !window.confirm(`Reset "${name}" to the built-in default? Your customisations will be lost.`)
+    )
+      return;
     startTransition(async () => {
       const r = await resetBuiltInToDefault(name);
       if (!r.ok) alert(r.error ?? 'Could not reset');
@@ -176,27 +179,69 @@ export function ActionRowMenu({
   // ── menu shape ───────────────────────────────────────────────────────────
   const items: MenuItem[] = [
     { id: 'open', label: 'Open details', href: `/actions/${encodeURIComponent(name)}`, group: 1 },
-    { id: 'run', label: 'Run now…', onSelect: () => setRunNowOpen(true), disabled: readOnly, group: 1 },
-    { id: 'toggle', label: enabled ? 'Disable' : 'Enable', onSelect: doToggle, disabled: readOnly, group: 1 },
+    {
+      id: 'run',
+      label: 'Run now…',
+      onSelect: () => setRunNowOpen(true),
+      disabled: readOnly,
+      group: 1,
+    },
+    {
+      id: 'toggle',
+      label: enabled ? 'Disable' : 'Enable',
+      onSelect: doToggle,
+      disabled: readOnly,
+      group: 1,
+    },
   ];
 
   if (target === 'issue') {
     if (isAutoTriage) {
-      items.push({ id: 'unset-auto-triage', label: 'Unset auto-triage', onSelect: doClearAutoTriage, disabled: readOnly, group: 2 });
+      items.push({
+        id: 'unset-auto-triage',
+        label: 'Unset auto-triage',
+        onSelect: doClearAutoTriage,
+        disabled: readOnly,
+        group: 2,
+      });
     } else {
-      items.push({ id: 'set-auto-triage', label: 'Set as auto-triage', onSelect: doSetAutoTriage, disabled: readOnly, group: 2 });
+      items.push({
+        id: 'set-auto-triage',
+        label: 'Set as auto-triage',
+        onSelect: doSetAutoTriage,
+        disabled: readOnly,
+        group: 2,
+      });
     }
   }
 
   if (kind === 'built-in') {
     if (hasUserOverride) {
-      items.push({ id: 'reset', label: 'Reset to default', onSelect: doReset, disabled: readOnly, group: 3 });
+      items.push({
+        id: 'reset',
+        label: 'Reset to default',
+        onSelect: doReset,
+        disabled: readOnly,
+        group: 3,
+      });
     } else {
-      items.push({ id: 'override', label: 'Override (copy & edit)', onSelect: doOverride, disabled: readOnly, group: 3 });
+      items.push({
+        id: 'override',
+        label: 'Override (copy & edit)',
+        onSelect: doOverride,
+        disabled: readOnly,
+        group: 3,
+      });
     }
   }
 
-  items.push({ id: 'duplicate', label: 'Duplicate', onSelect: doDuplicate, disabled: readOnly, group: 4 });
+  items.push({
+    id: 'duplicate',
+    label: 'Duplicate',
+    onSelect: doDuplicate,
+    disabled: readOnly,
+    group: 4,
+  });
   items.push({ id: 'copy-name', label: 'Copy name', onSelect: doCopyName, group: 5 });
   items.push({
     id: 'delete',
@@ -240,7 +285,9 @@ export function ActionRowMenu({
 
   function menuButtons(): HTMLButtonElement[] {
     return Array.from(
-      popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [],
+      popoverRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]:not([aria-disabled="true"])',
+      ) ?? [],
     );
   }
 
@@ -283,7 +330,9 @@ export function ActionRowMenu({
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (i > 0 && items[i - 1].group !== item.group) {
-      rendered.push(<div key={`sep-${i}`} className="my-1 h-px bg-outline-variant/60" aria-hidden />);
+      rendered.push(
+        <div key={`sep-${i}`} className="my-1 h-px bg-outline-variant/60" aria-hidden />,
+      );
     }
     rendered.push(
       <button
@@ -323,12 +372,7 @@ export function ActionRowMenu({
         <MoreVerticalIcon className="h-4 w-4" />
       </button>
       {coarse ? (
-        <ActionSheet
-          open={open}
-          onClose={() => setOpen(false)}
-          items={sheetItems}
-          title={name}
-        />
+        <ActionSheet open={open} onClose={() => setOpen(false)} items={sheetItems} title={name} />
       ) : (
         <RowMenuPortal
           open={open}

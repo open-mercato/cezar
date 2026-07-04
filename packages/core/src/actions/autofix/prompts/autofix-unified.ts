@@ -1,4 +1,9 @@
-import { ANALYZER_SYSTEM_PROMPT, RootCauseSchema, NoActionNeededSchema, AnalyzerResultSchema } from './analyzer.js';
+import {
+  ANALYZER_SYSTEM_PROMPT,
+  RootCauseSchema,
+  NoActionNeededSchema,
+  AnalyzerResultSchema,
+} from './analyzer.js';
 import { FIXER_SYSTEM_PROMPT, FixReportSchema } from './fixer.js';
 import { REVIEWER_SYSTEM_PROMPT, ReviewVerdictSchema } from './reviewer.js';
 import { AGENT_EXECUTION_GUIDANCE } from './agent-guidance.js';
@@ -35,15 +40,21 @@ ${verifyBody()}
 
 ## Phase 2: ANALYZER
 
-${ANALYZER_SYSTEM_PROMPT.replace(/^You are the ANALYZER agent\.[^\n]*\n+/i, '').replace(new RegExp(escape(AGENT_EXECUTION_GUIDANCE) + '$'), '').trim()}
+${ANALYZER_SYSTEM_PROMPT.replace(/^You are the ANALYZER agent\.[^\n]*\n+/i, '')
+  .replace(new RegExp(escape(AGENT_EXECUTION_GUIDANCE) + '$'), '')
+  .trim()}
 
 ## Phase 3: FIXER
 
-${FIXER_SYSTEM_PROMPT.replace(/^You are the FIXER agent\.[^\n]*\n+/i, '').replace(new RegExp(escape(AGENT_EXECUTION_GUIDANCE) + '$'), '').trim()}
+${FIXER_SYSTEM_PROMPT.replace(/^You are the FIXER agent\.[^\n]*\n+/i, '')
+  .replace(new RegExp(escape(AGENT_EXECUTION_GUIDANCE) + '$'), '')
+  .trim()}
 
 ## Phase 4: REVIEWER
 
-${REVIEWER_SYSTEM_PROMPT.replace(/^You are the REVIEWER agent\.[^\n]*\n+/i, '').replace(new RegExp(escape(AGENT_EXECUTION_GUIDANCE) + '$'), '').trim()}
+${REVIEWER_SYSTEM_PROMPT.replace(/^You are the REVIEWER agent\.[^\n]*\n+/i, '')
+  .replace(new RegExp(escape(AGENT_EXECUTION_GUIDANCE) + '$'), '')
+  .trim()}
 
 ${AGENT_EXECUTION_GUIDANCE}`;
 
@@ -54,14 +65,14 @@ ${AGENT_EXECUTION_GUIDANCE}`;
  */
 export const PHASE_SCHEMAS = {
   'verify-in-repo': null, // verify schema lives in the workflow def; not exported here
-  'analyzer': AnalyzerResultSchema,
-  'fixer': FixReportSchema,
-  'reviewer': ReviewVerdictSchema,
+  analyzer: AnalyzerResultSchema,
+  fixer: FixReportSchema,
+  reviewer: ReviewVerdictSchema,
 } as const;
 
 /** The four canonical phase markers, in order. */
 export const PHASES = ['verify-in-repo', 'analyzer', 'fixer', 'reviewer'] as const;
-export type PhaseName = typeof PHASES[number];
+export type PhaseName = (typeof PHASES)[number];
 
 /** Format a user-facing phase marker the model recognises. */
 export function phaseMarker(phase: PhaseName, payload: string): string {

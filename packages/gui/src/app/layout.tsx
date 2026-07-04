@@ -35,10 +35,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     );
   }
 
-  const [workspace, workspaces] = await Promise.all([
-    getActiveWorkspace(),
-    listWorkspaces(),
-  ]);
+  const [workspace, workspaces] = await Promise.all([getActiveWorkspace(), listWorkspaces()]);
 
   // Initial sync_status + sync_mode for the active workspace so the header dot
   // is correct on first paint; the client subscription keeps the status live
@@ -59,12 +56,21 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   if (workspace) {
     const supabase = createSupabaseAdminClient();
     const [{ data: status }, { data: ws }] = await Promise.all([
-      supabase.from('sync_status').select('*').eq('workspace_id', workspace.id).maybeSingle<SyncStatusRow>(),
+      supabase
+        .from('sync_status')
+        .select('*')
+        .eq('workspace_id', workspace.id)
+        .maybeSingle<SyncStatusRow>(),
       supabase
         .from('workspaces')
         .select('sync_mode, sync_interval_minutes, installation_id, last_webhook_received_at')
         .eq('id', workspace.id)
-        .maybeSingle<{ sync_mode: 'auto' | 'manual'; sync_interval_minutes: number | null; installation_id: number | null; last_webhook_received_at: string | null }>(),
+        .maybeSingle<{
+          sync_mode: 'auto' | 'manual';
+          sync_interval_minutes: number | null;
+          installation_id: number | null;
+          last_webhook_received_at: string | null;
+        }>(),
     ]);
     initialSyncStatus = status ?? null;
     syncMode = ws?.sync_mode ?? 'auto';

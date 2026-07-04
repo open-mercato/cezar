@@ -201,7 +201,10 @@ export function UploadModal({ open, onClose }: Props) {
             {files.length > 0 && (
               <ul className="max-h-40 overflow-auto rounded-md border border-outline-variant divide-y divide-outline-variant/50">
                 {files.map((file, idx) => (
-                  <li key={`${file.name}-${idx}`} className="flex items-center justify-between px-3 py-2 text-xs">
+                  <li
+                    key={`${file.name}-${idx}`}
+                    className="flex items-center justify-between px-3 py-2 text-xs"
+                  >
                     <span className="truncate font-mono text-on-surface">{file.name}</span>
                     <button
                       type="button"
@@ -215,9 +218,7 @@ export function UploadModal({ open, onClose }: Props) {
               </ul>
             )}
 
-            {filesResult && (
-              <ResultSummary summary={filesResult} />
-            )}
+            {filesResult && <ResultSummary summary={filesResult} />}
 
             <footer className="flex items-center justify-end gap-2">
               <button
@@ -260,7 +261,9 @@ export function UploadModal({ open, onClose }: Props) {
               <textarea
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
-                placeholder={'---\nname: my-skill\ndescription: …\ncezar-stages: [bug-detector]\n---\n\n# …'}
+                placeholder={
+                  '---\nname: my-skill\ndescription: …\ncezar-stages: [bug-detector]\n---\n\n# …'
+                }
                 className="mt-1 h-48 w-full rounded-md border border-outline-variant bg-surface p-2 font-mono text-xs text-on-surface focus:border-primary focus:outline-none"
               />
             </label>

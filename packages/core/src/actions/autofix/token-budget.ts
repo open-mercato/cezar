@@ -1,5 +1,8 @@
 export class TokenBudgetExceededError extends Error {
-  constructor(public readonly used: number, public readonly limit: number) {
+  constructor(
+    public readonly used: number,
+    public readonly limit: number,
+  ) {
     super(`Token budget exceeded: used ${used} of ${limit}`);
     this.name = 'TokenBudgetExceededError';
   }

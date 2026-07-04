@@ -49,7 +49,8 @@ export async function startLabelAnalysis(): Promise<StartLabelAnalysisResult> {
     })
     .select('id')
     .single();
-  if (aErr || !analysis) return { ok: false, error: aErr?.message ?? 'failed to create analysis row' };
+  if (aErr || !analysis)
+    return { ok: false, error: aErr?.message ?? 'failed to create analysis row' };
 
   const { error: jErr } = await supabase.from('jobs').insert({
     workspace_id: workspace.id,
@@ -78,7 +79,11 @@ export async function startLabelAnalysis(): Promise<StartLabelAnalysisResult> {
  * workspace. Marks both the analysis row and its job as `cancelled`.
  * Idempotent — no-op if nothing is in flight.
  */
-export async function cancelLabelAnalysis(): Promise<{ ok: boolean; cancelled: number; error?: string }> {
+export async function cancelLabelAnalysis(): Promise<{
+  ok: boolean;
+  cancelled: number;
+  error?: string;
+}> {
   const workspace = await getActiveWorkspace();
   if (!workspace) return { ok: false, cancelled: 0, error: 'No active workspace' };
   if (workspace.role !== 'admin') return { ok: false, cancelled: 0, error: 'Admin role required' };
@@ -130,7 +135,10 @@ export async function clearWorkspaceLabels(): Promise<{ ok: boolean; error?: str
   if (!workspace) return { ok: false, error: 'No active workspace' };
   if (workspace.role !== 'admin') return { ok: false, error: 'Admin role required' };
   const supabase = createSupabaseAdminClient();
-  const { error } = await supabase.from('workspace_labels').delete().eq('workspace_id', workspace.id);
+  const { error } = await supabase
+    .from('workspace_labels')
+    .delete()
+    .eq('workspace_id', workspace.id);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/settings');
   return { ok: true };

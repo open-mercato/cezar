@@ -23,9 +23,19 @@ function makeConfig(): Config {
     llm: { model: 'claude-sonnet-4-20250514', maxTokens: 4096, apiKey: 'sk-ant-test123' },
     store: { path: '.issue-store' },
     sync: {
-      digestBatchSize: 20, duplicateBatchSize: 30, minDuplicateConfidence: 0.80, includeClosed: false,
-      labelBatchSize: 20, missingInfoBatchSize: 15, recurringBatchSize: 15,
-      priorityBatchSize: 20, securityBatchSize: 20, staleDaysThreshold: 90, staleCloseDays: 14, doneDetectorBatchSize: 10, needsResponseBatchSize: 15,
+      digestBatchSize: 20,
+      duplicateBatchSize: 30,
+      minDuplicateConfidence: 0.8,
+      includeClosed: false,
+      labelBatchSize: 20,
+      missingInfoBatchSize: 15,
+      recurringBatchSize: 15,
+      priorityBatchSize: 20,
+      securityBatchSize: 20,
+      staleDaysThreshold: 90,
+      staleCloseDays: 14,
+      doneDetectorBatchSize: 10,
+      needsResponseBatchSize: 15,
     },
   };
 }
@@ -44,13 +54,15 @@ function makeStoredIssue(number: number, digest = true): StoredIssue {
     contentHash: 'abc123',
     commentCount: 0,
     reactions: 0,
-    digest: digest ? {
-      summary: `Summary for issue ${number}`,
-      category: 'bug',
-      affectedArea: 'core',
-      keywords: ['test'],
-      digestedAt: '2024-01-01T00:00:00Z',
-    } : null,
+    digest: digest
+      ? {
+          summary: `Summary for issue ${number}`,
+          category: 'bug',
+          affectedArea: 'core',
+          keywords: ['test'],
+          digestedAt: '2024-01-01T00:00:00Z',
+        }
+      : null,
     analysis: {
       duplicateOf: null,
       duplicateConfidence: null,
@@ -107,18 +119,22 @@ describe('LLMService', () => {
   describe('generateDigests', () => {
     it('parses valid digest response', async () => {
       mockCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            digests: [{
-              number: 1,
-              summary: 'Login page crashes',
-              category: 'bug',
-              affectedArea: 'auth',
-              keywords: ['login', 'crash'],
-            }],
-          }),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              digests: [
+                {
+                  number: 1,
+                  summary: 'Login page crashes',
+                  category: 'bug',
+                  affectedArea: 'auth',
+                  keywords: ['login', 'crash'],
+                },
+              ],
+            }),
+          },
+        ],
       });
 
       const service = new LLMService(makeConfig());
@@ -136,10 +152,12 @@ describe('LLMService', () => {
 
     it('handles markdown-wrapped JSON', async () => {
       mockCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: '```json\n{"digests":[{"number":1,"summary":"test","category":"bug","affectedArea":"core","keywords":["a"]}]}\n```',
-        }],
+        content: [
+          {
+            type: 'text',
+            text: '```json\n{"digests":[{"number":1,"summary":"test","category":"bug","affectedArea":"core","keywords":["a"]}]}\n```',
+          },
+        ],
       });
 
       const service = new LLMService(makeConfig());
@@ -165,18 +183,22 @@ describe('LLMService', () => {
 
     it('batches issues correctly', async () => {
       mockCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            digests: [{
-              number: 1,
-              summary: 'test',
-              category: 'bug',
-              affectedArea: 'core',
-              keywords: ['a'],
-            }],
-          }),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              digests: [
+                {
+                  number: 1,
+                  summary: 'test',
+                  category: 'bug',
+                  affectedArea: 'core',
+                  keywords: ['a'],
+                },
+              ],
+            }),
+          },
+        ],
       });
 
       const service = new LLMService(makeConfig());
@@ -198,19 +220,30 @@ describe('LLMService', () => {
       try {
         const rateLimited: any = new Error('rate limited');
         rateLimited.status = 429;
-        mockCreate
-          .mockRejectedValueOnce(rateLimited)
-          .mockResolvedValueOnce({
-            content: [{
+        mockCreate.mockRejectedValueOnce(rateLimited).mockResolvedValueOnce({
+          content: [
+            {
               type: 'text',
               text: JSON.stringify({
-                digests: [{ number: 1, summary: 'ok', category: 'bug', affectedArea: 'core', keywords: ['a'] }],
+                digests: [
+                  {
+                    number: 1,
+                    summary: 'ok',
+                    category: 'bug',
+                    affectedArea: 'core',
+                    keywords: ['a'],
+                  },
+                ],
               }),
-            }],
-          });
+            },
+          ],
+        });
 
         const service = new LLMService(makeConfig());
-        const promise = service.generateDigests([{ number: 1, title: 'Issue 1', body: 'Body 1' }], 20);
+        const promise = service.generateDigests(
+          [{ number: 1, title: 'Issue 1', body: 'Body 1' }],
+          20,
+        );
         await vi.runAllTimersAsync();
         const result = await promise;
 
@@ -241,7 +274,10 @@ describe('LLMService', () => {
         mockCreate.mockRejectedValue(overloaded);
 
         const service = new LLMService(makeConfig());
-        const promise = service.generateDigests([{ number: 1, title: 'Issue 1', body: 'Body 1' }], 20);
+        const promise = service.generateDigests(
+          [{ number: 1, title: 'Issue 1', body: 'Body 1' }],
+          20,
+        );
         const assertion = expect(promise).rejects.toThrow('overloaded');
         await vi.runAllTimersAsync();
         await assertion;
@@ -257,17 +293,21 @@ describe('LLMService', () => {
   describe('detectDuplicates', () => {
     it('parses valid duplicate response', async () => {
       mockCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            duplicates: [{
-              number: 5,
-              duplicateOf: 2,
-              confidence: 0.95,
-              reason: 'Both describe the same login bug',
-            }],
-          }),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              duplicates: [
+                {
+                  number: 5,
+                  duplicateOf: 2,
+                  confidence: 0.95,
+                  reason: 'Both describe the same login bug',
+                },
+              ],
+            }),
+          },
+        ],
       });
 
       const service = new LLMService(makeConfig());
@@ -283,17 +323,16 @@ describe('LLMService', () => {
 
     it('returns empty array when no duplicates found', async () => {
       mockCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ duplicates: [] }),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ duplicates: [] }),
+          },
+        ],
       });
 
       const service = new LLMService(makeConfig());
-      const result = await service.detectDuplicates(
-        [makeStoredIssue(5)],
-        [makeStoredIssue(1)],
-      );
+      const result = await service.detectDuplicates([makeStoredIssue(5)], [makeStoredIssue(1)]);
       expect(result).toEqual([]);
     });
 
@@ -303,10 +342,7 @@ describe('LLMService', () => {
       });
 
       const service = new LLMService(makeConfig());
-      const result = await service.detectDuplicates(
-        [makeStoredIssue(5)],
-        [makeStoredIssue(1)],
-      );
+      const result = await service.detectDuplicates([makeStoredIssue(5)], [makeStoredIssue(1)]);
       expect(result).toEqual([]);
     });
   });

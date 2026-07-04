@@ -62,7 +62,14 @@ export interface ClaimedJob {
 
 /** One streamed event the runner POSTs back to `/api/runner/runs/:id/events`. */
 export interface RunnerEvent {
-  type: 'lifecycle' | 'agent-text' | 'tool-call' | 'tool-result' | 'note' | 'step-start' | 'step-end';
+  type:
+    | 'lifecycle'
+    | 'agent-text'
+    | 'tool-call'
+    | 'tool-result'
+    | 'note'
+    | 'step-start'
+    | 'step-end';
   payload: unknown;
   /** Step lifecycle (`step-start`/`step-end`) carries these so the SaaS can
    * upsert an `agent_runs` row + advance `workflow_runs.current_step_id`. */
@@ -89,7 +96,15 @@ export interface RunnerEvent {
 }
 
 export interface FinalizeRunBody {
-  status: 'succeeded' | 'failed' | 'paused' | 'cancelled' | 'dry-run' | 'pr-opened' | 'pushed' | 'skipped';
+  status:
+    | 'succeeded'
+    | 'failed'
+    | 'paused'
+    | 'cancelled'
+    | 'dry-run'
+    | 'pr-opened'
+    | 'pushed'
+    | 'skipped';
   outcome?: unknown;
   prUrl?: string | null;
   prNumber?: number | null;
@@ -172,7 +187,10 @@ const MAX_RETRIES = 4;
 /** Thin bearer-authed HTTP client for the SaaS runner API. Retries 5xx/network
  * with exponential backoff; throws hard on 401 (bad/revoked token). */
 export class RunnerClient {
-  constructor(private readonly baseUrl: string, private readonly token: string) {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly token: string,
+  ) {
     // Refuse to send the long-lived runner bearer token over a non-TLS
     // transport. A prod typo (`http://…`) or a local-dev URL pasted into a
     // deployment would otherwise leak the credential in plaintext on every
@@ -211,13 +229,19 @@ export class RunnerClient {
     // get the default `request` timeout.
     const timeoutMs = opts.wait && opts.wait > 0 ? (opts.wait + 5) * 1000 : undefined;
     try {
-      const body = await this.request<{ job: null } | ClaimedJob>('GET', `/api/runner/jobs${qs ? `?${qs}` : ''}`, undefined, { timeoutMs });
+      const body = await this.request<{ job: null } | ClaimedJob>(
+        'GET',
+        `/api/runner/jobs${qs ? `?${qs}` : ''}`,
+        undefined,
+        { timeoutMs },
+      );
       if (!body || (body as { job: null }).job === null) return null;
       return body as ClaimedJob;
     } catch (err) {
       // AbortError from the long-poll timeout slack expiring is benign — same
       // outcome as "no claim, try again". The caller (daemon) will pump again.
-      if (err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'))) return null;
+      if (err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted')))
+        return null;
       throw err;
     }
   }
@@ -248,9 +272,8 @@ export class RunnerClient {
       // socket goes silent. The route's wait cap is 25s; we add 5s of
       // slack so a hit on the last beat still lands.
       const controller = opts.timeoutMs ? new AbortController() : null;
-      const abortTimer = controller && opts.timeoutMs
-        ? setTimeout(() => controller.abort(), opts.timeoutMs)
-        : null;
+      const abortTimer =
+        controller && opts.timeoutMs ? setTimeout(() => controller.abort(), opts.timeoutMs) : null;
       try {
         const res = await fetch(url, {
           method,
@@ -261,9 +284,11 @@ export class RunnerClient {
           body: body !== undefined ? JSON.stringify(body) : undefined,
           signal: controller?.signal,
         });
-        if (res.status === 401) throw new Error(`runner token rejected (401) for ${method} ${path}`);
+        if (res.status === 401)
+          throw new Error(`runner token rejected (401) for ${method} ${path}`);
         if (res.status >= 500) throw new RetryableError(`${method} ${path} → ${res.status}`);
-        if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${await res.text().catch(() => '')}`);
+        if (!res.ok)
+          throw new Error(`${method} ${path} → ${res.status}: ${await res.text().catch(() => '')}`);
         const text = await res.text();
         return (text ? JSON.parse(text) : undefined) as T;
       } catch (err) {

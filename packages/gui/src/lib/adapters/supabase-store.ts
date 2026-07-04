@@ -23,7 +23,11 @@ export class SupabaseStoreAdapter implements StorePort {
   async load(): Promise<Store> {
     const [{ data: ws, error: wsErr }, { data: issues, error: issuesErr }] = await Promise.all([
       this.supabase.from('workspaces').select('*').eq('id', this.workspaceId).single(),
-      this.supabase.from('issues').select('*').eq('workspace_id', this.workspaceId).order('number', { ascending: false }),
+      this.supabase
+        .from('issues')
+        .select('*')
+        .eq('workspace_id', this.workspaceId)
+        .order('number', { ascending: false }),
     ]);
 
     if (wsErr) throw new Error(`Workspace load failed: ${wsErr.message}`);
@@ -101,7 +105,10 @@ function rowToIssue(row: IssueRow): StoredIssue {
   };
 }
 
-function issueToRow(issue: StoredIssue, workspaceId: string): Database['public']['Tables']['issues']['Insert'] {
+function issueToRow(
+  issue: StoredIssue,
+  workspaceId: string,
+): Database['public']['Tables']['issues']['Insert'] {
   return {
     workspace_id: workspaceId,
     number: issue.number,

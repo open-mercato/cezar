@@ -56,11 +56,14 @@ async function loadPendingRow(id: string, workspaceId: string): Promise<Decision
 // Acquiring a GitHub token + building GitHubService is non-trivial, so we
 // memoise it per-invocation (constructed once for a batch of accepts).
 // ─────────────────────────────────────────────────────────────────────
-async function buildEffectContext(workspace: {
-  id: string;
-  repoOwner: string;
-  repoName: string;
-}, user: { githubToken?: string | null }) {
+async function buildEffectContext(
+  workspace: {
+    id: string;
+    repoOwner: string;
+    repoName: string;
+  },
+  user: { githubToken?: string | null },
+) {
   let githubToken: string | null = null;
   if (core.GitHubAppService.isConfigured()) {
     try {

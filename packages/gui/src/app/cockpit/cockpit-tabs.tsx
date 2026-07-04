@@ -21,14 +21,26 @@ export function CockpitTabs() {
   return (
     <div className="border-b border-border bg-bg">
       <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap px-4 pt-4 sm:px-6 lg:px-8">
-        <TabLink href="/cockpit" active={!isRunners}>Runs</TabLink>
-        <TabLink href="/cockpit/runners" active={isRunners}>Runners</TabLink>
+        <TabLink href="/cockpit" active={!isRunners}>
+          Runs
+        </TabLink>
+        <TabLink href="/cockpit/runners" active={isRunners}>
+          Runners
+        </TabLink>
       </div>
     </div>
   );
 }
 
-function TabLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
+function TabLink({
+  href,
+  active,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <Link
       href={href}

@@ -8,13 +8,15 @@ import type { StoredIssue } from '../../store/store.model.js';
  */
 
 export const DoneDetectorResponseSchema = z.object({
-  results: z.array(z.object({
-    number: z.number(),
-    isDone: z.boolean(),
-    confidence: z.number().min(0).max(1),
-    reason: z.string(),
-    draftComment: z.string(),
-  })),
+  results: z.array(
+    z.object({
+      number: z.number(),
+      isDone: z.boolean(),
+      confidence: z.number().min(0).max(1),
+      reason: z.string(),
+      draftComment: z.string(),
+    }),
+  ),
 });
 
 export type DoneDetectorResponse = z.infer<typeof DoneDetectorResponseSchema>;
@@ -62,9 +64,7 @@ function formatCandidate(candidate: IssueWithPRs): string {
   const { issue, mergedPRs } = candidate;
   const d = issue.digest!;
   const labels = issue.labels.length > 0 ? ` [${issue.labels.join(', ')}]` : '';
-  const prList = mergedPRs
-    .map(pr => `  - PR #${pr.prNumber}: ${pr.prTitle}`)
-    .join('\n');
+  const prList = mergedPRs.map((pr) => `  - PR #${pr.prNumber}: ${pr.prTitle}`).join('\n');
 
   return `#${issue.number}${labels} — ${issue.title}
 Category: ${d.category} | Area: ${d.affectedArea}

@@ -74,14 +74,19 @@ export function buildAnalyzerUserPrompt(opts: {
   // usually subsumed by the body — the latest discussion is where the
   // additional signal lives).
   const recentComments = opts.comments.slice(-MAX_COMMENTS);
-  const commentCountNote = opts.comments.length > MAX_COMMENTS
-    ? `\n[… ${opts.comments.length - MAX_COMMENTS} older comment(s) omitted]`
-    : '';
-  const comments = recentComments.length > 0
-    ? recentComments
-        .map(c => `${fenceUntrusted('COMMENT', `@${c.author} (${c.createdAt}):\n${truncate(c.body, COMMENT_MAX_CHARS)}`)}`)
-        .join('\n\n---\n\n') + commentCountNote
-    : '(no comments)';
+  const commentCountNote =
+    opts.comments.length > MAX_COMMENTS
+      ? `\n[… ${opts.comments.length - MAX_COMMENTS} older comment(s) omitted]`
+      : '';
+  const comments =
+    recentComments.length > 0
+      ? recentComments
+          .map(
+            (c) =>
+              `${fenceUntrusted('COMMENT', `@${c.author} (${c.createdAt}):\n${truncate(c.body, COMMENT_MAX_CHARS)}`)}`,
+          )
+          .join('\n\n---\n\n') + commentCountNote
+      : '(no comments)';
 
   const digestSection = opts.digest
     ? `\n\nDIGEST (pre-computed by cezar — use as a starting hint; do not re-derive):
