@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import {
-  buildOpenIssuesContextProviders,
-  digestSummary,
-} from '../src/lib/open-issues-context';
+import { buildOpenIssuesContextProviders, digestSummary } from '../src/lib/open-issues-context';
 import type { Database, Json } from '../src/lib/supabase/types';
 
 interface IssueRow {
@@ -121,7 +118,9 @@ describe('buildOpenIssuesContextProviders', () => {
     } as unknown as SupabaseClient<Database>;
 
     const providers = buildOpenIssuesContextProviders(failingClient, WS, TARGET);
-    await expect(providers['open-issues']()).rejects.toThrow(/open-issues context query failed: kb boom/);
+    await expect(providers['open-issues']()).rejects.toThrow(
+      /open-issues context query failed: kb boom/,
+    );
   });
 });
 
