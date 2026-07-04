@@ -49,7 +49,12 @@ const EMPTY_FORM: FormValues = {
   folder: '.ai/skills',
 };
 
-export function ExternalSourcesSection({ sources, readOnly, addModalOpen, onCloseAddModal }: Props) {
+export function ExternalSourcesSection({
+  sources,
+  readOnly,
+  addModalOpen,
+  onCloseAddModal,
+}: Props) {
   const [editing, setEditing] = useState<ExternalRepoSourceRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -82,8 +87,8 @@ export function ExternalSourcesSection({ sources, readOnly, addModalOpen, onClos
         <div>
           <h2 className="text-sm font-semibold text-on-surface">External skill sources</h2>
           <p className="mt-0.5 text-xs text-on-surface-variant">
-            Pull skills from any GitHub repo. Synced manually — bodies are cached so dispatch
-            works without a local clone.
+            Pull skills from any GitHub repo. Synced manually — bodies are cached so dispatch works
+            without a local clone.
           </p>
         </div>
       </header>
@@ -97,7 +102,8 @@ export function ExternalSourcesSection({ sources, readOnly, addModalOpen, onClos
       {sources.length === 0 ? (
         <div className="rounded-md border border-dashed border-outline-variant px-3 py-6 text-center text-xs text-on-surface-variant">
           No external sources yet. Use{' '}
-          <span className="font-mono text-on-surface">Add skill source → Another repo</span> to add one.
+          <span className="font-mono text-on-surface">Add skill source → Another repo</span> to add
+          one.
         </div>
       ) : (
         <ul className="divide-y divide-outline-variant/50 rounded-md border border-outline-variant">
@@ -114,7 +120,9 @@ export function ExternalSourcesSection({ sources, readOnly, addModalOpen, onClos
                 <div className="mt-0.5 text-[11px] text-on-surface-variant">
                   {s.skillCount} skill{s.skillCount === 1 ? '' : 's'}
                   {' · '}
-                  {s.lastSyncedAt ? `last synced ${formatTimestamp(s.lastSyncedAt)}` : 'never synced'}
+                  {s.lastSyncedAt
+                    ? `last synced ${formatTimestamp(s.lastSyncedAt)}`
+                    : 'never synced'}
                   {s.lastSyncError && (
                     <span className="ml-2 text-amber-300/90">⚠ {s.lastSyncError}</span>
                   )}

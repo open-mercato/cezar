@@ -24,9 +24,19 @@ export async function detectBackends(): Promise<BackendCheck[]> {
     versionRegex: RegExp;
   }> = [
     // The Anthropic Claude CLI prints e.g. `claude version 1.0.13` (or `claude code version …`).
-    { backend: 'claude-cli', binary: 'claude', loginCmd: 'claude login', versionRegex: /^claude(\s+code)?\s+version\s+\d+\.\d+/i },
+    {
+      backend: 'claude-cli',
+      binary: 'claude',
+      loginCmd: 'claude login',
+      versionRegex: /^claude(\s+code)?\s+version\s+\d+\.\d+/i,
+    },
     // The Codex CLI prints e.g. `codex 0.4.2`.
-    { backend: 'codex-cli', binary: 'codex', loginCmd: 'codex login', versionRegex: /^codex\s+\d+\.\d+/i },
+    {
+      backend: 'codex-cli',
+      binary: 'codex',
+      loginCmd: 'codex login',
+      versionRegex: /^codex\s+\d+\.\d+/i,
+    },
   ];
   return Promise.all(
     probes.map(async ({ backend, binary, loginCmd, versionRegex }) => {
@@ -44,9 +54,20 @@ export async function detectBackends(): Promise<BackendCheck[]> {
             hint: `\`${binary}\` is on PATH but doesn't look like the expected CLI (got: ${version.slice(0, 80)})`,
           };
         }
-        return { backend, binary, available: true, version, hint: `if not authenticated, run \`${loginCmd}\`` };
+        return {
+          backend,
+          binary,
+          available: true,
+          version,
+          hint: `if not authenticated, run \`${loginCmd}\``,
+        };
       } catch {
-        return { backend, binary, available: false, hint: `install the \`${binary}\` CLI and run \`${loginCmd}\`` };
+        return {
+          backend,
+          binary,
+          available: false,
+          hint: `install the \`${binary}\` CLI and run \`${loginCmd}\``,
+        };
       }
     }),
   );

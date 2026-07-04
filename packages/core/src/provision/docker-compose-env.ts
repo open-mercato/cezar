@@ -92,10 +92,14 @@ export class DockerComposeEnv implements RunEnv {
     const { compose, project, worktreePath, composeFile } = this.opts;
     return [
       ...compose.lead,
-      '-p', project,
-      '--project-directory', worktreePath,
-      '-f', composeFile,
-      '-f', this.overrideFile!,
+      '-p',
+      project,
+      '--project-directory',
+      worktreePath,
+      '-f',
+      composeFile,
+      '-f',
+      this.overrideFile!,
     ];
   }
 
@@ -107,11 +111,15 @@ export class DockerComposeEnv implements RunEnv {
     }
     const args = [
       ...this.baseArgs(),
-      'run', '--rm',
-      '-w', this.opts.workdir,
+      'run',
+      '--rm',
+      '-w',
+      this.opts.workdir,
       ...envFlags,
       this.opts.service,
-      'sh', '-lc', command,
+      'sh',
+      '-lc',
+      command,
     ];
     return spawnCapture(this.opts.compose.bin, args, command, onLine);
   }
@@ -120,7 +128,10 @@ export class DockerComposeEnv implements RunEnv {
     if (this.devHandle) return this.devHandle;
     const ds = this.opts.spec.devServer;
     if (!ds.enabled) return null;
-    if (!ds.port) throw new Error('projectEnv.devServer.port (the container port) is required for the compose dev server');
+    if (!ds.port)
+      throw new Error(
+        'projectEnv.devServer.port (the container port) is required for the compose dev server',
+      );
     await this.ensureOverride();
 
     const up = await spawnCapture(
@@ -129,7 +140,10 @@ export class DockerComposeEnv implements RunEnv {
       'compose up -d',
       onLine,
     );
-    if (!up.ok) throw new Error(`compose up failed (exit ${up.exitCode}): ${up.stderr.split('\n').slice(-3).join(' ')}`);
+    if (!up.ok)
+      throw new Error(
+        `compose up failed (exit ${up.exitCode}): ${up.stderr.split('\n').slice(-3).join(' ')}`,
+      );
 
     // Ask compose which host port the container port got published to.
     const portOut = await spawnCapture(
@@ -138,7 +152,10 @@ export class DockerComposeEnv implements RunEnv {
       'compose port',
     );
     const hostPort = parseHostPort(portOut.stdout);
-    if (!hostPort) throw new Error(`could not resolve the published host port for ${this.opts.service}:${ds.port}`);
+    if (!hostPort)
+      throw new Error(
+        `could not resolve the published host port for ${this.opts.service}:${ds.port}`,
+      );
 
     const url = `http://127.0.0.1:${hostPort}`;
     const status = await waitForHttp(`${url}${ds.readyPath}`, ds.readyTimeoutSec * 1000);
@@ -147,7 +164,11 @@ export class DockerComposeEnv implements RunEnv {
       url,
       ready: status != null,
       stop: async () => {
-        await spawnCapture(this.opts.compose.bin, [...this.baseArgs(), 'stop', this.opts.service], 'compose stop').catch(() => {});
+        await spawnCapture(
+          this.opts.compose.bin,
+          [...this.baseArgs(), 'stop', this.opts.service],
+          'compose stop',
+        ).catch(() => {});
         this.devHandle = null;
       },
     };
@@ -158,7 +179,11 @@ export class DockerComposeEnv implements RunEnv {
     this.devHandle = null; // `down -v` below stops everything anyway
     if (this.setupPromise) {
       try {
-        await spawnCapture(this.opts.compose.bin, [...this.baseArgs(), 'down', '-v', '--remove-orphans'], 'compose down');
+        await spawnCapture(
+          this.opts.compose.bin,
+          [...this.baseArgs(), 'down', '-v', '--remove-orphans'],
+          'compose down',
+        );
       } catch {
         // best-effort teardown
       }
@@ -183,7 +208,10 @@ export function yamlString(s: string): string {
 
 /** Parse `docker compose port` output (e.g. `0.0.0.0:54213` / `[::]:54213`) → the host port. */
 export function parseHostPort(out: string): number | null {
-  for (const line of out.split('\n').map((l) => l.trim()).filter(Boolean)) {
+  for (const line of out
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)) {
     const m = line.match(/:(\d+)\s*$/);
     if (m) return Number(m[1]);
   }
@@ -202,24 +230,40 @@ export function spawnCapture(
     const child = spawn(bin, args, { env: process.env });
     let stdout = '';
     let stderr = '';
-    const onChunk = (kind: 'out' | 'err') => (chunk: Buffer): void => {
-      const text = chunk.toString();
-      if (kind === 'out') stdout += text;
-      else stderr += text;
-      if (onLine) {
-        for (const line of text.split('\n')) {
-          const trimmed = line.trimEnd();
-          if (trimmed) onLine(trimmed);
+    const onChunk =
+      (kind: 'out' | 'err') =>
+      (chunk: Buffer): void => {
+        const text = chunk.toString();
+        if (kind === 'out') stdout += text;
+        else stderr += text;
+        if (onLine) {
+          for (const line of text.split('\n')) {
+            const trimmed = line.trimEnd();
+            if (trimmed) onLine(trimmed);
+          }
         }
-      }
-    };
+      };
     child.stdout?.on('data', onChunk('out'));
     child.stderr?.on('data', onChunk('err'));
     child.on('error', (err) => {
-      resolve({ command, ok: false, exitCode: null, stdout, stderr: `${stderr}\n${err.message}`, durationMs: Date.now() - started });
+      resolve({
+        command,
+        ok: false,
+        exitCode: null,
+        stdout,
+        stderr: `${stderr}\n${err.message}`,
+        durationMs: Date.now() - started,
+      });
     });
     child.on('close', (code) => {
-      resolve({ command, ok: code === 0, exitCode: code, stdout, stderr, durationMs: Date.now() - started });
+      resolve({
+        command,
+        ok: code === 0,
+        exitCode: code,
+        stdout,
+        stderr,
+        durationMs: Date.now() - started,
+      });
     });
   });
 }

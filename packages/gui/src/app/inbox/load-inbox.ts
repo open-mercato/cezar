@@ -235,10 +235,7 @@ function buildPrItems(rows: PrRow[], cezarPrWorkflow: Map<number, string>): Inbo
  * Group pending_decisions rows by issue_number — multiple findings on the
  * same issue collapse into one card with multiple findings inside.
  */
-function buildDecisionItems(
-  rows: PendingRow[],
-  actionNamesById: Map<string, string>,
-): InboxItem[] {
+function buildDecisionItems(rows: PendingRow[], actionNamesById: Map<string, string>): InboxItem[] {
   const byIssue = new Map<number, { title: string; findings: Finding[]; firstSeen: string }>();
   for (const r of rows) {
     const issueNumber = r.issue_number ?? r.pr_number;
@@ -328,7 +325,8 @@ function deriveFindingBody(r: PendingRow): FindingBody {
     case 'suggest-workflow': {
       // Args carry only { flowId, reason } — display the reason (cheap; no
       // flows join). The flow name shows up in the summary on accept.
-      const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason : r.summary;
+      const reason =
+        typeof args.reason === 'string' && args.reason.trim() ? args.reason : r.summary;
       return { kind: 'workflow', reason };
     }
   }

@@ -96,8 +96,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
   if (!rows || rows.length === 0) return new Response('Action not found', { status: 404 });
 
   const preferred = rows.find((r) => r.kind === 'user') ?? rows[0];
-  const systemPrompt =
-    (payload.systemPrompt ?? preferred.system_prompt ?? '').trim();
+  const systemPrompt = (payload.systemPrompt ?? preferred.system_prompt ?? '').trim();
   if (!systemPrompt) {
     return new Response('Action has no system prompt to simulate.', { status: 400 });
   }
@@ -166,7 +165,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const ts = () => new Date().toISOString().slice(11, 19);
-      controller.enqueue(encoder.encode(`[${ts()}] INFO: Simulating ${actionName} on #${issue.number}\n`));
+      controller.enqueue(
+        encoder.encode(`[${ts()}] INFO: Simulating ${actionName} on #${issue.number}\n`),
+      );
       controller.enqueue(encoder.encode(`[${ts()}] INFO: ${effectsLine}\n\n`));
 
       try {

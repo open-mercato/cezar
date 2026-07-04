@@ -99,13 +99,18 @@ export async function executeLabelAnalysisJob(
 ): Promise<void> {
   const { workspaceId, jobId, analysisId } = params;
 
-  const finishJob = async (status: Database['public']['Tables']['jobs']['Row']['status']): Promise<void> => {
+  const finishJob = async (
+    status: Database['public']['Tables']['jobs']['Row']['status'],
+  ): Promise<void> => {
     // Drop the lease (migration 0025) on completion.
-    await adminSupabase.from('jobs').update({
-      status,
-      claim_expires_at: null,
-      updated_at: new Date().toISOString(),
-    }).eq('id', jobId);
+    await adminSupabase
+      .from('jobs')
+      .update({
+        status,
+        claim_expires_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', jobId);
   };
 
   const failAnalysis = async (message: string): Promise<void> => {
@@ -132,7 +137,8 @@ export async function executeLabelAnalysisJob(
       .select('repo_owner, repo_name')
       .eq('id', workspaceId)
       .single();
-    if (wsErr || !ws) throw new Error(`workspace ${workspaceId} not found: ${wsErr?.message ?? ''}`);
+    if (wsErr || !ws)
+      throw new Error(`workspace ${workspaceId} not found: ${wsErr?.message ?? ''}`);
 
     const owner = ws.repo_owner;
     const repo = ws.repo_name;
@@ -205,7 +211,9 @@ export async function executeLabelAnalysisJob(
         state: i.state ?? 'unknown',
         author: i.user?.login ?? 'ghost',
         body: i.body ?? '',
-        labels: (i.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name ?? '')).filter(Boolean),
+        labels: (i.labels ?? [])
+          .map((l) => (typeof l === 'string' ? l : (l.name ?? '')))
+          .filter(Boolean),
         comments: i.comments ?? 0,
       })),
       'issue',
@@ -355,7 +363,9 @@ async function resolveWorkspaceGithubToken(
   return process.env.GITHUB_TOKEN ?? null;
 }
 
-async function readCodebaseGuides(repoRoot: string): Promise<Array<{ path: string; content: string }>> {
+async function readCodebaseGuides(
+  repoRoot: string,
+): Promise<Array<{ path: string; content: string }>> {
   const out: Array<{ path: string; content: string }> = [];
   const tryRead = async (rel: string): Promise<void> => {
     const abs = join(repoRoot, rel);
@@ -412,7 +422,9 @@ async function condenseItems(
   // Process in concurrency-limited batches to stay polite with rate limits.
   for (let i = 0; i < seeds.length; i += PER_ITEM_CONCURRENCY) {
     const batch = seeds.slice(i, i + PER_ITEM_CONCURRENCY);
-    const condensed = await Promise.all(batch.map((seed) => condenseOne(octokit, owner, repo, seed, kind)));
+    const condensed = await Promise.all(
+      batch.map((seed) => condenseOne(octokit, owner, repo, seed, kind)),
+    );
     out.push(...condensed);
   }
   return out;
@@ -498,14 +510,18 @@ function buildPrompt(args: {
   const lines: string[] = [];
   lines.push(`You are analyzing how labels are used in the GitHub repository ${owner}/${repo}.`);
   lines.push('Your output is a labeling guide that will be saved as the workspace catalog and');
-  lines.push('shown to a human for review. Be concrete and base every claim on the evidence below.');
+  lines.push(
+    'shown to a human for review. Be concrete and base every claim on the evidence below.',
+  );
   lines.push('');
   lines.push('## Current labels in the repo');
   if (labels.length === 0) {
     lines.push('(none)');
   } else {
     for (const l of labels) {
-      lines.push(`- ${l.name}${l.color ? ` (color #${l.color})` : ''}${l.description ? `: ${l.description}` : ''}`);
+      lines.push(
+        `- ${l.name}${l.color ? ` (color #${l.color})` : ''}${l.description ? `: ${l.description}` : ''}`,
+      );
     }
   }
   lines.push('');
@@ -530,7 +546,9 @@ function buildPrompt(args: {
   for (const it of items) {
     lines.push('');
     lines.push(`### ${it.kind.toUpperCase()} #${it.number} — ${it.title}`);
-    lines.push(`state=${it.state} author=${it.author} current_labels=[${it.current_labels.join(', ')}]`);
+    lines.push(
+      `state=${it.state} author=${it.author} current_labels=[${it.current_labels.join(', ')}]`,
+    );
     if (it.body) {
       lines.push('body:');
       lines.push(it.body);
@@ -552,17 +570,31 @@ function buildPrompt(args: {
 
   lines.push('## Task');
   lines.push('Produce two lists — `issue_labels` and `pr_labels` — describing every label that');
-  lines.push('appears in either the current repo labels or the timeline events above. For each label, infer:');
+  lines.push(
+    'appears in either the current repo labels or the timeline events above. For each label, infer:',
+  );
   lines.push('- description: a one-sentence purpose');
-  lines.push('- when_to_add: the concrete trigger conditions (what state of the issue/PR justifies the label)');
-  lines.push('- when_to_remove: the concrete conditions to remove it (or "never" / "when closed" etc.)');
-  lines.push('- add_meaning: the semantic meaning of *adding* it (what state transition it signals)');
-  lines.push('- remove_meaning: the semantic meaning of *removing* it (what state transition it signals)');
-  lines.push('- exists_on_github: true iff the label name appears in the "Current labels" section above');
+  lines.push(
+    '- when_to_add: the concrete trigger conditions (what state of the issue/PR justifies the label)',
+  );
+  lines.push(
+    '- when_to_remove: the concrete conditions to remove it (or "never" / "when closed" etc.)',
+  );
+  lines.push(
+    '- add_meaning: the semantic meaning of *adding* it (what state transition it signals)',
+  );
+  lines.push(
+    '- remove_meaning: the semantic meaning of *removing* it (what state transition it signals)',
+  );
+  lines.push(
+    '- exists_on_github: true iff the label name appears in the "Current labels" section above',
+  );
   lines.push('');
   lines.push('Rules:');
   lines.push('- Use the codebase guidance files as authoritative when they describe a label.');
-  lines.push('- A label may appear in both lists if usage differs between issues and PRs; otherwise put it');
+  lines.push(
+    '- A label may appear in both lists if usage differs between issues and PRs; otherwise put it',
+  );
   lines.push('  in the list where it is used most.');
   lines.push('- Do not invent labels that do not appear in the inputs.');
   lines.push('- Keep each text field to 1–2 sentences. Be specific to this repo, not generic.');
@@ -594,7 +626,10 @@ function parseLLMJson(raw: string): LabelAnalysisResult | null {
   };
 
   // Strip markdown fences if present.
-  const cleaned = raw.replace(/^```json?\s*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+  const cleaned = raw
+    .replace(/^```json?\s*\n?/m, '')
+    .replace(/\n?```\s*$/m, '')
+    .trim();
   const direct = tryParse(cleaned);
   if (direct) return direct;
 

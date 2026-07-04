@@ -45,10 +45,16 @@ export type AttributionLlmResult = z.infer<typeof AttributionLlmResultSchema>;
 
 // ─── Base-branch control (pure, deterministic) ────────────────────────────
 
-const FAIL_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure']);
+const FAIL_CONCLUSIONS = new Set([
+  'failure',
+  'timed_out',
+  'cancelled',
+  'action_required',
+  'startup_failure',
+]);
 
 export interface BaseControlResult {
-  preExistingChecks: string[];          // names of PR-failed checks that also fail on base
+  preExistingChecks: string[]; // names of PR-failed checks that also fail on base
   nonPreExistingChecks: CheckRunSummary[]; // failed checks that do NOT fail on base
   allPreExisting: boolean;
 }
@@ -68,8 +74,11 @@ export function runBaseBranchControl(
 ): BaseControlResult {
   const baseFailing = new Set(
     baseChecks
-      .filter(b => b.status === 'completed' && b.conclusion != null && FAIL_CONCLUSIONS.has(b.conclusion))
-      .map(b => b.name),
+      .filter(
+        (b) =>
+          b.status === 'completed' && b.conclusion != null && FAIL_CONCLUSIONS.has(b.conclusion),
+      )
+      .map((b) => b.name),
   );
 
   const preExistingChecks: string[] = [];
@@ -89,40 +98,52 @@ export function runBaseBranchControl(
 
 // ─── Prompt builder ───────────────────────────────────────────────────────
 
-const MAX_DIFF_CHARS = 12_000;   // roughly 3k tokens
+const MAX_DIFF_CHARS = 12_000; // roughly 3k tokens
 const MAX_LOG_LINES_PER_CHECK = 80;
 
-export function buildAttributionPrompt(input: AttributionInput, baseControl: BaseControlResult): string {
-  const truncatedDiff = input.prDiff.length > MAX_DIFF_CHARS
-    ? input.prDiff.slice(0, MAX_DIFF_CHARS) + `\n[...diff truncated; showed ${MAX_DIFF_CHARS} of ${input.prDiff.length} chars...]`
-    : input.prDiff;
+export function buildAttributionPrompt(
+  input: AttributionInput,
+  baseControl: BaseControlResult,
+): string {
+  const truncatedDiff =
+    input.prDiff.length > MAX_DIFF_CHARS
+      ? input.prDiff.slice(0, MAX_DIFF_CHARS) +
+        `\n[...diff truncated; showed ${MAX_DIFF_CHARS} of ${input.prDiff.length} chars...]`
+      : input.prDiff;
 
-  const changedFilesBlock = input.changedFiles.length > 0
-    ? input.changedFiles.map(f => `- ${f}`).join('\n')
-    : '_(no changed files reported)_';
+  const changedFilesBlock =
+    input.changedFiles.length > 0
+      ? input.changedFiles.map((f) => `- ${f}`).join('\n')
+      : '_(no changed files reported)_';
 
   const failedChecksBlock = input.failedChecks
-    .map(c => `- **${c.name}** (conclusion: ${c.conclusion ?? 'unknown'})${c.htmlUrl ? ` — ${c.htmlUrl}` : ''}`)
+    .map(
+      (c) =>
+        `- **${c.name}** (conclusion: ${c.conclusion ?? 'unknown'})${c.htmlUrl ? ` — ${c.htmlUrl}` : ''}`,
+    )
     .join('\n');
 
-  const preExistingNote = baseControl.preExistingChecks.length > 0
-    ? `**These checks ALSO fail on the base branch HEAD** (deterministic — they existed before this PR):\n${
-        baseControl.preExistingChecks.map(n => `- ${n}`).join('\n')
-      }\n\nTreat these as "unrelated" automatically.\n\n`
-    : '';
+  const preExistingNote =
+    baseControl.preExistingChecks.length > 0
+      ? `**These checks ALSO fail on the base branch HEAD** (deterministic — they existed before this PR):\n${baseControl.preExistingChecks
+          .map((n) => `- ${n}`)
+          .join('\n')}\n\nTreat these as "unrelated" automatically.\n\n`
+      : '';
 
-  const logsBlock = (input.logTails ?? []).length === 0
-    ? '_(no log excerpts available — base attribution on file paths and diff)_'
-    : (input.logTails ?? [])
-        .map(t => {
-          const tail = t.lines.slice(-MAX_LOG_LINES_PER_CHECK).join('\n');
-          return `### ${t.checkName}\n\`\`\`\n${tail}\n\`\`\``;
-        })
-        .join('\n\n');
+  const logsBlock =
+    (input.logTails ?? []).length === 0
+      ? '_(no log excerpts available — base attribution on file paths and diff)_'
+      : (input.logTails ?? [])
+          .map((t) => {
+            const tail = t.lines.slice(-MAX_LOG_LINES_PER_CHECK).join('\n');
+            return `### ${t.checkName}\n\`\`\`\n${tail}\n\`\`\``;
+          })
+          .join('\n\n');
 
-  const flakyHint = input.flakyRerunsSoFar > 0
-    ? `\n**IMPORTANT:** We already re-ran failed jobs ${input.flakyRerunsSoFar} time(s) and they failed again. Do NOT return verdict='flaky' — the failure is reproducible.\n`
-    : '';
+  const flakyHint =
+    input.flakyRerunsSoFar > 0
+      ? `\n**IMPORTANT:** We already re-ran failed jobs ${input.flakyRerunsSoFar} time(s) and they failed again. Do NOT return verdict='flaky' — the failure is reproducible.\n`
+      : '';
 
   return `You are attributing a CI failure on an auto-generated pull request. Decide whether the failure was caused by the changes in this PR.
 
@@ -195,7 +216,8 @@ export async function runCiAttribution(
       verdict: 'unsure',
       confidence: 0,
       method: 'degraded',
-      reasoning: 'LLM unavailable — attribution degraded to unsure. Base-branch control found no pre-existing matches for the failing checks, so a human needs to review.',
+      reasoning:
+        'LLM unavailable — attribution degraded to unsure. Base-branch control found no pre-existing matches for the failing checks, so a human needs to review.',
       preExistingChecks: baseControl.preExistingChecks,
       attributedAt: now(),
     };
@@ -209,7 +231,8 @@ export async function runCiAttribution(
       verdict: 'unsure',
       confidence: 0,
       method: 'degraded',
-      reasoning: 'Attribution LLM returned no parseable response. Treat as unsure — human review required.',
+      reasoning:
+        'Attribution LLM returned no parseable response. Treat as unsure — human review required.',
       preExistingChecks: baseControl.preExistingChecks,
       attributedAt: now(),
     };

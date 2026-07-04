@@ -75,7 +75,10 @@ export async function refreshRepoSkills(): Promise<RefreshSkillsResult> {
       return { commitSha: sha, skills: await core.discoverSkills(repoRoot, skillsDir) };
     }));
   } catch (err) {
-    return { ok: false, error: `Clone failed: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      ok: false,
+      error: `Clone failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
   // discoverSkills now returns the merged catalog (built-in shipped with
   // Cezar + repo skills under .ai/skills). We cache both so the GUI doesn't

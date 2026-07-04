@@ -29,7 +29,9 @@ const TRIAGE_TRIGGERS: ReadonlySet<string> = new Set<TriageTrigger>([
  * legacy `'sweep'` marker) falls back to `'on-issue-opened'`.
  */
 export function parseTriageTrigger(value: unknown): TriageTrigger {
-  return typeof value === 'string' && TRIAGE_TRIGGERS.has(value) ? (value as TriageTrigger) : 'on-issue-opened';
+  return typeof value === 'string' && TRIAGE_TRIGGERS.has(value)
+    ? (value as TriageTrigger)
+    : 'on-issue-opened';
 }
 
 export interface RunTriagePassJobParams {
@@ -84,7 +86,9 @@ export interface RunTriagePassJobResult {
  * function runs); we record one `agent_runs` row per action invocation and one
  * `agent_run_events` row per effect that fired plus a final lifecycle event.
  */
-export async function runTriagePassJob(params: RunTriagePassJobParams): Promise<RunTriagePassJobResult> {
+export async function runTriagePassJob(
+  params: RunTriagePassJobParams,
+): Promise<RunTriagePassJobResult> {
   const core = await import('@cezar/core');
   const { issueNumber, github, supabase, persister, workspaceId, deferSink, labels } = params;
   const trigger: TriageTrigger = params.trigger ?? 'on-issue-opened';
@@ -102,7 +106,9 @@ export async function runTriagePassJob(params: RunTriagePassJobParams): Promise<
   }
   const autoCommentEnabled = actionAutoComment ?? true;
 
-  await persister.recordEvent('lifecycle', { message: `triage-pass: fetching issue #${issueNumber}` });
+  await persister.recordEvent('lifecycle', {
+    message: `triage-pass: fetching issue #${issueNumber}`,
+  });
   const fetched = await github.getIssueWithComments(issueNumber);
   const target: ActionTarget = {
     kind: 'issue',
@@ -198,7 +204,10 @@ export async function runTriagePassJob(params: RunTriagePassJobParams): Promise<
   }
   return {
     status: allFailed ? 'failed' : 'succeeded',
-    reason: failed.length > 0 ? `${failed.length}/${pass.results.length} triage actions failed` : undefined,
+    reason:
+      failed.length > 0
+        ? `${failed.length}/${pass.results.length} triage actions failed`
+        : undefined,
     tokensUsed: pass.totalUsage.inputTokens + pass.totalUsage.outputTokens,
     outcome: {
       results: pass.results.map((r) => ({

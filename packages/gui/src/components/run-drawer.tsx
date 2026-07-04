@@ -39,7 +39,9 @@ export function RunDrawer({ runId, actionLabel, onClose }: RunDrawerProps) {
     });
 
     channel.subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [runId]);
 
   useEffect(() => {
@@ -96,10 +98,16 @@ export function RunDrawer({ runId, actionLabel, onClose }: RunDrawerProps) {
             <span className="w-10 shrink-0 text-right font-mono text-xs text-fg-subtle">
               {formatElapsed(logs[0]?.ts, log.ts)}
             </span>
-            <div className={cn(
-              'text-xs',
-              log.stage === 'error' ? 'text-danger' : log.stage === 'done' ? 'text-accent' : 'text-fg-muted',
-            )}>
+            <div
+              className={cn(
+                'text-xs',
+                log.stage === 'error'
+                  ? 'text-danger'
+                  : log.stage === 'done'
+                    ? 'text-accent'
+                    : 'text-fg-muted',
+              )}
+            >
               <span className="mr-1.5 font-mono text-fg-subtle">[{log.stage}]</span>
               {log.message}
             </div>
@@ -110,10 +118,12 @@ export function RunDrawer({ runId, actionLabel, onClose }: RunDrawerProps) {
 
       {/* Footer */}
       {status !== 'running' && (
-        <div className={cn(
-          'shrink-0 border-t border-border px-5 py-3 text-xs',
-          status === 'done' ? 'text-accent' : 'text-danger',
-        )}>
+        <div
+          className={cn(
+            'shrink-0 border-t border-border px-5 py-3 text-xs',
+            status === 'done' ? 'text-accent' : 'text-danger',
+          )}
+        >
           {status === 'done' ? 'Completed — reloading...' : 'Failed — check logs above'}
         </div>
       )}
@@ -124,17 +134,21 @@ export function RunDrawer({ runId, actionLabel, onClose }: RunDrawerProps) {
 function StatusIndicator({ status }: { status: 'running' | 'done' | 'error' }) {
   return (
     <span className="flex items-center gap-1.5 text-xs">
-      <span className={cn(
-        'inline-block h-1.5 w-1.5 rounded-full',
-        status === 'running' && 'animate-pulse bg-accent',
-        status === 'done' && 'bg-accent',
-        status === 'error' && 'bg-danger',
-      )} />
-      <span className={cn(
-        status === 'running' && 'text-fg-muted',
-        status === 'done' && 'text-accent',
-        status === 'error' && 'text-danger',
-      )}>
+      <span
+        className={cn(
+          'inline-block h-1.5 w-1.5 rounded-full',
+          status === 'running' && 'animate-pulse bg-accent',
+          status === 'done' && 'bg-accent',
+          status === 'error' && 'bg-danger',
+        )}
+      />
+      <span
+        className={cn(
+          status === 'running' && 'text-fg-muted',
+          status === 'done' && 'text-accent',
+          status === 'error' && 'text-danger',
+        )}
+      >
         {status}
       </span>
     </span>

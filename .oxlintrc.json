@@ -1,0 +1,57 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react", "react-hooks", "nextjs", "import"],
+  "categories": {
+    "correctness": "warn"
+  },
+  "rules": {
+    "no-unused-vars": [
+      "warn",
+      {
+        "args": "all",
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrors": "all",
+        "caughtErrorsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ],
+    "typescript/no-explicit-any": "off",
+    "typescript/no-empty-object-type": "off",
+    "no-unused-expressions": ["error", { "allowShortCircuit": true, "allowTernary": true }],
+    "typescript/ban-ts-comment": [
+      "warn",
+      { "ts-expect-error": "allow-with-description", "ts-ignore": "allow-with-description" }
+    ],
+    "no-empty": ["error", { "allowEmptyCatch": true }],
+    "no-constant-condition": ["error", { "checkLoops": false }],
+    "no-constant-binary-expression": "warn",
+    "no-fallthrough": "off",
+    "no-control-regex": "off",
+    "no-useless-escape": "warn",
+    "no-async-promise-executor": "warn",
+    "prefer-const": ["warn", { "destructuring": "all" }]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/tests/**/*.ts", "**/tests/**/*.tsx"],
+      "rules": {
+        "no-unused-vars": "off",
+        "typescript/no-non-null-assertion": "off"
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/.yarn/**",
+    "**/coverage/**",
+    "**/*.d.ts",
+    "**/tsconfig.tsbuildinfo",
+    "packages/gui/supabase/migrations/**",
+    "packages/gui/next-env.d.ts",
+    "packages/core/scripts/**"
+  ]
+}

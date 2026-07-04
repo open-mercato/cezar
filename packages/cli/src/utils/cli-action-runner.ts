@@ -92,9 +92,10 @@ function parseActionMarkdown(raw: string, fallbackName: string): ActionDef | nul
   const target = fm.target === 'pr' ? 'pr' : 'issue';
   const skillRefs = toStringArray(fm.skill_refs);
   const triggers = toStringArray(fm.triggers) as ActionTrigger[];
-  const effects = fm.effects === undefined || fm.effects === null
-    ? null
-    : (toStringArray(fm.effects) as EffectName[]);
+  const effects =
+    fm.effects === undefined || fm.effects === null
+      ? null
+      : (toStringArray(fm.effects) as EffectName[]);
 
   return {
     id: '',
@@ -137,7 +138,12 @@ function parseFrontmatterBlock(block: string): Frontmatter {
     }
     if (rest.startsWith('[') && rest.endsWith(']')) {
       const inner = rest.slice(1, -1).trim();
-      out[key] = inner ? inner.split(',').map((s) => stripQuotes(s.trim())).filter(Boolean) : [];
+      out[key] = inner
+        ? inner
+            .split(',')
+            .map((s) => stripQuotes(s.trim()))
+            .filter(Boolean)
+        : [];
       continue;
     }
     if (rest === 'true' || rest === 'false') {
@@ -221,11 +227,10 @@ export async function runActionAcrossIssues(
         contextProviders: buildStoreContextProviders(store, issue.number),
       });
       ok++;
-      const effectLine = result.effectsApplied.length === 0
-        ? chalk.dim('(no effects)')
-        : result.effectsApplied
-            .map((e) => `${e.call.effect} → ${e.summary}`)
-            .join('; ');
+      const effectLine =
+        result.effectsApplied.length === 0
+          ? chalk.dim('(no effects)')
+          : result.effectsApplied.map((e) => `${e.call.effect} → ${e.summary}`).join('; ');
       const text = result.text ? `\n      ${chalk.dim(result.text.split('\n')[0])}` : '';
       console.log(`  ${chalk.green('ok')}  #${issue.number}  ${effectLine}${text}`);
     } catch (err) {
@@ -322,7 +327,5 @@ function isAnalyzedFor(issue: StoredIssue, action: ActionDef): boolean {
 
 function formatStoredComments(issue: StoredIssue): string | undefined {
   if (!issue.comments || issue.comments.length === 0) return undefined;
-  return issue.comments
-    .map((c) => `@${c.author} (${c.createdAt}):\n${c.body}`)
-    .join('\n\n---\n\n');
+  return issue.comments.map((c) => `@${c.author} (${c.createdAt}):\n${c.body}`).join('\n\n---\n\n');
 }

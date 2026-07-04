@@ -2,13 +2,7 @@
 // TODO: replace with `supabase gen types typescript` output once the project
 // is linked (`supabase link --project-ref <ref>`).
 
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: Json | undefined }
-  | Json[];
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type WorkspaceRole = 'admin' | 'actor' | 'viewer';
 
@@ -18,7 +12,14 @@ export type WorkflowBackend = 'anthropic-api' | 'claude-cli' | 'codex-cli';
 // Note: `@cezar/core` also exports a `WorkflowRunStatus` (the in-process engine
 // state). These are the *DB* string sets — kept local + named distinctly to
 // avoid confusing the two.
-export type JobKind = 'triage' | 'autofix' | 'ci-followup' | 'flow' | 'label-analysis' | 'sync' | 'action';
+export type JobKind =
+  | 'triage'
+  | 'autofix'
+  | 'ci-followup'
+  | 'flow'
+  | 'label-analysis'
+  | 'sync'
+  | 'action';
 
 export type LabelAnalysisStatus =
   | 'queued'
@@ -99,7 +100,13 @@ export interface LabelAnalysisInputsSummary {
   codebase_files: string[];
 }
 export type JobStatus = 'queued' | 'claimed' | 'running' | 'done' | 'failed' | 'cancelled';
-export type DbWorkflowRunStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled';
+export type DbWorkflowRunStatus =
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
 export type AgentRunStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
 export type AgentRunStepKind = 'agent' | 'effect' | 'human-gate' | 'commit' | 'open-pr' | 'push';
 export type AgentRunEventType =
@@ -178,7 +185,22 @@ export interface Database {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['workspaces']['Row'], 'id' | 'created_at' | 'updated_at' | 'auto_triage_action_id' | 'action_auto_comment' | 'sync_mode' | 'sync_interval_minutes' | 'last_webhook_received_at' | 'last_webhook_event' | 'digest_mode' | 'digest_interval_minutes' | 'last_digested_at' | 'skill_states_seeded'> & {
+        Insert: Omit<
+          Database['public']['Tables']['workspaces']['Row'],
+          | 'id'
+          | 'created_at'
+          | 'updated_at'
+          | 'auto_triage_action_id'
+          | 'action_auto_comment'
+          | 'sync_mode'
+          | 'sync_interval_minutes'
+          | 'last_webhook_received_at'
+          | 'last_webhook_event'
+          | 'digest_mode'
+          | 'digest_interval_minutes'
+          | 'last_digested_at'
+          | 'skill_states_seeded'
+        > & {
           id?: string;
           auto_triage_action_id?: string | null;
           action_auto_comment?: boolean;
@@ -320,7 +342,10 @@ export interface Database {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['flows']['Row'], 'id' | 'triggers' | 'paused' | 'created_at' | 'updated_at'> & {
+        Insert: Omit<
+          Database['public']['Tables']['flows']['Row'],
+          'id' | 'triggers' | 'paused' | 'created_at' | 'updated_at'
+        > & {
           id?: string;
           triggers?: Json;
           paused?: boolean;
@@ -342,7 +367,10 @@ export interface Database {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['workflow_bindings']['Row'], 'id' | 'extra_tools' | 'created_at' | 'updated_at'> & {
+        Insert: Omit<
+          Database['public']['Tables']['workflow_bindings']['Row'],
+          'id' | 'extra_tools' | 'created_at' | 'updated_at'
+        > & {
           id?: string;
           repo?: string | null;
           skill_name?: string | null;
@@ -362,7 +390,10 @@ export interface Database {
           skills: Json;
           fetched_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['repo_skills']['Row'], 'commit_sha' | 'skills' | 'fetched_at'> & {
+        Insert: Omit<
+          Database['public']['Tables']['repo_skills']['Row'],
+          'commit_sha' | 'skills' | 'fetched_at'
+        > & {
           commit_sha?: string | null;
           skills?: Json;
           fetched_at?: string;
@@ -399,11 +430,28 @@ export interface Database {
           effect_routing: Json;
           suggested_flow_id: string | null;
         };
-        Insert: Omit<Database['public']['Tables']['actions']['Row'],
-          'id' | 'kind' | 'description' | 'system_prompt' | 'skill_refs' | 'context_refs' | 'triggers' |
-          'effects' | 'output_schema' | 'enabled' | 'replaces_built_in' | 'created_at' | 'updated_at' |
-          'created_by' | 'updated_by' | 'model' | 'acceptance_mode' | 'confidence_config' |
-          'effect_routing' | 'suggested_flow_id'
+        Insert: Omit<
+          Database['public']['Tables']['actions']['Row'],
+          | 'id'
+          | 'kind'
+          | 'description'
+          | 'system_prompt'
+          | 'skill_refs'
+          | 'context_refs'
+          | 'triggers'
+          | 'effects'
+          | 'output_schema'
+          | 'enabled'
+          | 'replaces_built_in'
+          | 'created_at'
+          | 'updated_at'
+          | 'created_by'
+          | 'updated_by'
+          | 'model'
+          | 'acceptance_mode'
+          | 'confidence_config'
+          | 'effect_routing'
+          | 'suggested_flow_id'
         > & {
           id?: string;
           kind?: 'built-in' | 'user';
@@ -444,7 +492,20 @@ export interface Database {
           created_by: string | null;
           updated_by: string | null;
         };
-        Insert: Omit<Database['public']['Tables']['skill_overrides']['Row'], 'id' | 'body' | 'execution_mode' | 'triggers' | 'outputs' | 'capabilities' | 'enabled' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by'> & {
+        Insert: Omit<
+          Database['public']['Tables']['skill_overrides']['Row'],
+          | 'id'
+          | 'body'
+          | 'execution_mode'
+          | 'triggers'
+          | 'outputs'
+          | 'capabilities'
+          | 'enabled'
+          | 'created_at'
+          | 'updated_at'
+          | 'created_by'
+          | 'updated_by'
+        > & {
           id?: string;
           body?: string;
           execution_mode?: string;
@@ -473,7 +534,16 @@ export interface Database {
           created_by: string | null;
           updated_by: string | null;
         };
-        Insert: Omit<Database['public']['Tables']['workspace_skill_states']['Row'], 'id' | 'enabled' | 'pinned_source' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by'> & {
+        Insert: Omit<
+          Database['public']['Tables']['workspace_skill_states']['Row'],
+          | 'id'
+          | 'enabled'
+          | 'pinned_source'
+          | 'created_at'
+          | 'updated_at'
+          | 'created_by'
+          | 'updated_by'
+        > & {
           id?: string;
           enabled?: boolean;
           pinned_source?: string | null;
@@ -500,7 +570,17 @@ export interface Database {
           created_by: string | null;
           updated_by: string | null;
         };
-        Insert: Omit<Database['public']['Tables']['skill_sources']['Row'], 'id' | 'config' | 'last_synced_at' | 'last_sync_error' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by'> & {
+        Insert: Omit<
+          Database['public']['Tables']['skill_sources']['Row'],
+          | 'id'
+          | 'config'
+          | 'last_synced_at'
+          | 'last_sync_error'
+          | 'created_at'
+          | 'updated_at'
+          | 'created_by'
+          | 'updated_by'
+        > & {
           id?: string;
           config?: Json;
           last_synced_at?: string | null;
@@ -521,7 +601,10 @@ export interface Database {
           skills: Json;
           fetched_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['external_repo_skills']['Row'], 'commit_sha' | 'skills' | 'fetched_at'> & {
+        Insert: Omit<
+          Database['public']['Tables']['external_repo_skills']['Row'],
+          'commit_sha' | 'skills' | 'fetched_at'
+        > & {
           commit_sha?: string | null;
           skills?: Json;
           fetched_at?: string;
@@ -543,7 +626,17 @@ export interface Database {
           uploaded_by: string | null;
           updated_by: string | null;
         };
-        Insert: Omit<Database['public']['Tables']['uploaded_skills']['Row'], 'id' | 'body' | 'description' | 'suggested_stages' | 'uploaded_at' | 'updated_at' | 'uploaded_by' | 'updated_by'> & {
+        Insert: Omit<
+          Database['public']['Tables']['uploaded_skills']['Row'],
+          | 'id'
+          | 'body'
+          | 'description'
+          | 'suggested_stages'
+          | 'uploaded_at'
+          | 'updated_at'
+          | 'uploaded_by'
+          | 'updated_by'
+        > & {
           id?: string;
           body?: string;
           description?: string | null;
@@ -573,7 +666,19 @@ export interface Database {
           last_sync_error: string | null;
           imported_by: string | null;
         };
-        Insert: Omit<Database['public']['Tables']['skills_sh_skills']['Row'], 'id' | 'body' | 'description' | 'suggested_stages' | 'content_hash' | 'install_url' | 'imported_at' | 'last_synced_at' | 'last_sync_error' | 'imported_by'> & {
+        Insert: Omit<
+          Database['public']['Tables']['skills_sh_skills']['Row'],
+          | 'id'
+          | 'body'
+          | 'description'
+          | 'suggested_stages'
+          | 'content_hash'
+          | 'install_url'
+          | 'imported_at'
+          | 'last_synced_at'
+          | 'last_sync_error'
+          | 'imported_by'
+        > & {
           id?: string;
           body?: string;
           description?: string | null;
@@ -618,7 +723,18 @@ export interface Database {
         };
         Insert: Omit<
           Database['public']['Tables']['jobs']['Row'],
-          'id' | 'priority' | 'status' | 'attempts' | 'max_attempts' | 'scheduled_at' | 'payload' | 'created_at' | 'updated_at' | 'claim_expires_at' | 'preferred_runner_id' | 'preferred_until'
+          | 'id'
+          | 'priority'
+          | 'status'
+          | 'attempts'
+          | 'max_attempts'
+          | 'scheduled_at'
+          | 'payload'
+          | 'created_at'
+          | 'updated_at'
+          | 'claim_expires_at'
+          | 'preferred_runner_id'
+          | 'preferred_until'
         > & {
           id?: string;
           repo?: string | null;
@@ -670,7 +786,13 @@ export interface Database {
         };
         Insert: Omit<
           Database['public']['Tables']['workflow_runs']['Row'],
-          'id' | 'status' | 'pause_requested' | 'tokens_used' | 'started_at' | 'created_at' | 'updated_at'
+          | 'id'
+          | 'status'
+          | 'pause_requested'
+          | 'tokens_used'
+          | 'started_at'
+          | 'created_at'
+          | 'updated_at'
         > & {
           id?: string;
           job_id?: string | null;
@@ -752,7 +874,10 @@ export interface Database {
           payload: Json;
           created_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['agent_run_events']['Row'], 'id' | 'payload' | 'created_at'> & {
+        Insert: Omit<
+          Database['public']['Tables']['agent_run_events']['Row'],
+          'id' | 'payload' | 'created_at'
+        > & {
           id?: number;
           agent_run_id?: string | null;
           payload?: Json;
@@ -792,7 +917,15 @@ export interface Database {
         };
         Insert: Omit<
           Database['public']['Tables']['runners']['Row'],
-          'id' | 'backends' | 'models' | 'status' | 'created_at' | 'updated_at' | 'github_installation_id' | 'github_inherit_host' | 'utilization'
+          | 'id'
+          | 'backends'
+          | 'models'
+          | 'status'
+          | 'created_at'
+          | 'updated_at'
+          | 'github_installation_id'
+          | 'github_inherit_host'
+          | 'utilization'
         > & {
           id?: string;
           workspace_id?: string | null;

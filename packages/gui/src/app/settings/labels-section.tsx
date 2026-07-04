@@ -193,10 +193,11 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
   return (
     <div className="space-y-5">
       <p className="text-sm text-on-surface-variant">
-        Pulls every label in the repo, scans the codebase for label guides, walks the last 100 issues
-        and PRs (timeline events + comments), and asks Claude to synthesize a labeling guide — a list
-        of issue and PR labels, each with a description, when to add, when to remove, and what
-        add/remove signifies. You review and accept the draft before it becomes the workspace catalog.
+        Pulls every label in the repo, scans the codebase for label guides, walks the last 100
+        issues and PRs (timeline events + comments), and asks Claude to synthesize a labeling guide
+        — a list of issue and PR labels, each with a description, when to add, when to remove, and
+        what add/remove signifies. You review and accept the draft before it becomes the workspace
+        catalog.
       </p>
 
       {/* ── primary action row ── */}
@@ -231,11 +232,15 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
             Reinitialize from scratch
           </button>
         )}
-        {readOnly && <p className="text-xs text-on-surface-variant">Admin role required to edit labels.</p>}
+        {readOnly && (
+          <p className="text-xs text-on-surface-variant">Admin role required to edit labels.</p>
+        )}
       </div>
 
       {actionError && (
-        <p className="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">{actionError}</p>
+        <p className="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">
+          {actionError}
+        </p>
       )}
 
       {/* ── latest run status ── */}
@@ -243,9 +248,13 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
         <div className="rounded-md border border-outline-variant/60 bg-surface-container/40 p-4">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <StatusBadge status={a.status} />
-            <span className="text-on-surface-variant">started {fmtRelative(new Date(a.created_at))}</span>
+            <span className="text-on-surface-variant">
+              started {fmtRelative(new Date(a.created_at))}
+            </span>
             {a.finished_at && (
-              <span className="text-on-surface-variant">· finished {fmtRelative(new Date(a.finished_at))}</span>
+              <span className="text-on-surface-variant">
+                · finished {fmtRelative(new Date(a.finished_at))}
+              </span>
             )}
           </div>
           {a.inputs_summary && (
@@ -271,7 +280,8 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
           )}
           {a.status === 'accepted' && (
             <p className="mt-3 text-sm text-on-surface">
-              Accepted catalog: <span className="font-medium">{state.acceptedLabelCount}</span> labels.
+              Accepted catalog: <span className="font-medium">{state.acceptedLabelCount}</span>{' '}
+              labels.
             </p>
           )}
         </div>
@@ -292,7 +302,8 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
         <div className="space-y-4">
           {a.status === 'completed' && a.result?.notes && (
             <p className="rounded-md border border-outline-variant/60 bg-surface-container/40 px-4 py-2 text-xs text-on-surface-variant">
-              <span className="font-medium text-on-surface">Notes from analysis:</span> {a.result.notes}
+              <span className="font-medium text-on-surface">Notes from analysis:</span>{' '}
+              {a.result.notes}
             </p>
           )}
           <LabelListEditor
@@ -316,7 +327,11 @@ export function LabelsSection({ initial, acceptedLabels, readOnly }: LabelsSecti
               disabled={readOnly || pending || !issueLabelsValid || !prLabelsValid}
               className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
-              {pending ? 'Saving…' : a.status === 'completed' ? 'Accept and save catalog' : 'Save changes'}
+              {pending
+                ? 'Saving…'
+                : a.status === 'completed'
+                  ? 'Accept and save catalog'
+                  : 'Save changes'}
             </button>
             {a.status === 'completed' && (
               <p className="text-xs text-on-surface-variant">
@@ -406,7 +421,8 @@ function InflightBanner({
         </button>
         {stale && (
           <p className="text-xs text-on-surface-variant">
-            Verify the cron is running (the dev server auto-ticks <span className="font-mono">/api/cron/dispatch</span> every 60s).
+            Verify the cron is running (the dev server auto-ticks{' '}
+            <span className="font-mono">/api/cron/dispatch</span> every 60s).
           </p>
         )}
       </div>

@@ -94,14 +94,19 @@ export function summarizeCi(checks: CheckRunSummary[]): CiSummary {
   const PASS = new Set(['success']);
   const NEUTRAL = new Set(['neutral', 'skipped', 'stale']);
 
-  const failedChecks = checks.filter(c => c.conclusion != null && FAIL.has(c.conclusion));
-  const anyPending = checks.some(c => c.status !== 'completed');
+  const failedChecks = checks.filter((c) => c.conclusion != null && FAIL.has(c.conclusion));
+  const anyPending = checks.some((c) => c.status !== 'completed');
 
   let overall: CiOverall;
   if (failedChecks.length > 0) overall = 'failure';
   else if (anyPending) overall = 'pending';
-  else if (checks.every(c => c.conclusion != null && PASS.has(c.conclusion))) overall = 'success';
-  else if (checks.every(c => c.conclusion != null && (PASS.has(c.conclusion) || NEUTRAL.has(c.conclusion)))) overall = 'neutral';
+  else if (checks.every((c) => c.conclusion != null && PASS.has(c.conclusion))) overall = 'success';
+  else if (
+    checks.every(
+      (c) => c.conclusion != null && (PASS.has(c.conclusion) || NEUTRAL.has(c.conclusion)),
+    )
+  )
+    overall = 'neutral';
   else overall = 'unknown';
 
   return { overall, total: checks.length, failedChecks };
@@ -156,8 +161,8 @@ export class GitHubService {
       });
 
       return issues
-        .filter(i => !i.pull_request) // exclude PRs
-        .map(i => this.mapIssue(i));
+        .filter((i) => !i.pull_request) // exclude PRs
+        .map((i) => this.mapIssue(i));
     } catch (error) {
       this.handleError(error);
       throw error;
@@ -179,9 +184,7 @@ export class GitHubService {
         direction: 'asc',
       });
 
-      return issues
-        .filter(i => !i.pull_request)
-        .map(i => this.mapIssue(i));
+      return issues.filter((i) => !i.pull_request).map((i) => this.mapIssue(i));
     } catch (error) {
       this.handleError(error);
       throw error;
@@ -210,7 +213,7 @@ export class GitHubService {
       draft: p.draft ?? false,
       labels: Array.isArray(p.labels)
         ? p.labels
-            .map((l) => (typeof l === 'string' ? l : l?.name ?? null))
+            .map((l) => (typeof l === 'string' ? l : (l?.name ?? null)))
             .filter((n): n is string => typeof n === 'string' && n.length > 0)
         : [],
       author: p.user?.login ?? 'unknown',
@@ -319,12 +322,14 @@ export class GitHubService {
 
   async setLabels(issueNumber: number, labels: string[]): Promise<void> {
     await this.withWriteRetry(`setLabels #${issueNumber}`, () =>
-      this.octokit.rest.issues.setLabels({
-        owner: this.owner,
-        repo: this.repo,
-        issue_number: issueNumber,
-        labels,
-      }).then(() => undefined),
+      this.octokit.rest.issues
+        .setLabels({
+          owner: this.owner,
+          repo: this.repo,
+          issue_number: issueNumber,
+          labels,
+        })
+        .then(() => undefined),
     );
   }
 
@@ -355,7 +360,10 @@ export class GitHubService {
     }
   }
 
-  async closeIssue(issueNumber: number, reason: 'completed' | 'not_planned' = 'completed'): Promise<void> {
+  async closeIssue(
+    issueNumber: number,
+    reason: 'completed' | 'not_planned' = 'completed',
+  ): Promise<void> {
     try {
       await this.octokit.rest.issues.update({
         owner: this.owner,
@@ -412,14 +420,18 @@ export class GitHubService {
         repo: this.repo,
         per_page: 100,
       });
-      return labels.map(l => l.name);
+      return labels.map((l) => l.name);
     } catch (error) {
       this.handleError(error);
       throw error;
     }
   }
 
-  async createIssue(title: string, body: string, labels?: string[]): Promise<{ number: number; htmlUrl: string }> {
+  async createIssue(
+    title: string,
+    body: string,
+    labels?: string[],
+  ): Promise<{ number: number; htmlUrl: string }> {
     try {
       const response = await this.octokit.rest.issues.create({
         owner: this.owner,
@@ -477,7 +489,9 @@ export class GitHubService {
     return result;
   }
 
-  async getIssueComments(issueNumber: number): Promise<Array<{ author: string; body: string; createdAt: string }>> {
+  async getIssueComments(
+    issueNumber: number,
+  ): Promise<Array<{ author: string; body: string; createdAt: string }>> {
     try {
       const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
         owner: this.owner,
@@ -485,7 +499,7 @@ export class GitHubService {
         issue_number: issueNumber,
         per_page: 100,
       });
-      return comments.map(c => ({
+      return comments.map((c) => ({
         author: c.user?.login ?? 'unknown',
         body: c.body ?? '',
         createdAt: c.created_at,
@@ -513,7 +527,7 @@ export class GitHubService {
         issue_number: issueNumber,
         per_page: 100,
       });
-      return comments.map(c => ({
+      return comments.map((c) => ({
         id: c.id,
         author: c.user?.login ?? 'unknown',
         body: c.body ?? '',
@@ -556,7 +570,9 @@ export class GitHubService {
           title: raw.title,
           body: raw.body ?? '',
           state: raw.state === 'closed' ? 'closed' : 'open',
-          labels: raw.labels.map(l => (typeof l === 'string' ? l : l.name ?? '')).filter(Boolean),
+          labels: raw.labels
+            .map((l) => (typeof l === 'string' ? l : (l.name ?? '')))
+            .filter(Boolean),
           author: raw.user?.login ?? 'unknown',
           htmlUrl: raw.html_url,
           createdAt: raw.created_at,
@@ -594,7 +610,12 @@ export class GitHubService {
       });
     } catch (error) {
       // 422 = ref already exists; treat as no-op so re-runs are idempotent
-      if (error && typeof error === 'object' && 'status' in error && (error as { status: number }).status === 422) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'status' in error &&
+        (error as { status: number }).status === 422
+      ) {
         return;
       }
       this.handleError(error);
@@ -615,9 +636,13 @@ export class GitHubService {
 
   async pushBranch(branch: string, localRepoPath: string, remote = 'origin'): Promise<void> {
     try {
-      await execFileAsync('git', [...this.gitAuthArgs(), 'push', '--set-upstream', remote, branch], {
-        cwd: localRepoPath,
-      });
+      await execFileAsync(
+        'git',
+        [...this.gitAuthArgs(), 'push', '--set-upstream', remote, branch],
+        {
+          cwd: localRepoPath,
+        },
+      );
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       throw new Error(`git push ${remote} ${branch} failed: ${msg}`);
@@ -646,17 +671,19 @@ export class GitHubService {
       const prNumber = response.data.number;
 
       if (opts.labels && opts.labels.length > 0) {
-        await this.octokit.rest.issues.addLabels({
-          owner: this.owner,
-          repo: this.repo,
-          issue_number: prNumber,
-          labels: opts.labels,
-        }).catch((err: unknown) => {
-          // Label attach is best-effort; don't fail the PR opening on a missing
-          // label — but log it so a scope/typo problem isn't completely silent.
-          const reason = err instanceof Error ? err.message : String(err);
-          console.warn(`[github] failed to attach labels to PR #${prNumber}: ${reason}`);
-        });
+        await this.octokit.rest.issues
+          .addLabels({
+            owner: this.owner,
+            repo: this.repo,
+            issue_number: prNumber,
+            labels: opts.labels,
+          })
+          .catch((err: unknown) => {
+            // Label attach is best-effort; don't fail the PR opening on a missing
+            // label — but log it so a scope/typo problem isn't completely silent.
+            const reason = err instanceof Error ? err.message : String(err);
+            console.warn(`[github] failed to attach labels to PR #${prNumber}: ${reason}`);
+          });
       }
 
       return {
@@ -677,7 +704,7 @@ export class GitHubService {
         ref: sha,
         per_page: 100,
       });
-      return runs.map(r => ({
+      return runs.map((r) => ({
         name: r.name,
         status: r.status as CheckRunSummary['status'],
         conclusion: r.conclusion,
@@ -720,7 +747,7 @@ export class GitHubService {
         pull_number: prNumber,
         per_page: 100,
       });
-      return files.map(f => f.filename);
+      return files.map((f) => f.filename);
     } catch (error) {
       this.handleError(error);
       throw error;
@@ -820,7 +847,7 @@ export class GitHubService {
       title,
       body,
       state: issue.state === 'closed' ? 'closed' : 'open',
-      labels: issue.labels.map(l => (typeof l === 'string' ? l : l.name ?? '')).filter(Boolean),
+      labels: issue.labels.map((l) => (typeof l === 'string' ? l : (l.name ?? ''))).filter(Boolean),
       author: issue.user?.login ?? 'unknown',
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,
@@ -828,7 +855,7 @@ export class GitHubService {
       contentHash: contentHash(title, body),
       commentCount: issue.comments ?? 0,
       reactions: issue.reactions?.total_count ?? 0,
-      assignees: issue.assignees?.map(a => a.login) ?? [],
+      assignees: issue.assignees?.map((a) => a.login) ?? [],
     };
   }
 
@@ -841,7 +868,10 @@ export class GitHubService {
     if (error && typeof error === 'object' && 'status' in error) {
       const status = (error as { status: number }).status;
       if (status === 401 || status === 403 || status === 404 || status === 429) {
-        throw toGitHubApiError(error, classifyGitHubError(error), { owner: this.owner, repo: this.repo });
+        throw toGitHubApiError(error, classifyGitHubError(error), {
+          owner: this.owner,
+          repo: this.repo,
+        });
       }
     }
   }
@@ -927,7 +957,10 @@ export class GitHubApiError extends Error {
   }
 }
 
-function headerValue(headers: Record<string, unknown> | undefined, name: string): string | undefined {
+function headerValue(
+  headers: Record<string, unknown> | undefined,
+  name: string,
+): string | undefined {
   if (!headers) return undefined;
   const v = headers[name] ?? headers[name.toLowerCase()];
   return v == null ? undefined : String(v);
@@ -959,28 +992,49 @@ export function classifyGitHubError(error: unknown): ClassifiedGitHubError {
   const remaining = headerValue(headers, 'x-ratelimit-remaining');
 
   const retryAfterRaw = headerValue(headers, 'retry-after');
-  const retryAfterMs = retryAfterRaw != null && Number.isFinite(Number(retryAfterRaw))
-    ? Number(retryAfterRaw) * 1000
-    : undefined;
+  const retryAfterMs =
+    retryAfterRaw != null && Number.isFinite(Number(retryAfterRaw))
+      ? Number(retryAfterRaw) * 1000
+      : undefined;
   const resetRaw = headerValue(headers, 'x-ratelimit-reset');
-  const resetMs = resetRaw != null && Number.isFinite(Number(resetRaw))
-    ? Math.max(0, Number(resetRaw) * 1000 - Date.now())
-    : undefined;
+  const resetMs =
+    resetRaw != null && Number.isFinite(Number(resetRaw))
+      ? Math.max(0, Number(resetRaw) * 1000 - Date.now())
+      : undefined;
 
-  if (status === 401) return { kind: 'auth', status, message: apiMessage, rateLimitRemaining: remaining };
+  if (status === 401)
+    return { kind: 'auth', status, message: apiMessage, rateLimitRemaining: remaining };
 
   if (status === 403 || status === 429) {
     // Secondary (anti-burst) limit: explicit message, or a Retry-After while
     // the primary budget is NOT exhausted.
     if (lower.includes('secondary rate limit') || (retryAfterMs != null && remaining !== '0')) {
-      return { kind: 'secondary-rate-limit', status, retryAfterMs, rateLimitRemaining: remaining, message: apiMessage };
+      return {
+        kind: 'secondary-rate-limit',
+        status,
+        retryAfterMs,
+        rateLimitRemaining: remaining,
+        message: apiMessage,
+      };
     }
     // Primary budget exhausted.
     if (remaining === '0' || (lower.includes('rate limit') && remaining !== undefined)) {
-      return { kind: 'primary-rate-limit', status, retryAfterMs: resetMs, rateLimitRemaining: remaining, message: apiMessage };
+      return {
+        kind: 'primary-rate-limit',
+        status,
+        retryAfterMs: resetMs,
+        rateLimitRemaining: remaining,
+        message: apiMessage,
+      };
     }
     if (lower.includes('rate limit')) {
-      return { kind: 'primary-rate-limit', status, retryAfterMs: resetMs, rateLimitRemaining: remaining, message: apiMessage };
+      return {
+        kind: 'primary-rate-limit',
+        status,
+        retryAfterMs: resetMs,
+        rateLimitRemaining: remaining,
+        message: apiMessage,
+      };
     }
     // A 403 with no rate-limit signal is a real permission denial.
     return { kind: 'permission', status, message: apiMessage, rateLimitRemaining: remaining };
@@ -1028,7 +1082,10 @@ export function toGitHubApiError(
         `This is transient (not a permission problem); re-run the action shortly.`;
       break;
     case 'primary-rate-limit': {
-      const resets = classified.retryAfterMs != null ? ` (resets in ~${Math.round(classified.retryAfterMs / 1000)}s)` : '';
+      const resets =
+        classified.retryAfterMs != null
+          ? ` (resets in ~${Math.round(classified.retryAfterMs / 1000)}s)`
+          : '';
       message = `GitHub API rate limit exhausted${resets}${detail}.`;
       break;
     }
@@ -1049,8 +1106,12 @@ export function toGitHubApiError(
 export function isAuthOrRateLimitError(error: unknown): boolean {
   // GitHubApiError carries the classified kind directly.
   if (error instanceof GitHubApiError) {
-    return error.kind === 'auth' || error.kind === 'permission'
-      || error.kind === 'primary-rate-limit' || error.kind === 'secondary-rate-limit';
+    return (
+      error.kind === 'auth' ||
+      error.kind === 'permission' ||
+      error.kind === 'primary-rate-limit' ||
+      error.kind === 'secondary-rate-limit'
+    );
   }
   if (error && typeof error === 'object' && 'status' in error) {
     const status = (error as { status: unknown }).status;
@@ -1069,7 +1130,9 @@ export function isAuthOrRateLimitError(error: unknown): boolean {
 // /{owner}/{repo}/actions/runs/{runId}/job/{jobId} (with optional #step:...
 // suffix). Checks from non-Actions providers return null — the attribution
 // worker should degrade gracefully when logs aren't available.
-export function parseCheckRunUrl(url: string | null | undefined): { runId: number; jobId: number } | null {
+export function parseCheckRunUrl(
+  url: string | null | undefined,
+): { runId: number; jobId: number } | null {
   if (!url) return null;
   const m = url.match(/\/actions\/runs\/(\d+)\/jobs?\/(\d+)/);
   if (!m) return null;

@@ -59,7 +59,8 @@ export interface CiFollowupBlackboard {
 /** Read the CI follow-up seed off a transient config field the caller sets. */
 function seedFrom(config: Config): CiFollowupSeed {
   const seed = (config as unknown as { __ciFollowup?: CiFollowupSeed }).__ciFollowup;
-  if (!seed) throw new Error('ci-followup workflow requires config.__ciFollowup to be set by the caller');
+  if (!seed)
+    throw new Error('ci-followup workflow requires config.__ciFollowup to be set by the caller');
   return seed;
 }
 
@@ -67,7 +68,10 @@ function autofixCfg(config: Config): NonNullable<Config['autofix']> {
   return config.autofix as NonNullable<Config['autofix']>;
 }
 
-function reviewPasses(cfg: NonNullable<Config['autofix']>, verdict: Required<ReviewVerdict>): boolean {
+function reviewPasses(
+  cfg: NonNullable<Config['autofix']>,
+  verdict: Required<ReviewVerdict>,
+): boolean {
   const blockers = verdict.issues.filter((iss) => iss.severity === 'blocker').length;
   return cfg.requireReviewPass ? verdict.verdict === 'pass' && blockers === 0 : blockers === 0;
 }
@@ -90,9 +94,10 @@ const attributeStep: WorkflowStep<CiFollowupBlackboard> = {
         : `CI failure on PR #${seed.prNumber} attributed to this autofix`,
       hypothesis: seed.attribution.reasoning,
       suspectedFiles: [],
-      reproductionNotes: seed.failedCheckNames.length > 0
-        ? `Failing CI checks: ${seed.failedCheckNames.join(', ')}`
-        : undefined,
+      reproductionNotes:
+        seed.failedCheckNames.length > 0
+          ? `Failing CI checks: ${seed.failedCheckNames.join(', ')}`
+          : undefined,
       confidence: 1,
     };
     return { kind: 'continue', blackboardPatch: { rootCause, seed } };
@@ -121,7 +126,8 @@ const fixStep: WorkflowStep<CiFollowupBlackboard> = agentStep<CiFollowupBlackboa
   buildUserPrompt: (ctx) => {
     const rc = ctx.blackboard.rootCause;
     const seed = ctx.blackboard.seed;
-    if (!rc || !seed) throw new Error('ci-followup fix ran without root cause / seed on the blackboard');
+    if (!rc || !seed)
+      throw new Error('ci-followup fix ran without root cause / seed on the blackboard');
     return buildFixerUserPrompt({
       issueNumber: ctx.issue.number,
       title: ctx.issue.title,
@@ -145,13 +151,20 @@ const commitStep: WorkflowStep<CiFollowupBlackboard> = {
   buildMessage: (ctx) => {
     const fr = ctx.blackboard.fixReport;
     const seed = ctx.blackboard.seed;
-    if (!fr || !seed) throw new Error('ci-followup commit ran without fix report / seed on the blackboard');
+    if (!fr || !seed)
+      throw new Error('ci-followup commit ran without fix report / seed on the blackboard');
     return buildCiFollowupCommitMessage(seed, ctx.issue.title, fr);
   },
-  onCommitted: (info) => ({ kind: 'continue', blackboardPatch: { commitSha: info.commitSha, diff: info.diff } }),
+  onCommitted: (info) => ({
+    kind: 'continue',
+    blackboardPatch: { commitSha: info.commitSha, diff: info.diff },
+  }),
 };
 
-const reviewStep: WorkflowStep<CiFollowupBlackboard> = agentStep<CiFollowupBlackboard, ReviewVerdict>({
+const reviewStep: WorkflowStep<CiFollowupBlackboard> = agentStep<
+  CiFollowupBlackboard,
+  ReviewVerdict
+>({
   id: 'review',
   kind: 'agent',
   builtinSkillId: 'review',
@@ -164,7 +177,8 @@ const reviewStep: WorkflowStep<CiFollowupBlackboard> = agentStep<CiFollowupBlack
   buildUserPrompt: (ctx) => {
     const rc = ctx.blackboard.rootCause;
     const fr = ctx.blackboard.fixReport;
-    if (!rc || !fr) throw new Error('ci-followup review ran without root cause / fix report on the blackboard');
+    if (!rc || !fr)
+      throw new Error('ci-followup review ran without root cause / fix report on the blackboard');
     return buildReviewerUserPrompt({
       issueNumber: ctx.issue.number,
       title: ctx.issue.title,
@@ -205,7 +219,10 @@ const reviewStep: WorkflowStep<CiFollowupBlackboard> = agentStep<CiFollowupBlack
     const v = normalizeVerdict(parsed);
     return { heading: `🔎 Review — verdict \`${v.verdict}\``, body: v.summary };
   },
-  failCommentSection: (reason): CommentSection => ({ heading: '🔁 CI follow-up review failed — retrying', body: reason }),
+  failCommentSection: (reason): CommentSection => ({
+    heading: '🔁 CI follow-up review failed — retrying',
+    body: reason,
+  }),
 });
 
 const pushStep: WorkflowStep<CiFollowupBlackboard> = {

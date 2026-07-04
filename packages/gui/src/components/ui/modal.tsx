@@ -71,9 +71,7 @@ export function Modal({
                 {title}
               </h2>
             )}
-            {description && (
-              <p className="mt-1 text-xs text-on-surface-variant">{description}</p>
-            )}
+            {description && <p className="mt-1 text-xs text-on-surface-variant">{description}</p>}
           </div>
         )}
 

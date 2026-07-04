@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { runWorkflow, type WorkflowGitHub } from '../../src/workflows/workflow-engine.js';
 import { agentStep, type Workflow, type AgentRunRecord } from '../../src/workflows/workflow.js';
-import type { AgentBackend, AgentRunner, AgentRunResult, AgentRunSpec } from '../../src/agents/agent-runner.js';
+import type {
+  AgentBackend,
+  AgentRunner,
+  AgentRunResult,
+  AgentRunSpec,
+} from '../../src/agents/agent-runner.js';
 import { IssueStore } from '../../src/store/store.js';
 import { ConfigSchema } from '../../src/config/config.model.js';
 import type { Store } from '../../src/store/store.model.js';
@@ -20,7 +25,15 @@ function makeConfig() {
 
 async function makeStore(): Promise<IssueStore> {
   const data: Store = {
-    meta: { owner: 'acme', repo: 'cezar', lastSyncedAt: null, totalFetched: 0, version: 1, orgMembers: [], orgMembersFetchedAt: null },
+    meta: {
+      owner: 'acme',
+      repo: 'cezar',
+      lastSyncedAt: null,
+      totalFetched: 0,
+      version: 1,
+      orgMembers: [],
+      orgMembersFetchedAt: null,
+    },
     issues: [],
   };
   return IssueStore.fromPort({ load: async () => data, save: async () => {} });
@@ -38,16 +51,26 @@ function makeFakeGitHub(): FakeGitHub {
   return {
     added,
     updated,
-    async addComment(n, body) { added.push({ n, body }); return nextId++; },
-    async updateComment(id, body) { updated.push({ id, body }); },
+    async addComment(n, body) {
+      added.push({ n, body });
+      return nextId++;
+    },
+    async updateComment(id, body) {
+      updated.push({ id, body });
+    },
     async getIssueWithComments(n) {
-      return { issue: { number: n, title: `Issue #${n}`, body: 'a synthetic issue body', }, comments: [] };
+      return {
+        issue: { number: n, title: `Issue #${n}`, body: 'a synthetic issue body' },
+        comments: [],
+      };
     },
     async setLabels() {},
     async addLabel() {},
     async closeIssue() {},
     async pushBranch() {},
-    async createPullRequest() { return { url: 'https://example.test/pr/7', number: 7 }; },
+    async createPullRequest() {
+      return { url: 'https://example.test/pr/7', number: 7 };
+    },
   };
 }
 
@@ -84,7 +107,11 @@ class FakeRunner implements AgentRunner {
 const StepASchema = z.object({ ok: z.boolean(), note: z.string() });
 const StepBSchema = z.object({ pass: z.boolean(), note: z.string() });
 
-interface TinyBB { a?: z.infer<typeof StepASchema>; b?: z.infer<typeof StepBSchema>; retryNotes?: string }
+interface TinyBB {
+  a?: z.infer<typeof StepASchema>;
+  b?: z.infer<typeof StepBSchema>;
+  retryNotes?: string;
+}
 
 function tinyWorkflow(): Workflow<TinyBB> {
   return {
@@ -103,7 +130,10 @@ function tinyWorkflow(): Workflow<TinyBB> {
         responseSchema: StepASchema,
         cwdRequired: false,
         buildUserPrompt: () => 'USER-A',
-        onResult: (parsed) => parsed.ok ? { kind: 'continue', blackboardPatch: { a: parsed } } : { kind: 'fail', reason: 'step-a not ok' },
+        onResult: (parsed) =>
+          parsed.ok
+            ? { kind: 'continue', blackboardPatch: { a: parsed } }
+            : { kind: 'fail', reason: 'step-a not ok' },
         commentSection: (parsed) => ({ heading: 'Step A', body: parsed.note }),
       }),
       agentStep<TinyBB, z.infer<typeof StepBSchema>>({
@@ -116,13 +146,26 @@ function tinyWorkflow(): Workflow<TinyBB> {
         responseSchema: StepBSchema,
         cwdRequired: false,
         buildUserPrompt: () => 'USER-B',
-        onResult: (parsed) => parsed.pass
-          ? { kind: 'continue', blackboardPatch: { b: parsed } }
-          : { kind: 'fail', reason: 'review failed', retriable: true, blackboardPatch: { retryNotes: parsed.note, b: parsed } },
+        onResult: (parsed) =>
+          parsed.pass
+            ? { kind: 'continue', blackboardPatch: { b: parsed } }
+            : {
+                kind: 'fail',
+                reason: 'review failed',
+                retriable: true,
+                blackboardPatch: { retryNotes: parsed.note, b: parsed },
+              },
         commentSection: (parsed) => ({ heading: 'Step B', body: parsed.note }),
       }),
     ],
-    loops: [{ id: 'b-loop', stepIds: ['step-b'], until: (ctx) => ctx.blackboard.b?.pass === true, maxIterations: 3 }],
+    loops: [
+      {
+        id: 'b-loop',
+        stepIds: ['step-b'],
+        until: (ctx) => ctx.blackboard.b?.pass === true,
+        maxIterations: 3,
+      },
+    ],
   };
 }
 
@@ -134,7 +177,10 @@ function tinyWorkflow(): Workflow<TinyBB> {
 const FixSchema = z.object({ done: z.boolean() });
 const ReviewSchema = z.object({ pass: z.boolean() });
 
-interface LoopBB { fix?: z.infer<typeof FixSchema>; review?: z.infer<typeof ReviewSchema> }
+interface LoopBB {
+  fix?: z.infer<typeof FixSchema>;
+  review?: z.infer<typeof ReviewSchema>;
+}
 
 function multiStepLoopWorkflow(maxIterations: number): Workflow<LoopBB> {
   return {
@@ -155,9 +201,15 @@ function multiStepLoopWorkflow(maxIterations: number): Workflow<LoopBB> {
         buildUserPrompt: () => 'USER-FIX',
         // `done:false` ⇒ a mid-loop retriable failure (jumps back to the head);
         // `done:true` ⇒ continue on to the `review` tail.
-        onResult: (parsed) => parsed.done
-          ? { kind: 'continue', blackboardPatch: { fix: parsed } }
-          : { kind: 'fail', reason: 'fix not done', retriable: true, blackboardPatch: { fix: parsed } },
+        onResult: (parsed) =>
+          parsed.done
+            ? { kind: 'continue', blackboardPatch: { fix: parsed } }
+            : {
+                kind: 'fail',
+                reason: 'fix not done',
+                retriable: true,
+                blackboardPatch: { fix: parsed },
+              },
       }),
       agentStep<LoopBB, z.infer<typeof ReviewSchema>>({
         id: 'review',
@@ -172,12 +224,14 @@ function multiStepLoopWorkflow(maxIterations: number): Workflow<LoopBB> {
         onResult: (parsed) => ({ kind: 'continue', blackboardPatch: { review: parsed } }),
       }),
     ],
-    loops: [{
-      id: 'fix-review',
-      stepIds: ['fix', 'review'],
-      until: (ctx) => ctx.blackboard.review?.pass === true,
-      maxIterations,
-    }],
+    loops: [
+      {
+        id: 'fix-review',
+        stepIds: ['fix', 'review'],
+        until: (ctx) => ctx.blackboard.review?.pass === true,
+        maxIterations,
+      },
+    ],
   };
 }
 
@@ -227,28 +281,52 @@ describe('WorkflowEngine.runWorkflow', () => {
     expect(lastBody).toContain('done'); // finalize header / footer
     // run records: one per agent step, with the right backend/model/status
     expect(records).toHaveLength(2);
-    expect(records[0]).toMatchObject({ stepId: 'step-a', backend: 'anthropic-api', model: 'model-a', status: 'succeeded', tokensUsed: 42 });
-    expect(records[1]).toMatchObject({ stepId: 'step-b', backend: 'anthropic-api', model: 'model-b', status: 'succeeded', tokensUsed: 42 });
+    expect(records[0]).toMatchObject({
+      stepId: 'step-a',
+      backend: 'anthropic-api',
+      model: 'model-a',
+      status: 'succeeded',
+      tokensUsed: 42,
+    });
+    expect(records[1]).toMatchObject({
+      stepId: 'step-b',
+      backend: 'anthropic-api',
+      model: 'model-b',
+      status: 'succeeded',
+      tokensUsed: 42,
+    });
     expect(result.tokensUsed).toBe(84);
   });
 
-  it('applies resolveStepConfig — a binding\'s skill body shows up in the spec', async () => {
+  it("applies resolveStepConfig — a binding's skill body shows up in the spec", async () => {
     const store = await makeStore();
-    const runner = new FakeRunner('anthropic-api', [{ ok: true, note: 'a' }, { pass: true, note: 'b' }]);
-    const bindings: WorkflowBinding[] = [{
-      stepId: 'step-a',
-      skillName: 'repo-skill',
-      backend: null,
-      model: 'model-a-override',
-      extraTools: ['WebFetch'],
-    }];
+    const runner = new FakeRunner('anthropic-api', [
+      { ok: true, note: 'a' },
+      { pass: true, note: 'b' },
+    ]);
+    const bindings: WorkflowBinding[] = [
+      {
+        stepId: 'step-a',
+        skillName: 'repo-skill',
+        backend: null,
+        model: 'model-a-override',
+        extraTools: ['WebFetch'],
+      },
+    ];
     await runWorkflow(tinyWorkflow(), {
       ...baseCtx(),
       store,
       github: makeFakeGitHub(),
       runnerFactory: () => runner,
       bindings,
-      skills: [{ name: 'repo-skill', body: 'CHECK-THE-MIDDLEWARE-FIRST', path: '/x/.ai/skills/repo-skill.md', suggestedStages: [] }],
+      skills: [
+        {
+          name: 'repo-skill',
+          body: 'CHECK-THE-MIDDLEWARE-FIRST',
+          path: '/x/.ai/skills/repo-skill.md',
+          suggestedStages: [],
+        },
+      ],
     });
     const specA = runner.specs[0];
     expect(specA.systemPrompt).toContain('SYSTEM-A');
@@ -261,7 +339,10 @@ describe('WorkflowEngine.runWorkflow', () => {
   it('separateCommentPerStep posts N comments instead of editing one', async () => {
     const store = await makeStore();
     const github = makeFakeGitHub();
-    const runner = new FakeRunner('anthropic-api', [{ ok: true, note: 'a' }, { pass: true, note: 'b' }]);
+    const runner = new FakeRunner('anthropic-api', [
+      { ok: true, note: 'a' },
+      { pass: true, note: 'b' },
+    ]);
     await runWorkflow(tinyWorkflow(), {
       ...baseCtx(),
       store,
@@ -276,7 +357,7 @@ describe('WorkflowEngine.runWorkflow', () => {
     expect(github.added[1].body).toContain('Step B');
   });
 
-  it('a retriable fail from the loop\'s last step re-runs the loop up to maxIterations then ends failed', async () => {
+  it("a retriable fail from the loop's last step re-runs the loop up to maxIterations then ends failed", async () => {
     const store = await makeStore();
     const runner = new FakeRunner('anthropic-api', [
       { ok: true, note: 'a' },
@@ -331,16 +412,33 @@ describe('WorkflowEngine.runWorkflow', () => {
       commentTargetOrder: ['issue'],
       initialBlackboard: () => ({}),
       steps: [
-        { id: 'gate', kind: 'human-gate', builtinSkillId: 'gate', buildPrompt: () => ({ stepId: 'gate', question: 'go?', options: ['proceed', 'skip'] }) },
+        {
+          id: 'gate',
+          kind: 'human-gate',
+          builtinSkillId: 'gate',
+          buildPrompt: () => ({ stepId: 'gate', question: 'go?', options: ['proceed', 'skip'] }),
+        },
         agentStep<TinyBB, z.infer<typeof StepASchema>>({
-          id: 'step-a', kind: 'agent', builtinSkillId: 'step-a', builtinSystemPrompt: 'S', builtinModel: 'm', builtinTools: [],
-          responseSchema: StepASchema, cwdRequired: false, buildUserPrompt: () => 'u',
+          id: 'step-a',
+          kind: 'agent',
+          builtinSkillId: 'step-a',
+          builtinSystemPrompt: 'S',
+          builtinModel: 'm',
+          builtinTools: [],
+          responseSchema: StepASchema,
+          cwdRequired: false,
+          buildUserPrompt: () => 'u',
           onResult: () => ({ kind: 'continue' }),
         }),
       ],
     };
     const runner = new FakeRunner('anthropic-api', [{ ok: true, note: 'a' }]);
-    const result = await runWorkflow(wf, { ...baseCtx(), store, github: makeFakeGitHub(), runnerFactory: () => runner });
+    const result = await runWorkflow(wf, {
+      ...baseCtx(),
+      store,
+      github: makeFakeGitHub(),
+      runnerFactory: () => runner,
+    });
     expect(result.status).toBe('paused');
     expect(result.reason).toMatch(/awaiting human decision/);
     // the agent step never ran
@@ -355,17 +453,32 @@ describe('WorkflowEngine.runWorkflow', () => {
       commentTargetOrder: ['issue'],
       initialBlackboard: () => ({}),
       steps: [
-        { id: 'gate', kind: 'human-gate', builtinSkillId: 'gate', buildPrompt: () => ({ stepId: 'gate', question: 'go?', options: ['proceed', 'skip'] }) },
+        {
+          id: 'gate',
+          kind: 'human-gate',
+          builtinSkillId: 'gate',
+          buildPrompt: () => ({ stepId: 'gate', question: 'go?', options: ['proceed', 'skip'] }),
+        },
         agentStep<TinyBB, z.infer<typeof StepASchema>>({
-          id: 'step-a', kind: 'agent', builtinSkillId: 'step-a', builtinSystemPrompt: 'S', builtinModel: 'm', builtinTools: [],
-          responseSchema: StepASchema, cwdRequired: false, buildUserPrompt: () => 'u',
+          id: 'step-a',
+          kind: 'agent',
+          builtinSkillId: 'step-a',
+          builtinSystemPrompt: 'S',
+          builtinModel: 'm',
+          builtinTools: [],
+          responseSchema: StepASchema,
+          cwdRequired: false,
+          buildUserPrompt: () => 'u',
           onResult: () => ({ kind: 'continue' }),
         }),
       ],
     };
     const runner = new FakeRunner('anthropic-api', [{ ok: true, note: 'a' }]);
     const result = await runWorkflow(wf, {
-      ...baseCtx(), store, github: makeFakeGitHub(), runnerFactory: () => runner,
+      ...baseCtx(),
+      store,
+      github: makeFakeGitHub(),
+      runnerFactory: () => runner,
       requestHumanDecision: async () => ({ choice: 'proceed' }),
     });
     expect(result.status).toBe('succeeded');
@@ -382,7 +495,9 @@ describe('WorkflowEngine.runWorkflow', () => {
       ...baseCtx(),
       store,
       github: makeFakeGitHub(),
-      bindings: [{ stepId: 'step-a', skillName: null, backend: 'claude-cli', model: null, extraTools: [] }],
+      bindings: [
+        { stepId: 'step-a', skillName: null, backend: 'claude-cli', model: null, extraTools: [] },
+      ],
       runnerFactory: (backend) => {
         seen.push(backend);
         return backend === 'claude-cli' ? claudeCliRunner : apiRunner;
@@ -405,7 +520,10 @@ describe('WorkflowEngine.runWorkflow', () => {
     ]);
     const records: AgentRunRecord[] = [];
     const result = await runWorkflow(tinyWorkflow(), {
-      ...baseCtx(), store, github: makeFakeGitHub(), runnerFactory: () => runner,
+      ...baseCtx(),
+      store,
+      github: makeFakeGitHub(),
+      runnerFactory: () => runner,
       loopMaxIterations: { 'b-loop': 1 },
       onRunRecord: (r) => records.push(r),
     });
@@ -416,10 +534,19 @@ describe('WorkflowEngine.runWorkflow', () => {
   it('pause requested between steps ⇒ run ends paused', async () => {
     const store = await makeStore();
     let calls = 0;
-    const runner = new FakeRunner('anthropic-api', [{ ok: true, note: 'a' }, { pass: true, note: 'b' }]);
+    const runner = new FakeRunner('anthropic-api', [
+      { ok: true, note: 'a' },
+      { pass: true, note: 'b' },
+    ]);
     const result = await runWorkflow(tinyWorkflow(), {
-      ...baseCtx(), store, github: makeFakeGitHub(), runnerFactory: () => runner,
-      pauseRequested: () => { calls++; return calls > 1; }, // allow step-a, pause before step-b
+      ...baseCtx(),
+      store,
+      github: makeFakeGitHub(),
+      runnerFactory: () => runner,
+      pauseRequested: () => {
+        calls++;
+        return calls > 1;
+      }, // allow step-a, pause before step-b
     });
     expect(result.status).toBe('paused');
     expect(runner.specs).toHaveLength(1);
@@ -435,7 +562,10 @@ describe('WorkflowEngine.runWorkflow', () => {
 
   it('threads one claude session id across every step of a run', async () => {
     const store = await makeStore();
-    const runner = new FakeRunner('claude-cli', [{ ok: true, note: 'a' }, { pass: true, note: 'b' }]);
+    const runner = new FakeRunner('claude-cli', [
+      { ok: true, note: 'a' },
+      { pass: true, note: 'b' },
+    ]);
     const records: AgentRunRecord[] = [];
     const result = await runWorkflow(tinyWorkflow(), {
       ...baseCtx(),
@@ -459,7 +589,10 @@ describe('WorkflowEngine.runWorkflow', () => {
 
   it('on resumeSessionId, first agent step asks the runner to resume; later steps do not', async () => {
     const store = await makeStore();
-    const runner = new FakeRunner('claude-cli', [{ ok: true, note: 'a' }, { pass: true, note: 'b' }]);
+    const runner = new FakeRunner('claude-cli', [
+      { ok: true, note: 'a' },
+      { pass: true, note: 'b' },
+    ]);
     const result = await runWorkflow(tinyWorkflow(), {
       ...baseCtx(),
       store,
@@ -480,7 +613,10 @@ describe('WorkflowEngine.runWorkflow', () => {
 
   it('non-claude-cli backends do not stamp sessionId onto agent_runs records', async () => {
     const store = await makeStore();
-    const runner = new FakeRunner('anthropic-api', [{ ok: true, note: 'a' }, { pass: true, note: 'b' }]);
+    const runner = new FakeRunner('anthropic-api', [
+      { ok: true, note: 'a' },
+      { pass: true, note: 'b' },
+    ]);
     const records: AgentRunRecord[] = [];
     const result = await runWorkflow(tinyWorkflow(), {
       ...baseCtx(),
@@ -498,7 +634,7 @@ describe('WorkflowEngine.runWorkflow', () => {
     for (const r of agentRecords) expect(r.sessionId).toBeUndefined();
   });
 
-  it('a mid-loop fail-retriable + the same pass\'s tail until-false count as ONE iteration (no double-bump)', async () => {
+  it("a mid-loop fail-retriable + the same pass's tail until-false count as ONE iteration (no double-bump)", async () => {
     // maxIterations: 2 ⇒ at most one re-entry. Sequence:
     //   pass 0: fix done:false  → fail-retriable, bump to iter 1, jump to head
     //   pass 1: fix done:true   → review pass:false → tail until-false.
@@ -509,10 +645,10 @@ describe('WorkflowEngine.runWorkflow', () => {
     const store = await makeStore();
     const runner = new FakeRunner('anthropic-api', [
       { done: false }, // fix — mid-loop retriable fail
-      { done: true },  // fix — retry succeeds
+      { done: true }, // fix — retry succeeds
       { pass: false }, // review — not yet passing (tail until-false)
-      { done: true },  // fix — re-entry
-      { pass: true },  // review — now passing
+      { done: true }, // fix — re-entry
+      { pass: true }, // review — now passing
     ]);
     const records: AgentRunRecord[] = [];
     const result = await runWorkflow(multiStepLoopWorkflow(2), {
@@ -560,10 +696,12 @@ describe('WorkflowEngine.runWorkflow', () => {
     );
     const store = await makeStore();
     const runner = new FakeRunner('anthropic-api', [
-      { done: true }, { pass: true }, // loop pass 0 (clean)
-      { done: false },                // second-round → goto-loop
-      { done: true }, { pass: true }, // loop pass after re-entry
-      { done: true },                 // second-round again → continue
+      { done: true },
+      { pass: true }, // loop pass 0 (clean)
+      { done: false }, // second-round → goto-loop
+      { done: true },
+      { pass: true }, // loop pass after re-entry
+      { done: true }, // second-round again → continue
     ]);
     const records: AgentRunRecord[] = [];
     const result = await runWorkflow(wf, {

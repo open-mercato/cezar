@@ -18,10 +18,24 @@ import type { ShellResult } from '../provision/run-env.js';
 
 // ─── Run / step states (docs §3.4 — Phase 2 just *models* the states) ────────
 
-export type WorkflowRunStatus = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled';
+export type WorkflowRunStatus =
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
 export type StepRunStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
 
-export type WorkflowStepKind = 'agent' | 'effect' | 'human-gate' | 'commit' | 'open-pr' | 'push' | 'shell-check' | 'dev-server';
+export type WorkflowStepKind =
+  | 'agent'
+  | 'effect'
+  | 'human-gate'
+  | 'commit'
+  | 'open-pr'
+  | 'push'
+  | 'shell-check'
+  | 'dev-server';
 
 // ─── Comment helpers passed to a step ────────────────────────────────────────
 
@@ -47,7 +61,12 @@ export type StepOutcome<W> =
   | { kind: 'continue'; blackboardPatch?: Partial<W>; openedPr?: { number: number; url: string } }
   | { kind: 'skip-run'; reason: string }
   | { kind: 'fail'; reason: string; retriable?: boolean; blackboardPatch?: Partial<W> }
-  | { kind: 'goto-loop'; loopId: string; blackboardPatch?: Partial<W>; openedPr?: { number: number; url: string } };
+  | {
+      kind: 'goto-loop';
+      loopId: string;
+      blackboardPatch?: Partial<W>;
+      openedPr?: { number: number; url: string };
+    };
 
 // ─── Step execution context ─────────────────────────────────────────────────
 
@@ -185,7 +204,10 @@ export interface CommitStepDef<W> extends BaseStepDef {
   /** `true` ⇒ commit producing no changes is a hard fail (autofix); `false` ⇒ skip-run (ci-followup). */
   failOnNoChanges: boolean;
   /** Patch the blackboard with the commit sha + the diff against base. */
-  onCommitted: (info: { commitSha: string; diff: string }, ctx: WorkflowStepContext<W>) => StepOutcome<W>;
+  onCommitted: (
+    info: { commitSha: string; diff: string },
+    ctx: WorkflowStepContext<W>,
+  ) => StepOutcome<W>;
   commentSection?: (info: { commitSha: string }, ctx: WorkflowStepContext<W>) => CommentSection;
 }
 
@@ -195,7 +217,10 @@ export interface OpenPrStepDef<W> extends BaseStepDef {
   buildPr: (ctx: WorkflowStepContext<W>) => { title: string; body: string };
   /** PR comment posted on the freshly-opened PR (the root-cause / approach / review summary). */
   prCommentSection?: (ctx: WorkflowStepContext<W>) => CommentSection;
-  onOpened: (info: { url: string; number: number; headSha: string }, ctx: WorkflowStepContext<W>) => StepOutcome<W>;
+  onOpened: (
+    info: { url: string; number: number; headSha: string },
+    ctx: WorkflowStepContext<W>,
+  ) => StepOutcome<W>;
 }
 
 /** Push new commits to the existing PR branch (ci-followup), then post a PR comment. */
@@ -241,9 +266,15 @@ export interface DevServerStepDef<W> extends BaseStepDef {
   /** When true, fail the run if the server never became ready — config-derivable. */
   gate?: StepValue<boolean>;
   /** Patch the blackboard once the server is up. */
-  onReady?: (info: { url: string; ready: boolean }, ctx: WorkflowStepContext<W>) => Partial<W> | undefined;
+  onReady?: (
+    info: { url: string; ready: boolean },
+    ctx: WorkflowStepContext<W>,
+  ) => Partial<W> | undefined;
   /** Render this step's living-comment section. */
-  commentSection?: (info: { url: string | null; ready: boolean }, ctx: WorkflowStepContext<W>) => CommentSection;
+  commentSection?: (
+    info: { url: string | null; ready: boolean },
+    ctx: WorkflowStepContext<W>,
+  ) => CommentSection;
 }
 
 export type WorkflowStep<W> =
@@ -272,7 +303,14 @@ export interface WorkflowEffectDeps {
     addLabel(issueNumber: number, label: string): Promise<void>;
     closeIssue(issueNumber: number, reason?: 'completed' | 'not_planned'): Promise<void>;
     pushBranch(branch: string, localRepoPath: string, remote?: string): Promise<void>;
-    createPullRequest(opts: { title: string; body: string; head: string; base: string; draft?: boolean; labels?: string[] }): Promise<{ url: string; number: number }>;
+    createPullRequest(opts: {
+      title: string;
+      body: string;
+      head: string;
+      base: string;
+      draft?: boolean;
+      labels?: string[];
+    }): Promise<{ url: string; number: number }>;
   };
   /** git helpers in the worktree (commitAll / getDiffAgainstBase). */
   git: {

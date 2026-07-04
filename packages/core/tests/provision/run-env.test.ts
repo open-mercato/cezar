@@ -14,8 +14,12 @@ function projectEnv(overrides: Record<string, unknown> = {}) {
 
 describe('compose-detect', () => {
   let dir: string;
-  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cezar-detect-')); });
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cezar-detect-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
 
   it('returns null when no compose file is present', () => {
     expect(detectComposeFile(dir)).toBeNull();
@@ -30,7 +34,16 @@ describe('compose-detect', () => {
   it('extracts the first service name', async () => {
     await writeFile(
       join(dir, 'docker-compose.yml'),
-      ['version: "3"', 'services:', '  app:', '    build: .', '  db:', '    image: postgres', 'volumes:', '  pg: {}'].join('\n'),
+      [
+        'version: "3"',
+        'services:',
+        '  app:',
+        '    build: .',
+        '  db:',
+        '    image: postgres',
+        'volumes:',
+        '  pg: {}',
+      ].join('\n'),
     );
     expect(firstComposeService(dir, 'docker-compose.yml')).toBe('app');
   });
@@ -43,8 +56,12 @@ describe('compose-detect', () => {
 
 describe('NativeShellEnv', () => {
   let dir: string;
-  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cezar-native-')); });
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cezar-native-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
 
   it('runs configured commands and reports success', async () => {
     const env = new NativeShellEnv(dir, projectEnv({ install: 'true', test: 'echo hello' }));
@@ -69,7 +86,10 @@ describe('NativeShellEnv', () => {
   });
 
   it('injects envVars', async () => {
-    const env = new NativeShellEnv(dir, projectEnv({ test: 'echo $CEZAR_FOO', envVars: { CEZAR_FOO: 'bar' } }));
+    const env = new NativeShellEnv(
+      dir,
+      projectEnv({ test: 'echo $CEZAR_FOO', envVars: { CEZAR_FOO: 'bar' } }),
+    );
     const r = await env.test();
     expect(r?.stdout).toContain('bar');
   });
@@ -77,15 +97,22 @@ describe('NativeShellEnv', () => {
 
 describe('NativeShellEnv dev server', () => {
   let dir: string;
-  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cezar-dev-')); });
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cezar-dev-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
 
   it('boots a server, probes readiness, and stops it on dispose', async () => {
     const port = 49000 + Math.floor(Math.random() * 10000);
     const command = `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port})"`;
-    const env = new NativeShellEnv(dir, projectEnv({
-      devServer: { enabled: true, command, port, readyPath: '/', readyTimeoutSec: 10 },
-    }));
+    const env = new NativeShellEnv(
+      dir,
+      projectEnv({
+        devServer: { enabled: true, command, port, readyPath: '/', readyTimeoutSec: 10 },
+      }),
+    );
 
     const handle = await env.startDevServer();
     expect(handle).not.toBeNull();
@@ -111,16 +138,28 @@ describe('NativeShellEnv dev server', () => {
 
 describe('createRunEnv', () => {
   let dir: string;
-  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cezar-factory-')); });
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cezar-factory-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
 
   it('returns a native env when kind is native', async () => {
-    const env = await createRunEnv({ worktreePath: dir, spec: projectEnv({ kind: 'native' }), runId: 'r1' });
+    const env = await createRunEnv({
+      worktreePath: dir,
+      spec: projectEnv({ kind: 'native' }),
+      runId: 'r1',
+    });
     expect(env.kind).toBe('native');
   });
 
   it('returns native under auto when no compose file exists', async () => {
-    const env = await createRunEnv({ worktreePath: dir, spec: projectEnv({ kind: 'auto' }), runId: 'r1' });
+    const env = await createRunEnv({
+      worktreePath: dir,
+      spec: projectEnv({ kind: 'auto' }),
+      runId: 'r1',
+    });
     expect(env.kind).toBe('native');
   });
 

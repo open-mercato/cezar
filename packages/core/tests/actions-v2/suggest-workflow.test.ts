@@ -13,7 +13,10 @@ import type { GitHubService } from '../../src/services/github.service.js';
 type ContentBlock = Record<string, unknown>;
 
 interface CapturedCall {
-  tools?: Array<{ name: string; input_schema: { properties: Record<string, unknown>; required?: string[] } }>;
+  tools?: Array<{
+    name: string;
+    input_schema: { properties: Record<string, unknown>; required?: string[] };
+  }>;
   messages: Array<{ role: string; content: unknown }>;
 }
 
@@ -232,18 +235,14 @@ describe('suggest-workflow routing', () => {
     const { ctx } = makeEffectCtx();
     const deferred: DeferredEffect[] = [];
 
-    const result = await runAction(
-      makeAction({ suggestedFlowId: 'flow-123' }),
-      target,
-      {
-        skills: [],
-        anthropic: client,
-        effectCtx: ctx,
-        deferSink: async (item) => {
-          deferred.push(item);
-        },
+    const result = await runAction(makeAction({ suggestedFlowId: 'flow-123' }), target, {
+      skills: [],
+      anthropic: client,
+      effectCtx: ctx,
+      deferSink: async (item) => {
+        deferred.push(item);
       },
-    );
+    });
 
     expect(deferred).toHaveLength(1);
     expect(deferred[0].call.effect).toBe('suggest-workflow');

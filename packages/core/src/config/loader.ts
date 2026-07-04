@@ -48,8 +48,19 @@ function deepMerge(
     const val = source[key];
     const skip = allowEmpty ? val === undefined : val === undefined || val === null || val === '';
     if (skip) continue;
-    if (typeof val === 'object' && val !== null && !Array.isArray(val) && typeof result[key] === 'object' && result[key] !== null && !Array.isArray(result[key])) {
-      result[key] = deepMerge(result[key] as Record<string, unknown>, val as Record<string, unknown>, allowEmpty);
+    if (
+      typeof val === 'object' &&
+      val !== null &&
+      !Array.isArray(val) &&
+      typeof result[key] === 'object' &&
+      result[key] !== null &&
+      !Array.isArray(result[key])
+    ) {
+      result[key] = deepMerge(
+        result[key] as Record<string, unknown>,
+        val as Record<string, unknown>,
+        allowEmpty,
+      );
     } else {
       result[key] = val;
     }

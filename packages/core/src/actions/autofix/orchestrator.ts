@@ -14,15 +14,44 @@ import type { AgentEvent as NormalizedAgentEvent } from '../../agents/agent-runn
 import { LLMService } from '../../services/llm.service.js';
 import { buildDoneDetectorPrompt, DoneDetectorResponseSchema } from './done-detector-preflight.js';
 import { detectBugSignal } from './bug-signal.js';
-import { ANALYZER_SYSTEM_PROMPT, AnalyzerResultSchema, isNoActionNeeded, buildAnalyzerUserPrompt, type RootCause } from './prompts/analyzer.js';
-import { FIXER_SYSTEM_PROMPT, FixReportSchema, buildFixerUserPrompt, type FixReport } from './prompts/fixer.js';
-import { REVIEWER_SYSTEM_PROMPT, ReviewVerdictSchema, buildReviewerUserPrompt, normalizeVerdict, retryNotesFromVerdict, fallbackVerdictFromProse, type ReviewVerdict } from './prompts/reviewer.js';
+import {
+  ANALYZER_SYSTEM_PROMPT,
+  AnalyzerResultSchema,
+  isNoActionNeeded,
+  buildAnalyzerUserPrompt,
+  type RootCause,
+} from './prompts/analyzer.js';
+import {
+  FIXER_SYSTEM_PROMPT,
+  FixReportSchema,
+  buildFixerUserPrompt,
+  type FixReport,
+} from './prompts/fixer.js';
+import {
+  REVIEWER_SYSTEM_PROMPT,
+  ReviewVerdictSchema,
+  buildReviewerUserPrompt,
+  normalizeVerdict,
+  retryNotesFromVerdict,
+  fallbackVerdictFromProse,
+  type ReviewVerdict,
+} from './prompts/reviewer.js';
 import { discoverSkills, type Skill } from '../../skills/skill-catalog.js';
 import { resolveStepConfig, type WorkflowBinding } from '../../workflows/binding.js';
 import { runWorkflow } from '../../workflows/workflow-engine.js';
-import { autofixWorkflow, type AutofixBlackboard } from '../../workflows/definitions/autofix.workflow.js';
-import { ciFollowupWorkflow, type CiFollowupBlackboard, type CiFollowupSeed } from '../../workflows/definitions/ci-followup.workflow.js';
-import { workflowResultToAutofixOutcome, workflowResultToCiFollowupOutcome } from '../../workflows/run-translation.js';
+import {
+  autofixWorkflow,
+  type AutofixBlackboard,
+} from '../../workflows/definitions/autofix.workflow.js';
+import {
+  ciFollowupWorkflow,
+  type CiFollowupBlackboard,
+  type CiFollowupSeed,
+} from '../../workflows/definitions/ci-followup.workflow.js';
+import {
+  workflowResultToAutofixOutcome,
+  workflowResultToCiFollowupOutcome,
+} from '../../workflows/run-translation.js';
 import type { AgentRunRecord } from '../../workflows/workflow.js';
 import {
   buildCiFollowupNotes,
@@ -59,7 +88,9 @@ function withAttemptTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new AgentSessionTimeoutError(timeoutMs)), timeoutMs);
   });
-  return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /**
@@ -70,10 +101,14 @@ function withAttemptTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<
  */
 function normalizedToLegacyAgentEvent(e: NormalizedAgentEvent): AgentEvent | null {
   switch (e.type) {
-    case 'text': return { type: 'text', text: e.text };
-    case 'tool-call': return { type: 'tool', tool: e.tool, input: e.input };
-    case 'tool-result': return { type: 'tool-result', toolUseId: e.toolCallId, result: e.result, isError: e.isError };
-    case 'token-usage': return { type: 'turn-end', tokensUsed: e.tokensUsed };
+    case 'text':
+      return { type: 'text', text: e.text };
+    case 'tool-call':
+      return { type: 'tool', tool: e.tool, input: e.input };
+    case 'tool-result':
+      return { type: 'tool-result', toolUseId: e.toolCallId, result: e.result, isError: e.isError };
+    case 'token-usage':
+      return { type: 'turn-end', tokensUsed: e.tokensUsed };
     case 'note':
     case 'done':
     case 'error':
@@ -89,7 +124,13 @@ function normalizedToLegacyAgentEvent(e: NormalizedAgentEvent): AgentEvent | nul
  */
 function applyLiveOverlay(
   stored: StoredIssue,
-  live: Partial<{ state: 'open' | 'closed'; labels: string[]; title: string; body: string; updatedAt: string }>,
+  live: Partial<{
+    state: 'open' | 'closed';
+    labels: string[];
+    title: string;
+    body: string;
+    updatedAt: string;
+  }>,
 ): StoredIssue {
   return {
     ...stored,
@@ -102,16 +143,38 @@ function applyLiveOverlay(
 }
 
 export type OrchestratorOutcome =
-  | { status: 'pr-opened'; prUrl: string; prNumber: number; branch: string; headSha: string; rootCause: RootCause; verdict: ReviewVerdict }
+  | {
+      status: 'pr-opened';
+      prUrl: string;
+      prNumber: number;
+      branch: string;
+      headSha: string;
+      rootCause: RootCause;
+      verdict: ReviewVerdict;
+    }
   | { status: 'skipped'; reason: string }
-  | { status: 'failed'; reason: string; rootCause?: RootCause; fixReport?: FixReport; verdict?: ReviewVerdict; branch?: string }
-  | { status: 'dry-run'; rootCause: RootCause; fixReport: FixReport; verdict: ReviewVerdict; branch: string; diff: string };
+  | {
+      status: 'failed';
+      reason: string;
+      rootCause?: RootCause;
+      fixReport?: FixReport;
+      verdict?: ReviewVerdict;
+      branch?: string;
+    }
+  | {
+      status: 'dry-run';
+      rootCause: RootCause;
+      fixReport: FixReport;
+      verdict: ReviewVerdict;
+      branch: string;
+      diff: string;
+    };
 
 export interface CiFollowupInput {
   issueNumber: number;
   prNumber: number;
   branch: string;
-  attemptIndex: number;    // 1-based — which follow-up attempt this is for the flow
+  attemptIndex: number; // 1-based — which follow-up attempt this is for the flow
   attemptMax: number;
   attribution: {
     reasoning: string;
@@ -123,22 +186,54 @@ export interface CiFollowupInput {
 }
 
 export type CiFollowupOutcome =
-  | { status: 'pushed'; branch: string; headSha: string; verdict: Required<ReviewVerdict>; fixReport: FixReport }
+  | {
+      status: 'pushed';
+      branch: string;
+      headSha: string;
+      verdict: Required<ReviewVerdict>;
+      fixReport: FixReport;
+    }
   | { status: 'skipped'; reason: string }
-  | { status: 'failed'; reason: string; branch?: string; verdict?: Required<ReviewVerdict>; fixReport?: FixReport };
+  | {
+      status: 'failed';
+      reason: string;
+      branch?: string;
+      verdict?: Required<ReviewVerdict>;
+      fixReport?: FixReport;
+    };
 
 // Per-attempt result from runOneAttempt. Only 'review-failed' is retriable;
 // other failure kinds bail out of the retry loop immediately.
 type AttemptOutcome =
-  | { kind: 'pr-opened'; prUrl: string; prNumber: number; headSha: string; rootCause: RootCause; fixReport: FixReport; verdict: Required<ReviewVerdict> }
-  | { kind: 'dry-run'; rootCause: RootCause; fixReport: FixReport; verdict: Required<ReviewVerdict>; diff: string }
+  | {
+      kind: 'pr-opened';
+      prUrl: string;
+      prNumber: number;
+      headSha: string;
+      rootCause: RootCause;
+      fixReport: FixReport;
+      verdict: Required<ReviewVerdict>;
+    }
+  | {
+      kind: 'dry-run';
+      rootCause: RootCause;
+      fixReport: FixReport;
+      verdict: Required<ReviewVerdict>;
+      diff: string;
+    }
   | { kind: 'user-declined' }
   | { kind: 'no-action-needed'; reason: string }
-  | { kind: 'review-failed'; reason: string; rootCause: RootCause; fixReport: FixReport; verdict: Required<ReviewVerdict> }
+  | {
+      kind: 'review-failed';
+      reason: string;
+      rootCause: RootCause;
+      fixReport: FixReport;
+      verdict: Required<ReviewVerdict>;
+    }
   | { kind: 'hard-failed'; reason: string; rootCause?: RootCause; fixReport?: FixReport };
 
 export interface OrchestratorOptions {
-  apply: boolean;       // false = dry-run (no push, no PR)
+  apply: boolean; // false = dry-run (no push, no PR)
   confirmBeforeFix?: (rootCause: RootCause, issue: StoredIssue) => Promise<boolean>;
   onEvent?: (event: string) => void;
   onAgentEvent?: (event: AgentEvent) => void;
@@ -205,13 +300,17 @@ export class AutofixOrchestrator {
     }
 
     const storedIssue = this.store.getIssue(issueNumber);
-    if (!storedIssue) return { status: 'skipped', reason: `issue #${issueNumber} not found in store` };
+    if (!storedIssue)
+      return { status: 'skipped', reason: `issue #${issueNumber} not found in store` };
     if (storedIssue.state !== 'open') return { status: 'skipped', reason: 'issue is closed' };
     // Cheap store-only gates first — no point making a GitHub call to refresh
     // labels if the issue is already done / PR already opened / out of
     // attempts.
     if (storedIssue.analysis.doneDetected === true) {
-      return { status: 'skipped', reason: storedIssue.analysis.doneReason ?? 'issue already appears resolved by a merged PR' };
+      return {
+        status: 'skipped',
+        reason: storedIssue.analysis.doneReason ?? 'issue already appears resolved by a merged PR',
+      };
     }
     if (storedIssue.analysis.autofixStatus === 'pr-opened') {
       return { status: 'skipped', reason: 'PR already opened' };
@@ -243,7 +342,8 @@ export class AutofixOrchestrator {
     // autofix — log and continue with no skills (built-in prompts unchanged).
     // Issue #262: when the caller supplied a pre-filtered catalog (SaaS path
     // with workspace_skill_states applied) use it instead of touching disk.
-    const skills = opts.skills ?? await this.discoverSkillsSafe(repoRoot, cfg.skillsDir, opts, issueNumber);
+    const skills =
+      opts.skills ?? (await this.discoverSkillsSafe(repoRoot, cfg.skillsDir, opts, issueNumber));
 
     const preflightSkip = await this.runAlreadyFixedPreflight(issue, opts);
     if (preflightSkip) {
@@ -264,7 +364,9 @@ export class AutofixOrchestrator {
       const isFirst = localAttempt === 0;
       const isLast = localAttempt === remainingAttempts - 1;
 
-      opts.onEvent?.(`[#${issueNumber}] Attempt ${globalAttempt}/${maxAttempts} — preparing worktree`);
+      opts.onEvent?.(
+        `[#${issueNumber}] Attempt ${globalAttempt}/${maxAttempts} — preparing worktree`,
+      );
 
       let worktree;
       try {
@@ -283,10 +385,17 @@ export class AutofixOrchestrator {
         });
       } catch (err) {
         // Worktree setup failure is the same next attempt too — hard stop.
-        return this.recordFailure(issueNumber, `worktree setup failed: ${(err as Error).message}`, totalTokens);
+        return this.recordFailure(
+          issueNumber,
+          `worktree setup failed: ${(err as Error).message}`,
+          totalTokens,
+        );
       }
 
-      this.store.setAnalysis(issueNumber, { autofixWorktreePath: worktree.path, autofixBranch: branch });
+      this.store.setAnalysis(issueNumber, {
+        autofixWorktreePath: worktree.path,
+        autofixBranch: branch,
+      });
       await this.store.save();
 
       // Run any user-configured env setup (yarn install, db migrate, etc.)
@@ -317,7 +426,14 @@ export class AutofixOrchestrator {
       let outcome: AttemptOutcome;
       try {
         outcome = await this.runOneAttempt({
-          issueNumber, worktree, budget, retryNotes, cfg, issue, issueData, skills,
+          issueNumber,
+          worktree,
+          budget,
+          retryNotes,
+          cfg,
+          issue,
+          issueData,
+          skills,
           confirmBeforeFix: isFirst ? opts.confirmBeforeFix : undefined,
           onEvent: opts.onEvent,
           onAgentEvent: opts.onAgentEvent,
@@ -386,7 +502,10 @@ export class AutofixOrchestrator {
 
       if (outcome.kind === 'user-declined') {
         await worktree.dispose();
-        this.store.setAnalysis(issueNumber, { autofixStatus: 'skipped', autofixWorktreePath: null });
+        this.store.setAnalysis(issueNumber, {
+          autofixStatus: 'skipped',
+          autofixWorktreePath: null,
+        });
         await this.store.save();
         return { status: 'skipped', reason: 'user declined after analysis' };
       }
@@ -408,7 +527,8 @@ export class AutofixOrchestrator {
 
       // All remaining kinds are failures. Narrow verdict/fixReport access.
       const failureVerdict = outcome.kind === 'review-failed' ? outcome.verdict : undefined;
-      const failureFixReport = outcome.kind === 'review-failed' ? outcome.fixReport : outcome.fixReport;
+      const failureFixReport =
+        outcome.kind === 'review-failed' ? outcome.fixReport : outcome.fixReport;
 
       this.store.setAnalysis(issueNumber, {
         autofixStatus: 'failed',
@@ -442,15 +562,22 @@ export class AutofixOrchestrator {
       }
 
       retryNotes = retryNotesFromVerdict(outcome.verdict);
-      opts.onEvent?.(`[#${issueNumber}] review failed — retrying with reviewer feedback (${outcome.verdict.issues.filter(i => i.severity === 'blocker').length} blocker(s))`);
+      opts.onEvent?.(
+        `[#${issueNumber}] review failed — retrying with reviewer feedback (${outcome.verdict.issues.filter((i) => i.severity === 'blocker').length} blocker(s))`,
+      );
     }
 
     // Loop exhausted — shouldn't reach here because the last iteration always
     // returns, but guard anyway.
-    return lastOutcome ?? { status: 'failed', reason: 'retry loop exhausted with no outcome', branch };
+    return (
+      lastOutcome ?? { status: 'failed', reason: 'retry loop exhausted with no outcome', branch }
+    );
   }
 
-  private async runAlreadyFixedPreflight(issue: StoredIssue, opts: OrchestratorOptions): Promise<string | null> {
+  private async runAlreadyFixedPreflight(
+    issue: StoredIssue,
+    opts: OrchestratorOptions,
+  ): Promise<string | null> {
     // TODO(phase-1a): also honor a `verify-in-repo` binding here — skipped for
     // now because this path uses LLMService.analyze(promptString), not the
     // system/user split runAgentSession exposes, so appending a skill body isn't
@@ -459,27 +586,33 @@ export class AutofixOrchestrator {
     try {
       mergedPRs = await this.github.getIssueTimeline(issue.number);
     } catch (err) {
-      opts.onEvent?.(`[#${issue.number}] PREFLIGHT — timeline lookup failed, continuing (${(err as Error).message})`);
+      opts.onEvent?.(
+        `[#${issue.number}] PREFLIGHT — timeline lookup failed, continuing (${(err as Error).message})`,
+      );
       return null;
     }
 
     if (mergedPRs.length === 0) return null;
 
-    const doneMergedPRs = mergedPRs.map(pr => ({ prNumber: pr.prNumber, prTitle: pr.prTitle }));
+    const doneMergedPRs = mergedPRs.map((pr) => ({ prNumber: pr.prNumber, prTitle: pr.prTitle }));
 
     if (!issue.digest) {
-      opts.onEvent?.(`[#${issue.number}] PREFLIGHT — merged PR references found but digest is missing, continuing`);
+      opts.onEvent?.(
+        `[#${issue.number}] PREFLIGHT — merged PR references found but digest is missing, continuing`,
+      );
       return null;
     }
 
-    opts.onEvent?.(`[#${issue.number}] PREFLIGHT — checking ${doneMergedPRs.length} merged PR reference(s) for an existing fix`);
+    opts.onEvent?.(
+      `[#${issue.number}] PREFLIGHT — checking ${doneMergedPRs.length} merged PR reference(s) for an existing fix`,
+    );
 
     try {
       const parsed = await this.llm.analyze(
         buildDoneDetectorPrompt([{ issue, mergedPRs: doneMergedPRs }]),
         DoneDetectorResponseSchema,
       );
-      const result = parsed?.results.find(r => r.number === issue.number);
+      const result = parsed?.results.find((r) => r.number === issue.number);
       if (!result) return null;
 
       this.store.setAnalysis(issue.number, {
@@ -493,10 +626,14 @@ export class AutofixOrchestrator {
       await this.store.save();
 
       if (!result.isDone) return null;
-      opts.onEvent?.(`[#${issue.number}] PREFLIGHT — skipping autofix, existing merged PR likely resolved the issue`);
+      opts.onEvent?.(
+        `[#${issue.number}] PREFLIGHT — skipping autofix, existing merged PR likely resolved the issue`,
+      );
       return result.reason;
     } catch (err) {
-      opts.onEvent?.(`[#${issue.number}] PREFLIGHT — merged-PR verification failed, continuing (${(err as Error).message})`);
+      opts.onEvent?.(
+        `[#${issue.number}] PREFLIGHT — merged-PR verification failed, continuing (${(err as Error).message})`,
+      );
       return null;
     }
   }
@@ -508,7 +645,10 @@ export class AutofixOrchestrator {
     retryNotes?: string;
     cfg: NonNullable<Config['autofix']>;
     issue: StoredIssue;
-    issueData: { issue: { title: string; body: string }; comments: Array<{ author: string; body: string; createdAt: string }> };
+    issueData: {
+      issue: { title: string; body: string };
+      comments: Array<{ author: string; body: string; createdAt: string }>;
+    };
     skills: Skill[];
     confirmBeforeFix?: (rootCause: RootCause, issue: StoredIssue) => Promise<boolean>;
     onEvent?: (event: string) => void;
@@ -524,35 +664,42 @@ export class AutofixOrchestrator {
       builtinSystemPrompt: ANALYZER_SYSTEM_PROMPT,
       builtinModel: cfg.models.analyzer,
       builtinTools: ['Read', 'Grep', 'Glob', 'Bash'],
-      bindings, skills, onEvent: args.onEvent, issueNumber,
+      bindings,
+      skills,
+      onEvent: args.onEvent,
+      issueNumber,
     });
-    const analyzer = await withAttemptTimeout(runAgentSession({
-      systemPrompt: analyzerStep.systemPrompt,
-      userPrompt: buildAnalyzerUserPrompt({
-        issueNumber,
-        title: issueData.issue.title,
-        body: issueData.issue.body,
-        comments: issueData.comments,
-        digest: issue.digest
-          ? {
-              summary: issue.digest.summary,
-              affectedArea: issue.digest.affectedArea,
-              keywords: issue.digest.keywords,
-            }
-          : undefined,
-        priorAttemptNotes: retryNotes,
+    const analyzer = await withAttemptTimeout(
+      runAgentSession({
+        systemPrompt: analyzerStep.systemPrompt,
+        userPrompt: buildAnalyzerUserPrompt({
+          issueNumber,
+          title: issueData.issue.title,
+          body: issueData.issue.body,
+          comments: issueData.comments,
+          digest: issue.digest
+            ? {
+                summary: issue.digest.summary,
+                affectedArea: issue.digest.affectedArea,
+                keywords: issue.digest.keywords,
+              }
+            : undefined,
+          priorAttemptNotes: retryNotes,
+        }),
+        cwd: worktree.path,
+        allowedTools: analyzerStep.allowedTools,
+        bashAllowlist: ['git log', 'git diff', 'git show', 'git status'],
+        responseSchema: AnalyzerResultSchema,
+        model: analyzerStep.model,
+        maxTurns: cfg.maxTurns.analyzer,
+        tokenBudget: budget,
+        onEvent: args.onAgentEvent,
       }),
-      cwd: worktree.path,
-      allowedTools: analyzerStep.allowedTools,
-      bashAllowlist: ['git log', 'git diff', 'git show', 'git status'],
-      responseSchema: AnalyzerResultSchema,
-      model: analyzerStep.model,
-      maxTurns: cfg.maxTurns.analyzer,
-      tokenBudget: budget,
-      onEvent: args.onAgentEvent,
-    }), cfg.attemptTimeoutMs);
+      cfg.attemptTimeoutMs,
+    );
 
-    if (analyzer.budgetExceeded) return { kind: 'hard-failed', reason: 'token budget exceeded during analysis' };
+    if (analyzer.budgetExceeded)
+      return { kind: 'hard-failed', reason: 'token budget exceeded during analysis' };
     if (!analyzer.parsed) {
       const tail = analyzer.text.slice(-400).trim();
       return {
@@ -587,34 +734,43 @@ export class AutofixOrchestrator {
       builtinSystemPrompt: FIXER_SYSTEM_PROMPT,
       builtinModel: cfg.models.fixer,
       builtinTools: cfg.allowedTools,
-      bindings, skills, onEvent: args.onEvent, issueNumber,
+      bindings,
+      skills,
+      onEvent: args.onEvent,
+      issueNumber,
     });
-    const fixer = await withAttemptTimeout(runAgentSession({
-      systemPrompt: fixStep.systemPrompt,
-      userPrompt: buildFixerUserPrompt({
-        issueNumber,
-        title: issueData.issue.title,
-        rootCause,
-        priorAttemptNotes: retryNotes,
+    const fixer = await withAttemptTimeout(
+      runAgentSession({
+        systemPrompt: fixStep.systemPrompt,
+        userPrompt: buildFixerUserPrompt({
+          issueNumber,
+          title: issueData.issue.title,
+          rootCause,
+          priorAttemptNotes: retryNotes,
+        }),
+        cwd: worktree.path,
+        allowedTools: fixStep.allowedTools,
+        bashAllowlist: cfg.bashAllowlist,
+        responseSchema: FixReportSchema,
+        model: fixStep.model,
+        maxTurns: cfg.maxTurns.fixer,
+        tokenBudget: budget,
+        onEvent: args.onAgentEvent,
       }),
-      cwd: worktree.path,
-      allowedTools: fixStep.allowedTools,
-      bashAllowlist: cfg.bashAllowlist,
-      responseSchema: FixReportSchema,
-      model: fixStep.model,
-      maxTurns: cfg.maxTurns.fixer,
-      tokenBudget: budget,
-      onEvent: args.onAgentEvent,
-    }), cfg.attemptTimeoutMs);
+      cfg.attemptTimeoutMs,
+    );
 
-    if (fixer.budgetExceeded) return { kind: 'hard-failed', reason: 'token budget exceeded during fix', rootCause };
-    if (!fixer.parsed) return { kind: 'hard-failed', reason: 'fixer did not return a valid FixReport', rootCause };
+    if (fixer.budgetExceeded)
+      return { kind: 'hard-failed', reason: 'token budget exceeded during fix', rootCause };
+    if (!fixer.parsed)
+      return { kind: 'hard-failed', reason: 'fixer did not return a valid FixReport', rootCause };
     const fixReport = fixer.parsed;
 
     args.onEvent?.(`[#${issueNumber}] COMMIT — staging changes`);
     const commitMessage = buildCommitMessage(issueNumber, issueData.issue.title, fixReport);
     const commitSha = await commitAll(worktree.path, commitMessage);
-    if (!commitSha) return { kind: 'hard-failed', reason: 'fixer made no file changes', rootCause, fixReport };
+    if (!commitSha)
+      return { kind: 'hard-failed', reason: 'fixer made no file changes', rootCause, fixReport };
 
     const diff = await getDiffAgainstBase(worktree.path, cfg.baseBranch);
 
@@ -624,26 +780,32 @@ export class AutofixOrchestrator {
       builtinSystemPrompt: REVIEWER_SYSTEM_PROMPT,
       builtinModel: cfg.models.reviewer,
       builtinTools: ['Read', 'Grep', 'Glob'],
-      bindings, skills, onEvent: args.onEvent, issueNumber,
+      bindings,
+      skills,
+      onEvent: args.onEvent,
+      issueNumber,
     });
-    const reviewer = await withAttemptTimeout(runAgentSession({
-      systemPrompt: reviewStep.systemPrompt,
-      userPrompt: buildReviewerUserPrompt({
-        issueNumber,
-        title: issueData.issue.title,
-        rootCause,
-        fixReport,
-        diff,
-        baseBranch: cfg.baseBranch,
+    const reviewer = await withAttemptTimeout(
+      runAgentSession({
+        systemPrompt: reviewStep.systemPrompt,
+        userPrompt: buildReviewerUserPrompt({
+          issueNumber,
+          title: issueData.issue.title,
+          rootCause,
+          fixReport,
+          diff,
+          baseBranch: cfg.baseBranch,
+        }),
+        cwd: worktree.path,
+        allowedTools: reviewStep.allowedTools,
+        responseSchema: ReviewVerdictSchema,
+        model: reviewStep.model,
+        maxTurns: cfg.maxTurns.reviewer,
+        tokenBudget: budget,
+        onEvent: args.onAgentEvent,
       }),
-      cwd: worktree.path,
-      allowedTools: reviewStep.allowedTools,
-      responseSchema: ReviewVerdictSchema,
-      model: reviewStep.model,
-      maxTurns: cfg.maxTurns.reviewer,
-      tokenBudget: budget,
-      onEvent: args.onAgentEvent,
-    }), cfg.attemptTimeoutMs);
+      cfg.attemptTimeoutMs,
+    );
 
     // If the reviewer emitted prose instead of JSON we recover what we can so
     // the retry loop keeps its signal. Worst case: synthetic fail that tells
@@ -652,8 +814,10 @@ export class AutofixOrchestrator {
       ? normalizeVerdict(reviewer.parsed)
       : fallbackVerdictFromProse(reviewer.text);
 
-    const blockers = verdict.issues.filter(i => i.severity === 'blocker').length;
-    const passes = cfg.requireReviewPass ? verdict.verdict === 'pass' && blockers === 0 : blockers === 0;
+    const blockers = verdict.issues.filter((i) => i.severity === 'blocker').length;
+    const passes = cfg.requireReviewPass
+      ? verdict.verdict === 'pass' && blockers === 0
+      : blockers === 0;
 
     if (!passes) {
       return {
@@ -686,7 +850,15 @@ export class AutofixOrchestrator {
       labels: cfg.prLabels,
     });
 
-    return { kind: 'pr-opened', prUrl: pr.url, prNumber: pr.number, headSha: commitSha, rootCause, fixReport, verdict };
+    return {
+      kind: 'pr-opened',
+      prUrl: pr.url,
+      prNumber: pr.number,
+      headSha: commitSha,
+      rootCause,
+      fixReport,
+      verdict,
+    };
   }
 
   /**
@@ -701,19 +873,25 @@ export class AutofixOrchestrator {
    *
    * One attempt per call. The ci-fix cron loops if attempts remain.
    */
-  async processCiFollowup(input: CiFollowupInput, opts: OrchestratorOptions): Promise<CiFollowupOutcome> {
+  async processCiFollowup(
+    input: CiFollowupInput,
+    opts: OrchestratorOptions,
+  ): Promise<CiFollowupOutcome> {
     if (this.config.workflow?.useEngine) return this.processCiFollowupViaEngine(input, opts);
     const cfg = this.config.autofix;
     if (!cfg || !cfg.enabled) return { status: 'skipped', reason: 'autofix disabled in config' };
     if (!cfg.repoRoot) return { status: 'skipped', reason: 'autofix.repoRoot not set' };
 
     const issue = this.store.getIssue(input.issueNumber);
-    if (!issue) return { status: 'skipped', reason: `issue #${input.issueNumber} not found in store` };
+    if (!issue)
+      return { status: 'skipped', reason: `issue #${input.issueNumber} not found in store` };
 
     const repoRoot = resolve(cfg.repoRoot);
     const issueData = await this.github.getIssueWithComments(input.issueNumber);
 
-    opts.onEvent?.(`[#${input.issueNumber}] CI-FIX ${input.attemptIndex}/${input.attemptMax} — fetching branch ${input.branch}`);
+    opts.onEvent?.(
+      `[#${input.issueNumber}] CI-FIX ${input.attemptIndex}/${input.attemptMax} — fetching branch ${input.branch}`,
+    );
 
     // Materialise the PR branch into cezar's private ref namespace. The
     // follow-up worktree attaches to the existing local branch
@@ -722,9 +900,18 @@ export class AutofixOrchestrator {
     // fetched PR tip when none exists yet.
     let prRef: string;
     try {
-      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch, this.github.gitAuthArgs());
+      prRef = await fetchRemoteBranch(
+        repoRoot,
+        cfg.remote,
+        input.branch,
+        this.github.gitAuthArgs(),
+      );
     } catch (err) {
-      return { status: 'failed', reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`, branch: input.branch };
+      return {
+        status: 'failed',
+        reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`,
+        branch: input.branch,
+      };
     }
 
     let worktree;
@@ -740,153 +927,201 @@ export class AutofixOrchestrator {
         resetBranch: false,
       });
     } catch (err) {
-      return { status: 'failed', reason: `worktree setup failed: ${(err as Error).message}`, branch: input.branch };
+      return {
+        status: 'failed',
+        reason: `worktree setup failed: ${(err as Error).message}`,
+        branch: input.branch,
+      };
     }
 
     // Wrap everything after worktree creation so an uncaught throw from a
     // runAgentSession / commit / push call can't leak the worktree.
     try {
-    // Re-run setup commands (fresh worktree, no deps installed yet).
-    if (cfg.setupCommands && cfg.setupCommands.length > 0) {
-      opts.onEvent?.(`[#${input.issueNumber}] CI-FIX SETUP — running ${cfg.setupCommands.length} command(s)`);
-      for (const command of cfg.setupCommands) {
-        opts.onEvent?.(`[#${input.issueNumber}] $ ${command}`);
-        const result = await runSetupCommand(command, worktree.path, (line) => {
-          opts.onEvent?.(`  ${line}`);
-        });
-        if (!result.ok) {
-          const tail = (result.stderr || result.stdout).split('\n').slice(-5).join(' | ').trim();
-          return {
-            status: 'failed',
-            reason: `env setup failed: \`${command}\` exited ${result.exitCode}${tail ? ` — ${tail}` : ''}`,
-            branch: input.branch,
-          };
+      // Re-run setup commands (fresh worktree, no deps installed yet).
+      if (cfg.setupCommands && cfg.setupCommands.length > 0) {
+        opts.onEvent?.(
+          `[#${input.issueNumber}] CI-FIX SETUP — running ${cfg.setupCommands.length} command(s)`,
+        );
+        for (const command of cfg.setupCommands) {
+          opts.onEvent?.(`[#${input.issueNumber}] $ ${command}`);
+          const result = await runSetupCommand(command, worktree.path, (line) => {
+            opts.onEvent?.(`  ${line}`);
+          });
+          if (!result.ok) {
+            const tail = (result.stderr || result.stdout).split('\n').slice(-5).join(' | ').trim();
+            return {
+              status: 'failed',
+              reason: `env setup failed: \`${command}\` exited ${result.exitCode}${tail ? ` — ${tail}` : ''}`,
+              branch: input.branch,
+            };
+          }
         }
       }
-    }
 
-    const budget = new TokenBudget(cfg.ciFixTokenBudget ?? cfg.tokenBudgetPerAttempt);
+      const budget = new TokenBudget(cfg.ciFixTokenBudget ?? cfg.tokenBudgetPerAttempt);
 
-    // Attribution IS our root-cause diagnosis. Confidence=1 because the
-    // attributor already cleared the "is this ours?" hurdle; the fixer
-    // shouldn't second-guess that.
-    const rootCause: RootCause = {
-      summary: input.attribution.suggestedFocus
-        ? `CI follow-up: ${input.attribution.suggestedFocus}`
-        : `CI failure on PR #${input.prNumber} attributed to this autofix`,
-      hypothesis: input.attribution.reasoning,
-      suspectedFiles: [],
-      reproductionNotes: input.failedCheckNames.length > 0
-        ? `Failing CI checks: ${input.failedCheckNames.join(', ')}`
-        : undefined,
-      confidence: 1,
-    };
-
-    const priorAttemptNotes = buildCiFollowupNotes(input);
-
-    opts.onEvent?.(`[#${input.issueNumber}] CI-FIX FIX — implementing adjustment`);
-    let fixer;
-    try {
-      fixer = await withAttemptTimeout(runAgentSession({
-        systemPrompt: FIXER_SYSTEM_PROMPT,
-        userPrompt: buildFixerUserPrompt({
-          issueNumber: input.issueNumber,
-          title: issueData.issue.title,
-          rootCause,
-          priorAttemptNotes,
-        }),
-        cwd: worktree.path,
-        allowedTools: cfg.allowedTools,
-        bashAllowlist: cfg.bashAllowlist,
-        responseSchema: FixReportSchema,
-        model: cfg.models.fixer,
-        maxTurns: cfg.maxTurns.fixer,
-        tokenBudget: budget,
-        onEvent: opts.onAgentEvent,
-      }), cfg.attemptTimeoutMs);
-    } catch (err) {
-      await worktree.dispose().catch(() => {});
-      return { status: 'failed', reason: `CI follow-up fix ${(err as Error).message}`, branch: input.branch };
-    }
-
-    if (fixer.budgetExceeded) {
-      return { status: 'failed', reason: 'token budget exceeded during CI follow-up fix', branch: input.branch };
-    }
-    if (!fixer.parsed) {
-      return { status: 'failed', reason: 'fixer did not return a valid FixReport for CI follow-up', branch: input.branch };
-    }
-    const fixReport = fixer.parsed;
-
-    opts.onEvent?.(`[#${input.issueNumber}] CI-FIX COMMIT — staging changes`);
-    const commitMessage = buildCiFollowupCommitMessage(input, issueData.issue.title, fixReport);
-    const commitSha = await commitAll(worktree.path, commitMessage);
-    if (!commitSha) {
-      return { status: 'skipped', reason: 'fixer made no file changes — CI failure may no longer reproduce' };
-    }
-
-    const diff = await getDiffAgainstBase(worktree.path, cfg.baseBranch);
-
-    opts.onEvent?.(`[#${input.issueNumber}] CI-FIX REVIEW — running code review`);
-    let reviewer;
-    try {
-      reviewer = await withAttemptTimeout(runAgentSession({
-        systemPrompt: REVIEWER_SYSTEM_PROMPT,
-        userPrompt: buildReviewerUserPrompt({
-          issueNumber: input.issueNumber,
-          title: issueData.issue.title,
-          rootCause,
-          fixReport,
-          diff,
-          baseBranch: cfg.baseBranch,
-        }),
-        cwd: worktree.path,
-        allowedTools: ['Read', 'Grep', 'Glob'],
-        responseSchema: ReviewVerdictSchema,
-        model: cfg.models.reviewer,
-        maxTurns: cfg.maxTurns.reviewer,
-        tokenBudget: budget,
-        onEvent: opts.onAgentEvent,
-      }), cfg.attemptTimeoutMs);
-    } catch (err) {
-      await worktree.dispose().catch(() => {});
-      return { status: 'failed', reason: `CI follow-up review ${(err as Error).message}`, branch: input.branch, fixReport };
-    }
-
-    const verdict: Required<ReviewVerdict> = reviewer.parsed
-      ? normalizeVerdict(reviewer.parsed)
-      : fallbackVerdictFromProse(reviewer.text);
-
-    const blockers = verdict.issues.filter(i => i.severity === 'blocker').length;
-    const passes = cfg.requireReviewPass ? verdict.verdict === 'pass' && blockers === 0 : blockers === 0;
-
-    if (!passes) {
-      return {
-        status: 'failed',
-        reason: `CI follow-up review ${verdict.verdict} (${blockers} blocker(s))`,
-        verdict,
-        fixReport,
-        branch: input.branch,
+      // Attribution IS our root-cause diagnosis. Confidence=1 because the
+      // attributor already cleared the "is this ours?" hurdle; the fixer
+      // shouldn't second-guess that.
+      const rootCause: RootCause = {
+        summary: input.attribution.suggestedFocus
+          ? `CI follow-up: ${input.attribution.suggestedFocus}`
+          : `CI failure on PR #${input.prNumber} attributed to this autofix`,
+        hypothesis: input.attribution.reasoning,
+        suspectedFiles: [],
+        reproductionNotes:
+          input.failedCheckNames.length > 0
+            ? `Failing CI checks: ${input.failedCheckNames.join(', ')}`
+            : undefined,
+        confidence: 1,
       };
-    }
 
-    opts.onEvent?.(`[#${input.issueNumber}] CI-FIX PUSH — updating PR #${input.prNumber}`);
-    try {
-      await this.github.pushBranch(input.branch, worktree.path, cfg.remote);
-    } catch (err) {
-      return { status: 'failed', reason: `push failed: ${(err as Error).message}`, verdict, fixReport, branch: input.branch };
-    }
+      const priorAttemptNotes = buildCiFollowupNotes(input);
 
-    // PR-comment is best-effort — don't fail the attempt just because we
-    // couldn't attach a note. The commit itself is the source of truth.
-    try {
-      await this.github.addComment(input.prNumber, buildCiFollowupPrComment(input, fixReport, verdict));
-    } catch (err) {
-      opts.onEvent?.(`[#${input.issueNumber}] CI-FIX NOTE — could not post PR comment: ${(err as Error).message}`);
-    }
+      opts.onEvent?.(`[#${input.issueNumber}] CI-FIX FIX — implementing adjustment`);
+      let fixer;
+      try {
+        fixer = await withAttemptTimeout(
+          runAgentSession({
+            systemPrompt: FIXER_SYSTEM_PROMPT,
+            userPrompt: buildFixerUserPrompt({
+              issueNumber: input.issueNumber,
+              title: issueData.issue.title,
+              rootCause,
+              priorAttemptNotes,
+            }),
+            cwd: worktree.path,
+            allowedTools: cfg.allowedTools,
+            bashAllowlist: cfg.bashAllowlist,
+            responseSchema: FixReportSchema,
+            model: cfg.models.fixer,
+            maxTurns: cfg.maxTurns.fixer,
+            tokenBudget: budget,
+            onEvent: opts.onAgentEvent,
+          }),
+          cfg.attemptTimeoutMs,
+        );
+      } catch (err) {
+        await worktree.dispose().catch(() => {});
+        return {
+          status: 'failed',
+          reason: `CI follow-up fix ${(err as Error).message}`,
+          branch: input.branch,
+        };
+      }
 
-    opts.onEvent?.(`[#${input.issueNumber}] CI-FIX DONE — ${commitSha.slice(0, 8)} pushed to ${input.branch}`);
+      if (fixer.budgetExceeded) {
+        return {
+          status: 'failed',
+          reason: 'token budget exceeded during CI follow-up fix',
+          branch: input.branch,
+        };
+      }
+      if (!fixer.parsed) {
+        return {
+          status: 'failed',
+          reason: 'fixer did not return a valid FixReport for CI follow-up',
+          branch: input.branch,
+        };
+      }
+      const fixReport = fixer.parsed;
 
-    return { status: 'pushed', branch: input.branch, headSha: commitSha, verdict, fixReport };
+      opts.onEvent?.(`[#${input.issueNumber}] CI-FIX COMMIT — staging changes`);
+      const commitMessage = buildCiFollowupCommitMessage(input, issueData.issue.title, fixReport);
+      const commitSha = await commitAll(worktree.path, commitMessage);
+      if (!commitSha) {
+        return {
+          status: 'skipped',
+          reason: 'fixer made no file changes — CI failure may no longer reproduce',
+        };
+      }
+
+      const diff = await getDiffAgainstBase(worktree.path, cfg.baseBranch);
+
+      opts.onEvent?.(`[#${input.issueNumber}] CI-FIX REVIEW — running code review`);
+      let reviewer;
+      try {
+        reviewer = await withAttemptTimeout(
+          runAgentSession({
+            systemPrompt: REVIEWER_SYSTEM_PROMPT,
+            userPrompt: buildReviewerUserPrompt({
+              issueNumber: input.issueNumber,
+              title: issueData.issue.title,
+              rootCause,
+              fixReport,
+              diff,
+              baseBranch: cfg.baseBranch,
+            }),
+            cwd: worktree.path,
+            allowedTools: ['Read', 'Grep', 'Glob'],
+            responseSchema: ReviewVerdictSchema,
+            model: cfg.models.reviewer,
+            maxTurns: cfg.maxTurns.reviewer,
+            tokenBudget: budget,
+            onEvent: opts.onAgentEvent,
+          }),
+          cfg.attemptTimeoutMs,
+        );
+      } catch (err) {
+        await worktree.dispose().catch(() => {});
+        return {
+          status: 'failed',
+          reason: `CI follow-up review ${(err as Error).message}`,
+          branch: input.branch,
+          fixReport,
+        };
+      }
+
+      const verdict: Required<ReviewVerdict> = reviewer.parsed
+        ? normalizeVerdict(reviewer.parsed)
+        : fallbackVerdictFromProse(reviewer.text);
+
+      const blockers = verdict.issues.filter((i) => i.severity === 'blocker').length;
+      const passes = cfg.requireReviewPass
+        ? verdict.verdict === 'pass' && blockers === 0
+        : blockers === 0;
+
+      if (!passes) {
+        return {
+          status: 'failed',
+          reason: `CI follow-up review ${verdict.verdict} (${blockers} blocker(s))`,
+          verdict,
+          fixReport,
+          branch: input.branch,
+        };
+      }
+
+      opts.onEvent?.(`[#${input.issueNumber}] CI-FIX PUSH — updating PR #${input.prNumber}`);
+      try {
+        await this.github.pushBranch(input.branch, worktree.path, cfg.remote);
+      } catch (err) {
+        return {
+          status: 'failed',
+          reason: `push failed: ${(err as Error).message}`,
+          verdict,
+          fixReport,
+          branch: input.branch,
+        };
+      }
+
+      // PR-comment is best-effort — don't fail the attempt just because we
+      // couldn't attach a note. The commit itself is the source of truth.
+      try {
+        await this.github.addComment(
+          input.prNumber,
+          buildCiFollowupPrComment(input, fixReport, verdict),
+        );
+      } catch (err) {
+        opts.onEvent?.(
+          `[#${input.issueNumber}] CI-FIX NOTE — could not post PR comment: ${(err as Error).message}`,
+        );
+      }
+
+      opts.onEvent?.(
+        `[#${input.issueNumber}] CI-FIX DONE — ${commitSha.slice(0, 8)} pushed to ${input.branch}`,
+      );
+
+      return { status: 'pushed', branch: input.branch, headSha: commitSha, verdict, fixReport };
     } finally {
       await worktree.dispose().catch(() => {});
     }
@@ -896,13 +1131,17 @@ export class AutofixOrchestrator {
   // When the flag is OFF (the default) none of this runs and the legacy path
   // above is byte-identical to before.
 
-  private async processIssueViaEngine(issueNumber: number, opts: OrchestratorOptions): Promise<OrchestratorOutcome> {
+  private async processIssueViaEngine(
+    issueNumber: number,
+    opts: OrchestratorOptions,
+  ): Promise<OrchestratorOutcome> {
     const cfg = this.config.autofix;
     if (!cfg || !cfg.enabled) return { status: 'skipped', reason: 'autofix disabled in config' };
     if (!cfg.repoRoot) return { status: 'skipped', reason: 'autofix.repoRoot not set' };
 
     const storedIssue = this.store.getIssue(issueNumber);
-    if (!storedIssue) return { status: 'skipped', reason: `issue #${issueNumber} not found in store` };
+    if (!storedIssue)
+      return { status: 'skipped', reason: `issue #${issueNumber} not found in store` };
     // Refresh from GitHub before the gate — same rationale as the legacy
     // path. The downstream workflow re-fetches what it needs anyway, so
     // the only marginal cost is this one extra API call.
@@ -911,13 +1150,18 @@ export class AutofixOrchestrator {
       const live = await this.github.getIssueWithComments(issueNumber);
       issue = applyLiveOverlay(storedIssue, live.issue);
     } catch (err) {
-      opts.onEvent?.(`[#${issueNumber}] GitHub refresh failed, using cached labels: ${(err as Error).message}`);
+      opts.onEvent?.(
+        `[#${issueNumber}] GitHub refresh failed, using cached labels: ${(err as Error).message}`,
+      );
     }
     if (issue.state !== 'open') return { status: 'skipped', reason: 'issue is closed' };
     const bugSignal = detectBugSignal(issue, { minConfidence: cfg.minBugConfidence });
     if (!bugSignal.isBug) return { status: 'skipped', reason: bugSignal.reason };
     if (issue.analysis.doneDetected === true) {
-      return { status: 'skipped', reason: issue.analysis.doneReason ?? 'issue already appears resolved by a merged PR' };
+      return {
+        status: 'skipped',
+        reason: issue.analysis.doneReason ?? 'issue already appears resolved by a merged PR',
+      };
     }
     if (issue.analysis.autofixStatus === 'pr-opened') {
       return { status: 'skipped', reason: 'PR already opened' };
@@ -948,21 +1192,38 @@ export class AutofixOrchestrator {
         onWarn: (m) => opts.onEvent?.(`[#${issueNumber}] ${m}`),
       });
     } catch (err) {
-      return this.recordFailure(issueNumber, `worktree setup failed: ${(err as Error).message}`, 0, undefined, branch);
+      return this.recordFailure(
+        issueNumber,
+        `worktree setup failed: ${(err as Error).message}`,
+        0,
+        undefined,
+        branch,
+      );
     }
 
-    this.store.setAnalysis(issueNumber, { autofixWorktreePath: worktree.path, autofixBranch: branch });
+    this.store.setAnalysis(issueNumber, {
+      autofixWorktreePath: worktree.path,
+      autofixBranch: branch,
+    });
     await this.store.save();
 
     if (cfg.setupCommands && cfg.setupCommands.length > 0) {
       opts.onEvent?.(`[#${issueNumber}] SETUP — running ${cfg.setupCommands.length} command(s)`);
       for (const command of cfg.setupCommands) {
         opts.onEvent?.(`[#${issueNumber}] $ ${command}`);
-        const result = await runSetupCommand(command, worktree.path, (line) => opts.onEvent?.(`  ${line}`));
+        const result = await runSetupCommand(command, worktree.path, (line) =>
+          opts.onEvent?.(`  ${line}`),
+        );
         if (!result.ok) {
           await worktree.dispose().catch(() => {});
           const tail = (result.stderr || result.stdout).split('\n').slice(-5).join(' | ').trim();
-          return this.recordFailure(issueNumber, `env setup failed: \`${command}\` exited ${result.exitCode}${tail ? ` — ${tail}` : ''}`, 0, undefined, branch);
+          return this.recordFailure(
+            issueNumber,
+            `env setup failed: \`${command}\` exited ${result.exitCode}${tail ? ` — ${tail}` : ''}`,
+            0,
+            undefined,
+            branch,
+          );
         }
       }
     }
@@ -981,7 +1242,13 @@ export class AutofixOrchestrator {
       });
     } catch (err) {
       await worktree.dispose().catch(() => {});
-      return this.recordFailure(issueNumber, `project env setup failed: ${(err as Error).message}`, 0, undefined, branch);
+      return this.recordFailure(
+        issueNumber,
+        `project env setup failed: ${(err as Error).message}`,
+        0,
+        undefined,
+        branch,
+      );
     }
 
     let result;
@@ -1003,7 +1270,12 @@ export class AutofixOrchestrator {
         loopMaxIterations: { 'fix-review': cfg.maxAttemptsPerIssue },
         tokenBudgetPerAttempt: cfg.tokenBudgetPerAttempt,
         onEvent: opts.onEvent,
-        onAgentEvent: opts.onAgentEvent ? (e) => { const legacy = normalizedToLegacyAgentEvent(e); if (legacy) opts.onAgentEvent!(legacy); } : undefined,
+        onAgentEvent: opts.onAgentEvent
+          ? (e) => {
+              const legacy = normalizedToLegacyAgentEvent(e);
+              if (legacy) opts.onAgentEvent!(legacy);
+            }
+          : undefined,
         onStepStart: opts.onStepStart,
         onRunRecord: opts.onRunRecord,
         pauseRequested: opts.pauseRequested,
@@ -1016,7 +1288,9 @@ export class AutofixOrchestrator {
         // wired for parity. No resume-after-pause in 3a.
         requestHumanDecision: opts.confirmBeforeFix
           ? async (prompt) => {
-              const verify = (prompt.context as { verify?: { reason?: string; confidence?: number } } | undefined)?.verify;
+              const verify = (
+                prompt.context as { verify?: { reason?: string; confidence?: number } } | undefined
+              )?.verify;
               const synthetic = {
                 summary: verify?.reason ?? prompt.question,
                 hypothesis: '',
@@ -1043,22 +1317,37 @@ export class AutofixOrchestrator {
     return outcome;
   }
 
-  private async processCiFollowupViaEngine(input: CiFollowupInput, opts: OrchestratorOptions): Promise<CiFollowupOutcome> {
+  private async processCiFollowupViaEngine(
+    input: CiFollowupInput,
+    opts: OrchestratorOptions,
+  ): Promise<CiFollowupOutcome> {
     const cfg = this.config.autofix;
     if (!cfg || !cfg.enabled) return { status: 'skipped', reason: 'autofix disabled in config' };
     if (!cfg.repoRoot) return { status: 'skipped', reason: 'autofix.repoRoot not set' };
 
     const issue = this.store.getIssue(input.issueNumber);
-    if (!issue) return { status: 'skipped', reason: `issue #${input.issueNumber} not found in store` };
+    if (!issue)
+      return { status: 'skipped', reason: `issue #${input.issueNumber} not found in store` };
 
     const repoRoot = resolve(cfg.repoRoot);
 
-    opts.onEvent?.(`[#${input.issueNumber}] CI-FIX ${input.attemptIndex}/${input.attemptMax} — fetching branch ${input.branch}`);
+    opts.onEvent?.(
+      `[#${input.issueNumber}] CI-FIX ${input.attemptIndex}/${input.attemptMax} — fetching branch ${input.branch}`,
+    );
     let prRef: string;
     try {
-      prRef = await fetchRemoteBranch(repoRoot, cfg.remote, input.branch, this.github.gitAuthArgs());
+      prRef = await fetchRemoteBranch(
+        repoRoot,
+        cfg.remote,
+        input.branch,
+        this.github.gitAuthArgs(),
+      );
     } catch (err) {
-      return { status: 'failed', reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`, branch: input.branch };
+      return {
+        status: 'failed',
+        reason: `failed to fetch ${cfg.remote}/${input.branch}: ${(err as Error).message}`,
+        branch: input.branch,
+      };
     }
 
     let worktree;
@@ -1075,18 +1364,30 @@ export class AutofixOrchestrator {
         onWarn: (m) => opts.onEvent?.(`[#${input.issueNumber}] ${m}`),
       });
     } catch (err) {
-      return { status: 'failed', reason: `worktree setup failed: ${(err as Error).message}`, branch: input.branch };
+      return {
+        status: 'failed',
+        reason: `worktree setup failed: ${(err as Error).message}`,
+        branch: input.branch,
+      };
     }
 
     if (cfg.setupCommands && cfg.setupCommands.length > 0) {
-      opts.onEvent?.(`[#${input.issueNumber}] CI-FIX SETUP — running ${cfg.setupCommands.length} command(s)`);
+      opts.onEvent?.(
+        `[#${input.issueNumber}] CI-FIX SETUP — running ${cfg.setupCommands.length} command(s)`,
+      );
       for (const command of cfg.setupCommands) {
         opts.onEvent?.(`[#${input.issueNumber}] $ ${command}`);
-        const result = await runSetupCommand(command, worktree.path, (line) => opts.onEvent?.(`  ${line}`));
+        const result = await runSetupCommand(command, worktree.path, (line) =>
+          opts.onEvent?.(`  ${line}`),
+        );
         if (!result.ok) {
           await worktree.dispose().catch(() => {});
           const tail = (result.stderr || result.stdout).split('\n').slice(-5).join(' | ').trim();
-          return { status: 'failed', reason: `env setup failed: \`${command}\` exited ${result.exitCode}${tail ? ` — ${tail}` : ''}`, branch: input.branch };
+          return {
+            status: 'failed',
+            reason: `env setup failed: \`${command}\` exited ${result.exitCode}${tail ? ` — ${tail}` : ''}`,
+            branch: input.branch,
+          };
         }
       }
     }
@@ -1114,7 +1415,11 @@ export class AutofixOrchestrator {
       });
     } catch (err) {
       await worktree.dispose().catch(() => {});
-      return { status: 'failed', reason: `project env setup failed: ${(err as Error).message}`, branch: input.branch };
+      return {
+        status: 'failed',
+        reason: `project env setup failed: ${(err as Error).message}`,
+        branch: input.branch,
+      };
     }
 
     let result;
@@ -1137,7 +1442,12 @@ export class AutofixOrchestrator {
         resumeSessionId: opts.resumeSessionId,
         tokenBudgetPerAttempt: cfg.ciFixTokenBudget ?? cfg.tokenBudgetPerAttempt,
         onEvent: opts.onEvent,
-        onAgentEvent: opts.onAgentEvent ? (e) => { const legacy = normalizedToLegacyAgentEvent(e); if (legacy) opts.onAgentEvent!(legacy); } : undefined,
+        onAgentEvent: opts.onAgentEvent
+          ? (e) => {
+              const legacy = normalizedToLegacyAgentEvent(e);
+              if (legacy) opts.onAgentEvent!(legacy);
+            }
+          : undefined,
         onStepStart: opts.onStepStart,
         onRunRecord: opts.onRunRecord,
         pauseRequested: opts.pauseRequested,
@@ -1205,7 +1515,9 @@ export class AutofixOrchestrator {
         autofixWorktreePath: null,
         autofixRootCause: outcome.rootCause?.summary ?? null,
         autofixReviewVerdict: outcome.verdict?.verdict ?? null,
-        autofixReviewNotes: outcome.verdict ? retryNotesFromVerdict(outcome.verdict as Required<ReviewVerdict>) : null,
+        autofixReviewNotes: outcome.verdict
+          ? retryNotesFromVerdict(outcome.verdict as Required<ReviewVerdict>)
+          : null,
       });
     }
     await this.store.save();
@@ -1224,7 +1536,9 @@ export class AutofixOrchestrator {
     try {
       return await discoverSkills(repoRoot, skillsDir);
     } catch (err) {
-      opts.onEvent?.(`[#${issueNumber}] SKILLS — discovery failed, continuing with built-in prompts (${(err as Error).message})`);
+      opts.onEvent?.(
+        `[#${issueNumber}] SKILLS — discovery failed, continuing with built-in prompts (${(err as Error).message})`,
+      );
       return [];
     }
   }
@@ -1253,7 +1567,9 @@ export class AutofixOrchestrator {
       skills: args.skills,
     });
     if (resolved.backend !== 'anthropic-api') {
-      args.onEvent?.(`[#${args.issueNumber}] binding requests backend '${resolved.backend}' but multi-backend execution lands in Phase 4 — using anthropic-api`);
+      args.onEvent?.(
+        `[#${args.issueNumber}] binding requests backend '${resolved.backend}' but multi-backend execution lands in Phase 4 — using anthropic-api`,
+      );
     }
     return {
       systemPrompt: resolved.systemPrompt,
@@ -1299,4 +1615,3 @@ export class AutofixOrchestrator {
     };
   }
 }
-

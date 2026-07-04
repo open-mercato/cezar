@@ -67,7 +67,10 @@ export async function acquireExternalRepoLock(sourceId: string): Promise<() => v
   // `next`, which is a different object identity than the value stored in the
   // Map (the .then() always returns a new Promise), so the delete branch was
   // unreachable and the Map grew without bound on long-lived workers.
-  const chained = prev.then(() => next, () => next);
+  const chained = prev.then(
+    () => next,
+    () => next,
+  );
   externalLocks.set(sourceId, chained);
   await prev.catch(() => {});
   let released = false;
@@ -80,10 +83,7 @@ export async function acquireExternalRepoLock(sourceId: string): Promise<() => v
 }
 
 /** Runs `fn` while holding the per-source lock. */
-export async function withExternalRepoLock<T>(
-  sourceId: string,
-  fn: () => Promise<T>,
-): Promise<T> {
+export async function withExternalRepoLock<T>(sourceId: string, fn: () => Promise<T>): Promise<T> {
   const release = await acquireExternalRepoLock(sourceId);
   try {
     return await fn();
@@ -119,9 +119,7 @@ export async function ensureExternalRepoClone(
   // `http.extraHeader`, so the token never lands in argv (visible in `ps` and
   // execFile error messages) nor in `.git/config` on disk.
   const cloneUrl = `https://github.com/${owner}/${repo}.git`;
-  const tokenEnv = githubToken
-    ? { ...process.env, ...gitTokenEnv(githubToken) }
-    : process.env;
+  const tokenEnv = githubToken ? { ...process.env, ...gitTokenEnv(githubToken) } : process.env;
 
   if (existsSync(join(repoDir, '.git'))) {
     // Heal any pre-existing clone that may have a token-bearing URL persisted

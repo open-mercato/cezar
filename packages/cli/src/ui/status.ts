@@ -5,10 +5,12 @@ import { VERSION } from '../utils/version.js';
 
 export function renderStatusBox(store: IssueStore | null): void {
   if (!store) {
-    const box = boxen(
-      chalk.yellow('No store found. Run `cezar init` to get started.'),
-      { padding: 1, borderColor: 'yellow', title: ` Cezar v${VERSION} `, titleAlignment: 'left' },
-    );
+    const box = boxen(chalk.yellow('No store found. Run `cezar init` to get started.'), {
+      padding: 1,
+      borderColor: 'yellow',
+      title: ` Cezar v${VERSION} `,
+      titleAlignment: 'left',
+    });
     console.log(box);
     return;
   }
@@ -19,9 +21,7 @@ export function renderStatusBox(store: IssueStore | null): void {
   const closedIssues = store.getIssues({ state: 'closed' });
   const digested = store.getIssues({ hasDigest: true });
 
-  const syncAgo = meta.lastSyncedAt
-    ? formatTimeAgo(new Date(meta.lastSyncedAt))
-    : 'never';
+  const syncAgo = meta.lastSyncedAt ? formatTimeAgo(new Date(meta.lastSyncedAt)) : 'never';
 
   const openStr = chalk.bold(`${openIssues.length} open`);
   const closedStr = `${closedIssues.length} closed`;

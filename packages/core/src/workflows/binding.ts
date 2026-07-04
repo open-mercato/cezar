@@ -82,7 +82,8 @@ export function resolveStepConfig(args: {
   /** Which scope of the catalog to include for this step. Defaults to `'both'`. */
   labelScope?: LabelPromptScope;
 }): ResolvedStepConfig {
-  const { builtinSystemPrompt, builtinModel, binding, runOverride, skills, labels, labelScope } = args;
+  const { builtinSystemPrompt, builtinModel, binding, runOverride, skills, labels, labelScope } =
+    args;
 
   const backend: AgentBackend =
     binding?.backend ?? runOverride?.backend ?? args.builtinBackend ?? 'anthropic-api';

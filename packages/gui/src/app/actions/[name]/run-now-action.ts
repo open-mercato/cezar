@@ -56,7 +56,11 @@ export async function enqueueActionRun(actionId: string, number: number): Promis
       .eq('workspace_id', workspace.id)
       .eq('number', number)
       .maybeSingle();
-    if (!data) return { ok: false, error: `PR #${number} not in the workspace's PR store — run /api/cron/sync to refresh` };
+    if (!data)
+      return {
+        ok: false,
+        error: `PR #${number} not in the workspace's PR store — run /api/cron/sync to refresh`,
+      };
   } else {
     const { data } = await supabase
       .from('issues')
@@ -104,7 +108,11 @@ export async function enqueueActionRun(actionId: string, number: number): Promis
     // stuck on `queued` forever in the cockpit.
     await supabase
       .from('workflow_runs')
-      .update({ status: 'failed', reason: `enqueue failed: ${jobErr.message}`, finished_at: new Date().toISOString() })
+      .update({
+        status: 'failed',
+        reason: `enqueue failed: ${jobErr.message}`,
+        finished_at: new Date().toISOString(),
+      })
       .eq('id', runId);
     return { ok: false, error: `Could not queue action: ${jobErr.message}` };
   }

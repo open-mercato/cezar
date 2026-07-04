@@ -7,15 +7,17 @@ import type { Store } from '../../../src/store/store.model.js';
 describe('AutofixOrchestrator preflight', () => {
   it('skips immediately when done-detector already marked the issue resolved', async () => {
     const store = await makeStore({
-      issues: [makeIssue({
-        number: 1740,
-        analysis: {
-          issueType: 'bug',
-          bugConfidence: 0.95,
-          doneDetected: true,
-          doneReason: 'PR #99 already resolved this issue',
-        },
-      })],
+      issues: [
+        makeIssue({
+          number: 1740,
+          analysis: {
+            issueType: 'bug',
+            bugConfidence: 0.95,
+            doneDetected: true,
+            doneReason: 'PR #99 already resolved this issue',
+          },
+        }),
+      ],
     });
 
     const github = {
@@ -35,13 +37,15 @@ describe('AutofixOrchestrator preflight', () => {
 
   it('skips when merged PR preflight concludes the issue is already fixed', async () => {
     const store = await makeStore({
-      issues: [makeIssue({
-        number: 1740,
-        analysis: {
-          issueType: 'bug',
-          bugConfidence: 0.95,
-        },
-      })],
+      issues: [
+        makeIssue({
+          number: 1740,
+          analysis: {
+            issueType: 'bug',
+            bugConfidence: 0.95,
+          },
+        }),
+      ],
     });
 
     const github = {
@@ -50,18 +54,25 @@ describe('AutofixOrchestrator preflight', () => {
         comments: [],
       }),
       getIssueTimeline: vi.fn().mockResolvedValue([
-        { prNumber: 281, prTitle: 'Fix reset password portal route', prUrl: 'https://example.test/pr/281', merged: true },
+        {
+          prNumber: 281,
+          prTitle: 'Fix reset password portal route',
+          prUrl: 'https://example.test/pr/281',
+          merged: true,
+        },
       ]),
     };
     const llm = {
       analyze: vi.fn().mockResolvedValue({
-        results: [{
-          number: 1740,
-          isDone: true,
-          confidence: 0.93,
-          reason: 'PR #281 explicitly fixes the missing reset-password route.',
-          draftComment: 'Resolved by PR #281.',
-        }],
+        results: [
+          {
+            number: 1740,
+            isDone: true,
+            confidence: 0.93,
+            reason: 'PR #281 explicitly fixes the missing reset-password route.',
+            draftComment: 'Resolved by PR #281.',
+          },
+        ],
       }),
     };
 
@@ -79,8 +90,12 @@ describe('AutofixOrchestrator preflight', () => {
     const issue = store.getIssue(1740);
     expect(issue?.analysis.doneDetected).toBe(true);
     expect(issue?.analysis.doneConfidence).toBe(0.93);
-    expect(issue?.analysis.doneReason).toBe('PR #281 explicitly fixes the missing reset-password route.');
-    expect(issue?.analysis.doneMergedPRs).toEqual([{ prNumber: 281, prTitle: 'Fix reset password portal route' }]);
+    expect(issue?.analysis.doneReason).toBe(
+      'PR #281 explicitly fixes the missing reset-password route.',
+    );
+    expect(issue?.analysis.doneMergedPRs).toEqual([
+      { prNumber: 281, prTitle: 'Fix reset password portal route' },
+    ]);
   });
 });
 
@@ -100,10 +115,7 @@ function makeConfig() {
   });
 }
 
-function makeIssue(overrides: {
-  number: number;
-  analysis?: Record<string, unknown>;
-}) {
+function makeIssue(overrides: { number: number; analysis?: Record<string, unknown> }) {
   return {
     number: overrides.number,
     title: `Issue #${overrides.number}`,

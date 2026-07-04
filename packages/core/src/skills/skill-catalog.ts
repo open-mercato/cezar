@@ -16,12 +16,7 @@ import { fileURLToPath } from 'node:url';
  * Overrides (workspace-scoped DB copies) are layered on top of any source at
  * consumer side; the catalog itself only enumerates origins.
  */
-export type SkillSource =
-  | 'built-in'
-  | 'workspace-repo'
-  | 'external-repo'
-  | 'disk'
-  | 'skills-sh';
+export type SkillSource = 'built-in' | 'workspace-repo' | 'external-repo' | 'disk' | 'skills-sh';
 
 /**
  * Order in which sources win collisions on the same skill name (highest
@@ -79,10 +74,7 @@ function builtinSkillsDir(): string {
  * Recursively discover `**\/*.md` skills under a directory. Missing /
  * unreadable directory ⇒ `[]`. Used internally by `discoverSkills`.
  */
-async function readMarkdownSkills(
-  dir: string,
-  source: Skill['source'],
-): Promise<Skill[]> {
+async function readMarkdownSkills(dir: string, source: Skill['source']): Promise<Skill[]> {
   let entries: string[];
   try {
     entries = await readdir(dir, { recursive: true });
@@ -101,12 +93,14 @@ async function readMarkdownSkills(
       continue;
     }
     const { frontmatter, body } = parseFrontmatter(raw, absPath);
-    const name = typeof frontmatter.name === 'string' && frontmatter.name.trim()
-      ? frontmatter.name.trim()
-      : basename(rel, extname(rel));
-    const description = typeof frontmatter.description === 'string' && frontmatter.description.trim()
-      ? frontmatter.description.trim()
-      : undefined;
+    const name =
+      typeof frontmatter.name === 'string' && frontmatter.name.trim()
+        ? frontmatter.name.trim()
+        : basename(rel, extname(rel));
+    const description =
+      typeof frontmatter.description === 'string' && frontmatter.description.trim()
+        ? frontmatter.description.trim()
+        : undefined;
     const suggestedStages = Array.isArray(frontmatter['cezar-stages'])
       ? frontmatter['cezar-stages'].filter((s): s is string => typeof s === 'string')
       : [];
@@ -123,10 +117,7 @@ async function readMarkdownSkills(
  * Empty repo skills dir is fully supported — every action falls back to the
  * built-in catalog.
  */
-export async function discoverSkills(
-  repoRoot: string,
-  skillsDir = '.ai/skills',
-): Promise<Skill[]> {
+export async function discoverSkills(repoRoot: string, skillsDir = '.ai/skills'): Promise<Skill[]> {
   const [builtin, repo] = await Promise.all([
     readMarkdownSkills(builtinSkillsDir(), 'built-in'),
     readMarkdownSkills(resolve(repoRoot, skillsDir), 'workspace-repo'),
@@ -193,10 +184,7 @@ export interface ParsedSkillMarkdown {
   body: string;
 }
 
-export function parseSkillMarkdown(
-  raw: string,
-  fallbackName?: string,
-): ParsedSkillMarkdown {
+export function parseSkillMarkdown(raw: string, fallbackName?: string): ParsedSkillMarkdown {
   const { frontmatter, body } = parseFrontmatter(raw);
   const frontmatterName =
     typeof frontmatter.name === 'string' && frontmatter.name.trim()
@@ -214,7 +202,10 @@ export function parseSkillMarkdown(
 }
 
 /** Partition skills by whether their `suggestedStages` includes `stageId`. */
-export function skillsForStage(skills: Skill[], stageId: string): { suggested: Skill[]; others: Skill[] } {
+export function skillsForStage(
+  skills: Skill[],
+  stageId: string,
+): { suggested: Skill[]; others: Skill[] } {
   const suggested: Skill[] = [];
   const others: Skill[] = [];
   for (const skill of skills) {
@@ -280,7 +271,10 @@ function parseFrontmatter(
     if (rest.startsWith('[') && rest.endsWith(']')) {
       const inner = rest.slice(1, -1).trim();
       frontmatter[key] = inner
-        ? inner.split(',').map((s) => stripQuotes(s.trim())).filter((s) => s.length > 0)
+        ? inner
+            .split(',')
+            .map((s) => stripQuotes(s.trim()))
+            .filter((s) => s.length > 0)
         : [];
       continue;
     }

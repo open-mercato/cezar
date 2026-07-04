@@ -80,7 +80,8 @@ export async function loadWorkflowSettings(
 
   if (!data) return { ...DEFAULT_WORKSPACE_WORKFLOW_SETTINGS };
   return {
-    autoTriageEnabled: data.auto_triage_enabled ?? DEFAULT_WORKSPACE_WORKFLOW_SETTINGS.autoTriageEnabled,
+    autoTriageEnabled:
+      data.auto_triage_enabled ?? DEFAULT_WORKSPACE_WORKFLOW_SETTINGS.autoTriageEnabled,
     autofixEnabled: data.autofix_enabled ?? DEFAULT_WORKSPACE_WORKFLOW_SETTINGS.autofixEnabled,
     separateCommentPerStep:
       data.separate_comment_per_step ?? DEFAULT_WORKSPACE_WORKFLOW_SETTINGS.separateCommentPerStep,
@@ -115,7 +116,10 @@ export async function loadActiveSkillCatalog(
       ? await core.discoverSkills(repoRoot, skillsDir)
       : await core.discoverBuiltinSkills();
   } catch (err) {
-    console.warn('[workflow-config] discoverSkills failed:', err instanceof Error ? err.message : err);
+    console.warn(
+      '[workflow-config] discoverSkills failed:',
+      err instanceof Error ? err.message : err,
+    );
     return undefined;
   }
 

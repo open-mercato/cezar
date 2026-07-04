@@ -27,7 +27,9 @@ async function loadActivity(workspaceId: string): Promise<ActivityItem[]> {
   const [{ data: runs }, { data: events }] = await Promise.all([
     supabase
       .from('workflow_runs')
-      .select('id, workflow, issue_number, status, outcome, started_at, finished_at, pr_url, reason')
+      .select(
+        'id, workflow, issue_number, status, outcome, started_at, finished_at, pr_url, reason',
+      )
       .eq('workspace_id', workspaceId)
       .gte('started_at', since)
       .order('started_at', { ascending: false })
@@ -45,7 +47,8 @@ async function loadActivity(workspaceId: string): Promise<ActivityItem[]> {
   const items: ActivityItem[] = [];
 
   for (const r of (runs ?? []) as WorkflowRunRow[]) {
-    const isTerminal = r.status === 'succeeded' || r.status === 'failed' || r.status === 'cancelled';
+    const isTerminal =
+      r.status === 'succeeded' || r.status === 'failed' || r.status === 'cancelled';
     const issueRef = r.issue_number != null ? `#${r.issue_number}` : '(no issue)';
 
     items.push({
@@ -156,7 +159,8 @@ export default async function ActivityPage() {
 }
 
 function TypeIcon({ type, status }: { type: string; status?: DbWorkflowRunStatus }) {
-  if (type === 'run_completed' && status === 'failed') return <span className="text-xs text-danger">✗</span>;
+  if (type === 'run_completed' && status === 'failed')
+    return <span className="text-xs text-danger">✗</span>;
   if (type === 'run_completed') return <span className="text-xs text-accent">✓</span>;
   if (type === 'run_started') return <span className="text-xs text-fg-muted">▸</span>;
   return <span className="text-xs text-fg-subtle">·</span>;

@@ -2,16 +2,34 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { Config } from '../config/config.model.js';
 import type { IssueStore } from '../store/store.js';
-import type { AgentBackend, AgentEvent, AgentRunner, AgentRunSpec } from '../agents/agent-runner.js';
+import type {
+  AgentBackend,
+  AgentEvent,
+  AgentRunner,
+  AgentRunSpec,
+} from '../agents/agent-runner.js';
 import { createAgentRunner } from '../agents/runner-factory.js';
 import { discoverSkills, type Skill } from '../skills/skill-catalog.js';
-import { resolveStepConfig, type WorkflowBinding, type WorkspaceWorkflowSettings, DEFAULT_WORKSPACE_WORKFLOW_SETTINGS } from './binding.js';
+import {
+  resolveStepConfig,
+  type WorkflowBinding,
+  type WorkspaceWorkflowSettings,
+  DEFAULT_WORKSPACE_WORKFLOW_SETTINGS,
+} from './binding.js';
 import type { WorkspaceLabel } from '../labels/label-catalog.js';
-import { commitAll, getDiffAgainstBase, squashCommitsToBase, startWorktreeAutosaver } from '../actions/autofix/worktree.js';
+import {
+  commitAll,
+  getDiffAgainstBase,
+  squashCommitsToBase,
+  startWorktreeAutosaver,
+} from '../actions/autofix/worktree.js';
 import { upsertMarkerComment } from './pr-link-marker.js';
 import type { RunEnv } from '../provision/run-env.js';
 import { PersistentClaudeSession, ResumeFailedError } from '../agents/persistent-claude-session.js';
-import { UNIFIED_AUTOFIX_SYSTEM_PROMPT, buildUnifiedFlowSystemPrompt } from '../actions/autofix/prompts/autofix-unified.js';
+import {
+  UNIFIED_AUTOFIX_SYSTEM_PROMPT,
+  buildUnifiedFlowSystemPrompt,
+} from '../actions/autofix/prompts/autofix-unified.js';
 import { TokenBudget } from '../actions/autofix/token-budget.js';
 import { parseStructured } from '../agents/structured-output.js';
 import {
@@ -137,7 +155,11 @@ export interface WorkflowRunContext {
     /** Optional. Used to recover from autosaver-already-committed work — see
      *  `squashCommitsToBase` in worktree.ts. When omitted the engine falls
      *  back to the no-changes path, matching pre-autosaver behavior. */
-    squashCommitsToBase?(worktreePath: string, baseRef: string, message: string): Promise<string | null>;
+    squashCommitsToBase?(
+      worktreePath: string,
+      baseRef: string,
+      message: string,
+    ): Promise<string | null>;
   };
 }
 
@@ -150,12 +172,21 @@ export interface WorkflowGitHub {
     comments: Array<{ author: string; body: string; createdAt: string }>;
   }>;
   /** Used by the pr-link-marker upsert; falls back to `addComment` when absent. */
-  listIssueCommentsWithIds?(issueNumber: number): Promise<Array<{ id: number; author: string; body: string; createdAt: string }>>;
+  listIssueCommentsWithIds?(
+    issueNumber: number,
+  ): Promise<Array<{ id: number; author: string; body: string; createdAt: string }>>;
   setLabels(issueNumber: number, labels: string[]): Promise<void>;
   addLabel(issueNumber: number, label: string): Promise<void>;
   closeIssue(issueNumber: number, reason?: 'completed' | 'not_planned'): Promise<void>;
   pushBranch(branch: string, localRepoPath: string, remote?: string): Promise<void>;
-  createPullRequest(opts: { title: string; body: string; head: string; base: string; draft?: boolean; labels?: string[] }): Promise<{ url: string; number: number }>;
+  createPullRequest(opts: {
+    title: string;
+    body: string;
+    head: string;
+    base: string;
+    draft?: boolean;
+    labels?: string[];
+  }): Promise<{ url: string; number: number }>;
 }
 
 interface RenderedSection {
@@ -203,7 +234,10 @@ class LivingComment {
     if (!section) return;
     if (this.separatePerStep) {
       // Old behavior: one comment per step.
-      await this.github.addComment(this.targetNumber(this.active), `### ${section.heading}\n\n${section.body}`);
+      await this.github.addComment(
+        this.targetNumber(this.active),
+        `### ${section.heading}\n\n${section.body}`,
+      );
       return;
     }
     const list = this.sections.get(this.active) ?? [];
@@ -250,9 +284,10 @@ class LivingComment {
 
   private render(target: CommentTarget, started: boolean, finalOpts?: FinalOpts): string {
     const list = this.sections.get(target) ?? [];
-    const header = target === 'pr'
-      ? `## 🤖 Cezar — automated work for #${this.issueNumber}`
-      : `## 🤖 Cezar autofix — ${finalOpts?.done ? 'done' : 'in progress'}`;
+    const header =
+      target === 'pr'
+        ? `## 🤖 Cezar — automated work for #${this.issueNumber}`
+        : `## 🤖 Cezar autofix — ${finalOpts?.done ? 'done' : 'in progress'}`;
     const lines: string[] = [header, '', `**Issue:** #${this.issueNumber} — ${this.title}`, ''];
     if (list.length === 0) {
       lines.push(started ? '_(no sections yet)_' : '_Starting…_');
@@ -263,7 +298,10 @@ class LivingComment {
     }
     if (finalOpts?.done && target === 'issue') {
       if (finalOpts.prNumber != null) {
-        lines.push('---', `Done — see PR #${finalOpts.prNumber}${finalOpts.prUrl ? ` (${finalOpts.prUrl})` : ''}.`);
+        lines.push(
+          '---',
+          `Done — see PR #${finalOpts.prNumber}${finalOpts.prUrl ? ` (${finalOpts.prUrl})` : ''}.`,
+        );
       } else if (finalOpts.reason) {
         lines.push('---', `Done — ${finalOpts.reason}`);
       } else {
@@ -276,9 +314,13 @@ class LivingComment {
 
 /** Execute one declarative workflow run. */
 export class WorkflowEngine {
-  async runWorkflow<W>(workflow: Workflow<W>, ctx: WorkflowRunContext): Promise<WorkflowRunResult<W>> {
+  async runWorkflow<W>(
+    workflow: Workflow<W>,
+    ctx: WorkflowRunContext,
+  ): Promise<WorkflowRunResult<W>> {
     const settings: WorkspaceWorkflowSettings = ctx.settings ?? DEFAULT_WORKSPACE_WORKFLOW_SETTINGS;
-    const runnerFactory = ctx.runnerFactory ?? ((backend) => createAgentRunner(backend, { config: ctx.config }));
+    const runnerFactory =
+      ctx.runnerFactory ?? ((backend) => createAgentRunner(backend, { config: ctx.config }));
     const bindings = ctx.bindings ?? ctx.config.workflow?.bindings ?? [];
     // The workspace's effective default backend, used to stamp non-agent steps'
     // synthetic records so the cockpit's per-row backend icon matches where the
@@ -286,7 +328,8 @@ export class WorkflowEngine {
     // 'anthropic-api'. Derived from the per-step bindings — the same source the
     // agent steps resolve their backend from (see resolveStepConfig) — using the
     // first binding that pins one. Falls back to the API path when none do.
-    const workspaceBackend: AgentBackend = bindings.find((b) => b.backend != null)?.backend ?? 'anthropic-api';
+    const workspaceBackend: AgentBackend =
+      bindings.find((b) => b.backend != null)?.backend ?? 'anthropic-api';
 
     // Issue data — repo-less workflows still want title/body for prompts.
     let issueTitle = `#${ctx.issueNumber}`;
@@ -303,10 +346,14 @@ export class WorkflowEngine {
 
     const storedIssue = ctx.store.getIssue(ctx.issueNumber);
     const digest = storedIssue?.digest
-      ? { summary: storedIssue.digest.summary, affectedArea: storedIssue.digest.affectedArea, keywords: storedIssue.digest.keywords }
+      ? {
+          summary: storedIssue.digest.summary,
+          affectedArea: storedIssue.digest.affectedArea,
+          keywords: storedIssue.digest.keywords,
+        }
       : undefined;
 
-    const skills: Skill[] = ctx.skills ?? await this.discoverSkillsSafe(ctx);
+    const skills: Skill[] = ctx.skills ?? (await this.discoverSkillsSafe(ctx));
 
     // Worktree (repo-backed workflows). The caller may pass a path directly or
     // a `prepareWorktree` hook; repo-less workflows leave both undefined.
@@ -360,7 +407,9 @@ export class WorkflowEngine {
       labels: ctx.labels,
       resume: resumingFromCrash,
       onResumeFallback: () => {
-        ctx.onEvent?.(`[#${ctx.issueNumber}] claude --resume ${runSessionId} failed — falling back to fresh start under same id`);
+        ctx.onEvent?.(
+          `[#${ctx.issueNumber}] claude --resume ${runSessionId} failed — falling back to fresh start under same id`,
+        );
         resumingFromCrash = false;
       },
     });
@@ -398,20 +447,26 @@ export class WorkflowEngine {
       // path to still exist for any pending flushes. (dispose may remove it.)
       if (unifiedSession) {
         await unifiedSession.stop().catch((err) => {
-          ctx.onEvent?.(`[#${ctx.issueNumber}] unified session stop failed: ${(err as Error).message}`);
+          ctx.onEvent?.(
+            `[#${ctx.issueNumber}] unified session stop failed: ${(err as Error).message}`,
+          );
         });
       }
       if (disposeWorktree) await disposeWorktree().catch(() => {});
       // Best-effort: finalizing the living comment must never throw out of
       // finishRun — that would discard the run result and leak the run.
-      await living.finalize({
-        done: status === 'succeeded',
-        prNumber,
-        prUrl,
-        reason,
-      }).catch((err) => {
-        ctx.onEvent?.(`[#${ctx.issueNumber}] living comment finalize failed: ${(err as Error).message}`);
-      });
+      await living
+        .finalize({
+          done: status === 'succeeded',
+          prNumber,
+          prUrl,
+          reason,
+        })
+        .catch((err) => {
+          ctx.onEvent?.(
+            `[#${ctx.issueNumber}] living comment finalize failed: ${(err as Error).message}`,
+          );
+        });
       return {
         status,
         blackboard,
@@ -436,7 +491,9 @@ export class WorkflowEngine {
     await living.start().catch((err: Error) => {
       ctx.onEvent?.(`[#${ctx.issueNumber}] living comment start failed: ${err.message}`);
     });
-    ctx.onEvent?.(`[#${ctx.issueNumber}] workflow '${workflow.id}' — ${workflow.steps.length} step(s)`);
+    ctx.onEvent?.(
+      `[#${ctx.issueNumber}] workflow '${workflow.id}' — ${workflow.steps.length} step(s)`,
+    );
 
     // Build a quick lookup for which loop (if any) a step belongs to. Apply
     // any `loopMaxIterations` override (workflow defs are static; config caps it).
@@ -446,7 +503,7 @@ export class WorkflowEngine {
       return { ...loop, maxIterations };
     });
     const loopById = new Map(effectiveLoops.map((l) => [l.id, l]));
-    const loopOfStep = new Map<string, typeof effectiveLoops[number]>();
+    const loopOfStep = new Map<string, (typeof effectiveLoops)[number]>();
     for (const loop of effectiveLoops) {
       for (const sid of loop.stepIds) loopOfStep.set(sid, loop);
     }
@@ -460,10 +517,15 @@ export class WorkflowEngine {
     for (const loop of effectiveLoops) {
       for (const sid of loop.stepIds) {
         if (!workflow.steps.some((s) => s.id === sid)) {
-          throw new Error(`workflow '${workflow.id}' loop '${loop.id}' references unknown step '${sid}'`);
+          throw new Error(
+            `workflow '${workflow.id}' loop '${loop.id}' references unknown step '${sid}'`,
+          );
         }
       }
-      loopFirstIndex.set(loop.id, workflow.steps.findIndex((s) => s.id === loop.stepIds[0]));
+      loopFirstIndex.set(
+        loop.id,
+        workflow.steps.findIndex((s) => s.id === loop.stepIds[0]),
+      );
     }
 
     // Engine main loop. We walk `workflow.steps` by index; when a loop body
@@ -486,17 +548,22 @@ export class WorkflowEngine {
     // `justReentered` below) and makes the cap mean exactly "N body passes".
     // Returns the step index to jump to, or a finished run when the cap is hit.
     const reenterLoop = (
-      loop: typeof effectiveLoops[number],
+      loop: (typeof effectiveLoops)[number],
       reason?: string,
     ): number | Promise<WorkflowRunResult<W>> => {
       const next = (loopIterations.get(loop.id) ?? 0) + 1;
       if (next >= loop.maxIterations) {
-        return finishRun('failed', reason
-          ? `${reason} (loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s))`
-          : `loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s)`);
+        return finishRun(
+          'failed',
+          reason
+            ? `${reason} (loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s))`
+            : `loop '${loop.id}' exhausted ${loop.maxIterations} iteration(s)`,
+        );
       }
       loopIterations.set(loop.id, next);
-      ctx.onEvent?.(`[#${ctx.issueNumber}] loop '${loop.id}' — iteration ${next}/${loop.maxIterations}${reason ? `: ${reason}` : ''}`);
+      ctx.onEvent?.(
+        `[#${ctx.issueNumber}] loop '${loop.id}' — iteration ${next}/${loop.maxIterations}${reason ? `: ${reason}` : ''}`,
+      );
       return loopFirstIndex.get(loop.id)!;
     };
 
@@ -524,11 +591,23 @@ export class WorkflowEngine {
       }
 
       const stepCtx = this.makeStepContext<W>({
-        blackboard, iteration, config: ctx.config,
-        issue: { number: ctx.issueNumber, title: issueTitle, body: issueBody, comments: issueComments, digest },
-        prNumber, branch, worktreePath, devServerUrl,
+        blackboard,
+        iteration,
+        config: ctx.config,
+        issue: {
+          number: ctx.issueNumber,
+          title: issueTitle,
+          body: issueBody,
+          comments: issueComments,
+          digest,
+        },
+        prNumber,
+        branch,
+        worktreePath,
+        devServerUrl,
         tokenBudget: undefined, // set per agent step below
-        onAgentEvent: ctx.onAgentEvent, onEvent: ctx.onEvent,
+        onAgentEvent: ctx.onAgentEvent,
+        onEvent: ctx.onEvent,
         appendCommentSection: (section) => living.appendSection(step.id, section),
         requestHumanDecision: ctx.requestHumanDecision,
       });
@@ -542,16 +621,29 @@ export class WorkflowEngine {
       // from inside runAgentStep — after binding resolution — so the record
       // carries the real backend/model instead of placeholders.
       if (step.kind !== 'agent') {
-        record = this.syntheticRecord(workflow.id, step.id, step.kind, iteration, 'running', workspaceBackend);
+        record = this.syntheticRecord(
+          workflow.id,
+          step.id,
+          step.kind,
+          iteration,
+          'running',
+          workspaceBackend,
+        );
         ctx.onStepStart?.(record);
       }
 
       try {
         if (step.kind === 'agent') {
           const r = await this.runAgentStep(step as AgentStepDef<W, unknown>, {
-            stepCtx, iteration, bindings, skills, runnerFactory,
-            tokenBudgetPerAttempt: ctx.tokenBudgetPerAttempt ?? ctx.config.autofix?.tokenBudgetPerAttempt,
-            workflowId: workflow.id, worktreePath,
+            stepCtx,
+            iteration,
+            bindings,
+            skills,
+            runnerFactory,
+            tokenBudgetPerAttempt:
+              ctx.tokenBudgetPerAttempt ?? ctx.config.autofix?.tokenBudgetPerAttempt,
+            workflowId: workflow.id,
+            worktreePath,
             living,
             labels: ctx.labels,
             unifiedSession,
@@ -564,7 +656,9 @@ export class WorkflowEngine {
             // file regardless).
             resume: resumingFromCrash,
             onResumeFallback: () => {
-              ctx.onEvent?.(`[#${ctx.issueNumber}] claude --resume ${runSessionId} failed — fell back to fresh start under same id`);
+              ctx.onEvent?.(
+                `[#${ctx.issueNumber}] claude --resume ${runSessionId} failed — fell back to fresh start under same id`,
+              );
             },
             onStepStart: ctx.onStepStart,
           });
@@ -577,7 +671,8 @@ export class WorkflowEngine {
           totalTokens += r.record.tokensUsed;
         } else if (step.kind === 'effect') {
           outcome = await step.run(stepCtx, effectDeps);
-          if (step.commentSection) await living.appendSection(step.id, step.commentSection(stepCtx));
+          if (step.commentSection)
+            await living.appendSection(step.id, step.commentSection(stepCtx));
         } else if (step.kind === 'human-gate') {
           const r = await this.runHumanGate(step, stepCtx);
           if (r.kind === 'paused') {
@@ -593,7 +688,8 @@ export class WorkflowEngine {
             return finishRun('paused', `paused — awaiting human decision at '${step.id}'`);
           }
           outcome = r.outcome;
-          if (step.commentSection) await living.appendSection(step.id, step.commentSection(stepCtx));
+          if (step.commentSection)
+            await living.appendSection(step.id, step.commentSection(stepCtx));
         } else if (step.kind === 'commit') {
           const wt = this.requireWorktree(worktreePath, step.id);
           const baseRef = ctx.config.autofix?.baseBranch ?? 'main';
@@ -617,7 +713,10 @@ export class WorkflowEngine {
             if (step.failOnNoChanges) {
               outcome = { kind: 'fail', reason: 'fixer made no file changes' };
             } else {
-              outcome = { kind: 'skip-run', reason: 'fixer made no file changes — CI failure may no longer reproduce' };
+              outcome = {
+                kind: 'skip-run',
+                reason: 'fixer made no file changes — CI failure may no longer reproduce',
+              };
             }
           } else {
             // Diff against the same fixed branch point we squashed onto, so the
@@ -626,7 +725,8 @@ export class WorkflowEngine {
             const diff = await gitOps.getDiffAgainstBase(wt, squashBase);
             headSha = sha;
             outcome = step.onCommitted({ commitSha: sha, diff }, stepCtx);
-            if (step.commentSection) await living.appendSection(step.id, step.commentSection({ commitSha: sha }, stepCtx));
+            if (step.commentSection)
+              await living.appendSection(step.id, step.commentSection({ commitSha: sha }, stepCtx));
           }
         } else if (step.kind === 'open-pr') {
           const wt = this.requireWorktree(worktreePath, step.id);
@@ -635,11 +735,13 @@ export class WorkflowEngine {
           // actual local branch — e.g. the unique per-flow branch generated by
           // `runFlow`). Fall back to the legacy derivation so the autofix path,
           // which doesn't seed `ctx.branch`, behaves identically.
-          const pushBranchName = branch ?? ((cfg?.branchPrefix ?? 'autofix/cezar-issue-') + ctx.issueNumber);
+          const pushBranchName =
+            branch ?? (cfg?.branchPrefix ?? 'autofix/cezar-issue-') + ctx.issueNumber;
           await ctx.github.pushBranch(pushBranchName, wt, cfg?.remote);
           const { title, body } = step.buildPr(stepCtx);
           const pr = await ctx.github.createPullRequest({
-            title, body,
+            title,
+            body,
             head: pushBranchName,
             base: cfg?.baseBranch ?? 'main',
             draft: cfg?.draftPr ?? true,
@@ -650,7 +752,8 @@ export class WorkflowEngine {
           branch = pushBranchName;
           // Post-PR steps edit the PR comment now.
           await living.switchToPr(pr.number);
-          if (step.prCommentSection) await living.appendSection(step.id, step.prCommentSection(stepCtx));
+          if (step.prCommentSection)
+            await living.appendSection(step.id, step.prCommentSection(stepCtx));
           // Sticky pr-link marker on the issue — see pr-link-marker.ts. A
           // best-effort write: a network blip here shouldn't fail the run,
           // since the PR itself was created successfully. Future runs of
@@ -664,7 +767,10 @@ export class WorkflowEngine {
           }).catch((err: Error) => {
             ctx.onEvent?.(`[#${ctx.issueNumber}] pr-link marker upsert failed: ${err.message}`);
           });
-          outcome = step.onOpened({ url: pr.url, number: pr.number, headSha: headSha ?? '' }, stepCtx);
+          outcome = step.onOpened(
+            { url: pr.url, number: pr.number, headSha: headSha ?? '' },
+            stepCtx,
+          );
         } else if (step.kind === 'push') {
           const wt = this.requireWorktree(worktreePath, step.id);
           const cfg = ctx.config.autofix;
@@ -674,7 +780,8 @@ export class WorkflowEngine {
             await ctx.github.pushBranch(branch, wt, cfg?.remote);
             if (prNumber != null) {
               await living.switchToPr(prNumber);
-              if (step.prCommentSection) await living.appendSection(step.id, step.prCommentSection(stepCtx));
+              if (step.prCommentSection)
+                await living.appendSection(step.id, step.prCommentSection(stepCtx));
             }
             outcome = step.onPushed({ headSha: headSha ?? '' }, stepCtx);
           }
@@ -703,7 +810,14 @@ export class WorkflowEngine {
       // Record the step (non-agent steps get a synthetic record too so the
       // cockpit shows every step; agent steps already have theirs).
       if (!record) {
-        record = this.syntheticRecord(workflow.id, step.id, step.kind, iteration, 'succeeded', workspaceBackend);
+        record = this.syntheticRecord(
+          workflow.id,
+          step.id,
+          step.kind,
+          iteration,
+          'succeeded',
+          workspaceBackend,
+        );
       }
       if (outcome.kind === 'skip-run') {
         record.status = 'skipped';
@@ -756,7 +870,8 @@ export class WorkflowEngine {
 
       if (outcome.kind === 'goto-loop') {
         const targetLoop = loopById.get(outcome.loopId);
-        if (!targetLoop) return finishRun('failed', `goto-loop to unknown loop '${outcome.loopId}'`);
+        if (!targetLoop)
+          return finishRun('failed', `goto-loop to unknown loop '${outcome.loopId}'`);
         const target = reenterLoop(targetLoop);
         if (typeof target !== 'number') return target;
         // A fresh re-entry into the loop body — drop any pending one-shot from
@@ -818,9 +933,13 @@ export class WorkflowEngine {
     if (!result) return { kind: 'continue' }; // command not configured ⇒ skip the check
     const gate = resolveStepValue(step.gate, ctx.config);
     const patch = step.onResult?.(result, stepCtx) as Partial<W> | undefined;
-    if (step.commentSection) await living.appendSection(step.id, step.commentSection(result, stepCtx));
+    if (step.commentSection)
+      await living.appendSection(step.id, step.commentSection(result, stepCtx));
     if (result.ok || !gate) {
-      if (!result.ok) ctx.onEvent?.(`[#${ctx.issueNumber}] ${step.which} failed (exit ${result.exitCode}) — not gated, continuing`);
+      if (!result.ok)
+        ctx.onEvent?.(
+          `[#${ctx.issueNumber}] ${step.which} failed (exit ${result.exitCode}) — not gated, continuing`,
+        );
       return { kind: 'continue', blackboardPatch: patch };
     }
     return {
@@ -852,19 +971,34 @@ export class WorkflowEngine {
       handle = await env.startDevServer((line) => stepCtx.log(`  ${line}`));
     } catch (err) {
       const reason = `dev server failed to start: ${(err as Error).message}`;
-      if (step.commentSection) await living.appendSection(step.id, step.commentSection({ url: null, ready: false }, stepCtx));
+      if (step.commentSection)
+        await living.appendSection(
+          step.id,
+          step.commentSection({ url: null, ready: false }, stepCtx),
+        );
       return { outcome: gate ? { kind: 'fail', reason } : { kind: 'continue' } };
     }
     if (!handle) return { outcome: { kind: 'continue' } }; // not configured
 
-    if (step.commentSection) await living.appendSection(step.id, step.commentSection({ url: handle.url, ready: handle.ready }, stepCtx));
-    const patch = step.onReady?.({ url: handle.url, ready: handle.ready }, stepCtx) as Partial<W> | undefined;
+    if (step.commentSection)
+      await living.appendSection(
+        step.id,
+        step.commentSection({ url: handle.url, ready: handle.ready }, stepCtx),
+      );
+    const patch = step.onReady?.({ url: handle.url, ready: handle.ready }, stepCtx) as
+      | Partial<W>
+      | undefined;
 
     if (!handle.ready && gate) {
-      return { outcome: { kind: 'fail', reason: `dev server at ${handle.url} never became ready` }, url: handle.url };
+      return {
+        outcome: { kind: 'fail', reason: `dev server at ${handle.url} never became ready` },
+        url: handle.url,
+      };
     }
     if (!handle.ready) {
-      ctx.onEvent?.(`[#${ctx.issueNumber}] dev server at ${handle.url} not confirmed ready — continuing`);
+      ctx.onEvent?.(
+        `[#${ctx.issueNumber}] dev server at ${handle.url} not confirmed ready — continuing`,
+      );
     }
     return { outcome: { kind: 'continue', blackboardPatch: patch }, url: handle.url };
   }
@@ -875,7 +1009,9 @@ export class WorkflowEngine {
     try {
       return await discoverSkills(resolve(repoRoot), ctx.config.autofix?.skillsDir ?? '.ai/skills');
     } catch (err) {
-      ctx.onEvent?.(`[#${ctx.issueNumber}] SKILLS — discovery failed, continuing with built-in prompts (${(err as Error).message})`);
+      ctx.onEvent?.(
+        `[#${ctx.issueNumber}] SKILLS — discovery failed, continuing with built-in prompts (${(err as Error).message})`,
+      );
       return [];
     }
   }
@@ -908,7 +1044,8 @@ export class WorkflowEngine {
       emit: (e) => args.onAgentEvent?.(e),
       log: (m) => args.onEvent?.(m),
       appendCommentSection: args.appendCommentSection,
-      requestHumanDecision: async (prompt) => (args.requestHumanDecision ? args.requestHumanDecision(prompt) : null),
+      requestHumanDecision: async (prompt) =>
+        args.requestHumanDecision ? args.requestHumanDecision(prompt) : null,
     };
   }
 
@@ -965,9 +1102,9 @@ export class WorkflowEngine {
     if (!decision) return { kind: 'paused' };
     const outcome = step.onDecision
       ? step.onDecision(decision, ctx)
-      : (decision.choice === 'proceed'
+      : decision.choice === 'proceed'
         ? ({ kind: 'continue' } as StepOutcome<W>)
-        : ({ kind: 'skip-run', reason: `human chose '${decision.choice}'` } as StepOutcome<W>));
+        : ({ kind: 'skip-run', reason: `human chose '${decision.choice}'` } as StepOutcome<W>);
     return { kind: 'resolved', outcome };
   }
 
@@ -1012,7 +1149,8 @@ export class WorkflowEngine {
     const config = stepCtx.config;
     const builtinModel = resolveStepValue(step.builtinModel, config);
     const builtinTools = resolveStepValue(step.builtinTools, config);
-    const bashAllowlist = step.bashAllowlist != null ? resolveStepValue(step.bashAllowlist, config) : undefined;
+    const bashAllowlist =
+      step.bashAllowlist != null ? resolveStepValue(step.bashAllowlist, config) : undefined;
     const maxTurns = step.maxTurns != null ? resolveStepValue(step.maxTurns, config) : undefined;
 
     const resolved = resolveStepConfig({
@@ -1025,7 +1163,9 @@ export class WorkflowEngine {
       labelScope: step.labelScope ?? 'both',
     });
 
-    const budget = args.tokenBudgetPerAttempt ? new TokenBudget(args.tokenBudgetPerAttempt) : undefined;
+    const budget = args.tokenBudgetPerAttempt
+      ? new TokenBudget(args.tokenBudgetPerAttempt)
+      : undefined;
     const ctxWithBudget: WorkflowStepContext<W> = { ...stepCtx, tokenBudget: budget };
 
     const record: AgentRunRecord = {
@@ -1113,13 +1253,14 @@ export class WorkflowEngine {
     // A crashed agent leaves a recoverable branch instead of an empty run.
     const writeTools = new Set(['Edit', 'Write', 'NotebookEdit']);
     const mutates = allowedTools.some((t) => writeTools.has(t));
-    const stopAutosave = mutates && args.worktreePath
-      ? startWorktreeAutosaver({
-          worktreePath: args.worktreePath,
-          message: `cezar: autosave (${step.id})`,
-          onWarn: (m) => stepCtx.emit({ type: 'note', message: m }),
-        })
-      : null;
+    const stopAutosave =
+      mutates && args.worktreePath
+        ? startWorktreeAutosaver({
+            worktreePath: args.worktreePath,
+            message: `cezar: autosave (${step.id})`,
+            onWarn: (m) => stepCtx.emit({ type: 'note', message: m }),
+          })
+        : null;
 
     let result: Awaited<ReturnType<typeof runner.run>>;
     try {
@@ -1151,7 +1292,10 @@ export class WorkflowEngine {
           if (!(err instanceof ResumeFailedError)) throw err;
           args.onResumeFallback?.();
           await args.unifiedSession.stop().catch(() => {});
-          stepCtx.emit({ type: 'note', message: `falling back to staged runner for step '${step.id}' after resume failure` });
+          stepCtx.emit({
+            type: 'note',
+            message: `falling back to staged runner for step '${step.id}' after resume failure`,
+          });
           result = await runner.run({ ...spec, resume: false }, (e) => stepCtx.emit(e));
         }
       } else {
@@ -1166,7 +1310,8 @@ export class WorkflowEngine {
     if (result.budgetExceeded) {
       record.status = 'failed';
       record.error = `token budget exceeded during '${step.id}'`;
-      if (step.failCommentSection) await args.living.appendSection(step.id, step.failCommentSection(record.error, stepCtx));
+      if (step.failCommentSection)
+        await args.living.appendSection(step.id, step.failCommentSection(record.error, stepCtx));
       return { outcome: { kind: 'fail', reason: record.error }, record };
     }
 
@@ -1176,7 +1321,12 @@ export class WorkflowEngine {
     if (parsed == null) {
       if (step.onNoParse) {
         const outcome = step.onNoParse(result.text, stepCtx);
-        record.status = outcome.kind === 'fail' ? 'failed' : outcome.kind === 'skip-run' ? 'skipped' : 'succeeded';
+        record.status =
+          outcome.kind === 'fail'
+            ? 'failed'
+            : outcome.kind === 'skip-run'
+              ? 'skipped'
+              : 'succeeded';
         if (outcome.kind === 'fail') record.error = outcome.reason;
         // Flow runtime: an agent step may open a PR via `gh pr create` and
         // signal it via `openedPr` (extracted from PR_URL/PR_NUMBER markers in
@@ -1189,11 +1339,17 @@ export class WorkflowEngine {
           await args.living.switchToPr(outcome.openedPr.number);
         }
         if (step.failCommentSection && outcome.kind === 'fail') {
-          await args.living.appendSection(step.id, step.failCommentSection(outcome.reason, stepCtx));
+          await args.living.appendSection(
+            step.id,
+            step.failCommentSection(outcome.reason, stepCtx),
+          );
         } else if (step.unparsedCommentSection && outcome.kind !== 'fail') {
           // Flows runtime path: agent emitted free text and onNoParse said go.
           // Surface what the agent actually produced in the living comment.
-          await args.living.appendSection(step.id, step.unparsedCommentSection(result.text, stepCtx));
+          await args.living.appendSection(
+            step.id,
+            step.unparsedCommentSection(result.text, stepCtx),
+          );
         }
         return { outcome, record };
       }
@@ -1203,17 +1359,20 @@ export class WorkflowEngine {
         : `${step.id} returned no parseable output (likely hit maxTurns without emitting JSON)`;
       record.status = 'failed';
       record.error = reason;
-      if (step.failCommentSection) await args.living.appendSection(step.id, step.failCommentSection(reason, stepCtx));
+      if (step.failCommentSection)
+        await args.living.appendSection(step.id, step.failCommentSection(reason, stepCtx));
       return { outcome: { kind: 'fail', reason }, record };
     }
 
     const outcome = step.onResult(parsed, stepCtx);
-    record.status = outcome.kind === 'fail' ? 'failed' : outcome.kind === 'skip-run' ? 'skipped' : 'succeeded';
+    record.status =
+      outcome.kind === 'fail' ? 'failed' : outcome.kind === 'skip-run' ? 'skipped' : 'succeeded';
     if (outcome.kind === 'fail') record.error = outcome.reason;
     if (outcome.kind === 'skip-run') record.summary = outcome.reason;
 
     if (outcome.kind === 'fail') {
-      if (step.failCommentSection) await args.living.appendSection(step.id, step.failCommentSection(outcome.reason, stepCtx));
+      if (step.failCommentSection)
+        await args.living.appendSection(step.id, step.failCommentSection(outcome.reason, stepCtx));
     } else if (step.commentSection) {
       await args.living.appendSection(step.id, step.commentSection(parsed, stepCtx));
     }
@@ -1349,6 +1508,9 @@ export class WorkflowEngine {
 }
 
 /** Functional sugar — `runWorkflow(workflow, ctx)` ≡ `new WorkflowEngine().runWorkflow(...)`. */
-export function runWorkflow<W>(workflow: Workflow<W>, ctx: WorkflowRunContext): Promise<WorkflowRunResult<W>> {
+export function runWorkflow<W>(
+  workflow: Workflow<W>,
+  ctx: WorkflowRunContext,
+): Promise<WorkflowRunResult<W>> {
   return new WorkflowEngine().runWorkflow(workflow, ctx);
 }

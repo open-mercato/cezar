@@ -117,13 +117,15 @@ describe('IssueStore', () => {
 
     it('throws for nonexistent issue', async () => {
       const store = await IssueStore.init(tmpDir, { owner: 'test', repo: 'repo' });
-      expect(() => store.setDigest(999, {
-        summary: 'test',
-        category: 'bug',
-        affectedArea: 'core',
-        keywords: [],
-        digestedAt: '2024-01-01T00:00:00Z',
-      })).toThrow('Issue #999 not found');
+      expect(() =>
+        store.setDigest(999, {
+          summary: 'test',
+          category: 'bug',
+          affectedArea: 'core',
+          keywords: [],
+          digestedAt: '2024-01-01T00:00:00Z',
+        }),
+      ).toThrow('Issue #999 not found');
     });
   });
 
@@ -197,7 +199,7 @@ describe('IssueStore', () => {
       });
       store.setAnalysis(1, {
         duplicateOf: 2,
-        duplicateConfidence: 0.90,
+        duplicateConfidence: 0.9,
         duplicateReason: 'Same issue',
         duplicatesAnalyzedAt: '2024-01-01T00:00:00Z',
       });

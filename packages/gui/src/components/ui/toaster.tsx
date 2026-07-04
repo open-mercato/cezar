@@ -2,12 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { cn } from './cn';
-import {
-  ToastContext,
-  type ToastOptions,
-  type ToastRecord,
-  type ToastTone,
-} from './use-toast';
+import { ToastContext, type ToastOptions, type ToastRecord, type ToastTone } from './use-toast';
 
 const DEFAULT_DURATION_MS = 4000;
 

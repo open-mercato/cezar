@@ -93,21 +93,36 @@ function autofixCfg(config: Config): NonNullable<Config['autofix']> {
   return config.autofix as NonNullable<Config['autofix']>;
 }
 
-function reviewPasses(cfg: NonNullable<Config['autofix']>, verdict: Required<ReviewVerdict>): boolean {
+function reviewPasses(
+  cfg: NonNullable<Config['autofix']>,
+  verdict: Required<ReviewVerdict>,
+): boolean {
   const blockers = verdict.issues.filter((iss) => iss.severity === 'blocker').length;
   return cfg.requireReviewPass ? verdict.verdict === 'pass' && blockers === 0 : blockers === 0;
 }
 
 // ─── Steps ──────────────────────────────────────────────────────────────────
 
-const verifyInRepoStep: WorkflowStep<AutofixBlackboard> = agentStep<AutofixBlackboard, VerifyInRepo>({
+const verifyInRepoStep: WorkflowStep<AutofixBlackboard> = agentStep<
+  AutofixBlackboard,
+  VerifyInRepo
+>({
   id: 'verify-in-repo',
   kind: 'agent',
   builtinSkillId: 'verify-in-repo',
   builtinSystemPrompt: VERIFY_IN_REPO_SYSTEM_PROMPT,
   builtinModel: (cfg) => autofixCfg(cfg).models.reviewer,
   builtinTools: ['Read', 'Grep', 'Glob', 'Bash'],
-  bashAllowlist: ['git log', 'git diff', 'git show', 'git status', 'gh issue edit', 'gh issue view', 'gh pr edit', 'gh pr view'],
+  bashAllowlist: [
+    'git log',
+    'git diff',
+    'git show',
+    'git status',
+    'gh issue edit',
+    'gh issue view',
+    'gh pr edit',
+    'gh pr view',
+  ],
   maxTurns: (cfg) => autofixCfg(cfg).maxTurns.reviewer,
   responseSchema: VerifyInRepoSchema,
   cwdRequired: true,
@@ -115,7 +130,10 @@ const verifyInRepoStep: WorkflowStep<AutofixBlackboard> = agentStep<AutofixBlack
   buildUserPrompt: (ctx) => {
     const lines = [`ISSUE #${ctx.issue.number}: ${ctx.issue.title}`, ''];
     if (ctx.issue.digest) {
-      lines.push(`DIGEST: ${ctx.issue.digest.summary} (area: ${ctx.issue.digest.affectedArea})`, '');
+      lines.push(
+        `DIGEST: ${ctx.issue.digest.summary} (area: ${ctx.issue.digest.affectedArea})`,
+        '',
+      );
     }
     lines.push('BODY:', ctx.issue.body.slice(0, 4000), '');
     if (ctx.issue.comments.length > 0) {
@@ -134,7 +152,10 @@ const verifyInRepoStep: WorkflowStep<AutofixBlackboard> = agentStep<AutofixBlack
       return { kind: 'skip-run', reason: parsed.reason };
     }
     if (parsed.confidence < cfg.minAnalyzerConfidence) {
-      return { kind: 'skip-run', reason: `verify-in-repo confidence ${parsed.confidence.toFixed(2)} below threshold ${cfg.minAnalyzerConfidence}` };
+      return {
+        kind: 'skip-run',
+        reason: `verify-in-repo confidence ${parsed.confidence.toFixed(2)} below threshold ${cfg.minAnalyzerConfidence}`,
+      };
     }
     return { kind: 'continue', blackboardPatch: { verify: parsed } };
   },
@@ -163,8 +184,13 @@ const confirmFixGate: WorkflowStep<AutofixBlackboard> = {
     return conf >= cfg.minAnalyzerConfidence;
   },
   onDecision: (decision) =>
-    decision.choice === 'proceed' ? { kind: 'continue' } : { kind: 'skip-run', reason: 'maintainer declined the automated fix' },
-  commentSection: (): CommentSection => ({ heading: '⏸ Maintainer go-ahead', body: 'Proceeding with the automated fix.' }),
+    decision.choice === 'proceed'
+      ? { kind: 'continue' }
+      : { kind: 'skip-run', reason: 'maintainer declined the automated fix' },
+  commentSection: (): CommentSection => ({
+    heading: '⏸ Maintainer go-ahead',
+    body: 'Proceeding with the automated fix.',
+  }),
 };
 
 // ─── shell-check steps (install / build / test) ─────────────────────────────
@@ -209,7 +235,10 @@ const buildStep: WorkflowStep<AutofixBlackboard> = {
   onResult: (result, ctx) =>
     result.ok
       ? { buildResult: result }
-      : { buildResult: result, retryNotes: failureRetryNote('build', ctx.blackboard.retryNotes, result) },
+      : {
+          buildResult: result,
+          retryNotes: failureRetryNote('build', ctx.blackboard.retryNotes, result),
+        },
   commentSection: (result): CommentSection => shellCommentSection('Build', result),
 };
 
@@ -223,7 +252,10 @@ const testStep: WorkflowStep<AutofixBlackboard> = {
   onResult: (result, ctx) =>
     result.ok
       ? { testResult: result }
-      : { testResult: result, retryNotes: failureRetryNote('test', ctx.blackboard.retryNotes, result) },
+      : {
+          testResult: result,
+          retryNotes: failureRetryNote('test', ctx.blackboard.retryNotes, result),
+        },
   commentSection: (result): CommentSection => shellCommentSection('Tests', result),
 };
 
@@ -240,33 +272,50 @@ const devServerStep: WorkflowStep<AutofixBlackboard> = {
   // injected into later agent prompts; the cockpit shows boot status.
 };
 
-const rootCauseStep: WorkflowStep<AutofixBlackboard> = agentStep<AutofixBlackboard, z.infer<typeof AnalyzerResultSchema>>({
+const rootCauseStep: WorkflowStep<AutofixBlackboard> = agentStep<
+  AutofixBlackboard,
+  z.infer<typeof AnalyzerResultSchema>
+>({
   id: 'root-cause',
   kind: 'agent',
   builtinSkillId: 'root-cause',
   builtinSystemPrompt: ANALYZER_SYSTEM_PROMPT,
   builtinModel: (cfg) => autofixCfg(cfg).models.analyzer,
   builtinTools: ['Read', 'Grep', 'Glob', 'Bash'],
-  bashAllowlist: ['git log', 'git diff', 'git show', 'git status', 'gh issue edit', 'gh issue view', 'gh pr edit', 'gh pr view'],
+  bashAllowlist: [
+    'git log',
+    'git diff',
+    'git show',
+    'git status',
+    'gh issue edit',
+    'gh issue view',
+    'gh pr edit',
+    'gh pr view',
+  ],
   maxTurns: (cfg) => autofixCfg(cfg).maxTurns.analyzer,
   responseSchema: AnalyzerResultSchema,
   cwdRequired: true,
   labelScope: 'issue',
-  buildUserPrompt: (ctx) => buildAnalyzerUserPrompt({
-    issueNumber: ctx.issue.number,
-    title: ctx.issue.title,
-    body: ctx.issue.body,
-    comments: ctx.issue.comments,
-    digest: ctx.issue.digest,
-    priorAttemptNotes: ctx.blackboard.retryNotes,
-  }),
+  buildUserPrompt: (ctx) =>
+    buildAnalyzerUserPrompt({
+      issueNumber: ctx.issue.number,
+      title: ctx.issue.title,
+      body: ctx.issue.body,
+      comments: ctx.issue.comments,
+      digest: ctx.issue.digest,
+      priorAttemptNotes: ctx.blackboard.retryNotes,
+    }),
   onResult: (parsed, ctx) => {
     const cfg = autofixCfg(ctx.config);
     if (isNoActionNeeded(parsed)) {
       return { kind: 'skip-run', reason: parsed.reason };
     }
     if (parsed.confidence < cfg.minAnalyzerConfidence) {
-      return { kind: 'fail', reason: `analyzer confidence ${parsed.confidence.toFixed(2)} below threshold ${cfg.minAnalyzerConfidence}`, blackboardPatch: { rootCause: parsed } };
+      return {
+        kind: 'fail',
+        reason: `analyzer confidence ${parsed.confidence.toFixed(2)} below threshold ${cfg.minAnalyzerConfidence}`,
+        blackboardPatch: { rootCause: parsed },
+      };
     }
     return { kind: 'continue', blackboardPatch: { rootCause: parsed } };
   },
@@ -315,7 +364,10 @@ const commitStep: WorkflowStep<AutofixBlackboard> = {
     if (!fr) throw new Error('commit step ran without a fix report on the blackboard');
     return buildCommitMessage(ctx.issue.number, ctx.issue.title, fr);
   },
-  onCommitted: (info) => ({ kind: 'continue', blackboardPatch: { commitSha: info.commitSha, diff: info.diff } }),
+  onCommitted: (info) => ({
+    kind: 'continue',
+    blackboardPatch: { commitSha: info.commitSha, diff: info.diff },
+  }),
 };
 
 const reviewStep: WorkflowStep<AutofixBlackboard> = agentStep<AutofixBlackboard, ReviewVerdict>({
@@ -331,7 +383,8 @@ const reviewStep: WorkflowStep<AutofixBlackboard> = agentStep<AutofixBlackboard,
   buildUserPrompt: (ctx) => {
     const rc = ctx.blackboard.rootCause;
     const fr = ctx.blackboard.fixReport;
-    if (!rc || !fr) throw new Error('review step ran without root cause / fix report on the blackboard');
+    if (!rc || !fr)
+      throw new Error('review step ran without root cause / fix report on the blackboard');
     return buildReviewerUserPrompt({
       issueNumber: ctx.issue.number,
       title: ctx.issue.title,
@@ -375,7 +428,10 @@ const reviewStep: WorkflowStep<AutofixBlackboard> = agentStep<AutofixBlackboard,
     const v = normalizeVerdict(parsed);
     return { heading: `🔎 Review — verdict \`${v.verdict}\``, body: v.summary };
   },
-  failCommentSection: (reason): CommentSection => ({ heading: '🔁 Review failed — retrying', body: reason }),
+  failCommentSection: (reason): CommentSection => ({
+    heading: '🔁 Review failed — retrying',
+    body: reason,
+  }),
 });
 
 const openPrStep: WorkflowStep<AutofixBlackboard> = {
@@ -386,7 +442,8 @@ const openPrStep: WorkflowStep<AutofixBlackboard> = {
     const rc = ctx.blackboard.rootCause;
     const fr = ctx.blackboard.fixReport;
     const v = ctx.blackboard.verdict;
-    if (!rc || !fr || !v) throw new Error('open-pr ran without root cause / fix report / verdict on the blackboard');
+    if (!rc || !fr || !v)
+      throw new Error('open-pr ran without root cause / fix report / verdict on the blackboard');
     return {
       title: `fix: ${normalizeTitle(ctx.issue.title)} (#${ctx.issue.number})`,
       body: buildPrBody(ctx.issue.number, rc, fr, v),
@@ -402,7 +459,10 @@ const openPrStep: WorkflowStep<AutofixBlackboard> = {
       body: `**Root cause:** ${rc.summary}\n\n${rc.hypothesis}\n\n**Approach:** ${fr.approach}\n\n**Automated review:** \`${v.verdict}\` — ${v.summary}\n\nThis is a draft PR — a human reviewer must confirm correctness before it merges.`,
     };
   },
-  onOpened: (info) => ({ kind: 'continue', blackboardPatch: { prUrl: info.url, prNumber: info.number, headSha: info.headSha } }),
+  onOpened: (info) => ({
+    kind: 'continue',
+    blackboardPatch: { prUrl: info.url, prNumber: info.number, headSha: info.headSha },
+  }),
 };
 
 // ─── Workflow ───────────────────────────────────────────────────────────────

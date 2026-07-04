@@ -5,10 +5,7 @@ import { useRouter } from 'next/navigation';
 import { cn } from '@/components/ui/cn';
 import { Modal } from '@/components/ui/modal';
 import { enqueueActionRun } from '@/app/actions/[name]/run-now-action';
-import {
-  listActionsForPrTarget,
-  type PrTargetAction,
-} from './prs-page-actions';
+import { listActionsForPrTarget, type PrTargetAction } from './prs-page-actions';
 
 export interface RunActionForPrModalProps {
   prNumber: number;
@@ -79,7 +76,8 @@ export function RunActionForPrModal({ prNumber, prTitle, onClose }: RunActionFor
       }
       description={
         <>
-          Queues the chosen action against <span className="font-medium text-on-surface">{prTitle || `PR #${prNumber}`}</span>,
+          Queues the chosen action against{' '}
+          <span className="font-medium text-on-surface">{prTitle || `PR #${prNumber}`}</span>,
           applying any effects for real. Runs in the background — you&apos;ll land on its run page.
         </>
       }
@@ -124,7 +122,9 @@ export function RunActionForPrModal({ prNumber, prTitle, onClose }: RunActionFor
             className="mt-1 h-9 w-full rounded-md border border-outline-variant bg-surface px-2 text-base text-on-surface focus:border-primary focus:outline-none lg:text-sm"
           >
             {actionsLoading && <option>Loading actions…</option>}
-            {!actionsLoading && actions.length === 0 && <option value="">No enabled PR-target actions</option>}
+            {!actionsLoading && actions.length === 0 && (
+              <option value="">No enabled PR-target actions</option>
+            )}
             {actions.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}

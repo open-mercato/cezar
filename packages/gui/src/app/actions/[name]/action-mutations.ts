@@ -63,7 +63,10 @@ interface ResolvedRow {
   enabled: boolean;
 }
 
-async function loadCurrentRows(workspaceId: string, name: string): Promise<{ user: ResolvedRow | null; builtin: ResolvedRow | null }> {
+async function loadCurrentRows(
+  workspaceId: string,
+  name: string,
+): Promise<{ user: ResolvedRow | null; builtin: ResolvedRow | null }> {
   const supabase = createSupabaseAdminClient();
   const { data } = await supabase
     .from('actions')
@@ -77,7 +80,9 @@ async function loadCurrentRows(workspaceId: string, name: string): Promise<{ use
   };
 }
 
-function parseOutputSchema(raw: string): { ok: true; value: Record<string, unknown> | null } | { ok: false; error: string } {
+function parseOutputSchema(
+  raw: string,
+): { ok: true; value: Record<string, unknown> | null } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (trimmed.length === 0) return { ok: true, value: null };
   try {
@@ -88,7 +93,10 @@ function parseOutputSchema(raw: string): { ok: true; value: Record<string, unkno
     }
     return { ok: true, value: parsed as Record<string, unknown> };
   } catch (err) {
-    return { ok: false, error: `Invalid JSON in output_schema: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      ok: false,
+      error: `Invalid JSON in output_schema: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 }
 
@@ -110,8 +118,12 @@ export async function saveAction(
   if (!schemaParse.ok) return { ok: false, error: schemaParse.error };
 
   if (!isActionModel(payload.model)) return { ok: false, error: 'Unknown model' };
-  if (!isAcceptanceMode(payload.acceptanceMode)) return { ok: false, error: 'Unknown acceptance mode' };
-  const confidenceParse = validateConfidenceConfig(payload.acceptanceMode, payload.confidenceConfig);
+  if (!isAcceptanceMode(payload.acceptanceMode))
+    return { ok: false, error: 'Unknown acceptance mode' };
+  const confidenceParse = validateConfidenceConfig(
+    payload.acceptanceMode,
+    payload.confidenceConfig,
+  );
   if (!confidenceParse.ok) return { ok: false, error: confidenceParse.error };
 
   const supabase = createSupabaseAdminClient();
@@ -160,7 +172,11 @@ export async function saveAction(
       .single();
     if (error) return { ok: false, error: error.message };
     revalidateAction(name);
-    return { ok: true, updatedAt: data?.updated_at ?? undefined, enabled: data?.enabled ?? baseFields.enabled };
+    return {
+      ok: true,
+      updatedAt: data?.updated_at ?? undefined,
+      enabled: data?.enabled ?? baseFields.enabled,
+    };
   }
 
   // No user row yet — insert one. If a built-in exists with this name, mark
@@ -179,7 +195,11 @@ export async function saveAction(
     .single();
   if (error) return { ok: false, error: error.message };
   revalidateAction(name);
-  return { ok: true, updatedAt: data?.updated_at ?? undefined, enabled: data?.enabled ?? baseFields.enabled };
+  return {
+    ok: true,
+    updatedAt: data?.updated_at ?? undefined,
+    enabled: data?.enabled ?? baseFields.enabled,
+  };
 }
 
 /**
@@ -260,10 +280,7 @@ export async function autosaveActionPrompt(
  * Toggle the action's enabled state. Mirrors `saveAction`'s built-in policy:
  * disabling/enabling a built-in clones it into a user row first.
  */
-export async function setActionEnabled(
-  name: string,
-  enabled: boolean,
-): Promise<SaveActionResult> {
+export async function setActionEnabled(name: string, enabled: boolean): Promise<SaveActionResult> {
   const auth = await requireAdminWorkspace();
   if ('error' in auth) return { ok: false, error: auth.error };
   const { user, workspace } = auth;
@@ -280,7 +297,11 @@ export async function setActionEnabled(
       .single();
     if (error) return { ok: false, error: error.message };
     revalidateAction(name);
-    return { ok: true, updatedAt: data?.updated_at ?? undefined, enabled: data?.enabled ?? enabled };
+    return {
+      ok: true,
+      updatedAt: data?.updated_at ?? undefined,
+      enabled: data?.enabled ?? enabled,
+    };
   }
 
   if (!current.builtin) {
@@ -341,10 +362,7 @@ export async function deleteAction(name: string): Promise<SaveActionResult> {
   if (!current.user) {
     return { ok: false, error: 'No user override exists for this action' };
   }
-  const { error } = await supabase
-    .from('actions')
-    .delete()
-    .eq('id', current.user.id);
+  const { error } = await supabase.from('actions').delete().eq('id', current.user.id);
   if (error) return { ok: false, error: error.message };
   revalidateAction(name);
   return { ok: true };
@@ -411,7 +429,9 @@ export async function overrideBuiltInAction(
 
   const { data: source, error: sourceErr } = await supabase
     .from('actions')
-    .select('description, system_prompt, skill_refs, target, triggers, effects, output_schema, model, acceptance_mode, confidence_config, effect_routing, suggested_flow_id')
+    .select(
+      'description, system_prompt, skill_refs, target, triggers, effects, output_schema, model, acceptance_mode, confidence_config, effect_routing, suggested_flow_id',
+    )
     .eq('id', current.builtin.id)
     .single<SourceActionFields>();
   if (sourceErr || !source) {
@@ -462,10 +482,7 @@ export async function resetBuiltInToDefault(name: string): Promise<SaveActionRes
   if (!current.user) return { ok: false, error: 'No user override exists for this action' };
   if (!current.builtin) return { ok: false, error: 'No built-in to restore — use Delete instead' };
 
-  const { error } = await supabase
-    .from('actions')
-    .delete()
-    .eq('id', current.user.id);
+  const { error } = await supabase.from('actions').delete().eq('id', current.user.id);
   if (error) return { ok: false, error: error.message };
   revalidateAction(name);
   return { ok: true };
@@ -476,7 +493,9 @@ export async function resetBuiltInToDefault(name: string): Promise<SaveActionRes
  * `-copy[-N]` suffix that doesn't collide with the existing user rows.
  * Returns the new row's name so the caller can navigate to its detail page.
  */
-export async function duplicateAction(name: string): Promise<SaveActionResult & { newName?: string }> {
+export async function duplicateAction(
+  name: string,
+): Promise<SaveActionResult & { newName?: string }> {
   const auth = await requireAdminWorkspace();
   if ('error' in auth) return { ok: false, error: auth.error };
   const { user, workspace } = auth;
@@ -488,7 +507,9 @@ export async function duplicateAction(name: string): Promise<SaveActionResult & 
 
   const { data: source, error: sourceErr } = await supabase
     .from('actions')
-    .select('description, system_prompt, skill_refs, target, triggers, effects, output_schema, model, acceptance_mode, confidence_config, effect_routing, suggested_flow_id')
+    .select(
+      'description, system_prompt, skill_refs, target, triggers, effects, output_schema, model, acceptance_mode, confidence_config, effect_routing, suggested_flow_id',
+    )
     .eq('id', sourceRow.id)
     .single<SourceActionFields>();
   if (sourceErr || !source) {
@@ -501,9 +522,7 @@ export async function duplicateAction(name: string): Promise<SaveActionResult & 
     .eq('workspace_id', workspace.id)
     .like('name', `${name}-copy%`);
   const takenUserNames = new Set(
-    (existing ?? [])
-      .filter((r) => r.kind === 'user')
-      .map((r) => r.name as string),
+    (existing ?? []).filter((r) => r.kind === 'user').map((r) => r.name as string),
   );
 
   let candidate = `${name}-copy`;
@@ -513,29 +532,27 @@ export async function duplicateAction(name: string): Promise<SaveActionResult & 
     suffix += 1;
   }
 
-  const { error } = await supabase
-    .from('actions')
-    .insert({
-      workspace_id: workspace.id,
-      name: candidate,
-      kind: 'user',
-      replaces_built_in: null,
-      description: source.description,
-      system_prompt: source.system_prompt,
-      skill_refs: source.skill_refs as never,
-      target: source.target,
-      triggers: source.triggers as never,
-      effects: source.effects as never,
-      output_schema: source.output_schema as never,
-      enabled: true,
-      model: source.model,
-      acceptance_mode: source.acceptance_mode,
-      confidence_config: source.confidence_config as never,
-      effect_routing: source.effect_routing as never,
-      suggested_flow_id: source.suggested_flow_id,
-      created_by: user.id,
-      updated_by: user.id,
-    });
+  const { error } = await supabase.from('actions').insert({
+    workspace_id: workspace.id,
+    name: candidate,
+    kind: 'user',
+    replaces_built_in: null,
+    description: source.description,
+    system_prompt: source.system_prompt,
+    skill_refs: source.skill_refs as never,
+    target: source.target,
+    triggers: source.triggers as never,
+    effects: source.effects as never,
+    output_schema: source.output_schema as never,
+    enabled: true,
+    model: source.model,
+    acceptance_mode: source.acceptance_mode,
+    confidence_config: source.confidence_config as never,
+    effect_routing: source.effect_routing as never,
+    suggested_flow_id: source.suggested_flow_id,
+    created_by: user.id,
+    updated_by: user.id,
+  });
   if (error) return { ok: false, error: error.message };
   revalidatePath('/actions');
   revalidatePath(`/actions/${encodeURIComponent(candidate)}`);

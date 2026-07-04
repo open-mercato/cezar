@@ -53,11 +53,15 @@ async function main(): Promise<void> {
       }
     }
     if (!anyAvailable) {
-      console.error('\nNo subscription-CLI backends available. Install `claude` and/or `codex`, then re-run.');
+      console.error(
+        '\nNo subscription-CLI backends available. Install `claude` and/or `codex`, then re-run.',
+      );
       process.exitCode = 1;
       return;
     }
-    console.log('\nAt least one backend is available. Start the runner with `cezar-runner start --url ... --token ...`.');
+    console.log(
+      '\nAt least one backend is available. Start the runner with `cezar-runner start --url ... --token ...`.',
+    );
     return;
   }
 
@@ -78,7 +82,9 @@ async function main(): Promise<void> {
     const url = values.url ?? process.env.CEZAR_RUNNER_URL;
     const token = values.token ?? process.env.CEZAR_RUNNER_TOKEN;
     if (!url || !token) {
-      console.error('cezar-runner start: --url and --token are required (or set CEZAR_RUNNER_URL / CEZAR_RUNNER_TOKEN).');
+      console.error(
+        'cezar-runner start: --url and --token are required (or set CEZAR_RUNNER_URL / CEZAR_RUNNER_TOKEN).',
+      );
       process.exitCode = 1;
       return;
     }
@@ -86,14 +92,19 @@ async function main(): Promise<void> {
 
     let backends: string[];
     if (values.backends) {
-      backends = values.backends.split(',').map((s) => s.trim()).filter(Boolean);
+      backends = values.backends
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     } else if (kind === 'cloud') {
       backends = ['anthropic-api'];
     } else {
       const checks = await detectBackends();
       backends = checks.filter((c) => c.available).map((c) => c.backend);
       if (backends.length === 0) {
-        console.error('No backends auto-detected for a self-hosted runner. Pass --backends explicitly (e.g. --backends claude-cli) or run `cezar-runner login`.');
+        console.error(
+          'No backends auto-detected for a self-hosted runner. Pass --backends explicitly (e.g. --backends claude-cli) or run `cezar-runner login`.',
+        );
         process.exitCode = 1;
         return;
       }
@@ -103,21 +114,30 @@ async function main(): Promise<void> {
     // Both modes mutually exclusive; inherit-host wins (matches server-side
     // precedence in /api/runner/jobs).
     const inheritHostGithub =
-      Boolean(values['inherit-host-github']) || process.env.CEZAR_RUNNER_INHERIT_HOST_GITHUB === '1';
+      Boolean(values['inherit-host-github']) ||
+      process.env.CEZAR_RUNNER_INHERIT_HOST_GITHUB === '1';
     let githubInstallationId: number | null = null;
     if (!inheritHostGithub) {
-      const raw = values['github-installation-id'] ?? process.env.CEZAR_RUNNER_GITHUB_INSTALLATION_ID;
+      const raw =
+        values['github-installation-id'] ?? process.env.CEZAR_RUNNER_GITHUB_INSTALLATION_ID;
       if (raw && raw.trim()) {
         const n = Number(raw);
         if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
-          console.error(`cezar-runner start: --github-installation-id must be a positive integer (got '${raw}')`);
+          console.error(
+            `cezar-runner start: --github-installation-id must be a positive integer (got '${raw}')`,
+          );
           process.exitCode = 1;
           return;
         }
         githubInstallationId = n;
       }
-    } else if (values['github-installation-id'] || process.env.CEZAR_RUNNER_GITHUB_INSTALLATION_ID) {
-      console.warn('[cezar-runner] --inherit-host-github overrides --github-installation-id (host wins).');
+    } else if (
+      values['github-installation-id'] ||
+      process.env.CEZAR_RUNNER_GITHUB_INSTALLATION_ID
+    ) {
+      console.warn(
+        '[cezar-runner] --inherit-host-github overrides --github-installation-id (host wins).',
+      );
     }
 
     const daemon = new RunnerDaemon({
@@ -140,6 +160,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('[cezar-runner] fatal:', err instanceof Error ? err.stack ?? err.message : err);
+  console.error('[cezar-runner] fatal:', err instanceof Error ? (err.stack ?? err.message) : err);
   process.exit(1);
 });

@@ -25,13 +25,16 @@ type AgentRunEventRow = Database['public']['Tables']['agent_run_events']['Row'];
 /** Phase 5 — minimal runner info threaded into the step chip on /cockpit/[runId].
  *  Keyed by `runners.id`; populated server-side from the distinct `runner_id`s
  *  seen on this run's steps. Steps with no `runner_id` (cron path) skip the chip. */
-export type RunnerLookup = Record<string, {
-  id: string;
-  name: string;
-  status: string;
-  lastHeartbeatAt: string | null;
-  ghIdentity: string;
-}>;
+export type RunnerLookup = Record<
+  string,
+  {
+    id: string;
+    name: string;
+    status: string;
+    lastHeartbeatAt: string | null;
+    ghIdentity: string;
+  }
+>;
 
 interface Props {
   run: WorkflowRunRow;
@@ -45,7 +48,15 @@ interface Props {
   runners?: RunnerLookup;
 }
 
-export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, initialSteps, initialEvents, runners = {} }: Props) {
+export function RunDetailShell({
+  run: initialRun,
+  repoOwner,
+  repoName,
+  role,
+  initialSteps,
+  initialEvents,
+  runners = {},
+}: Props) {
   const router = useRouter();
   const [run, setRun] = useState<WorkflowRunRow>(initialRun);
   const [steps, setSteps] = useState<AgentRunRow[]>(initialSteps);
@@ -72,7 +83,12 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
       .channel(`cockpit-run-${run.id}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'agent_run_events', filter: `workflow_run_id=eq.${run.id}` },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'agent_run_events',
+          filter: `workflow_run_id=eq.${run.id}`,
+        },
         (msg) => {
           if (msg.eventType !== 'INSERT') return;
           const row = msg.new as AgentRunEventRow;
@@ -83,7 +99,12 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'agent_runs', filter: `workflow_run_id=eq.${run.id}` },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'agent_runs',
+          filter: `workflow_run_id=eq.${run.id}`,
+        },
         (msg) => {
           if (msg.eventType === 'DELETE') return;
           const row = msg.new as AgentRunRow;
@@ -182,7 +203,12 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
               {gh ? (
-                <a href={gh} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                <a
+                  href={gh}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent hover:underline"
+                >
                   {runRefLabel(run)} ↗
                 </a>
               ) : (
@@ -191,20 +217,31 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
               {run.repo && <span>{run.repo}</span>}
               {run.branch && <span>branch: {run.branch}</span>}
               {run.pr_url && (
-                <a href={run.pr_url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                <a
+                  href={run.pr_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent hover:underline"
+                >
                   PR ↗
                 </a>
               )}
               <span>started {timeAgo(run.started_at ?? run.created_at)}</span>
               {run.finished_at && <span>finished {timeAgo(run.finished_at)}</span>}
               <span>{humanizeTokens(run.tokens_used)} tokens</span>
-              {run.current_step_id && !terminal && <span>step: {stepLabel(run.current_step_id)}</span>}
+              {run.current_step_id && !terminal && (
+                <span>step: {stepLabel(run.current_step_id)}</span>
+              )}
             </div>
             {run.reason && <div className="mt-1 text-xs text-fg-subtle">{run.reason}</div>}
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {showPause && (
-              <HeaderBtn label="Pause" onClick={() => act(() => pauseRun(run.id))} disabled={pending} />
+              <HeaderBtn
+                label="Pause"
+                onClick={() => act(() => pauseRun(run.id))}
+                disabled={pending}
+              />
             )}
             {showResume && (
               <HeaderBtn
@@ -215,7 +252,12 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
               />
             )}
             {showCancel && (
-              <HeaderBtn label="Cancel" danger onClick={() => act(() => cancelRun(run.id))} disabled={pending} />
+              <HeaderBtn
+                label="Cancel"
+                danger
+                onClick={() => act(() => cancelRun(run.id))}
+                disabled={pending}
+              />
             )}
             {showDelete && (
               <HeaderBtn
@@ -223,7 +265,10 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
                 danger
                 title="Permanently removes this run and its step history and events."
                 onClick={() => {
-                  if (!window.confirm('Delete this run record? Step history and events go with it.')) return;
+                  if (
+                    !window.confirm('Delete this run record? Step history and events go with it.')
+                  )
+                    return;
                   setErr(null);
                   startTransition(async () => {
                     const res = await deleteRun(run.id);
@@ -240,7 +285,9 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
           </div>
         </div>
         {err && (
-          <div className="mt-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-1.5 text-xs text-danger">{err}</div>
+          <div className="mt-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-1.5 text-xs text-danger">
+            {err}
+          </div>
         )}
       </div>
 
@@ -254,7 +301,9 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
         </TabBtn>
         <TabBtn active={mobileTab === 'log'} onClick={() => setMobileTab('log')}>
           Event log
-          {!terminal && <span className="ml-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent align-middle" />}
+          {!terminal && (
+            <span className="ml-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent align-middle" />
+          )}
         </TabBtn>
       </div>
 
@@ -269,7 +318,9 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
             mobileTab === 'steps' ? 'block' : 'hidden lg:block',
           )}
         >
-          <div className="mb-3 hidden text-xs font-medium uppercase tracking-wider text-fg-subtle lg:block">Steps</div>
+          <div className="mb-3 hidden text-xs font-medium uppercase tracking-wider text-fg-subtle lg:block">
+            Steps
+          </div>
           {/* TODO(phase-3b): "re-run from step N" (§3.4) needs the Phase-3c dispatcher —
               steps are read-only here for now (the disabled button below is a placeholder). */}
           {steps.length === 0 ? (
@@ -299,11 +350,16 @@ export function RunDetailShell({ run: initialRun, repoOwner, repoName, role, ini
             Event log
             {!terminal && (
               <span className="ml-2 inline-flex items-center gap-1 text-fg-subtle">
-                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> live
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />{' '}
+                live
               </span>
             )}
           </div>
-          <div ref={feedRef} onScroll={onFeedScroll} className="flex-1 overflow-y-auto p-4 font-mono text-xs">
+          <div
+            ref={feedRef}
+            onScroll={onFeedScroll}
+            className="flex-1 overflow-y-auto p-4 font-mono text-xs"
+          >
             {events.length === 0 ? (
               <div className="py-8 text-center text-fg-muted">Waiting for events…</div>
             ) : (
@@ -385,7 +441,10 @@ function StepCard({
       {step.error && <div className="mt-2 text-xs text-danger">{step.error}</div>}
       {events.length > 0 && (
         <div className="mt-2">
-          <button onClick={() => setOpen((v) => !v)} className="text-xs text-fg-subtle hover:text-fg">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="text-xs text-fg-subtle hover:text-fg"
+          >
             {open ? '▾' : '▸'} {events.length} event{events.length === 1 ? '' : 's'}
           </button>
           {open && (
@@ -435,11 +494,15 @@ function EventLine({ event }: { event: AgentRunEventRow }) {
         </div>
       );
     case 'agent-text':
-      return <div className="py-0.5 pl-2 whitespace-pre-wrap text-fg">{(p?.text as string) ?? ''}</div>;
+      return (
+        <div className="py-0.5 pl-2 whitespace-pre-wrap text-fg">{(p?.text as string) ?? ''}</div>
+      );
     case 'tool-call':
       return (
         <div className="py-0.5 pl-2 text-fg-muted">
-          <span className="text-accent">▸ {(p?.tool as string) ?? (p?.name as string) ?? 'tool'}</span>
+          <span className="text-accent">
+            ▸ {(p?.tool as string) ?? (p?.name as string) ?? 'tool'}
+          </span>
           <span className="ml-1 text-fg-subtle">({shortInput(p?.input ?? p?.args)})</span>
         </div>
       );

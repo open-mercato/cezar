@@ -14,17 +14,17 @@ export async function statusCommand(config: Config): Promise<void> {
   const openIssues = store.getIssues({ state: 'open' });
   const closedIssues = store.getIssues({ state: 'closed' });
   const digested = store.getIssues({ hasDigest: true });
-  const unanalyzed = openIssues.filter(i => i.digest && i.analysis.duplicatesAnalyzedAt === null);
+  const unanalyzed = openIssues.filter((i) => i.digest && i.analysis.duplicatesAnalyzedAt === null);
 
-  const syncAgo = meta.lastSyncedAt
-    ? formatTimeAgo(new Date(meta.lastSyncedAt))
-    : 'never';
+  const syncAgo = meta.lastSyncedAt ? formatTimeAgo(new Date(meta.lastSyncedAt)) : 'never';
 
   console.log('');
   console.log(chalk.bold(`  Cezar — ${meta.owner}/${meta.repo}`));
   console.log('');
   console.log(`  ${openIssues.length} open · ${closedIssues.length} closed · synced ${syncAgo}`);
-  console.log(`  Digested: ${digested.length}/${allIssues.length} · Unanalyzed: ${unanalyzed.length}`);
+  console.log(
+    `  Digested: ${digested.length}/${allIssues.length} · Unanalyzed: ${unanalyzed.length}`,
+  );
   console.log('');
 }
 

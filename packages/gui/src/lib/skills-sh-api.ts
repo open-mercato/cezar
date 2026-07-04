@@ -223,7 +223,7 @@ export async function fetchSkillsShSkill(slug: string): Promise<SkillsShSkill> {
     name:
       typeof data.name === 'string' && data.name.trim()
         ? data.name.trim()
-        : slug.split('/').pop() ?? slug,
+        : (slug.split('/').pop() ?? slug),
     description: typeof data.description === 'string' ? data.description : null,
     body: pickBody(files),
     contentHash: typeof data.contentHash === 'string' ? data.contentHash : null,

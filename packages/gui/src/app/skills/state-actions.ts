@@ -34,13 +34,7 @@ export async function setSkillEnabled(
   if (!skillName.trim()) return { ok: false, error: 'skillName is required' };
 
   const supabase = createSupabaseAdminClient();
-  const result = await setSkillEnabledImpl(
-    workspace.id,
-    skillName,
-    enabled,
-    supabase,
-    user.id,
-  );
+  const result = await setSkillEnabledImpl(workspace.id, skillName, enabled, supabase, user.id);
   if (!result.ok) return { ok: false, error: result.error };
 
   revalidatePath('/skills');

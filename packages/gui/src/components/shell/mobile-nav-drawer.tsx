@@ -27,7 +27,13 @@ interface MobileNavDrawerProps {
  * Locks background scroll, traps focus, and closes on backdrop tap, Esc, and
  * route change.
  */
-export function MobileNavDrawer({ open, onClose, user, workspace, workspaces }: MobileNavDrawerProps) {
+export function MobileNavDrawer({
+  open,
+  onClose,
+  user,
+  workspace,
+  workspaces,
+}: MobileNavDrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
 
@@ -121,9 +127,11 @@ export function MobileNavDrawer({ open, onClose, user, workspace, workspaces }: 
               </div>
             )}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-on-surface">{user.name || 'Cezar User'}</div>
+              <div className="truncate text-sm font-medium text-on-surface">
+                {user.name || 'Cezar User'}
+              </div>
               <div className="truncate text-xs text-on-surface-variant">
-                {workspace?.role === 'admin' ? 'Admin Account' : workspace?.role ?? user.email}
+                {workspace?.role === 'admin' ? 'Admin Account' : (workspace?.role ?? user.email)}
               </div>
             </div>
           </div>

@@ -25,7 +25,9 @@ export async function executeSyncJob(
 ): Promise<void> {
   const { workspaceId, jobId, repoOwner, repoName } = params;
 
-  const finishJob = async (status: Database['public']['Tables']['jobs']['Row']['status']): Promise<void> => {
+  const finishJob = async (
+    status: Database['public']['Tables']['jobs']['Row']['status'],
+  ): Promise<void> => {
     // Drop the lease (migration 0025) on completion; guard on `running` like
     // the dispatch path so a watchdog requeue can't be clobbered.
     await supabase

@@ -85,11 +85,7 @@ export const DEFAULT_AUTO_ACCEPT_ABOVE = 80;
  * action; `manual` is the "run now" path. Re-add entries (e.g. `on-cron`,
  * `on-pr-opened`) only when a real firing path ships.
  */
-export type ActionTrigger =
-  | 'manual'
-  | 'on-issue-opened'
-  | 'on-issue-edited'
-  | 'on-issue-reopened';
+export type ActionTrigger = 'manual' | 'on-issue-opened' | 'on-issue-edited' | 'on-issue-reopened';
 
 /** Output of a successful action run. */
 export interface ActionRunResult {

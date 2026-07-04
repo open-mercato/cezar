@@ -69,9 +69,11 @@ export async function syncCommand(opts: SyncOptions, config: Config): Promise<vo
     try {
       const llm = new LLMService(config);
       const digests = await llm.generateDigests(
-        needsDigest.map(i => ({ number: i.number, title: i.title, body: i.body })),
+        needsDigest.map((i) => ({ number: i.number, title: i.title, body: i.body })),
         config.sync.digestBatchSize,
-        (done, total) => { digestSpinner.text = `Generating digests  ${progressBar(done, total)}`; },
+        (done, total) => {
+          digestSpinner.text = `Generating digests  ${progressBar(done, total)}`;
+        },
       );
 
       let digestCount = 0;
@@ -91,14 +93,23 @@ export async function syncCommand(opts: SyncOptions, config: Config): Promise<vo
   }
 
   // Fetch comments for issues with new/changed comments
-  const needsComments = store.getIssues()
-    .filter(i => i.commentCount > 0 && (i.commentsFetchedAt === null || i.comments.length !== i.commentCount));
+  const needsComments = store
+    .getIssues()
+    .filter(
+      (i) =>
+        i.commentCount > 0 &&
+        (i.commentsFetchedAt === null || i.comments.length !== i.commentCount),
+    );
   if (needsComments.length > 0) {
-    const commentSpinner = ora(`Fetching comments  ${progressBar(0, needsComments.length)}`).start();
+    const commentSpinner = ora(
+      `Fetching comments  ${progressBar(0, needsComments.length)}`,
+    ).start();
     try {
       const commentMap = await github.fetchCommentsForIssues(
-        needsComments.map(i => i.number),
-        (done, total) => { commentSpinner.text = `Fetching comments  ${progressBar(done, total)}`; },
+        needsComments.map((i) => i.number),
+        (done, total) => {
+          commentSpinner.text = `Fetching comments  ${progressBar(done, total)}`;
+        },
       );
       let commentCount = 0;
       for (const [number, comments] of commentMap) {
@@ -117,7 +128,7 @@ export async function syncCommand(opts: SyncOptions, config: Config): Promise<vo
   // Refresh org members if stale (>24h)
   const orgMembersFetchedAt = meta.orgMembersFetchedAt;
   const orgStaleMs = 24 * 60 * 60 * 1000;
-  if (!orgMembersFetchedAt || (Date.now() - new Date(orgMembersFetchedAt).getTime()) > orgStaleMs) {
+  if (!orgMembersFetchedAt || Date.now() - new Date(orgMembersFetchedAt).getTime() > orgStaleMs) {
     const orgSpinner = ora('Refreshing org members...').start();
     try {
       const orgMembers = await github.fetchOrgMembers(meta.owner);
@@ -133,9 +144,12 @@ export async function syncCommand(opts: SyncOptions, config: Config): Promise<vo
   }
 
   // Summary
-  const unanalyzed = store.getIssues({ state: 'open', hasDigest: true })
-    .filter(i => i.analysis.duplicatesAnalyzedAt === null).length;
+  const unanalyzed = store
+    .getIssues({ state: 'open', hasDigest: true })
+    .filter((i) => i.analysis.duplicatesAnalyzedAt === null).length;
   if (unanalyzed > 0) {
-    console.log(chalk.dim(`  ${unanalyzed} issues need duplicate check — run 'cezar run duplicates'`));
+    console.log(
+      chalk.dim(`  ${unanalyzed} issues need duplicate check — run 'cezar run duplicates'`),
+    );
   }
 }

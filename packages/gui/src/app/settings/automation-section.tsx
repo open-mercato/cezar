@@ -38,7 +38,10 @@ export function AutomationSection({
   digestIntervalMinutes,
   readOnly,
 }: AutomationSectionProps) {
-  const [state, formAction, pending] = useActionState<SaveAutomationState, FormData>(saveAutomationToggles, {});
+  const [state, formAction, pending] = useActionState<SaveAutomationState, FormData>(
+    saveAutomationToggles,
+    {},
+  );
   const [autofix, setAutofix] = useState(autofixEnabled);
   const [syncAuto, setSyncAuto] = useState(syncMode === 'auto');
   const [digest, setDigest] = useState<DigestMode>(digestMode);
@@ -81,8 +84,8 @@ export function AutomationSection({
 
       {autofix && !autofixEnabled && (
         <Banner tone="warn">
-          With auto-fix on, Cezar will open draft PRs without a human in the loop (only on bugs above the
-          confidence threshold). Review the draft before merging.
+          With auto-fix on, Cezar will open draft PRs without a human in the loop (only on bugs
+          above the confidence threshold). Review the draft before merging.
         </Banner>
       )}
 
@@ -121,8 +124,8 @@ export function AutomationSection({
           <span className="min-w-0 flex-1 space-y-1">
             <span className="block text-sm font-medium text-on-surface">Sync frequency</span>
             <span className="block text-xs leading-relaxed text-on-surface-variant">
-              How often Cezar auto-syncs from GitHub. The minimum gap between automatic syncs — the cron
-              checks every 5 minutes, so faster than that has no effect.
+              How often Cezar auto-syncs from GitHub. The minimum gap between automatic syncs — the
+              cron checks every 5 minutes, so faster than that has no effect.
             </span>
           </span>
           <select
@@ -131,7 +134,9 @@ export function AutomationSection({
             disabled={readOnly}
             className="mt-1 h-9 shrink-0 rounded-md border border-outline-variant bg-surface px-2 text-base text-on-surface focus:border-primary focus:outline-none disabled:opacity-70 lg:text-sm"
           >
-            {(SYNC_INTERVAL_OPTIONS.includes(syncIntervalMinutes as (typeof SYNC_INTERVAL_OPTIONS)[number])
+            {(SYNC_INTERVAL_OPTIONS.includes(
+              syncIntervalMinutes as (typeof SYNC_INTERVAL_OPTIONS)[number],
+            )
               ? SYNC_INTERVAL_OPTIONS
               : [syncIntervalMinutes, ...SYNC_INTERVAL_OPTIONS]
             ).map((min) => (
@@ -149,11 +154,12 @@ export function AutomationSection({
         <div className="space-y-1">
           <span className="block text-sm font-medium text-on-surface">AI digests</span>
           <span className="block text-xs leading-relaxed text-on-surface-variant">
-            Digests are AI-generated issue summaries (uses your Anthropic key). They&rsquo;re the only
-            LLM spend in a sync, so they have their own cadence — metadata sync (issues, PRs, comments)
-            stays on your sync schedule regardless. <span className="font-medium">Auto</span> digests on
-            their own slower schedule, <span className="font-medium">On-demand</span> only when you click
-            below, <span className="font-medium">Off</span> never (the inbox shows raw issue titles).
+            Digests are AI-generated issue summaries (uses your Anthropic key). They&rsquo;re the
+            only LLM spend in a sync, so they have their own cadence — metadata sync (issues, PRs,
+            comments) stays on your sync schedule regardless.{' '}
+            <span className="font-medium">Auto</span> digests on their own slower schedule,{' '}
+            <span className="font-medium">On-demand</span> only when you click below,{' '}
+            <span className="font-medium">Off</span> never (the inbox shows raw issue titles).
           </span>
         </div>
 
@@ -187,7 +193,9 @@ export function AutomationSection({
               disabled={readOnly}
               className="h-9 shrink-0 rounded-md border border-outline-variant bg-surface px-2 text-base text-on-surface focus:border-primary focus:outline-none disabled:opacity-70 lg:text-sm"
             >
-              {(DIGEST_INTERVAL_OPTIONS.includes(digestIntervalMinutes as (typeof DIGEST_INTERVAL_OPTIONS)[number])
+              {(DIGEST_INTERVAL_OPTIONS.includes(
+                digestIntervalMinutes as (typeof DIGEST_INTERVAL_OPTIONS)[number],
+              )
                 ? DIGEST_INTERVAL_OPTIONS
                 : [digestIntervalMinutes, ...DIGEST_INTERVAL_OPTIONS]
               ).map((min) => (
@@ -211,7 +219,8 @@ export function AutomationSection({
               {genPending ? 'Starting…' : 'Generate digests now'}
             </button>
             <span className="block text-xs text-on-surface-variant">
-              Runs a digest pass immediately, regardless of mode. Useful for On-demand / Off workspaces.
+              Runs a digest pass immediately, regardless of mode. Useful for On-demand / Off
+              workspaces.
             </span>
           </div>
         )}

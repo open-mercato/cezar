@@ -60,7 +60,9 @@ export interface ClaudeCodeCliRunnerOptions {
  * default). Print mode stays reachable for callers that need the legacy
  * argv-style argv invocation (e.g. older claude builds, debugging).
  */
-function resolveDefaultTransport(explicit: 'print' | 'stream-json' | undefined): 'print' | 'stream-json' {
+function resolveDefaultTransport(
+  explicit: 'print' | 'stream-json' | undefined,
+): 'print' | 'stream-json' {
   if (explicit) return explicit;
   const env = process.env.CEZAR_CLI_TRANSPORT;
   if (env === 'print' || env === 'stream-json') return env;
@@ -154,7 +156,10 @@ export class ClaudeCodeCliRunner implements AgentRunner {
         child.stdin.write(`${JSON.stringify(userMessage)}\n`);
         child.stdin.end();
       } catch (err) {
-        onEvent?.({ type: 'note', message: `claude: stdin write failed: ${(err as Error).message}` });
+        onEvent?.({
+          type: 'note',
+          message: `claude: stdin write failed: ${(err as Error).message}`,
+        });
       }
     }
 
@@ -197,7 +202,10 @@ export class ClaudeCodeCliRunner implements AgentRunner {
           msg = JSON.parse(line) as ClaudeStreamMessage;
         } catch {
           // Non-JSON noise on the stream — surface it, never crash.
-          onEvent?.({ type: 'note', message: `claude: skipped unparseable stream line: ${truncate(line)}` });
+          onEvent?.({
+            type: 'note',
+            message: `claude: skipped unparseable stream line: ${truncate(line)}`,
+          });
           continue;
         }
 
@@ -206,7 +214,10 @@ export class ClaudeCodeCliRunner implements AgentRunner {
           delta = handleClaudeMessage(msg, { toolCalls, textChunks, onEvent });
         } catch (err) {
           // Renamed/missing fields shouldn't take the whole run down.
-          onEvent?.({ type: 'note', message: `claude: skipped malformed event (${msg.type ?? 'unknown'}): ${(err as Error).message}` });
+          onEvent?.({
+            type: 'note',
+            message: `claude: skipped malformed event (${msg.type ?? 'unknown'}): ${(err as Error).message}`,
+          });
           continue;
         }
         if (delta > 0) {
@@ -220,7 +231,10 @@ export class ClaudeCodeCliRunner implements AgentRunner {
             } catch (err) {
               if (err instanceof TokenBudgetExceededError) {
                 budgetExceeded = true;
-                onEvent?.({ type: 'note', message: `token budget exceeded: used ${err.used} of ${err.limit}` });
+                onEvent?.({
+                  type: 'note',
+                  message: `token budget exceeded: used ${err.used} of ${err.limit}`,
+                });
                 await this.interrupt();
                 break;
               }
@@ -251,7 +265,14 @@ export class ClaudeCodeCliRunner implements AgentRunner {
       onEvent?.({ type: 'note', message: `timed out after ${mins}m — killed` });
       onEvent?.({ type: 'error', message: `claude CLI timed out after ${mins}m and was killed` });
       onEvent?.({ type: 'done' });
-      return { text, parsed, toolCalls, tokensUsed, budgetExceeded: false, sessionId: spec.sessionId };
+      return {
+        text,
+        parsed,
+        toolCalls,
+        tokensUsed,
+        budgetExceeded: false,
+        sessionId: spec.sessionId,
+      };
     }
 
     if (!budgetExceeded && exitCode !== 0 && exitCode !== null) {
@@ -300,10 +321,28 @@ function buildClaudeArgs<T>(
   //                    NDJSON `{type:user, …}` line after spawn.
   const args: string[] =
     transport === 'stream-json'
-      ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-         '--append-system-prompt', spec.systemPrompt, '--permission-mode', 'acceptEdits']
-      : ['-p', spec.userPrompt, '--output-format', 'stream-json', '--verbose',
-         '--append-system-prompt', spec.systemPrompt, '--permission-mode', 'acceptEdits'];
+      ? [
+          '--input-format',
+          'stream-json',
+          '--output-format',
+          'stream-json',
+          '--verbose',
+          '--append-system-prompt',
+          spec.systemPrompt,
+          '--permission-mode',
+          'acceptEdits',
+        ]
+      : [
+          '-p',
+          spec.userPrompt,
+          '--output-format',
+          'stream-json',
+          '--verbose',
+          '--append-system-prompt',
+          spec.systemPrompt,
+          '--permission-mode',
+          'acceptEdits',
+        ];
   // Pin the session so an operator can `cd <worktree> && claude --resume
   // <sessionId>` after a failed run to take over interactively. We use
   // the agent_run.id as the session id (already a UUID) so the cockpit
@@ -419,11 +458,21 @@ interface ClaudeStreamMessage {
 
 function handleClaudeMessage(
   msg: ClaudeStreamMessage,
-  ctx: { toolCalls: AgentToolCallRecord[]; textChunks: string[]; onEvent?: (e: AgentEvent) => void },
+  ctx: {
+    toolCalls: AgentToolCallRecord[];
+    textChunks: string[];
+    onEvent?: (e: AgentEvent) => void;
+  },
 ): number {
   if (msg.type === 'assistant' && msg.message?.content) {
     for (const block of msg.message.content) {
-      const b = block as { type?: string; text?: string; id?: string; name?: string; input?: unknown };
+      const b = block as {
+        type?: string;
+        text?: string;
+        id?: string;
+        name?: string;
+        input?: unknown;
+      };
       if (b.type === 'text' && typeof b.text === 'string') {
         ctx.textChunks.push(b.text);
         ctx.onEvent?.({ type: 'text', text: b.text });
@@ -437,7 +486,12 @@ function handleClaudeMessage(
 
   if (msg.type === 'user' && msg.message?.content) {
     for (const block of msg.message.content) {
-      const b = block as { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean };
+      const b = block as {
+        type?: string;
+        tool_use_id?: string;
+        content?: unknown;
+        is_error?: boolean;
+      };
       if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
         ctx.onEvent?.({
           type: 'tool-result',
@@ -458,7 +512,10 @@ function handleClaudeMessage(
       ctx.onEvent?.({ type: 'text', text: msg.result });
     }
     if (msg.is_error) {
-      ctx.onEvent?.({ type: 'note', message: `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}` });
+      ctx.onEvent?.({
+        type: 'note',
+        message: `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
+      });
     }
     return costWeightedTokens(msg.usage);
   }

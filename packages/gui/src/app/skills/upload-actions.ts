@@ -132,7 +132,10 @@ export async function uploadSkillsFromFiles(
     const fallbackName = filename.replace(/\.md$/i, '');
     const parsed = parseSkillMarkdown(raw, fallbackName);
     if (!parsed.name) {
-      summary.failed.push({ filename, error: 'no `name` in frontmatter and filename was unusable' });
+      summary.failed.push({
+        filename,
+        error: 'no `name` in frontmatter and filename was unusable',
+      });
       continue;
     }
     if (!NAME_PATTERN.test(parsed.name)) {

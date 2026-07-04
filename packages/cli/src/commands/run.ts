@@ -14,7 +14,11 @@ interface RunOptions {
   dryRun?: boolean;
 }
 
-export async function runCommand(actionName: string, opts: RunOptions, config: Config): Promise<void> {
+export async function runCommand(
+  actionName: string,
+  opts: RunOptions,
+  config: Config,
+): Promise<void> {
   if (opts.apply && opts.dryRun) {
     console.error(chalk.red('Cannot pass both --apply and --dry-run.'));
     process.exit(1);
@@ -31,11 +35,12 @@ export async function runCommand(actionName: string, opts: RunOptions, config: C
     process.exit(1);
   }
 
-  const scope: IssueScope = opts.issue != null
-    ? { kind: 'single', number: opts.issue }
-    : opts.all
-      ? { kind: 'all' }
-      : { kind: 'unanalyzed' };
+  const scope: IssueScope =
+    opts.issue != null
+      ? { kind: 'single', number: opts.issue }
+      : opts.all
+        ? { kind: 'all' }
+        : { kind: 'unanalyzed' };
 
   const result = await runActionAcrossIssues(
     action,

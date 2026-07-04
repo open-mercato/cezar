@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "all",
+  "printWidth": 100,
+  "tabWidth": 2,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "node_modules",
+    "**/node_modules",
+    "dist",
+    "**/dist",
+    ".next",
+    "**/.next",
+    ".yarn",
+    "coverage",
+    "**/coverage",
+    "**/*.tsbuildinfo",
+    "yarn.lock",
+    "packages/gui/supabase/migrations",
+    "packages/gui/next-env.d.ts",
+    "packages/core/scripts",
+    "**/*.md"
+  ]
+}
