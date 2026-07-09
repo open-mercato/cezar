@@ -24,7 +24,7 @@
     "db:psql": "docker compose -f infra/supabase/docker-compose.yml exec db psql -U postgres -d postgres"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^26.1.1",
     "oxfmt": "^0.57.0",
     "oxlint": "^1.72.0",
     "tsx": "^4.23.0",
