@@ -15,6 +15,8 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "dev": "yarn workspace cezar dev",
+    "link:bins": "(cd packages/cli && npm link) && (cd packages/runner && npm link)",
+    "unlink:bins": "npm rm -g cezar @cezar/runner",
     "db:start": "docker compose -f infra/supabase/docker-compose.yml up -d",
     "db:stop": "docker compose -f infra/supabase/docker-compose.yml down",
     "db:reset": "docker compose -f infra/supabase/docker-compose.yml down -v && docker compose -f infra/supabase/docker-compose.yml up -d",
@@ -23,11 +25,11 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "oxfmt": "^0.55.0",
-    "oxlint": "^1.70.0",
-    "tsx": "^4.0.0",
+    "oxfmt": "^0.57.0",
+    "oxlint": "^1.72.0",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.0",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.9"
   },
   "packageManager": "yarn@4.12.0"
 }

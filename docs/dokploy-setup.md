@@ -142,8 +142,11 @@ GITHUB_APP_WEBHOOK_SECRET=replace-me
 # Engine
 CEZAR_USE_WORKFLOW_ENGINE=true
 
-# Runner token (placeholder — replaced after step 9)
-CEZAR_RUNNER_TOKEN=placeholder
+# Runner join token (placeholder — replaced after step 9)
+CEZAR_RUNNER_JOIN_TOKEN=placeholder
+# DEPRECATED — removed in v0.3.0; pre-issued runner token, superseded by
+# CEZAR_RUNNER_JOIN_TOKEN. Leave unset.
+# CEZAR_RUNNER_TOKEN=
 ```
 
 The full reference (optional tuning vars: `CEZAR_DISPATCH_BATCH`,
@@ -201,11 +204,12 @@ GitHub OAuth, and confirm the cockpit loads.
 
 ## 9 · Register the runner and finish the auth dance
 
-1. In the GUI, **Settings → Runners → Register a runner**. Give it a name
-   (e.g. `dokploy-runner`). Copy the **token** that's shown — it's only
-   displayed once.
-2. Back in Dokploy → **Environment** → set `CEZAR_RUNNER_TOKEN` to that
-   token. Save.
+1. In the GUI, **Settings → Runners → Mint join token**. Copy the **join
+   token** that's shown — it's only displayed once. (The runner registers
+   itself with it and belongs to you; jobs you trigger route to your
+   runners.)
+2. Back in Dokploy → **Environment** → set `CEZAR_RUNNER_JOIN_TOKEN` to that
+   token. Save. (`CEZAR_RUNNER_TOKEN` is deprecated — removed in v0.3.0.)
 3. Dokploy will offer to redeploy — accept (or use **Redeploy** manually).
    Only the `runner` container needs the new value, but a stack redeploy is
    the simplest path.
@@ -309,7 +313,7 @@ If you scale and want only one replica to drive `sync`, set
 | Browser shows Dokploy's default page, not Cezar | Domain not yet routed | Check **Domains** tab, container port `3000`, service `gui`. Wait for Let's Encrypt. |
 | `502 Bad Gateway` from Traefik | GUI container crashed | `docker logs <gui>`. Usually a missing/wrong Supabase env var. |
 | GUI loads but login redirects to localhost | Supabase auth URL config | Re-check Site URL + Redirect URLs in Supabase (step 3.4). |
-| Runner stuck on `auth lookup failed` | Token still placeholder | Repeat step 9; redeploy after setting `CEZAR_RUNNER_TOKEN`. |
+| Runner stuck on `unknown or revoked join token` | Token still placeholder | Repeat step 9; redeploy after setting `CEZAR_RUNNER_JOIN_TOKEN`. |
 | `claude login` errors with "command not found" | Wrong container | Confirm you're `exec`-ing into the **runner** container, not `gui`. |
 | Webhook deliveries show `503` | `GITHUB_APP_WEBHOOK_SECRET` unset | Set it, redeploy. Until then `triage-sweep` polls as a fallback. |
 | Jobs stay queued forever | Dispatcher not running, or no runner for the required backend | Check `/api/cron/dispatch` logs (in-process scheduler tail). For CLI backends, confirm a runner is registered + online. |

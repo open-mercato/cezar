@@ -130,6 +130,7 @@ export async function startLabelAnalysisForWorkspace(
     status: 'queued',
     // Cron-dispatched + Anthropic API only. See migration 0023.
     required_backend: 'anthropic-api',
+    requested_by: user.id,
     payload: { analysisId: analysis.id },
   });
   if (jErr) {

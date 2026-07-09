@@ -5,14 +5,16 @@ export type ActionModel = 'claude-opus-4-7' | 'claude-sonnet-4-6' | 'claude-haik
 
 export type AcceptanceMode = 'auto' | 'human-in-the-loop';
 
-export interface AutoConfidenceConfig {
+// Type aliases (not interfaces) so the shapes stay assignable to the DB's
+// `Json` — interfaces lack the implicit index signature that check needs.
+export type AutoConfidenceConfig = {
   autoAcceptAbove: number;
-}
+};
 
-export interface HitlConfidenceConfig {
+export type HitlConfidenceConfig = {
   autoDenyBelow: number;
   autoAcceptAbove: number;
-}
+};
 
 export type ConfidenceConfig = AutoConfidenceConfig | HitlConfidenceConfig;
 

@@ -208,7 +208,10 @@ export async function fetchSkillsShSkill(slug: string): Promise<SkillsShSkill> {
   }
 
   const text = await res.text();
-  if (text.length > MAX_RESPONSE_BYTES) {
+  // Measure real UTF-8 bytes — `text.length` counts UTF-16 code units, which
+  // under-counts multi-byte content and lets a payload slip past the byte cap.
+  // Matches the `Buffer.byteLength` checks used everywhere else in this PR.
+  if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) {
     throw new SkillsShPayloadTooLargeError();
   }
   let data: ApiSkillResponse;

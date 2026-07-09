@@ -89,6 +89,12 @@ export {
   DEFAULT_AGENT_BACKEND,
   type CreateAgentRunnerOptions,
 } from './agents/runner-factory.js';
+export {
+  RunnerRegisterRequestSchema,
+  RunnerRegisterResponseSchema,
+  type RunnerRegisterRequest,
+  type RunnerRegisterResponse,
+} from './agents/runner-register.model.js';
 
 // Autofix internals (orchestrator + agent session). The CLI still owns the
 // terminal-facing AutofixRunner + verbose toggle.

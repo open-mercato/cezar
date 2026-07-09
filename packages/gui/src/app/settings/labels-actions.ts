@@ -62,6 +62,7 @@ export async function startLabelAnalysis(): Promise<StartLabelAnalysisResult> {
     // guard (0023) is the hard enforcement; this stamp documents intent and
     // makes a misrouted job easy to spot.
     required_backend: 'anthropic-api',
+    requested_by: user.id,
     payload: { analysisId: analysis.id },
   });
   if (jErr) {

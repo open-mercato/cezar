@@ -25,21 +25,30 @@ yarn workspace @cezar/runner build
 ```
 
 This produces the `cezar-runner` binary (`packages/runner/dist/cli.js`). Run it
-via `yarn workspace @cezar/runner exec cezar-runner …`, or `npm link` /
-`yarn link` the package, or just call `node packages/runner/dist/cli.js …`.
+via `node packages/runner/dist/cli.js …`, or put it on your PATH globally with
+`yarn link:bins` (from the repo root; `yarn unlink:bins` removes it).
 
-## 2. Register the runner in the web app
+## 2. Mint a join token in the web app
+
+Runners register **themselves** — you never create a runner row by hand.
 
 1. In the Cezar web app, go to **Settings → Runners**.
-2. Click **Register a runner**, give it a name (e.g. `ci-box-1`), and pick the
-   backends it will serve (`claude-cli`, `codex-cli`, and/or — unusually —
-   `anthropic-api`).
-3. Copy the **token** shown on the next screen. **It is shown once and never
-   again** — only a SHA-256 hash of it is stored. If you lose it, revoke the
-   runner and register a new one.
+2. Click **Mint join token** (any workspace member can; give it a label like
+   `laptop` or `ci-box` if you'll mint several).
+3. Copy the **join token**. **It is shown once and never again** — only a
+   SHA-256 hash is stored. Unlike the old per-runner token it is *reusable*:
+   the same join token can register any number of runners across devices,
+   until you revoke it.
+
+A runner registered with your join token **belongs to you**: jobs you trigger
+in the GUI route to *your* runners; jobs another user triggers route to
+*theirs*. System-initiated jobs (webhooks, sweeps) can run on any runner in
+the workspace. Runners are identified by *(workspace, owner, name)* — starting
+a runner again with the same name re-keys the existing registration instead of
+creating a duplicate.
 
 The page also shows a ready-to-paste `cezar-runner start …` command with the
-token and backends filled in.
+join token filled in.
 
 ## 3. Check the CLIs on the runner host
 
@@ -57,17 +66,35 @@ be billed** — those credentials live on this host only; Cezar never sees them.
 ```bash
 cezar-runner start \
   --url https://<your-cezar-host> \
-  --token <token-from-step-2> \
-  --backends claude-cli,codex-cli
+  --join-token <join-token-from-step-2>
 ```
 
 Or via environment variables instead of flags:
 
 ```bash
 export CEZAR_RUNNER_URL=https://<your-cezar-host>
-export CEZAR_RUNNER_TOKEN=<token-from-step-2>
-cezar-runner start --backends claude-cli,codex-cli
+export CEZAR_RUNNER_JOIN_TOKEN=<join-token-from-step-2>
+cezar-runner start
 ```
+
+On first start the daemon registers itself (name defaults to the hostname —
+override with `--name` / `CEZAR_RUNNER_NAME`; backends are auto-detected from
+the CLIs on `PATH` — override with `--backends`), then persists the resulting
+per-runner credential in `~/.cezar-runner/credentials.json` (`0600`; override
+the directory with `CEZAR_RUNNER_STATE_DIR`). Later starts reuse the persisted
+credential, and if the SaaS ever rejects it (you revoked the runner, or the
+database was reset) the daemon automatically re-registers with the join token.
+
+A runner registered before the join-token flow keeps working: pass its
+pre-issued token via `--token` / `CEZAR_RUNNER_TOKEN` and registration is
+skipped entirely. **Deprecated — `--token` / `CEZAR_RUNNER_TOKEN` will be
+removed in v0.3.0**; re-register through a join token before upgrading (this
+also gives the runner an owner, without which it only receives
+system-initiated jobs).
+
+In the Docker compose stack, set `CEZAR_RUNNER_JOIN_TOKEN` in `.env` — the
+`runner` service self-registers as `compose-runner` on first boot and keeps
+its credential in the `runner-home` volume.
 
 The daemon polls the SaaS for jobs matching its advertised backends, claims one,
 clones the repo into a worktree, runs the agent there (sandboxed to the worktree

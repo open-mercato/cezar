@@ -47,11 +47,16 @@ function revalidateUploadSurfaces(name?: string) {
 }
 
 /**
- * Upsert an `enabled=true` row in `workspace_skill_states` so the freshly
- * uploaded skill shows up in the workflow picker and the dispatch catalog
- * immediately — without this the runtime would default-off for any workspace
- * that's already been seeded (the common case), and the admin would have to
- * toggle the new skill on at `/skills` before it does anything.
+ * First-install seed for `workspace_skill_states` so a freshly uploaded skill
+ * shows up in the workflow picker and the dispatch catalog immediately —
+ * without this the runtime would default-off for any workspace that's already
+ * been seeded (the common case), and the admin would have to toggle the new
+ * skill on at `/skills` before it does anything.
+ *
+ * `ignoreDuplicates: true` makes this seed-only: replacing a file the admin had
+ * *disabled* preserves that choice instead of silently re-enabling it. This
+ * matches the skills.sh refresh behaviour (`enableSkillsShSkillState`) — both
+ * sources now preserve admin intent on re-sync (see issue #307).
  */
 async function enableUploadedSkillState(
   supabase: SupabaseClient<Database>,
@@ -59,9 +64,6 @@ async function enableUploadedSkillState(
   skillName: string,
   userId: string,
 ) {
-  // Upsert with `ignoreDuplicates: false` so we re-enable a previously-disabled
-  // state row when the admin replaces the file. `created_by` is only set on
-  // first insert (the unique constraint takes the existing value otherwise).
   await supabase.from('workspace_skill_states').upsert(
     {
       workspace_id: workspaceId,
@@ -71,7 +73,7 @@ async function enableUploadedSkillState(
       created_by: userId,
       updated_by: userId,
     },
-    { onConflict: 'workspace_id,skill_name' },
+    { onConflict: 'workspace_id,skill_name', ignoreDuplicates: true },
   );
 }
 

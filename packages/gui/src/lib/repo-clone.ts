@@ -47,20 +47,24 @@ export async function acquireRepoLock(owner: string, repo: string): Promise<() =
   // Chain so the next waiter starts only after this one releases. Swallow a
   // prior rejection (there shouldn't be one — `next` only ever resolves) so the
   // chain never gets stuck.
-  repoLocks.set(
-    key,
-    prev.then(
-      () => next,
-      () => next,
-    ),
+  //
+  // Store the chained promise (`prev.then(...)`) — NOT `next` — and compare
+  // against that same reference on cleanup. `.then()` always returns a new
+  // Promise, so comparing the stored value against `next` never matched and the
+  // delete branch was unreachable, growing the Map without bound on long-lived
+  // workers (mirrors the fix in `external-repo-clone.ts`; see issue #308).
+  const chained = prev.then(
+    () => next,
+    () => next,
   );
+  repoLocks.set(key, chained);
   await prev.catch(() => {});
   let released = false;
   return () => {
     if (released) return;
     released = true;
     release();
-    if (repoLocks.get(key) === next) repoLocks.delete(key);
+    if (repoLocks.get(key) === chained) repoLocks.delete(key);
   };
 }
 

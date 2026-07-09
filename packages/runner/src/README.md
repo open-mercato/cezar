@@ -36,10 +36,11 @@ The `cezar-runner` bin is installed when the package is built/linked.
   `<tool> login` to run. The `anthropic-api` backend needs `ANTHROPIC_API_KEY`
   in the environment instead.
 - **`git`** on PATH (the runner clones repos to `~/.cezar/runner-repos`).
-- A **runner token**, created on the Settings → Runners page (shown once,
-  stored hashed server-side — treat like a password). *(That UI lands in Phase
-  4b; until then a runner row + `token_hash` can be inserted directly into the
-  `runners` table — the token is `sha256(<raw>)` hex.)*
+- A **join token**, minted on the Settings → Runners page (shown once,
+  stored hashed server-side — treat like a password). The daemon registers
+  itself with it on first start and persists the resulting per-runner
+  credential in `~/.cezar-runner/credentials.json`. The runner belongs to
+  the user who minted the token; jobs they request route to their runners.
 
 The runner never sees a Supabase credential; the SaaS mints a short-lived GitHub
 App token per job and ships it (plus the merged workspace config and the issue
@@ -49,5 +50,8 @@ store snapshot) in the claim response.
 
 | Var | Purpose |
 |---|---|
-| `CEZAR_RUNNER_URL` / `CEZAR_RUNNER_TOKEN` | defaults for `--url` / `--token` |
+| `CEZAR_RUNNER_URL` / `CEZAR_RUNNER_JOIN_TOKEN` | defaults for `--url` / `--join-token` |
+| `CEZAR_RUNNER_NAME` | runner name (default: hostname); (workspace, owner, name) identifies the runner |
+| `CEZAR_RUNNER_STATE_DIR` | where the registered credential persists (default `~/.cezar-runner`) |
+| `CEZAR_RUNNER_TOKEN` | **deprecated — removed in v0.3.0**; pre-issued token, skips registration |
 | `ANTHROPIC_API_KEY` | required for the `anthropic-api` backend |

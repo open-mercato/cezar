@@ -21,7 +21,7 @@ export interface ActionRowLike {
   id: string;
   name: string;
   kind: string;
-  description: string;
+  description: string | null;
   system_prompt: string;
   skill_refs: unknown;
   context_refs: unknown;

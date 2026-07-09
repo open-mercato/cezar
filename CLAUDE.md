@@ -187,5 +187,5 @@ confirmation; `--dry-run` previews.
 - `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_APP_WEBHOOK_SECRET` — the GitHub App (webhooks + install tokens); without the secret the webhook receiver returns 503
 - `CEZAR_USE_WORKFLOW_ENGINE` — local CLI only: `true` opts the legacy `AutofixOrchestrator` path into delegating to `runWorkflow` (or set `workflow.useEngine: true` in `.issuemanagerrc.json`). The SaaS dispatch path always uses the engine.
 - `CRON_SECRET` — bearer check shared by `/api/cron/dispatch`, `/api/cron/triage-sweep`, `/api/cron/issue-sync`
-- `CEZAR_RUNNER_URL` / `CEZAR_RUNNER_TOKEN` — the self-hosted runner
+- `CEZAR_RUNNER_URL` / `CEZAR_RUNNER_JOIN_TOKEN` — the self-hosted runner (join token minted in Settings → Runners; the runner registers itself). `CEZAR_RUNNER_TOKEN` (pre-issued per-runner token) is **deprecated — removed in v0.3.0**.
 - Supabase vars + `NEXT_PUBLIC_APP_URL` (GUI) — see `docs/SELF-HOSTING.md` and `.env.docker.example` for the full list and the `CEZAR_DISPATCH_*` / `CEZAR_TRIAGE_SWEEP_*` tuning vars

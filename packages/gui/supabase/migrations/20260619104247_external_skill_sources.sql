@@ -18,7 +18,8 @@
 create table skill_sources (
   id              uuid primary key default gen_random_uuid(),
   workspace_id    uuid not null references workspaces(id) on delete cascade,
-  -- PR 4 will widen this to also accept 'skills-sh'.
+  -- Only 'external-repo' today. skills.sh shipped as its own table
+  -- (skills_sh_skills), so this CHECK is not widened to 'skills-sh'.
   kind            text not null check (kind in ('external-repo')),
   -- Human-friendly label (slug-ish). Surfaced in the /skills "Sources" panel
   -- and in source badges next to each skill.

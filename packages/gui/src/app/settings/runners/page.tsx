@@ -1,9 +1,15 @@
 import Link from 'next/link';
+import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
-import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import { createSupabaseAdminClient, createSupabaseServerClient } from '@/lib/supabase/server';
 import type { RunnerKind, RunnerStatus } from '@/lib/supabase/types';
 import { PageContainer } from '@/components/ui/page-container';
-import { RunnersSection, type RunnerRowView, type RunnerDisplayStatus } from './runners-section';
+import {
+  RunnersSection,
+  type RunnerRowView,
+  type RunnerDisplayStatus,
+  type JoinTokenView,
+} from './runners-section';
 
 interface RunnerDbRow {
   id: string;
@@ -14,6 +20,17 @@ interface RunnerDbRow {
   status: RunnerStatus;
   last_heartbeat_at: string | null;
   created_at: string;
+  owner_user_id: string | null;
+  owner_login: string | null;
+}
+
+interface JoinTokenDbRow {
+  id: string;
+  created_by: string;
+  created_by_login: string;
+  label: string;
+  created_at: string;
+  revoked_at: string | null;
 }
 
 const ONLINE_WINDOW_MS = 2 * 60_000;
@@ -30,7 +47,7 @@ function displayStatus(lastHeartbeatAt: string | null): RunnerDisplayStatus {
   return 'offline';
 }
 
-function toView(r: RunnerDbRow): RunnerRowView {
+function toView(r: RunnerDbRow, currentUserId: string | null): RunnerRowView {
   return {
     id: r.id,
     name: r.name,
@@ -40,6 +57,8 @@ function toView(r: RunnerDbRow): RunnerRowView {
     lastHeartbeatAt: r.last_heartbeat_at,
     createdAt: r.created_at,
     managed: r.workspace_id == null,
+    ownerLogin: r.owner_login,
+    mine: r.owner_user_id != null && r.owner_user_id === currentUserId,
   };
 }
 
@@ -61,20 +80,34 @@ export default async function RunnersPage() {
     );
   }
 
-  const supabase = createSupabaseAdminClient();
-  const [{ data: ownRows }, { data: managedRows }] = await Promise.all([
-    supabase
+  const user = await getSessionUser();
+  const admin = createSupabaseAdminClient();
+  // Join tokens go through the user-scoped client: RLS shows members their
+  // own tokens and admins every token in the workspace.
+  const userClient = await createSupabaseServerClient();
+  const [{ data: ownRows }, { data: managedRows }, { data: tokenRows }] = await Promise.all([
+    admin
       .from('runners')
-      .select('id, workspace_id, name, kind, backends, status, last_heartbeat_at, created_at')
+      .select(
+        'id, workspace_id, name, kind, backends, status, last_heartbeat_at, created_at, owner_user_id, owner_login',
+      )
       .eq('workspace_id', workspace.id)
       .order('created_at', { ascending: true })
       .returns<RunnerDbRow[]>(),
-    supabase
+    admin
       .from('runners')
-      .select('id, workspace_id, name, kind, backends, status, last_heartbeat_at, created_at')
+      .select(
+        'id, workspace_id, name, kind, backends, status, last_heartbeat_at, created_at, owner_user_id, owner_login',
+      )
       .is('workspace_id', null)
       .order('created_at', { ascending: true })
       .returns<RunnerDbRow[]>(),
+    userClient
+      .from('runner_join_tokens')
+      .select('id, created_by, created_by_login, label, created_at, revoked_at')
+      .eq('workspace_id', workspace.id)
+      .order('created_at', { ascending: false })
+      .returns<JoinTokenDbRow[]>(),
   ]);
 
   const isAdmin = workspace.role === 'admin';
@@ -82,6 +115,15 @@ export default async function RunnersPage() {
     process.env.NEXT_PUBLIC_APP_URL ||
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
     '';
+
+  const joinTokens: JoinTokenView[] = (tokenRows ?? []).map((t) => ({
+    id: t.id,
+    label: t.label,
+    createdByLogin: t.created_by_login,
+    createdAt: t.created_at,
+    revokedAt: t.revoked_at,
+    mine: user != null && t.created_by === user.id,
+  }));
 
   return (
     <PageContainer max="max-w-[1080px]">
@@ -108,7 +150,10 @@ export default async function RunnersPage() {
           <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
             codex-cli
           </code>{' '}
-          jobs on your own infra under your own CLI login. The managed cloud handles{' '}
+          jobs on your own infra under your own CLI login. Runners register themselves with a{' '}
+          <strong className="font-medium text-on-surface">join token</strong> you mint below; a
+          runner belongs to whoever minted its token, and jobs you request run on your runners. The
+          managed cloud handles{' '}
           <code className="rounded bg-surface-container px-1 py-px font-mono text-[12px] text-on-surface">
             anthropic-api
           </code>{' '}
@@ -117,17 +162,13 @@ export default async function RunnersPage() {
             docs/runner-setup.md
           </code>{' '}
           for the full setup.
-          {!isAdmin && (
-            <span className="ml-1 text-outline">
-              — read-only, admin required to register or revoke.
-            </span>
-          )}
         </p>
       </header>
 
       <RunnersSection
-        ownRunners={(ownRows ?? []).map(toView)}
-        managedRunners={(managedRows ?? []).map(toView)}
+        ownRunners={(ownRows ?? []).map((r) => toView(r, user?.id ?? null))}
+        managedRunners={(managedRows ?? []).map((r) => toView(r, user?.id ?? null))}
+        joinTokens={joinTokens}
         isAdmin={isAdmin}
         appUrl={appUrl}
       />

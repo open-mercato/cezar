@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getActiveWorkspace } from '@/lib/workspace';
+import type { Database, DigestMode } from '@/lib/supabase/types';
 
 export interface SaveAutomationState {
   ok?: boolean;
@@ -45,7 +46,7 @@ export async function saveAutomationToggles(
 
   const bool = (key: string): boolean => formData.get(key) === 'on' || formData.get(key) === 'true';
 
-  const update: Record<string, unknown> = {
+  const update: Database['public']['Tables']['workspaces']['Update'] = {
     auto_triage_enabled: bool('autoTriageEnabled'),
     autofix_enabled: bool('autofixEnabled'),
     separate_comment_per_step: bool('separateCommentPerStep'),
@@ -72,7 +73,7 @@ export async function saveAutomationToggles(
     typeof rawDigestMode === 'string' &&
     (DIGEST_MODES as readonly string[]).includes(rawDigestMode)
   ) {
-    update.digest_mode = rawDigestMode;
+    update.digest_mode = rawDigestMode as DigestMode;
   }
   // The digest-interval field is only rendered in `auto` mode; clamp when
   // present, leave the stored value untouched when hidden (manual/off) — mirrors

@@ -237,9 +237,6 @@ export default async function SkillsPage() {
   const cacheBySourceId = new Map<string, ExternalCacheRow>(
     (externalCacheRows ?? []).map((row) => [row.source_id, row]),
   );
-  const externalSourceMeta = new Map<string, ExternalSourceRow>(
-    (externalSourceRows ?? []).map((row) => [row.id, row]),
-  );
   const seenNames = new Set(parsed.map((p) => p.name));
   const externalSkillCounts = new Map<string, number>();
   for (const sourceRow of externalSourceRows ?? []) {
@@ -352,9 +349,6 @@ export default async function SkillsPage() {
       };
     })
     .filter((row): row is ExternalRepoSourceRow => row !== null);
-  // Keep `externalSourceMeta` reference for a possible future "show name" column
-  // — silence unused-var until then.
-  void externalSourceMeta;
 
   const uploadedSkills: UploadedSkillRow[] = (uploadedRows ?? []).map((row) => ({
     name: row.name,

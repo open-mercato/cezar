@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 
 /**
@@ -14,6 +15,8 @@ import { getActiveWorkspace } from '@/lib/workspace';
  * see it appear via Realtime.
  */
 export async function startAutofix(issueNumber: number): Promise<void> {
+  const user = await getSessionUser();
+  if (!user) throw new Error('not authenticated');
   const workspace = await getActiveWorkspace();
   if (!workspace) throw new Error('no active workspace');
 
@@ -38,6 +41,7 @@ export async function startAutofix(issueNumber: number): Promise<void> {
       priority: 10,
       status: 'queued',
       max_attempts: 1,
+      requested_by: user.id,
       payload: { trigger: 'manual' },
     });
     if (error) throw new Error(`enqueue failed: ${error.message}`);

@@ -6,73 +6,104 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { hashRunnerToken, invalidateRunnerAuth } from '@/app/api/runner/_auth';
 
-/** Backends a *self-hosted* runner may advertise. */
-const VALID_BACKENDS = ['claude-cli', 'codex-cli', 'anthropic-api'] as const;
-type SelfHostedBackend = (typeof VALID_BACKENDS)[number];
-
 export interface RunnerActionState {
   ok?: boolean;
   error?: string;
-  /** The raw bearer token — travels only in this one response, never stored/logged. */
+}
+
+export interface JoinTokenActionState {
+  ok?: boolean;
+  error?: string;
+  /** The raw join token — travels only in this one response, never stored/logged. */
   token?: string;
-  runnerId?: string;
-  /** The backends the new runner was registered with (for the paste-ready command). */
-  backends?: string[];
+  joinTokenId?: string;
 }
 
 /**
- * Register a new self-hosted runner. Generates a high-entropy bearer token,
- * stores only its SHA-256 hash (the exact hash `api/runner/_auth.ts` checks),
- * and returns the raw token once so the operator can copy it. Admin-only.
+ * Mint a join token — the ONLY way to register a runner. Any workspace
+ * member mints tokens for themselves; runners registered through a token are
+ * owned by its creator, and job routing sends that user's requested jobs to
+ * their runners only. The token is reusable across devices until revoked;
+ * only its SHA-256 hash is stored (the exact hash `/api/runner/register`
+ * looks up).
  */
-export async function registerRunner(
-  _prev: RunnerActionState,
+export async function mintJoinToken(
+  _prev: JoinTokenActionState,
   formData: FormData,
-): Promise<RunnerActionState> {
+): Promise<JoinTokenActionState> {
   const workspace = await getActiveWorkspace();
   if (!workspace) return { error: 'No workspace selected' };
-  if (workspace.role !== 'admin') return { error: 'Only admins can register runners' };
 
-  const name = (formData.get('name') as string | null)?.trim() ?? '';
-  if (!name) return { error: 'Runner name is required' };
-  if (name.length > 80) return { error: 'Runner name is too long (max 80 chars)' };
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: 'Not authenticated' };
 
-  // `backends` arrives as repeated form fields (checkboxes).
-  const backends = formData
-    .getAll('backends')
-    .map((b) => String(b).trim())
-    .filter((b): b is SelfHostedBackend => (VALID_BACKENDS as readonly string[]).includes(b));
-  if (backends.length === 0) return { error: 'Pick at least one backend' };
+  const label = (formData.get('label') as string | null)?.trim() ?? '';
+  if (label.length > 80) return { error: 'Label is too long (max 80 chars)' };
+
+  // The GitHub login (users sign in via GitHub OAuth) — denormalized onto the
+  // token so the runners list can show "owner" without an auth-admin lookup.
+  const login =
+    (typeof user.user_metadata?.user_name === 'string' && user.user_metadata.user_name) ||
+    user.email ||
+    '';
 
   const token = randomBytes(32).toString('hex');
-  const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
-    .from('runners')
+    .from('runner_join_tokens')
     .insert({
       workspace_id: workspace.id,
-      name,
-      kind: 'self-hosted',
-      backends,
-      models: [],
+      created_by: user.id,
+      created_by_login: login,
+      label,
       token_hash: hashRunnerToken(token),
-      status: 'offline',
     })
     .select('id')
     .single();
   if (error) return { error: error.message };
 
   revalidatePath('/settings/runners');
-  return { ok: true, token, runnerId: data.id as string, backends };
+  return { ok: true, token, joinTokenId: data.id as string };
 }
 
-/** Revoke (delete) a workspace-scoped runner. Admin-only. */
+/**
+ * Revoke a join token: it can no longer register runners. Runners already
+ * registered through it keep working (revoke those individually below).
+ * RLS limits this to the token's creator or a workspace admin.
+ */
+export async function revokeJoinToken(
+  _prev: JoinTokenActionState,
+  formData: FormData,
+): Promise<JoinTokenActionState> {
+  const workspace = await getActiveWorkspace();
+  if (!workspace) return { error: 'No workspace selected' };
+
+  const id = (formData.get('joinTokenId') as string | null)?.trim() ?? '';
+  if (!id) return { error: 'Missing join token id' };
+
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase
+    .from('runner_join_tokens')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('workspace_id', workspace.id);
+  if (error) return { error: error.message };
+
+  revalidatePath('/settings/runners');
+  return { ok: true };
+}
+
+/** Revoke (delete) a workspace-scoped runner. Admins revoke any; owners
+ *  revoke their own (RLS enforces both — runners_admin_write from 0008 plus
+ *  runners_owner_delete from the join-token migration). */
 export async function revokeRunner(
   _prev: RunnerActionState,
   formData: FormData,
 ): Promise<RunnerActionState> {
   const workspace = await getActiveWorkspace();
   if (!workspace) return { error: 'No workspace selected' };
-  if (workspace.role !== 'admin') return { error: 'Only admins can revoke runners' };
 
   const id = (formData.get('runnerId') as string | null)?.trim() ?? '';
   if (!id) return { error: 'Missing runner id' };

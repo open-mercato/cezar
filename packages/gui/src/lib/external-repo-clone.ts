@@ -8,18 +8,23 @@ import { homedir } from 'node:os';
 const exec = promisify(execFile);
 
 /**
- * Build env vars that inject `http.extraHeader: Authorization: Bearer <token>`
- * into one git invocation via `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` /
- * `GIT_CONFIG_VALUE_<n>`. The token stays out of argv (no leakage in `ps` or
- * execFile error messages) AND out of `.git/config` on disk — the clone uses
- * the clean public URL and the header is only present for the duration of the
- * child process.
+ * Build env vars that inject `http.extraHeader: Authorization: Basic <…>` into
+ * one git invocation via `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` /
+ * `GIT_CONFIG_VALUE_<n>`. We use the `x-access-token:<token>` Basic-auth scheme
+ * — GitHub's documented, proven convention for git-over-HTTPS (the same one
+ * `repo-clone.ts` embeds in the URL). A bare `Authorization: Bearer <token>`
+ * is *not* a supported git-over-HTTPS auth method on github.com and would make
+ * private-repo sync fail silently. The token still stays out of argv (no
+ * leakage in `ps` or execFile error messages) AND out of `.git/config` on disk
+ * — the clone uses the clean public URL and the header is only present for the
+ * duration of the child process.
  */
 function gitTokenEnv(token: string): Record<string, string> {
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
   return {
     GIT_CONFIG_COUNT: '1',
     GIT_CONFIG_KEY_0: 'http.extraHeader',
-    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
   };
 }
 
@@ -102,7 +107,9 @@ export interface ExternalRepoConfig {
  * Ensures a shallow clone of the external repo exists at
  * `~/.cezar/external-skills/<sourceId>/`, fetching the configured branch.
  * Token is optional — public repos work without one. When provided, it's
- * wired into the HTTPS URL via the `x-access-token` GitHub auth convention.
+ * injected as an `http.extraHeader: Authorization: Basic <x-access-token:…>`
+ * via `GIT_CONFIG_*` env vars (see {@link gitTokenEnv}), so it never lands in
+ * argv or `.git/config`.
  *
  * MUST be called inside {@link withExternalRepoLock} so a concurrent sync of
  * the same source doesn't race on the checkout.

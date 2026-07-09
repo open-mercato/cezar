@@ -68,7 +68,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         .maybeSingle<{
           sync_mode: 'auto' | 'manual';
           sync_interval_minutes: number | null;
-          installation_id: number | null;
+          installation_id: string | null;
           last_webhook_received_at: string | null;
         }>(),
     ]);

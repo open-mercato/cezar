@@ -16,6 +16,7 @@ export interface ActionResult {
 interface Ctx {
   supabase: ReturnType<typeof createSupabaseAdminClient>;
   workspaceId: string;
+  userId: string;
   actorLabel: string;
 }
 
@@ -33,6 +34,7 @@ async function guard(): Promise<Ctx | { error: string }> {
   return {
     supabase: createSupabaseAdminClient(),
     workspaceId: workspace.id,
+    userId: user.id,
     actorLabel: user.name || user.email || user.id,
   };
 }
@@ -168,7 +170,7 @@ export async function deleteRun(runId: string): Promise<ActionResult> {
     .delete()
     .eq('id', runId)
     .eq('workspace_id', ctx.workspaceId)
-    .in('status', TERMINAL_STATUSES as readonly string[] as string[]);
+    .in('status', TERMINAL_STATUSES);
   if (error) return { error: error.message };
   revalidatePath('/cockpit');
   return { ok: true };
@@ -184,7 +186,7 @@ export async function deleteRuns(ids: string[]): Promise<ActionResult> {
     .delete()
     .in('id', ids)
     .eq('workspace_id', ctx.workspaceId)
-    .in('status', TERMINAL_STATUSES as readonly string[] as string[]);
+    .in('status', TERMINAL_STATUSES);
   if (error) return { error: error.message };
   revalidatePath('/cockpit');
   return { ok: true };
@@ -218,6 +220,7 @@ export async function retryRun(runId: string): Promise<ActionResult> {
     pr_number: run.pr_number,
     status: 'queued',
     max_attempts: 1,
+    requested_by: ctx.userId,
     payload: { retryOf: runId },
   });
   if (error) return { error: error.message };
@@ -291,6 +294,7 @@ export async function enqueueWorkflowRun(params: {
       status: 'queued',
       priority: 10,
       max_attempts: 1,
+      requested_by: user.id,
       payload: {},
     })
     .select('id')

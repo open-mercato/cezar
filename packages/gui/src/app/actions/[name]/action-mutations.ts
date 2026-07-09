@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { getSessionUser } from '@/lib/auth';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import type { Json } from '@/lib/supabase/types';
 import {
   isAcceptanceMode,
   isActionModel,
@@ -82,7 +83,7 @@ async function loadCurrentRows(
 
 function parseOutputSchema(
   raw: string,
-): { ok: true; value: Record<string, unknown> | null } | { ok: false; error: string } {
+): { ok: true; value: { [key: string]: Json | undefined } | null } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (trimmed.length === 0) return { ok: true, value: null };
   try {
@@ -91,7 +92,7 @@ function parseOutputSchema(
     if (typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { ok: false, error: 'output_schema must be a JSON object' };
     }
-    return { ok: true, value: parsed as Record<string, unknown> };
+    return { ok: true, value: parsed as { [key: string]: Json | undefined } };
   } catch (err) {
     return {
       ok: false,
@@ -402,7 +403,7 @@ interface SourceActionFields {
   effects: unknown;
   output_schema: unknown;
   model: string;
-  acceptance_mode: string;
+  acceptance_mode: AcceptanceMode;
   confidence_config: unknown;
   effect_routing: unknown;
   suggested_flow_id: string | null;

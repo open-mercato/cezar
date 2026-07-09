@@ -93,11 +93,16 @@ async function buildEffectContext(
 // ─────────────────────────────────────────────────────────────────────
 export async function acceptDecision(id: string): Promise<DecisionResult> {
   const result = await acceptDecisionsImpl([id]);
-  if (!result.ok) return result;
+  if (result.ok) return { ok: true, results: result.results };
+  // A per-row failure leaves the impl's top-level `error` unset — lift the
+  // row's message so the single-accept toast shows the real cause instead
+  // of "unknown".
   const first = result.results?.[0];
-  return first?.ok
-    ? { ok: true, results: result.results }
-    : { ok: false, error: first?.error ?? 'accept failed', results: result.results };
+  return {
+    ok: false,
+    error: result.error ?? first?.error ?? 'accept failed',
+    results: result.results,
+  };
 }
 
 export async function acceptDecisions(ids: string[]): Promise<DecisionResult> {

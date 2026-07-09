@@ -4,6 +4,7 @@ How to run Cezar on your own infrastructure — both the managed-runner side and
 the self-hosted-runner daemon.
 
 - [Self-hosted runner](#self-hosted-runner)
+- [Skill-source sync needs git + a writable home](#skill-source-sync-needs-git--a-writable-home)
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
 
@@ -50,6 +51,28 @@ runner notes.
 
 ---
 
+## Skill-source sync needs git + a writable home
+
+Syncing a **workspace repo** or an **external skill repo** (the *Refresh* button
+on **/skills → Sources**) shells out to the `git` binary and writes a clone
+under `homedir()/.cezar/` (`repos/` for workspace repos, `external-skills/` for
+external sources). Both run inside a Next.js **server action**, so the host that
+serves the GUI must provide:
+
+- a **`git` binary** on PATH, and
+- a **writable home directory** (`$HOME`).
+
+This rules out a pure read-only / ephemeral serverless target (e.g. stock
+Vercel) **for that sync operation** — there is no `git` and the filesystem is
+read-only. Run the GUI on a host that satisfies the two requirements above
+(a long-lived container / VM, the same model `@cezar/runner` already assumes).
+
+Note this only affects the admin-triggered **sync**. Dispatch is unaffected:
+synced skill bodies are cached inline in the database (`external_repo_skills`,
+`repo_skills`), so agent runs never re-clone at dispatch time.
+
+---
+
 ## Configuration
 
 The CLI uses [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig)
@@ -81,7 +104,8 @@ The full template with every supported variable is in
 | `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` | GitHub App auth (short-lived install tokens) |
 | `GITHUB_APP_WEBHOOK_SECRET` | Webhook signature verification (until set, the receiver returns 503) |
 | `CRON_SECRET` | Bearer check shared by `/api/cron/*` routes |
-| `CEZAR_RUNNER_URL` / `CEZAR_RUNNER_TOKEN` | `@cezar/runner` connection defaults |
+| `CEZAR_RUNNER_URL` / `CEZAR_RUNNER_JOIN_TOKEN` | `@cezar/runner` connection defaults (join token minted in Settings → Runners) |
+| `CEZAR_RUNNER_TOKEN` | **Deprecated — removed in v0.3.0.** Pre-issued runner token; migrate to `CEZAR_RUNNER_JOIN_TOKEN` |
 | Supabase + `NEXT_PUBLIC_APP_URL` | GUI |
 
 The CLI auto-loads `.env` from the project root; env vars override config-file

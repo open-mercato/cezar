@@ -131,6 +131,7 @@ export async function enqueueActionRun(
     // by the cron dispatcher; a `*-cli` backend is claimed by a self-hosted
     // runner advertising it, which runs `core.runAction` over that CLI transport.
     required_backend: requiredBackend,
+    requested_by: user.id,
     payload: { trigger: 'manual', actionId, runId, target: actionRow.target },
   });
   if (jobErr) {

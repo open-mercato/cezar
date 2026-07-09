@@ -615,7 +615,7 @@ async function handleInstallation(
       if (installationId != null && repo) {
         await admin
           .from('workspaces')
-          .update({ installation_id: installationId })
+          .update({ installation_id: String(installationId) })
           .eq('repo_owner', repo.owner.login)
           .eq('repo_name', repo.name);
       }
@@ -624,7 +624,7 @@ async function handleInstallation(
         await admin
           .from('workspaces')
           .update({ installation_id: null })
-          .eq('installation_id', installationId);
+          .eq('installation_id', String(installationId));
       } else if (repo) {
         await admin
           .from('workspaces')
@@ -672,7 +672,7 @@ async function resolveWorkspaces(
     const { data } = await admin
       .from('workspaces')
       .select('id, auto_triage_enabled')
-      .eq('installation_id', installationId);
+      .eq('installation_id', String(installationId));
     if (data && data.length > 0) matched = data;
   }
   if (matched.length === 0) {

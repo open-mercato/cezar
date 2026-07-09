@@ -31,8 +31,8 @@ node packages/cli/dist/index.js sync
 node packages/cli/dist/index.js run bug-detector --apply
 ```
 
-`npm link packages/cli` (or `yarn workspace cezar link`) installs the `cezar`
-binary globally.
+`yarn link:bins` installs the `cezar` and `cezar-runner` binaries globally
+(via `npm link`); `yarn unlink:bins` removes them.
 
 <!-- SCREENSHOT: Terminal screenshot of the `cezar` interactive hub — the
      setup-wizard greeting, then the main menu of analysis actions

@@ -39,6 +39,12 @@ export interface RunnerDaemonConfig {
   /** Phase 4 (migration 0026) — advertise a per-runner GitHub App install id.
    *  Mutually exclusive with `githubInheritHost` (the latter wins server-side). */
   githubInstallationId?: number | null;
+  /** Join-token recovery: called when the SaaS rejects our runner token
+   *  (401 — revoked in Settings → Runners, or a reset DB). Returns a fresh
+   *  runner token (the CLI re-registers with its join token); the daemon
+   *  swaps its client and keeps going. Absent → 401 shuts the daemon down
+   *  (legacy pre-issued-token behavior). */
+  onAuthError?: () => Promise<string>;
 }
 
 interface InFlight {
@@ -64,7 +70,8 @@ interface InFlight {
  * pause/cancel probes read between steps.
  */
 export class RunnerDaemon {
-  private readonly client: RunnerClient;
+  /** Swapped for a re-authenticated client after a join-token re-register. */
+  private client: RunnerClient;
   private readonly concurrency: number;
   private readonly pollMs: number;
   private readonly inFlight = new Map<string, InFlight>();
@@ -177,8 +184,9 @@ export class RunnerDaemon {
         } catch (err) {
           console.error('[runner] claim tick failed:', err instanceof Error ? err.message : err);
           if (err instanceof Error && err.message.includes('(401)')) {
-            await this.shutdown('auth-error');
-            return;
+            const recovered = await this.handleAuthError();
+            if (!recovered) return;
+            continue;
           }
           // Back off briefly on unexpected errors so we don't hot-spin if the
           // SaaS is returning 5xx.
@@ -381,8 +389,43 @@ export class RunnerDaemon {
       }
     } catch (err) {
       console.error('[runner] heartbeat failed:', err instanceof Error ? err.message : err);
-      if (err instanceof Error && err.message.includes('(401)')) await this.shutdown('auth-error');
+      if (err instanceof Error && err.message.includes('(401)')) {
+        await this.handleAuthError();
+      }
     }
+  }
+
+  /** In-flight re-auth attempt, shared so a heartbeat 401 and a claim 401
+   *  landing together trigger one re-registration, not two. */
+  private reauth: Promise<boolean> | null = null;
+
+  /**
+   * 401 from the SaaS: our runner token is dead. With an `onAuthError` hook
+   * (join-token mode) we re-register and swap the client — resolves true and
+   * the caller carries on. Without one, or when re-registration itself fails
+   * hard (join token revoked too), we shut down — resolves false.
+   */
+  private async handleAuthError(): Promise<boolean> {
+    if (this.stopping) return false;
+    if (!this.cfg.onAuthError) {
+      await this.shutdown('auth-error');
+      return false;
+    }
+    this.reauth ??= (async () => {
+      try {
+        const fresh = await this.cfg.onAuthError!();
+        this.client = new RunnerClient(this.cfg.url, fresh);
+        console.log('[runner] re-registered — resuming with a fresh runner token');
+        return true;
+      } catch (err) {
+        console.error('[runner] re-registration failed:', err instanceof Error ? err.message : err);
+        await this.shutdown('auth-error');
+        return false;
+      } finally {
+        this.reauth = null;
+      }
+    })();
+    return this.reauth;
   }
 
   private async shutdown(why: string): Promise<void> {

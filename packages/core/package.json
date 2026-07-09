@@ -22,15 +22,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
-    "@anthropic-ai/sdk": "^0.27.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.201",
+    "@anthropic-ai/sdk": "^0.110.0",
     "@octokit/rest": "^21.0.0",
-    "cosmiconfig": "^9.0.0",
+    "cosmiconfig": "^9.0.2",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.9"
   }
 }

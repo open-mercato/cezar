@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authRunner, runnerScopesWorkspace } from '../../../_auth';
-import type { AgentRunEventType } from '@/lib/supabase/types';
+import type { AgentRunEventType, Json } from '@/lib/supabase/types';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -68,7 +68,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ runId: 
   const { error } = await admin.rpc('ingest_runner_events', {
     p_run_id: runId,
     p_workspace_id: run.workspace_id,
-    p_events: events,
+    // IncomingEvent came off req.json() so it is JSON by construction; the
+    // interface just lacks Json's index signature.
+    p_events: events as unknown as Json,
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

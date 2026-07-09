@@ -23,19 +23,21 @@ export async function detectBackends(): Promise<BackendCheck[]> {
     loginCmd: string;
     versionRegex: RegExp;
   }> = [
-    // The Anthropic Claude CLI prints e.g. `claude version 1.0.13` (or `claude code version …`).
+    // The Anthropic Claude CLI prints e.g. `2.1.201 (Claude Code)` (≥2.x) or
+    // `claude version 1.0.13` / `claude code version …` (older releases).
     {
       backend: 'claude-cli',
       binary: 'claude',
       loginCmd: 'claude login',
-      versionRegex: /^claude(\s+code)?\s+version\s+\d+\.\d+/i,
+      versionRegex:
+        /^(?:claude(?:\s+code)?\s+version\s+\d+\.\d+|\d+\.\d+\.\d+\s*\(claude\s+code\))/i,
     },
-    // The Codex CLI prints e.g. `codex 0.4.2`.
+    // The Codex CLI prints e.g. `codex-cli 0.132.0` (or `codex 0.4.2` on older releases).
     {
       backend: 'codex-cli',
       binary: 'codex',
       loginCmd: 'codex login',
-      versionRegex: /^codex\s+\d+\.\d+/i,
+      versionRegex: /^codex(?:-cli)?\s+\d+\.\d+/i,
     },
   ];
   return Promise.all(

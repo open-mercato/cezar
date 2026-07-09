@@ -4,7 +4,13 @@ import { useActionState, useEffect, useState } from 'react';
 import { cn } from '@/components/ui/cn';
 import { StatusDotIcon } from '@/components/icons';
 import { timeAgo } from '@/lib/time-ago';
-import { registerRunner, revokeRunner, type RunnerActionState } from './runners-actions';
+import {
+  mintJoinToken,
+  revokeJoinToken,
+  revokeRunner,
+  type JoinTokenActionState,
+  type RunnerActionState,
+} from './runners-actions';
 
 export type RunnerDisplayStatus = 'online' | 'stale' | 'offline';
 
@@ -17,27 +23,29 @@ export interface RunnerRowView {
   lastHeartbeatAt: string | null;
   createdAt: string;
   managed: boolean;
+  /** GitHub login of the runner's owner; null on legacy pre-join-token rows. */
+  ownerLogin: string | null;
+  /** True when the current user owns this runner (may revoke it). */
+  mine: boolean;
+}
+
+export interface JoinTokenView {
+  id: string;
+  label: string;
+  createdByLogin: string;
+  createdAt: string;
+  revokedAt: string | null;
+  /** True when the current user minted this token (may revoke it). */
+  mine: boolean;
 }
 
 interface RunnersSectionProps {
   ownRunners: RunnerRowView[];
   managedRunners: RunnerRowView[];
+  joinTokens: JoinTokenView[];
   isAdmin: boolean;
   appUrl: string;
 }
-
-// Backends a self-hosted runner can serve. `anthropic-api` is the managed-cloud
-// one — a self-hosted runner *may* register for it (it just needs an API key
-// in its env) but it's the unusual case, so it's offered as secondary.
-const BACKEND_OPTIONS: { value: string; label: string; secondary?: boolean }[] = [
-  { value: 'claude-cli', label: 'claude-cli — Claude Code subscription' },
-  { value: 'codex-cli', label: 'codex-cli — OpenAI Codex subscription' },
-  {
-    value: 'anthropic-api',
-    label: 'anthropic-api — uses ANTHROPIC_API_KEY (usually the managed cloud)',
-    secondary: true,
-  },
-];
 
 const STATUS_TONE: Record<RunnerDisplayStatus, 'enabled' | 'warning' | 'queued'> = {
   online: 'enabled',
@@ -54,11 +62,12 @@ const STATUS_LABEL_CLASS: Record<RunnerDisplayStatus, string> = {
 export function RunnersSection({
   ownRunners,
   managedRunners,
+  joinTokens,
   isAdmin,
   appUrl,
 }: RunnersSectionProps) {
-  const [state, formAction, pending] = useActionState<RunnerActionState, FormData>(
-    registerRunner,
+  const [state, formAction, pending] = useActionState<JoinTokenActionState, FormData>(
+    mintJoinToken,
     {},
   );
 
@@ -66,14 +75,10 @@ export function RunnersSection({
   // useActionState keeps its own result around (and can replay it on a
   // back/forward navigation), so we never render `state.token` directly — we
   // surface a copy that we clear on a timeout or an explicit dismiss.
-  const [revealedToken, setRevealedToken] = useState<{ token: string; backends: string[] } | null>(
-    null,
-  );
+  const [revealedToken, setRevealedToken] = useState<string | null>(null);
   useEffect(() => {
-    if (state.token && state.runnerId) {
-      setRevealedToken({ token: state.token, backends: state.backends ?? [] });
-    }
-  }, [state.token, state.runnerId, state.backends]);
+    if (state.token && state.joinTokenId) setRevealedToken(state.token);
+  }, [state.token, state.joinTokenId]);
 
   return (
     <div className="space-y-6">
@@ -83,17 +88,11 @@ export function RunnersSection({
         subtitle={`${ownRunners.length} self-hosted runner${ownRunners.length === 1 ? '' : 's'}`}
       >
         {ownRunners.length === 0 ? (
-          <EmptyState
-            body={
-              isAdmin
-                ? 'No self-hosted runners yet. Register one below.'
-                : 'No self-hosted runners yet. Ask an admin to register one.'
-            }
-          />
+          <EmptyState body="No self-hosted runners yet. Mint a join token below and start a runner with it — it registers itself." />
         ) : (
           <ul className="divide-y divide-outline-variant/60">
             {ownRunners.map((r) => (
-              <RunnerRow key={r.id} runner={r} canRevoke={isAdmin} />
+              <RunnerRow key={r.id} runner={r} canRevoke={isAdmin || r.mine} />
             ))}
           </ul>
         )}
@@ -115,78 +114,60 @@ export function RunnersSection({
         )}
       </Card>
 
-      {/* Register a runner */}
-      {isAdmin && (
-        <Card title="Register a runner">
+      {/* Join tokens — the only way to register a runner */}
+      <Card
+        title="Join tokens"
+        subtitle="A runner registers itself with a join token and belongs to whoever minted it. Tokens are reusable across devices until revoked."
+      >
+        <div className="space-y-4">
           {revealedToken ? (
             <TokenReveal
-              token={revealedToken.token}
-              backends={revealedToken.backends}
+              token={revealedToken}
               appUrl={appUrl}
               onDismiss={() => setRevealedToken(null)}
             />
           ) : (
-            <form action={formAction} className="space-y-4">
+            <form action={formAction} className="flex flex-col gap-3 sm:flex-row sm:items-end">
               {state.error && (
-                <div className="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">
+                <div className="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-sm text-error sm:order-last">
                   {state.error}
                 </div>
               )}
-              <div>
+              <div className="flex-1 sm:max-w-md">
                 <label
-                  htmlFor="runner-name"
+                  htmlFor="join-token-label"
                   className="mb-1 block text-xs font-medium text-on-surface-variant"
                 >
-                  Name
+                  Label <span className="text-outline">(optional — e.g. “laptop”, “ci-box”)</span>
                 </label>
                 <input
-                  id="runner-name"
-                  name="name"
+                  id="join-token-label"
+                  name="label"
                   type="text"
-                  required
                   maxLength={80}
-                  placeholder="e.g. ci-box-1"
-                  className="h-9 w-full sm:max-w-md rounded-md border border-outline-variant bg-surface px-3 text-base lg:text-sm text-on-surface placeholder:text-outline focus:border-primary focus:outline-none"
+                  placeholder="What is this token for?"
+                  className="h-9 w-full rounded-md border border-outline-variant bg-surface px-3 text-base lg:text-sm text-on-surface placeholder:text-outline focus:border-primary focus:outline-none"
                 />
               </div>
-              <div>
-                <span className="mb-1 block text-xs font-medium text-on-surface-variant">
-                  Backends
-                </span>
-                <div className="space-y-2">
-                  {BACKEND_OPTIONS.map((b) => (
-                    <label
-                      key={b.value}
-                      className={cn(
-                        'flex items-center gap-3 rounded-md border border-outline-variant bg-surface px-3 py-2 text-sm',
-                        b.secondary && 'opacity-80',
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        name="backends"
-                        value={b.value}
-                        defaultChecked={!b.secondary && b.value === 'claude-cli'}
-                        className="h-4 w-4 accent-primary"
-                      />
-                      <span className="text-on-surface">{b.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="flex justify-end pt-1">
-                <button
-                  type="submit"
-                  disabled={pending}
-                  className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-on transition-colors hover:bg-primary-container hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {pending ? 'Registering…' : 'Register runner'}
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={pending}
+                className="inline-flex h-9 shrink-0 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-on transition-colors hover:bg-primary-container hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {pending ? 'Minting…' : 'Mint join token'}
+              </button>
             </form>
           )}
-        </Card>
-      )}
+
+          {joinTokens.length > 0 && (
+            <ul className="divide-y divide-outline-variant/60">
+              {joinTokens.map((t) => (
+                <JoinTokenRow key={t.id} token={t} canRevoke={isAdmin || t.mine} />
+              ))}
+            </ul>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }
@@ -243,6 +224,11 @@ function RunnerRow({ runner, canRevoke }: { runner: RunnerRowView; canRevoke: bo
             {runner.managed && <span className="font-mono text-[11px] text-outline">managed</span>}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {!runner.managed && (
+              <span className="font-mono text-[10.5px] text-on-surface-variant">
+                {runner.ownerLogin ? `@${runner.ownerLogin}` : 'unowned (legacy)'}
+              </span>
+            )}
             {(runner.managed ? ['anthropic-api'] : runner.backends).map((b) => (
               <span
                 key={b}
@@ -261,6 +247,33 @@ function RunnerRow({ runner, canRevoke }: { runner: RunnerRowView; canRevoke: bo
         </div>
         {canRevoke && !runner.managed && <RevokeButton runnerId={runner.id} name={runner.name} />}
       </div>
+    </li>
+  );
+}
+
+function JoinTokenRow({ token, canRevoke }: { token: JoinTokenView; canRevoke: boolean }) {
+  const revoked = token.revokedAt != null;
+  return (
+    <li className="flex items-center gap-4 py-3 first:pt-0 last:pb-0">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-sm">
+          <span className={cn('truncate text-on-surface', revoked && 'line-through opacity-60')}>
+            {token.label || 'untitled token'}
+          </span>
+          {revoked && (
+            <span className="font-display text-[10.5px] font-semibold uppercase tracking-wider text-on-surface-variant">
+              revoked
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 font-mono text-[10.5px] text-on-surface-variant">
+          @{token.createdByLogin}
+        </div>
+      </div>
+      <div className="shrink-0 text-right text-[11px] text-outline">
+        minted {timeAgo(token.createdAt)}
+      </div>
+      {canRevoke && !revoked && <RevokeJoinTokenButton joinTokenId={token.id} />}
     </li>
   );
 }
@@ -289,24 +302,52 @@ function RevokeButton({ runnerId, name }: { runnerId: string; name: string }) {
   );
 }
 
+function RevokeJoinTokenButton({ joinTokenId }: { joinTokenId: string }) {
+  const [state, action, pending] = useActionState<JoinTokenActionState, FormData>(
+    revokeJoinToken,
+    {},
+  );
+  return (
+    <form
+      action={action}
+      onSubmit={(e) => {
+        if (
+          !confirm(
+            'Revoke this join token? It can no longer register runners; already-registered runners keep working.',
+          )
+        )
+          e.preventDefault();
+      }}
+      className="shrink-0"
+    >
+      <input type="hidden" name="joinTokenId" value={joinTokenId} />
+      <button
+        type="submit"
+        disabled={pending}
+        className="inline-flex h-7 items-center rounded-md border border-outline-variant bg-surface px-2.5 text-xs text-on-surface-variant transition-colors hover:border-error/40 hover:text-error disabled:cursor-not-allowed disabled:opacity-50"
+        title={state.error ?? undefined}
+      >
+        {pending ? 'Revoking…' : 'Revoke'}
+      </button>
+    </form>
+  );
+}
+
 // Seconds the one-shot token stays in memory before it auto-clears. Keeps the
 // raw credential out of the DOM/React state for longer than necessary.
 const TOKEN_AUTO_CLEAR_MS = 60_000;
 
 function TokenReveal({
   token,
-  backends,
   appUrl,
   onDismiss,
 }: {
   token: string;
-  backends: string[];
   appUrl: string;
   onDismiss: () => void;
 }) {
   const url = appUrl || '<your-cezar-url>';
-  const csv = (backends.length > 0 ? backends : ['claude-cli']).join(',');
-  const command = `cezar-runner start --url ${url} --token ${token} --backends ${csv}`;
+  const command = `cezar-runner start --url ${url} --join-token ${token}`;
   const [revealed, setRevealed] = useState(false);
 
   // Auto-clear the token from memory after a short window so it doesn't sit in
@@ -319,11 +360,13 @@ function TokenReveal({
   return (
     <div className="space-y-3 rounded-md border border-primary/40 bg-primary/10 p-4">
       <p className="text-sm text-on-surface">
-        Runner registered.{' '}
-        <strong className="text-primary">Copy the token now — it won&apos;t be shown again.</strong>
+        Join token minted.{' '}
+        <strong className="text-primary">Copy it now — it won&apos;t be shown again.</strong> Start
+        a runner with it (backends are auto-detected from the CLIs on that host); in Docker, set{' '}
+        <code className="font-mono text-[12px]">CEZAR_RUNNER_JOIN_TOKEN</code> instead.
       </p>
       <CopyBox
-        label="Token"
+        label="Join token"
         value={token}
         secret
         revealed={revealed}
