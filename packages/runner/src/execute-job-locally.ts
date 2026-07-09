@@ -427,6 +427,11 @@ export async function executeJobLocally(
           args: e.call.args,
           summary: e.summary,
         }));
+        // The CLI-backend event stream never emits a numeric `tokensUsed`, so
+        // fold in the run's usage from `res` (core surfaces it as
+        // `usage.outputTokens`) or `workflow_runs.tokens_used` and the cockpit
+        // counter would show 0 for every self-hosted action run.
+        tokensUsed += res.usage.outputTokens;
       } catch (err) {
         runStatus = 'failed';
         runError = err instanceof Error ? err.message : String(err);

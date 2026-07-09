@@ -83,17 +83,18 @@ const TriageOutcomeSchema = z
   })
   .passthrough();
 
-/** Human-review effects a `single-action` run streamed back in
+/** One human-review effect a `single-action` run streamed back in
  *  `outcome.deferredEffects`. Only the effect payload + confidence is trusted
- *  from the runner; workspace/action/target identity is re-derived server-side. */
-const DeferredEffectsSchema = z.array(
-  z.object({
-    effect: z.string().min(1),
-    args: z.unknown().optional(),
-    summary: z.string(),
-    confidence: z.number().int().min(0).max(100),
-  }),
-);
+ *  from the runner; workspace/action/target identity is re-derived server-side.
+ *  Validated per-item (not as a whole array) so one malformed entry — e.g. a
+ *  float `confidence` that passes the runner's looser `number` typing — drops
+ *  only itself, not the entire batch of pending decisions. */
+const DeferredEffectSchema = z.object({
+  effect: z.string().min(1),
+  args: z.unknown().optional(),
+  summary: z.string(),
+  confidence: z.number().int().min(0).max(100),
+});
 
 /** PATCH /api/runner/runs/:runId — the runner reports the final state. Updates
  * `workflow_runs` (+ `finished_at` on terminal) and the linked `jobs` row. */
@@ -258,13 +259,21 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
   if (run.workflow === 'single-action' && runStatus === 'succeeded' && run.job_id) {
     const deferredRaw =
       (body.outcome as { deferredEffects?: unknown } | null)?.deferredEffects ?? [];
-    const deferredParsed = DeferredEffectsSchema.safeParse(deferredRaw);
-    if (!deferredParsed.success) {
-      console.error(
-        '[runner-finalize] invalid deferredEffects, skipping:',
-        deferredParsed.error.flatten(),
-      );
-    } else if (deferredParsed.data.length > 0) {
+    // Parse per-item and keep the valid ones (mirroring the cron path's
+    // per-decision durability): one bad entry must not lose the rest, since the
+    // runner has no Supabase access and these human-review decisions land
+    // nowhere else.
+    const deferredItems: z.infer<typeof DeferredEffectSchema>[] = [];
+    for (const entry of Array.isArray(deferredRaw) ? deferredRaw : []) {
+      const parsed = DeferredEffectSchema.safeParse(entry);
+      if (parsed.success) deferredItems.push(parsed.data);
+      else
+        console.error(
+          '[runner-finalize] invalid deferred effect, skipping one:',
+          parsed.error.flatten(),
+        );
+    }
+    if (deferredItems.length > 0) {
       try {
         const { data: jobRow } = await admin
           .from('jobs')
@@ -285,7 +294,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ runId:
             targetKind,
             targetNumber,
           );
-          for (const d of deferredParsed.data) {
+          for (const d of deferredItems) {
             const { error } = await insertPendingDecision(admin, {
               workspaceId: run.workspace_id,
               actionId,

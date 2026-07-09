@@ -50,6 +50,21 @@ export async function enqueueActionRun(
   if (!workspace) return { ok: false, error: 'No workspace selected' };
   if (workspace.role !== 'admin') return { ok: false, error: 'Only admins can run actions' };
 
+  // A `*-cli` backend must have a live runner advertising it *right now*, or the
+  // job inserts as `queued` and never runs: cron's `claim_next_job` only claims
+  // `anthropic-api`, and the stall watchdogs only match `claimed`/`running`, so a
+  // never-claimed `queued` job leaks forever. The modal greys these out, but
+  // re-check server-side — the runner may have gone offline between modal load
+  // and submit, or this action may be invoked directly.
+  if (requiredBackend !== 'anthropic-api') {
+    const available = await listAvailableBackends();
+    if (!available.includes(requiredBackend))
+      return {
+        ok: false,
+        error: `No online runner is serving the '${requiredBackend}' backend — start a runner or pick another backend`,
+      };
+  }
+
   const supabase = createSupabaseAdminClient();
 
   const { data: actionRow } = await supabase
