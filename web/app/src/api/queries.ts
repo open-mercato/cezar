@@ -27,6 +27,8 @@ import {
   getRunFile,
   getRunHandoff,
   getRuns,
+  getImportableSkills,
+  getImportableSkillsWhenReady,
   getSkills,
   getSkillsWhenReady,
   getTodos,
@@ -93,6 +95,14 @@ export const queryKeys = {
   },
   get skillsReady() {
     return [queryScope(), 'skills', 'ready'] as const
+  },
+  /** Children of `skills`: the "Import skills" panel's opt-in catalog. Sharing the `skills`
+   *  prefix means a refresh that invalidates the catalog re-reads the importable list too. */
+  get importableSkills() {
+    return [queryScope(), 'skills', 'importable'] as const
+  },
+  get importableSkillsReady() {
+    return [queryScope(), 'skills', 'importable', 'ready'] as const
   },
   get launchKey() {
     return [queryScope(), 'launch-key'] as const
@@ -443,6 +453,34 @@ export function useSkills(enabled = true) {
   }, [queryClient, ready.data, skillsScope])
 
   return skills
+}
+
+/** The opt-in catalog for the "Import skills" panel — the default (vendor) repo's full skill
+ *  list, regardless of import state. Same fast-then-`wait=1` convergence as `useSkills`: the
+ *  panel renders whatever the cache holds immediately, then the cold-clone wait fills it in. */
+export function useImportableSkills(enabled = true) {
+  const queryClient = useQueryClient()
+  const importableKey = queryKeys.importableSkills
+  const scope = importableKey[0]
+  const importable = useQuery({
+    queryKey: importableKey,
+    queryFn: ({ signal }) => getImportableSkills({ signal }),
+    enabled,
+  })
+  const ready = useQuery({
+    queryKey: queryKeys.importableSkillsReady,
+    queryFn: ({ signal }) => getImportableSkillsWhenReady({ signal }),
+    enabled: enabled && importable.isSuccess,
+    staleTime: Infinity,
+    retry: false,
+  })
+
+  useEffect(() => {
+    // Best-effort, like useSkills: seed the fast list from the converged one.
+    if (Array.isArray(ready.data)) queryClient.setQueryData([scope, 'skills', 'importable'], ready.data)
+  }, [queryClient, ready.data, scope])
+
+  return importable
 }
 
 /** The bookmarklet auto-start secret (spec 011). Mounted ONLY by the Settings → Skills

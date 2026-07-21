@@ -6,7 +6,6 @@ import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { ProjectGroups } from '@/components/project-groups'
-import { SkillsBanner } from '@/components/skills-banner'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 
@@ -94,7 +93,6 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
           ) : undefined
         }
         toolsMenu={<ToolsMenu health={health.data} />}
-        banner={<SkillsBanner />}
       >
         {children}
       </AppShell>

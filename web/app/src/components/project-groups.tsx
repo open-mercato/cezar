@@ -57,7 +57,7 @@ export function isProjectCollapsed(
 /**
  * Read + write of `sidebar.collapsed` in `~/.cezar/ui-state.json`.
  *
- * The house pattern for ui-state (see `SkillsBanner`): apply optimistically to the query cache
+ * The house pattern for ui-state (see `skills-import-panel.tsx`): apply optimistically to the query cache
  * so the chevron turns on the click, PUT behind a debounce, reconcile with the server's merged
  * answer, and on failure toast + invalidate rather than leave the cache asserting a collapse
  * that never persisted.

@@ -28,7 +28,7 @@ import {
 } from '../workflows/types.js';
 import { planChain, slugify } from '../planner.js';
 import { discoverSkills } from '../skills.js';
-import { refreshTeamSkills, waitForTeamSkills } from '../skills-remote.js';
+import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.js';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.js';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.js';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.js';
@@ -48,7 +48,7 @@ import {
   pushCurrentBranch,
   readWorktreePath,
 } from './git-changes.js';
-import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.js';
+import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.js';
 import { findConfigFile } from '../agent-config/catalog.js';
 import { readConfigFile, writeConfigFile } from '../agent-config/files.js';
 import { listAgentConfig } from '../agent-config/service.js';
@@ -507,7 +507,20 @@ const uiStateSchema = z
       .optional(),
     // Skills promo banner (#391): set once the cockpit banner is dismissed, never unset.
     // Server-persisted (not a cookie) so the "shown once" promise holds across browsers.
+    // Retained for backward compatibility — the banner is gone, replaced by the import flow
+    // below; `.passthrough()` would preserve the key regardless, but keep it typed.
     dismissedSkillsBanner: z.boolean().optional(),
+    // Imported team skills: names the user opted into from a default (vendor) skills repo —
+    // `open-mercato/skills` — so the whole catalog is no longer forced on them. The gate lives
+    // in `discoverSkills`; this is just the persisted selection. Bounded exactly like the
+    // neighbouring `skillUsage` map: the whole file is GET/PUT wholesale, so an unbounded array
+    // is an unbounded write. Names match `lastTask.ref` (`.min(1).max(200)`). ADDITIVE — an old
+    // ui-state.json without the key behaves as "nothing imported". The client PUTs the whole
+    // array because the top-level merge below is shallow.
+    importedSkills: z
+      .array(z.string().min(1).max(200))
+      .max(SKILL_USAGE_MAX_ENTRIES)
+      .optional(),
   })
   .passthrough();
 
@@ -1469,6 +1482,22 @@ export function createApp(deps: ServerDeps): Hono {
     // cache converges without polling or a manual reload (spec 005 / #555).
     if (c.req.query('wait') === '1') await waitForTeamSkills(repoRoot);
     return c.json(await discoverSkills(repoRoot));
+  });
+
+  // The opt-in catalog for the "Import skills" panel: every skill a default
+  // (vendor) repo offers — `open-mercato/skills` — regardless of import state,
+  // so the panel can present them all with a per-skill toggle. Empty once a repo
+  // configures its own `skillsRepos` (nothing is gated then). `wait=1` lets the
+  // panel wait out a cold team-skill cache, same as `GET /skills` (spec 005).
+  api.get('/skills/importable', async (c) => {
+    const repoRoot = c.get('project').root;
+    const gated = await gatedSkillsRepos(repoRoot);
+    if (gated.size === 0) return c.json([]);
+    if (c.req.query('wait') === '1') await waitForTeamSkills(repoRoot);
+    const importable = getTeamSkillsCached(repoRoot)
+      .filter((skill) => skill.team && gated.has(skill.team.repo))
+      .map((skill) => ({ name: skill.name, description: skill.description }));
+    return c.json(importable);
   });
 
   // ---- GUI prefs (ui-state.json) --------------------------------------------

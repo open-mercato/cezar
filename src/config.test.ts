@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadConfig, resolveWorktreeRetention } from './config.js';
+import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.js';
 
 /**
  * `config.json` schema roundtrips (R2 2.3: `systemPrompt?`). The invariants
@@ -227,5 +227,54 @@ describe('resolveWorktreeRetention', () => {
     writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), '{ nope', 'utf8');
     writeWorkspace({ resources: { worktreeRetentionDefault: 8 } });
     expect(await resolveWorktreeRetention(repoRoot)).toBe(8);
+  });
+});
+
+/**
+ * `gatedSkillsRepos` decides which repos are opt-in per skill (the "Import skills" flow). The
+ * invariant: the vendor default (`open-mercato/skills`) is gated for the zero-config majority,
+ * and a repo that sets its OWN `skillsRepos` gates nothing (it took control — everything it lists
+ * auto-loads). Detection must probe the raw file because the schema's `.default()` erases the
+ * "did the user set this?" distinction — the same reason `resolveWorktreeRetention` probes it.
+ */
+describe('gatedSkillsRepos', () => {
+  let repoRoot: string;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-gate-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const write = (value: unknown) =>
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+
+  const defaults = DEFAULT_SKILLS_REPOS.map((r) => r.repo);
+
+  it('gates the vendor defaults when there is no config file (zero-config)', async () => {
+    expect([...(await gatedSkillsRepos(repoRoot))]).toEqual(defaults);
+  });
+
+  it('gates the vendor defaults when the config omits skillsRepos (additive)', async () => {
+    write({ maxParallel: 4 });
+    expect([...(await gatedSkillsRepos(repoRoot))]).toEqual(defaults);
+  });
+
+  it('gates nothing once the repo sets its own skillsRepos', async () => {
+    write({ skillsRepos: [{ repo: 'acme/team-skills', ref: 'main' }] });
+    expect((await gatedSkillsRepos(repoRoot)).size).toBe(0);
+  });
+
+  it('gates nothing even when skillsRepos is set to empty (an explicit opt-out)', async () => {
+    write({ skillsRepos: [] });
+    expect((await gatedSkillsRepos(repoRoot)).size).toBe(0);
+  });
+
+  it('degrades a malformed config to the vendor defaults (like loadConfig)', async () => {
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), '{ nope', 'utf8');
+    expect([...(await gatedSkillsRepos(repoRoot))]).toEqual(defaults);
   });
 });

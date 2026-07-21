@@ -53,6 +53,7 @@ import type {
   SetConfigResponse,
   SetAgentConfigInput,
   SetWorkspaceConfigInput,
+  ImportableSkill,
   Skill,
   StartTodoResponse,
   TodoItem,
@@ -266,6 +267,18 @@ export function getSkillsWhenReady(opts?: ReadOptions): Promise<Skill[]> {
  *  the merged catalog — the Settings → Skills "Refresh" button. */
 export function refreshSkills(): Promise<Skill[]> {
   return mutate<Skill[]>('POST', '/api/skills/refresh')
+}
+
+/** The default (vendor) repo's full skill list — every skill the "Import skills" panel can
+ *  offer, regardless of import state. Empty once a repo configures its own `skillsRepos`. */
+export function getImportableSkills(opts?: ReadOptions): Promise<ImportableSkill[]> {
+  return get<ImportableSkill[]>('/api/skills/importable', opts)
+}
+
+/** Wait for the server's already-started team-skill load before listing importable skills —
+ *  the same cold-cache convergence as `getSkillsWhenReady`, off the panel's first render. */
+export function getImportableSkillsWhenReady(opts?: ReadOptions): Promise<ImportableSkill[]> {
+  return get<ImportableSkill[]>('/api/skills/importable?wait=1', opts)
 }
 
 export function getTodos(opts?: ReadOptions): Promise<TodoItem[]> {

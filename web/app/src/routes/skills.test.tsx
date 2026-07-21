@@ -47,13 +47,23 @@ const WORKFLOWS: WorkflowsResponse = {
   issues: [],
 }
 
-let requests: Array<{ method: string; url: string }> = []
+let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
 function serve({
   skills = SKILLS,
   refreshed = SKILLS,
-}: { skills?: Skill[]; refreshed?: Skill[] } = {}) {
+  importable = [],
+  uiState = {},
+}: {
+  skills?: Skill[]
+  refreshed?: Skill[]
+  importable?: { name: string; description?: string }[]
+  uiState?: Record<string, unknown>
+} = {}) {
   requests = []
+  // The real /api/ui-state PUT answers the MERGED state; the import panel relies on that echo to
+  // reconcile its optimistic write, so the stub must merge and return rather than answer `{}`.
+  let state: Record<string, unknown> = { ...uiState }
   const json = (payload: unknown) =>
     new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
   vi.stubGlobal(
@@ -61,12 +71,19 @@ function serve({
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
-      requests.push({ method, url })
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      requests.push({ method, url, body })
       if (url === '/api/skills' && method === 'GET') return json(skills)
       if (url === '/api/skills/refresh' && method === 'POST') return json(refreshed)
+      // Both the fast read and the ?wait=1 convergence read hit this endpoint.
+      if (url.startsWith('/api/skills/importable')) return json(importable)
       if (url === '/api/workflows') return json(WORKFLOWS)
       if (url === '/api/launch-key') return json({ key: 'sekret' })
-      if (url === '/api/ui-state') return json({})
+      if (url === '/api/ui-state' && method === 'GET') return json(state)
+      if (url === '/api/ui-state' && method === 'PUT') {
+        state = { ...state, ...(body as Record<string, unknown>) }
+        return json(state)
+      }
       return new Promise<never>(() => {})
     }),
   )
@@ -220,6 +237,102 @@ describe('refresh (#384: selection and scroll survive)', () => {
 
     fireEvent.click(document.querySelector('[data-slot="skills-refresh"]')!)
     await waitFor(() => expect(detail()?.querySelector('h2')?.textContent).toBe('om-fix'))
+  })
+})
+
+describe('the import panel (opt-in OM skills)', () => {
+  const IMPORTABLE = [
+    { name: 'pr-create', description: 'Open a PR from the current branch' },
+    { name: 'code-review', description: 'Review the diff for bugs' },
+  ]
+
+  const importRows = () =>
+    [...document.querySelectorAll('[data-slot="import-row"]')].map((el) => el.getAttribute('data-skill'))
+
+  it('shows the pinned "Import skills" entry only when a vendor repo has importable skills', async () => {
+    serve({ importable: IMPORTABLE })
+    renderAt('/skills')
+    await waitFor(() => expect(document.querySelector('[data-slot="import-skills-row"]')).not.toBeNull())
+  })
+
+  it('hides the entry when nothing is importable (repo configured its own skillsRepos)', async () => {
+    serve({ importable: [] })
+    renderAt('/skills')
+    await waitFor(() => expect(rowNames()).toHaveLength(3))
+    expect(document.querySelector('[data-slot="import-skills-row"]')).toBeNull()
+  })
+
+  it('lists the importable skills and imports one via a PUT that persists the checked state', async () => {
+    serve({ importable: IMPORTABLE })
+    renderAt('/skills?skill=__import')
+    await waitFor(() => expect(importRows()).toEqual(['pr-create', 'code-review']))
+
+    const row = document.querySelector('[data-slot="import-row"][data-skill="pr-create"]')!
+    expect(row.querySelector<HTMLInputElement>('[data-slot="import-toggle"]')!.checked).toBe(false)
+
+    fireEvent.click(row.querySelector('[data-slot="import-toggle"]')!)
+
+    // The selection is PUT to ui-state as the whole array…
+    await waitFor(() =>
+      expect(
+        requests.some(
+          (r) =>
+            r.method === 'PUT' &&
+            r.url === '/api/ui-state' &&
+            Array.isArray((r.body as { importedSkills?: unknown })?.importedSkills) &&
+            (r.body as { importedSkills: string[] }).importedSkills.includes('pr-create'),
+        ),
+      ).toBe(true),
+    )
+    // …and the checkbox reflects the persisted state (the server echo reconciled, not reverted).
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector('[data-slot="import-row"][data-skill="pr-create"]')
+          ?.getAttribute('data-imported'),
+      ).toBe('true'),
+    )
+  })
+
+  it('starts with an already-imported skill checked, and toggling it off removes it', async () => {
+    serve({ importable: IMPORTABLE, uiState: { importedSkills: ['code-review'] } })
+    renderAt('/skills?skill=__import')
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector('[data-slot="import-row"][data-skill="code-review"]')
+          ?.getAttribute('data-imported'),
+      ).toBe('true'),
+    )
+
+    fireEvent.click(
+      document.querySelector('[data-slot="import-row"][data-skill="code-review"] [data-slot="import-toggle"]')!,
+    )
+    await waitFor(() =>
+      expect(
+        requests.some(
+          (r) =>
+            r.method === 'PUT' &&
+            Array.isArray((r.body as { importedSkills?: unknown })?.importedSkills) &&
+            !(r.body as { importedSkills: string[] }).importedSkills.includes('code-review'),
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('"Import all" imports every offered skill in one write', async () => {
+    serve({ importable: IMPORTABLE })
+    renderAt('/skills?skill=__import')
+    await waitFor(() => expect(importRows()).toHaveLength(2))
+
+    fireEvent.click(document.querySelector('[data-slot="import-all"]')!)
+    await waitFor(() => {
+      const put = requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')
+      expect((put?.body as { importedSkills: string[] })?.importedSkills.sort()).toEqual([
+        'code-review',
+        'pr-create',
+      ])
+    })
   })
 })
 

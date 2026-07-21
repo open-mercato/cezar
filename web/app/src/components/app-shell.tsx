@@ -67,8 +67,9 @@ export type AppShellProps = {
   /** Inbox gating (#471): `false` drops the Inbox nav item and its badge — the global inbox is
    *  opt-in via `CEZ_FOLLOWUPS=1`. Defaults to shown for the same reason as `forgeAvailable`. */
   inboxAvailable?: boolean
-  /** Global chrome banner (#391's `SkillsBanner`), rendered in its own row above the scroller.
-   *  Absent renders nothing — the slot is generic, not skills-specific. */
+  /** Global chrome banner, rendered in its own row above the scroller. Absent renders nothing —
+   *  the slot is generic and currently unused (the #391 skills promo it once held is gone,
+   *  replaced by the opt-in Import panel on the Skills page). */
   banner?: ReactNode
   /** Step 3.3's multi-project sidebar: one collapsible group per registered project, each
    *  carrying its own nav + task list. When present it REPLACES the flat nav and the

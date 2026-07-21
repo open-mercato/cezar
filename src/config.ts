@@ -147,6 +147,43 @@ async function ownWorktreeRetention(repoRoot: string): Promise<number | undefine
 }
 
 /**
+ * The default skills repos that are *opt-in per skill* (the "import OM skills"
+ * flow): the set of repo identifiers a user must explicitly import from before
+ * their skills join the catalog. This is exactly `DEFAULT_SKILLS_REPOS` when the
+ * repo has NOT configured its own `skillsRepos` — the zero-config majority — and
+ * empty once a repo takes control by setting `skillsRepos` (then everything it
+ * lists auto-loads, unchanged).
+ *
+ * `loadConfig` cannot answer this: the schema's `.default(DEFAULT_SKILLS_REPOS)`
+ * materializes the key, so a parsed config can't tell "the user chose these" from
+ * "the user said nothing". So we probe the raw file for the key's presence — the
+ * same reason `ownWorktreeRetention` below reads the raw JSON.
+ */
+export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
+  const none = new Set<string>();
+  let raw: string;
+  try {
+    raw = await readFile(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8');
+  } catch {
+    // No file — the defaults are in effect, so they are the opt-in set.
+    return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
+    }
+    // The user took control of the source list — nothing is gated; a value the
+    // schema would refuse degrades to the default too (same as `loadConfig`).
+    if ((parsed as Record<string, unknown>).skillsRepos !== undefined) return none;
+    return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
+  } catch {
+    // Malformed JSON degrades to the default (which loadConfig also does).
+    return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
+  }
+}
+
+/**
  * Effective worktree retention for a repo (#483 + spec
  * 2026-07-20-multi-project-workspace). Precedence, exactly what Settings →
  * Worktrees promises: the repo's own `worktreeRetention` wins whenever it sets

@@ -786,10 +786,22 @@ export interface UiState {
    *  present (even `[]`) is the user's own edited list from Settings → Prompt templates.
    *  `skills` (optional) are the skill names the template auto-applies for. */
   promptTemplates?: { id: string; label: string; text: string; skills?: string[] }[]
-  /** The open-mercato/skills promo banner (#391), dismissed for good. Set once true, never
-   *  unset — server-persisted rather than a cookie so "shown once" holds across browsers. */
+  /** The open-mercato/skills promo banner (#391), dismissed for good. Legacy — the banner is
+   *  gone, replaced by the import flow below; retained so old ui-state.json round-trips. */
   dismissedSkillsBanner?: boolean
+  /** Team skills imported from a default (vendor) repo — `open-mercato/skills` — so the whole
+   *  catalog is no longer forced on the user. Only these names join the catalog from that repo
+   *  (the gate lives server-side in `discoverSkills`). Absent/`[]` → nothing imported. The
+   *  Skills page's import panel writes the whole array (shallow top-level merge). */
+  importedSkills?: string[]
   [key: string]: unknown
+}
+
+/** One row in the "Import skills" panel — a skill a default (vendor) repo offers,
+ *  from `GET /api/skills/importable`, independent of whether it is imported yet. */
+export interface ImportableSkill {
+  name: string
+  description?: string
 }
 
 // ---- request bodies ------------------------------------------------------------------------------
