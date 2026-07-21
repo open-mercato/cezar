@@ -186,6 +186,46 @@ describe('mapClaudeMessage edge cases', () => {
     expect(mapped.events.map((e) => e.type)).toEqual(['turn.completed']);
   });
 
+  // The runner emits a v1 `text` from `msg.result` when a session streamed no assistant text
+  // block (claude-cli-runner.ts, `textChunks.length === 0`). Without the v2 twin, that prose
+  // reached the cockpit only in v1 — where the thread reducer's per-turn "v2 wins" rule deleted
+  // it as soon as any tool item landed, so the message appeared and then vanished.
+  it('mints a message item from msg.result when the session streamed no text block', () => {
+    const mapped = mapClaudeMessage({ type: 'result', subtype: 'success', result: 'The whole reply.' }, state);
+    expect(mapped.events).toEqual([
+      { type: 'item.started', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'The whole reply.' } },
+      { type: 'item.completed', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'The whole reply.' } },
+      { type: 'turn.completed', turnId: 'turn_1', stopReason: 'end_turn' },
+    ]);
+  });
+
+  it('does NOT mint a result message once a text block already streamed — no duplicate prose', () => {
+    const streamed = mapClaudeMessage(
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Streamed.' }] } },
+      state,
+    );
+    const mapped = mapClaudeMessage({ type: 'result', subtype: 'success', result: 'Streamed.' }, streamed.state);
+    expect(mapped.events.map((e) => e.type)).toEqual(['turn.completed']);
+  });
+
+  it('the no-text-block guard is session-scoped, mirroring the runner s textChunks', () => {
+    // textChunks is allocated once per runAgent and never cleared, so a later turn that streams
+    // nothing gets NO v1 result fallback — and must get no v2 twin either.
+    const streamed = mapClaudeMessage(
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Turn one.' }] } },
+      state,
+    );
+    const firstResult = mapClaudeMessage({ type: 'result', subtype: 'success', result: 'Turn one.' }, streamed.state);
+    const nextTurn = claudeTurnStarted(firstResult.state);
+    const mapped = mapClaudeMessage({ type: 'result', subtype: 'success', result: 'Turn two.' }, nextTurn.state);
+    expect(mapped.events.map((e) => e.type)).toEqual(['turn.completed']);
+  });
+
+  it('an empty result string mints nothing', () => {
+    const mapped = mapClaudeMessage({ type: 'result', subtype: 'success', result: '' }, state);
+    expect(mapped.events.map((e) => e.type)).toEqual(['turn.completed']);
+  });
+
   it('TodoWrite with malformed todos filters bad entries; non-array todos emit no plan', () => {
     const good = mapClaudeMessage(
       {

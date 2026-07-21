@@ -247,6 +247,44 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(kinds(turns[0]!.items)).toEqual(['tool'])
     expect((turns[0]!.items[0] as UiToolItem).status).toBe('completed')
   })
+
+  // The vanishing-message regression: a turn can be v2-covered for TOOLS while its prose exists
+  // only as a v1 `text` line (claude's `msg.result` fallback — see claude-ui-mapper's mapResult).
+  // The old blanket "drop every v1 item once the latch flips" deleted that message a moment
+  // after it rendered, leaving tool cards with no prose. Membership in v2 is now decided by
+  // text, so an untwinned line survives.
+  it('keeps a v1 text that has NO v2 message twin, even in a v2-covered turn', () => {
+    const resultFallback: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'text', { text: 'Prose that only v1 ever described.' }),
+      line(3, 'item.started', {
+        item: { kind: 'tool', id: 'toolu_A', name: 'Bash', toolKind: 'execute', title: 'Ran npm test', status: 'running' },
+      }),
+      line(4, 'item.completed', {
+        item: { kind: 'tool', id: 'toolu_A', name: 'Bash', toolKind: 'execute', title: 'Ran npm test', status: 'completed' },
+      }),
+    ]
+    const { turns } = reduceThread(resultFallback)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'tool'])
+    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('Prose that only v1 ever described.')
+  })
+
+  // The two vocabularies normalize markers differently — the server strips `CEZ:` from v1 `text`
+  // before persisting, v2 items carry it raw — so the twin match has to strip both sides or
+  // every final message in a run would render twice.
+  it('matches a v1 twin against a v2 message whose text still carries its CEZ marker', () => {
+    const finalTurn: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.started', {
+        item: { kind: 'tool', id: 'toolu_A', name: 'Bash', toolKind: 'execute', title: 'Ran x', status: 'completed' },
+      }),
+      line(3, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'All done.\n\nCEZ:DONE' } }),
+      line(4, 'text', { text: 'All done.' }), // the server-stripped v1 twin
+    ]
+    const { turns } = reduceThread(finalTurn)
+    expect(kinds(turns[0]!.items)).toEqual(['tool', 'message'])
+    expect((turns[0]!.items[1] as UiMessageItem).text).toBe('All done.')
+  })
 })
 
 describe('reduceThread — live-stream mechanics', () => {

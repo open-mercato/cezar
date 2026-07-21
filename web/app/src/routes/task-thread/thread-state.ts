@@ -264,13 +264,21 @@ export function reduceThread(events: RunEvent[]): ThreadState {
     // Clone: deltas append in place, and the event object off the wire must stay untouched.
     const item = { ...raw }
     if (!turn.v2Items) {
-      // The dedup latch flips: this turn is v2-covered, so every v1-synthesized item in it is
-      // a duplicate of something v2 already describes (or is about to).
+      // The dedup latch flips: this turn is v2-covered, so every v1-synthesized TOOL in it is
+      // a duplicate of something v2 already describes (or is about to). Tools can be dropped
+      // sight-unseen because v2 tool coverage is total across backends and ids are shared —
+      // `tool-call`'s own `turn.v2Items` guard already suppresses the rest.
+      //
+      // v1 MESSAGES are deliberately NOT dropped here (#agent-log-vanishing-text): a turn being
+      // v2-covered for tools does NOT prove its prose has a v2 twin. Claude's result fallback
+      // (claude-cli-runner.ts emits a v1 `text` from `msg.result`) had no v2 counterpart, so
+      // this blanket drop deleted the agent's only message a moment after it rendered. The
+      // twinned ones are removed by text at the end of the fold, where the evidence exists.
       turn.v2Items = true
       for (const dropped of turn.entries) {
-        if (dropped.origin === 'v1' && isUiItem(dropped.entry)) itemsById.delete(dropped.entry.id)
+        if (dropped.origin === 'v1' && dropped.entry.kind === 'tool') itemsById.delete(dropped.entry.id)
       }
-      turn.entries = turn.entries.filter((e) => !(e.origin === 'v1' && isUiItem(e.entry)))
+      turn.entries = turn.entries.filter((e) => !(e.origin === 'v1' && e.entry.kind === 'tool'))
     }
     const existing = itemsById.get(key)
     if (existing && existing.turn === turn) {
@@ -373,8 +381,10 @@ export function reduceThread(events: RunEvent[]): ThreadState {
 
       // ---- v1 fallback items (skipped once the turn is v2-covered) -----------------------
       case 'text': {
+        // No `v2Items` guard, unlike `tool-call` below: whether this line has a v2 twin is
+        // decided by TEXT at the end of the fold, not by the latch. Suppressing it here would
+        // lose any prose v2 never described (claude's `msg.result` fallback).
         const turn = currentTurn()
-        if (turn.v2Items) break
         const text = str(event.text) ?? ''
         if (text === '') break
         turn.entries.push({
@@ -545,6 +555,26 @@ export function reduceThread(events: RunEvent[]): ThreadState {
       default:
         break
     }
+  }
+
+  // The message half of the mixed-file dedup, resolved once the whole turn is known: a v1
+  // `text` line is a duplicate exactly when some v2 message item in the same turn carries the
+  // same prose — which is the normal claude/codex/opencode path, where the v2 item lands first
+  // and its v1 twin one line later. Comparison is on marker-stripped, trimmed text because the
+  // two arrive differently normalized: the server strips `CEZ:` markers from v1 `text` before
+  // persisting, while v2 items carry the raw text and are stripped below at render time.
+  // Anything left unmatched is prose that exists ONLY in v1 — it renders rather than vanishing.
+  for (const draft of turns) {
+    if (!draft.v2Items) continue
+    const v2Texts = new Set<string>()
+    for (const { origin, entry } of draft.entries) {
+      if (origin === 'v2' && entry.kind === 'message') v2Texts.add(stripDoneMarker(entry.text).trim())
+    }
+    if (v2Texts.size === 0) continue
+    draft.entries = draft.entries.filter(
+      (e) =>
+        !(e.origin === 'v1' && e.entry.kind === 'message' && v2Texts.has(stripDoneMarker(e.entry.text).trim())),
+    )
   }
 
   return {

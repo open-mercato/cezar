@@ -52,6 +52,15 @@ export interface ClaudeUiMapperState {
   readonly turnSeq: number;
   readonly currentTurnId: string | null;
   readonly itemSeq: number;
+  /** True once any assistant `text` block minted a message item. SESSION-scoped,
+   *  never reset per turn — it mirrors `ctx.textChunks` in claude-cli-runner.ts,
+   *  which is allocated once per `runAgent` and accumulates across turns. When a
+   *  session streams no text block at all, the runner falls back to emitting the
+   *  v1 `text` from `msg.result` (`textChunks.length === 0`), and `mapResult`
+   *  must mint the v2 twin under the SAME guard — otherwise that prose exists
+   *  only in v1 and the cockpit's "v2 wins per turn" dedup drops it with no
+   *  replacement, which is exactly the vanishing-message bug. */
+  readonly sawAssistantText: boolean;
   /** `tool_use` items awaiting their `tool_result`, keyed by tool_use id. */
   readonly openTools: ReadonlyMap<string, UiToolItem>;
   /** The running plan built incrementally by Claude's task tools, keyed by the
@@ -76,6 +85,7 @@ export function createClaudeUiState(opts: { fallbackSessionId?: string } = {}): 
     turnSeq: 0,
     currentTurnId: null,
     itemSeq: 0,
+    sawAssistantText: false,
     openTools: new Map(),
     tasks: new Map(),
     pendingTaskCreates: new Map(),
@@ -146,12 +156,17 @@ function mapAssistant(msg: Record<string, unknown>, state: ClaudeUiMapperState):
   let openTools: Map<string, UiToolItem> | null = null;
   let tasks = state.tasks;
   let pendingTaskCreates = state.pendingTaskCreates;
+  let sawAssistantText = state.sawAssistantText;
 
   for (const raw of content) {
     if (!isRecord(raw)) continue;
     if (raw.type === 'text' && typeof raw.text === 'string') {
       // Whole blocks per API round-trip — claude sends no deltas in this
       // mode, so we never fake `item.delta`s: started + completed.
+      // Counted against the result fallback exactly as the runner counts it:
+      // every text block, sub-agent ones included (`ctx.textChunks.push` runs
+      // regardless of `parent_tool_use_id`).
+      sawAssistantText = true;
       const item: UiMessageItem = { kind: 'message', id: `item_${++itemSeq}`, role: 'assistant', text: raw.text };
       if (parentItemId !== undefined) item.parentItemId = parentItemId;
       events.push({ type: 'item.started', item }, { type: 'item.completed', item });
@@ -213,7 +228,7 @@ function mapAssistant(msg: Record<string, unknown>, state: ClaudeUiMapperState):
   if (events.length === 0) return { events, state };
   return {
     events,
-    state: { ...state, itemSeq, openTools: openTools ?? state.openTools, tasks, pendingTaskCreates },
+    state: { ...state, itemSeq, openTools: openTools ?? state.openTools, tasks, pendingTaskCreates, sawAssistantText },
   };
 }
 
@@ -499,6 +514,23 @@ function mapResult(msg: Record<string, unknown>, state: ClaudeUiMapperState): Cl
     }
   }
 
+  // The result fallback, mirroring claude-cli-runner.ts's `textChunks.length === 0`
+  // branch: a session that streamed no assistant text block carries its whole
+  // reply on `msg.result`. The runner emits a v1 `text` for it; without the v2
+  // twin below, the cockpit's per-turn "v2 wins" dedup drops that line and the
+  // turn renders tool cards with no prose at all.
+  let sawAssistantText = state.sawAssistantText;
+  if (!sawAssistantText && typeof msg.result === 'string' && msg.result !== '') {
+    sawAssistantText = true;
+    const item: UiMessageItem = {
+      kind: 'message',
+      id: `item_${++itemSeq}`,
+      role: 'assistant',
+      text: msg.result,
+    };
+    events.push({ type: 'item.started', item }, { type: 'item.completed', item });
+  }
+
   const turnId = state.currentTurnId ?? `turn_${++turnSeq}`;
   const usage = rawTokenUsage(msg.usage);
   const costUsd =
@@ -517,7 +549,14 @@ function mapResult(msg: Record<string, unknown>, state: ClaudeUiMapperState): Cl
 
   return {
     events,
-    state: { ...state, itemSeq, turnSeq, currentTurnId: null, openTools: openTools ?? state.openTools },
+    state: {
+      ...state,
+      itemSeq,
+      turnSeq,
+      currentTurnId: null,
+      openTools: openTools ?? state.openTools,
+      sawAssistantText,
+    },
   };
 }
 
