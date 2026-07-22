@@ -38,8 +38,8 @@ export interface RunnerOption {
   desc: string
 }
 
-/** The selectable agent backends (legacy `RUNNERS`). Only those detected on the host via
- *  /api/health checks are offered. */
+/** The agent-backend catalog (legacy `RUNNERS`). Installation-only compatibility surfaces use
+ *  `availableRunners`; the new-task composer filters this catalog by connected provider status. */
 export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
@@ -184,7 +184,7 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
- *  - `runner` only when the host actually offers a choice (single-backend hosts stay implicit);
+ *  - `runner` only when it differs from the server default (a connected fallback must be explicit);
  *  - `model`/`variants`/`images` only when they say something (`''`/1/empty mean "default").
  */
 export function buildCreateRunBody(opts: {
@@ -192,7 +192,7 @@ export function buildCreateRunBody(opts: {
   source: TaskSource
   model: string
   runner: Runner
-  runnerCount: number
+  defaultRunner: Runner
   variants: number
   images: readonly ImageInput[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
@@ -213,7 +213,7 @@ export function buildCreateRunBody(opts: {
     source,
     model,
     runner,
-    runnerCount,
+    defaultRunner,
     variants,
     images,
     worktree,
@@ -227,7 +227,7 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source.ref }),
     model: model || undefined,
-    runner: runnerCount > 1 ? runner : undefined,
+    runner: runner === defaultRunner ? undefined : runner,
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
     // Off only matters for a single run — variants always isolate.
