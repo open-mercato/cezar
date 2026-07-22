@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from './api/query-client'
@@ -82,6 +82,11 @@ function LocationProbe() {
       data-hash={location.hash}
     />
   )
+}
+
+function ProjectNavigationProbe() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate('/p/other/')}>Switch project</button>
 }
 
 /** Cold-load the router at a URL, exactly as a pasted deep link would — under the same providers
@@ -251,6 +256,46 @@ describe('scoped route map (/p/:projectId)', () => {
     renderAt(`/p/${BOOT}/settings`)
     const link = document.querySelector('[data-slot="settings-index"] a[data-section="agents"]')
     expect(link?.getAttribute('href')).toBe(`/p/${BOOT}/settings/agents`)
+  })
+
+  it('remounts the same page and loads its new scope when the project param changes', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/runs' || path === '/api/p/other/runs') {
+        return new Response('[]', { headers: { 'content-type': 'application/json' } })
+      }
+      return new Promise<never>(() => {})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.health, HEALTH)
+    client.setQueryData(workspaceQueryKeys.projects, REGISTRY)
+    render(
+      <QueryClientProvider client={client}>
+        <ThemeProvider>
+          <AppearanceProvider>
+            <MemoryRouter initialEntries={[`/p/${BOOT}/`]}>
+              <ListViewProvider>
+                <AppRoutes />
+                <ProjectNavigationProbe />
+              </ListViewProvider>
+            </MemoryRouter>
+          </AppearanceProvider>
+        </ThemeProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/runs')).toBe(true),
+    )
+    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'stale filter' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Switch project' }))
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/p/other/runs')).toBe(true),
+    )
+    expect((screen.getByLabelText('Search tasks') as HTMLInputElement).value).toBe('')
   })
 })
 
