@@ -139,12 +139,12 @@ export function filterImportedTeamSkills(
 }
 
 /**
- * Walk a skills dir for `*.md` files, following directory symlinks —
- * `npx skills` mirrors `.claude/skills/<name>` → `.agents/skills/<name>` as
- * symlinks, and `readdir({recursive})` would not descend into them. Depth-
- * capped and cycle-guarded via realpath.
+ * Walk a skills dir for entrypoints, following directory symlinks. Once a
+ * directory contains `SKILL.md`, it is one directory-based skill and its
+ * supporting Markdown (for example `references/*.md`) is not scanned. Other
+ * directories retain the legacy recursive `*.md` discovery behavior.
  */
-async function walkMarkdownFiles(
+async function skillEntryPaths(
   dir: string,
   depth: number,
   visited: Set<string>,
@@ -165,7 +165,17 @@ async function walkMarkdownFiles(
   } catch {
     return [];
   }
-  const files: string[] = [];
+  const skillEntry = entries.find((entry) => entry.name === 'SKILL.md');
+  if (skillEntry) {
+    const skillPath = join(dir, skillEntry.name);
+    try {
+      if ((await stat(skillPath)).isFile()) return [skillPath];
+    } catch {
+      // A dangling or unreadable SKILL.md does not hide other valid entries.
+    }
+  }
+
+  const paths: string[] = [];
   for (const entry of entries) {
     const path = join(dir, entry.name);
     let isDir = entry.isDirectory();
@@ -177,16 +187,16 @@ async function walkMarkdownFiles(
       }
     }
     if (isDir) {
-      files.push(...(await walkMarkdownFiles(path, depth - 1, visited)));
+      paths.push(...(await skillEntryPaths(path, depth - 1, visited)));
     } else if (extname(entry.name).toLowerCase() === '.md') {
-      files.push(path);
+      paths.push(path);
     }
   }
-  return files;
+  return paths;
 }
 
 async function readMarkdownSkills(dir: string, source: Skill['source']): Promise<Skill[]> {
-  const paths = await walkMarkdownFiles(dir, 4, new Set());
+  const paths = await skillEntryPaths(dir, 4, new Set());
   const skills: Skill[] = [];
   for (const absPath of paths) {
     let raw: string;

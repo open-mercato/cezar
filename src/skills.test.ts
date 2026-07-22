@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { filterImportedTeamSkills, readImportedSkills, type Skill } from './skills.js';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  discoverSkills,
+  filterImportedTeamSkills,
+  readImportedSkills,
+  type Skill,
+} from './skills.js';
 
 /**
  * The opt-out gate's two pure halves (#391 follow-up: the promo banner is gone, replaced by
@@ -9,6 +17,11 @@ import { filterImportedTeamSkills, readImportedSkills, type Skill } from './skil
  */
 
 const OM = 'open-mercato/skills';
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 function teamSkill(name: string, repo: string): Skill {
   return {
@@ -85,5 +98,40 @@ describe('filterImportedTeamSkills', () => {
   it('gates nothing when the gated set is empty (repo configured its own skillsRepos)', () => {
     const skills = [teamSkill('pr-create', OM)];
     expect(filterImportedTeamSkills(skills, new Set(), []).map((s) => s.name)).toEqual(['pr-create']);
+  });
+});
+
+describe('discoverSkills local entrypoints', () => {
+  it('keeps flat and SKILL.md skills while excluding nested reference files', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+    const skillsDir = join(repoRoot, '.ai/cezar/skills');
+    await mkdir(join(skillsDir, 'om-example/references'), { recursive: true });
+    await mkdir(join(skillsDir, 'legacy/nested'), { recursive: true });
+    await writeFile(join(skillsDir, 'flat.md'), '# Flat skill');
+    await writeFile(join(skillsDir, 'legacy/nested/legacy.md'), '# Legacy skill');
+    await writeFile(join(skillsDir, 'om-example/SKILL.md'), '# Example skill');
+    await writeFile(join(skillsDir, 'om-example/references/agentic-setup.md'), '# Supporting doc');
+
+    const skills = (await discoverSkills(repoRoot)).filter((skill) => skill.source === 'cezar');
+
+    expect(skills.map((skill) => skill.name)).toEqual(['flat', 'legacy', 'om-example']);
+    expect(skills.some((skill) => skill.name === 'agentic-setup')).toBe(false);
+  });
+
+  it('follows npx-skills directory mirrors and deduplicates them by skill name', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+    const canonicalDir = join(repoRoot, '.agents/skills/om-example');
+    const mirrorRoot = join(repoRoot, '.claude/skills');
+    await mkdir(canonicalDir, { recursive: true });
+    await mkdir(mirrorRoot, { recursive: true });
+    await writeFile(join(canonicalDir, 'SKILL.md'), '# Example skill');
+    await symlink('../../.agents/skills/om-example', join(mirrorRoot, 'om-example'), 'dir');
+
+    const skills = (await discoverSkills(repoRoot)).filter((skill) => skill.name === 'om-example');
+
+    expect(skills).toHaveLength(1);
+    expect(skills[0]?.source).toBe('agents');
   });
 });
