@@ -198,6 +198,22 @@ describe('workspace config', () => {
     expect(config.projects[1]?.source).toBe('local');
   });
 
+  it('per-project maxParallel: keeps a valid value, degrades a bad one to inherit, absent stays absent', async () => {
+    write({
+      projects: [
+        { ...project('capped'), maxParallel: 1 }, // valid override
+        { ...project('too-big'), maxParallel: 999 }, // out of range → inherit (undefined)
+        project('inherits'), // no key → inherit (undefined)
+      ],
+    });
+    const config = await loadWorkspaceConfig();
+    // A bad maxParallel degrades that one key without evicting the entry.
+    expect(config.projects.map((p) => p.id)).toEqual(['capped', 'too-big', 'inherits']);
+    expect(config.projects[0]?.maxParallel).toBe(1);
+    expect(config.projects[1]?.maxParallel).toBeUndefined();
+    expect(config.projects[2]?.maxParallel).toBeUndefined();
+  });
+
   it('memoryLimitMb keeps an explicit null and a real value', async () => {
     write({ resources: { memoryLimitMb: null } });
     expect((await loadWorkspaceConfig()).resources.memoryLimitMb).toBeNull();

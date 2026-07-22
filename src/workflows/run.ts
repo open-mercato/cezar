@@ -502,11 +502,13 @@ export class RunManager {
   }
 
   /**
-   * Start queued runs while parallel slots are free. The cap is the WORKSPACE
-   * `resources.maxParallel` (default 2), cached in the shared semaphore and
-   * counted across every manager (spec 2026-07-20, step 2.5) — legacy per-repo
-   * `maxParallel` keys are ignored. A non-git directory degrades to 1
-   * sequential run in the repo root (spec 006 degradation rule).
+   * Start queued runs while parallel slots are free. A run starts only under
+   * BOTH ceilings: the WORKSPACE `resources.maxParallel` (default 2, counted
+   * across every manager — spec 2026-07-20, step 2.5) AND this project's own
+   * per-project `maxParallel` when the registry sets one (spec 2026-07-22,
+   * inherits the workspace cap when unset). Legacy per-repo `maxParallel` keys
+   * are ignored. A non-git directory degrades to 1 sequential run in the repo
+   * root (spec 006 degradation rule), which is always the tighter bound.
    */
   private async pump(): Promise<void> {
     if (this.pumping) return;
@@ -514,10 +516,17 @@ export class RunManager {
     try {
       const repo = await getRepoInfo(this.repoRoot);
       const maxParallel = this.semaphore.maxParallel();
+      // Per-project ceiling (spec 2026-07-22-per-project-concurrency): this
+      // project never runs more than its own configured `maxParallel`; absent
+      // an override it equals the workspace cap, so behavior is unchanged.
+      const projectMax = this.semaphore.projectMaxParallel(this.repoRoot);
       // `waiting` runs don't hold a slot (#347) — see busySlots(). The check
-      // below is the only slot gate: resumes never pass through it.
+      // below is the only slot gate: resumes never pass through it. A run
+      // starts only under BOTH the workspace cap and this project's ceiling.
       const capacity = () =>
-        this.semaphore.busy() < maxParallel && (repo !== null || this.busySlots() < 1);
+        this.semaphore.busy() < maxParallel && // host ceiling (unchanged)
+        this.busySlots() < projectMax && // this project's ceiling (per-project)
+        (repo !== null || this.busySlots() < 1); // non-git degradation (unchanged)
       while (this.queue.length > 0 && capacity()) {
         const runId = this.queue.shift();
         if (!runId) break;

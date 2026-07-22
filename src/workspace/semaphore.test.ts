@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.js';
 
@@ -51,6 +54,39 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.maxParallel()).toBe(7);
     expect(sem.memoryLimitMb()).toBe(1024);
     expect(a.pumped.length).toBe(1);
+  });
+
+  it('projectMaxParallel returns the per-project value when set, else the workspace cap', async () => {
+    // Key by realpath'd temp dirs so normalizeRootSync resolves them identically.
+    const dirs = mkdtempSync(join(tmpdir(), 'cez-sema-'));
+    const capped = join(dirs, 'capped');
+    const open = join(dirs, 'open');
+    mkdirSync(capped, { recursive: true });
+    mkdirSync(open, { recursive: true });
+    try {
+      let projectLimits = new Map<string, number>([[realpathSync(capped), 1]]);
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 4, memoryLimitMb: null, projectLimits }),
+      });
+      await sem.refresh();
+      // The registered project uses its own cap...
+      expect(sem.projectMaxParallel(capped)).toBe(1);
+      // ...a registered-but-unset project and an unknown root inherit the workspace cap.
+      expect(sem.projectMaxParallel(open)).toBe(4);
+      expect(sem.projectMaxParallel(join(dirs, 'never-registered'))).toBe(4);
+      // A refresh that changes the value is reflected immediately.
+      projectLimits = new Map<string, number>([[realpathSync(capped), 3]]);
+      await sem.refresh();
+      expect(sem.projectMaxParallel(capped)).toBe(3);
+    } finally {
+      rmSync(dirs, { recursive: true, force: true });
+    }
+  });
+
+  it('projectMaxParallel inherits the workspace cap when no projectLimits map is provided', () => {
+    // An older load stub (resource slice only) → every root inherits.
+    const sem = new WorkspaceSemaphore({ initial: { maxParallel: 6 } });
+    expect(sem.projectMaxParallel('/tmp/whatever')).toBe(6);
   });
 
   it('a failed load keeps the last good cache (never degrades to defaults) and still pumps', async () => {

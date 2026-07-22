@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -73,13 +73,16 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
   const savedEnv: Record<string, string | undefined> = {};
 
   /** A project: fixture repo + store + manager on the SHARED semaphore. */
-  function project(prefix: string, semaphore: WorkspaceSemaphore): { store: RunStore; manager: RunManager } {
+  function project(
+    prefix: string,
+    semaphore: WorkspaceSemaphore,
+  ): { store: RunStore; manager: RunManager; root: string } {
     const root = fixtureRepo(prefix, roots);
     const store = RunStore.open(join(root, '.ai/cezar'));
     const manager = new RunManager(store, root, { semaphore });
     stores.push(store);
     managers.push(manager);
-    return { store, manager };
+    return { store, manager, root };
   }
 
   beforeEach(() => {
@@ -181,6 +184,84 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     await waitFor(
       () => b.store.getRun(waitingRun.id)?.status === 'waiting',
       "B's run to re-park after the resumed turn",
+    );
+  }, 45_000);
+
+  it('per-project cap: project A limited to 1 runs one at a time while B fills the workspace cap', async () => {
+    // Shared snapshot the load hook copies on each refresh — mutating the map
+    // and calling refresh() mirrors a settings write to a project's maxParallel.
+    const projectLimits = new Map<string, number>();
+    const semaphore = new WorkspaceSemaphore({
+      load: () =>
+        Promise.resolve({ maxParallel: 4, memoryLimitMb: null, projectLimits: new Map(projectLimits) }),
+      initial: { maxParallel: 4 },
+    });
+    const a = project('cez-wsem-ppA-', semaphore);
+    const rootA = a.root;
+    const b = project('cez-wsem-ppB-', semaphore);
+
+    // Pin project A to a single concurrent run; refresh so the snapshot carries it.
+    projectLimits.set(realpathSync(rootA), 1);
+    await semaphore.refresh();
+
+    // A starts two runs. The workspace has room (cap 4), but A's own ceiling is
+    // 1 — so the second A run must queue on the per-project gate.
+    const a1 = a.manager.startRun(SLOW, { task: 'A slot 1' });
+    const a2 = a.manager.startRun(SLOW, { task: 'A slot 2 — must queue on A per-project cap' });
+    await waitFor(() => a.store.getRun(a1.id)?.status === 'running', 'A first run to run');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(a.store.getRun(a2.id)?.status).toBe('queued'); // blocked by A's own cap, not the workspace
+
+    // B inherits the workspace cap (no override) — it runs two concurrently.
+    const b1 = b.manager.startRun(SLOW, { task: 'B slot 1' });
+    const b2 = b.manager.startRun(SLOW, { task: 'B slot 2' });
+    await waitFor(
+      () =>
+        b.store.getRun(b1.id)?.status === 'running' && b.store.getRun(b2.id)?.status === 'running',
+      'B to run two concurrently under the workspace cap',
+    );
+
+    // A still runs only one; the workspace total (1 A + 2 B) never exceeds 4.
+    expect(a.store.getRun(a1.id)?.status).toBe('running');
+    expect(a.store.getRun(a2.id)?.status).toBe('queued');
+    expect(semaphore.busy()).toBeLessThanOrEqual(4);
+
+    // Once A's holder settles, A's second run starts — the cap gates, never strands.
+    await waitFor(
+      () => settled.includes(a.store.getRun(a2.id)?.status ?? ''),
+      "A's queued run to start and finish after its slot frees",
+      30_000,
+    );
+    expect(a.store.getRun(a2.id)?.status).toBe('done');
+  }, 60_000);
+
+  it('#347 with a per-project cap: a waiting run on the capped project still resumes immediately', async () => {
+    const projectLimits = new Map<string, number>();
+    const semaphore = new WorkspaceSemaphore({
+      load: () =>
+        Promise.resolve({ maxParallel: 4, memoryLimitMb: null, projectLimits: new Map(projectLimits) }),
+      initial: { maxParallel: 4 },
+    });
+    const a = project('cez-wsem-pp347-', semaphore);
+    const rootA = a.root;
+    projectLimits.set(realpathSync(rootA), 1);
+    await semaphore.refresh();
+
+    // Park an agent run at `waiting` (holds no slot per #347), then saturate A's
+    // per-project cap of 1 with a running holder.
+    const waitingRun = a.manager.startRun(AGENT, { task: 'park and wait', worktree: false });
+    await waitFor(() => a.store.getRun(waitingRun.id)?.status === 'waiting', 'the agent run to park');
+    const holder = a.manager.startRun(SLOW, { task: 'occupy the single per-project slot' });
+    await waitFor(() => a.store.getRun(holder.id)?.status === 'running', "the holder to take A's only slot");
+
+    // Even at A's per-project cap, the resume bypasses pump() — straight into the
+    // open session, no slot acquire — so the ceiling can never strand it.
+    expect(a.manager.sendMessage(waitingRun.id, [{ type: 'text', text: 'carry on' }])).toBe(true);
+    expect(a.store.getRun(waitingRun.id)?.status).toBe('running');
+    expect(a.store.getRun(holder.id)?.status).toBe('running'); // holder keeps the single slot
+    await waitFor(
+      () => a.store.getRun(waitingRun.id)?.status === 'waiting',
+      'the resumed run to re-park after its turn',
     );
   }, 45_000);
 

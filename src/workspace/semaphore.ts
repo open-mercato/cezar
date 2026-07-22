@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { loadWorkspaceConfig } from './config.js';
 
 /**
@@ -36,6 +38,26 @@ export interface WorkspaceResourceLimits {
   maxParallel: number;
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
   memoryLimitMb: number | null;
+  /**
+   * Per-project concurrency ceilings, keyed by realpath-normalized project
+   * root (the registry stores normalized `root`). A root absent from the map
+   * inherits the workspace `maxParallel`. Optional so older `load` stubs that
+   * only return the resource slice keep working — an absent map means "no
+   * project has an override", i.e. every project inherits.
+   */
+  projectLimits?: ReadonlyMap<string, number>;
+}
+
+/** Realpath-normalize a root the same way the registry does
+ *  (`workspace/projects.ts` `normalizeRoot`), but synchronously — this answers
+ *  a manager's hot-path lookup and must not `await`. A path that cannot be
+ *  realpath'd degrades to `resolve()`, matching the registry's own fallback. */
+function normalizeRootSync(root: string): string {
+  try {
+    return realpathSync(root);
+  } catch {
+    return resolve(root);
+  }
 }
 
 /** One manager's seam into the shared counter. */
@@ -50,10 +72,21 @@ export interface SemaphoreParticipant {
 const DEFAULT_LIMITS: WorkspaceResourceLimits = { maxParallel: 2, memoryLimitMb: null };
 
 /** Production loader: the `resources` slice of `~/.cezar/config.json`
- *  (schema-defaulted, so a missing/corrupt file yields the zero-config 2/null). */
+ *  (schema-defaulted, so a missing/corrupt file yields the zero-config 2/null),
+ *  plus the per-project `maxParallel` overrides built into a root→limit map.
+ *  The registry `root` is already realpath-normalized (`registerProject`), so
+ *  the keys match `normalizeRootSync`'s output at lookup time. */
 async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
-  const { resources } = await loadWorkspaceConfig();
-  return { maxParallel: resources.maxParallel, memoryLimitMb: resources.memoryLimitMb };
+  const { resources, projects } = await loadWorkspaceConfig();
+  const projectLimits = new Map<string, number>();
+  for (const project of projects) {
+    if (typeof project.maxParallel === 'number') projectLimits.set(project.root, project.maxParallel);
+  }
+  return {
+    maxParallel: resources.maxParallel,
+    memoryLimitMb: resources.memoryLimitMb,
+    projectLimits,
+  };
 }
 
 export interface WorkspaceSemaphoreOptions {
@@ -99,6 +132,21 @@ export class WorkspaceSemaphore {
   /** Cached per-task memory ceiling (MiB), or null for no limit. */
   memoryLimitMb(): number | null {
     return this.limits.memoryLimitMb;
+  }
+
+  /**
+   * The effective per-project concurrency cap for a manager's repo root: the
+   * project's own `maxParallel` if set in the registry, else the workspace cap
+   * (`maxParallel()`). Answered from the cached snapshot — the class's
+   * no-per-tick-file-read invariant is preserved; the only syscall is a
+   * `realpathSync` to key the lookup the same way the registry normalizes
+   * `root` (once per `pump()`, alongside the existing `getRepoInfo` stat). A
+   * root with no registry entry (an ad-hoc run outside the registry) has no
+   * override and inherits the workspace cap.
+   */
+  projectMaxParallel(repoRoot: string): number {
+    const override = this.limits.projectLimits?.get(normalizeRootSync(repoRoot));
+    return override ?? this.maxParallel();
   }
 
   /**
