@@ -45,6 +45,40 @@ Two independent fixes, both needed:
 
 Plus a dedicated **cheap liveness endpoint** `GET /api/live` (no probes) for load-balancer/ops checks.
 
+### Health event wire and cache contract
+
+`health` is a **workspace-only**, un-stamped event on `GET /api/workspace/events`, alongside
+`project-added`, `project-removed`, and `checkout-progress` — it is not one of the project-owned
+events handled by `parseWorkspaceEvent`. Its wire shape is:
+
+```text
+event: health
+data: <the complete HealthResponse JSON returned by GET /api/health>
+```
+
+The legacy boot-project stream `GET /api/events` does not gain this event, and
+`parseGlobalEvent` remains unchanged. The client adds `health` to the workspace-only event
+vocabulary, validates the payload as a `HealthResponse`, and applies it without an active-project
+filter.
+
+Although health is workspace-wide, the existing TanStack key is scoped as
+`[queryScope(), 'health']`. One health frame therefore updates **every existing scoped health cache
+entry** (all two-element keys whose second element is `health`) and seeds the current scope's key.
+This keeps already-visited project routes coherent after a project switch without changing the
+query-key contract as part of this performance fix.
+
+### Acceptance criteria
+
+- After the first probe, repeated `/api/health` requests within the 30 s TTL launch zero agent/`gh`/
+  `git --version` probe subprocesses; concurrent cold requests share one probe promise.
+- With an open workspace SSE connection, changing the boot repo branch reaches the visible branch
+  chip within one monitor interval and causes no browser `GET /api/health` polling.
+- A health frame received while a non-boot project is active updates that view, and switching to a
+  second previously cached project shows the same fresh health snapshot without a refetch.
+- `/api/live` performs no environment, repository, config, or workspace probes and answers `200`
+  with a small stable JSON body.
+- Existing `/api/health` fields, CORS behavior, and the legacy `/api/events` wire remain unchanged.
+
 ## Scope
 
 - `src/core/backend-detect.ts` — add a cached, single-flight `detectEnvironmentCached()`.
@@ -52,8 +86,10 @@ Plus a dedicated **cheap liveness endpoint** `GET /api/live` (no probes) for loa
   add `HealthMonitor` (injectable via `ServerDeps`); emit `health` on `/api/workspace/events`; add
   `GET /api/live`.
 - `BACKWARD_COMPATIBILITY.md` — inventory `/api/live`; note the additive `health` SSE event.
-- `web/app/src/api/events.ts` — parse the `health` event.
-- `web/app/src/api/global-events.tsx` — fold `health` into the query cache.
+- `web/app/src/api/events.ts` — validate the workspace-only, un-stamped `health` payload; leave the
+  project-stamped and legacy parsers unchanged.
+- `web/app/src/api/global-events.tsx` — subscribe to workspace `health` and fold it into every
+  existing scoped health cache plus the current scope.
 - `web/app/src/api/queries.ts` — drop `useHealth`'s `refetchInterval`.
 - Tests alongside each.
 
@@ -95,12 +131,12 @@ Plus a dedicated **cheap liveness endpoint** `GET /api/live` (no probes) for loa
 
 ### Phase 4: Client — subscribe to push, drop the poll
 
-- [ ] 4.1 Parse the `health` event in `events.ts` (`GlobalEvent` + workspace/legacy parsers)
-- [ ] 4.2 Fold `health` into the query cache in `global-events.tsx`
+- [ ] 4.1 Parse `health` as an un-stamped workspace-only event in `events.ts` (legacy and project-stamped parsers unchanged)
+- [ ] 4.2 Fold `health` into every existing scoped health cache and seed the current scope in `global-events.tsx`
 - [ ] 4.3 Remove `useHealth`'s `refetchInterval` in `queries.ts`
 
 ### Phase 5: Tests + validation
 
-- [ ] 5.1 Server tests: `/api/live`, probe cache single-flight, `HealthMonitor` diff/emit, stream emits `health`
-- [ ] 5.2 Client tests: `health` parse, cache fold, `useHealth` no longer polls
+- [ ] 5.1 Server tests: `/api/live` performs no probes, probe cache single-flight/TTL, `HealthMonitor` diff/emit, workspace stream emits un-stamped `health`, legacy stream unchanged
+- [ ] 5.2 Client tests: workspace-only `health` validation, non-boot active scope, all cached health keys update, project switch stays fresh, `useHealth` no longer polls
 - [ ] 5.3 Full validation gate green (`npm run typecheck`, `npm test`, `npm run test:unit`, `npm run build`, `npm run test:package`)
