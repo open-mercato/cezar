@@ -1333,11 +1333,24 @@ export function createApp(deps: ServerDeps): Hono {
     const id = raw === 'default' ? await resolveBootProject() : raw;
     const { maxParallel } = parsed.data;
 
+    // Read-first (mirroring DELETE, server.ts:1252-1258): a well-formed but
+    // unknown id must 404 WITHOUT rewriting the config — otherwise it would both
+    // do a needless full-config tmp+rename and, on a read-only home, surface the
+    // write failure as a 500 where the honest answer is 404.
+    let known = false;
+    try {
+      known = (await loadWorkspaceConfig()).projects.some((p) => p.id === id);
+    } catch {
+      // unreadable workspace — treat as unknown; the read-only case answers 404,
+      // not a 500 the caller cannot act on (same reasoning as DELETE).
+    }
+    if (!known) return c.json({ error: `unknown project: ${id}` }, 404);
+
     let updated: WorkspaceProject | undefined;
     try {
       await mergeWriteWorkspaceConfig((config) => {
         const entry = config.projects.find((p) => p.id === id);
-        if (!entry) return; // unknown id — persisted nothing; answered 404 below
+        if (!entry) return; // lost a race with a concurrent remove — answered below
         // null clears the override; a number sets it. Mutated in place so
         // `.passthrough()` keys on the entry survive.
         if (maxParallel === null) delete entry.maxParallel;
@@ -1348,6 +1361,7 @@ export function createApp(deps: ServerDeps): Hono {
       // e.g. a read-only home — nothing was persisted (atomic tmp+rename).
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
+    // Raced with a concurrent removal between the read and the write.
     if (!updated) return c.json({ error: `unknown project: ${id}` }, 404);
 
     // The new ceiling takes effect WITHOUT a restart: refresh the shared

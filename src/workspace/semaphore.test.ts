@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -87,6 +87,33 @@ describe('WorkspaceSemaphore', () => {
     // An older load stub (resource slice only) → every root inherits.
     const sem = new WorkspaceSemaphore({ initial: { maxParallel: 6 } });
     expect(sem.projectMaxParallel('/tmp/whatever')).toBe(6);
+  });
+
+  it('projectMaxParallel resolves a manager keyed by a symlinked root to the registry entry (spec Q7)', async () => {
+    // The spec's normalization guard: the registry stores the realpath'd root,
+    // but a manager may hold a *symlinked* spelling of the same directory. The
+    // lookup must realpath both, or the override silently falls back to the
+    // workspace cap. A real symlink is the only way to prove normalizeRootSync
+    // actually canonicalizes — an all-`/tmp` test passes even as a no-op.
+    const dirs = realpathSync(mkdtempSync(join(tmpdir(), 'cez-sema-link-')));
+    const real = join(dirs, 'real-root');
+    const link = join(dirs, 'link-root'); // a symlink pointing at real-root
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link);
+    try {
+      // Registry keys by the realpath'd root (what registerProject stores)…
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 4, memoryLimitMb: null, projectLimits: new Map([[real, 1]]) }),
+      });
+      await sem.refresh();
+      // …and a manager holding the symlinked spelling still resolves the cap.
+      expect(link).not.toBe(real); // guard: the two spellings really differ
+      expect(realpathSync(link)).toBe(real); // guard: the symlink resolves to it
+      expect(sem.projectMaxParallel(link)).toBe(1);
+      expect(sem.projectMaxParallel(real)).toBe(1);
+    } finally {
+      rmSync(dirs, { recursive: true, force: true });
+    }
   });
 
   it('a failed load keeps the last good cache (never degrades to defaults) and still pumps', async () => {

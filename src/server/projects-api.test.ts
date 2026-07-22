@@ -18,6 +18,7 @@ import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProj
 import { ProjectContexts } from './project-context.js';
 import { apiRequest } from './loopback-request.testkit.js';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.js';
+import { workspaceConfigPath } from '../paths.js';
 import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import {
   WorkspaceEventBus,
@@ -506,14 +507,17 @@ describe('workspace projects API', () => {
       expect((await getProjects()).projects.find((p) => p.id === other.id)?.maxParallel).toBeUndefined();
     });
 
-    it('404s an unknown id and a malformed one, without touching the registry', async () => {
-      const other = await registerProject(otherRoot);
+    it('404s an unknown id and a malformed one, and rewrites nothing (read-first, like DELETE)', async () => {
+      await registerProject(otherRoot);
+      // The config bytes before any 404 PATCH — a well-formed-unknown id must not
+      // rewrite the file (else a read-only home would 500 where 404 is honest).
+      const before = readFileSync(workspaceConfigPath(), 'utf8');
       for (const id of ['nope', 'Not%20A%20Slug', 'a'.repeat(120)]) {
         const { status, body } = await patch(id, { maxParallel: 1 });
         expect(status, id).toBe(404);
         expect(body.error, id).toContain('unknown project');
       }
-      expect((await getProjects()).projects.find((p) => p.id === other.id)?.maxParallel).toBeUndefined();
+      expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
     });
   });
 
