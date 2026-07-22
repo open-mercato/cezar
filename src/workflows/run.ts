@@ -128,8 +128,8 @@ export interface StartRunInput {
   model?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
-  /** Screenshots pasted into the new-task form — delivered once, with the
-   *  first agent step's opening message. */
+  /** Screenshots pasted into the new-task form — persisted when the run is
+   *  created and delivered once, with the first agent step's opening message. */
   images?: ContentBlock[];
   /** Per-run system-prompt override (`POST /api/runs`, programmatic callers).
    *  Replaces the `config.json` default for this run — see
@@ -149,7 +149,7 @@ export interface StartRunInput {
   generateFollowups?: boolean;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
    *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
-   *  are persisted into `taskImages` on the way through `execute()` — folding
+   *  are persisted into `taskImages` by `startRun()` — folding
    *  the stack's (already-persisted) files in there would write duplicate files
    *  and make the task bubble render the stack's images as its own. In-memory
    *  only: rebuilt from the record on every hydration, never persisted. */
@@ -450,6 +450,19 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow as unknown as Record<string, unknown> });
+    // Initial pasted images must be visible while the run is still queued (#612),
+    // and must survive a restart before a slot opens. Persist them before the job
+    // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
+    // from these URLs when a recovered run eventually starts.
+    if (input.images?.length) {
+      const persisted = input.images
+        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+        .map((b) => this.persistImage(run.id, b.source.media_type, b.source.data, 'pasted'))
+        .filter((saved): saved is PersistedAttachment => saved !== null);
+      if (persisted.length) {
+        this.store.updateRun(run.id, { taskImages: persisted.map((saved) => saved.url) });
+      }
+    }
     // Step-0 reference extraction (task auto-naming spec): the regex layer's
     // numbers persist immediately; the namer may add the kind it verified later.
     const skillHint = workflow.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
@@ -793,34 +806,47 @@ export class RunManager {
     const run = this.store.getRun(runId);
     if (!run) return input;
     const stack = run.queuedMessages ?? [];
-    if (!stack.length) return { ...input, task: run.task };
 
     const task = [run.task, ...stack.map((m) => m.text)]
       .map((part) => part.trim())
       .filter((part) => part.length > 0)
       .join('\n\n');
 
-    const stackedImages: ContentBlock[] = [];
-    for (const url of stack.flatMap((m) => m.images ?? [])) {
-      const name = url.split('/').pop();
-      if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
-      try {
-        const data = readFileSync(join(this.dataDir, 'runs', `${runId}-images`, name));
-        stackedImages.push({
-          type: 'image',
-          source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
-        });
-      } catch {
-        // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
-        // or the file is unreadable — start with the text and say which image went.
-        this.store.appendEvent(runId, {
-          type: 'note',
-          message: `queued attachment ${name} could not be read — starting without it`,
-        });
+    const readImages = (urls: string[], kind: 'task' | 'queued'): ContentBlock[] => {
+      const images: ContentBlock[] = [];
+      for (const url of urls) {
+        const name = url.split('/').pop();
+        if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
+        try {
+          const data = readFileSync(join(this.dataDir, 'runs', `${runId}-images`, name));
+          images.push({
+            type: 'image',
+            source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
+          });
+        } catch {
+          // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
+          // or the file is unreadable — start with the text and say which image went.
+          this.store.appendEvent(runId, {
+            type: 'note',
+            message: `${kind} attachment ${name} could not be read — starting without it`,
+          });
+        }
       }
-    }
+      return images;
+    };
 
-    return { ...input, task, ...(stackedImages.length ? { stackedImages } : {}) };
+    // Keep the original in-memory blocks for a live process (including the
+    // best-effort case where persistence failed). Recovery has no such copy,
+    // so rebuild it from the durable task-image URLs.
+    const images = input.images?.length ? input.images : readImages(run.taskImages ?? [], 'task');
+    const stackedImages = readImages(stack.flatMap((m) => m.images ?? []), 'queued');
+
+    return {
+      ...input,
+      task,
+      ...(images.length ? { images } : { images: undefined }),
+      ...(stackedImages.length ? { stackedImages } : { stackedImages: undefined }),
+    };
   }
 
   /**
@@ -1543,21 +1569,17 @@ export class RunManager {
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
-    // Persist the task's attached images so the thread's initial bubble can render them
-    // (#image-display); they still ride the first agent step's opening message below.
-    // `pasted` prefix (#357) marks these as user attachments on disk and keeps their
-    // absolute paths so runAgentStep can tell the agent where to find the real files.
-    let startAttachments: PersistedAttachment[] = [];
-    if (input.images?.length) {
-      const persisted = input.images
-        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-        .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-        .filter((saved): saved is PersistedAttachment => saved !== null);
-      if (persisted.length) {
-        this.store.updateRun(runId, { taskImages: persisted.map((p) => p.url) });
-        startAttachments = persisted;
-      }
-    }
+    // `startRun` already persisted task images so a queued bubble can render them
+    // (#612). Reuse those files for the agent-facing path note instead of minting
+    // duplicate pasted files when execution finally begins.
+    let startAttachments: PersistedAttachment[] = (this.store.getRun(runId)?.taskImages ?? [])
+      .map((url): PersistedAttachment | null => {
+        const name = url.split('/').pop();
+        if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) return null;
+        const path = join(this.dataDir, 'runs', `${runId}-images`, name);
+        return existsSync(path) ? { name, url, path } : null;
+      })
+      .filter((saved): saved is PersistedAttachment => saved !== null);
     // Task screenshots go with the FIRST agent step's opening message only —
     // later steps and retry loops run in fresh sessions without them. Stacked
     // attachments (#472) ride along too, but are NOT re-persisted above: they
