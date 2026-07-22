@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react'
 
 import { createRepoBranch, putConfig } from '@/api/client'
 import { queryKeys, useGithub, useHealth } from '@/api/queries'
-import type { GithubItem, RepoInfo, RepoResponse } from '@/api/types'
+import type { GithubItem, HealthResponse, RepoInfo, RepoResponse } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
@@ -29,12 +29,23 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
 
   const branchAction = useMutation({
     mutationFn: (name: string) => createRepoBranch({ name }),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       toast(result.created ? `Created and switched to ${result.branch}` : `Switched to ${result.branch}`)
-      // The checkout moved: the repo payload (branch, log), the working-tree diff (children
-      // of the same key) and the sidebar's health chip are all stale now.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.repo })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.health })
+      // Refresh the rest of both payloads first, then preserve the mutation's authoritative
+      // checkout result even if a read races and briefly returns the previous HEAD.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+      ])
+      queryClient.setQueryData<RepoResponse>(queryKeys.repo, (current) =>
+        current?.info ? { ...current, info: { ...current.info, branch: result.branch } } : current,
+      )
+      // Health is workspace-level, so only patch it when it describes this repo.
+      queryClient.setQueryData<HealthResponse>(queryKeys.health, (current) =>
+        current?.repo?.root === info.root
+          ? { ...current, repo: { ...current.repo, branch: result.branch } }
+          : current,
+      )
     },
     onError,
   })
@@ -53,6 +64,11 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
   })
 
   const [newName, setNewName] = useState('')
+  const [branchQuery, setBranchQuery] = useState('')
+  const normalizedBranchQuery = branchQuery.trim().toLowerCase()
+  const filteredBranches = normalizedBranchQuery
+    ? repo.branches.filter((name) => name.toLowerCase().includes(normalizedBranchQuery))
+    : repo.branches
   const submitCreate = (event: FormEvent) => {
     event.preventDefault()
     const name = newName.trim()
@@ -64,8 +80,15 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
     <section data-slot="repo-branches" className="flex flex-col gap-6 px-4 py-4 md:px-6">
       <div>
         <h2 className="text-xs font-semibold tracking-wide text-soft-foreground uppercase">Branches</h2>
+        <Input
+          aria-label="Filter branches"
+          placeholder="Filter branches…"
+          value={branchQuery}
+          onChange={(event) => setBranchQuery(event.target.value)}
+          className="mt-2 max-w-xl"
+        />
         <ul data-slot="repo-branch-list" className="mt-2 flex max-w-xl flex-col divide-y divide-border">
-          {repo.branches.map((name) => {
+          {filteredBranches.map((name) => {
             const current = name === info.branch
             return (
               <li key={name} data-slot="branch-row" data-branch={name} className="flex min-h-9 items-center gap-2 py-1">
@@ -94,6 +117,11 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
               </li>
             )
           })}
+          {filteredBranches.length === 0 ? (
+            <li data-slot="branch-empty" className="py-3 text-xs text-soft-foreground">
+              No branches match “{branchQuery.trim()}”.
+            </li>
+          ) : null}
         </ul>
 
         <form data-slot="branch-create" className="mt-3 flex max-w-md items-center gap-2" onSubmit={submitCreate}>
