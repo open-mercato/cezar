@@ -20,11 +20,13 @@ let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
 function serve({
   status = ALL_STATUSES,
+  refreshStatus,
   statusCode = 200,
   connect = { opened: true, command: 'codex login' },
   connectCode = 200,
 }: {
   status?: ProviderStatusResponse | { error: string }
+  refreshStatus?: ProviderStatusResponse
   statusCode?: number
   connect?: unknown
   connectCode?: number
@@ -43,7 +45,7 @@ function serve({
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
       if (url.startsWith('/api/providers/status') && method === 'GET') {
-        return json(status, statusCode)
+        return json(url.endsWith('?refresh=1') && refreshStatus ? refreshStatus : status, statusCode)
       }
       if (url === '/api/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
@@ -171,6 +173,30 @@ describe('ProviderSettings', () => {
     fireEvent.click(within(fallback).getByRole('button', { name: 'Copy command' }))
     expect(writeText).toHaveBeenCalledOnce()
     expect(writeText).toHaveBeenCalledWith('codex login --device-auth')
+  })
+
+  it('removes a manual command once Check again verifies the provider is connected', async () => {
+    serve({
+      connectCode: 409,
+      connect: { error: 'Run this command manually.', command: 'codex login --device-auth' },
+      refreshStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
+        ],
+      },
+    })
+    renderSettings()
+    fireEvent.click(await within(card('codex')).findByRole('button', { name: 'Connect' }))
+
+    const fallback = await screen.findByRole('region', { name: 'Codex manual sign-in' })
+    expect(within(fallback).getByText('codex login --device-auth')).toBeTruthy()
+    fireEvent.click(within(card('codex')).getByRole('button', { name: 'Check again' }))
+
+    await within(card('codex')).findByText('Connected')
+    expect(screen.queryByRole('region', { name: 'Codex manual sign-in' })).toBeNull()
+    expect(screen.queryByText('codex login --device-auth')).toBeNull()
   })
 
   it('keeps provider settings visible when status loading fails and offers an honest retry', async () => {

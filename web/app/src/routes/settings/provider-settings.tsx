@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 
 import { ApiError, connectProvider } from '@/api/client'
 import {
@@ -38,6 +38,12 @@ export function ProviderSettings() {
   const refresh = useRefreshProviderStatus()
   const queryClient = useQueryClient()
   const [manual, setManual] = useState<ManualCommand | null>(null)
+
+  useEffect(() => {
+    if (manual && providerStatusFor(status.data, manual.provider)?.status === 'connected') {
+      setManual(null)
+    }
+  }, [manual, status.data])
 
   const connect = useMutation({
     mutationFn: connectProvider,
@@ -167,7 +173,7 @@ export function ProviderSettings() {
                 </div>
               </div>
 
-              {manual?.provider === provider.id ? (
+              {manual?.provider === provider.id && state !== 'connected' ? (
                 <div
                   role="region"
                   aria-label={`${manual.label} manual sign-in`}
