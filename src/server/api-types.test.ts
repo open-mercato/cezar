@@ -18,6 +18,8 @@ import type {
   RepoCommitPayload as WebRepoCommitPayload,
   LogEntry as WebLogEntry,
   ProcessUsage as WebProcessUsage,
+  ProviderStatus as WebProviderStatus,
+  ProviderStatusResponse as WebProviderStatusResponse,
   RepoInfo as WebRepoInfo,
   RunEvent as WebRunEvent,
   QueuedMessage as WebQueuedMessage,
@@ -53,6 +55,7 @@ import type {
 } from '../../web/app/src/protocol/ui-events.js';
 import type { BackendCheck } from '../core/backend-detect.js';
 import type { ProcessUsage } from '../core/process-usage.js';
+import type { ProviderStatus, ProviderStatusResponse } from '../core/provider-auth.js';
 import type { ToolDisplay } from '../core/tool-display.js';
 import type {
   FileDiff,
@@ -138,6 +141,10 @@ const guards = {
   runEvent: true satisfies Exact<RunEvent, WebRunEvent>,
   processUsage: true satisfies Exact<ProcessUsage, WebProcessUsage>,
   backendCheck: true satisfies Exact<BackendCheck, WebBackendCheck>,
+  providerStatus: true satisfies Exact<ProviderStatus, WebProviderStatus>,
+  providerStatusKeys: true satisfies ExactKeys<ProviderStatus, WebProviderStatus>,
+  providerStatusResponse: true satisfies Exact<ProviderStatusResponse, WebProviderStatusResponse>,
+  providerStatusResponseKeys: true satisfies ExactKeys<ProviderStatusResponse, WebProviderStatusResponse>,
   repoInfo: true satisfies Exact<RepoInfo, WebRepoInfo>,
   statusEntry: true satisfies Exact<StatusEntry, WebStatusEntry>,
   logEntry: true satisfies Exact<LogEntry, WebLogEntry>,

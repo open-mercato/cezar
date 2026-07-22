@@ -35,6 +35,9 @@ import type {
   PatchRunInput,
   PickVariantResponse,
   PlanResponse,
+  ProviderConnectResponse,
+  ProviderId,
+  ProviderStatusResponse,
   ProjectsResponse,
   RegisterProjectResponse,
   RemoveProjectResponse,
@@ -206,6 +209,17 @@ export function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
 /** Host-local Codex catalog. Workspace-level: one CLI/account serves every project. */
 export function getRunnerModels(opts?: ReadOptions): Promise<RunnerModelCatalogResponse> {
   return get<RunnerModelCatalogResponse>('/api/models?runner=codex', opts)
+}
+
+/** Host-local authentication state shared by every project. */
+export function getProviderStatus(
+  refresh = false,
+  opts?: ReadOptions,
+): Promise<ProviderStatusResponse> {
+  return get<ProviderStatusResponse>(
+    `/api/providers/status${refresh ? '?refresh=1' : ''}`,
+    opts,
+  )
 }
 
 /** The bookmarklet auto-start secret (spec 011). Fetched to compare against `/new?key=` —
@@ -400,6 +414,10 @@ export function getGroup(groupId: string, opts?: ReadOptions): Promise<GroupResp
 }
 
 // ---- workspace mutations ------------------------------------------------------------------
+
+export function connectProvider(provider: ProviderId): Promise<ProviderConnectResponse> {
+  return mutate<ProviderConnectResponse>('POST', '/api/providers/connect', { provider })
+}
 
 /**
  * Register an existing folder (`POST /api/projects`, step 4.2).

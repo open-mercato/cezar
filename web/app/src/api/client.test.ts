@@ -5,6 +5,7 @@ import {
   archiveFinished,
   archiveRun,
   cancelRun,
+  connectProvider,
   continueRun,
   createRun,
   deleteRun,
@@ -12,6 +13,7 @@ import {
   getGithub,
   getGroup,
   getHealth,
+  getProviderStatus,
   getRepo,
   getRunnerModels,
   getRun,
@@ -79,6 +81,25 @@ describe('request shapes', () => {
     body?: unknown
   }> = [
     { name: 'getHealth', call: () => getHealth(), path: '/api/health', method: 'GET' },
+    {
+      name: 'getProviderStatus',
+      call: () => getProviderStatus(),
+      path: '/api/providers/status',
+      method: 'GET',
+    },
+    {
+      name: 'getProviderStatus (refresh)',
+      call: () => getProviderStatus(true),
+      path: '/api/providers/status?refresh=1',
+      method: 'GET',
+    },
+    {
+      name: 'connectProvider',
+      call: () => connectProvider('codex'),
+      path: '/api/providers/connect',
+      method: 'POST',
+      body: { provider: 'codex' },
+    },
     { name: 'getRunnerModels', call: () => getRunnerModels(), path: '/api/models?runner=codex', method: 'GET' },
     { name: 'getRuns', call: () => getRuns(), path: '/api/runs', method: 'GET' },
     { name: 'getRun', call: () => getRun('run-1'), path: '/api/runs/run-1', method: 'GET' },

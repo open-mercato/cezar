@@ -13,6 +13,7 @@ import {
   getHealth,
   getLaunchKey,
   getOpenTargets,
+  getProviderStatus,
   getProjectRuns,
   getProjects,
   getRunnerModels,
@@ -147,6 +148,7 @@ export const queryKeys = {
  */
 export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
+  providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
@@ -167,6 +169,23 @@ export function useRunnerModels() {
     queryKey: workspaceQueryKeys.models('codex'),
     queryFn: ({ signal }) => getRunnerModels({ signal }),
     staleTime: 5 * 60 * 1_000,
+  })
+}
+
+export function useProviderStatus() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.providerStatus,
+    queryFn: ({ signal }) => getProviderStatus(false, { signal }),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  })
+}
+
+export function useRefreshProviderStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => getProviderStatus(true),
+    onSuccess: (result) => queryClient.setQueryData(workspaceQueryKeys.providerStatus, result),
   })
 }
 

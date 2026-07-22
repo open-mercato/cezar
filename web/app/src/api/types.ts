@@ -38,6 +38,29 @@ export type StepStatus =
  *  choice and are Claude by definition (see `resumeCommand` in the server). */
 export type Runner = 'claude' | 'codex' | 'opencode'
 
+/** Coarse host authentication state from `/api/providers/status`. Credentials, account
+ *  identity, and raw CLI output never cross this boundary. */
+export type ProviderId = Runner
+export type ProviderConnectionState =
+  | 'connected'
+  | 'disconnected'
+  | 'not-installed'
+  | 'unknown'
+
+export interface ProviderStatus {
+  provider: ProviderId
+  status: ProviderConnectionState
+  hint?: string
+}
+
+export interface ProviderStatusResponse {
+  providers: ProviderStatus[]
+}
+
+export type ProviderConnectResponse =
+  | { opened: true; command: string }
+  | { opened: false; connected: true; command: string }
+
 export interface RunnerModelOption {
   id: string
   label: string
