@@ -71,13 +71,34 @@ async function curlCode(ctx: InstallContext, args: string[], opts?: { input?: st
   return r.stdout.trim() || '000';
 }
 
-/** True once cezar answers on 127.0.0.1:<port> (any HTTP status = the process is up). */
+/**
+ * Name of the process listening on `port`, or null when nothing is. Best effort
+ * (`ss` output varies, and without root the process name may be hidden) — used
+ * only to make a port collision explainable, never to gate the install.
+ */
+export async function portListener(ctx: InstallContext, port: number): Promise<string | null> {
+  if (ctx.dryRun) return null;
+  const r = await ctx.runner.capture('ss', ['-ltnp', `( sport = :${port} )`]);
+  if (r.code !== 0) return null;
+  const line = r.stdout.split('\n').find((l) => /LISTEN/.test(l));
+  if (!line) return null;
+  // `users:(("docker-proxy",pid=123,fd=4))` → docker-proxy; unnamed → "another process".
+  return /users:\(\("([^"]+)"/.exec(line)?.[1] ?? 'another process';
+}
+
+/** The interface the cockpit listens on — loopback unless an external-proxy
+ *  install bound it somewhere the proxy can reach (e.g. the docker bridge). */
+export function upstreamHost(ctx: InstallContext): string {
+  return ctx.state.bindHost?.trim() || '127.0.0.1';
+}
+
+/** True once cezar answers on <host>:<port> (any HTTP status = the process is up). */
 async function isCezarUp(ctx: InstallContext, port: number): Promise<boolean> {
-  const code = await curlCode(ctx, [`http://127.0.0.1:${port}/`]);
+  const code = await curlCode(ctx, [`http://${upstreamHost(ctx)}:${port}/`]);
   return code !== '000';
 }
 
-/** Poll the loopback upstream until cezar responds or the attempts run out. */
+/** Poll the upstream until cezar responds or the attempts run out. */
 async function waitForCezar(ctx: InstallContext, port: number, attempts = 15): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
     if (await isCezarUp(ctx, port)) return true;
@@ -95,7 +116,7 @@ async function waitForCezar(ctx: InstallContext, port: number, attempts = 15): P
  */
 async function confirmCezarRunning(ctx: InstallContext, statusCmd: string, logsCmd: string): Promise<void> {
   if (ctx.dryRun) {
-    ctx.ui.info(`DRY RUN — would wait for cezar on 127.0.0.1:${ctx.state.primaryPort}.`);
+    ctx.ui.info(`DRY RUN — would wait for cezar on ${upstreamHost(ctx)}:${ctx.state.primaryPort}.`);
     return;
   }
   const sp = ctx.ui.spinner();
@@ -535,7 +556,13 @@ const sslStep: InstallStep = {
  * absolute `"<node> <entry.js>"`. We still set `Environment=PATH` (with the
  * installer's node dir) for any child process the app spawns.
  */
-export function systemdUnit(repoRoot: string, port: number, scope: 'user' | 'system', execStart: string): string {
+export function systemdUnit(
+  repoRoot: string,
+  port: number,
+  scope: 'user' | 'system',
+  execStart: string,
+  bindHost?: string,
+): string {
   const userLine = scope === 'system' ? `User=${userInfo().username}\n` : '';
   const installTarget = scope === 'system' ? 'multi-user.target' : 'default.target';
   // Give the service the operator's own PATH (node dir + the login PATH the CLI
@@ -546,6 +573,10 @@ export function systemdUnit(repoRoot: string, port: number, scope: 'user' | 'sys
   // systemd expands `%` specifiers in Environment/ExecStart values — a literal
   // `%` (possible in an nvm dir name) must be doubled or the unit fails to load.
   const sysd = (s: string) => s.replace(/%/g, '%%');
+  // Loopback stays the default (and stays flag-less, so existing units are
+  // byte-identical); an external-proxy install binds an interface its proxy can
+  // actually reach — a container-based proxy cannot dial the host's loopback.
+  const bind = bindHost?.trim() && bindHost.trim() !== '127.0.0.1' ? ` --bind-host ${bindHost.trim()}` : '';
   return `# Managed by cezar server-install — do not edit by hand.
 [Unit]
 Description=cezar cockpit
@@ -557,7 +588,7 @@ Type=simple
 ${userLine}WorkingDirectory=${repoRoot}
 Environment=CEZ_REMOTE=1
 Environment=PATH=${sysd(pathDirs.join(':'))}
-ExecStart=${sysd(execStart)} serve --no-open --port ${port}
+ExecStart=${sysd(execStart)} serve --no-open --port ${port}${sysd(bind)}
 Restart=on-failure
 RestartSec=5
 
@@ -648,7 +679,11 @@ const autostartStep: InstallStep = {
         ctx.ui.info(`DRY RUN — would write ${unitPath} and enable it (systemctl --user enable --now cezar).`);
       } else {
         mkdirSync(join(homedir(), '.config', 'systemd', 'user'), { recursive: true });
-        writeFileSync(unitPath, systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'user', execStart), 'utf8');
+        writeFileSync(
+          unitPath,
+          systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'user', execStart, ctx.state.bindHost),
+          'utf8',
+        );
         await ctx.runner.interactive('systemctl', ['--user', 'daemon-reload']);
         await ctx.runner.interactive('systemctl', ['--user', 'enable', '--now', UNIT_NAME]);
         if ((await ctx.runner.capture('systemctl', ['--user', 'is-enabled', UNIT_NAME])).code !== 0) {
@@ -681,7 +716,7 @@ const autostartStep: InstallStep = {
     await writeFileStep(ctx, {
       description: 'Install the cezar systemd unit, start it now, and enable it at boot.',
       path: `/etc/systemd/system/${UNIT_NAME}`,
-      content: systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'system', execStart),
+      content: systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'system', execStart, ctx.state.bindHost),
       extra: `systemctl daemon-reload && systemctl enable --now ${UNIT_NAME}`,
       verify: (c) => verifyCommand(c, 'systemctl', ['is-enabled', UNIT_NAME]),
     });
@@ -721,6 +756,71 @@ const autostartStep: InstallStep = {
   },
 };
 
+/**
+ * `--external-proxy` verification: confirm the cockpit is listening on the
+ * interface the operator's proxy will dial, then hand them the routing snippet.
+ * cezar ships no auth of its own, so this is also where we say — unmissably —
+ * that the front they own has to enforce it.
+ */
+async function verifyBehindExternalProxy(ctx: InstallContext): Promise<{ artifacts: StepArtifact[] }> {
+  const port = ctx.state.primaryPort;
+  const host = upstreamHost(ctx);
+  const target = `http://${host}:${port}`;
+  const domain = ctx.state.domain ?? '<your-domain>';
+
+  if (ctx.dryRun) {
+    ctx.ui.info(`DRY RUN — would verify cezar answers on ${target} and print the proxy routing snippet.`);
+    return { artifacts: [] };
+  }
+
+  if (!(await waitForCezar(ctx, port))) {
+    ctx.ui.error(
+      `cezar is not answering on ${target}.\n\n` +
+        `Diagnostics on the server:\n` +
+        `  • systemctl --user status ${unitName(ctx)}   (or: sudo systemctl status ${unitName(ctx)})\n` +
+        `  • sudo ss -ltnp | grep :${port}\n` +
+        (host === '127.0.0.1'
+          ? ''
+          : `  • is ${host} a real local interface? (ip -brief addr) — a container-based proxy\n` +
+            `    usually reaches the host on the docker bridge, commonly 172.17.0.1\n`),
+    );
+    throw new StepAborted('cockpit verification failed — see the diagnostics above');
+  }
+
+  ctx.ui.success(`Cockpit is up and listening on ${target}.`);
+  ctx.ui.warn(
+    'cezar has NO built-in authentication in this mode — your reverse proxy MUST enforce it. ' +
+      'Anyone who can reach ' + target + ' can run agents on this box.',
+  );
+  ctx.ui.message(
+    [
+      `Point your existing proxy at ${target} for ${domain}. For Dokploy / Traefik,`,
+      `add a file-provider config (Traefik runs in a container, so it cannot use 127.0.0.1):`,
+      ``,
+      `  http:`,
+      `    routers:`,
+      `      cezar:`,
+      `        rule: "Host(\`${domain}\`)"`,
+      `        entryPoints: [websecure]`,
+      `        middlewares: [cezar-auth]`,
+      `        service: cezar`,
+      `        tls: { certResolver: letsencrypt }`,
+      `    services:`,
+      `      cezar:`,
+      `        loadBalancer:`,
+      `          servers: [{ url: "${target}" }]`,
+      `    middlewares:`,
+      `      cezar-auth:`,
+      `        basicAuth:`,
+      `          users: ["USER:$$apr1$$...."]   # htpasswd -nb user pass (double every $)`,
+      ``,
+      `Keep ${host}:${port} off the public internet (ufw / cloud firewall) — the proxy`,
+      `should be the only thing that can reach it.`,
+    ].join('\n'),
+  );
+  return { artifacts: [] };
+}
+
 const identityStep: InstallStep = {
   id: 'identity',
   title: 'Verify the cockpit end-to-end (auth + HTTPS reach cezar)',
@@ -728,6 +828,10 @@ const identityStep: InstallStep = {
     return false; // always re-verify; it creates nothing
   },
   async run(ctx): Promise<{ artifacts: StepArtifact[] }> {
+    // External proxy: cezar installed no nginx, so there is no auth challenge of
+    // ours to probe. All we can (and should) verify is that the cockpit is
+    // actually listening where the operator's proxy will look for it.
+    if (ctx.state.externalProxy) return verifyBehindExternalProxy(ctx);
     if (ctx.dryRun) {
       ctx.ui.info('DRY RUN — would verify auth (401 for anon) AND that an authenticated request reaches cezar.');
       return { artifacts: [] };
@@ -824,9 +928,30 @@ export const ubuntuVps: PlatformStrategy = {
     if ((await ctx.runner.capture('id', ['-u'])).stdout.trim() === '0') {
       throw new PreflightError('run server-install as a normal sudo-capable user, not root.');
     }
+    // Someone else already owns the HTTP front (Dokploy/Traefik, Coolify, Caddy,
+    // a hand-rolled nginx)? Installing ours would fight it for :80/:443 and the
+    // proxy step would fail with a confusing bind error — point at the mode that
+    // actually fits instead.
+    if (!ctx.state.externalProxy) {
+      const holder = await portListener(ctx, 80);
+      if (holder && !/nginx/i.test(holder)) {
+        ctx.ui.warn(
+          `Port 80 is already served by "${holder}" on this host.\n` +
+            `cezar's ubuntu-vps install wants :80/:443 for its own nginx, so these will collide.\n\n` +
+            `If that is a reverse proxy you rely on (Dokploy/Traefik, Coolify, Caddy), re-run with:\n` +
+            `  cezar server-install --platform ubuntu-vps --external-proxy${ctx.state.domain ? ` --domain ${ctx.state.domain}` : ''} [--bind-host 172.17.0.1]\n` +
+            `That installs the cezar service only and lets your proxy front it.`,
+        );
+      }
+    }
   },
-  steps(): InstallStep[] {
-    // deps → proxy → (optional) ssl → (optional) autostart → identity.
+  steps(ctx: InstallContext): InstallStep[] {
+    // `--external-proxy`: the box already has a front owning :80/:443 (Dokploy/
+    // Traefik, Coolify, Caddy, an existing nginx). Installing our own nginx
+    // there would fight it for the ports, so we ship the service only and let
+    // that proxy terminate TLS + auth.
+    if (ctx.state.externalProxy) return [depCheckStep(), autostartStep, identityStep];
+    // deps → proxy → (optional) ssl → autostart → identity.
     return [depCheckStep(), nginxProxyStep, sslStep, autostartStep, identityStep];
   },
   async redeploy(ctx: InstallContext) {

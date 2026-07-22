@@ -46,6 +46,11 @@ export interface RunOptions {
   /** Loopback port for this instance. For a NEW named instance the caller
    * passes an auto-picked free port; a resume keeps the recorded one. */
   port?: number;
+  /** `--external-proxy`: an existing reverse proxy fronts cezar, so the
+   * platform installs no nginx/SSL of its own. */
+  externalProxy?: boolean;
+  /** `--bind-host`: interface the cockpit binds so that proxy can reach it. */
+  bindHost?: string;
 }
 
 export type RunStatus = 'complete' | 'cancelled' | 'failed';
@@ -147,6 +152,10 @@ export async function runInstall(strategy: PlatformStrategy, opts: RunOptions): 
     // uninstall/deploy runs (and `server-instances/` listings) agree on it.
     state.instance = opts.instance ?? state.instance ?? 'default';
     if (opts.domain) state.domain = opts.domain;
+    // Proxy mode + bind host are recorded before `steps(ctx)` runs, because the
+    // platform selects its step list from them (external proxy ⇒ no nginx/SSL).
+    if (opts.externalProxy !== undefined) state.externalProxy = opts.externalProxy;
+    if (opts.bindHost) state.bindHost = opts.bindHost;
     // A caller-supplied port wins (a new named instance auto-picks a free one);
     // otherwise keep whatever the resumed record already carries.
     if (opts.port) state.primaryPort = opts.port;

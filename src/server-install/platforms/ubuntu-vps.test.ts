@@ -9,9 +9,14 @@ import type { InstallContext, InstallStep, Runner, Ui } from '../types.js';
 
 const okRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
 
-function ctxWith(over: { ui?: Ui; runner?: Runner; dryRun?: boolean }): InstallContext {
+function ctxWith(over: {
+  ui?: Ui;
+  runner?: Runner;
+  dryRun?: boolean;
+  state?: Partial<InstallContext['state']>;
+}): InstallContext {
   return {
-    state: { schema: 1, installed: false, primaryPort: 4321, steps: {} },
+    state: { schema: 1, installed: false, primaryPort: 4321, steps: {}, ...over.state },
     ui: over.ui ?? createAutoUi(),
     instance: 'default',
     runner: over.runner ?? okRunner,
@@ -51,6 +56,38 @@ describe('ubuntu-vps ssl step', () => {
     // The service step is required now — after install cezar must actually run.
     expect(stepById('autostart').optional).toBeFalsy();
     expect(stepById('identity').optional).toBeFalsy();
+  });
+
+  it('--external-proxy drops our nginx + SSL steps (an existing front owns :80/:443)', () => {
+    const ids = ubuntuVps.steps(ctxWith({ state: { externalProxy: true } })).map((s) => s.id);
+    expect(ids).toEqual(['deps', 'autostart', 'identity']);
+    expect(ids).not.toContain('nginx-proxy');
+    expect(ids).not.toContain('ssl');
+  });
+
+  it('external-proxy verify passes when cezar answers on the bound host', async () => {
+    const seen: string[] = [];
+    const runner: Runner = {
+      capture: async (program, args) => {
+        if (program === 'curl') seen.push(args.join(' '));
+        return { code: 0, stdout: program === 'curl' ? '200' : '', stderr: '' };
+      },
+      interactive: async () => 0,
+    };
+    const ctx = ctxWith({ runner, state: { externalProxy: true, bindHost: '172.17.0.1' } });
+    await expect(stepById('identity').run(ctx)).resolves.toBeTruthy();
+    // It must probe the bind host, not loopback — a container proxy can't use 127.0.0.1.
+    expect(seen.some((a) => a.includes('http://172.17.0.1:4321/'))).toBe(true);
+  });
+
+  it('external-proxy verify aborts when nothing is listening', async () => {
+    const runner: Runner = {
+      // curl "000" = no connection; `sleep` between polls returns 0.
+      capture: async (program) => ({ code: 0, stdout: program === 'curl' ? '000' : '', stderr: '' }),
+      interactive: async () => 0,
+    };
+    const ctx = ctxWith({ runner, state: { externalProxy: true, bindHost: '172.17.0.1' } });
+    await expect(stepById('identity').run(ctx)).rejects.toBeInstanceOf(StepAborted);
   });
 
   it('dry-run records the cert as a shared artifact and sets publicUrl', async () => {
@@ -198,6 +235,17 @@ describe('systemdUnit', () => {
   it('takes an absolute "<node> <entry.js>" ExecStart verbatim (no bare name → no 203/EXEC)', () => {
     const unit = systemdUnit('/srv/app', 4321, 'system', '/usr/bin/node /srv/app/dist/index.js');
     expect(unit).toContain('ExecStart=/usr/bin/node /srv/app/dist/index.js serve --no-open --port 4321');
+  });
+
+  it('passes --bind-host when an external-proxy install needs a reachable interface', () => {
+    const unit = systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar', '172.17.0.1');
+    expect(unit).toContain('ExecStart=/usr/local/bin/cezar serve --no-open --port 4321 --bind-host 172.17.0.1');
+  });
+
+  it('stays flag-free for loopback so existing units are unchanged', () => {
+    const plain = systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar');
+    expect(systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar', '127.0.0.1')).toBe(plain);
+    expect(plain).not.toContain('--bind-host');
   });
 });
 
