@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ProviderAuthService,
   type ProviderCommandResult,
@@ -16,6 +16,12 @@ const originalEnv = {
   CEZ_CODEX_BIN: process.env.CEZ_CODEX_BIN,
   CEZ_OPENCODE_BIN: process.env.CEZ_OPENCODE_BIN,
 };
+
+beforeEach(() => {
+  delete process.env.CEZ_DRY_RUN;
+  delete process.env.CEZ_CODEX_BIN;
+  delete process.env.CEZ_OPENCODE_BIN;
+});
 
 afterEach(() => {
   for (const [key, value] of Object.entries(originalEnv)) {
@@ -260,12 +266,12 @@ describe('ProviderAuthService', () => {
 
   it('renders POSIX and Windows login commands safely for executable special characters', () => {
     process.env.CEZ_CODEX_BIN = "a path/'codex'";
-    process.env.CEZ_OPENCODE_BIN = 'C:\\Tools\\op%en&co!de".exe';
+    process.env.CEZ_OPENCODE_BIN = 'C:\\Program Files\\op%en&co!de".exe';
 
     expect(new ProviderAuthService({ platform: 'linux' }).loginCommand('codex'))
       .toBe("'a path/'\\''codex'\\''' login");
     expect(new ProviderAuthService({ platform: 'win32' }).loginCommand('opencode'))
-      .toBe('"C:\\Tools\\op^%en^&co^!de^".exe" auth login');
+      .toBe('"C:\\Program Files\\op^%en^&co^!de^".exe" auth login');
   });
 
   it('reports all three providers connected in CEZ_DRY_RUN without executing a command', async () => {
