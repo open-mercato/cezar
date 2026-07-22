@@ -1,0 +1,308 @@
+# Provider authentication discovery and setup
+
+Status: approved in design review · Date: 2026-07-22
+
+## Summary
+
+cezar currently knows whether the Claude Code, Codex, and OpenCode executables are installed,
+but it treats an installed CLI as runnable even when that CLI has no usable provider
+credentials. The task composer then offers an agent that fails only after a run starts, while
+Settings → Agents cannot explain or repair the missing authentication.
+
+This feature adds a same-origin, host-wide provider-status API and extends Settings → Agents
+with provider connection cards. cezar asks each vendor CLI for its own authentication status;
+it never reads credential files or handles tokens. When no CLI reports usable credentials, a
+compact, non-dismissible banner links directly to the provider controls, and task surfaces stop
+offering disconnected providers.
+
+The chosen notification is the compact global banner shown in the approved visual comparison.
+Provider status refreshes every 30 seconds, on window focus, after a Connect action, and when the
+user explicitly asks to check again.
+
+## Goals
+
+- Detect provider-owned credentials for Claude Code, Codex, and OpenCode through supported CLI
+  commands.
+- Distinguish connected, disconnected, not-installed, and indeterminate providers without
+  exposing credentials or account details.
+- Reuse credentials automatically by continuing to launch each runner as the same host user;
+  no token injection or credential copy is necessary.
+- Guide local users through the vendor's login flow and give hosted users an exact command to
+  run on the cezar host.
+- Keep provider setup inside the existing Settings → Agents page.
+- Make disconnected providers unavailable in task and follow-up runner pickers.
+- Preserve zero configuration, dry-run behavior, and graceful degradation.
+
+## Non-goals
+
+- cezar does not implement, proxy, or embed a third-party OAuth flow.
+- cezar does not read Keychain entries, credential JSON, environment-secret values, emails,
+  organizations, subscription tiers, or provider tokens.
+- cezar does not install missing CLIs automatically.
+- cezar does not validate billing, quotas, model access, or network reachability. A connected
+  credential can still fail later for reasons only the provider can diagnose.
+- This change does not add a run-start API preflight. Direct API callers and workflow step-level
+  runner overrides retain the runner's existing fail-loud behavior because credentials can
+  expire between any preflight and process spawn.
+- `/api/health` remains byte-shape compatible and does not gain authentication fields or extra
+  probes.
+
+## Vendor-owned contracts
+
+The status implementation uses commands supplied by the tools rather than inferring state from
+private storage:
+
+| Provider | Status command | Login command | Interpretation |
+| --- | --- | --- | --- |
+| Claude Code | `claude auth status --json` | `claude auth login` | Exit 0 plus `loggedIn: true` is connected; the documented not-logged-in result is disconnected. |
+| Codex | `codex login status` | `codex login` | A recognized logged-in result is connected; a recognized not-logged-in result is disconnected. |
+| OpenCode | `opencode auth list` | `opencode auth login` | One or more CLI-reported credentials is connected; an explicitly empty list is disconnected. |
+
+Claude documents `claude auth status` as returning JSON and exiting 0 when logged in and 1 when
+not logged in: <https://code.claude.com/docs/en/cli-usage>. OpenCode documents `opencode auth
+login` and `opencode auth list`: <https://opencode.ai/docs/cli/>. The installed Codex CLI's
+`login` help exposes both `login` and `login status`; parser fixtures pin the accepted output so
+unrecognized future output degrades to `unknown` rather than guessing.
+
+"Connected" means the CLI reports provider-owned stored authentication, including OAuth where
+the CLI supports it. cezar deliberately trusts the CLI's effective answer instead of trying to
+classify or reproduce the vendor's credential-precedence rules.
+
+## Core model and detection
+
+Create `src/core/provider-auth.ts` as the only provider-authentication knowledge seam. It owns
+the command table, parsers, process timeouts, hints, and cache. It does not change
+`src/core/backend-detect.ts`, whose `available` field continues to mean executable availability
+for the Tools menu and other compatibility surfaces.
+
+```ts
+export type ProviderId = 'claude' | 'codex' | 'opencode';
+export type ProviderConnectionState =
+  | 'connected'
+  | 'disconnected'
+  | 'not-installed'
+  | 'unknown';
+
+export interface ProviderStatus {
+  provider: ProviderId;
+  status: ProviderConnectionState;
+  hint?: string;
+}
+
+export interface ProviderStatusResponse {
+  providers: ProviderStatus[];
+}
+```
+
+All three probes run concurrently with a 10-second per-process timeout, matching existing host
+tool probes. Each provider always produces one row, in `claude`, `codex`, `opencode` order:
+
+- `ENOENT` means `not-installed`.
+- A recognized vendor answer means `connected` or `disconnected`.
+- A timeout, malformed output, unexpected exit, permission failure, or unrecognized future
+  format means `unknown` with a concise retry hint.
+- Probe stdout and stderr are parsed in memory and never logged or returned.
+
+The detector coalesces concurrent requests and caches the completed result for five seconds so
+multiple tabs do not fan out identical processes. An explicit refresh bypasses the completed
+cache while still joining an already-running probe. `CEZ_DRY_RUN=1` returns all three providers
+as connected mock providers and invokes no real CLI, preserving offline runner selection.
+
+Existing binary overrides remain authoritative: `CEZ_CODEX_BIN` and `CEZ_OPENCODE_BIN` select
+the executable used by both status and login commands. The executable is shell-quoted before it
+is rendered into the terminal command; every argument comes from the closed server descriptor.
+Claude continues to use `claude`, matching existing detection. No environment variable or
+configuration key is added, so `.env.example` does not change.
+
+## HTTP API
+
+Provider credentials belong to the host user, not to a repository. Both routes are workspace
+routes mounted once, outside `/api/p/:projectId`, and remain protected by the existing global
+same-origin request guard.
+
+### `GET /api/providers/status`
+
+Returns `ProviderStatusResponse`. `?refresh=1` bypasses the five-second completed-result cache
+for the Check again action. One failed provider does not fail the response; its row is
+`unknown`, so the route normally returns 200 even on a smaller or partially broken host.
+
+The route is deliberately separate from `/api/health`: health is CORS-open, latency-sensitive,
+and covered by a backwards-compatibility contract. Authentication state is neither necessary
+nor appropriate on that surface.
+
+### `POST /api/providers/connect`
+
+The JSON body is validated with Zod:
+
+```ts
+{ provider: 'claude' | 'codex' | 'opencode' }
+```
+
+The validated provider id selects a server-owned descriptor; request text never becomes an
+executable or argument. The descriptor supplies fixed arguments, while the canonical executable
+or its existing `CEZ_*_BIN` override is shell-quoted before terminal handoff. The 200 response is
+one of:
+
+```ts
+{ opened: true; command: string }
+{ opened: false; connected: true; command: string }
+```
+
+Behavior:
+
+- In local-handoff mode, an already-connected provider returns the second 200 response without
+  opening a terminal, a not-installed provider returns 409 with its install hint, and a
+  disconnected provider opens the vendor login command in a real terminal rooted at the boot
+  repository.
+- A successful launch returns 200 with `{ opened: true, command }`.
+- If no terminal emulator can be opened, the route returns 409 with a human error and the exact
+  copyable `command`.
+- When `capabilities.localHandoff` is false, the route never attempts a local GUI launch. It
+  returns 409 with the command and tells the user to run it on the cezar host.
+- Invalid JSON or provider ids return 400 `{ error }`, following the server's mutating-route
+  pattern.
+
+Launching the vendor CLI is the maximum safe automation: the CLI owns browser authorization,
+callback handling, credential storage, and consent. cezar neither observes nor receives the
+resulting token.
+
+## Client model and refresh behavior
+
+Add provider response types, client methods, query keys, and a `useProviderStatus()` hook. The
+normal query uses a 30-second `refetchInterval`. It also refetches on window focus. Connect
+success invalidates the status query immediately; the explicit Check again control requests
+`?refresh=1` so a just-completed login is not hidden behind the short server cache.
+
+While the first status request is pending, the UI does not flash the missing-provider banner and
+does not invent a fallback provider. Task submission waits until provider status is known. A
+route-level fetch failure is shown as an honest verification error with Retry; it is not treated
+as proof that every account is disconnected.
+
+## Settings → Agents
+
+Extend `web/app/src/routes/settings/agents-section.tsx`; do not add a separate Providers settings
+route. A Providers block with `id="providers"` appears first and gives each supported provider a
+card:
+
+- `connected`: green status and no login action;
+- `disconnected`: amber status, provider hint, Connect, and Check again;
+- `not-installed`: missing status and the install hint, with no Connect action;
+- `unknown`: verification warning and Check again, without asserting that credentials are
+  absent.
+
+Connect calls the POST route. A successful terminal launch shows a toast explaining that the
+vendor flow must be completed there. A 409 carrying `command` reveals a copyable manual command;
+other failures use the server's message verbatim.
+
+The existing project-specific Default runner and Default models controls remain where they are.
+Every provider stays visible for discoverability, but controls for anything other than
+`connected` are disabled and carry a concise reason. If the saved default runner is no longer
+connected, it remains visibly selected so Settings does not lie about persisted configuration;
+the page asks the user to connect it or choose another connected provider.
+
+## Global banner
+
+Use the existing generic `AppShell` banner slot. `AppShellContainer` derives the banner from the
+provider-status query:
+
+- If any provider is `connected`, render no banner.
+- If status is loaded, none is connected, and every row is definitive, show “No agent provider
+  is connected.”
+- If none is connected and any row is `unknown`, show “No connected provider could be verified.”
+- While loading or when the route itself is unreachable, do not show the definitive missing
+  banner; surface verification failure in the provider-dependent controls instead.
+
+The banner is compact, non-dismissible, keyboard accessible, and visible above the route
+scroller on desktop and mobile. Its project-aware link targets `/settings/agents#providers`; a
+global-settings page falls back through the existing boot-project redirect. The Providers block
+uses scroll margin so the hash target is not obscured by sticky settings chrome.
+
+## Runnable-provider gating
+
+Do not overload `BackendCheck.available`: it remains installation state. Introduce a helper that
+derives connected runner ids from `ProviderStatusResponse`, with no legacy Claude fallback.
+
+The helper feeds every interactive provider picker:
+
+- new-task runner selection and submission;
+- parallel-variant engine pills;
+- follow-up runner selection.
+
+Disconnected, not-installed, unknown, and still-loading providers are not selectable. When the
+connected set is empty, the new-task form disables submission and shows a direct link to the
+Providers block. Existing Agent config “not installed” badges continue to use health checks,
+because config-file visibility depends on installation rather than login.
+
+## Security and privacy
+
+- Status is same-origin only and is not added to the CORS-open health endpoint.
+- Responses contain provider ids, coarse state, and human hints only.
+- Provider ids and command arguments are fixed server constants selected by a closed Zod enum;
+  existing executable overrides are server environment only and are shell-quoted.
+- Connect is gated by `localHandoff`, matching other open-on-this-machine capabilities.
+- Credential files, keychains, tokens, account identifiers, and raw command output never cross
+  the API boundary.
+- Probe failures degrade per provider; they never prevent cezar from booting.
+
+## Compatibility and zero configuration
+
+- No existing route or response changes shape.
+- No state file, migration, daemon, port, account, or authored configuration is introduced.
+- Missing CLIs and read-only or hosted environments remain supported.
+- The Tools menu keeps reporting installed tools from `/api/health`; authentication belongs only
+  to the new provider surface.
+- Old direct API clients can still submit runs exactly as before.
+
+## Test plan
+
+### Core and API
+
+- `src/core/provider-auth.test.ts`: Claude JSON and exit behavior; Codex positive/negative output
+  ordering; OpenCode empty and populated lists; ANSI/whitespace tolerance; missing binaries;
+  timeouts; malformed output; per-provider isolation; five-second cache; forced refresh;
+  in-flight coalescing; and dry-run with zero process calls.
+- `src/server/providers-api.test.ts`: complete GET response, refresh flag, one-provider failure,
+  strict POST body validation, descriptor command selection and executable quoting,
+  already-connected and not-installed handling, local terminal success, no-terminal command
+  fallback, and hosted-mode refusal.
+
+### Client and UI
+
+- API/query tests pin route paths, response types, 30-second polling, focus behavior, normal
+  invalidation, and forced refresh.
+- Agents-section tests cover all four card states, Connect, Check again, manual-command fallback,
+  persisted-but-disconnected defaults, and disabled model/default controls.
+- App-shell-container tests cover definitive and indeterminate banner copy, project-aware hash
+  navigation, non-dismissible behavior, loading suppression, and disappearance after connection.
+- New-task, engine-pill, and follow-up tests prove only connected providers are selectable, the
+  old Claude fallback is absent for this status source, and submission is disabled at zero.
+
+### Browser verification
+
+Run `npm run dev` and use temporary executable shims placed first on `PATH` to simulate installed
+but disconnected CLIs. The shims contain no credentials and do not modify real provider state.
+Using the requested in-app Browser, verify:
+
+1. the compact global banner appears;
+2. its link lands on the Providers block inside Settings → Agents;
+3. cards and disabled default controls match provider state;
+4. task submission is blocked with a setup link;
+5. a second shim state with one connected provider removes the banner and enables that provider.
+
+Do not automate the real vendor login or touch the user's real credentials during QA. Route and
+UI tests mock the terminal handoff.
+
+### Repository validation
+
+Run the repository gates in their documented order before any final commit or PR:
+
+```bash
+npm run typecheck
+npm test
+npm run test:unit
+npm run build
+npm run test:package
+```
+
+Run `npm run test:e2e` separately and report `passed`, `skipped`, or `failed` according to its
+marker rather than treating a skip as success.
