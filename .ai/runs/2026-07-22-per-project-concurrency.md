@@ -37,6 +37,8 @@ Make the parallel-task concurrency ceiling configurable **per project** instead 
 
 ## Progress
 
+PR: #609 (link: https://github.com/open-mercato/cezar/pull/609)
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Enforcement
