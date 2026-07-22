@@ -38,6 +38,8 @@ import type {
   ProjectsResponse,
   RegisterProjectResponse,
   RemoveProjectResponse,
+  UpdateProjectInput,
+  UpdateProjectResponse,
   RemoveTodoResponse,
   RepoBranchResponse,
   RepoCommitPayload,
@@ -453,6 +455,17 @@ export function checkoutProject(input: CheckoutProjectInput): Promise<RegisterPr
  */
 export function removeProject(projectId: string): Promise<RemoveProjectResponse> {
   return mutate<RemoveProjectResponse>('DELETE', `/api/projects/${encodeURIComponent(projectId)}`)
+}
+
+/**
+ * Set or clear a project's per-project concurrency ceiling
+ * (`PATCH /api/projects/:projectId`, spec 2026-07-22). `maxParallel: null`
+ * clears the override back to "inherit the workspace cap"; an integer pins it.
+ * The server applies the new ceiling live (semaphore refresh), so the answer is
+ * the updated entry the pane swaps into its list.
+ */
+export function updateProject(projectId: string, input: UpdateProjectInput): Promise<UpdateProjectResponse> {
+  return mutate<UpdateProjectResponse>('PATCH', `/api/projects/${encodeURIComponent(projectId)}`, input)
 }
 
 // ---- run mutations ------------------------------------------------------------------------

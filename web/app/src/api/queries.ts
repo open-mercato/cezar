@@ -42,11 +42,18 @@ import {
   removeQueuedMessage,
   registerProject,
   removeProject,
+  updateProject,
   sendMessage,
   putAgentConfigFile,
 } from './client'
 import { queryScope } from './project-scope'
-import type { CheckoutProjectInput, MessageInput, PatchRunInput, SetAgentConfigInput } from './types'
+import type {
+  CheckoutProjectInput,
+  MessageInput,
+  PatchRunInput,
+  SetAgentConfigInput,
+  UpdateProjectInput,
+} from './types'
 
 /**
  * Query keys, in one place and exported, because they are a contract rather than an
@@ -235,6 +242,25 @@ export function useRemoveProject() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (projectId: string) => removeProject(projectId),
+    retry: false,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/**
+ * Set or clear a project's per-project concurrency ceiling
+ * (`PATCH /api/projects/:projectId`, spec 2026-07-22 — Settings → Projects).
+ *
+ * Same registry invalidation as the add/remove paths: the pane reads the ceiling
+ * off the projects query, so the row must reflect the new value without a reload.
+ * No retry — an out-of-range value or unknown id (400/404) is a deterministic
+ * refusal re-asking cannot change.
+ */
+export function useUpdateProject() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (variables: { id: string } & UpdateProjectInput) =>
+      updateProject(variables.id, { maxParallel: variables.maxParallel }),
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
   })
