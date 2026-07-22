@@ -78,8 +78,8 @@ export function planTaskLine(task: string, max = 120): string {
  * The exact `POST /api/runs` body for an approved plan: the edited steps INLINE (never a
  * workflow name — the chain may be unsaved), plus the composer's current picker choices under
  * the same rules as `buildCreateRunBody`: `model`/`variants`/`images` only when they say
- * something, `runner` only when it differs from the server default, `generateFollowups` only
- * when off (#444), and `todoId` only when the composer was prefilled from an inbox entry (#374 —
+ * something, `runner` omitted only when it equals a known server default, `generateFollowups`
+ * only when off (#444), and `todoId` only when the composer was prefilled from an inbox entry (#374 —
  * planning the follow-up first still starts it, so the entry must still be marked started).
  */
 export function buildPlannedRunBody(opts: {
@@ -87,7 +87,7 @@ export function buildPlannedRunBody(opts: {
   steps: readonly WorkflowStepDef[]
   model: string
   runner: Runner
-  defaultRunner: Runner
+  defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
   generateFollowups?: boolean

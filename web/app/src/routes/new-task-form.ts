@@ -184,7 +184,8 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
- *  - `runner` only when it differs from the server default (a connected fallback must be explicit);
+ *  - `runner` omitted only when it equals a known server default (unknown defaults and connected
+ *    fallbacks stay explicit);
  *  - `model`/`variants`/`images` only when they say something (`''`/1/empty mean "default").
  */
 export function buildCreateRunBody(opts: {
@@ -192,7 +193,7 @@ export function buildCreateRunBody(opts: {
   source: TaskSource
   model: string
   runner: Runner
-  defaultRunner: Runner
+  defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when

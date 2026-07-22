@@ -195,9 +195,10 @@ export function NewTaskRoute() {
 
   const providers = useProviderStatus()
   const runners = connectedRunners(providers.data)
-  const defaultRunner = health.data?.defaultRunner ?? 'claude'
-  const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, defaultRunner) : null
-  const displayRunner = runner ?? defaultRunner
+  const defaultRunner = health.data?.defaultRunner
+  const preferredRunner = defaultRunner ?? 'claude'
+  const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
+  const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels()
   const models = runner === null
@@ -279,10 +280,20 @@ export function NewTaskRoute() {
     if (deepLinkHandled.current) return
     if (!deepLink.auto || deepLink.ref === '') return
     if (providers.isPending) return
-    deepLinkHandled.current = true
     if (!providersReady || runner === null) {
+      deepLinkHandled.current = true
       // Authentication could not be established: keep the deep-link intent in the disabled
       // composer and let the provider gate explain whether this is an error or missing setup.
+      setNotice({ kind: 'prefill' })
+      setAutoStarting(false)
+      return
+    }
+    // Provider status often resolves before health on a cold load. The protected bookmarklet
+    // body may omit runner only against the server's authoritative default, never our display
+    // fallback; a failed health check degrades to the prefilled composer instead of guessing.
+    if (health.isPending) return
+    deepLinkHandled.current = true
+    if (defaultRunner === undefined) {
       setNotice({ kind: 'prefill' })
       setAutoStarting(false)
       return
@@ -313,7 +324,7 @@ export function NewTaskRoute() {
       }
       setAutoStarting(false)
     })()
-  }, [defaultRunner, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [defaultRunner, health.isPending, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
   // The prefill toast waits for the pickers' data: whether the skill exists decides the
   // wording, and the unknown-skill case rewrites the draft the way legacy did (intent into
   // the text, quick-task as the source — its planner resolves skills from prose).

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -156,8 +156,22 @@ const FALLBACK_PLAN = {
 type Recorded = { method: string; url: string; body?: unknown }
 let requests: Recorded[]
 
+function deferredJson<T>() {
+  let resolve!: (response: Response) => void
+  return {
+    fetch: () => new Promise<Response>((done) => { resolve = done }),
+    release: (payload: T) =>
+      resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+  }
+}
+
 function serve(overrides: {
-  health?: HealthResponse
+  health?: HealthResponse | (() => Promise<Response>)
   /** Host authentication state, or a delayed answer for pending/refresh tests. */
   providerStatus?: ProviderStatusResponse | (() => Promise<Response>)
   providerStatusStatus?: number
@@ -204,7 +218,9 @@ function serve(overrides: {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/health') return json(data.health)
+      if (url === '/api/health') {
+        return typeof data.health === 'function' ? data.health() : json(data.health)
+      }
       if (url === '/api/providers/status') {
         return typeof data.providerStatus === 'function'
           ? data.providerStatus()
@@ -528,6 +544,19 @@ describe('provider authentication gate', () => {
     expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
     fireEvent.change(textarea(), { target: { value: 'Use the only connected provider' } })
     expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('sends the connected runner explicitly when health has not revealed the server default yet', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    serve({ health: delayedHealth.fetch })
+    renderNewTask()
+    await pillReady()
+
+    fireEvent.change(textarea(), { target: { value: 'Start before health resolves' } })
+    await startTask()
+
+    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    delayedHealth.release(HEALTH)
   })
 
   it('posts an explicit connected fallback when the configured default is disconnected', async () => {
@@ -886,6 +915,67 @@ describe('bookmarklet auto-start', () => {
     expect(runsPosted()).toHaveLength(1)
   })
 
+  it('waits for health and sends Claude explicitly when the eventual server default is Codex', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    const delayedProviders = deferredJson<ProviderStatusResponse>()
+    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
+    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.url === '/api/health')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
+    })
+    await act(async () => {
+      delayedProviders.release(PROVIDERS_CONNECTED)
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
+    )
+    expect(keyFetched()).toBe(false)
+    expect(runsPosted()).toHaveLength(0)
+
+    delayedHealth.release({ ...HEALTH, defaultRunner: 'codex' })
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    expect(runsPosted().map((request) => request.body)).toEqual([
+      {
+        task: 'hello',
+        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
+        runner: 'claude',
+      },
+    ])
+  })
+
+  it('waits for health and keeps the protected body implicit when the eventual default is Claude', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    const delayedProviders = deferredJson<ProviderStatusResponse>()
+    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
+    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.url === '/api/health')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
+    })
+    await act(async () => {
+      delayedProviders.release(PROVIDERS_CONNECTED)
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
+    )
+    expect(keyFetched()).toBe(false)
+    expect(runsPosted()).toHaveLength(0)
+
+    delayedHealth.release(HEALTH)
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    expect(runsPosted().map((request) => request.body)).toEqual([
+      {
+        task: 'hello',
+        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
+      },
+    ])
+  })
+
   it('valid key + auto=1 + skill/ref → starts unattended with the exact legacy body, then the thread', async () => {
     serve()
     renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
@@ -1214,6 +1304,19 @@ describe('the plan flow', () => {
       ],
     })
     await waitFor(() => expect(location()).toBe('/tasks/planned-1'))
+  })
+
+  it('▶ Start sends the connected runner explicitly when health is still pending', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    serve({ health: delayedHealth.fetch, createRun: { id: 'planned-before-health' } })
+    renderNewTask()
+    await planTask('Plan before health resolves')
+
+    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
+    await waitFor(() => expect(postedBody()).toBeDefined())
+
+    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    delayedHealth.release(HEALTH)
   })
 
   it('does not start a reviewed plan after provider status loses every connection', async () => {
