@@ -47,8 +47,8 @@ Make the parallel-task concurrency ceiling configurable **per project** instead 
 
 ### Phase 2: Live API wiring
 
-- [ ] 2.1 Add PATCH /api/projects/:projectId
-- [ ] 2.2 Serialize maxParallel on GET /api/projects
+- [x] 2.1 Add PATCH /api/projects/:projectId — 31b1107
+- [x] 2.2 Serialize maxParallel on GET /api/projects — 31b1107
 
 ### Phase 3: Settings UI
 
