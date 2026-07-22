@@ -123,6 +123,13 @@ server {
     listen [::]:80;
     server_name ${serverName};
 
+    # HTTP/2 multiplexes every request over ONE TCP connection. Without it the
+    # browser's ~6-connections-per-origin HTTP/1.1 cap is exhausted by cezar's
+    # long-lived SSE run streams, and further requests block until tabs close.
+    # Valid on the plain :80 block too; it only takes effect once the SSL step
+    # adds a 443 ssl listener (certbot preserves this directive).
+    http2 on;
+
     auth_basic "cezar";
     auth_basic_user_file ${htpasswd};
 

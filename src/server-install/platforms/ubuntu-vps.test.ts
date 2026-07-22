@@ -106,6 +106,10 @@ describe('nginxVhost', () => {
     expect(nginxVhost(4321, 'cezar.example.com')).toContain('server_name cezar.example.com;');
   });
 
+  it('enables HTTP/2 so long-lived SSE streams do not exhaust the browser connection pool', () => {
+    expect(nginxVhost(4321)).toContain('http2 on;');
+  });
+
   it('defaults to the legacy htpasswd path but accepts an instance-scoped one', () => {
     expect(nginxVhost(4321)).toContain('auth_basic_user_file /etc/cezar/htpasswd;');
     expect(nginxVhost(4322, 'shop.example.com', '/etc/cezar/htpasswd-shop-example-com')).toContain(

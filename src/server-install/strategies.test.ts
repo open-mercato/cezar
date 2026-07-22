@@ -25,6 +25,7 @@ describe('nginxVhost', () => {
     const v = nginxVhost(4321);
     expect(v).toContain('proxy_pass http://127.0.0.1:4321;');
     expect(v).toContain('proxy_buffering off;');
+    expect(v).toContain('http2 on;');
     expect(v).toContain('auth_basic_user_file /etc/cezar/htpasswd;');
   });
 });
