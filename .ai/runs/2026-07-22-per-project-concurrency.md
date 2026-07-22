@@ -52,4 +52,4 @@ Make the parallel-task concurrency ceiling configurable **per project** instead 
 
 ### Phase 3: Settings UI
 
-- [ ] 3.1 Add the per-project "Max parallel tasks" control in the projects section
+- [x] 3.1 Add the per-project "Max parallel tasks" control in the projects section — 032e2f8
