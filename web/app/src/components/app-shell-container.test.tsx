@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
-import type { HealthResponse, RunRecord } from '@/api/types'
+import type { HealthResponse, ProviderStatusResponse, RunRecord } from '@/api/types'
 import { AppShellContainer, repoChipOf } from '@/components/app-shell-container'
 import { ThemeProvider } from '@/components/theme-provider'
 
@@ -54,13 +54,23 @@ const TODOS = [
   { id: 't2', summary: 'Rebase the branch' },
 ]
 
+const PROVIDERS: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected' },
+    { provider: 'codex', status: 'disconnected' },
+    { provider: 'opencode', status: 'not-installed' },
+  ],
+}
+
 /** Answer each endpoint the shell reads; anything else 404s loudly rather than silently
  *  resolving to `{}` and making a broken wiring look fine. */
 function serve(routes: Record<string, unknown>): void {
   fetchMock.mockImplementation(async (input) => {
     const path = String(input)
-    if (!(path in routes)) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
-    return new Response(JSON.stringify(routes[path]), {
+    const response = path === '/api/providers/status' ? (routes[path] ?? PROVIDERS) : routes[path]
+    if (response === undefined) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
+    if (response instanceof Response) return response
+    return new Response(JSON.stringify(response), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
@@ -256,6 +266,39 @@ describe('sidebar wiring', () => {
     await waitFor(() => expect(versionChip()).not.toBeNull())
     expect(versionChip()?.textContent).toBe('v0.1.3')
     expect(repoChip()).toBeNull()
+  })
+
+  it('wires the provider query into the AppShell banner slot', async () => {
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': {
+        providers: [
+          { provider: 'claude', status: 'disconnected' },
+          { provider: 'codex', status: 'not-installed' },
+          { provider: 'opencode', status: 'disconnected' },
+        ],
+      },
+    })
+    renderShell('/p/cezar/')
+
+    const banner = await screen.findByRole('status')
+    expect(banner.textContent).toContain('No agent provider is connected.')
+    expect(document.querySelector('[data-slot="banner-slot"]')?.contains(banner)).toBe(true)
+  })
+
+  it('keeps the shell and route content when provider status fails', async () => {
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': new Response(JSON.stringify({ error: 'unavailable' }), { status: 500 }),
+    })
+    renderShell()
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(screen.getByText('route content')).toBeTruthy()
+    expect(document.querySelector('[data-slot="app-shell"]')).not.toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
   })
 })
 
