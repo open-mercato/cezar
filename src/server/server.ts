@@ -13,6 +13,11 @@ import { z } from 'zod';
 import { detectEnvironment } from '../core/backend-detect.js';
 import type { ContentBlock } from '../core/agent-runner.js';
 import { discoverCodexModels } from '../core/codex-model-catalog.js';
+import {
+  PROVIDER_IDS,
+  ProviderAuthService,
+  type ProviderId,
+} from '../core/provider-auth.js';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.js';
 import { currentUsage, onUsage } from '../core/process-usage.js';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.js';
@@ -134,6 +139,10 @@ export interface ServerDeps {
   cloneRunner?: CloneRunner;
   /** Host-wide model discovery service. Tests inject a deterministic adapter. */
   modelCatalog?: RunnerModelCatalog;
+  /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
+  providerAuth?: ProviderAuthService;
+  /** Local terminal handoff for provider-owned login. */
+  openTerminal?: typeof openInTerminal;
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -147,6 +156,10 @@ type ProjectApiEnv = { Variables: { project: ProjectContext } };
  *  or path. (`default` matches the slug regex too; the literal keeps the
  *  contract explicit.) */
 const projectIdSchema = z.union([z.literal('default'), z.string().regex(PROJECT_ID_RE)]);
+
+const providerConnectSchema = z.object({
+  provider: z.enum(PROVIDER_IDS),
+}).strict();
 
 /** One row of the mirrored project-route table. */
 export interface ProjectRouteInfo {
@@ -692,6 +705,8 @@ export function createApp(deps: ServerDeps): Hono {
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: { codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) } },
   });
+  const providerAuth = deps.providerAuth ?? new ProviderAuthService();
+  const openTerminal = deps.openTerminal ?? openInTerminal;
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -1028,6 +1043,40 @@ export function createApp(deps: ServerDeps): Hono {
     const query = z.object({ runner: z.literal('codex') }).safeParse(c.req.query());
     if (!query.success) return c.json({ error: 'runner must be codex' }, 400);
     return c.json(await modelCatalog.get(query.data.runner));
+  });
+
+  app.get('/api/providers/status', async (c) => {
+    const query = z.object({ refresh: z.literal('1').optional() }).safeParse(c.req.query());
+    if (!query.success) return c.json({ error: 'refresh must be 1 when provided' }, 400);
+    return c.json(await providerAuth.status({ refresh: query.data.refresh === '1' }));
+  });
+
+  app.post('/api/providers/connect', async (c) => {
+    const body = providerConnectSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'provider must be claude, codex, or opencode' }, 400);
+
+    const provider = body.data.provider as ProviderId;
+    const command = providerAuth.loginCommand(provider);
+    const row = (await providerAuth.status({ refresh: true })).providers.find(
+      (candidate) => candidate.provider === provider,
+    )!;
+
+    if (row.status === 'connected') {
+      return c.json({ opened: false, connected: true, command });
+    }
+    if (row.status === 'not-installed') {
+      return c.json({ error: row.hint ?? providerAuth.installHint(provider), command }, 409);
+    }
+    if (row.status === 'unknown') {
+      return c.json({ error: row.hint ?? 'Authentication could not be verified. Try again.', command }, 409);
+    }
+    if (!capabilities().localHandoff) {
+      return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
+    }
+    if (!(await openTerminal(bootRoot, command))) {
+      return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
+    }
+    return c.json({ opened: true, command });
   });
 
   // ---- workspace projects (multi-project spec) -----------------------------
