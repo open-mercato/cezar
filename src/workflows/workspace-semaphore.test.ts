@@ -140,6 +140,63 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(a.store.getRun(third.id)?.status).toBe('done');
   }, 45_000);
 
+  it('a slot freed in one project starts the run queued in ANOTHER project', async () => {
+    // The starvation regression: `RunManager` only ever pumps ITSELF, so a
+    // freed slot used to reach exactly one queue. With both slots held by A,
+    // B's queued run sat at `queued` while A's runs finished one after
+    // another — it only ever started if B happened to start or finish a run of
+    // its own. The fix routes every slot-freeing transition through
+    // `WorkspaceSemaphore.release()`, which pumps every manager.
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2 } });
+    const a = project('cez-wsem-cross-a-', semaphore);
+    const b = project('cez-wsem-cross-b-', semaphore);
+
+    const slow1 = a.manager.startRun(SLOW, { task: 'saturate 1' });
+    const slow2 = a.manager.startRun(SLOW, { task: 'saturate 2' });
+    await waitFor(
+      () =>
+        a.store.getRun(slow1.id)?.status === 'running' &&
+        a.store.getRun(slow2.id)?.status === 'running',
+      'A to saturate the workspace cap',
+    );
+
+    const queued = b.manager.startRun(INSTANT, { task: 'queued in the OTHER project' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(b.store.getRun(queued.id)?.status).toBe('queued');
+
+    // Nothing else happens in B — the only event is A's runs settling.
+    await waitFor(
+      () => settled.includes(b.store.getRun(queued.id)?.status ?? ''),
+      "B's queued run to start once A frees a slot",
+      30_000,
+    );
+    expect(b.store.getRun(queued.id)?.status).toBe('done');
+  }, 45_000);
+
+  it('a freed slot goes to the longest-waiting run across projects', async () => {
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+    const a = project('cez-wsem-fair-a-', semaphore);
+    const b = project('cez-wsem-fair-b-', semaphore);
+
+    const holder = a.manager.startRun(SLOW, { task: 'hold the only slot' });
+    await waitFor(() => a.store.getRun(holder.id)?.status === 'running', 'the holder to run');
+    // B queues first, then A — the freed slot must go to B despite the slot
+    // being freed by (and the pump originating in) A.
+    const older = b.manager.startRun(INSTANT, { task: 'queued first, other project' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const newer = a.manager.startRun(SLOW, { task: 'queued second, same project' });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(b.store.getRun(older.id)?.status).toBe('queued');
+    expect(a.store.getRun(newer.id)?.status).toBe('queued');
+
+    await waitFor(
+      () => settled.includes(b.store.getRun(older.id)?.status ?? ''),
+      "B's older queued run to take the freed slot",
+      30_000,
+    );
+    expect(b.store.getRun(older.id)?.status).toBe('done');
+  }, 45_000);
+
   it('#347 across projects: a waiting run resumes immediately even when other projects saturate the cap', async () => {
     const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2 } });
     const a = project('cez-wsem-347a-', semaphore);

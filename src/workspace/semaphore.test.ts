@@ -6,10 +6,14 @@ import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.js';
  *  waiting-resume exemption, refresh-without-restart) lives in
  *  src/workflows/workspace-semaphore.test.ts against real RunManagers. */
 describe('WorkspaceSemaphore', () => {
-  const participant = (busy: number): SemaphoreParticipant & { pumped: number[] } => {
+  const participant = (
+    busy: number,
+    queuedAt: number | null = null,
+  ): SemaphoreParticipant & { pumped: number[] } => {
     const p = {
       pumped: [] as number[],
       busySlots: () => busy,
+      oldestQueuedAt: () => queuedAt,
       pump: () => {
         p.pumped.push(Date.now());
       },
@@ -51,6 +55,54 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.maxParallel()).toBe(7);
     expect(sem.memoryLimitMb()).toBe(1024);
     expect(a.pumped.length).toBe(1);
+  });
+
+  it('release() pumps EVERY participant, not just the one that freed the slot', async () => {
+    const sem = new WorkspaceSemaphore();
+    const a = participant(1);
+    const b = participant(0, 1000);
+    sem.register(a);
+    sem.register(b);
+    await sem.release();
+    expect(a.pumped.length).toBe(1);
+    expect(b.pumped.length).toBe(1); // the whole point: B's queue hears about A's freed slot
+  });
+
+  it('release() pumps the longest-waiting queue first; empty queues go last', async () => {
+    const order: string[] = [];
+    const named = (name: string, queuedAt: number | null): SemaphoreParticipant => ({
+      busySlots: () => 0,
+      oldestQueuedAt: () => queuedAt,
+      pump: () => {
+        order.push(name);
+      },
+    });
+    const sem = new WorkspaceSemaphore();
+    sem.register(named('idle', null));
+    sem.register(named('newer', 2000));
+    sem.register(named('older', 1000));
+    await sem.release();
+    expect(order).toEqual(['older', 'newer', 'idle']);
+  });
+
+  it('a release landing mid-sweep re-runs the sweep instead of being dropped', async () => {
+    const sem = new WorkspaceSemaphore();
+    let reentered = false;
+    const a: SemaphoreParticipant & { pumped: number } = {
+      pumped: 0,
+      busySlots: () => 0,
+      oldestQueuedAt: () => null,
+      pump: async () => {
+        a.pumped += 1;
+        if (!reentered) {
+          reentered = true;
+          await sem.release(); // a run settles while the sweep is in flight
+        }
+      },
+    };
+    sem.register(a);
+    await sem.release();
+    expect(a.pumped).toBe(2); // the nested release replayed the sweep
   });
 
   it('a failed load keeps the last good cache (never degrades to defaults) and still pumps', async () => {

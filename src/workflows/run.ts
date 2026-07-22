@@ -291,6 +291,9 @@ export class RunManager {
    *  ordinary follow-up turns the moment the session opens. In-memory only. */
   private readonly deferredMessages = new Map<string, ContentBlock[][]>();
   private pumping = false;
+  /** A pump that arrived while one was in flight — replayed by `pump()`'s own
+   *  loop so a slot freed mid-sweep is never a lost wakeup. */
+  private pumpAgain = false;
   /**
    * Runs normally isolate in worktrees and may execute in parallel. When that
    * isolation is unavailable (or explicitly disabled), serialize access to
@@ -327,7 +330,8 @@ export class RunManager {
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
-      pump: () => void this.pump(),
+      pump: () => this.pump(),
+      oldestQueuedAt: () => this.oldestQueuedAt(),
     });
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
@@ -501,6 +505,31 @@ export class RunManager {
     return this.active.size + this.starting.size - this.waiting.size;
   }
 
+  /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
+   *  key when a freed slot is broadcast), or null when nothing is queued.
+   *  `queue` is FIFO — `startRun` pushes and `recover()` re-queues by
+   *  `createdAt` — so the head is the oldest. */
+  private oldestQueuedAt(): number | null {
+    const head = this.queue[0];
+    if (!head) return null;
+    const createdAt = this.store.getRun(head)?.createdAt;
+    const ms = createdAt ? Date.parse(createdAt) : Number.NaN;
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  /**
+   * A slot this manager held just came free. Pump the whole WORKSPACE, not
+   * just this manager: `maxParallel` is counted across every project, so the
+   * run that should take the slot is the workspace's oldest queued one — which
+   * usually sits in another project's queue. Pumping only `this` is what left
+   * a queued run in project B stuck at `queued` while project A's runs came
+   * and went. `release()` pumps this manager too, so it replaces the local
+   * `pump()` at every slot-freeing transition.
+   */
+  private releaseSlot(): void {
+    void this.semaphore.release();
+  }
+
   /**
    * Start queued runs while parallel slots are free. The cap is the WORKSPACE
    * `resources.maxParallel` (default 2), cached in the shared semaphore and
@@ -509,44 +538,53 @@ export class RunManager {
    * sequential run in the repo root (spec 006 degradation rule).
    */
   private async pump(): Promise<void> {
-    if (this.pumping) return;
+    // A pump requested while one is in flight can't just be dropped: the
+    // in-flight pass may already have read capacity (it awaits `getRepoInfo`
+    // before the first check), so a slot freed in that window would be lost
+    // until the next unrelated event. Re-run the sweep instead.
+    if (this.pumping) {
+      this.pumpAgain = true;
+      return;
+    }
     this.pumping = true;
     try {
-      const repo = await getRepoInfo(this.repoRoot);
-      const maxParallel = this.semaphore.maxParallel();
-      // `waiting` runs don't hold a slot (#347) — see busySlots(). The check
-      // below is the only slot gate: resumes never pass through it.
-      const capacity = () =>
-        this.semaphore.busy() < maxParallel && (repo !== null || this.busySlots() < 1);
-      while (this.queue.length > 0 && capacity()) {
-        const runId = this.queue.shift();
-        if (!runId) break;
-        const job = this.pendingJobs.get(runId);
-        this.pendingJobs.delete(runId);
-        if (!job) continue;
-        this.starting.add(runId);
-        // Rebuild the prompt from the store at the last instant (#472), so an edit
-        // or a stacked message that landed while the run waited is honored. Entered
-        // in the same synchronous tick as the `pendingJobs.delete` above, so no
-        // handler can observe a half-dequeued run.
-        const input = this.hydrateQueuedInput(runId, job.input);
-        void this.execute(runId, job.workflow, input).catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          this.store.updateRun(runId, {
-            status: 'failed',
-            error: `engine crashed: ${message}`,
-            finishedAt: new Date().toISOString(),
+      do {
+        this.pumpAgain = false;
+        const repo = await getRepoInfo(this.repoRoot);
+        const maxParallel = this.semaphore.maxParallel();
+        // `waiting` runs don't hold a slot (#347) — see busySlots(). The check
+        // below is the only slot gate: resumes never pass through it.
+        const capacity = () =>
+          this.semaphore.busy() < maxParallel && (repo !== null || this.busySlots() < 1);
+        while (this.queue.length > 0 && capacity()) {
+          const runId = this.queue.shift();
+          if (!runId) break;
+          const job = this.pendingJobs.get(runId);
+          this.pendingJobs.delete(runId);
+          if (!job) continue;
+          this.starting.add(runId);
+          // Rebuild the prompt from the store at the last instant (#472), so an edit
+          // or a stacked message that landed while the run waited is honored. Entered
+          // in the same synchronous tick as the `pendingJobs.delete` above, so no
+          // handler can observe a half-dequeued run.
+          const input = this.hydrateQueuedInput(runId, job.input);
+          void this.execute(runId, job.workflow, input).catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            this.store.updateRun(runId, {
+              status: 'failed',
+              error: `engine crashed: ${message}`,
+              finishedAt: new Date().toISOString(),
+            });
+            const state = this.active.get(runId);
+            if (state) {
+              this.clearIdleTimer(state);
+              this.clearAutosaveTimer(state);
+            }
+            this.starting.delete(runId);
+            this.dropActive(runId);
           });
-          const state = this.active.get(runId);
-          if (state) {
-            this.clearIdleTimer(state);
-            this.clearAutosaveTimer(state);
-          }
-          this.starting.delete(runId);
-          this.dropActive(runId);
-          void this.pump();
-        });
-      }
+        }
+      } while (this.pumpAgain);
     } finally {
       this.pumping = false;
     }
@@ -673,6 +711,10 @@ export class RunManager {
     this.active.delete(runId);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
+    // The run's slot is gone from busySlots() as of the deletes above — hand it
+    // to the workspace's oldest queued run, in ANY project. Every terminal path
+    // funnels through here, so this one call covers them all.
+    this.releaseSlot();
     // A run leaving the active registry is a terminal transition (done/review/
     // failed/cancelled) — the one moment the finished-worktree count can grow.
     // Enforce count-based retention (#483) here so a single hook covers every
@@ -739,7 +781,7 @@ export class RunManager {
       abort();
     };
     this.waiting.add(runId);
-    void this.pump();
+    this.releaseSlot();
     try {
       await Promise.race([previous, cancelled]);
     } finally {
@@ -1148,7 +1190,6 @@ export class RunManager {
           finishedAt: new Date().toISOString(),
         });
         this.dropActive(runId);
-        void this.pump();
       },
     );
     return { ok: true };
@@ -1192,7 +1233,6 @@ export class RunManager {
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
         this.dropActive(runId);
-        void this.pump();
         return;
       }
     }
@@ -1296,7 +1336,7 @@ export class RunManager {
             }
             this.waiting.add(runId);
             this.armIdleTimer(runId, state);
-            void this.pump();
+            this.releaseSlot();
           }
         }
         appendHandoffHeartbeat(
@@ -1343,7 +1383,6 @@ export class RunManager {
         message: `continue failed — ${err.message}`,
       });
       this.dropActive(runId);
-      void this.pump();
       return;
     }
     const runner = createRunner(continueBackend);
@@ -1409,7 +1448,6 @@ export class RunManager {
       this.clearAutosaveTimer(state);
       if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'turn end');
       this.dropActive(runId);
-      void this.pump();
     }
   }
 
@@ -1516,7 +1554,6 @@ export class RunManager {
         });
         emit({ type: 'lifecycle', message: `run failed — ${error}` });
         this.dropActive(runId);
-        void this.pump();
         return;
       }
     } else {
@@ -1673,7 +1710,6 @@ export class RunManager {
     }
     this.clearIdleTimer(state);
     this.dropActive(runId);
-    void this.pump();
   }
 
   /** Returns an error message, or null on success. */
@@ -1823,7 +1859,7 @@ export class RunManager {
           }
           this.waiting.add(runId);
           this.armIdleTimer(runId, state);
-          void this.pump(); // the freed slot can start a queued run right away
+          this.releaseSlot(); // the freed slot can start a queued run right away — in any project
         }
         // Cez's own heartbeat — the handoff stays current even when the
         // agent forgets to write (spec 007).
@@ -1943,7 +1979,7 @@ export class RunManager {
     this.waiting.add(runId);
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
-    void this.pump();
+    this.releaseSlot();
   }
 
   /**
