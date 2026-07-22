@@ -435,6 +435,18 @@ const workspaceUiStateSchema = z
       })
       .passthrough()
       .optional(),
+    // The user's curated selection of default (vendor) skills — `open-mercato/skills` — so the
+    // catalog is no longer forced in full. GLOBAL (here, not per-repo) because "which skills I
+    // want" describes the person, not a checkout, and must not depend on where cezar was launched
+    // (multi-project workspace). Tri-state, enforced in `discoverSkills`: an ABSENT key means "not
+    // curated" and every default skill still shows (opt-out default — no silent break on upgrade);
+    // a PRESENT array (even `[]`) shows only those names. Bounded like the `skillUsage` map: the
+    // file is GET/PUT wholesale, so an unbounded array is an unbounded write. Names match
+    // `lastTask.ref` (`.min(1).max(200)`). The client PUTs the whole array (shallow top-level merge).
+    importedSkills: z
+      .array(z.string().min(1).max(200))
+      .max(SKILL_USAGE_MAX_ENTRIES)
+      .optional(),
   })
   .passthrough();
 
@@ -507,20 +519,10 @@ const uiStateSchema = z
       .optional(),
     // Skills promo banner (#391): set once the cockpit banner is dismissed, never unset.
     // Server-persisted (not a cookie) so the "shown once" promise holds across browsers.
-    // Retained for backward compatibility — the banner is gone, replaced by the import flow
-    // below; `.passthrough()` would preserve the key regardless, but keep it typed.
+    // Retained for backward compatibility — the banner is gone, replaced by the workspace-level
+    // `importedSkills` curation (see `workspaceUiStateSchema`); `.passthrough()` would preserve
+    // the key regardless, but keep it typed.
     dismissedSkillsBanner: z.boolean().optional(),
-    // Imported team skills: names the user opted into from a default (vendor) skills repo —
-    // `open-mercato/skills` — so the whole catalog is no longer forced on them. The gate lives
-    // in `discoverSkills`; this is just the persisted selection. Bounded exactly like the
-    // neighbouring `skillUsage` map: the whole file is GET/PUT wholesale, so an unbounded array
-    // is an unbounded write. Names match `lastTask.ref` (`.min(1).max(200)`). ADDITIVE — an old
-    // ui-state.json without the key behaves as "nothing imported". The client PUTs the whole
-    // array because the top-level merge below is shallow.
-    importedSkills: z
-      .array(z.string().min(1).max(200))
-      .max(SKILL_USAGE_MAX_ENTRIES)
-      .optional(),
   })
   .passthrough();
 

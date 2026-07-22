@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { filterImportedTeamSkills, readImportedSkills, type Skill } from './skills.js';
 
 /**
- * The opt-in gate's two pure halves (#391 follow-up: the promo banner is gone, replaced by
- * per-skill import). `readImportedSkills` parses a user-editable ui-state defensively;
- * `filterImportedTeamSkills` applies the gate. Kept pure so they are testable without a network
- * clone — the gated repo set is otherwise a hard-coded vendor default.
+ * The opt-out gate's two pure halves (#391 follow-up: the promo banner is gone, replaced by
+ * per-skill curation). `readImportedSkills` parses a user-editable ui-state as a tri-state
+ * (absent = not curated = keep all); `filterImportedTeamSkills` applies the gate. Kept pure so
+ * they are testable without a network clone — the gated repo set is otherwise a vendor default.
  */
 
 const OM = 'open-mercato/skills';
@@ -32,12 +32,16 @@ describe('readImportedSkills', () => {
     ]);
   });
 
-  it('degrades a missing key to nothing imported', () => {
-    expect(readImportedSkills({})).toEqual([]);
+  it('returns undefined for a missing key — not curated, so the caller keeps all', () => {
+    expect(readImportedSkills({})).toBeUndefined();
   });
 
-  it('degrades a non-array (a hand-edited file) to nothing imported', () => {
-    expect(readImportedSkills({ importedSkills: 'pr-create' })).toEqual([]);
+  it('returns undefined for a non-array (a hand-edited file) — the safe, keep-all reading', () => {
+    expect(readImportedSkills({ importedSkills: 'pr-create' })).toBeUndefined();
+  });
+
+  it('distinguishes an explicit empty array (curated to nothing) from absent', () => {
+    expect(readImportedSkills({ importedSkills: [] })).toEqual([]);
   });
 
   it('drops non-string and empty entries rather than throwing', () => {
@@ -48,12 +52,20 @@ describe('readImportedSkills', () => {
 describe('filterImportedTeamSkills', () => {
   const gated = new Set([OM]);
 
-  it('drops a gated-repo skill that was not imported', () => {
+  it('keeps every gated-repo skill when not curated (undefined) — opt-out default, no upgrade break', () => {
+    const skills = [teamSkill('pr-create', OM), teamSkill('code-review', OM)];
+    expect(filterImportedTeamSkills(skills, gated, undefined).map((s) => s.name)).toEqual([
+      'pr-create',
+      'code-review',
+    ]);
+  });
+
+  it('drops a gated-repo skill once curated away (explicit empty array)', () => {
     const skills = [teamSkill('pr-create', OM), teamSkill('code-review', OM)];
     expect(filterImportedTeamSkills(skills, gated, []).map((s) => s.name)).toEqual([]);
   });
 
-  it('keeps only the imported skills from a gated repo', () => {
+  it('keeps only the named skills from a gated repo when curated', () => {
     const skills = [teamSkill('pr-create', OM), teamSkill('code-review', OM)];
     expect(filterImportedTeamSkills(skills, gated, ['code-review']).map((s) => s.name)).toEqual([
       'code-review',
@@ -65,7 +77,7 @@ describe('filterImportedTeamSkills', () => {
     expect(filterImportedTeamSkills(skills, gated, []).map((s) => s.name)).toEqual(['alpha', 'beta']);
   });
 
-  it('never gates a local skill (no team field)', () => {
+  it('never gates a local skill (no team field), even when curated to nothing', () => {
     const skills = [localSkill('house-rules'), teamSkill('pr-create', OM)];
     expect(filterImportedTeamSkills(skills, gated, []).map((s) => s.name)).toEqual(['house-rules']);
   });

@@ -53,17 +53,18 @@ function serve({
   skills = SKILLS,
   refreshed = SKILLS,
   importable = [],
-  uiState = {},
+  workspaceUiState = {},
 }: {
   skills?: Skill[]
   refreshed?: Skill[]
   importable?: { name: string; description?: string }[]
-  uiState?: Record<string, unknown>
+  workspaceUiState?: Record<string, unknown>
 } = {}) {
   requests = []
-  // The real /api/ui-state PUT answers the MERGED state; the import panel relies on that echo to
-  // reconcile its optimistic write, so the stub must merge and return rather than answer `{}`.
-  let state: Record<string, unknown> = { ...uiState }
+  // The selection lives in the GLOBAL ui-state (`/api/workspace/ui-state`), whose PUT answers the
+  // MERGED state; the Manage panel relies on that echo to reconcile its optimistic write, so the
+  // stub must merge and return rather than answer `{}`.
+  let global: Record<string, unknown> = { ...workspaceUiState }
   const json = (payload: unknown) =>
     new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
   vi.stubGlobal(
@@ -79,10 +80,11 @@ function serve({
       if (url.startsWith('/api/skills/importable')) return json(importable)
       if (url === '/api/workflows') return json(WORKFLOWS)
       if (url === '/api/launch-key') return json({ key: 'sekret' })
-      if (url === '/api/ui-state' && method === 'GET') return json(state)
-      if (url === '/api/ui-state' && method === 'PUT') {
-        state = { ...state, ...(body as Record<string, unknown>) }
-        return json(state)
+      if (url === '/api/ui-state') return json({}) // per-repo prefs — unused by the panel
+      if (url === '/api/workspace/ui-state' && method === 'GET') return json(global)
+      if (url === '/api/workspace/ui-state' && method === 'PUT') {
+        global = { ...global, ...(body as Record<string, unknown>) }
+        return json(global)
       }
       return new Promise<never>(() => {})
     }),
@@ -240,7 +242,7 @@ describe('refresh (#384: selection and scroll survive)', () => {
   })
 })
 
-describe('the import panel (opt-in OM skills)', () => {
+describe('the Manage skills panel (opt-out OM skills)', () => {
   const IMPORTABLE = [
     { name: 'pr-create', description: 'Open a PR from the current branch' },
     { name: 'code-review', description: 'Review the diff for bugs' },
@@ -249,90 +251,178 @@ describe('the import panel (opt-in OM skills)', () => {
   const importRows = () =>
     [...document.querySelectorAll('[data-slot="import-row"]')].map((el) => el.getAttribute('data-skill'))
 
-  it('shows the pinned "Import skills" entry only when a vendor repo has importable skills', async () => {
+  // The panel's writes carry `importedSkills`; other providers (appearance, sidebar) write the
+  // SAME global ui-state on mount, so select only the writes that touch our key.
+  const lastPut = () =>
+    requests
+      .filter(
+        (r) =>
+          r.method === 'PUT' &&
+          r.url === '/api/workspace/ui-state' &&
+          (r.body as { importedSkills?: unknown })?.importedSkills !== undefined,
+      )
+      .at(-1)?.body as { importedSkills: string[] } | undefined
+
+  it('shows the pinned "Manage skills" entry only when a vendor repo has default skills', async () => {
     serve({ importable: IMPORTABLE })
     renderAt('/skills')
     await waitFor(() => expect(document.querySelector('[data-slot="import-skills-row"]')).not.toBeNull())
   })
 
-  it('hides the entry when nothing is importable (repo configured its own skillsRepos)', async () => {
+  it('hides the entry when there are no default skills (repo configured its own skillsRepos)', async () => {
     serve({ importable: [] })
     renderAt('/skills')
     await waitFor(() => expect(rowNames()).toHaveLength(3))
     expect(document.querySelector('[data-slot="import-skills-row"]')).toBeNull()
   })
 
-  it('lists the importable skills and imports one via a PUT that persists the checked state', async () => {
-    serve({ importable: IMPORTABLE })
+  it('enables every default skill by default (opt-out), and unchecking one curates it away', async () => {
+    serve({ importable: IMPORTABLE }) // uiState {} → not curated → all on
     renderAt('/skills?skill=__import')
     await waitFor(() => expect(importRows()).toEqual(['pr-create', 'code-review']))
 
-    const row = document.querySelector('[data-slot="import-row"][data-skill="pr-create"]')!
-    expect(row.querySelector<HTMLInputElement>('[data-slot="import-toggle"]')!.checked).toBe(false)
+    const toggleOf = (name: string) =>
+      document.querySelector<HTMLInputElement>(
+        `[data-slot="import-row"][data-skill="${name}"] [data-slot="import-toggle"]`,
+      )!
+    // Opt-out default: nothing is curated yet, so both start checked.
+    expect(toggleOf('pr-create').checked).toBe(true)
+    expect(toggleOf('code-review').checked).toBe(true)
 
-    fireEvent.click(row.querySelector('[data-slot="import-toggle"]')!)
+    fireEvent.click(toggleOf('pr-create'))
 
-    // The selection is PUT to ui-state as the whole array…
+    // The first uncheck expands "all on" into an explicit remaining set — the other skill only.
+    await waitFor(() => expect(lastPut()?.importedSkills).toEqual(['code-review']))
+    // …and the row reflects it (server echo reconciled, not reverted).
     await waitFor(() =>
       expect(
-        requests.some(
-          (r) =>
-            r.method === 'PUT' &&
-            r.url === '/api/ui-state' &&
-            Array.isArray((r.body as { importedSkills?: unknown })?.importedSkills) &&
-            (r.body as { importedSkills: string[] }).importedSkills.includes('pr-create'),
-        ),
-      ).toBe(true),
+        document.querySelector('[data-slot="import-row"][data-skill="pr-create"]')?.getAttribute('data-imported'),
+      ).toBeNull(),
     )
-    // …and the checkbox reflects the persisted state (the server echo reconciled, not reverted).
-    await waitFor(() =>
-      expect(
-        document
-          .querySelector('[data-slot="import-row"][data-skill="pr-create"]')
-          ?.getAttribute('data-imported'),
-      ).toBe('true'),
-    )
+    expect(
+      document.querySelector('[data-slot="import-row"][data-skill="code-review"]')?.getAttribute('data-imported'),
+    ).toBe('true')
   })
 
-  it('starts with an already-imported skill checked, and toggling it off removes it', async () => {
-    serve({ importable: IMPORTABLE, uiState: { importedSkills: ['code-review'] } })
+  it('honors an existing curated selection, and re-checking a skill adds it back', async () => {
+    serve({ importable: IMPORTABLE, workspaceUiState: { importedSkills: ['code-review'] } })
     renderAt('/skills?skill=__import')
+    // Curated present → only code-review is on; pr-create is off.
     await waitFor(() =>
       expect(
-        document
-          .querySelector('[data-slot="import-row"][data-skill="code-review"]')
-          ?.getAttribute('data-imported'),
+        document.querySelector('[data-slot="import-row"][data-skill="code-review"]')?.getAttribute('data-imported'),
       ).toBe('true'),
     )
+    expect(
+      document.querySelector('[data-slot="import-row"][data-skill="pr-create"]')?.getAttribute('data-imported'),
+    ).toBeNull()
 
     fireEvent.click(
-      document.querySelector('[data-slot="import-row"][data-skill="code-review"] [data-slot="import-toggle"]')!,
+      document.querySelector('[data-slot="import-row"][data-skill="pr-create"] [data-slot="import-toggle"]')!,
     )
-    await waitFor(() =>
-      expect(
-        requests.some(
-          (r) =>
-            r.method === 'PUT' &&
-            Array.isArray((r.body as { importedSkills?: unknown })?.importedSkills) &&
-            !(r.body as { importedSkills: string[] }).importedSkills.includes('code-review'),
-        ),
-      ).toBe(true),
-    )
+    await waitFor(() => expect(lastPut()?.importedSkills.sort()).toEqual(['code-review', 'pr-create']))
   })
 
-  it('"Import all" imports every offered skill in one write', async () => {
-    serve({ importable: IMPORTABLE })
+  it('"Remove all" clears the default catalog, then "Enable all" restores it', async () => {
+    serve({ importable: IMPORTABLE }) // default: all on
     renderAt('/skills?skill=__import')
     await waitFor(() => expect(importRows()).toHaveLength(2))
 
-    fireEvent.click(document.querySelector('[data-slot="import-all"]')!)
+    const button = () => document.querySelector('[data-slot="import-all"]')!
+    // Opt-out default (all on) → the action is Remove all.
+    expect(button().textContent).toContain('Remove all')
+    fireEvent.click(button())
+    await waitFor(() => expect(lastPut()?.importedSkills).toEqual([]))
+
+    // Everything off → the action flips to Enable all → clicking restores the full set.
+    await waitFor(() => expect(button().textContent).toContain('Enable all'))
+    fireEvent.click(button())
+    await waitFor(() => expect(lastPut()?.importedSkills.sort()).toEqual(['code-review', 'pr-create']))
+  })
+
+  // The lost-update regression (review "Major"): two toggles fired before the first PUT resolves
+  // must both survive. The write chain serializes the PUTs (the second is derived from the first
+  // and sent only after it lands), and only the newest response reconciles the cache — so a slow
+  // or out-of-order response can neither lose nor resurrect a selection.
+  it('serializes overlapping toggles so both persist, even with a slow/reordered response', async () => {
+    const puts: { body: { importedSkills: string[] }; release: () => void }[] = []
+    // Start already curated-to-empty so both rows begin unchecked and the two clicks ADD skills
+    // (the opt-out default would start them checked, which is exercised elsewhere).
+    let state: Record<string, unknown> = { importedSkills: [] }
+    const json = (payload: unknown) =>
+      new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url === '/api/skills' && method === 'GET') return json(SKILLS)
+        if (url.startsWith('/api/skills/importable')) return json(IMPORTABLE)
+        if (url === '/api/workflows') return json(WORKFLOWS)
+        if (url === '/api/launch-key') return json({ key: 'sekret' })
+        if (url === '/api/ui-state') return json({}) // per-repo prefs — unused by the panel
+        if (url === '/api/workspace/ui-state' && method === 'GET') return json(state)
+        if (url === '/api/workspace/ui-state' && method === 'PUT') {
+          const body = JSON.parse(String(init!.body)) as { importedSkills: string[] }
+          // Defer the response so the test controls when (and in what order) it lands.
+          return new Promise<Response>((resolve) => {
+            puts.push({
+              body,
+              release: () => {
+                state = { ...state, ...body }
+                resolve(json(state))
+              },
+            })
+          })
+        }
+        return new Promise<never>(() => {})
+      }),
+    )
+
+    renderAt('/skills?skill=__import')
+    await waitFor(() => expect(importRows()).toEqual(['pr-create', 'code-review']))
+
+    // Two quick toggles before the first PUT resolves.
+    fireEvent.click(
+      document.querySelector('[data-slot="import-row"][data-skill="pr-create"] [data-slot="import-toggle"]')!,
+    )
+    fireEvent.click(
+      document.querySelector('[data-slot="import-row"][data-skill="code-review"] [data-slot="import-toggle"]')!,
+    )
+
+    // Optimistic UI: both flip immediately because the second toggle read the first from the cache.
     await waitFor(() => {
-      const put = requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')
-      expect((put?.body as { importedSkills: string[] })?.importedSkills.sort()).toEqual([
-        'code-review',
-        'pr-create',
-      ])
+      expect(
+        document.querySelector('[data-slot="import-row"][data-skill="pr-create"]')?.getAttribute('data-imported'),
+      ).toBe('true')
+      expect(
+        document.querySelector('[data-slot="import-row"][data-skill="code-review"]')?.getAttribute('data-imported'),
+      ).toBe('true')
     })
+
+    // Serialized: only the FIRST PUT is in flight; the second waits for it.
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]?.body.importedSkills).toEqual(['pr-create'])
+
+    // Release the first → the chained second PUT fires, built on the first.
+    await act(async () => {
+      puts[0]!.release()
+    })
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect(puts[1]?.body.importedSkills).toEqual(['pr-create', 'code-review'])
+
+    await act(async () => {
+      puts[1]!.release()
+    })
+
+    // Both selections persisted on the server, and neither toggle was lost.
+    await waitFor(() => expect(state).toEqual({ importedSkills: ['pr-create', 'code-review'] }))
+    expect(
+      document.querySelector('[data-slot="import-row"][data-skill="pr-create"]')?.getAttribute('data-imported'),
+    ).toBe('true')
+    expect(
+      document.querySelector('[data-slot="import-row"][data-skill="code-review"]')?.getAttribute('data-imported'),
+    ).toBe('true')
   })
 })
 

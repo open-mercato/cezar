@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
 import { gatedSkillsRepos } from './config.js';
 import { getTeamSkillsCached } from './skills-remote.js';
-import { readUiState } from './ui-state.js';
+import { readWorkspaceUiState } from './workspace/ui-state.js';
 
 /**
  * A skill is a Markdown file with optional YAML-ish frontmatter (`name`,
@@ -65,12 +65,16 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  * prompt). Team skills come from the in-process cache; the first call starts
  * a background load so nothing here ever waits on the network.
  *
- * Opt-in gate: skills from a *default* (vendor) skills repo — `open-mercato/skills`
- * for the zero-config majority, see `gatedSkillsRepos` — appear only once the user
- * imports them (`importedSkills` in `ui-state.json`). A repo that sets its own
- * `skillsRepos` gates nothing: everything it lists auto-loads, unchanged. This is
- * the single chokepoint, so an un-imported skill is invisible to every consumer
- * alike — catalog, composer picker, planner, runner.
+ * Opt-out gate: skills from a *default* (vendor) skills repo — `open-mercato/skills`
+ * for the zero-config majority, see `gatedSkillsRepos` — appear unless the user has
+ * curated them away. `importedSkills` in the GLOBAL `~/.cezar/ui-state.json` (not the
+ * per-repo file — the selection describes the person and must not depend on the launch
+ * directory, multi-project workspace) is a tri-state: ABSENT means "not curated" and
+ * every default skill shows (the historical behavior — no upgrade break for existing
+ * installs); a PRESENT array (even `[]`) means the user has taken control and only those
+ * names show. A repo that sets its own `skillsRepos` gates nothing regardless. This is the
+ * single chokepoint, so the decision is identical for every consumer — catalog, composer
+ * picker, planner, runner.
  */
 export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
   const [lists, gatedRepos, uiState] = await Promise.all([
@@ -79,7 +83,7 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
       ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source)),
     ]),
     gatedSkillsRepos(repoRoot),
-    readUiState(repoRoot),
+    readWorkspaceUiState(),
   ]);
   const teamSkills = filterImportedTeamSkills(
     getTeamSkillsCached(repoRoot),
@@ -100,28 +104,34 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
 }
 
 /**
- * The imported team-skill names from a raw `ui-state.json` object, defensively:
- * this reads a user-editable file, so a non-array or non-string entries degrade
- * to "nothing imported" rather than throwing (the house zero-config rule).
+ * The imported team-skill names from a raw `ui-state.json` object, as a tri-state:
+ * `undefined` means the key is absent — "not curated", so every default skill shows
+ * (the opt-out default that keeps existing installs whole); an array (even empty) is
+ * the user's explicit selection. Defensive because the file is user-editable: a value
+ * that is not an array degrades to `undefined` (keep all — the safe, backward-compatible
+ * reading), and non-string / empty entries inside an array are dropped rather than thrown on.
  */
-export function readImportedSkills(uiState: Record<string, unknown>): string[] {
+export function readImportedSkills(uiState: Record<string, unknown>): string[] | undefined {
   const value = uiState.importedSkills;
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) return undefined;
   return value.filter((name): name is string => typeof name === 'string' && name.length > 0);
 }
 
 /**
- * The opt-in gate: keep every team skill whose repo is NOT gated (a repo with its
- * own configured `skillsRepos` — auto-loads everything), and, for skills from a
- * gated default (vendor) repo, keep only the ones the user explicitly imported.
- * Local skills carry no `team` and are always kept. Pure so the gate is unit-
- * testable without a network clone (the gated set is a const default otherwise).
+ * The opt-out gate: keep every team skill whose repo is NOT gated (a repo with its own
+ * configured `skillsRepos` — auto-loads everything). For skills from a gated default
+ * (vendor) repo, `importedSkills === undefined` keeps them ALL (not curated — the
+ * historical behavior), while a present array keeps only the named ones. Local skills
+ * carry no `team` and are always kept. Pure so the gate is unit-testable without a
+ * network clone (the gated set is a const default otherwise).
  */
 export function filterImportedTeamSkills(
   teamSkills: readonly Skill[],
   gatedRepos: ReadonlySet<string>,
-  importedSkills: readonly string[],
+  importedSkills: readonly string[] | undefined,
 ): Skill[] {
+  // Not curated → the full default catalog still appears (no upgrade break).
+  if (importedSkills === undefined) return [...teamSkills];
   const imported = new Set(importedSkills);
   return teamSkills.filter(
     (skill) => !skill.team || !gatedRepos.has(skill.team.repo) || imported.has(skill.name),

@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { SparklesIcon, TriangleAlertIcon } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
-import { putUiState } from '@/api/client'
-import { queryKeys, useImportableSkills, useUiState } from '@/api/queries'
-import type { UiState } from '@/api/types'
+import { putWorkspaceUiState } from '@/api/client'
+import { queryKeys, useImportableSkills, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
+import type { WorkspaceUiState } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
@@ -12,78 +12,119 @@ import { cn } from '@/lib/utils'
 
 const SKILLS_REPO_URL = 'https://github.com/open-mercato/skills'
 
-/** The imported set from ui-state, defensively — a user-editable file, so a non-array degrades
- *  to "nothing imported" rather than crashing the panel (mirrors the server-side `readImportedSkills`). */
-function importedNames(uiState: UiState | undefined): string[] {
+/** The user's EXPLICIT selection, or `undefined` when the key is absent (not curated) — mirrors
+ *  the server's tri-state `readImportedSkills`. A non-array (hand-edited file) degrades to
+ *  `undefined` (the safe, keep-all reading), and junk entries inside an array are dropped. */
+function curatedNames(uiState: WorkspaceUiState | undefined): string[] | undefined {
   const value = uiState?.importedSkills
-  return Array.isArray(value) ? value.filter((name): name is string => typeof name === 'string' && !!name) : []
+  if (!Array.isArray(value)) return undefined
+  return value.filter((name): name is string => typeof name === 'string' && !!name)
+}
+
+/** The skills effectively enabled right now: the curated list if the user has one, otherwise ALL
+ *  offered skills — the opt-out default, matching the server (absent `importedSkills` = keep all,
+ *  so existing installs are never silently emptied on upgrade). */
+function effectiveImported(uiState: WorkspaceUiState | undefined, allNames: readonly string[]): string[] {
+  return curatedNames(uiState) ?? [...allNames]
 }
 
 /**
- * The "Import skills" panel (replaces the old promo banner, #391 follow-up): the default
- * `open-mercato/skills` catalog is no longer forced on the user — they browse it here and import
- * only the skills they want. Imported names live in `ui-state.json` (`importedSkills`); the gate
- * that decides which team skills reach the catalog is server-side in `discoverSkills`, so this
- * panel only ever writes the selection.
+ * The "Manage skills" panel (replaces the old promo banner, #391 follow-up): the default
+ * `open-mercato/skills` catalog is no longer forced on the user, but it is not taken away either —
+ * every skill is enabled by default (opt-out) and the user unchecks the ones they don't want. The
+ * selection lives in the GLOBAL `~/.cezar/ui-state.json` (`importedSkills`, via the workspace
+ * ui-state) so it follows the person across projects rather than depending on the launch directory;
+ * the gate that decides which team skills reach the catalog is server-side in `discoverSkills`, so
+ * this panel only writes the selection. The first uncheck expands the "all on" default into an
+ * explicit array (curation begins).
  *
- * Persistence copies the banner-dismiss pattern exactly: optimistic cache write, then `putUiState`,
+ * Persistence copies the banner-dismiss pattern: optimistic cache write, then `putWorkspaceUiState`,
  * reconcile the cache with the server's merged answer on success, toast + refetch on failure. On
- * every successful change it also invalidates the skills catalog so the add/remove shows up in the
+ * every successful change it also invalidates the skills catalog so the change shows up in the
  * list (and the composer picker) without a manual refresh.
+ *
+ * Writes are hardened against the classic lost-update race (two quick toggles, or PUT responses
+ * arriving out of order). Each mutation derives its next array from the LATEST cache (not the
+ * render-captured snapshot), so a second toggle builds on the first; the PUTs are chained so they
+ * reach the server in issue order (no concurrent shallow-merge clobber); and only the newest write
+ * may reconcile the cache, so a slow older response can never overwrite a newer selection.
  */
 export function ImportSkillsPanel() {
   const queryClient = useQueryClient()
-  const uiState = useUiState()
+  const uiState = useWorkspaceUiState()
   const importable = useImportableSkills()
   const [query, setQuery] = useState('')
 
-  const imported = useMemo(() => new Set(importedNames(uiState.data)), [uiState.data])
+  const all = importable.data ?? []
+  const allNames = useMemo(() => all.map((skill) => skill.name), [all])
+  // persist() is a stable callback, but the opt-out default ("all on") must expand into an
+  // explicit array on the first curation — so it needs the current offered names via a ref.
+  const allNamesRef = useRef<string[]>([])
+  allNamesRef.current = allNames
+
+  const imported = useMemo(
+    () => new Set(effectiveImported(uiState.data, allNames)),
+    [uiState.data, allNames],
+  )
+
+  // Serializes the PUTs (each waits for the prior) and marks the newest write, so out-of-order
+  // completion can neither reorder the server's writes nor let a stale response win the cache.
+  const writeChain = useRef<Promise<unknown>>(Promise.resolve())
+  const latestWrite = useRef(0)
 
   const persist = useCallback(
-    (next: string[]) => {
-      // Optimistic: reflect the toggle immediately rather than waiting on the round trip.
-      queryClient.setQueryData(queryKeys.uiState, { ...uiState.data, importedSkills: next })
-      putUiState({ importedSkills: next })
-        .then((merged) => {
-          queryClient.setQueryData(queryKeys.uiState, merged)
-          // The gate lives in discoverSkills — re-read so the catalog (and the composer picker)
-          // reflect the newly imported/removed skill without a manual Refresh.
-          void queryClient.invalidateQueries({ queryKey: queryKeys.skills })
-        })
-        .catch((error: unknown) => {
+    (compute: (prev: string[]) => string[]) => {
+      const key = workspaceQueryKeys.uiState
+      // Read the LATEST cache, not the render-captured snapshot — a second toggle fired before the
+      // rerender must build on the first, or the two derive from the same old array and one is lost.
+      const current = queryClient.getQueryData<WorkspaceUiState>(key)
+      // Base the change on the EFFECTIVE set: before any curation everything is enabled, so the
+      // first uncheck must start from "all offered", not from an empty array.
+      const next = compute(effectiveImported(current, allNamesRef.current))
+      // Optimistic now, so the checkbox flips instantly and the next toggle reads this state.
+      queryClient.setQueryData(key, { ...current, importedSkills: next })
+      const seq = ++latestWrite.current
+      writeChain.current = writeChain.current.then(async () => {
+        try {
+          const merged = await putWorkspaceUiState({ importedSkills: next })
+          // Only the newest write reconciles: an earlier, slower response must not resurrect a
+          // selection the user has already moved past.
+          if (seq === latestWrite.current) {
+            queryClient.setQueryData(key, merged)
+            // The gate lives in discoverSkills — re-read so the catalog (and the composer picker)
+            // reflect the change without a manual Refresh.
+            void queryClient.invalidateQueries({ queryKey: queryKeys.skills })
+          }
+        } catch (error: unknown) {
           toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
           // The write failed to persist — re-sync with the server's truth rather than leave the
           // cache claiming a selection that never saved.
-          void queryClient.invalidateQueries({ queryKey: queryKeys.uiState })
-        })
+          if (seq === latestWrite.current) void queryClient.invalidateQueries({ queryKey: key })
+        }
+      })
     },
-    [queryClient, uiState.data],
+    [queryClient],
   )
 
   const toggle = useCallback(
     (name: string) => {
-      const next = imported.has(name)
-        ? importedNames(uiState.data).filter((entry) => entry !== name)
-        : [...importedNames(uiState.data), name]
-      persist(next)
+      persist((prev) => (prev.includes(name) ? prev.filter((entry) => entry !== name) : [...prev, name]))
     },
-    [imported, persist, uiState.data],
+    [persist],
   )
 
-  const all = importable.data ?? []
-  const allNames = useMemo(() => all.map((skill) => skill.name), [all])
   const allImported = allNames.length > 0 && allNames.every((name) => imported.has(name))
 
-  const importOrRemoveAll = useCallback(() => {
+  const enableOrDisableAll = useCallback(() => {
     if (allImported) {
-      // Remove only the names this panel offers — never touch an imported name from elsewhere.
-      const offered = new Set(allNames)
-      persist(importedNames(uiState.data).filter((name) => !offered.has(name)))
+      // Remove only the names this panel offers — never touch a selection made elsewhere.
+      const offered = new Set(allNamesRef.current)
+      persist((prev) => prev.filter((name) => !offered.has(name)))
     } else {
-      // Union so an already-imported skill is preserved and duplicates never accumulate.
-      persist([...new Set([...importedNames(uiState.data), ...allNames])])
+      // Union so an already-kept skill is preserved and duplicates never accumulate.
+      persist((prev) => [...new Set([...prev, ...allNamesRef.current])])
     }
-  }, [allImported, allNames, persist, uiState.data])
+  }, [allImported, persist])
 
   if (importable.isError) {
     return (
@@ -108,7 +149,7 @@ export function ImportSkillsPanel() {
 
   return (
     <div data-slot="skills-import-panel" className="mx-auto w-full max-w-2xl">
-      <h2 className="text-base font-semibold">Import skills</h2>
+      <h2 className="text-base font-semibold">Manage skills</h2>
       <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
         Reusable, technology-agnostic agent skills from{' '}
         <a
@@ -119,15 +160,15 @@ export function ImportSkillsPanel() {
         >
           open-mercato/skills
         </a>{' '}
-        — PR creation, code review, CI stabilisation, spec writing and more. Import the ones you
-        want; they join your catalog and the composer picker. Nothing is imported until you pick it.
+        — PR creation, code review, CI stabilisation, spec writing and more. They&apos;re all in your
+        catalog and the composer picker by default; uncheck any you don&apos;t want.
       </p>
 
       <div className="mt-4 flex items-center gap-2">
         <Input
           data-slot="import-filter"
           placeholder="Filter skills…"
-          aria-label="Filter importable skills"
+          aria-label="Filter skills"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           className="h-8 text-[13px]"
@@ -136,10 +177,10 @@ export function ImportSkillsPanel() {
           type="button"
           data-slot="import-all"
           disabled={allNames.length === 0 || uiState.isPending}
-          onClick={importOrRemoveAll}
+          onClick={enableOrDisableAll}
           className="h-8 shrink-0 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
         >
-          {allImported ? 'Remove all' : 'Import all'}
+          {allImported ? 'Remove all' : 'Enable all'}
         </button>
       </div>
 
@@ -185,7 +226,7 @@ export function ImportSkillsPanel() {
           })
         ) : (
           <p className="px-1 py-2 text-xs text-soft-foreground">
-            {all.length > 0 ? '(no skills match)' : '(no importable skills — the repo may still be cloning)'}
+            {all.length > 0 ? '(no skills match)' : '(no skills available — the repo may still be cloning)'}
           </p>
         )}
       </div>

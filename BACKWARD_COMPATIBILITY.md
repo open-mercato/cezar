@@ -84,6 +84,8 @@ A skill is a `.md` file with optional YAML frontmatter (`name`, `description`); 
 
 Breaking: requiring frontmatter, dropping a discovery directory, or inverting precedence so a team skill shadows a local one. Required path: additive discovery only; a precedence change needs a README callout and a minor bump.
 
+The Manage-skills opt-out (`importedSkills` in the global `~/.cezar/ui-state.json`) preserves this contract: the key is a tri-state and its **absence keeps the historical full default-repo catalog**, so an existing install that never curated sees exactly what it saw before. Only a *present* array (the user actively curated in the Skills page) narrows the default repo, and only that repo — a `config.json` `skillsRepos` the user configured is never gated. The selection lives at workspace scope (not the per-repo `.ai/cezar/ui-state.json`) so it follows the user across projects and never depends on the launch directory. Emptying the default catalog for a not-yet-curated install would be the breaking case, and is deliberately not what happens.
+
 ## 6. npm package surface (`package.json`)
 
 - Name `@open-mercato/cezar` (plus the `cezar-cli` npx alias documented in the README); `bin` entries `cezar` + `cez`; published `files`: `dist`, `web/dist`, `web/open-mercato.svg`, `scripts`, `README.md`; `engines.node >= 20`; `"type": "module"`.
