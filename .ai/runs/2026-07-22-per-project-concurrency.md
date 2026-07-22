@@ -41,9 +41,9 @@ Make the parallel-task concurrency ceiling configurable **per project** instead 
 
 ### Phase 1: Enforcement
 
-- [ ] 1.1 Add the schema field to workspaceProjectSchema
-- [ ] 1.2 Cache per-project limits in the semaphore snapshot + projectMaxParallel lookup
-- [ ] 1.3 Add the per-project clause to the pump() gate
+- [x] 1.1 Add the schema field to workspaceProjectSchema — 5ea394e
+- [x] 1.2 Cache per-project limits in the semaphore snapshot + projectMaxParallel lookup — 5ea394e
+- [x] 1.3 Add the per-project clause to the pump() gate — 5ea394e
 
 ### Phase 2: Live API wiring
 
