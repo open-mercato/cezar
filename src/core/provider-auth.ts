@@ -1,0 +1,224 @@
+import { execFile } from 'node:child_process';
+
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode'] as const;
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+export type ProviderConnectionState =
+  | 'connected'
+  | 'disconnected'
+  | 'not-installed'
+  | 'unknown';
+
+export interface ProviderStatus {
+  provider: ProviderId;
+  status: ProviderConnectionState;
+  hint?: string;
+}
+
+export interface ProviderStatusResponse {
+  providers: ProviderStatus[];
+}
+
+export interface ProviderCommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  errorCode?: string;
+  timedOut?: boolean;
+}
+
+export type RunProviderCommand = (
+  executable: string,
+  args: readonly string[],
+  timeoutMs: number,
+) => Promise<ProviderCommandResult>;
+
+interface ProviderDescriptor {
+  id: ProviderId;
+  executable: () => string;
+  statusArgs: readonly string[];
+  loginArgs: readonly string[];
+  installHint: string;
+  parse: (result: ProviderCommandResult) => ProviderConnectionState | null;
+}
+
+const COMMAND_TIMEOUT_MS = 10_000;
+const CACHE_TTL_MS = 5_000;
+const UNKNOWN_HINT = 'Authentication could not be verified. Try again.';
+const TIMEOUT_HINT = 'Authentication check timed out. Try again.';
+const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+
+function normalizedOutput(stdout: string): string {
+  return stdout.replace(ANSI_SEQUENCE, '').trim().toLowerCase();
+}
+
+function parseClaudeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  try {
+    const value = JSON.parse(result.stdout) as { loggedIn?: unknown };
+    return value.loggedIn === true
+      ? 'connected'
+      : value.loggedIn === false
+        ? 'disconnected'
+        : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  const output = normalizedOutput(result.stdout);
+  if (output === 'logged in using chatgpt' || output === 'logged in using an api key') {
+    return 'connected';
+  }
+  if (output === 'not logged in' || output === 'run codex login to authenticate') {
+    return 'disconnected';
+  }
+  return null;
+}
+
+function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  const output = normalizedOutput(result.stdout);
+  if (output === 'anthropic  oauth') return 'connected';
+  if (output === 'no credentials found' || output === 'no credentials') return 'disconnected';
+  return null;
+}
+
+const DESCRIPTORS: readonly ProviderDescriptor[] = [
+  {
+    id: 'claude',
+    executable: () => 'claude',
+    statusArgs: ['auth', 'status', '--json'],
+    loginArgs: ['auth', 'login'],
+    installHint: 'Install Claude Code, then run `claude auth login`.',
+    parse: parseClaudeStatus,
+  },
+  {
+    id: 'codex',
+    executable: () => process.env.CEZ_CODEX_BIN ?? 'codex',
+    statusArgs: ['login', 'status'],
+    loginArgs: ['login'],
+    installHint: 'Install the Codex CLI, then run `codex login`.',
+    parse: parseCodexStatus,
+  },
+  {
+    id: 'opencode',
+    executable: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
+    statusArgs: ['auth', 'list'],
+    loginArgs: ['auth', 'login'],
+    installHint: 'Install OpenCode, then run `opencode auth login`.',
+    parse: parseOpenCodeStatus,
+  },
+];
+
+function defaultRunProviderCommand(
+  executable: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<ProviderCommandResult> {
+  return new Promise((resolve) => {
+    execFile(
+      executable,
+      args,
+      { timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 },
+      (error, stdout, stderr) => {
+        const commandError = error as (NodeJS.ErrnoException & {
+          killed?: boolean;
+          signal?: string | null;
+        }) | null;
+        const code = commandError?.code;
+        resolve({
+          stdout: String(stdout),
+          stderr: String(stderr),
+          exitCode: typeof code === 'number' ? code : error ? null : 0,
+          errorCode: typeof code === 'string' ? code : undefined,
+          timedOut: commandError?.code === 'ETIMEDOUT'
+            || (commandError?.killed === true && commandError.signal === 'SIGTERM'),
+        });
+      },
+    );
+  });
+}
+
+function quoteExecutable(executable: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') {
+    return `"${executable.replace(/[%&!"]/g, '^$&')}"`;
+  }
+  return `'${executable.replaceAll("'", "'\\''")}'`;
+}
+
+function descriptorFor(provider: ProviderId): ProviderDescriptor {
+  const descriptor = DESCRIPTORS.find(({ id }) => id === provider);
+  if (!descriptor) throw new Error(`Unknown provider: ${provider}`);
+  return descriptor;
+}
+
+export class ProviderAuthService {
+  private readonly runCommand: RunProviderCommand;
+  private readonly now: () => number;
+  private readonly platform: NodeJS.Platform;
+  private completed?: { response: ProviderStatusResponse; timestamp: number };
+  private inFlight?: Promise<ProviderStatusResponse>;
+
+  constructor(options?: {
+    runCommand?: RunProviderCommand;
+    now?: () => number;
+    platform?: NodeJS.Platform;
+  }) {
+    this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
+    this.now = options?.now ?? Date.now;
+    this.platform = options?.platform ?? process.platform;
+  }
+
+  status(options?: { refresh?: boolean }): Promise<ProviderStatusResponse> {
+    if (process.env.CEZ_DRY_RUN === '1') {
+      return Promise.resolve({
+        providers: PROVIDER_IDS.map((provider) => ({ provider, status: 'connected' })),
+      });
+    }
+    if (this.inFlight) return this.inFlight;
+    if (!options?.refresh && this.completed && this.now() - this.completed.timestamp < CACHE_TTL_MS) {
+      return Promise.resolve(this.completed.response);
+    }
+
+    const inFlight = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
+      .then((providers) => {
+        const response = { providers };
+        this.completed = { response, timestamp: this.now() };
+        return response;
+      });
+    this.inFlight = inFlight;
+    void inFlight.finally(() => {
+      if (this.inFlight === inFlight) this.inFlight = undefined;
+    });
+    return inFlight;
+  }
+
+  loginCommand(provider: ProviderId): string {
+    const descriptor = descriptorFor(provider);
+    return [quoteExecutable(descriptor.executable(), this.platform), ...descriptor.loginArgs].join(' ');
+  }
+
+  installHint(provider: ProviderId): string {
+    return descriptorFor(provider).installHint;
+  }
+
+  private async probe(descriptor: ProviderDescriptor): Promise<ProviderStatus> {
+    let result: ProviderCommandResult;
+    try {
+      result = await this.runCommand(descriptor.executable(), descriptor.statusArgs, COMMAND_TIMEOUT_MS);
+    } catch {
+      return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+    }
+    if (result.errorCode === 'ENOENT') {
+      return { provider: descriptor.id, status: 'not-installed', hint: descriptor.installHint };
+    }
+    if (result.timedOut) {
+      return { provider: descriptor.id, status: 'unknown', hint: TIMEOUT_HINT };
+    }
+    if (result.errorCode) {
+      return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+    }
+    const status = descriptor.parse(result);
+    if (status !== null) return { provider: descriptor.id, status };
+    return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+  }
+}
