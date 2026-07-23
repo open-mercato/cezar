@@ -70,6 +70,8 @@ describe('runtime provider authentication failures', () => {
     'AuthenticationError: expired api-key',
     '401 invalid x-api-key',
     'x-api-key is invalid',
+    'expired API key',
+    'API key expired',
     'access token is invalid',
     'authentication failed with HTTP 401',
   ])('recognizes an authoritative runtime auth rejection: %s', (message) => {
@@ -80,6 +82,9 @@ describe('runtime provider authentication failures', () => {
     'claude CLI exited with code 1 — TypeScript check failed',
     'API Error: 429 rate limit exceeded',
     'the agent fixed a 401 response in src/auth.ts',
+    'added coverage for invalid API key handling',
+    'fixed a 401 response in the API key header parser',
+    'investigated expired API-key validation before updating the note-event tests',
     'the API key rotation guide is invalid because its example is stale',
     'the invalid response parser documents an API key header',
     'network connection reset',
@@ -655,10 +660,39 @@ describe('ProviderAuthService', () => {
 
     const ordinary = service.status();
     const refresh = service.status({ refresh: true });
+    expect(refresh).toBe(ordinary);
     await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
     release();
     await expect(Promise.all([ordinary, refresh])).resolves.toHaveLength(2);
     expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives ordinary callers one shared visible promise for a recovery probe', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runCommand = vi.fn(async (executable: string) => {
+      await waiting;
+      return resultFor(executable);
+    });
+    const service = new ProviderAuthService({ runCommand });
+    service.reportRuntimeAuthFailure('claude');
+
+    const recovery = service.status({ refresh: true, recoverRuntimeFailures: true });
+    const ordinary = service.status();
+    const refresh = service.status({ refresh: true });
+
+    expect(refresh).toBe(ordinary);
+    expect(ordinary).not.toBe(recovery);
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    release();
+    await expect(ordinary.then(({ providers }) => providers[0])).resolves.toMatchObject({
+      provider: 'claude',
+      status: 'disconnected',
+    });
+    await expect(recovery.then(({ providers }) => providers[0])).resolves.toMatchObject({
+      provider: 'claude',
+      status: 'connected',
+    });
   });
 
   it('uses CEZ_CODEX_BIN and CEZ_OPENCODE_BIN for both probe and login commands', async () => {

@@ -53,14 +53,23 @@ const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\bproviderautherror\b/i,
   /\b(?:oauth|access|refresh)?\s*token\b.{0,80}\b(?:revoked|expired|invalid)\b/i,
   /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth|access|refresh)?\s*token\b/i,
-  /\b(?:api[-\s]?key|x-api-key)\b\s*(?:(?:is|was|has been)\s+|[:=-]\s*)?(?:revoked|expired|invalid)\b/i,
-  /\b(?:revoked|expired|invalid)\s+(?:api[-\s]?key|x-api-key)\b/i,
-  /\b(?:oauth|token|credential|api[-\s]?key|x-api-key|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
-  /\b401\b.{0,80}\b(?:oauth|token|credential|api[-\s]?key|x-api-key|unauthorized|unauthenticated)\b/i,
+  /\b(?:oauth|token|credential|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
+  /\b401\b.{0,80}\b(?:oauth|token|credential|unauthorized|unauthenticated)\b/i,
+] as const;
+const RUNTIME_API_KEY_FAILURE_PATTERNS = [
+  // Vendor-shaped errors can carry a process prefix before the actual
+  // authentication error, so anchor on that explicit error label.
+  /\b(?:api|authentication|auth)\s*error\b\s*[:=-]\s*(?:(?:http\s+)?401\b[\s:=-]*)?(?:(?:revoked|expired|invalid)\s+(?:api[-\s]?key|x-api-key)|(?:api[-\s]?key|x-api-key)\s*(?:(?:is|was|has been)\s+|[:=-]\s*)?(?:revoked|expired|invalid))\b/i,
+  // Otherwise require the credential rejection to be the complete line,
+  // optionally introduced by a generic error label or 401 status. This keeps
+  // implementation notes such as "coverage for invalid API key handling"
+  // from looking like live authentication failures.
+  /(?:^|\r?\n)\s*(?:error\s*[:=-]\s*)?(?:(?:http\s+)?401\b[\s:=-]*)?(?:(?:revoked|expired|invalid)\s+(?:api[-\s]?key|x-api-key)|(?:api[-\s]?key|x-api-key)\s+(?:(?:is|was|has been)\s+)?(?:revoked|expired|invalid))\s*(?:[.!]|$)/im,
 ] as const;
 
 export function isRuntimeProviderAuthFailure(message: string): boolean {
-  return RUNTIME_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
+  return [...RUNTIME_AUTH_FAILURE_PATTERNS, ...RUNTIME_API_KEY_FAILURE_PATTERNS]
+    .some((pattern) => pattern.test(message));
 }
 
 function normalizedOutput(stdout: string): string {
@@ -215,7 +224,10 @@ export class ProviderAuthService {
     timestamp: number;
     generation: number;
   };
-  private inFlight?: Promise<ProviderStatusResponse>;
+  private inFlight?: {
+    raw: Promise<ProviderStatusResponse>;
+    visible: Promise<ProviderStatusResponse>;
+  };
 
   constructor(options?: {
     runCommand?: RunProviderCommand;
@@ -239,24 +251,18 @@ export class ProviderAuthService {
 
     if (options?.recoverRuntimeFailures && options.refresh) {
       const observedFailures = new Map(this.runtimeFailures);
-      return this.startFreshProbe()
+      return this.startFreshProbe().raw
         .then((response) => this.recoverRuntimeFailures(response, observedFailures));
     }
 
-    let base: Promise<ProviderStatusResponse>;
     if (this.inFlight) {
-      base = this.inFlight;
-    } else if (!options?.refresh && this.completed && this.now() - this.completed.timestamp < CACHE_TTL_MS) {
-      base = Promise.resolve(this.completed.response);
-    } else {
-      base = this.startFreshProbe();
+      return this.inFlight.visible;
     }
-
-    // The runtime signal is more authoritative than a local status command.
-    // Read the latch only after the async probe resolves so a rejection that
-    // arrives while the command is running cannot be overwritten by its older
-    // result.
-    return base.then((response) => this.withRuntimeFailures(response));
+    if (!options?.refresh && this.completed && this.now() - this.completed.timestamp < CACHE_TTL_MS) {
+      return Promise.resolve(this.completed.response)
+        .then((response) => this.withRuntimeFailures(response));
+    }
+    return this.startFreshProbe().visible;
   }
 
   reportRuntimeAuthFailure(provider: ProviderId): ProviderStatus | null {
@@ -304,9 +310,12 @@ export class ProviderAuthService {
     return this.withRuntimeFailures(response);
   }
 
-  private startFreshProbe(): Promise<ProviderStatusResponse> {
+  private startFreshProbe(): {
+    raw: Promise<ProviderStatusResponse>;
+    visible: Promise<ProviderStatusResponse>;
+  } {
     const generation = ++this.nextProbeGeneration;
-    const inFlight = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
+    const raw = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
       .then((providers) => {
         const response = { providers };
         if (!this.completed || generation >= this.completed.generation) {
@@ -314,11 +323,18 @@ export class ProviderAuthService {
         }
         return response;
       });
-    this.inFlight = inFlight;
-    void inFlight.finally(() => {
-      if (this.inFlight === inFlight) this.inFlight = undefined;
+    // One derived visible promise per raw probe preserves the historical
+    // in-flight identity contract while still consulting the current latch
+    // only after the async vendor commands resolve.
+    const probe = {
+      raw,
+      visible: raw.then((response) => this.withRuntimeFailures(response)),
+    };
+    this.inFlight = probe;
+    void raw.finally(() => {
+      if (this.inFlight === probe) this.inFlight = undefined;
     });
-    return inFlight;
+    return probe;
   }
 
   private async probe(descriptor: ProviderDescriptor): Promise<ProviderStatus> {
