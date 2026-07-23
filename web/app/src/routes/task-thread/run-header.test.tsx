@@ -472,6 +472,50 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
+  it.each([
+    {
+      name: 'both',
+      refs: {
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534',
+        referencedIssueUrl: 'https://github.com/open-mercato/cezar/issues/544',
+      },
+      pr: true,
+      issue: true,
+    },
+    {
+      name: 'PR only',
+      refs: { referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534' },
+      pr: true,
+      issue: false,
+    },
+    {
+      name: 'issue only',
+      refs: { referencedIssueUrl: 'https://github.com/open-mercato/cezar/issues/544' },
+      pr: false,
+      issue: true,
+    },
+    { name: 'neither', refs: {}, pr: false, issue: false },
+  ])('shows discovered tracker chips next to the branch ($name)', ({ refs, pr, issue }) => {
+    stubFetch()
+    renderHeader(run('done', { branch: 'cez/r1', ...refs }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const branch = meta.querySelector('[data-slot="branch-chip"]')
+    const prChip = meta.querySelector('[data-slot="pr-chip"]')
+    const issueChip = meta.querySelector('[data-slot="issue-chip"]')
+
+    expect(Boolean(prChip)).toBe(pr)
+    expect(Boolean(issueChip)).toBe(issue)
+    if (prChip) {
+      expect(prChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/534')
+      expect(prChip.textContent).toContain('#534')
+      expect(branch?.nextElementSibling?.nextElementSibling).toBe(prChip)
+    }
+    if (issueChip) {
+      expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
+      expect(issueChip.textContent).toContain('Issue #544')
+    }
+  })
+
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))

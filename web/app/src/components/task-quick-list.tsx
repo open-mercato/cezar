@@ -1,10 +1,11 @@
-import { ArrowUpRightIcon, ChevronDownIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
+import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import { compactTokens, shortAge } from '@/lib/format'
@@ -16,7 +17,7 @@ import {
   type QuickListBucket,
   type QuickListRow,
 } from '@/lib/task-groups'
-import { taskPrUrl } from '@/lib/tasks-table'
+import { prNumber, taskPrUrl } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
 import { cn, isHttpUrl } from '@/lib/utils'
 
@@ -312,18 +313,16 @@ function RunRow({
       </Link>
       {/* href protocol guard (#431): link only for http(s) URLs. */}
       {prUrl && isHttpUrl(prUrl) ? (
-        <a
-          data-slot="pr-chip"
-          href={prUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={prUrl}
-          aria-label={`Open the pull request for ${runTitle(run)}`}
-          className="mr-2.5 inline-flex shrink-0 items-center gap-[3px] rounded-full border border-violet/35 px-1.5 py-px font-mono text-[10.5px] font-semibold text-violet hover:bg-violet/10"
-        >
-          PR
-          <ArrowUpRightIcon className="size-[9px]" aria-hidden="true" />
-        </a>
+        <ReferenceChip
+          reference={{
+            kind: 'PR',
+            ...(prNumber(prUrl) ? { number: Number(prNumber(prUrl)) } : {}),
+            url: prUrl,
+          }}
+          taskTitle={runTitle(run)}
+          compact
+          className="mr-2.5 h-auto shrink-0 gap-[3px] px-1.5 py-px text-[10.5px]"
+        />
       ) : null}
     </div>
   )

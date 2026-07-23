@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
-  ArrowUpRightIcon,
   ListChecksIcon,
   PencilIcon,
   PlusIcon,
@@ -21,6 +20,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
+import { ReferenceChip } from '@/components/reference-chip'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
@@ -37,7 +37,7 @@ import {
   type UsageCell,
 } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
-import { cn, isHttpUrl } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 /**
  * The Tasks overview — the table that IS the home at `/` (spec, "Task list & table", per PR
@@ -549,48 +549,6 @@ function BranchChip({ branch }: { branch: string }) {
     <span className="rounded-[6px] bg-muted px-1.5 py-0.5 font-mono text-[11.5px] font-medium text-muted-foreground">
       {branch}
     </span>
-  )
-}
-
-/** The out-of-app link. One style for every PR — the record carries no merged/closed state to
- *  honestly split violet-open from green-merged (that is R5's forge driver). */
-function ReferenceChip({
-  reference,
-  taskTitle,
-  className,
-}: {
-  reference: NonNullable<ReturnType<typeof taskReference>>
-  taskTitle: string
-  className?: string
-}) {
-  const { kind, number, url } = reference
-  const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border border-violet/35 px-2 font-mono text-[11px] font-semibold text-violet',
-    className
-  )
-  // href protocol guard (#431): render a link only for http(s) URLs; a
-  // non-http value (e.g. a `javascript:` PR URL scraped from a transcript)
-  // degrades to inert text instead of an executable link.
-  if (!url || !isHttpUrl(url)) {
-    return (
-      <span data-slot={kind === 'PR' ? 'pr-chip' : 'issue-chip'} className={chipClass}>
-        {kind === 'Issue' ? 'Issue ' : ''}#{number}
-      </span>
-    )
-  }
-  return (
-    <a
-      data-slot={kind === 'PR' ? 'pr-chip' : 'issue-chip'}
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={url}
-      aria-label={`Open the ${kind === 'PR' ? 'pull request' : 'issue'} for ${taskTitle}`}
-      className={cn(chipClass, 'hover:bg-violet/10')}
-    >
-      {kind === 'Issue' ? 'Issue ' : ''}#{number}
-      <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />
-    </a>
   )
 }
 

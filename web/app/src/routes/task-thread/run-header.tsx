@@ -42,6 +42,7 @@ import type { ApiRun, OpenTarget } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
+import { ReferenceChip } from '@/components/reference-chip'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -66,7 +67,8 @@ import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
 import { compactTokens } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
-import { formatCost, workflowLabel } from '@/lib/tasks-table'
+import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { cliTargetResumes, finishTitle, resumeHint, runActionFlags } from './run-actions'
@@ -452,6 +454,30 @@ function MetaRow({ run }: { run: ApiRun }) {
       >
         {run.branch}
       </span>,
+    )
+  }
+  const prUrl = taskPrUrl(run)
+  if (prUrl && isHttpUrl(prUrl)) {
+    const number = prNumber(prUrl)
+    parts.push(
+      <ReferenceChip
+        key="pr"
+        reference={{ kind: 'PR', ...(number ? { number: Number(number) } : {}), url: prUrl }}
+        taskTitle={runTitle(run)}
+        className="h-5"
+      />,
+    )
+  }
+  const issueUrl = taskIssueUrl(run)
+  if (issueUrl && isHttpUrl(issueUrl)) {
+    const number = prNumber(issueUrl)
+    parts.push(
+      <ReferenceChip
+        key="issue"
+        reference={{ kind: 'Issue', ...(number ? { number: Number(number) } : {}), url: issueUrl }}
+        taskTitle={runTitle(run)}
+        className="h-5"
+      />,
     )
   }
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
