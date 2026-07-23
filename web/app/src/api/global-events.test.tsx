@@ -7,8 +7,8 @@ import { createUsageStore, type UsageStore } from './events'
 import { GlobalEventsProvider, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope } from './project-scope'
 import { createQueryClient } from './query-client'
-import { queryKeys } from './queries'
-import type { ApiRun, RunRecord } from './types'
+import { queryKeys, workspaceQueryKeys } from './queries'
+import type { ApiRun, ProviderStatusResponse, RunRecord } from './types'
 
 /**
  * jsdom ships no EventSource at all (it is not in its supported-API set), so there is nothing to
@@ -103,6 +103,14 @@ const SAMPLE = { cpuPct: 12, rssBytes: 1024, procCount: 3 }
 /** The boot project's id, as `GET /api/health` reports it (`bootProject`). Unscoped, the
  *  workspace stream's filter compares every stamp against it. */
 const BOOT = 'boot'
+
+const CONNECTED_PROVIDERS: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected' },
+    { provider: 'codex', status: 'connected' },
+    { provider: 'opencode', status: 'connected' },
+  ],
+}
 
 /** A `run` frame as the workspace stream sends it (step 2.8): the record with a `project`
  *  stamp riding along, which the parser strips back off before the reducers see it. */
@@ -362,6 +370,84 @@ describe('useGlobalEvents — usage', () => {
   })
 })
 
+describe('useGlobalEvents — provider status', () => {
+  it('patches the provider cache immediately from a workspace provider-status event', () => {
+    client.setQueryData(workspaceQueryKeys.providerStatus, CONNECTED_PROVIDERS)
+    const { source } = mount()
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'claude',
+      status: 'disconnected',
+      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+    }))
+
+    expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[0]).toEqual({
+      provider: 'claude',
+      status: 'disconnected',
+      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('ignores malformed frames without poisoning the next provider-status event', () => {
+    client.setQueryData(workspaceQueryKeys.providerStatus, CONNECTED_PROVIDERS)
+    const { source } = mount()
+
+    source.emit('provider-status', 'not json{')
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBe(CONNECTED_PROVIDERS)
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'future',
+      status: 'disconnected',
+    }))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBe(CONNECTED_PROVIDERS)
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'codex',
+      status: 'disconnected',
+    }))
+    expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[1]).toEqual({
+      provider: 'codex',
+      status: 'disconnected',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('does not invent an unfetched provider cache', () => {
+    const { source } = mount()
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'claude',
+      status: 'disconnected',
+    }))
+
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('applies provider status while a different project scope is active', () => {
+    setApiScope('other-project')
+    client.setQueryData(workspaceQueryKeys.providerStatus, CONNECTED_PROVIDERS)
+    const { source } = mount()
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'opencode',
+      status: 'disconnected',
+    }))
+
+    expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[2]).toEqual({
+      provider: 'opencode',
+      status: 'disconnected',
+    })
+  })
+})
+
 describe('useGlobalEvents — project scoping (multi-project spec, step 3.1)', () => {
   it('drops another project\'s stamped events when unscoped — no cross-project cache bleed', () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
@@ -450,6 +536,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.todos,
       queryKeys.health, // the repo/branch chip — health is not on the stream (#369)
       queryKeys.worktrees, // the Resources panel's list/total (#483)
+      workspaceQueryKeys.providerStatus,
     ])
   })
 
@@ -469,6 +556,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.todos,
       queryKeys.health,
       queryKeys.worktrees,
+      workspaceQueryKeys.providerStatus,
     ])
   })
 

@@ -7,29 +7,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+export function parseProviderStatusRow(value: unknown): ProviderStatus | null {
+  if (!isRecord(value)) return null
+  const { provider, status, hint } = value
+  if (
+    typeof provider !== 'string'
+    || !RUNNER_ORDER.includes(provider as Runner)
+    || typeof status !== 'string'
+    || !PROVIDER_STATES.has(status)
+    || (hint !== undefined && typeof hint !== 'string')
+  ) return null
+  return {
+    provider: provider as Runner,
+    status: status as ProviderStatus['status'],
+    ...(hint === undefined ? {} : { hint }),
+  }
+}
+
 function safeProviderRows(value: unknown): ProviderStatus[] | null {
   if (!isRecord(value) || !Array.isArray(value.providers)) return null
   const rows: ProviderStatus[] = []
   const seen = new Set<string>()
   for (const valueRow of value.providers) {
-    if (!isRecord(valueRow)) return null
-    const { provider, status, hint } = valueRow
-    if (
-      typeof provider !== 'string'
-      || !RUNNER_ORDER.includes(provider as Runner)
-      || seen.has(provider)
-      || typeof status !== 'string'
-      || !PROVIDER_STATES.has(status)
-      || (hint !== undefined && typeof hint !== 'string')
-    ) {
-      return null
-    }
-    seen.add(provider)
-    rows.push({
-      provider: provider as Runner,
-      status: status as ProviderStatus['status'],
-      ...(hint === undefined ? {} : { hint }),
-    })
+    const row = parseProviderStatusRow(valueRow)
+    if (row === null || seen.has(row.provider)) return null
+    seen.add(row.provider)
+    rows.push(row)
   }
   return rows
 }
@@ -48,6 +51,18 @@ export function parseProviderStatusResponse(value: unknown): ProviderStatusRespo
     throw new Error('Invalid provider status response')
   }
   return { providers: rows }
+}
+
+export function applyProviderStatusRow(
+  response: ProviderStatusResponse | undefined,
+  row: ProviderStatus,
+): ProviderStatusResponse | undefined {
+  const providers = completeProviderRows(response)
+  if (providers === null) return undefined
+  return {
+    providers: providers.map((candidate) =>
+      candidate.provider === row.provider ? row : candidate),
+  }
 }
 
 export function connectedRunners(status: ProviderStatusResponse | undefined): Runner[] {

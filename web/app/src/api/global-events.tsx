@@ -1,6 +1,7 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
+import { applyProviderStatusRow, parseProviderStatusRow } from '@/lib/provider-status'
 import {
   applyRunDeleted,
   applyRunEvent,
@@ -13,7 +14,12 @@ import {
 } from './events'
 import { getApiScope } from './project-scope'
 import { queryKeys, workspaceQueryKeys } from './queries'
-import type { ApiRun, HealthResponse, ProcessUsage } from './types'
+import type {
+  ApiRun,
+  HealthResponse,
+  ProcessUsage,
+  ProviderStatusResponse,
+} from './types'
 
 /**
  * The app's one connection to `GET /api/workspace/events`, and the two halves of the sync
@@ -33,6 +39,9 @@ import type { ApiRun, HealthResponse, ProcessUsage } from './types'
  * (which are keyed by that same scope, queries.ts) never see another project's data. One
  * connection for the whole workspace, not one per project: same per-origin socket-budget
  * argument as ever, and a project switch changes the filter, not the socket.
+ *
+ * Provider authentication is host-wide rather than project-owned. Its dedicated unstamped event
+ * bypasses that project filter and patches only an already-fetched workspace cache.
  */
 
 const SSE_URL = '/api/workspace/events'
@@ -84,7 +93,7 @@ export function onWorkspaceEvent(
 /**
  * Refetch the authoritative endpoints.
  *
- * These three because they are the ones the stream can leave stale:
+ * These are the endpoints the stream can leave stale:
  * - runs: the summaries the stream patches (`invalidate(['runs'])` covers the list and every
  *   single-run query under it — that is what the hierarchical keys in queries.ts are for);
  * - todos: the inbox the `todos` event replaces;
@@ -92,7 +101,9 @@ export function onWorkspaceEvent(
  *   branch switch — so this reconcile alone only catches a switch across a reconnect or a tab
  *   coming back; a checkout in a foreground, connected tab is covered by `useHealth`'s own poll
  *   instead (#369). Invalidating it here too costs nothing extra and keeps this list a complete
- *   "everything the stream can leave stale" note.
+ *   "everything the stream can leave stale" note;
+ * - worktrees: run terminal transitions and reclaim operations change the resources panel;
+ * - provider status: runtime authentication failures patch this workspace-wide cache live.
  *
  * `invalidateQueries` and not `refetchQueries`: it refetches what is actually rendered and marks
  * the rest stale for whenever it next mounts. A background tab with fifty cached runs should not
@@ -104,6 +115,7 @@ function reconcile(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: queryKeys.health })
   // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
   void queryClient.invalidateQueries({ queryKey: queryKeys.worktrees })
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
 }
 
 /**
@@ -241,6 +253,21 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           for (const listener of [...workspaceListeners]) listener(name, payload)
         })
       }
+
+      source.addEventListener('provider-status', (event) => {
+        let payload: unknown
+        try {
+          payload = JSON.parse((event as MessageEvent<string>).data)
+        } catch {
+          return
+        }
+        const row = parseProviderStatusRow(payload)
+        if (!row) return
+        queryClient.setQueryData<ProviderStatusResponse>(
+          workspaceQueryKeys.providerStatus,
+          (response) => applyProviderStatusRow(response, row),
+        )
+      })
 
       source.addEventListener('error', () => {
         // An ordinary drop leaves the stream CONNECTING and the browser retries it on its own —

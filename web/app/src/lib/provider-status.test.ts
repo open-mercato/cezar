@@ -2,10 +2,61 @@ import { describe, expect, it } from 'vitest'
 
 import type { ProviderStatusResponse } from '@/api/types'
 import {
+  applyProviderStatusRow,
   connectedRunners,
+  parseProviderStatusRow,
   parseProviderStatusResponse,
   providerStatusFor,
 } from './provider-status'
+
+const CONNECTED: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected' },
+    { provider: 'codex', status: 'connected' },
+    { provider: 'opencode', status: 'connected' },
+  ],
+}
+
+describe('provider-status SSE rows', () => {
+  it('parses one coarse provider-status SSE row', () => {
+    expect(parseProviderStatusRow({
+      provider: 'claude',
+      status: 'disconnected',
+      hint: 'Reconnect, then check again.',
+    })).toEqual({
+      provider: 'claude',
+      status: 'disconnected',
+      hint: 'Reconnect, then check again.',
+    })
+  })
+
+  it.each([
+    null,
+    { provider: 'future', status: 'disconnected' },
+    { provider: 'claude', status: 'future' },
+    { provider: 'claude', status: 'disconnected', hint: 1 },
+  ])('rejects malformed provider-status SSE rows: %#', (value) => {
+    expect(parseProviderStatusRow(value)).toBeNull()
+  })
+
+  it('replaces one row immutably without inventing a missing cache', () => {
+    expect(applyProviderStatusRow(undefined, {
+      provider: 'claude',
+      status: 'disconnected',
+    })).toBeUndefined()
+
+    expect(applyProviderStatusRow(CONNECTED, {
+      provider: 'claude',
+      status: 'disconnected',
+    })).toEqual({
+      providers: [
+        { provider: 'claude', status: 'disconnected' },
+        CONNECTED.providers[1],
+        CONNECTED.providers[2],
+      ],
+    })
+  })
+})
 
 describe('parseProviderStatusResponse', () => {
   it('normalizes valid rows to canonical order and public fields only', () => {
