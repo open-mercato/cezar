@@ -48,12 +48,14 @@
 
 **Files:**
 - Modify: `src/core/provider-auth.ts:1-20, 215-315`
+- Modify: `web/app/src/api/types.ts:43-60`
 - Test: `src/core/provider-auth.test.ts`
 - Test: `src/server/provider-auth-runtime.test.ts`
 - Test: `src/server/providers-api.test.ts`
 
 **Interfaces:**
 - Produces: `ProviderStatus.authFailureId?: string`
+- Produces: the exact browser mirror `ProviderStatus.authFailureId?: string`
 - Produces: `ProviderAuthService` constructor option `createAuthFailureId?: () => string`
 - Preserves: `reportRuntimeAuthFailure(provider: ProviderId): ProviderStatus | null`
 
@@ -133,7 +135,8 @@ Expected: FAIL because `ProviderStatus` has no `authFailureId` and the construct
 
 - [ ] **Step 4: Implement incident identity in `ProviderAuthService`**
 
-Import `randomUUID` from `node:crypto`, extend the public row, and replace the numeric map with:
+Import `randomUUID` from `node:crypto`, extend the server and browser `ProviderStatus` interfaces,
+and replace the numeric map with:
 
 ```ts
 interface RuntimeAuthFailure {
@@ -207,7 +210,7 @@ Expected: all selected tests pass and both TypeScript projects report no errors.
 - [ ] **Step 6: Commit the core incident contract**
 
 ```bash
-git add src/core/provider-auth.ts src/core/provider-auth.test.ts src/server/provider-auth-runtime.test.ts src/server/providers-api.test.ts
+git add src/core/provider-auth.ts web/app/src/api/types.ts src/core/provider-auth.test.ts src/server/provider-auth-runtime.test.ts src/server/providers-api.test.ts
 git commit -m "feat: identify runtime provider auth incidents"
 ```
 
@@ -216,7 +219,7 @@ git commit -m "feat: identify runtime provider auth incidents"
 ### Task 2: Validate the Incident Field and Workspace Dismissal State
 
 **Files:**
-- Modify: `web/app/src/api/types.ts:43-60, 388-410`
+- Modify: `web/app/src/api/types.ts:388-410`
 - Modify: `web/app/src/lib/provider-status.ts:1-35`
 - Test: `web/app/src/lib/provider-status.test.ts`
 - Test: `web/app/src/api/client.test.ts`
@@ -286,20 +289,9 @@ npm test -- web/app/src/lib/provider-status.test.ts web/app/src/api/client.test.
 Expected: FAIL because the client strips `authFailureId` and the workspace schema accepts or strips
 the new map instead of validating it.
 
-- [ ] **Step 4: Implement browser types and strict row parsing**
+- [ ] **Step 4: Implement strict row parsing**
 
-Add the optional field to the browser mirror and preserve it only when valid:
-
-```ts
-export interface ProviderStatus {
-  provider: ProviderId
-  status: ProviderConnectionState
-  hint?: string
-  authFailureId?: string
-}
-```
-
-In `parseProviderStatusRow()` validate:
+Preserve the Task 1 browser field only when valid. In `parseProviderStatusRow()` validate:
 
 ```ts
 const { provider, status, hint, authFailureId } = value
