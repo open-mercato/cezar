@@ -1,6 +1,6 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProviderStatusResponse } from '@/api/types'
 import { ProviderBanner } from './provider-banner'
@@ -19,7 +19,14 @@ function renderBanner(
 ) {
   return render(
     <MemoryRouter initialEntries={[entry]}>
-      <ProviderBanner status={DEFINITIVE_MISSING} pending={false} error={false} {...props} />
+      <ProviderBanner
+        status={DEFINITIVE_MISSING}
+        pending={false}
+        error={false}
+        dismissals={{}}
+        onDismissAuthFailures={vi.fn()}
+        {...props}
+      />
     </MemoryRouter>,
   )
 }
@@ -61,6 +68,102 @@ describe('ProviderBanner', () => {
     })
 
     expect(container.innerHTML).toBe('')
+  })
+
+  it('shows every runtime incident even while another provider is connected', () => {
+    const onDismiss = vi.fn()
+    renderBanner({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
+        ],
+      },
+      onDismissAuthFailures: onDismiss,
+    })
+
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain(
+      'Provider authentication failed during a task: Claude Code, OpenCode.',
+    )
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Dismiss provider authentication alert',
+    }))
+    expect(onDismiss).toHaveBeenCalledWith([
+      { provider: 'claude', label: 'Claude Code', authFailureId: 'claude-1' },
+      { provider: 'opencode', label: 'OpenCode', authFailureId: 'open-1' },
+    ])
+  })
+
+  it('hides a matching dismissed incident while a newer incident resurfaces', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+        { provider: 'codex', status: 'connected' },
+        { provider: 'opencode', status: 'not-installed' },
+      ],
+    }
+    const hidden = renderBanner({ status, dismissals: { claude: 'claude-1' } })
+
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    hidden.unmount()
+    renderBanner({
+      status: {
+        providers: status.providers.map((row) =>
+          row.provider === 'claude' ? { ...row, authFailureId: 'claude-2' } : row,
+        ),
+      },
+      dismissals: { claude: 'claude-1' },
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain('Claude Code')
+  })
+
+  it('keeps the runtime alert settings link scoped to the active project', () => {
+    renderBanner({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
+        ],
+      },
+    })
+
+    expect(screen.getByRole('link', { name: 'Open agent settings' }).getAttribute('href')).toBe(
+      '/p/cezar/settings/agents#providers',
+    )
+  })
+
+  it('reveals the generic safety banner after the runtime incident is dismissed', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+        { provider: 'codex', status: 'not-installed' },
+        { provider: 'opencode', status: 'disconnected' },
+      ],
+    }
+    const view = renderBanner({ status })
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Dismiss provider authentication alert',
+    }))
+    view.rerender(
+      <MemoryRouter initialEntries={['/p/cezar/']}>
+        <ProviderBanner
+          status={status}
+          pending={false}
+          error={false}
+          dismissals={{ claude: 'claude-1' }}
+          onDismissAuthFailures={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('status').textContent).toContain('No agent provider is connected.')
   })
 
   it('says no provider is connected when every row is definitive and none is connected', () => {

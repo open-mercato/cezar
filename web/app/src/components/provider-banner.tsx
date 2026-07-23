@@ -1,5 +1,12 @@
+import { XIcon } from 'lucide-react'
+
 import type { ProviderStatusResponse } from '@/api/types'
 import { Link } from '@/lib/project-router'
+import {
+  type ProviderAuthDismissals,
+  type ProviderAuthIncident,
+  visibleProviderAuthIncidents,
+} from '@/lib/provider-auth-alert'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 
 import { StatusDot } from './status-dot'
@@ -8,9 +15,17 @@ interface ProviderBannerProps {
   status: ProviderStatusResponse | undefined
   pending: boolean
   error: boolean
+  dismissals: ProviderAuthDismissals
+  onDismissAuthFailures: (incidents: readonly ProviderAuthIncident[]) => void
 }
 
-export function ProviderBanner({ status, pending, error }: ProviderBannerProps) {
+export function ProviderBanner({
+  status,
+  pending,
+  error,
+  dismissals,
+  onDismissAuthFailures,
+}: ProviderBannerProps) {
   if (pending || error || !status) return null
   let normalized: ProviderStatusResponse
   try {
@@ -18,6 +33,38 @@ export function ProviderBanner({ status, pending, error }: ProviderBannerProps) 
   } catch {
     return null
   }
+
+  const incidents = visibleProviderAuthIncidents(normalized, dismissals)
+  if (incidents.length > 0) {
+    return (
+      <div
+        data-slot="provider-banner"
+        role="alert"
+        className="flex min-h-9 items-center gap-2 border-b border-border bg-destructive/10 px-4 text-sm text-foreground"
+      >
+        <StatusDot tone="danger" />
+        <span>
+          Provider authentication failed during a task:{' '}
+          {incidents.map(({ label }) => label).join(', ')}.
+        </span>
+        <Link
+          to="/settings/agents#providers"
+          className="ml-auto shrink-0 font-medium underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Open agent settings
+        </Link>
+        <button
+          type="button"
+          aria-label="Dismiss provider authentication alert"
+          onClick={() => onDismissAuthFailures(incidents)}
+          className="shrink-0 rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <XIcon className="size-4" aria-hidden="true" />
+        </button>
+      </div>
+    )
+  }
+
   if (normalized.providers.some((row) => row.status === 'connected')) return null
 
   const uncertain = normalized.providers.some((row) => row.status === 'unknown')

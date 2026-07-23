@@ -67,7 +67,12 @@ const PROVIDERS: ProviderStatusResponse = {
 function serve(routes: Record<string, unknown>): void {
   fetchMock.mockImplementation(async (input) => {
     const path = String(input)
-    const response = path === '/api/providers/status' ? (routes[path] ?? PROVIDERS) : routes[path]
+    const response =
+      path === '/api/providers/status'
+        ? (routes[path] ?? PROVIDERS)
+        : path === '/api/workspace/ui-state'
+          ? (routes[path] ?? {})
+          : routes[path]
     if (response === undefined) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
     if (response instanceof Response) return response
     return new Response(JSON.stringify(response), {
@@ -285,6 +290,27 @@ describe('sidebar wiring', () => {
     const banner = await screen.findByRole('status')
     expect(banner.textContent).toContain('No agent provider is connected.')
     expect(document.querySelector('[data-slot="banner-slot"]')?.contains(banner)).toBe(true)
+  })
+
+  it('shows a runtime authentication incident in the global banner slot', async () => {
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': {
+        providers: [
+          { provider: 'claude', status: 'disconnected' },
+          { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
+        ],
+      },
+    })
+    renderShell('/p/cezar/')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(
+      'Provider authentication failed during a task: OpenCode.',
+    )
+    expect(document.querySelector('[data-slot="banner-slot"]')?.contains(alert)).toBe(true)
   })
 
   it('keeps the shell and route content when provider status fails', async () => {

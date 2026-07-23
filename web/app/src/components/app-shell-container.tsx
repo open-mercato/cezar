@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, useProjectRuns, useProjects, useProviderStatus, useTodos } from '@/api/queries'
+import { useHealth, useProjectRuns, useProjects, useTodos } from '@/api/queries'
 import type { HealthResponse } from '@/api/types'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { ListViewProvider } from '@/components/list-view'
-import { ProviderBanner } from '@/components/provider-banner'
+import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
@@ -50,7 +50,6 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const projectId = useActiveProjectId()
   const health = useHealth()
-  const providers = useProviderStatus()
   // The global inbox is opt-in (#471). With the capability off there is no Inbox nav item to
   // badge and the endpoint can only answer [], so the query parks rather than polls.
   const inboxAvailable = health.data?.capabilities.followups === true
@@ -110,13 +109,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
         // the nav must not offer an Inbox this server will never fill.
         inboxAvailable={inboxAvailable}
-        banner={
-          <ProviderBanner
-            status={providers.data}
-            pending={providers.isPending}
-            error={providers.isError}
-          />
-        }
+        banner={<ProviderBannerContainer />}
         taskQuickList={<TaskQuickListContainer />}
         // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
         // quick-list above whenever this slot is absent.
