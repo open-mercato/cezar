@@ -118,6 +118,80 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'connected' } });
   });
 
+  it.each([
+    'Logged in using ChatGPT',
+    'Logged in using an API key - sk-proj-***ABCDE',
+    'Logged in using access token',
+    'Logged in using personal access token',
+    'Logged in using Amazon Bedrock API key',
+  ])('recognizes current Codex stderr output: %s', async (statusLine) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? {
+          stdout: '',
+          stderr: [
+            'WARNING: experimental feature enabled',
+            `\u001B[32m${statusLine}\u001B[0m`,
+          ].join('\n'),
+          exitCode: 0,
+        }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'connected' } });
+  });
+
+  it('recognizes current Codex not-logged-in stderr on exit 1', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? {
+          stdout: '',
+          stderr: ['WARNING: config migration available', 'Not logged in'].join('\n'),
+          exitCode: 1,
+        }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'disconnected' } });
+  });
+
+  it.each([
+    {
+      case: 'duplicate answers',
+      stdout: 'Logged in using ChatGPT',
+      stderr: 'Logged in using ChatGPT',
+    },
+    {
+      case: 'conflicting answers',
+      stdout: 'Logged in using ChatGPT',
+      stderr: 'Not logged in',
+    },
+  ])('treats Codex $case across output channels as unknown', async ({ stdout, stderr }) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout, stderr, exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'unknown' } });
+  });
+
+  it('never returns the masked Codex API-key identifier', async () => {
+    const masked = 'sk-proj-***ABCDE';
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout: '', stderr: `Logged in using an API key - ${masked}`, exitCode: 0 }
+        : resultFor(executable)),
+    });
+
+    const response = await service.status();
+    expect(response.providers.find(({ provider }) => provider === 'codex')).toEqual({
+      provider: 'codex',
+      status: 'connected',
+    });
+    expect(JSON.stringify(response)).not.toContain(masked);
+  });
+
   it('does not accept known Codex connected output on an unexpected nonzero exit', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
@@ -211,6 +285,109 @@ describe('provider auth parsers', () => {
     });
 
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'disconnected' } });
+  });
+
+  it.each([
+    [
+      'one environment variable',
+      [
+        '┌  Credentials ~/.local/share/opencode/auth.json',
+        '│',
+        '└  0 credentials',
+        '',
+        '┌  Environment',
+        '│',
+        '●  Anthropic ANTHROPIC_API_KEY',
+        '│',
+        '└  1 environment variable',
+      ].join('\n'),
+    ],
+    [
+      'multiple environment variables',
+      [
+        '\u001B[90m┌  Credentials /srv/opencode/auth.json\u001B[0m',
+        '\u001B[90m│\u001B[0m',
+        '\u001B[90m└\u001B[0m  0 credentials',
+        '',
+        '\u001B[90m┌  Environment\u001B[0m',
+        '\u001B[90m│\u001B[0m',
+        '\u001B[36m●\u001B[0m  Acme ACME_API_KEY',
+        '\u001B[36m●\u001B[0m  Custom Gateway CUSTOM_TOKEN',
+        '\u001B[90m│\u001B[0m',
+        '\u001B[90m└\u001B[0m  2 environment variables',
+      ].join('\n'),
+    ],
+  ])('recognizes OpenCode zero stored credentials plus %s as connected', async (_case, stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout, stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
+  });
+
+  it.each([
+    [
+      'a missing stored-credential summary',
+      [
+        '┌  Environment',
+        '●  Acme ACME_API_KEY',
+        '└  1 environment variable',
+      ].join('\n'),
+    ],
+    [
+      'duplicate stored-credential summaries',
+      [
+        '┌  Credentials ~/.local/share/opencode/auth.json',
+        '└  0 credentials',
+        '└  1 credential',
+      ].join('\n'),
+    ],
+    [
+      'conflicting environment summaries',
+      [
+        '┌  Credentials ~/.local/share/opencode/auth.json',
+        '└  0 credentials',
+        '┌  Environment',
+        '└  1 environment variable',
+        '└  2 environment variables',
+      ].join('\n'),
+    ],
+    [
+      'a malformed environment summary',
+      [
+        '┌  Credentials ~/.local/share/opencode/auth.json',
+        '└  0 credentials',
+        '┌  Environment',
+        '└  environment variables: many',
+      ].join('\n'),
+    ],
+    [
+      'an environment summary without its block',
+      [
+        '┌  Credentials ~/.local/share/opencode/auth.json',
+        '└  0 credentials',
+        '└  1 environment variable',
+      ].join('\n'),
+    ],
+    [
+      'an unsafe environment count',
+      [
+        '┌  Credentials ~/.local/share/opencode/auth.json',
+        '└  0 credentials',
+        '┌  Environment',
+        '└  9007199254740992 environment variables',
+      ].join('\n'),
+    ],
+  ])('treats OpenCode output with %s as unknown', async (_case, stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout, stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
   });
 
   it('does not accept an OpenCode credential summary on an unexpected nonzero exit', async () => {

@@ -45,7 +45,7 @@ function serve({
   config?: Partial<ConfigResponse>
   putStatus?: number
   putError?: string
-  providerStatus?: ProviderStatusResponse | { error: string }
+  providerStatus?: unknown
   providerStatusCode?: number
   providerStatusPending?: boolean
   providerStatusAfterFirstError?: string
@@ -159,7 +159,8 @@ describe('the agents form', () => {
     await waitFor(() => expect(form()).not.toBeNull())
     const providers = document.querySelector<HTMLElement>('[data-slot="provider-settings"]')!
     expect(providers.id).toBe('providers')
-    expect(providers.className).toContain('scroll-mt-6')
+    expect(providers.className).toContain('scroll-mt-20')
+    expect(providers.className).not.toContain('scroll-mt-6')
     expect(form()?.firstElementChild).toBe(providers)
   })
 
@@ -207,6 +208,20 @@ describe('the agents form', () => {
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
     expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
     expect(screen.getByLabelText<HTMLButtonElement>('Review changes before finishing').disabled).toBe(false)
+  })
+
+  it('keeps unrelated settings usable and provider controls disabled for malformed status data', async () => {
+    const secret = 'unexpected-provider-payload'
+    serve({
+      providerStatus: { providers: [null, { provider: 'future', status: secret }] },
+    })
+    renderAt('/settings/agents')
+
+    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
+    expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
+    expect(screen.queryByText(secret)).toBeNull()
   })
 
   it('disables provider controls when a failed refresh leaves connected data cached', async () => {

@@ -148,8 +148,33 @@ describe('provider status workspace query', () => {
     expect((result.current.error as ApiError).message).toBe('provider probe failed')
   })
 
+  it('enters the query error state for a malformed successful response', async () => {
+    fetchMock.mockImplementation(async () =>
+      json({ providers: [null], raw: 'do-not-render-this' }),
+    )
+    const client = createQueryClient()
+    client.setDefaultOptions({
+      queries: { ...client.getDefaultOptions().queries, retry: false },
+    })
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 })
+    expect(result.current.data).toBeUndefined()
+    expect(result.current.error?.message).toBe('Invalid provider status response')
+  })
+
   it('refreshes explicitly and replaces the workspace cache', async () => {
-    const refreshed = { providers: [{ provider: 'codex', status: 'connected' }] }
+    const refreshed = {
+      providers: [
+        { provider: 'claude', status: 'disconnected' },
+        { provider: 'codex', status: 'connected' },
+        { provider: 'opencode', status: 'not-installed' },
+      ],
+    }
     fetchMock.mockResolvedValue(json(refreshed))
     const client = createQueryClient()
     const { result } = renderHook(() => useRefreshProviderStatus(), {

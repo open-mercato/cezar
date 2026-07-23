@@ -51,6 +51,12 @@ function normalizedOutput(stdout: string): string {
   return stdout.replace(ANSI_SEQUENCE, '').trim().toLowerCase();
 }
 
+function normalizedLines(...outputs: string[]): string[] {
+  return outputs.flatMap((output) => normalizedOutput(output).split(/\r?\n/))
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function parseClaudeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   try {
     const value = JSON.parse(result.stdout) as { loggedIn?: unknown };
@@ -63,37 +69,53 @@ function parseClaudeStatus(result: ProviderCommandResult): ProviderConnectionSta
 }
 
 function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionState | null {
-  const output = normalizedOutput(result.stdout);
-  if (
-    result.exitCode === 0
-    && (
-      output === 'logged in using chatgpt'
-      || output === 'logged in using an api key'
-      || output === 'logged in using agent identity'
-    )
-  ) {
-    return 'connected';
-  }
-  if (
-    result.exitCode === 1
-    && (output === 'not logged in' || output === 'run codex login to authenticate')
-  ) {
-    return 'disconnected';
-  }
+  const answers = normalizedLines(result.stdout, result.stderr)
+    .map((line): ProviderConnectionState | null => {
+      if (
+        line === 'logged in using chatgpt'
+        || line === 'logged in using an api key'
+        || line === 'logged in using agent identity'
+        || line === 'logged in using access token'
+        || line === 'logged in using personal access token'
+        || line === 'logged in using amazon bedrock api key'
+        || /^logged in using an api key - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
+      ) {
+        return 'connected';
+      }
+      if (line === 'not logged in' || line === 'run codex login to authenticate') {
+        return 'disconnected';
+      }
+      return null;
+    })
+    .filter((answer): answer is ProviderConnectionState => answer !== null);
+  if (answers.length !== 1) return null;
+  if (answers[0] === 'connected' && result.exitCode === 0) return 'connected';
+  if (answers[0] === 'disconnected' && result.exitCode === 1) return 'disconnected';
   return null;
 }
 
 function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
-  const output = normalizedOutput(result.stdout);
-  const summaries = output
-    .split(/\r?\n/)
+  const lines = normalizedLines(result.stdout);
+  const storedSummaries = lines
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
     .filter((count): count is string => count !== undefined);
-  if (summaries.length !== 1) return null;
-  const count = Number(summaries[0]);
-  if (!Number.isSafeInteger(count)) return null;
-  return count === 0 ? 'disconnected' : 'connected';
+  if (storedSummaries.length !== 1) return null;
+  const storedCount = Number(storedSummaries[0]);
+  if (!Number.isSafeInteger(storedCount)) return null;
+
+  const environmentSummaries = lines
+    .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+environment\s+variables?$/)?.[1])
+    .filter((count): count is string => count !== undefined);
+  const hasEnvironmentBlock = lines.some((line) => /^[^a-z0-9]*environment$/.test(line));
+  if (environmentSummaries.length > 1) return null;
+  if (hasEnvironmentBlock !== (environmentSummaries.length === 1)) return null;
+  const environmentCount = environmentSummaries.length === 1
+    ? Number(environmentSummaries[0])
+    : 0;
+  if (!Number.isSafeInteger(environmentCount)) return null;
+
+  return storedCount > 0 || environmentCount > 0 ? 'connected' : 'disconnected';
 }
 
 const DESCRIPTORS: readonly ProviderDescriptor[] = [

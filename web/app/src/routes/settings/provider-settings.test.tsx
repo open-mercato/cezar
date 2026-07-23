@@ -25,7 +25,7 @@ function serve({
   connect = { opened: true, command: 'codex login' },
   connectCode = 200,
 }: {
-  status?: ProviderStatusResponse | { error: string }
+  status?: unknown
   refreshStatus?: ProviderStatusResponse
   statusCode?: number
   connect?: unknown
@@ -206,6 +206,17 @@ describe('ProviderSettings', () => {
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(3)
+  })
+
+  it('treats a malformed successful response as a safe verification error', async () => {
+    const secret = 'unexpected-provider-payload'
+    serve({ status: { providers: [null, { provider: 'future', status: secret }] } })
+    renderSettings()
+
+    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(3)
+    expect(screen.queryByText(secret)).toBeNull()
   })
 
   it('Check again performs an explicit refreshed status request', async () => {

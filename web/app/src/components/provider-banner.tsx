@@ -1,5 +1,6 @@
 import type { ProviderStatusResponse } from '@/api/types'
 import { Link } from '@/lib/project-router'
+import { parseProviderStatusResponse } from '@/lib/provider-status'
 
 import { StatusDot } from './status-dot'
 
@@ -11,9 +12,15 @@ interface ProviderBannerProps {
 
 export function ProviderBanner({ status, pending, error }: ProviderBannerProps) {
   if (pending || error || !status) return null
-  if (status.providers.some((row) => row.status === 'connected')) return null
+  let normalized: ProviderStatusResponse
+  try {
+    normalized = parseProviderStatusResponse(status)
+  } catch {
+    return null
+  }
+  if (normalized.providers.some((row) => row.status === 'connected')) return null
 
-  const uncertain = status.providers.some((row) => row.status === 'unknown')
+  const uncertain = normalized.providers.some((row) => row.status === 'unknown')
   const message = uncertain
     ? 'No connected provider could be verified.'
     : 'No agent provider is connected.'

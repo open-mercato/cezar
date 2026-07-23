@@ -535,6 +535,7 @@ describe('provider authentication gate', () => {
         providers: [
           { provider: 'claude', status: 'disconnected' },
           { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
         ],
       },
     })
@@ -565,6 +566,7 @@ describe('provider authentication gate', () => {
         providers: [
           { provider: 'claude', status: 'disconnected' },
           { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
         ],
       },
     })
@@ -582,6 +584,7 @@ describe('provider authentication gate', () => {
         providers: [
           { provider: 'claude', status: 'unknown' },
           { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
         ],
       },
     })
@@ -998,6 +1001,7 @@ describe('bookmarklet auto-start', () => {
         providers: [
           { provider: 'claude', status: 'disconnected' },
           { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
         ],
       },
     })

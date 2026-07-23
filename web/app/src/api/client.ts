@@ -65,6 +65,7 @@ import type {
   WorkspaceConfigResponse,
   WorkspaceUiState,
 } from './types'
+import { parseProviderStatusResponse } from '@/lib/provider-status'
 import { scopeApiPath } from './project-scope'
 
 /**
@@ -216,10 +217,10 @@ export function getProviderStatus(
   refresh = false,
   opts?: ReadOptions,
 ): Promise<ProviderStatusResponse> {
-  return get<ProviderStatusResponse>(
+  return get<unknown>(
     `/api/providers/status${refresh ? '?refresh=1' : ''}`,
     opts,
-  )
+  ).then(parseProviderStatusResponse)
 }
 
 /** The bookmarklet auto-start secret (spec 011). Fetched to compare against `/new?key=` —

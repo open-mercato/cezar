@@ -83,6 +83,7 @@ describe('useResolvedEngine provider status', () => {
         providers: [
           { provider: 'claude', status: 'disconnected' },
           { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
         ],
       },
     })

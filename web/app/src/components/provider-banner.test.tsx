@@ -39,10 +39,24 @@ describe('ProviderBanner', () => {
     expect(container.innerHTML).toBe('')
   })
 
+  it('fails closed without rendering unexpected data when called with malformed rows', () => {
+    const secret = 'unexpected-provider-payload'
+    const { container } = renderBanner({
+      status: {
+        providers: [null, { provider: 'future', status: secret }],
+      } as unknown as ProviderStatusResponse,
+    })
+
+    expect(container.innerHTML).toBe('')
+    expect(screen.queryByText(secret)).toBeNull()
+  })
+
   it('renders nothing when any provider is connected', () => {
     const { container } = renderBanner({
       status: {
-        providers: [...DEFINITIVE_MISSING.providers, { provider: 'claude', status: 'connected' }],
+        providers: DEFINITIVE_MISSING.providers.map((row) =>
+          row.provider === 'claude' ? { provider: 'claude', status: 'connected' } : row,
+        ),
       },
     })
 
@@ -61,7 +75,9 @@ describe('ProviderBanner', () => {
   it('says no provider could be verified when any row is unknown and none is connected', () => {
     renderBanner({
       status: {
-        providers: [...DEFINITIVE_MISSING.providers, { provider: 'claude', status: 'unknown' }],
+        providers: DEFINITIVE_MISSING.providers.map((row) =>
+          row.provider === 'claude' ? { provider: 'claude', status: 'unknown' } : row,
+        ),
       },
     })
 

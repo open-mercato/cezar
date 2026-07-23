@@ -293,12 +293,40 @@ describe('sidebar wiring', () => {
       '/api/todos': [],
       '/api/providers/status': new Response(JSON.stringify({ error: 'unavailable' }), { status: 500 }),
     })
-    renderShell()
+    const client = createQueryClient()
+    client.setDefaultOptions({
+      queries: { ...client.getDefaultOptions().queries, retry: false },
+    })
+    renderShell('/', client)
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('error'),
+    )
     expect(screen.getByText('route content')).toBeTruthy()
     expect(document.querySelector('[data-slot="app-shell"]')).not.toBeNull()
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('keeps the shell and route content when a successful provider response is malformed', async () => {
+    const secret = 'unexpected-provider-payload'
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': { providers: [null, { provider: 'future', status: secret }] },
+    })
+    const client = createQueryClient()
+    client.setDefaultOptions({
+      queries: { ...client.getDefaultOptions().queries, retry: false },
+    })
+    renderShell('/', client)
+
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('error'),
+    )
+    expect(screen.getByText('route content')).toBeTruthy()
+    expect(document.querySelector('[data-slot="app-shell"]')).not.toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(secret)).toBeNull()
   })
 })
 

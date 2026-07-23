@@ -59,6 +59,14 @@ function reply(body: unknown, init: ResponseInit = {}): void {
   )
 }
 
+const VALID_PROVIDER_STATUS = {
+  providers: [
+    { provider: 'claude', status: 'connected' },
+    { provider: 'codex', status: 'disconnected' },
+    { provider: 'opencode', status: 'not-installed' },
+  ],
+}
+
 /** The (path, init) the client actually asked for. */
 function lastCall(): { path: string; method: string; body: unknown; headers: Headers } {
   const call = fetchMock.mock.calls.at(-1)
@@ -254,7 +262,7 @@ describe('request shapes', () => {
   ]
 
   it.each(cases)('$name hits $method $path', async ({ call, path, method, body }) => {
-    reply({ ok: true })
+    reply(path.startsWith('/api/providers/status') ? VALID_PROVIDER_STATUS : { ok: true })
     await call()
 
     const sent = lastCall()
@@ -321,6 +329,64 @@ describe('project scope (multi-project spec, step 3.1)', () => {
 })
 
 describe('response parsing', () => {
+  it('normalizes provider status into canonical order without unexpected fields', async () => {
+    reply({
+      ignored: 'top-level raw value',
+      providers: [
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.', raw: 'private' },
+        { provider: 'claude', status: 'connected', account: 'private@example.test' },
+        { provider: 'codex', status: 'disconnected' },
+      ],
+    })
+
+    await expect(getProviderStatus()).resolves.toEqual({
+      providers: [
+        { provider: 'claude', status: 'connected' },
+        { provider: 'codex', status: 'disconnected' },
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.' },
+      ],
+    })
+  })
+
+  it.each([
+    ['an empty object', {}],
+    ['null providers', { providers: null }],
+    ['a null row', { providers: [null] }],
+    [
+      'an unknown state',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'future-state' },
+          { provider: 'opencode', status: 'connected' },
+        ],
+      },
+    ],
+    [
+      'a duplicate provider',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'claude', status: 'disconnected' },
+          { provider: 'opencode', status: 'connected' },
+        ],
+      },
+    ],
+    [
+      'a missing provider',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'connected' },
+        ],
+      },
+    ],
+  ])('rejects a successful provider response containing %s', async (_case, body) => {
+    reply(body)
+
+    await expect(getProviderStatus()).rejects.toThrow('Invalid provider status response')
+  })
+
   it('returns the health payload as-is', async () => {
     const health = {
       version: '0.1.3',

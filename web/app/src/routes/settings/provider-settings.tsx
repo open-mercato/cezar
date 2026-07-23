@@ -76,7 +76,7 @@ export function ProviderSettings() {
   }
 
   return (
-    <section id="providers" data-slot="provider-settings" className="scroll-mt-6">
+    <section id="providers" data-slot="provider-settings" className="scroll-mt-20">
       <div className="mb-2">
         <h2 className="text-sm font-semibold text-foreground">Providers</h2>
         <p className="text-[13px] text-muted-foreground">
