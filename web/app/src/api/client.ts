@@ -24,6 +24,7 @@ import type {
   GithubData,
   GroupResponse,
   HealthResponse,
+  ImageInput,
   LaunchKeyResponse,
   MessageInput,
   EditQueuedMessageResponse,
@@ -483,9 +484,12 @@ export function finishRun(id: string): Promise<FinishResponse> {
 }
 
 /** The follow-up composer's optional overrides for a Continue (#401): pick which backend and
- *  model handle the reopened session. Omitted fields keep the run's current backend/model. */
+ *  model handle the reopened session. Omitted fields keep the run's current backend/model.
+ *  `text`/`images` are the prompt the reopened session starts on — omitted, the engine opens
+ *  with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
+  images?: ImageInput[]
   runner?: Runner
   model?: string
 }
@@ -496,6 +500,7 @@ export interface ContinueOptions {
 export function continueRun(id: string, opts: ContinueOptions = {}): Promise<ContinueResponse> {
   const body: Record<string, unknown> = {}
   if (opts.text !== undefined) body.text = opts.text
+  if (opts.images !== undefined) body.images = opts.images
   if (opts.runner !== undefined) body.runner = opts.runner
   if (opts.model !== undefined) body.model = opts.model
   return mutate<ContinueResponse>('POST', runPath(id, '/continue'), body)

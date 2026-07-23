@@ -1078,7 +1078,7 @@ export class RunManager {
    */
   continueRun(
     runId: string,
-    opts: { text?: string; runner?: RunnerId; model?: string } = {},
+    opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string } = {},
   ): { ok: boolean; error?: string } {
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
@@ -1139,6 +1139,7 @@ export class RunManager {
       resume ? sessionStep.sessionId : undefined,
       targetRunner,
       opts.text?.trim() || 'Continue.',
+      opts.images ?? [],
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -1160,6 +1161,10 @@ export class RunManager {
     sessionId: string | undefined,
     backend: RunnerId,
     prompt: string,
+    /** Screenshots pasted into the follow-up composer — delivered with the
+     *  reopened session's opening message, exactly like a live-session
+     *  message's attachments. */
+    images: ContentBlock[] = [],
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -1214,7 +1219,22 @@ export class RunManager {
       backend,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
-    this.store.appendEvent(runId, { type: 'user-message', stepId, text: prompt, imageCount: 0 });
+    // Attachments pasted into the follow-up composer, on the same terms as a live-session
+    // message (#357): persisted to the run's own image store so the thread renders the bubble's
+    // images rather than a bare count, and handed to the agent BOTH as base64 blocks (so it can
+    // view them) and as absolute paths appended to the prompt (so it can operate on them — and
+    // because codex/opencode drop image blocks before they reach the model).
+    const attachments = images
+      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
+      .filter((saved): saved is PersistedAttachment => saved !== null);
+    this.store.appendEvent(runId, {
+      type: 'user-message',
+      stepId,
+      text: prompt,
+      imageCount: images.filter((b) => b.type === 'image').length,
+      ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
+    });
 
     let stepCost = 0;
     let turnText = '';
@@ -1356,7 +1376,8 @@ export class RunManager {
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
-        userPrompt: prompt,
+        userPrompt: attachments.length ? `${prompt}\n\n${pastedAttachmentsText(attachments)}` : prompt,
+        ...(images.length ? { images } : {}),
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
         additionalDirectories: [join(this.dataDir, 'runs')],

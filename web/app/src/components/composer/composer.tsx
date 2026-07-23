@@ -70,9 +70,12 @@ export interface ComposerProps {
   /** Shown as the placeholder while disabled — e.g. the legacy "Session closed — Continue to
    *  reopen." */
   disabledReason?: string
-  /** Rendered in the footer bar while disabled — the host's way out (the thread passes its
-   *  Continue button). */
-  disabledAction?: ReactNode
+  /**
+   * Let the send button fire on an empty draft. Off by default (an empty message is not a
+   * message); ON for the thread's closed-but-resumable state, where submitting IS "Continue"
+   * and continuing with no prompt is the legacy one-click behavior.
+   */
+  allowEmptySubmit?: boolean
   placeholder?: string
   ariaLabel?: string
   /** `/` opens the project-first skills autocomplete (#380). */
@@ -112,7 +115,7 @@ export function Composer({
   sendAriaLabel = 'Send',
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
-  disabledAction,
+  allowEmptySubmit = false,
   placeholder = 'Reply — / for skills, @ for files…',
   ariaLabel = 'Reply to the agent',
   autocompleteSkills = true,
@@ -306,7 +309,8 @@ export function Composer({
   const send = useCallback(
     async (messageText: string, messageImages: PendingImage[], restoreOnError: boolean) => {
       const body = messageText.trim()
-      if (disabled || busy || (body === '' && messageImages.length === 0)) return
+      if (disabled || busy) return
+      if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
       setBusy(true)
       try {
         await onSubmit(
@@ -325,11 +329,11 @@ export function Composer({
         setBusy(false)
       }
     },
-    [busy, disabled, onSubmit],
+    [allowEmptySubmit, busy, disabled, onSubmit],
   )
 
   const submitDraft = useCallback(() => {
-    if (text.trim() === '' && images.length === 0) return
+    if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
     const draftText = text
     const draftImages = images
     // Optimistic clear — the reply feels instant; a rejection restores it above.
@@ -337,7 +341,7 @@ export function Composer({
     setImages([])
     setTrigger(null)
     void send(draftText, draftImages, true)
-  }, [images, send, text])
+  }, [allowEmptySubmit, images, send, text])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
@@ -489,11 +493,6 @@ export function Composer({
                 {footerStart}
               </div>
               <div className="ml-auto flex items-center gap-1">
-                {disabled && disabledAction ? (
-                  <div data-slot="composer-disabled-action" className="mr-1">
-                    {disabledAction}
-                  </div>
-                ) : null}
                 {dictation.supported ? (
                   <Button
                     type="button"
@@ -518,7 +517,9 @@ export function Composer({
                   type="button"
                   size="icon-sm"
                   aria-label={sendAriaLabel}
-                  disabled={disabled || busy || (text.trim() === '' && images.length === 0)}
+                  disabled={
+                    disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+                  }
                   className="size-8"
                   onClick={submitDraft}
                 >

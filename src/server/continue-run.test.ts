@@ -19,7 +19,13 @@ describe('POST /api/runs/:id/continue override', () => {
   let store: RunStore;
   let app: Hono;
   let runId: string;
-  let captured: { id: string; opts: { text?: string; runner?: string; model?: string } } | undefined;
+  type ContinueOpts = {
+    text?: string;
+    images?: Array<{ type: string; source: { media_type: string; data: string } }>;
+    runner?: string;
+    model?: string;
+  };
+  let captured: { id: string; opts: ContinueOpts } | undefined;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-continue-'));
@@ -32,7 +38,7 @@ describe('POST /api/runs/:id/continue override', () => {
       steps: [],
     }).id;
     const manager = {
-      continueRun: (id: string, opts: { text?: string; runner?: string; model?: string } = {}) => {
+      continueRun: (id: string, opts: ContinueOpts = {}) => {
         captured = { id, opts };
         return { ok: true };
       },
@@ -71,6 +77,23 @@ describe('POST /api/runs/:id/continue override', () => {
     expect(res.status).toBe(200);
     expect(captured?.opts.text).toBe('keep going');
     expect(captured?.opts.runner).toBe('opencode');
+  });
+
+  /** The follow-up composer is a full composer, so a screenshot pasted into it has to reach the
+   *  reopened session — as content blocks, the same shape `POST /messages` hands the engine. */
+  it('converts pasted images into content blocks for the manager', async () => {
+    const res = await post({ text: 'like this', images: [{ mediaType: 'image/png', data: 'AAAA' }] });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.images).toEqual([
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+    ]);
+  });
+
+  it('rejects a non-image media type, and more images than a message may carry', async () => {
+    expect((await post({ images: [{ mediaType: 'text/plain', data: 'AAAA' }] })).status).toBe(400);
+    const five = Array.from({ length: 5 }, () => ({ mediaType: 'image/png', data: 'AAAA' }));
+    expect((await post({ images: five })).status).toBe(400);
+    expect(captured).toBeUndefined();
   });
 
   it('rejects an unknown runner with a 400 and never reaches the manager', async () => {

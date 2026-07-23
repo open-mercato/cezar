@@ -155,7 +155,9 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
   })
 
-  it('closed → the composer is disabled with the legacy reason and the Continue way out', () => {
+  /** A closed run with a session to resume is still AUTHORABLE: Continue takes a prompt, so
+   *  the composer stays live and its send is that Continue. */
+  it('closed but resumable → the composer stays enabled, and sending is Continue', () => {
     renderView(
       <ThreadView
         run={run('done', {
@@ -167,12 +169,12 @@ describe('ThreadView', () => {
       />,
     )
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
-    expect(textarea.disabled).toBe(true)
-    expect(textarea.placeholder).toBe('Session closed — Continue to reopen.')
-    // The way out, only because this run HAS a session to resume.
-    expect(
-      document.querySelector('[data-slot="composer-disabled-action"]')?.textContent,
-    ).toContain('Continue')
+    expect(textarea.disabled).toBe(false)
+    expect(textarea.placeholder).toBe('Continue — add a prompt, or send to just reopen the session…')
+    // Empty is still the one-click Continue, so send is live with nothing typed.
+    expect((screen.getByLabelText('Continue') as HTMLButtonElement).disabled).toBe(false)
+    // The engine pills ride along, so the prompt and the picked backend go in one request.
+    expect(document.querySelector('[data-slot="follow-up-engine"]')).not.toBeNull()
   })
 
   /** #472 — stacked messages render as their own bubbles, after the task. */
@@ -440,28 +442,23 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="queued-hint"]')?.textContent).toContain(
       'folded into the prompt before the run starts',
     )
-    // Continue is meaningless for a run that has not run.
-    expect(document.querySelector('[data-slot="composer-disabled-action"]')).toBeNull()
+    // Continue is meaningless for a run that has not run, so no engine pills either.
+    expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
   })
 
   /**
-   * The scope boundary: the queued branch is `queued` ONLY. Every other closed
-   * status keeps the legacy copy — including the string `composer.e2e.ts` asserts.
+   * The scope boundary: the queued branch is `queued` ONLY, and the composer only stays live
+   * on a closed run that HAS a session to resume. This `done` run has none, so it is the one
+   * remaining genuinely-disabled state — and it is told so honestly, without offering a
+   * Continue it cannot perform.
    */
-  it('done keeps the legacy disabled copy and shows no queued hint', () => {
+  it('closed with no resumable session → disabled composer, and no Continue invented', () => {
     renderView(<ThreadView run={run('done')} thread={reduceThread(EVENTS)} />)
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(true)
-    expect(textarea.placeholder).toBe('Session closed — Continue to reopen.')
+    expect(textarea.placeholder).toBe('Session closed — no session to resume.')
+    expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
     expect(document.querySelector('[data-slot="queued-hint"]')).toBeNull()
-  })
-
-  it('closed with no resumable session → disabled composer, and no Continue button invented', () => {
-    renderView(<ThreadView run={run('done')} thread={reduceThread(EVENTS)} />)
-    expect((screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement).disabled).toBe(true)
-    expect(document.querySelector('[data-slot="composer-disabled-action"]')?.textContent ?? '').not.toContain(
-      'Continue',
-    )
   })
 
   it('done → the closed footer; failed → the danger footer carrying the run error', () => {

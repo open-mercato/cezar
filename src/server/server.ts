@@ -595,9 +595,12 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 // "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
 // the last session on the run's current backend (backward compat). A runner/model override lets
 // the follow-up composer choose which engine handles the continuation. `text` stays bounded like
-// the live-session message `text` (#429).
+// the live-session message `text` (#429), and `images` like a live-session message's — the
+// follow-up composer is a full composer, so a screenshot pasted into it must reach the reopened
+// session rather than being silently dropped.
 const continueSchema = z.object({
   text: z.string().max(100_000, 'text must be at most 100000 characters').optional(),
+  images: z.array(imageInputSchema).max(4).optional(),
   runner: z.enum(['claude', 'codex', 'opencode']).optional(),
   model: z.string().max(200).optional(),
 });
@@ -2043,6 +2046,10 @@ export function createApp(deps: ServerDeps): Hono {
     }
     const result = manager.continueRun(id, {
       text: parsed.data.text,
+      images: parsed.data.images?.map((img): ContentBlock => ({
+        type: 'image',
+        source: { type: 'base64', media_type: img.mediaType, data: img.data },
+      })),
       runner: parsed.data.runner,
       model: parsed.data.model,
     });

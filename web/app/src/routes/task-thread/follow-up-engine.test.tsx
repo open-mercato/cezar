@@ -6,12 +6,15 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, HealthResponse, StepState } from '@/api/types'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { ContinueAction } from './follow-up-engine'
+import { useContinueAction } from './follow-up-engine'
 
 /**
  * The follow-up composer's Continue control (#401): the runner + model pills default to the
  * run's current backend, so an untouched Continue posts nothing extra (backward compat); a pick
  * rides through to `POST /continue`; the runner pill is hidden on a single-backend host.
+ *
+ * The hook has no button of its own — the composer's send is what fires it — so the harness
+ * below supplies one, standing in for that send.
  */
 
 beforeAll(() => {
@@ -108,10 +111,24 @@ const makeRun = (extra: Partial<ApiRun> = {}): ApiRun => ({
   ...extra,
 })
 
-function renderAction(record: ApiRun) {
+/** Stands in for the thread composer: the pills, plus a send that submits `draft`. */
+function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
+  const action = useContinueAction(run)
+  if (!action.available) return null
+  return (
+    <>
+      {action.pills}
+      <button type="button" onClick={() => void action.continueWith(draft, [])}>
+        Continue
+      </button>
+    </>
+  )
+}
+
+function renderAction(record: ApiRun, draft?: string) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
-      <ContinueAction run={record} />
+      <Harness run={record} draft={draft} />
       <Toaster />
     </QueryClientProvider>,
   )
@@ -127,6 +144,15 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({})
+  })
+
+  it('carries the composer draft as the prompt the reopened session starts on', async () => {
+    serve()
+    renderAction(makeRun(), 'now also update the changelog')
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    // Only `text` — the pills were never touched, so the run keeps its backend.
+    expect(continueBody()).toEqual({ text: 'now also update the changelog' })
   })
 
   it('sends the chosen runner + model through to /continue', async () => {

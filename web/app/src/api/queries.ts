@@ -162,11 +162,14 @@ export const workspaceQueryKeys = {
   fsBrowse: (path: string | null) => [...workspaceQueryKeys.fsBrowseRoot, path] as const,
 }
 
-export function useRunnerModels() {
+/** `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue —
+ *  hooks cannot be called conditionally) skip the fetch when it definitely won't. */
+export function useRunnerModels(enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.models('codex'),
     queryFn: ({ signal }) => getRunnerModels({ signal }),
     staleTime: 5 * 60 * 1_000,
+    enabled,
   })
 }
 
