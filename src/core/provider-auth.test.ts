@@ -66,6 +66,10 @@ describe('runtime provider authentication failures', () => {
     'claude CLI exited with code 1 — Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
     'codex: turn failed: unauthorized',
     'ProviderAuthError: API key expired — run `opencode auth login`',
+    'API Error: invalid API key',
+    'AuthenticationError: expired api-key',
+    '401 invalid x-api-key',
+    'x-api-key is invalid',
     'access token is invalid',
     'authentication failed with HTTP 401',
   ])('recognizes an authoritative runtime auth rejection: %s', (message) => {
@@ -76,6 +80,8 @@ describe('runtime provider authentication failures', () => {
     'claude CLI exited with code 1 — TypeScript check failed',
     'API Error: 429 rate limit exceeded',
     'the agent fixed a 401 response in src/auth.ts',
+    'the API key rotation guide is invalid because its example is stale',
+    'the invalid response parser documents an API key header',
     'network connection reset',
   ])('does not turn unrelated failures into credential failures: %s', (message) => {
     expect(isRuntimeProviderAuthFailure(message)).toBe(false);
@@ -551,6 +557,72 @@ describe('ProviderAuthService', () => {
     });
   });
 
+  it('applies a runtime failure that arrives while an ordinary probe is in flight', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runCommand = vi.fn(async (executable: string) => {
+      await waiting;
+      return resultFor(executable);
+    });
+    const service = new ProviderAuthService({ runCommand });
+
+    const pending = service.status();
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    service.reportRuntimeAuthFailure('claude');
+    release();
+
+    await expect(pending.then(({ providers }) => providers[0])).resolves.toMatchObject({
+      provider: 'claude',
+      status: 'disconnected',
+    });
+  });
+
+  it('starts explicit recovery with a fresh probe instead of joining an older probe', async () => {
+    let releaseOlder!: () => void;
+    const olderWaiting = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    let callCount = 0;
+    const runCommand = vi.fn(async (executable: string) => {
+      callCount += 1;
+      if (callCount <= 3) await olderWaiting;
+      return resultFor(executable);
+    });
+    const service = new ProviderAuthService({ runCommand });
+
+    const older = service.status();
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    service.reportRuntimeAuthFailure('claude');
+    const recovery = service.status({ refresh: true, recoverRuntimeFailures: true });
+
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(6));
+    await expect(recovery.then(({ providers }) => providers[0])).resolves.toMatchObject({
+      provider: 'claude',
+      status: 'connected',
+    });
+    releaseOlder();
+    await expect(older).resolves.toBeDefined();
+  });
+
+  it('keeps a newer runtime failure that arrives during an explicit recovery probe', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runCommand = vi.fn(async (executable: string) => {
+      await waiting;
+      return resultFor(executable);
+    });
+    const service = new ProviderAuthService({ runCommand });
+    service.reportRuntimeAuthFailure('claude');
+
+    const recovery = service.status({ refresh: true, recoverRuntimeFailures: true });
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
+    release();
+
+    await expect(recovery.then(({ providers }) => providers[0])).resolves.toMatchObject({
+      provider: 'claude',
+      status: 'disconnected',
+    });
+  });
+
   it('does not clear a runtime latch from a cached connected response', async () => {
     const runCommand = runner();
     const service = new ProviderAuthService({ runCommand });
@@ -583,10 +655,10 @@ describe('ProviderAuthService', () => {
 
     const ordinary = service.status();
     const refresh = service.status({ refresh: true });
-    expect(refresh).toBe(ordinary);
     await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
     release();
     await expect(Promise.all([ordinary, refresh])).resolves.toHaveLength(2);
+    expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
   it('uses CEZ_CODEX_BIN and CEZ_OPENCODE_BIN for both probe and login commands', async () => {

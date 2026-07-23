@@ -9,7 +9,8 @@ import {
   type RunProviderCommand,
 } from '../core/provider-auth.js';
 import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
+import { RunManager } from '../workflows/run.js';
+import { ProjectContexts } from './project-context.js';
 import { apiRequest } from './loopback-request.testkit.js';
 import { WorkspaceEventBus, createApp } from './server.js';
 
@@ -82,6 +83,7 @@ describe('workspace provider API', () => {
     openTerminal?: (cwd: string, command: string) => Promise<boolean>;
     bindHost?: string;
     workspaceEvents?: WorkspaceEventBus;
+    contexts?: ProjectContexts;
   } = {}) => createApp({
     repoRoot: root,
     store,
@@ -91,6 +93,7 @@ describe('workspace provider API', () => {
     openTerminal: options.openTerminal,
     bindHost: options.bindHost,
     workspaceEvents: options.workspaceEvents,
+    contexts: options.contexts,
   });
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
@@ -186,6 +189,51 @@ describe('workspace provider API', () => {
       });
   });
 
+  it('observes a lazy-project auth failure emitted during recovery', async () => {
+    const lazyRoot = mkdtempSync(join(tmpdir(), 'cez-providers-lazy-'));
+    const lazyStore = RunStore.open(join(lazyRoot, '.ai/cezar'), { keepLive: true });
+    const run = lazyStore.createRun({
+      title: 'lazy recovery',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    lazyStore.flush();
+    lazyStore.removeAllListeners();
+
+    const contexts = new ProjectContexts({
+      listProjects: async () => [{ id: 'lazy', root: lazyRoot, status: 'not-git' }],
+    });
+    const providerAuth = service();
+    const recover = vi.spyOn(RunManager.prototype, 'recover').mockImplementationOnce(
+      async function recoveryFailure(this: RunManager) {
+        const recoveringStore = (
+          this as unknown as { store: RunStore }
+        ).store;
+        recoveringStore.appendEvent(run.id, {
+          type: 'error',
+          message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+        });
+      },
+    );
+
+    try {
+      const server = app({ providerAuth, contexts });
+      expect((await apiRequest(server, '/api/p/lazy/runs')).status).toBe(200);
+      await expect((await apiRequest(server, '/api/providers/status')).json()).resolves
+        .toMatchObject({
+          providers: expect.arrayContaining([
+            expect.objectContaining({ provider: 'claude', status: 'disconnected' }),
+          ]),
+        });
+    } finally {
+      recover.mockRestore();
+      contexts.disposeAll();
+      rmSync(lazyRoot, { recursive: true, force: true });
+    }
+  });
+
   it('POST still opens Claude login when a runtime latch overlays a connected probe', async () => {
     const providerAuth = service();
     providerAuth.reportRuntimeAuthFailure('claude');
@@ -193,6 +241,31 @@ describe('workspace provider API', () => {
 
     const response = await connect(app({ providerAuth, openTerminal }), 'claude');
 
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ opened: true, command: "'claude' auth login" });
+    expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");
+  });
+
+  it('POST opens login when a runtime rejection arrives during its status probe', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runCommand = vi.fn<RunProviderCommand>(async (executable) => {
+      await waiting;
+      return {
+        stdout: CONNECTED_OUTPUT[providerForExecutable(executable)],
+        stderr: '',
+        exitCode: 0,
+      };
+    });
+    const providerAuth = service({}, runCommand);
+    const openTerminal = vi.fn(async () => true);
+    const pending = connect(app({ providerAuth, openTerminal }), 'claude');
+
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    providerAuth.reportRuntimeAuthFailure('claude');
+    release();
+
+    const response = await pending;
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ opened: true, command: "'claude' auth login" });
     expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");

@@ -53,9 +53,10 @@ const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\bproviderautherror\b/i,
   /\b(?:oauth|access|refresh)?\s*token\b.{0,80}\b(?:revoked|expired|invalid)\b/i,
   /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth|access|refresh)?\s*token\b/i,
-  /\bapi key\b.{0,80}\b(?:revoked|expired|invalid)\b/i,
-  /\b(?:oauth|token|credential|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
-  /\b401\b.{0,80}\b(?:oauth|token|credential|unauthorized|unauthenticated)\b/i,
+  /\b(?:api[-\s]?key|x-api-key)\b\s*(?:(?:is|was|has been)\s+|[:=-]\s*)?(?:revoked|expired|invalid)\b/i,
+  /\b(?:revoked|expired|invalid)\s+(?:api[-\s]?key|x-api-key)\b/i,
+  /\b(?:oauth|token|credential|api[-\s]?key|x-api-key|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
+  /\b401\b.{0,80}\b(?:oauth|token|credential|api[-\s]?key|x-api-key|unauthorized|unauthenticated)\b/i,
 ] as const;
 
 export function isRuntimeProviderAuthFailure(message: string): boolean {
@@ -206,8 +207,14 @@ export class ProviderAuthService {
   private readonly runCommand: RunProviderCommand;
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
-  private readonly runtimeFailures = new Set<ProviderId>();
-  private completed?: { response: ProviderStatusResponse; timestamp: number };
+  private readonly runtimeFailures = new Map<ProviderId, number>();
+  private nextRuntimeFailureGeneration = 0;
+  private nextProbeGeneration = 0;
+  private completed?: {
+    response: ProviderStatusResponse;
+    timestamp: number;
+    generation: number;
+  };
   private inFlight?: Promise<ProviderStatusResponse>;
 
   constructor(options?: {
@@ -229,37 +236,34 @@ export class ProviderAuthService {
         providers: PROVIDER_IDS.map((provider) => ({ provider, status: 'connected' })),
       });
     }
+
+    if (options?.recoverRuntimeFailures && options.refresh) {
+      const observedFailures = new Map(this.runtimeFailures);
+      return this.startFreshProbe()
+        .then((response) => this.recoverRuntimeFailures(response, observedFailures));
+    }
+
     let base: Promise<ProviderStatusResponse>;
     if (this.inFlight) {
       base = this.inFlight;
     } else if (!options?.refresh && this.completed && this.now() - this.completed.timestamp < CACHE_TTL_MS) {
       base = Promise.resolve(this.completed.response);
     } else {
-      const inFlight = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
-        .then((providers) => {
-          const response = { providers };
-          this.completed = { response, timestamp: this.now() };
-          return response;
-        });
-      this.inFlight = inFlight;
-      void inFlight.finally(() => {
-        if (this.inFlight === inFlight) this.inFlight = undefined;
-      });
-      base = inFlight;
+      base = this.startFreshProbe();
     }
 
-    if (options?.recoverRuntimeFailures && options.refresh) {
-      return base.then((response) => this.recoverRuntimeFailures(response));
-    }
-    if (this.runtimeFailures.size > 0) {
-      return base.then((response) => this.withRuntimeFailures(response));
-    }
-    return base;
+    // The runtime signal is more authoritative than a local status command.
+    // Read the latch only after the async probe resolves so a rejection that
+    // arrives while the command is running cannot be overwritten by its older
+    // result.
+    return base.then((response) => this.withRuntimeFailures(response));
   }
 
   reportRuntimeAuthFailure(provider: ProviderId): ProviderStatus | null {
-    if (process.env.CEZ_DRY_RUN === '1' || this.runtimeFailures.has(provider)) return null;
-    this.runtimeFailures.add(provider);
+    if (process.env.CEZ_DRY_RUN === '1') return null;
+    const alreadyLatched = this.runtimeFailures.has(provider);
+    this.runtimeFailures.set(provider, ++this.nextRuntimeFailureGeneration);
+    if (alreadyLatched) return null;
     return { provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT };
   }
 
@@ -283,11 +287,38 @@ export class ProviderAuthService {
     };
   }
 
-  private recoverRuntimeFailures(response: ProviderStatusResponse): ProviderStatusResponse {
+  private recoverRuntimeFailures(
+    response: ProviderStatusResponse,
+    observedFailures: ReadonlyMap<ProviderId, number>,
+  ): ProviderStatusResponse {
     for (const row of response.providers) {
-      if (row.status === 'connected') this.runtimeFailures.delete(row.provider);
+      const observedGeneration = observedFailures.get(row.provider);
+      if (
+        row.status === 'connected'
+        && observedGeneration !== undefined
+        && this.runtimeFailures.get(row.provider) === observedGeneration
+      ) {
+        this.runtimeFailures.delete(row.provider);
+      }
     }
     return this.withRuntimeFailures(response);
+  }
+
+  private startFreshProbe(): Promise<ProviderStatusResponse> {
+    const generation = ++this.nextProbeGeneration;
+    const inFlight = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
+      .then((providers) => {
+        const response = { providers };
+        if (!this.completed || generation >= this.completed.generation) {
+          this.completed = { response, timestamp: this.now(), generation };
+        }
+        return response;
+      });
+    this.inFlight = inFlight;
+    void inFlight.finally(() => {
+      if (this.inFlight === inFlight) this.inFlight = undefined;
+    });
+    return inFlight;
   }
 
   private async probe(descriptor: ProviderDescriptor): Promise<ProviderStatus> {

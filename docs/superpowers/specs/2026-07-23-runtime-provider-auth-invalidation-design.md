@@ -64,6 +64,16 @@ vendor probes and clears a latched provider only when that fresh probe reports `
 provider still opens the vendor login flow rather than returning “already connected.” After the
 user completes that flow, “Check again” is the deliberate recovery action.
 
+Runtime failures carry an in-memory generation per provider. Status overlays are applied when a
+probe resolves, not when it starts, so a rejection always outranks an older in-flight probe.
+Check again owns a fresh probe instead of joining a probe that predates the request, and clears
+only the failure generation it observed at probe start. A newer rejection arriving during that
+probe remains latched.
+
+Run-store observation is attached before `RunManager.recover()` for both the boot project and
+lazy project contexts. A resumed runner can therefore invalidate authentication even when it
+fails immediately during startup recovery.
+
 The latch is in memory only. Restarting cezar rebuilds status from vendor CLIs, preserving the
 project's zero-configuration and no-new-state guarantees.
 

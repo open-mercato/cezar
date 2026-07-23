@@ -31,3 +31,37 @@ export function watchProviderRuntimeAuthFailures(
   store.on('event', onEvent);
   return () => store.off('event', onEvent);
 }
+
+/**
+ * Process-wide dedupe for store observation. The same boot store is wired
+ * before recovery and again when the HTTP app is constructed; lazy stores are
+ * wired both at creation and at the existing context-built hook. One listener
+ * per RunStore keeps those lifecycle overlaps harmless.
+ */
+export class ProviderRuntimeAuthObserver {
+  private readonly watched = new WeakSet<RunStore>();
+
+  constructor(
+    private readonly providerAuth: ProviderAuthService,
+    private readonly onInvalidated: (status: ProviderStatus) => void,
+  ) {}
+
+  watch(store: RunStore): void {
+    if (this.watched.has(store)) return;
+    this.watched.add(store);
+    watchProviderRuntimeAuthFailures(store, this.providerAuth, this.onInvalidated);
+  }
+}
+
+/**
+ * Boot ordering seam: observation must exist before recovery starts because a
+ * resumed runner can emit its first normalized error before recover() returns.
+ */
+export async function recoverWithProviderRuntimeAuthObservation(
+  store: RunStore,
+  recover: () => Promise<void>,
+  observer: ProviderRuntimeAuthObserver,
+): Promise<void> {
+  observer.watch(store);
+  await recover();
+}

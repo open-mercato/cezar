@@ -16,10 +16,11 @@ import { WorkspaceEventBus, createApp } from './server.js';
  * `GET /api/workspace/events` carries EVERY instantiated project's events,
  * each payload stamped with its `project` id; `usage` is split per project
  * (one stamped event per project with live rows); workspace-level bus events
- * (`project-added`, `project-removed`, `checkout-progress`) ride the same
- * stream. Subscribing never force-instantiates a project — late-built
- * contexts join dynamically. The legacy `/api/events` alias stays
- * boot-filtered with its UN-stamped, byte-identical shape (protected).
+ * (`project-added`, `project-removed`, `checkout-progress`) and the host-wide
+ * unstamped `provider-status` event ride the same stream. Subscribing never
+ * force-instantiates a project — late-built contexts join dynamically. The
+ * legacy `/api/events` alias stays boot-filtered with its UN-stamped,
+ * byte-identical shape (protected).
  */
 describe('GET /api/workspace/events', () => {
   const savedHome = process.env.CEZ_HOME;
@@ -333,7 +334,7 @@ describe('GET /api/workspace/events', () => {
     ]);
   });
 
-  it('relays workspace-level bus events under their own names (project-added/removed, checkout-progress)', async () => {
+  it('relays workspace-level bus events under their own names (projects, checkout, provider status)', async () => {
     const ws = await openStream('/api/workspace/events');
     await ws.readUntil('event: ping');
 

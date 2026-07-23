@@ -89,7 +89,7 @@ import { ensureLaunchKey } from './launch-key.js';
 import { openInTerminal } from './open-in-terminal.js';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.js';
 import { createDraftPr } from './pr.js';
-import { watchProviderRuntimeAuthFailures } from './provider-auth-runtime.js';
+import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.js';
 import {
   ASSET_CACHE_CONTROL,
   BUILD_HINT_HTML,
@@ -129,9 +129,10 @@ export interface ServerDeps {
    *  callers/tests change nothing. */
   semaphore?: WorkspaceSemaphore;
   /** Workspace-level SSE bus (spec, step 2.8): `project-added` /
-   *  `project-removed` / `checkout-progress` reach the `/api/workspace/events`
-   *  streams through this. Optional — createApp builds a private one; inject
-   *  to emit from outside the app (tests, future CLI hooks). */
+   *  `project-removed` / `checkout-progress` plus the host-wide unstamped
+   *  `provider-status` event reach `/api/workspace/events` through this.
+   *  Optional — createApp builds a private one; inject to emit from outside
+   *  the app (tests, future CLI hooks). */
   workspaceEvents?: WorkspaceEventBus;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
@@ -142,6 +143,10 @@ export interface ServerDeps {
   modelCatalog?: RunnerModelCatalog;
   /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
   providerAuth?: ProviderAuthService;
+  /** Shared runtime rejection observer. The CLI injects the instance already
+   *  watching the boot store before recovery; createApp builds one for legacy
+   *  callers and tests. */
+  providerRuntimeAuth?: ProviderRuntimeAuthObserver;
   /** Local terminal handoff for provider-owned login. */
   openTerminal?: typeof openInTerminal;
 }
@@ -271,8 +276,8 @@ export interface WorkspaceConfigResponse {
 // ---- workspace SSE (multi-project spec, step 2.8) --------------------------
 
 /** Workspace-level event names carried ONLY on `GET /api/workspace/events`
- *  (never on the per-project streams): registry mutations plus the GUI-clone
- *  progress feed (step 4.3). */
+ *  (never on the per-project streams): registry mutations, the GUI-clone
+ *  progress feed (step 4.3), and host-wide unstamped provider status. */
 export type WorkspaceEventName =
   | 'project-added'
   | 'project-removed'
@@ -283,10 +288,11 @@ export type WorkspaceEventName =
  * The in-process bus for workspace-level SSE events. The registry-mutating
  * routes (`POST /api/projects` — step 4.2, emits `project-added` for a
  * genuinely new entry; `DELETE /api/projects/:projectId` — step 4.4) and the
- * checkout flow (step 4.3) call `emit()`; every open `/api/workspace/events`
- * stream relays the
- * event verbatim under its name. Injectable via `ServerDeps.workspaceEvents`
- * so tests (and any out-of-createApp emitter) can drive the stream.
+ * checkout flow (step 4.3) call `emit()`; runtime provider auth observation
+ * emits host-wide `provider-status`; every open `/api/workspace/events` stream
+ * relays the event verbatim under its name. Injectable via
+ * `ServerDeps.workspaceEvents` so tests (and any out-of-createApp emitter) can
+ * drive the stream.
  */
 export class WorkspaceEventBus {
   private readonly listeners = new Set<(event: WorkspaceEventName, data: unknown) => void>();
@@ -786,21 +792,18 @@ export function createApp(deps: ServerDeps): Hono {
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
 
-  const watchedProviderStores = new WeakSet<RunStore>();
-  const watchProviderStore = (store: RunStore): void => {
-    if (watchedProviderStores.has(store)) return;
-    watchedProviderStores.add(store);
-    watchProviderRuntimeAuthFailures(store, providerAuth, (status) => {
+  const providerRuntimeAuth = deps.providerRuntimeAuth
+    ?? new ProviderRuntimeAuthObserver(providerAuth, (status) => {
       workspaceEvents.emit('provider-status', status);
     });
-  };
 
-  watchProviderStore(bootContext.store);
+  providerRuntimeAuth.watch(bootContext.store);
   for (const id of contexts.ids()) {
     const ctx = contexts.peek(id);
-    if (ctx) watchProviderStore(ctx.store);
+    if (ctx) providerRuntimeAuth.watch(ctx.store);
   }
-  contexts.onContextBuilt((ctx) => watchProviderStore(ctx.store));
+  contexts.onStoreCreated((store) => providerRuntimeAuth.watch(store));
+  contexts.onContextBuilt((ctx) => providerRuntimeAuth.watch(ctx.store));
 
   const app = new Hono();
 
@@ -2829,11 +2832,12 @@ export function createApp(deps: ServerDeps): Hono {
       });
 
       // Workspace-level events (project-added / project-removed /
-      // checkout-progress) — relayed verbatim under their own names. A
-      // removal also drops the project's attach entry: the id guard in
-      // `attach` would otherwise pin the DISPOSED context forever, so a
-      // project removed and re-added on the same slug would rebuild a fresh
-      // context whose events never reach this already-open stream.
+      // checkout-progress plus host-wide unstamped provider-status) — relayed
+      // verbatim under their own names. A removal also drops the project's
+      // attach entry: the id guard in `attach` would otherwise pin the
+      // DISPOSED context forever, so a project removed and re-added on the
+      // same slug would rebuild a fresh context whose events never reach this
+      // already-open stream.
       const offWorkspace = workspaceEvents.on((event, data) => {
         if (event === 'project-removed') {
           const removed = (data as { id?: string }).id;

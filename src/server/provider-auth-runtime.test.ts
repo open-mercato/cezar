@@ -8,7 +8,11 @@ import {
   type RunProviderCommand,
 } from '../core/provider-auth.js';
 import { RunStore } from '../runs/store.js';
-import { watchProviderRuntimeAuthFailures } from './provider-auth-runtime.js';
+import {
+  ProviderRuntimeAuthObserver,
+  recoverWithProviderRuntimeAuthObservation,
+  watchProviderRuntimeAuthFailures,
+} from './provider-auth-runtime.js';
 
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
@@ -214,5 +218,51 @@ describe('watchProviderRuntimeAuthFailures', () => {
     });
 
     expect(onInvalidated).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates observation when startup and app construction watch the same store', () => {
+    const onInvalidated = vi.fn();
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, onInvalidated);
+    const run = store.createRun({
+      title: 'deduplicated',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+
+    observer.watch(store);
+    observer.watch(store);
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+    });
+
+    expect(onInvalidated).toHaveBeenCalledTimes(1);
+  });
+
+  it('attaches boot-store observation before recovery can emit an auth failure', async () => {
+    const run = store.createRun({
+      title: 'boot recovery',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
+
+    await recoverWithProviderRuntimeAuthObservation(
+      store,
+      async () => {
+        store.appendEvent(run.id, {
+          type: 'error',
+          message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+        });
+      },
+      observer,
+    );
+
+    await expect(providerAuth.status().then(({ providers }) => providers[0]))
+      .resolves.toMatchObject({ provider: 'claude', status: 'disconnected' });
   });
 });

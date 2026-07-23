@@ -127,6 +127,13 @@ a fresh connected result clears that provider's runtime latch. Connect itself pr
 latch—the user must complete the vendor flow and then check again—so a launched login command
 cannot prematurely claim recovery.
 
+The latch is generation-aware: every runtime rejection advances that provider's generation.
+Responses apply the current latch only after their asynchronous probes resolve, so an older
+in-flight result cannot restore green. Check again never joins a probe started before the
+request, and it clears only the generation present when its fresh probe began; a rejection
+arriving during recovery remains disconnected. Store observation is installed before startup
+recovery for the boot project and every lazy project context.
+
 The server emits the resulting change as an additive workspace `provider-status` SSE event. A
 duplicate v1/v2 runtime report causes no second transition. Raw runtime error text never leaves
 the server: the response and event carry only the provider id, disconnected state, and fixed

@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.js';
+import { ProviderAuthService } from './core/provider-auth.js';
 import { pruneOrphans } from './git-worktree.js';
 import { getRepoInfo } from './server/git.js';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.js';
@@ -13,7 +14,11 @@ import { reclaimWorktrees } from './runs/retention.js';
 import { RunStore } from './runs/store.js';
 import { RunManager } from './workflows/run.js';
 import { loadWorkflows } from './workflows/load.js';
-import { startServer } from './server/server.js';
+import { startServer, WorkspaceEventBus } from './server/server.js';
+import {
+  ProviderRuntimeAuthObserver,
+  recoverWithProviderRuntimeAuthObservation,
+} from './server/provider-auth-runtime.js';
 import { checkForUpdate } from './update-check.js';
 import { printSkillsBanner } from './skills-banner.js';
 import { runMigrations } from './workspace/migrations.js';
@@ -174,6 +179,11 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
   const manager = new RunManager(store, repoRoot, { semaphore });
+  const providerAuth = new ProviderAuthService();
+  const workspaceEvents = new WorkspaceEventBus();
+  const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
+    workspaceEvents.emit('provider-status', status);
+  });
   const version = readOwnVersion();
 
   const checks = await detectEnvironment();
@@ -200,7 +210,11 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
-  await manager.recover();
+  await recoverWithProviderRuntimeAuthObservation(
+    store,
+    () => manager.recover(),
+    providerRuntimeAuth,
+  );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
 
   // Update discovery (#368) — fire-and-forget; the banner prints whenever the
@@ -214,7 +228,18 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
   });
 
   const port = await pickPort(preferredPort);
-  startServer({ repoRoot, store, manager, version, update, bootProjectId, semaphore }, port);
+  startServer({
+    repoRoot,
+    store,
+    manager,
+    version,
+    update,
+    bootProjectId,
+    semaphore,
+    providerAuth,
+    providerRuntimeAuth,
+    workspaceEvents,
+  }, port);
   const url = `http://localhost:${port}`;
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
