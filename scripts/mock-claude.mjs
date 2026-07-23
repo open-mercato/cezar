@@ -113,6 +113,21 @@ async function respond(userText, imageCount) {
   // `mock:slow` → hold the turn for ~25 s so queue states are observable.
   if (userText.includes('mock:slow')) await sleep(25_000);
 
+  // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
+  // the credential failure in an `is_error` result even though its subtype is
+  // `success`, rather than emitting a dedicated error frame.
+  if (userText.includes('mock:auth-error')) {
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+
   // `mock:md` → answer with a markdown-rich reply (#346 QA: tables, nested
   // lists, emphasis, fences, quotes) instead of the scripted turn.
   if (userText.includes('mock:md')) {
