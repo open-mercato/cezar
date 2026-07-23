@@ -11,7 +11,7 @@ import {
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { WorkspaceEventBus, createApp } from './server.js';
 
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
@@ -81,6 +81,7 @@ describe('workspace provider API', () => {
     providerAuth?: ProviderAuthService;
     openTerminal?: (cwd: string, command: string) => Promise<boolean>;
     bindHost?: string;
+    workspaceEvents?: WorkspaceEventBus;
   } = {}) => createApp({
     repoRoot: root,
     store,
@@ -89,6 +90,7 @@ describe('workspace provider API', () => {
     providerAuth: options.providerAuth ?? service(),
     openTerminal: options.openTerminal,
     bindHost: options.bindHost,
+    workspaceEvents: options.workspaceEvents,
   });
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
@@ -146,6 +148,69 @@ describe('workspace provider API', () => {
     await apiRequest(server, '/api/providers/status');
 
     expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it('changes API truth immediately after a runtime auth rejection', async () => {
+    const providerAuth = service();
+    const bus = new WorkspaceEventBus();
+    const seen: unknown[] = [];
+    bus.on((event, data) => {
+      if (event === 'provider-status') seen.push(data);
+    });
+    const server = app({ providerAuth, workspaceEvents: bus });
+    const run = store.createRun({
+      title: 'auth',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'work', { backend: 'claude' });
+
+    store.appendEvent(run.id, {
+      type: 'error',
+      stepId: 'work',
+      message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+    });
+
+    expect(seen).toEqual([{
+      provider: 'claude',
+      status: 'disconnected',
+      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+    }]);
+    await expect((await apiRequest(server, '/api/providers/status')).json()).resolves
+      .toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'disconnected' }),
+        ]),
+      });
+  });
+
+  it('POST still opens Claude login when a runtime latch overlays a connected probe', async () => {
+    const providerAuth = service();
+    providerAuth.reportRuntimeAuthFailure('claude');
+    const openTerminal = vi.fn(async () => true);
+
+    const response = await connect(app({ providerAuth, openTerminal }), 'claude');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ opened: true, command: "'claude' auth login" });
+    expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");
+  });
+
+  it('GET ?refresh=1 clears a runtime latch after a fresh connected probe', async () => {
+    const providerAuth = service();
+    providerAuth.reportRuntimeAuthFailure('claude');
+    const server = app({ providerAuth });
+
+    const response = await apiRequest(server, '/api/providers/status?refresh=1');
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      providers: expect.arrayContaining([
+        { provider: 'claude', status: 'connected' },
+      ]),
+    });
   });
 
   it('is workspace-level rather than project-scoped', async () => {

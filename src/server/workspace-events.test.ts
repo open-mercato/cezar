@@ -260,6 +260,43 @@ describe('GET /api/workspace/events', () => {
     ]);
   });
 
+  it("broadcasts a late-built context's runtime provider invalidation without a project stamp", async () => {
+    const other = await buildOtherContext();
+    const ws = await openStream('/api/workspace/events');
+    await ws.readUntil('event: ping');
+
+    try {
+      delete process.env.CEZ_DRY_RUN;
+      const run = other.store.createRun({
+        title: 'auth',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'opencode',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      other.store.updateStep(run.id, 'work', { backend: 'opencode' });
+      other.store.appendEvent(run.id, {
+        type: 'session.error',
+        stepId: 'work',
+        message: 'OAuth access token is invalid',
+      });
+
+      const body = await ws.readUntil('event: provider-status');
+      expect(body).toContain(
+        'event: provider-status\n'
+        + 'data: {"provider":"opencode","status":"disconnected",'
+        + '"hint":"Authentication was rejected during a run. Reconnect, then check again."}\n',
+      );
+      expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toEqual([{
+        provider: 'opencode',
+        status: 'disconnected',
+        hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+      }]);
+    } finally {
+      process.env.CEZ_DRY_RUN = '1';
+    }
+  });
+
   it('a removed project re-added on the same slug resumes flowing on an already-open stream', async () => {
     const other = await buildOtherContext();
 

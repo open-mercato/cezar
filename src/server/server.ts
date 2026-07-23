@@ -89,6 +89,7 @@ import { ensureLaunchKey } from './launch-key.js';
 import { openInTerminal } from './open-in-terminal.js';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.js';
 import { createDraftPr } from './pr.js';
+import { watchProviderRuntimeAuthFailures } from './provider-auth-runtime.js';
 import {
   ASSET_CACHE_CONTROL,
   BUILD_HINT_HTML,
@@ -272,7 +273,11 @@ export interface WorkspaceConfigResponse {
 /** Workspace-level event names carried ONLY on `GET /api/workspace/events`
  *  (never on the per-project streams): registry mutations plus the GUI-clone
  *  progress feed (step 4.3). */
-export type WorkspaceEventName = 'project-added' | 'project-removed' | 'checkout-progress';
+export type WorkspaceEventName =
+  | 'project-added'
+  | 'project-removed'
+  | 'checkout-progress'
+  | 'provider-status';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -781,6 +786,22 @@ export function createApp(deps: ServerDeps): Hono {
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
 
+  const watchedProviderStores = new WeakSet<RunStore>();
+  const watchProviderStore = (store: RunStore): void => {
+    if (watchedProviderStores.has(store)) return;
+    watchedProviderStores.add(store);
+    watchProviderRuntimeAuthFailures(store, providerAuth, (status) => {
+      workspaceEvents.emit('provider-status', status);
+    });
+  };
+
+  watchProviderStore(bootContext.store);
+  for (const id of contexts.ids()) {
+    const ctx = contexts.peek(id);
+    if (ctx) watchProviderStore(ctx.store);
+  }
+  contexts.onContextBuilt((ctx) => watchProviderStore(ctx.store));
+
   const app = new Hono();
 
   // Reject oversized request bodies before they reach any handler (#429). GETs
@@ -1048,7 +1069,11 @@ export function createApp(deps: ServerDeps): Hono {
   app.get('/api/providers/status', async (c) => {
     const query = z.object({ refresh: z.literal('1').optional() }).safeParse(c.req.query());
     if (!query.success) return c.json({ error: 'refresh must be 1 when provided' }, 400);
-    return c.json(await providerAuth.status({ refresh: query.data.refresh === '1' }));
+    const refresh = query.data.refresh === '1';
+    return c.json(await providerAuth.status({
+      refresh,
+      recoverRuntimeFailures: refresh,
+    }));
   });
 
   app.post('/api/providers/connect', async (c) => {
