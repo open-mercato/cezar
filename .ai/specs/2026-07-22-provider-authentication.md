@@ -139,6 +139,10 @@ duplicate v1/v2 runtime report causes no second transition. Raw runtime error te
 the server: the response and event carry only the provider id, disconnected state, and fixed
 hint.
 
+A runtime-latched provider row includes an opaque `authFailureId`. The identifier stays stable for
+that latch, is removed by successful explicit recovery, and changes if a later runtime rejection
+creates a new latch. It contains no vendor output or credential data.
+
 ## HTTP API
 
 Provider credentials belong to the host user, not to a repository. Both routes are workspace
@@ -241,6 +245,11 @@ The banner is compact, non-dismissible, keyboard accessible, and visible above t
 scroller on desktop and mobile. Its project-aware link targets `/settings/agents#providers`; a
 global-settings page falls back through the existing boot-project redirect. The Providers block
 uses scroll margin so the hash target is not obscured by sticky settings chrome.
+
+The global banner first renders every undismissed runtime-authentication incident, even when another
+provider is connected. Dismissals are provider-to-incident mappings in workspace UI state and never
+change provider status. When no runtime incident remains visible, the existing zero-connected
+provider banner rules apply.
 
 ## Runnable-provider gating
 
