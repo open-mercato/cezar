@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ProviderAuthService } from '../core/provider-auth.js';
 import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.js';
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
@@ -59,6 +60,9 @@ describe('GET /api/workspace/events', () => {
       version: '0.0.0-test',
       contexts,
       workspaceEvents: bus,
+      providerAuth: new ProviderAuthService({
+        createAuthFailureId: () => 'auth-incident-1',
+      }),
     });
   });
 
@@ -286,12 +290,14 @@ describe('GET /api/workspace/events', () => {
       expect(body).toContain(
         'event: provider-status\n'
         + 'data: {"provider":"opencode","status":"disconnected",'
-        + '"hint":"Authentication was rejected during a run. Reconnect, then check again."}\n',
+        + '"hint":"Authentication was rejected during a run. Reconnect, then check again.",'
+        + '"authFailureId":"auth-incident-1"}\n',
       );
       expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toEqual([{
         provider: 'opencode',
         status: 'disconnected',
         hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+        authFailureId: 'auth-incident-1',
       }]);
     } finally {
       process.env.CEZ_DRY_RUN = '1';

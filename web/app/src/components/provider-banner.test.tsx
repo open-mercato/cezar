@@ -40,10 +40,27 @@ describe('ProviderBanner', () => {
     expect(container.innerHTML).toBe('')
   })
 
-  it('renders nothing when the route itself failed', () => {
+  it('keeps the generic provider banner hidden when a refetch fails with cached generic status', () => {
     const { container } = renderBanner({ error: true })
 
     expect(container.innerHTML).toBe('')
+  })
+
+  it('keeps a cached runtime incident visible when a background refetch fails', () => {
+    renderBanner({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
+        ],
+      },
+      error: true,
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Provider authentication failed during a task: Claude Code.',
+    )
   })
 
   it('fails closed without rendering unexpected data when called with malformed rows', () => {

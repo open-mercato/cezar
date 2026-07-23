@@ -1096,7 +1096,10 @@ export function createApp(deps: ServerDeps): Hono {
     const command = providerAuth.loginCommand(provider);
     const row = (await providerAuth.status({ refresh: true })).providers.find(
       (candidate) => candidate.provider === provider,
-    )!;
+    );
+    if (!row) {
+      return c.json({ error: 'Authentication could not be verified. Try again.' }, 500);
+    }
 
     if (row.status === 'connected') {
       return c.json({ opened: false, connected: true, command });

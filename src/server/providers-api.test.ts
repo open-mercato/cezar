@@ -373,6 +373,27 @@ describe('workspace provider API', () => {
     expect(openTerminal).not.toHaveBeenCalled();
   });
 
+  it('POST returns a sanitized JSON error when provider status omits the requested row', async () => {
+    const providerAuth = service();
+    vi.spyOn(providerAuth, 'status').mockResolvedValue({
+      providers: [{
+        provider: 'claude',
+        status: 'unknown',
+        hint: 'private provider probe output',
+      }],
+    });
+    const openTerminal = vi.fn(async () => true);
+
+    const response = await connect(app({ providerAuth, openTerminal }), 'codex');
+    const raw = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(JSON.parse(raw)).toEqual({ error: 'Authentication could not be verified. Try again.' });
+    expect(raw).not.toContain('private provider probe output');
+    expect(openTerminal).not.toHaveBeenCalled();
+  });
+
   it('POST returns 409 plus command when localHandoff is false', async () => {
     const openTerminal = vi.fn(async () => true);
     const response = await connect(app({

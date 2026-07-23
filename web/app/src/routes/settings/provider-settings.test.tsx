@@ -22,12 +22,14 @@ function serve({
   status = ALL_STATUSES,
   refreshStatus,
   statusCode = 200,
+  refreshStatusCode,
   connect = { opened: true, command: 'codex login' },
   connectCode = 200,
 }: {
   status?: unknown
-  refreshStatus?: ProviderStatusResponse
+  refreshStatus?: unknown
   statusCode?: number
+  refreshStatusCode?: number
   connect?: unknown
   connectCode?: number
 } = {}) {
@@ -45,7 +47,11 @@ function serve({
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
       if (url.startsWith('/api/providers/status') && method === 'GET') {
-        return json(url.endsWith('?refresh=1') && refreshStatus ? refreshStatus : status, statusCode)
+        const refreshing = url.endsWith('?refresh=1')
+        return json(
+          refreshing && refreshStatus !== undefined ? refreshStatus : status,
+          refreshing ? (refreshStatusCode ?? statusCode) : statusCode,
+        )
       }
       if (url === '/api/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
@@ -227,5 +233,25 @@ describe('ProviderSettings', () => {
     await waitFor(() =>
       expect(requests.some((request) => request.url === '/api/providers/status?refresh=1')).toBe(true),
     )
+  })
+
+  it('surfaces a failed Check again without replacing the cached provider state', async () => {
+    serve({
+      refreshStatus: { error: 'Provider refresh failed.' },
+      refreshStatusCode: 500,
+    })
+    renderSettings()
+
+    const codexCard = card('codex')
+    fireEvent.click(await within(codexCard).findByRole('button', { name: 'Check again' }))
+    await waitFor(() =>
+      expect(requests.some((request) => request.url === '/api/providers/status?refresh=1')).toBe(true),
+    )
+
+    expect(within(codexCard).getByText('Not connected')).toBeTruthy()
+    expect(within(codexCard).queryByText('Connected')).toBeNull()
+    expect(within(codexCard).getByRole('button', { name: 'Connect' })).toBeTruthy()
+    const failure = await screen.findByText('Provider refresh failed.')
+    expect(failure.closest('[data-slot="toast"]')?.getAttribute('data-tone')).toBe('danger')
   })
 })

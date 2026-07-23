@@ -153,7 +153,9 @@ export function ProviderSettings() {
                         variant="ghost"
                         size="sm"
                         disabled={refresh.isPending}
-                        onClick={() => refresh.mutate()}
+                        onClick={() => refresh.mutate(undefined, {
+                          onError: (error) => toast(error.message, { tone: 'danger' }),
+                        })}
                       >
                         Check again
                       </Button>

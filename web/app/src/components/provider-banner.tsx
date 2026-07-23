@@ -26,7 +26,7 @@ export function ProviderBanner({
   dismissals,
   onDismissAuthFailures,
 }: ProviderBannerProps) {
-  if (pending || error || !status) return null
+  if (pending || !status) return null
   let normalized: ProviderStatusResponse
   try {
     normalized = parseProviderStatusResponse(status)
@@ -65,6 +65,7 @@ export function ProviderBanner({
     )
   }
 
+  if (error) return null
   if (normalized.providers.some((row) => row.status === 'connected')) return null
 
   const uncertain = normalized.providers.some((row) => row.status === 'unknown')
