@@ -59,8 +59,10 @@ describe('workspace provider API', () => {
   const service = (
     states: Partial<Record<ProviderId, ProviderConnectionState>> = {},
     onRun?: RunProviderCommand,
+    createAuthFailureId?: () => string,
   ) => new ProviderAuthService({
     platform: 'linux',
+    createAuthFailureId,
     runCommand: onRun ?? (async (executable) => {
       const provider = providerForExecutable(executable);
       const state = states[provider] ?? 'connected';
@@ -154,7 +156,7 @@ describe('workspace provider API', () => {
   });
 
   it('changes API truth immediately after a runtime auth rejection', async () => {
-    const providerAuth = service();
+    const providerAuth = service({}, undefined, () => 'auth-incident-1');
     const bus = new WorkspaceEventBus();
     const seen: unknown[] = [];
     bus.on((event, data) => {
@@ -180,11 +182,16 @@ describe('workspace provider API', () => {
       provider: 'claude',
       status: 'disconnected',
       hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+      authFailureId: 'auth-incident-1',
     }]);
     await expect((await apiRequest(server, '/api/providers/status')).json()).resolves
       .toMatchObject({
         providers: expect.arrayContaining([
-          expect.objectContaining({ provider: 'claude', status: 'disconnected' }),
+          expect.objectContaining({
+            provider: 'claude',
+            status: 'disconnected',
+            authFailureId: 'auth-incident-1',
+          }),
         ]),
       });
   });

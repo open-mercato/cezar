@@ -51,6 +51,7 @@ export interface ProviderStatus {
   provider: ProviderId
   status: ProviderConnectionState
   hint?: string
+  authFailureId?: string
 }
 
 export interface ProviderStatusResponse {

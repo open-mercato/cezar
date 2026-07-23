@@ -533,18 +533,32 @@ describe('ProviderAuthService', () => {
     expect(runCommand).toHaveBeenCalledTimes(6);
   });
 
-  it('overrides a connected probe after a runtime rejection and survives ordinary polling', async () => {
-    const service = new ProviderAuthService({ runCommand: runner() });
+  it('keeps one incident id until recovery and creates a new id after recovery', async () => {
+    const ids = ['incident-1', 'incident-2'];
+    const service = new ProviderAuthService({
+      platform: 'linux',
+      runCommand: runner(),
+      createAuthFailureId: () => ids.shift()!,
+    });
 
-    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'connected' } });
     expect(service.reportRuntimeAuthFailure('claude')).toEqual({
       provider: 'claude',
       status: 'disconnected',
       hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+      authFailureId: 'incident-1',
     });
     expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
+    await expect(service.status()).resolves.toMatchObject({
+      providers: expect.arrayContaining([
+        expect.objectContaining({ provider: 'claude', authFailureId: 'incident-1' }),
+      ]),
+    });
 
-    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'disconnected' } });
+    await service.status({ refresh: true, recoverRuntimeFailures: true });
+
+    expect(service.reportRuntimeAuthFailure('claude')).toMatchObject({
+      authFailureId: 'incident-2',
+    });
   });
 
   it('clears a runtime latch only after an explicit fresh connected recovery probe', async () => {
@@ -643,9 +657,11 @@ describe('ProviderAuthService', () => {
 
   it('keeps CEZ_DRY_RUN connected and ignores runtime invalidation', async () => {
     process.env.CEZ_DRY_RUN = '1';
-    const service = new ProviderAuthService({ runCommand: runner() });
+    const createAuthFailureId = vi.fn(() => 'unused-incident');
+    const service = new ProviderAuthService({ runCommand: runner(), createAuthFailureId });
 
     expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
+    expect(createAuthFailureId).not.toHaveBeenCalled();
     await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'connected' } });
   });
 

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 export const PROVIDER_IDS = ['claude', 'codex', 'opencode'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -12,6 +13,7 @@ export interface ProviderStatus {
   provider: ProviderId;
   status: ProviderConnectionState;
   hint?: string;
+  authFailureId?: string;
 }
 
 export interface ProviderStatusResponse {
@@ -212,11 +214,17 @@ function descriptorFor(provider: ProviderId): ProviderDescriptor {
   return descriptor;
 }
 
+interface RuntimeAuthFailure {
+  generation: number;
+  authFailureId: string;
+}
+
 export class ProviderAuthService {
   private readonly runCommand: RunProviderCommand;
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
-  private readonly runtimeFailures = new Map<ProviderId, number>();
+  private readonly createAuthFailureId: () => string;
+  private readonly runtimeFailures = new Map<ProviderId, RuntimeAuthFailure>();
   private nextRuntimeFailureGeneration = 0;
   private nextProbeGeneration = 0;
   private completed?: {
@@ -233,10 +241,12 @@ export class ProviderAuthService {
     runCommand?: RunProviderCommand;
     now?: () => number;
     platform?: NodeJS.Platform;
+    createAuthFailureId?: () => string;
   }) {
     this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
     this.now = options?.now ?? Date.now;
     this.platform = options?.platform ?? process.platform;
+    this.createAuthFailureId = options?.createAuthFailureId ?? randomUUID;
   }
 
   status(options?: {
@@ -267,10 +277,19 @@ export class ProviderAuthService {
 
   reportRuntimeAuthFailure(provider: ProviderId): ProviderStatus | null {
     if (process.env.CEZ_DRY_RUN === '1') return null;
-    const alreadyLatched = this.runtimeFailures.has(provider);
-    this.runtimeFailures.set(provider, ++this.nextRuntimeFailureGeneration);
-    if (alreadyLatched) return null;
-    return { provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT };
+    const current = this.runtimeFailures.get(provider);
+    const failure: RuntimeAuthFailure = {
+      generation: ++this.nextRuntimeFailureGeneration,
+      authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+    };
+    this.runtimeFailures.set(provider, failure);
+    if (current) return null;
+    return {
+      provider,
+      status: 'disconnected',
+      hint: RUNTIME_AUTH_HINT,
+      authFailureId: failure.authFailureId,
+    };
   }
 
   loginCommand(provider: ProviderId): string {
@@ -285,24 +304,30 @@ export class ProviderAuthService {
   private withRuntimeFailures(response: ProviderStatusResponse): ProviderStatusResponse {
     if (this.runtimeFailures.size === 0) return response;
     return {
-      providers: response.providers.map((row) => (
-        this.runtimeFailures.has(row.provider)
-          ? { provider: row.provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT }
-          : row
-      )),
+      providers: response.providers.map((row) => {
+        const failure = this.runtimeFailures.get(row.provider);
+        return failure
+          ? {
+            provider: row.provider,
+            status: 'disconnected',
+            hint: RUNTIME_AUTH_HINT,
+            authFailureId: failure.authFailureId,
+          }
+          : row;
+      }),
     };
   }
 
   private recoverRuntimeFailures(
     response: ProviderStatusResponse,
-    observedFailures: ReadonlyMap<ProviderId, number>,
+    observedFailures: ReadonlyMap<ProviderId, RuntimeAuthFailure>,
   ): ProviderStatusResponse {
     for (const row of response.providers) {
-      const observedGeneration = observedFailures.get(row.provider);
+      const observedFailure = observedFailures.get(row.provider);
       if (
         row.status === 'connected'
-        && observedGeneration !== undefined
-        && this.runtimeFailures.get(row.provider) === observedGeneration
+        && observedFailure !== undefined
+        && this.runtimeFailures.get(row.provider)?.generation === observedFailure.generation
       ) {
         this.runtimeFailures.delete(row.provider);
       }

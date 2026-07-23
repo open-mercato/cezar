@@ -45,7 +45,11 @@ describe('watchProviderRuntimeAuthFailures', () => {
       stderr: '',
       exitCode: 0,
     }));
-    providerAuth = new ProviderAuthService({ platform: 'linux', runCommand });
+    providerAuth = new ProviderAuthService({
+      platform: 'linux',
+      runCommand,
+      createAuthFailureId: () => 'auth-incident-1',
+    });
   });
 
   afterEach(() => {
@@ -83,6 +87,7 @@ describe('watchProviderRuntimeAuthFailures', () => {
       provider: 'codex',
       status: 'disconnected',
       hint: expect.any(String),
+      authFailureId: 'auth-incident-1',
     });
   });
 
