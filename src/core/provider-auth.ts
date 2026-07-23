@@ -248,7 +248,7 @@ export class ProviderAuthService {
       base = inFlight;
     }
 
-    if (options?.recoverRuntimeFailures) {
+    if (options?.recoverRuntimeFailures && options.refresh) {
       return base.then((response) => this.recoverRuntimeFailures(response));
     }
     if (this.runtimeFailures.size > 0) {

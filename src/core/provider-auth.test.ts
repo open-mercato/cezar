@@ -551,6 +551,19 @@ describe('ProviderAuthService', () => {
     });
   });
 
+  it('does not clear a runtime latch from a cached connected response', async () => {
+    const runCommand = runner();
+    const service = new ProviderAuthService({ runCommand });
+
+    await service.status();
+    service.reportRuntimeAuthFailure('claude');
+
+    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'disconnected' } });
+    await expect(service.status({ recoverRuntimeFailures: true }).then(({ providers }) => providers[0]))
+      .resolves.toMatchObject({ provider: 'claude', status: 'disconnected' });
+    expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
   it('keeps CEZ_DRY_RUN connected and ignores runtime invalidation', async () => {
     process.env.CEZ_DRY_RUN = '1';
     const service = new ProviderAuthService({ runCommand: runner() });
