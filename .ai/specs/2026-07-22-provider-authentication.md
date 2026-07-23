@@ -114,6 +114,24 @@ is rendered into the terminal command; every argument comes from the closed serv
 Claude continues to use `claude`, matching existing detection. No environment variable or
 configuration key is added, so `.env.example` does not change.
 
+## Runtime invalidation
+
+A provider's authoritative runtime authentication rejection outranks its stored-login status:
+an agent can discover that a token has been revoked after the vendor CLI reported it as logged
+in. The status service keeps an in-memory latch per provider for that condition and reports the
+latched provider as disconnected with a safe, fixed reconnect hint.
+
+Ordinary 30-second polling preserves a latch, even when the vendor's stored-login probe remains
+connected. An explicit Check again request (`?refresh=1`) performs a fresh recovery probe; only
+a fresh connected result clears that provider's runtime latch. Connect itself preserves the
+latch—the user must complete the vendor flow and then check again—so a launched login command
+cannot prematurely claim recovery.
+
+The server emits the resulting change as an additive workspace `provider-status` SSE event. A
+duplicate v1/v2 runtime report causes no second transition. Raw runtime error text never leaves
+the server: the response and event carry only the provider id, disconnected state, and fixed
+hint.
+
 ## HTTP API
 
 Provider credentials belong to the host user, not to a repository. Both routes are workspace

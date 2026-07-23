@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ProviderAuthService,
+  isRuntimeProviderAuthFailure,
   type ProviderCommandResult,
   type RunProviderCommand,
 } from './provider-auth.js';
@@ -59,6 +60,27 @@ function statuses(
     providers.map(({ provider, status, hint }) => [provider, { status, hint }]),
   ));
 }
+
+describe('runtime provider authentication failures', () => {
+  it.each([
+    'claude CLI exited with code 1 — Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+    'codex: turn failed: unauthorized',
+    'ProviderAuthError: API key expired — run `opencode auth login`',
+    'access token is invalid',
+    'authentication failed with HTTP 401',
+  ])('recognizes an authoritative runtime auth rejection: %s', (message) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(true);
+  });
+
+  it.each([
+    'claude CLI exited with code 1 — TypeScript check failed',
+    'API Error: 429 rate limit exceeded',
+    'the agent fixed a 401 response in src/auth.ts',
+    'network connection reset',
+  ])('does not turn unrelated failures into credential failures: %s', (message) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(false);
+  });
+});
 
 describe('provider auth parsers', () => {
   it('accepts only Claude JSON with loggedIn true as connected', async () => {
@@ -498,6 +520,43 @@ describe('ProviderAuthService', () => {
     await service.status();
     await service.status({ refresh: true });
     expect(runCommand).toHaveBeenCalledTimes(6);
+  });
+
+  it('overrides a connected probe after a runtime rejection and survives ordinary polling', async () => {
+    const service = new ProviderAuthService({ runCommand: runner() });
+
+    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'connected' } });
+    expect(service.reportRuntimeAuthFailure('claude')).toEqual({
+      provider: 'claude',
+      status: 'disconnected',
+      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+    });
+    expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
+
+    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'disconnected' } });
+  });
+
+  it('clears a runtime latch only after an explicit fresh connected recovery probe', async () => {
+    const service = new ProviderAuthService({ runCommand: runner() });
+    service.reportRuntimeAuthFailure('claude');
+
+    await expect(service.status({ refresh: true }).then(({ providers }) => providers[0]))
+      .resolves.toMatchObject({ provider: 'claude', status: 'disconnected' });
+    await expect(service.status({
+      refresh: true,
+      recoverRuntimeFailures: true,
+    }).then(({ providers }) => providers[0])).resolves.toMatchObject({
+      provider: 'claude',
+      status: 'connected',
+    });
+  });
+
+  it('keeps CEZ_DRY_RUN connected and ignores runtime invalidation', async () => {
+    process.env.CEZ_DRY_RUN = '1';
+    const service = new ProviderAuthService({ runCommand: runner() });
+
+    expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
+    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'connected' } });
   });
 
   it('coalesces ordinary and refresh callers while a probe is in flight', async () => {

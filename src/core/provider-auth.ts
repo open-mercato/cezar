@@ -45,7 +45,22 @@ const COMMAND_TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 5_000;
 const UNKNOWN_HINT = 'Authentication could not be verified. Try again.';
 const TIMEOUT_HINT = 'Authentication check timed out. Try again.';
+const RUNTIME_AUTH_HINT =
+  'Authentication was rejected during a run. Reconnect, then check again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+const RUNTIME_AUTH_FAILURE_PATTERNS = [
+  /\b(?:failed to authenticate|authentication failed|unauthenticated|unauthorized)\b/i,
+  /\bproviderautherror\b/i,
+  /\b(?:oauth|access|refresh)?\s*token\b.{0,80}\b(?:revoked|expired|invalid)\b/i,
+  /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth|access|refresh)?\s*token\b/i,
+  /\bapi key\b.{0,80}\b(?:revoked|expired|invalid)\b/i,
+  /\b(?:oauth|token|credential|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
+  /\b401\b.{0,80}\b(?:oauth|token|credential|unauthorized|unauthenticated)\b/i,
+] as const;
+
+export function isRuntimeProviderAuthFailure(message: string): boolean {
+  return RUNTIME_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 function normalizedOutput(stdout: string): string {
   return stdout.replace(ANSI_SEQUENCE, '').trim().toLowerCase();
@@ -191,6 +206,7 @@ export class ProviderAuthService {
   private readonly runCommand: RunProviderCommand;
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
+  private readonly runtimeFailures = new Set<ProviderId>();
   private completed?: { response: ProviderStatusResponse; timestamp: number };
   private inFlight?: Promise<ProviderStatusResponse>;
 
@@ -204,28 +220,47 @@ export class ProviderAuthService {
     this.platform = options?.platform ?? process.platform;
   }
 
-  status(options?: { refresh?: boolean }): Promise<ProviderStatusResponse> {
+  status(options?: {
+    refresh?: boolean;
+    recoverRuntimeFailures?: boolean;
+  }): Promise<ProviderStatusResponse> {
     if (process.env.CEZ_DRY_RUN === '1') {
       return Promise.resolve({
         providers: PROVIDER_IDS.map((provider) => ({ provider, status: 'connected' })),
       });
     }
-    if (this.inFlight) return this.inFlight;
-    if (!options?.refresh && this.completed && this.now() - this.completed.timestamp < CACHE_TTL_MS) {
-      return Promise.resolve(this.completed.response);
+    let base: Promise<ProviderStatusResponse>;
+    if (this.inFlight) {
+      base = this.inFlight;
+    } else if (!options?.refresh && this.completed && this.now() - this.completed.timestamp < CACHE_TTL_MS) {
+      base = Promise.resolve(this.completed.response);
+    } else {
+      const inFlight = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
+        .then((providers) => {
+          const response = { providers };
+          this.completed = { response, timestamp: this.now() };
+          return response;
+        });
+      this.inFlight = inFlight;
+      void inFlight.finally(() => {
+        if (this.inFlight === inFlight) this.inFlight = undefined;
+      });
+      base = inFlight;
     }
 
-    const inFlight = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
-      .then((providers) => {
-        const response = { providers };
-        this.completed = { response, timestamp: this.now() };
-        return response;
-      });
-    this.inFlight = inFlight;
-    void inFlight.finally(() => {
-      if (this.inFlight === inFlight) this.inFlight = undefined;
-    });
-    return inFlight;
+    if (options?.recoverRuntimeFailures) {
+      return base.then((response) => this.recoverRuntimeFailures(response));
+    }
+    if (this.runtimeFailures.size > 0) {
+      return base.then((response) => this.withRuntimeFailures(response));
+    }
+    return base;
+  }
+
+  reportRuntimeAuthFailure(provider: ProviderId): ProviderStatus | null {
+    if (process.env.CEZ_DRY_RUN === '1' || this.runtimeFailures.has(provider)) return null;
+    this.runtimeFailures.add(provider);
+    return { provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT };
   }
 
   loginCommand(provider: ProviderId): string {
@@ -235,6 +270,24 @@ export class ProviderAuthService {
 
   installHint(provider: ProviderId): string {
     return descriptorFor(provider).installHint;
+  }
+
+  private withRuntimeFailures(response: ProviderStatusResponse): ProviderStatusResponse {
+    if (this.runtimeFailures.size === 0) return response;
+    return {
+      providers: response.providers.map((row) => (
+        this.runtimeFailures.has(row.provider)
+          ? { provider: row.provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT }
+          : row
+      )),
+    };
+  }
+
+  private recoverRuntimeFailures(response: ProviderStatusResponse): ProviderStatusResponse {
+    for (const row of response.providers) {
+      if (row.status === 'connected') this.runtimeFailures.delete(row.provider);
+    }
+    return this.withRuntimeFailures(response);
   }
 
   private async probe(descriptor: ProviderDescriptor): Promise<ProviderStatus> {
