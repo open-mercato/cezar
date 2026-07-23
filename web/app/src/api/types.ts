@@ -388,6 +388,10 @@ export interface FsBrowseResponse {
  *  the top level server-side, so a writer must send the whole `sidebar` object, not a leaf. */
 export interface WorkspaceUiState {
   sidebar?: { collapsed?: Record<string, boolean> } & Record<string, unknown>
+  /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until
+   *  the provider reports a different incident, so this stays workspace-global with the
+   *  browser rather than one project checkout. */
+  dismissedProviderAuthFailures?: Partial<Record<ProviderId, string>>
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at
    *  the keyboard, not a repo, so they live in `~/.cezar/ui-state.json` and follow the user
    *  across every project. Same shape as the per-repo `UiState.appearance` it superseded

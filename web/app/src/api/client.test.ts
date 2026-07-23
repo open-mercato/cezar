@@ -335,14 +335,14 @@ describe('response parsing', () => {
       providers: [
         { provider: 'opencode', status: 'unknown', hint: 'Try again.', raw: 'private' },
         { provider: 'claude', status: 'connected', account: 'private@example.test' },
-        { provider: 'codex', status: 'disconnected' },
+        { provider: 'codex', status: 'disconnected', authFailureId: 'incident-1', raw: 'private' },
       ],
     })
 
     await expect(getProviderStatus()).resolves.toEqual({
       providers: [
         { provider: 'claude', status: 'connected' },
-        { provider: 'codex', status: 'disconnected' },
+        { provider: 'codex', status: 'disconnected', authFailureId: 'incident-1' },
         { provider: 'opencode', status: 'unknown', hint: 'Try again.' },
       ],
     })

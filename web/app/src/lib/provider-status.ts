@@ -9,18 +9,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function parseProviderStatusRow(value: unknown): ProviderStatus | null {
   if (!isRecord(value)) return null
-  const { provider, status, hint } = value
+  const { provider, status, hint, authFailureId } = value
   if (
     typeof provider !== 'string'
     || !RUNNER_ORDER.includes(provider as Runner)
     || typeof status !== 'string'
     || !PROVIDER_STATES.has(status)
     || (hint !== undefined && typeof hint !== 'string')
+    || (
+      authFailureId !== undefined
+      && (
+        typeof authFailureId !== 'string'
+        || authFailureId.length < 1
+        || authFailureId.length > 128
+        || status !== 'disconnected'
+      )
+    )
   ) return null
   return {
     provider: provider as Runner,
     status: status as ProviderStatus['status'],
     ...(hint === undefined ? {} : { hint }),
+    ...(authFailureId === undefined ? {} : { authFailureId }),
   }
 }
 

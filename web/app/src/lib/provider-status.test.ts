@@ -23,10 +23,13 @@ describe('provider-status SSE rows', () => {
       provider: 'claude',
       status: 'disconnected',
       hint: 'Reconnect, then check again.',
+      authFailureId: 'incident-1',
+      raw: 'private',
     })).toEqual({
       provider: 'claude',
       status: 'disconnected',
       hint: 'Reconnect, then check again.',
+      authFailureId: 'incident-1',
     })
   })
 
@@ -35,6 +38,10 @@ describe('provider-status SSE rows', () => {
     { provider: 'future', status: 'disconnected' },
     { provider: 'claude', status: 'future' },
     { provider: 'claude', status: 'disconnected', hint: 1 },
+    { provider: 'claude', status: 'disconnected', authFailureId: 1 },
+    { provider: 'claude', status: 'disconnected', authFailureId: '' },
+    { provider: 'claude', status: 'disconnected', authFailureId: 'a'.repeat(129) },
+    { provider: 'claude', status: 'connected', authFailureId: 'incident-1' },
   ])('rejects malformed provider-status SSE rows: %#', (value) => {
     expect(parseProviderStatusRow(value)).toBeNull()
   })

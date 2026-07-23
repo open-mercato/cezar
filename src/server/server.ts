@@ -436,6 +436,14 @@ const appearanceSchema = z.object({
   density: z.enum(['comfortable', 'compact', 'ultra']).optional(),
 });
 
+const providerAuthDismissalsSchema = z
+  .object({
+    claude: z.string().min(1).max(128).optional(),
+    codex: z.string().min(1).max(128).optional(),
+    opencode: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
 /** Global GUI state (`~/.cezar/ui-state.json`, step 2.7) — the workspace twin
  *  of `uiStateSchema` below, sharing its `.passthrough()` + key-cap + shallow
  *  merge-on-write semantics via `parseUiStateBody`. Known keys are the
@@ -445,6 +453,7 @@ const workspaceUiStateSchema = z
   .object({
     appearance: appearanceSchema.optional(),
     notifications: z.object({ enabled: z.boolean().optional() }).passthrough().optional(),
+    dismissedProviderAuthFailures: providerAuthDismissalsSchema.optional(),
     // Sidebar per-project collapse map, keyed by project id (slug ≤ 64 chars).
     // Entry-capped like `skillUsage`: the map is written straight to a file the
     // cockpit GETs on every load, so it must stay bounded on every axis.
