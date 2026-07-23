@@ -74,6 +74,15 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (override) return override()
       if (method === 'GET' && path === '/api/runs/r1/diff') return new Response(DIFF, { status: 200 })
       if (method === 'GET' && path === '/api/runs') return jsonResponse([])
+      if (method === 'GET' && path === '/api/providers/status') {
+        return jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'connected' },
+            { provider: 'codex', status: 'not-installed' },
+            { provider: 'opencode', status: 'not-installed' },
+          ],
+        })
+      }
       return jsonResponse({})
     }),
   )

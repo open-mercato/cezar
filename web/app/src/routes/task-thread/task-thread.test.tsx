@@ -21,11 +21,24 @@ afterEach(() => {
 function renderView(ui: ReactElement) {
   vi.stubGlobal(
     'fetch',
-    vi.fn(() =>
-      Promise.resolve(
-        new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }),
-      ),
-    ),
+    vi.fn((input: RequestInfo | URL) => {
+      const body =
+        String(input) === '/api/providers/status'
+          ? {
+              providers: [
+                { provider: 'claude', status: 'connected' },
+                { provider: 'codex', status: 'not-installed' },
+                { provider: 'opencode', status: 'not-installed' },
+              ],
+            }
+          : []
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }),
   )
   return render(
     <QueryClientProvider client={createQueryClient()}>
@@ -155,7 +168,7 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
   })
 
-  it('closed → the composer is disabled with the legacy reason and the Continue way out', () => {
+  it('closed → the composer is disabled with the legacy reason and the Continue way out', async () => {
     renderView(
       <ThreadView
         run={run('done', {
@@ -170,9 +183,11 @@ describe('ThreadView', () => {
     expect(textarea.disabled).toBe(true)
     expect(textarea.placeholder).toBe('Session closed — Continue to reopen.')
     // The way out, only because this run HAS a session to resume.
-    expect(
-      document.querySelector('[data-slot="composer-disabled-action"]')?.textContent,
-    ).toContain('Continue')
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-slot="composer-disabled-action"]')?.textContent,
+      ).toContain('Continue'),
+    )
   })
 
   /** #472 — stacked messages render as their own bubbles, after the task. */

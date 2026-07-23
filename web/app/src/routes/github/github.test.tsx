@@ -10,6 +10,7 @@ import type {
   GithubData,
   GithubItem,
   HealthResponse,
+  ProviderStatusResponse,
   Runner,
   Skill,
   WorkflowsResponse,
@@ -142,6 +143,30 @@ const SKILLS: Skill[] = [
   { name: 'team-x', description: 'team skill', body: '', path: '/t/team-x.md', source: 'team' },
 ]
 
+const PROVIDERS_CONNECTED: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected' },
+    { provider: 'codex', status: 'not-installed' },
+    { provider: 'opencode', status: 'not-installed' },
+  ],
+}
+
+const PROVIDERS_MULTI: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected' },
+    { provider: 'codex', status: 'connected' },
+    { provider: 'opencode', status: 'disconnected' },
+  ],
+}
+
+const PROVIDERS_NONE: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'disconnected' },
+    { provider: 'codex', status: 'unknown' },
+    { provider: 'opencode', status: 'not-installed' },
+  ],
+}
+
 interface SentRequest {
   path: string
   method: string
@@ -170,6 +195,9 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (method === 'GET' && path === '/api/github?limit=1000') return jsonResponse(GITHUB)
       if (method === 'GET' && path === '/api/workflows') return jsonResponse(WORKFLOWS)
       if (method === 'GET' && path === '/api/skills') return jsonResponse(SKILLS)
+      if (method === 'GET' && path === '/api/providers/status') {
+        return jsonResponse(PROVIDERS_CONNECTED)
+      }
       if (method === 'GET' && path === '/api/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/runs') {
         return jsonResponse({
@@ -202,6 +230,10 @@ function renderAt(entry: string) {
           <Route path="/github/prs" element={<GithubRoute view="prs" />} />
           <Route path="/github/issues/:n" element={<GithubRoute view="issues" />} />
           <Route path="/github/prs/:n" element={<GithubRoute view="prs" />} />
+          <Route path="/p/:projectId/github" element={<GithubIndexRoute />} />
+          <Route path="/p/:projectId/github/prs" element={<GithubRoute view="prs" />} />
+          <Route path="/p/:projectId/github/issues/:n" element={<GithubRoute view="issues" />} />
+          <Route path="/p/:projectId/github/prs/:n" element={<GithubRoute view="prs" />} />
         </Routes>
         <Toaster />
       </MemoryRouter>
@@ -893,6 +925,13 @@ async function pickPill(slot: string, label: string) {
 const postedRun = (sent: readonly SentRequest[]) =>
   sent.find((request) => request.method === 'POST' && request.path === '/api/runs')?.body
 
+const waitForAgentRunEnabled = () =>
+  waitFor(() =>
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this/ }).disabled,
+    ).toBe(false),
+  )
+
 describe('the hand-to-agent backend pills (#401)', () => {
   it('a single-backend host hides the runner pill but still offers the model', async () => {
     // A real one-check health response — the default stub 404s /api/health, which exercises
@@ -907,6 +946,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
   it('an untouched panel posts no runner/model — the pre-#401 body, unchanged', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -917,7 +957,10 @@ describe('the hand-to-agent backend pills (#401)', () => {
   })
 
   it('a runner + model pick rides the POST alongside the workflow routing', async () => {
-    const sent = stubFetch({ 'GET /api/health': MULTI_BACKEND })
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
     await openDetail()
 
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
@@ -935,7 +978,10 @@ describe('the hand-to-agent backend pills (#401)', () => {
   })
 
   it('switching backend resets the model pick — the presets are per runner', async () => {
-    const sent = stubFetch({ 'GET /api/health': MULTI_BACKEND })
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
     await openDetail()
 
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
@@ -952,7 +998,10 @@ describe('the hand-to-agent backend pills (#401)', () => {
   })
 
   it('the pick survives switching to another issue (it is a way of working, not a property of one item)', async () => {
-    const sent = stubFetch({ 'GET /api/health': MULTI_BACKEND })
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
     await openDetail()
 
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
@@ -968,6 +1017,76 @@ describe('the hand-to-agent backend pills (#401)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
     await waitFor(() => expect(postedRun(sent)).toBeDefined())
     expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
+  })
+
+  it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
+    const sent = stubFetch({
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_NONE),
+    })
+    await openDetail('/p/acme/github/issues/142')
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(true))
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-slot="model-pill"]')?.disabled,
+    ).toBe(true)
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/p/acme/settings/agents#providers',
+    )
+
+    fireEvent.change(promptField(), { target: { value: 'Keep this editable.' } })
+    expect(promptValue()).toBe('Keep this editable.')
+    fireEvent.click(rows().find((row) => row.dataset.number === '139')!)
+    await waitFor(() => expect(promptField().value).toContain('#139'))
+
+    // Force both entry points past their visual disabled state; neither may reach createRun.
+    const currentRun = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    currentRun.removeAttribute('disabled')
+    fireEvent.click(currentRun)
+    fireEvent.keyDown(promptField(), { key: 'Enter', ctrlKey: true })
+    await act(() => Promise.resolve())
+    expect(postedRun(sent)).toBeUndefined()
+  })
+
+  it('describes provider route failure as failed verification and keeps setup available', async () => {
+    stubFetch({
+      'GET /api/providers/status': () =>
+        jsonResponse({ error: 'provider probe failed' }, 404),
+    })
+    await openDetail()
+
+    expect(await screen.findByText('Provider authentication could not be verified.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('No agent provider is connected')
+    expect(screen.getByRole('link', { name: 'Configure providers' })).toBeTruthy()
+  })
+
+  it('explicitly sends a connected fallback that differs from the server default', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => jsonResponse(health(['claude'])),
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected' },
+            { provider: 'codex', status: 'connected' },
+            { provider: 'opencode', status: 'not-installed' },
+          ],
+        } satisfies ProviderStatusResponse),
+    })
+    await openDetail()
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.click(run)
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
   })
 })
 
@@ -1117,6 +1236,7 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
   it('nothing selected → quick-task, and the queued affordance links the new run', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1195,6 +1315,7 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
       'POST /api/runs': () => jsonResponse({ error: 'a task is already running' }, 409),
     })
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1483,6 +1604,7 @@ describe('⌘/Ctrl+Enter submits the follow-up composer (#408 item 5)', () => {
   it('Ctrl+Enter runs the agent', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     const textarea = screen.getByLabelText('Custom prompt')
     fireEvent.change(textarea, { target: { value: 'go' } })
@@ -1498,6 +1620,7 @@ describe('⌘/Ctrl+Enter submits the follow-up composer (#408 item 5)', () => {
   it('⌘+Enter (metaKey) also runs the agent', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     const textarea = screen.getByLabelText('Custom prompt')
     fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })

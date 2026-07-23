@@ -1,9 +1,15 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { ApiRun, HealthResponse, StepState } from '@/api/types'
+import type {
+  ApiRun,
+  HealthResponse,
+  ProviderStatusResponse,
+  StepState,
+} from '@/api/types'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
 import { ContinueAction } from './follow-up-engine'
@@ -55,7 +61,21 @@ const HEALTH_MULTI: HealthResponse = {
 type Recorded = { method: string; url: string; body?: unknown }
 let requests: Recorded[]
 
-function serve(health: HealthResponse = HEALTH_MULTI, defaultModels: Record<string, string> = {}) {
+const providersForHealth = (health: HealthResponse): ProviderStatusResponse => ({
+  providers: (['claude', 'codex', 'opencode'] as const).map((provider) => ({
+    provider,
+    status: health.checks.some((check) => check.name === provider && check.available)
+      ? 'connected' as const
+      : 'not-installed' as const,
+  })),
+})
+
+function serve(
+  health: HealthResponse = HEALTH_MULTI,
+  defaultModels: Record<string, string> = {},
+  providerStatus: ProviderStatusResponse | { error: string } = providersForHealth(health),
+  providerStatusCode = 200,
+) {
   requests = []
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
@@ -67,6 +87,7 @@ function serve(health: HealthResponse = HEALTH_MULTI, defaultModels: Record<stri
       const body = init.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
       if (url === '/api/health') return json(health)
+      if (url === '/api/providers/status') return json(providerStatus, providerStatusCode)
       if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/config' && method === 'GET')
         return json({
@@ -108,11 +129,13 @@ const makeRun = (extra: Partial<ApiRun> = {}): ApiRun => ({
   ...extra,
 })
 
-function renderAction(record: ApiRun) {
+function renderAction(record: ApiRun, entry = '/') {
   return render(
     <QueryClientProvider client={createQueryClient()}>
-      <ContinueAction run={record} />
-      <Toaster />
+      <MemoryRouter initialEntries={[entry]}>
+        <ContinueAction run={record} />
+        <Toaster />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -186,5 +209,97 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     renderAction(makeRun())
     await screen.findByRole('button', { name: 'Model' })
     expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
+  })
+
+  it('preserves session affinity when the current runner remains connected', async () => {
+    serve(
+      HEALTH_MULTI,
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'disconnected' },
+          { provider: 'opencode', status: 'not-installed' },
+        ],
+      },
+    )
+    renderAction(makeRun({ runner: 'claude', model: 'opus' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({})
+  })
+
+  it('sends the connected fallback when the current runner disconnected and the pills were untouched', async () => {
+    serve(
+      HEALTH_MULTI,
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'disconnected' },
+          { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'not-installed' },
+        ],
+      },
+    )
+    renderAction(makeRun({ runner: 'claude', model: 'opus' }))
+
+    const button = await screen.findByRole('button', { name: /continue/i })
+    expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
+    fireEvent.click(button)
+
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({ runner: 'codex' })
+  })
+
+  it('shows project-aware setup guidance instead of controls when none are connected', async () => {
+    serve(
+      HEALTH_MULTI,
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'disconnected' },
+          { provider: 'codex', status: 'unknown' },
+          { provider: 'opencode', status: 'not-installed' },
+        ],
+      },
+    )
+    renderAction(makeRun(), '/p/acme/tasks/r1')
+
+    const link = await screen.findByRole('link', { name: 'Configure providers' })
+    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
+    expect(screen.queryByRole('button', { name: /continue/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
+    expect(continueBody()).toBeUndefined()
+  })
+
+  it('describes a provider route error as failed verification', async () => {
+    serve(HEALTH_MULTI, {}, { error: 'provider probe failed' }, 404)
+    renderAction(makeRun())
+
+    expect(await screen.findByText('Provider authentication could not be verified.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Configure providers' })).toBeTruthy()
+    expect(document.body.textContent).not.toContain('No agent provider is connected')
+    expect(screen.queryByRole('button', { name: /continue/i })).toBeNull()
+  })
+
+  it('never offers disconnected providers in the runner picker', async () => {
+    const providers: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'connected' },
+        { provider: 'codex', status: 'disconnected' },
+        { provider: 'opencode', status: 'connected' },
+      ],
+    }
+    serve(HEALTH_MULTI, {}, providers)
+    renderAction(makeRun({ runner: 'claude' }))
+
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Runner' }))
+    const options = await screen.findAllByRole('menuitemradio')
+    expect(options.map((option) => option.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining('claude'), expect.stringContaining('opencode')]),
+    )
+    expect(options.some((option) => option.textContent?.includes('codex'))).toBe(false)
   })
 })
