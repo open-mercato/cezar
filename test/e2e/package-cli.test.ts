@@ -146,6 +146,23 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.deepEqual(reversed.steps, {}, 'server-uninstall reverses every step');
     assert.equal(reversed.installed, false, 'server-uninstall clears installed');
 
+    await execFile(
+      process.execPath,
+      [cliPath, 'server-install', '--platform', 'ubuntu-vps', '--external-proxy', '--yes', '--repo', fixtureRepo],
+      serverExec,
+    );
+    await execFile(
+      process.execPath,
+      [cliPath, 'server-install', '--platform', 'ubuntu-vps', '--yes', '--repo', fixtureRepo],
+      serverExec,
+    );
+    const resumedExternal = JSON.parse(await readFile(join(cezHome, 'server.json'), 'utf8')) as {
+      externalProxy?: boolean;
+      steps: Record<string, unknown>;
+    };
+    assert.equal(resumedExternal.externalProxy, true, 'a flag-less resume preserves external-proxy mode');
+    assert.ok(!resumedExternal.steps['nginx-proxy'], 'a flag-less resume does not add cezar-managed nginx');
+
     // Unknown platform exits non-zero.
     await assert.rejects(
       execFile(process.execPath, [cliPath, 'server-install', '--platform', 'nope'], serverExec),

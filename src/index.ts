@@ -496,9 +496,11 @@ async function serverCommand(
     domain,
     port,
     // Only an install decides proxy mode; deploy/uninstall read it back from
-    // the recorded state (passing `false` here would flip a recorded install).
+    // the recorded state. Preserve an omitted flag as `undefined`: a flag-less
+    // resume must keep an external-proxy install external instead of flipping
+    // it back to cezar-managed nginx/SSL.
     ...(mode === 'install'
-      ? { externalProxy: Boolean(flags.externalProxy), bindHost: flags.bindHost }
+      ? { externalProxy: flags.externalProxy || undefined, bindHost: flags.bindHost }
       : {}),
   };
 
