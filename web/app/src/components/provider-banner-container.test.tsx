@@ -134,6 +134,61 @@ describe('ProviderBannerContainer', () => {
     expect(error.getAttribute('data-tone')).toBe('danger')
   })
 
+  it('restores the last server-confirmed cache when two queued dismissals fail', async () => {
+    const client = createQueryClient()
+    const confirmed: WorkspaceUiState = { appearance: { accent: 'lime' } }
+    seed(client, confirmed, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+        { provider: 'codex', status: 'connected' },
+        { provider: 'opencode', status: 'disconnected' },
+      ],
+    })
+    const answerPuts: Array<(response: Response) => void> = []
+    fetchMock.mockImplementation(async (_input, init) => {
+      if (init?.method === 'PUT') {
+        return new Promise<Response>((resolve) => answerPuts.push(resolve))
+      }
+      return json({ error: 'could not reconcile auth dismissals' }, 500)
+    })
+    renderContainer(client)
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Dismiss provider authentication alert',
+    }))
+    await waitFor(() => expect(answerPuts).toHaveLength(1))
+
+    act(() => {
+      client.setQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus, {
+        providers: [
+          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected' },
+          { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
+        ],
+      })
+    })
+    const secondAlert = await screen.findByRole('alert')
+    expect(secondAlert.textContent).toContain(
+      'Provider authentication failed during a task: OpenCode.',
+    )
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Dismiss provider authentication alert',
+    }))
+
+    expect(answerPuts).toHaveLength(1)
+    answerPuts[0]?.(json({ error: 'first dismissal failed' }, 500))
+    await waitFor(() => expect(answerPuts).toHaveLength(2))
+    answerPuts[1]?.(json({ error: 'second dismissal failed' }, 500))
+
+    const restoredAlert = await screen.findByRole('alert')
+    await waitFor(() =>
+      expect(restoredAlert.textContent).toContain(
+        'Provider authentication failed during a task: Claude Code, OpenCode.',
+      ),
+    )
+    expect(client.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)).toEqual(confirmed)
+  })
+
   it('shows incidents while workspace UI state is unavailable or malformed', () => {
     const unavailableClient = createQueryClient()
     unavailableClient.setQueryData(workspaceQueryKeys.providerStatus, INCIDENTS)

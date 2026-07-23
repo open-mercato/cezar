@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import { putWorkspaceUiState } from '@/api/client'
 import {
@@ -27,6 +27,16 @@ export function ProviderBannerContainer() {
   const queryClient = useQueryClient()
   const writeChain = useRef<Promise<unknown>>(Promise.resolve())
   const latestWrite = useRef(0)
+  const pendingWrites = useRef(0)
+  const lastConfirmed = useRef<WorkspaceUiState | undefined>(
+    workspaceUiState(uiState.data),
+  )
+
+  useEffect(() => {
+    if (pendingWrites.current === 0) {
+      lastConfirmed.current = workspaceUiState(uiState.data)
+    }
+  }, [uiState.data])
 
   const dismiss = useCallback(
     (incidents: readonly ProviderAuthIncident[]) => {
@@ -40,6 +50,7 @@ export function ProviderBannerContainer() {
         ...previous,
         dismissedProviderAuthFailures: nextDismissals,
       }
+      pendingWrites.current += 1
       queryClient.setQueryData(key, optimistic)
 
       const seq = ++latestWrite.current
@@ -48,17 +59,20 @@ export function ProviderBannerContainer() {
           const merged = await putWorkspaceUiState({
             dismissedProviderAuthFailures: nextDismissals,
           })
+          lastConfirmed.current = workspaceUiState(merged)
           if (seq === latestWrite.current) queryClient.setQueryData(key, merged)
         } catch (error: unknown) {
           if (seq === latestWrite.current) {
-            if (previous === undefined) {
+            if (lastConfirmed.current === undefined) {
               queryClient.removeQueries({ queryKey: key, exact: true })
             } else {
-              queryClient.setQueryData(key, previous)
+              queryClient.setQueryData(key, lastConfirmed.current)
             }
             void queryClient.invalidateQueries({ queryKey: key })
             toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
           }
+        } finally {
+          pendingWrites.current -= 1
         }
       })
     },
