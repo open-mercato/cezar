@@ -65,6 +65,15 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       const override = overrides[path]
       if (override) return override()
       if (method === 'GET' && path === '/api/runs') return jsonResponse([])
+      if (method === 'GET' && path === '/api/providers/status') {
+        return jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'connected' },
+            { provider: 'codex', status: 'not-installed' },
+            { provider: 'opencode', status: 'not-installed' },
+          ],
+        })
+      }
       return jsonResponse({})
     }),
   )
@@ -203,10 +212,80 @@ describe('actions hit their endpoints', () => {
   it('Continue → POST /continue', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Continue' }))
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/runs/r1/continue')).toBe(true)
     })
+  })
+
+  it('disables desktop Continue and its mutation guard blocks a forced click without a provider', async () => {
+    const sent = stubFetch({
+      '/api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected' },
+            { provider: 'codex', status: 'unknown' },
+            { provider: 'opencode', status: 'not-installed' },
+          ],
+        }),
+    })
+    renderHeader(run('done', { runner: 'claude' }))
+
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(true))
+    button.removeAttribute('disabled')
+    fireEvent.click(button)
+    await act(() => Promise.resolve())
+
+    expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
+  })
+
+  it('disables mobile Continue and does not post when its menu item is selected', async () => {
+    const sent = stubFetch({
+      '/api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected' },
+            { provider: 'codex', status: 'unknown' },
+            { provider: 'opencode', status: 'not-installed' },
+          ],
+        }),
+    })
+    renderHeader(run('done', { runner: 'claude' }))
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const item = await screen.findByRole('menuitem', { name: 'Continue' })
+    await waitFor(() => expect(item.getAttribute('data-disabled')).not.toBeNull())
+    fireEvent.click(item)
+    await act(() => Promise.resolve())
+
+    expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
+  })
+
+  it('sends a connected fallback runner when the run provider is disconnected', async () => {
+    const sent = stubFetch({
+      '/api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected' },
+            { provider: 'codex', status: 'connected' },
+            { provider: 'opencode', status: 'not-installed' },
+          ],
+        }),
+    })
+    renderHeader(run('done', { runner: 'claude' }))
+
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
+
+    await waitFor(() =>
+      expect(sent.find((request) => request.path === '/api/runs/r1/continue')?.body).toEqual({
+        runner: 'codex',
+      }),
+    )
   })
 
   it('Archive → POST /archive with the flipped flag', async () => {
@@ -276,7 +355,9 @@ describe('actions hit their endpoints', () => {
       '/api/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
     })
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Continue' }))
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
     const item = await screen.findByRole('status')
     expect(item.textContent).toBe('no agent session to resume')
     expect(item.getAttribute('data-tone')).toBe('danger')

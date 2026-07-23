@@ -3,19 +3,18 @@ import { PlayIcon } from 'lucide-react'
 import { useState } from 'react'
 
 import { continueRun } from '@/api/client'
-import { queryKeys, useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import type { ApiRun, Runner } from '@/api/types'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
-import { connectedRunners } from '@/lib/provider-status'
 import { Link } from '@/lib/project-router'
 import {
   modelsForRunner,
   modelCatalogStatus,
   resolveModel,
-  resolveRunner,
 } from '@/routes/new-task-form'
+import { useContinuationProvider } from './continuation-provider'
 import { runActionFlags } from './run-actions'
 
 /**
@@ -28,7 +27,6 @@ import { runActionFlags } from './run-actions'
  */
 export function ContinueAction({ run }: { run: ApiRun }) {
   const queryClient = useQueryClient()
-  const providers = useProviderStatus()
   const config = useConfig()
   const catalog = useRunnerModels()
   // null = "not touched": the pills fall back to the run's current backend/model, so an
@@ -36,14 +34,8 @@ export function ContinueAction({ run }: { run: ApiRun }) {
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
   const [pickedModel, setPickedModel] = useState<string | null>(null)
 
-  const runners = connectedRunners(providers.data)
-  const canContinue = providers.isSuccess && runners.length > 0
-  // Mirrors the server's continue-path resolution (`record?.runner ?? 'claude'`): a run
-  // without a persisted runner predates the choice and continues on claude — NOT on the
-  // host's defaultRunner, which only applies to brand-new tasks.
-  const currentRunner = (run.runner ?? 'claude') as Runner
-  const runner = resolveRunner(pickedRunner, runners, currentRunner)
-  const currentRunnerConnected = runners.includes(currentRunner)
+  const continuation = useContinuationProvider(run, pickedRunner)
+  const { runners, canContinue, currentRunner, runner } = continuation
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the
   // runner invalidates that pin and falls back to the new backend's configured default / auto.
   const runnerChanged = runner !== currentRunner
@@ -61,7 +53,7 @@ export function ContinueAction({ run }: { run: ApiRun }) {
         // Send an override only for a pill the user actually touched; otherwise omit it so the
         // server keeps the run's current backend/model. If that backend disconnected, the
         // connected fallback must be explicit even when the pills were untouched.
-        runner: pickedRunner !== null || !currentRunnerConnected ? runner : undefined,
+        runner: continuation.runnerOverride,
         model: pickedModel !== null ? model : undefined,
       })
     },
@@ -78,13 +70,9 @@ export function ContinueAction({ run }: { run: ApiRun }) {
         className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
       >
         <span>
-          {providers.isPending
-            ? 'Checking agent providers…'
-            : providers.isError
-              ? 'Provider authentication could not be verified.'
-              : 'Connect an agent provider to continue.'}
+          {continuation.reason}
         </span>
-        {!providers.isPending ? (
+        {!continuation.providerPending ? (
           <Link
             to="/settings/agents#providers"
             className="font-medium text-foreground underline underline-offset-4"

@@ -69,6 +69,7 @@ import { queuePositions, runTitle } from '@/lib/task-groups'
 import { formatCost, workflowLabel } from '@/lib/tasks-table'
 
 import { Markdown } from './markdown'
+import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { StepRail } from './step-rail'
 import { useFinishRun } from './use-finish-run'
@@ -160,7 +161,13 @@ export function RunHeader({
               </Button>
             ) : null}
             {flags.continueRun ? (
-              <Button variant="outline" size="sm" title="Reopen the session" onClick={() => actions.continueRun.mutate()}>
+              <Button
+                variant="outline"
+                size="sm"
+                title={actions.continuation.reason ?? 'Reopen the session'}
+                disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
+                onClick={() => actions.continueRun.mutate()}
+              >
                 <PlayIcon aria-hidden="true" />
                 Continue
               </Button>
@@ -343,9 +350,15 @@ function useRunActions(run: ApiRun) {
   // Shared with the review panel's ✓ Accept (use-finish-run.ts) — the review-accept semantics
   // must be ONE implementation, not two buttons that happen to agree today.
   const finish = useFinishRun(run.id)
+  const continuation = useContinuationProvider(run)
   const continueMutation = useMutation({
-    mutationFn: () => continueRun(run.id),
-    onSuccess: invalidate,
+    mutationFn: async () => {
+      if (!continuation.canContinue) return null
+      return continueRun(run.id, { runner: continuation.runnerOverride })
+    },
+    onSuccess: (result) => {
+      if (result !== null) invalidate()
+    },
     onError,
   })
   const archive = useMutation({
@@ -378,6 +391,7 @@ function useRunActions(run: ApiRun) {
 
   return {
     finish,
+    continuation,
     continueRun: continueMutation,
     archive,
     cancel,
@@ -574,7 +588,11 @@ function ActionsKebab({
           </DropdownMenuItem>
         ) : null}
         {flags.continueRun ? (
-          <DropdownMenuItem onSelect={() => actions.continueRun.mutate()}>
+          <DropdownMenuItem
+            disabled={!actions.continuation.canContinue || actions.continueRun.isPending}
+            title={actions.continuation.reason}
+            onSelect={() => actions.continueRun.mutate()}
+          >
             <PlayIcon aria-hidden="true" /> Continue
           </DropdownMenuItem>
         ) : null}

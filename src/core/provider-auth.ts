@@ -54,11 +54,9 @@ function normalizedOutput(stdout: string): string {
 function parseClaudeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   try {
     const value = JSON.parse(result.stdout) as { loggedIn?: unknown };
-    return value.loggedIn === true
-      ? 'connected'
-      : value.loggedIn === false
-        ? 'disconnected'
-        : null;
+    if (value.loggedIn === true && result.exitCode === 0) return 'connected';
+    if (value.loggedIn === false && result.exitCode === 1) return 'disconnected';
+    return null;
   } catch {
     return null;
   }
@@ -66,20 +64,36 @@ function parseClaudeStatus(result: ProviderCommandResult): ProviderConnectionSta
 
 function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   const output = normalizedOutput(result.stdout);
-  if (output === 'logged in using chatgpt' || output === 'logged in using an api key') {
+  if (
+    result.exitCode === 0
+    && (
+      output === 'logged in using chatgpt'
+      || output === 'logged in using an api key'
+      || output === 'logged in using agent identity'
+    )
+  ) {
     return 'connected';
   }
-  if (output === 'not logged in' || output === 'run codex login to authenticate') {
+  if (
+    result.exitCode === 1
+    && (output === 'not logged in' || output === 'run codex login to authenticate')
+  ) {
     return 'disconnected';
   }
   return null;
 }
 
 function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0) return null;
   const output = normalizedOutput(result.stdout);
-  if (output === 'anthropic  oauth') return 'connected';
-  if (output === 'no credentials found' || output === 'no credentials') return 'disconnected';
-  return null;
+  const summaries = output
+    .split(/\r?\n/)
+    .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
+    .filter((count): count is string => count !== undefined);
+  if (summaries.length !== 1) return null;
+  const count = Number(summaries[0]);
+  if (!Number.isSafeInteger(count)) return null;
+  return count === 0 ? 'disconnected' : 'connected';
 }
 
 const DESCRIPTORS: readonly ProviderDescriptor[] = [

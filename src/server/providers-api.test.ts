@@ -16,13 +16,20 @@ import { createApp } from './server.js';
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
   codex: 'Logged in using ChatGPT',
-  opencode: 'anthropic  oauth',
+  opencode: [
+    '┌  Credentials ~/.local/share/opencode/auth.json',
+    '●  Anthropic oauth',
+    '└  1 credential',
+  ].join('\n'),
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":false}',
   codex: 'Not logged in',
-  opencode: 'No credentials found',
+  opencode: [
+    '┌  Credentials ~/.local/share/opencode/auth.json',
+    '└  0 credentials',
+  ].join('\n'),
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
@@ -65,7 +72,7 @@ describe('workspace provider API', () => {
       return {
         stdout: state === 'connected' ? CONNECTED_OUTPUT[provider] : DISCONNECTED_OUTPUT[provider],
         stderr: '',
-        exitCode: 0,
+        exitCode: state === 'connected' || provider === 'opencode' ? 0 : 1,
       };
     }),
   });
@@ -239,6 +246,23 @@ describe('workspace provider API', () => {
 
   it('POST returns 409 plus command when the terminal launcher returns false', async () => {
     const openTerminal = vi.fn(async () => false);
+    const response = await connect(app({
+      providerAuth: service({ codex: 'disconnected' }),
+      openTerminal,
+    }), 'codex');
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'No terminal emulator could be opened. Run this command manually.',
+      command: "'codex' login",
+    });
+    expect(openTerminal).toHaveBeenCalledOnce();
+  });
+
+  it('POST returns the manual command when the terminal launcher rejects', async () => {
+    const openTerminal = vi.fn(async () => {
+      throw new Error('private launcher failure');
+    });
     const response = await connect(app({
       providerAuth: service({ codex: 'disconnected' }),
       openTerminal,

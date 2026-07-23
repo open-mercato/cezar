@@ -36,8 +36,8 @@ export interface ResolvedEngine {
   model: string
   /** The backends this host offers — the runner pill renders only when there is a choice. */
   runners: readonly Runner[]
-  /** What the server would pick on its own, i.e. what an omitted runner resolves to. */
-  defaultRunner: Runner
+  /** What the server would pick on its own, once health has authoritatively reported it. */
+  defaultRunner?: Runner
   /** True only after provider status confirms at least one connected backend. */
   canRun: boolean
   providerPending: boolean
@@ -50,8 +50,8 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   const config = useConfig()
   const catalog = useRunnerModels()
   const runners = connectedRunners(providers.data)
-  const defaultRunner = health.data?.defaultRunner ?? 'claude'
-  const runner = resolveRunner(pick.runner, runners, defaultRunner)
+  const defaultRunner = health.data?.defaultRunner
+  const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
   return {
     runner,
     model: resolveModel(pick.model, runner, config.data?.defaultModels, catalog.data),
@@ -83,7 +83,10 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
  */
 export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model'> {
   return {
-    runner: resolved.runner === resolved.defaultRunner ? undefined : resolved.runner,
+    runner:
+      resolved.defaultRunner !== undefined && resolved.runner === resolved.defaultRunner
+        ? undefined
+        : resolved.runner,
     model: resolved.model || undefined,
   }
 }

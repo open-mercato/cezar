@@ -20,6 +20,10 @@ describe('connectedRunners', () => {
     expect(connectedRunners(undefined)).toEqual([])
   })
 
+  it('degrades a malformed successful response to no verified providers', () => {
+    expect(connectedRunners({} as ProviderStatusResponse)).toEqual([])
+  })
+
   it('does not fall back to claude when none is connected', () => {
     expect(connectedRunners({ providers: [] })).toEqual([])
   })

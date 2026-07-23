@@ -8,7 +8,17 @@ import {
 const connectedResults: Record<string, ProviderCommandResult> = {
   claude: { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },
   codex: { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0 },
-  opencode: { stdout: 'anthropic  oauth', stderr: '', exitCode: 0 },
+  opencode: {
+    stdout: [
+      '┌  Credentials ~/.local/share/opencode/auth.json',
+      '│',
+      '●  Anthropic oauth',
+      '│',
+      '└  1 credential',
+    ].join('\n'),
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
@@ -71,6 +81,19 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'disconnected' } });
   });
 
+  it.each([
+    ['loggedIn true on exit 7', '{"loggedIn":true}', 7],
+    ['loggedIn false on exit 0', '{"loggedIn":false}', 0],
+  ])('treats Claude %s as unknown', async (_case, stdout, exitCode) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'claude'
+        ? { stdout, stderr: '', exitCode }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'unknown' } });
+  });
+
   it('treats malformed Claude JSON as unknown', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'claude'
@@ -84,6 +107,7 @@ describe('provider auth parsers', () => {
   it.each([
     'Logged in using ChatGPT',
     'Logged in using an API key',
+    'Logged in using Agent Identity',
   ])('recognizes Codex connected output: %s', async (stdout) => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
@@ -92,6 +116,16 @@ describe('provider auth parsers', () => {
     });
 
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'connected' } });
+  });
+
+  it('does not accept known Codex connected output on an unexpected nonzero exit', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 7 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'unknown' } });
   });
 
   it.each([
@@ -107,6 +141,16 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'disconnected' } });
   });
 
+  it('does not accept known Codex disconnected output on exit 0', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout: 'Not logged in', stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'unknown' } });
+  });
+
   it('does not guess from unrecognized Codex output', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
@@ -117,30 +161,75 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'unknown' } });
   });
 
-  it('recognizes an OpenCode credential row as connected', async () => {
+  it.each([
+    [
+      'one ANSI-styled credential',
+      [
+        '\u001B[90m┌  Credentials ~/.local/share/opencode/auth.json\u001B[0m',
+        '\u001B[90m│\u001B[0m',
+        '\u001B[36m●\u001B[0m  Acme Enterprise \u001B[2moauth\u001B[0m',
+        '\u001B[90m│\u001B[0m',
+        '\u001B[90m└\u001B[0m  1 credential',
+      ].join('\n'),
+    ],
+    [
+      'multiple arbitrary credential rows',
+      [
+        '┌  Credentials /srv/opencode/auth.json',
+        '│',
+        '●  Acme Enterprise oauth',
+        '●  local-provider api',
+        '●  Custom Gateway wellknown',
+        '●  Another Provider api',
+        '│',
+        '└  4 credentials',
+      ].join('\n'),
+    ],
+  ])('recognizes OpenCode %s as connected', async (_case, stdout) => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'opencode'
-        ? { stdout: 'anthropic  oauth', stderr: '', exitCode: 0 }
+        ? { stdout, stderr: '', exitCode: 0 }
         : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
     });
 
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
   });
 
-  it('recognizes OpenCode explicit empty/no-credentials output as disconnected', async () => {
+  it('recognizes an OpenCode decorated zero-credential list as disconnected', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'opencode'
-        ? { stdout: 'No credentials found', stderr: '', exitCode: 0 }
+        ? {
+          stdout: [
+            '┌  Credentials ~/.local/share/opencode/auth.json',
+            '│',
+            '└  0 credentials',
+          ].join('\n'),
+          stderr: '',
+          exitCode: 0,
+        }
         : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
     });
 
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'disconnected' } });
   });
 
-  it('does not guess from an OpenCode error or future output', async () => {
+  it('does not accept an OpenCode credential summary on an unexpected nonzero exit', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'opencode'
-        ? { stdout: 'New auth output format v99', stderr: 'error', exitCode: 0 }
+        ? { ...connectedResults.opencode!, exitCode: 7 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+  });
+
+  it.each([
+    'New auth output format v99',
+    ['┌  Credentials ~/.local/share/opencode/auth.json', '└  credentials: many'].join('\n'),
+  ])('does not guess from OpenCode output without a valid count summary', async (stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout, stderr: 'error', exitCode: 0 }
         : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
     });
 

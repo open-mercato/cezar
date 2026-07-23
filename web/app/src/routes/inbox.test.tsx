@@ -106,7 +106,7 @@ const PROVIDERS_NONE: ProviderStatusResponse = {
  *  and lets a test override specific `METHOD path` keys. Stateful like the real server: a
  *  DELETE really removes the entry, so the invalidation refetch answers without it. */
 function stubFetch(
-  overrides: Record<string, () => Response> = {},
+  overrides: Record<string, () => Response | Promise<Response>> = {},
   todos: TodoItem[] = TODOS,
   backends: readonly string[] = ['claude'],
   defaultModels: Record<string, string> = {},
@@ -307,6 +307,20 @@ describe('Run — backend selection (#401)', () => {
     fireEvent.click(cards()[0]!.querySelector('[data-action="todo-run"]')!)
 
     await waitFor(() => expect(startBody(sent, 't1')).toBeUndefined())
+  })
+
+  it('sends the connected runner explicitly when provider status resolves before health', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => new Promise<Response>(() => {}),
+    })
+    renderInbox()
+
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const run = cards()[0]!.querySelector<HTMLButtonElement>('[data-action="todo-run"]')!
+    await waitFor(() => expect(run.disabled).toBe(false))
+    fireEvent.click(run)
+
+    await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'claude' }))
   })
 
   it('an untouched card honors Settings → Agents defaultModels — the one real behavior change', async () => {
@@ -636,10 +650,13 @@ describe('Add instructions', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="thread-probe"]')).not.toBeNull())
 
     const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/todos/t1/start')
-    expect(posted?.body).toEqual({ prompt: 'Also add a regression test.' })
+    expect(posted?.body).toEqual({
+      runner: 'claude',
+      prompt: 'Also add a regression test.',
+    })
   })
 
-  it('leaving the instructions box empty sends no body at all — the pre-#413 call shape', async () => {
+  it('leaving instructions empty sends only the cold-load-safe runner', async () => {
     const sent = stubFetchCapturingBody()
     renderInbox()
     await waitFor(() => expect(cards()).toHaveLength(2))
@@ -649,7 +666,7 @@ describe('Add instructions', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="thread-probe"]')).not.toBeNull())
 
     const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/todos/t1/start')
-    expect(posted?.body).toBeUndefined()
+    expect(posted?.body).toEqual({ runner: 'claude' })
   })
 
   it('an opened composer can be collapsed again, keeping the draft', async () => {

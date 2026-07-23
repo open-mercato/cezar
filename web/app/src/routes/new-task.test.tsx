@@ -1336,7 +1336,14 @@ describe('the plan flow', () => {
     current = PROVIDERS_NONE
     await client.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
     await waitFor(() => expect(textarea().disabled).toBe(true))
-    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
+    const start = document.querySelector<HTMLButtonElement>('[data-slot="plan-start"]')!
+    expect(start.disabled).toBe(true)
+    expect(screen.getByText('Connect an agent provider before starting a task.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+    start.removeAttribute('disabled')
+    fireEvent.click(start)
 
     expect(requests.some((request) => request.url === '/api/runs')).toBe(false)
   })

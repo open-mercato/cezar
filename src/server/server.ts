@@ -1073,7 +1073,13 @@ export function createApp(deps: ServerDeps): Hono {
     if (!capabilities().localHandoff) {
       return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
     }
-    if (!(await openTerminal(bootRoot, command))) {
+    let opened = false;
+    try {
+      opened = await openTerminal(bootRoot, command);
+    } catch {
+      // Terminal handoff is best-effort; the exact command remains the safe fallback.
+    }
+    if (!opened) {
       return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
     }
     return c.json({ opened: true, command });

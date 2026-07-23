@@ -178,7 +178,9 @@ const jsonResponse = (body: unknown, status = 200) =>
 
 /** Fetch stub in the house style (repo-git.test.tsx): records requests, serves the fixtures,
  *  and lets a test override specific `METHOD path` keys. */
-function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[] {
+function stubFetch(
+  overrides: Record<string, () => Response | Promise<Response>> = {},
+): SentRequest[] {
   const sent: SentRequest[] = []
   vi.stubGlobal(
     'fetch',
@@ -943,7 +945,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
   })
 
-  it('an untouched panel posts no runner/model — the pre-#401 body, unchanged', async () => {
+  it('an untouched cold-load panel posts the connected runner and no model', async () => {
     const sent = stubFetch()
     await openDetail()
     await waitForAgentRunEnabled()
@@ -952,8 +954,21 @@ describe('the hand-to-agent backend pills (#401)', () => {
 
     await waitFor(() => expect(postedRun(sent)).toBeDefined())
     expect(postedRun(sent)).toMatchObject({ workflow: 'quick-task' })
-    expect((postedRun(sent) as { runner?: string }).runner).toBeUndefined()
+    expect((postedRun(sent) as { runner?: string }).runner).toBe('claude')
     expect((postedRun(sent) as { model?: string }).model).toBeUndefined()
+  })
+
+  it('sends the connected runner explicitly when provider status resolves before health', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => new Promise<Response>(() => {}),
+    })
+    await openDetail()
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'claude' })
   })
 
   it('a runner + model pick rides the POST alongside the workflow routing', async () => {

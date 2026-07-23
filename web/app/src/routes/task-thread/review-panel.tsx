@@ -17,10 +17,12 @@ import { RunDiff } from '@/components/run-diff'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { Link } from '@/lib/project-router'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
 import { isHttpUrl } from '@/lib/utils'
 
 import { finishTitle } from './run-actions'
+import { useContinuationProvider } from './continuation-provider'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -62,14 +64,22 @@ function ReviewActions({ run }: { run: ApiRun }) {
   const [notes, setNotes] = useState('')
   const [manual, setManual] = useState<string | null>(null)
   const finish = useFinishRun(run.id)
+  const continuation = useContinuationProvider(run)
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
 
   // Legacy send-back semantics verbatim (web/app.js `data-action="send-back"`): the notes go
   // back into the SAME session via continue, prefixed `Review feedback:` — the run leaves
   // `review`, works, and gates again. On success the status flip unmounts this panel.
   const sendBack = useMutation({
-    mutationFn: (text: string) => continueRun(run.id, { text: `Review feedback:\n${text}` }),
-    onSuccess: () => {
+    mutationFn: async (text: string) => {
+      if (!continuation.canContinue) return null
+      return continueRun(run.id, {
+        text: `Review feedback:\n${text}`,
+        runner: continuation.runnerOverride,
+      })
+    },
+    onSuccess: (result) => {
+      if (result === null) return
       setNotes('')
       invalidate()
     },
@@ -129,13 +139,30 @@ function ReviewActions({ run }: { run: ApiRun }) {
         }}
         className="min-h-[52px] text-[13px]"
       />
+      {!continuation.canContinue ? (
+        <p
+          id="review-provider-guidance"
+          className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          <span>{continuation.reason}</span>
+          {!continuation.providerPending ? (
+            <Link
+              to="/settings/agents#providers"
+              className="font-medium text-foreground underline underline-offset-4"
+            >
+              Configure providers
+            </Link>
+          ) : null}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           data-slot="review-send-back"
           variant="outline"
           size="sm"
-          title="Send the notes back into the agent's session"
-          disabled={sendBack.isPending}
+          title={continuation.reason ?? "Send the notes back into the agent's session"}
+          aria-describedby={!continuation.canContinue ? 'review-provider-guidance' : undefined}
+          disabled={sendBack.isPending || !continuation.canContinue}
           onClick={submitNotes}
         >
           <CornerUpLeftIcon aria-hidden="true" />

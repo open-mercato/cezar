@@ -630,6 +630,19 @@ export function NewTaskRoute() {
         <PlanReview
           plan={plan}
           starting={starting}
+          startAvailable={providersReady}
+          startUnavailableReason={
+            providers.isPending
+              ? 'Checking agent providers…'
+              : providers.isError
+                ? 'Provider authentication could not be verified.'
+                : 'Connect an agent provider before starting a task.'
+          }
+          startUnavailableAction={
+            !providers.isPending ? (
+              <Link to="/settings/agents#providers">Configure providers</Link>
+            ) : undefined
+          }
           onStepsChange={(steps) => setPlan((current) => (current ? { ...current, steps } : current))}
           onStart={() => void startPlanned()}
           onDiscard={() => setPlan(null)}
