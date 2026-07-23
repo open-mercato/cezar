@@ -1065,6 +1065,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
 
   type Hydrate = (runId: string, input: { task: string }) => {
     task: string;
+    images?: ContentBlock[];
     stackedImages?: ContentBlock[];
   };
   const hydrate = (id: string, task: string) =>
@@ -1139,6 +1140,25 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
       type: 'image',
       source: { media_type: 'image/png', data: Buffer.from('the-bytes').toString('base64') },
     });
+  });
+
+  it('re-encodes initial task images from disk after a queued-run restart (#612)', () => {
+    const r = store.createRun({ title: 't', workflow: 'w', task: 'look at this', steps: [] });
+    const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'pasted-1.png'), 'the-task-bytes');
+    store.updateRun(r.id, { taskImages: [`/api/runs/${r.id}/images/pasted-1.png`] });
+
+    expect(hydrate(r.id, r.task).images).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: Buffer.from('the-task-bytes').toString('base64'),
+        },
+      },
+    ]);
   });
 
   /** Degrade, never fail the boot (AGENTS.md). */

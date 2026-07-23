@@ -18,12 +18,15 @@ import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProj
 import { ProjectContexts } from './project-context.js';
 import { apiRequest } from './loopback-request.testkit.js';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.js';
+import { workspaceConfigPath } from '../paths.js';
+import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import {
   WorkspaceEventBus,
   createApp,
   type ProjectsResponse,
   type RegisterProjectResponse,
   type ServerDeps,
+  type UpdateProjectResponse,
 } from './server.js';
 
 /**
@@ -149,6 +152,19 @@ describe('workspace projects API', () => {
       await registerProject(repoRoot);
       const body = await getProjects({ bootProjectId: 'plumbed-boot' });
       expect(body.bootProject).toBe('plumbed-boot');
+    });
+
+    it('serializes a per-project maxParallel when set, and omits it when absent (2026-07-22)', async () => {
+      await registerProject(repoRoot); // boot, no override → inherits
+      await registerProject(otherRoot);
+      await mergeWriteWorkspaceConfig((config) => {
+        const entry = config.projects.find((p) => p.root === realpathSync(otherRoot));
+        if (entry) entry.maxParallel = 3;
+      });
+      const body = await getProjects();
+      const byRoot = new Map(body.projects.map((p) => [p.root, p]));
+      expect(byRoot.get(realpathSync(otherRoot))?.maxParallel).toBe(3);
+      expect(byRoot.get(realpathSync(repoRoot))?.maxParallel).toBeUndefined();
     });
   });
 
@@ -423,6 +439,85 @@ describe('workspace projects API', () => {
         expect(body.error, id).toContain('re-registers');
       }
       expect((await getProjects()).projects.map((p) => p.id)).toEqual([boot.id]);
+    });
+  });
+
+  describe('PATCH /api/projects/:projectId — per-project maxParallel (2026-07-22)', () => {
+    /** A semaphore whose refresh() is observable — the route MUST call it so a
+     *  new ceiling applies without a restart (mirrors PUT /api/workspace/config). */
+    const countingSemaphore = () => {
+      let refreshes = 0;
+      const semaphore = new WorkspaceSemaphore({
+        load: () => {
+          refreshes += 1;
+          return Promise.resolve({ maxParallel: 2, memoryLimitMb: null });
+        },
+      });
+      return { semaphore, refreshes: () => refreshes };
+    };
+
+    const patch = async (id: string, body: unknown, over: Partial<ServerDeps> = {}) => {
+      const res = await apiRequest(makeApp(over), `/api/projects/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return {
+        status: res.status,
+        body: (await res.json()) as UpdateProjectResponse & { error?: string },
+      };
+    };
+
+    it('sets the per-project value, persists it, and refreshes the semaphore', async () => {
+      const other = await registerProject(otherRoot);
+      const { semaphore, refreshes } = countingSemaphore();
+      const { status, body } = await patch(other.id, { maxParallel: 1 }, { semaphore });
+      expect(status).toBe(200);
+      expect(body.project.id).toBe(other.id);
+      expect(body.project.maxParallel).toBe(1);
+      // Persisted to the registry, and reachable through the read route.
+      const listed = await getProjects();
+      expect(listed.projects.find((p) => p.id === other.id)?.maxParallel).toBe(1);
+      // The live-apply hook fired.
+      expect(refreshes()).toBe(1);
+    });
+
+    it('clears the override when maxParallel is null (back to inherit)', async () => {
+      await registerProject(otherRoot);
+      await mergeWriteWorkspaceConfig((config) => {
+        const entry = config.projects.find((p) => p.root === realpathSync(otherRoot));
+        if (entry) entry.maxParallel = 4;
+      });
+      const other = (await getProjects()).projects.find((p) => p.root === realpathSync(otherRoot))!;
+      expect(other.maxParallel).toBe(4);
+
+      const { status, body } = await patch(other.id, { maxParallel: null });
+      expect(status).toBe(200);
+      expect(body.project.maxParallel).toBeUndefined();
+      const listed = await getProjects();
+      expect(listed.projects.find((p) => p.id === other.id)?.maxParallel).toBeUndefined();
+    });
+
+    it('rejects an out-of-range value with a 400 and persists nothing', async () => {
+      const other = await registerProject(otherRoot);
+      for (const bad of [{ maxParallel: 0 }, { maxParallel: 99 }, { maxParallel: 1.5 }, {}]) {
+        const { status } = await patch(other.id, bad);
+        expect(status, JSON.stringify(bad)).toBe(400);
+      }
+      expect((await getProjects()).projects.find((p) => p.id === other.id)?.maxParallel).toBeUndefined();
+    });
+
+    it('404s an unknown id and a malformed one, and rewrites nothing (read-first, like DELETE)', async () => {
+      await registerProject(otherRoot);
+      // The config bytes before any 404 PATCH — a well-formed-unknown id must not
+      // rewrite the file (else a read-only home would 500 where 404 is honest).
+      const before = readFileSync(workspaceConfigPath(), 'utf8');
+      for (const id of ['nope', 'Not%20A%20Slug', 'a'.repeat(120)]) {
+        const { status, body } = await patch(id, { maxParallel: 1 });
+        expect(status, id).toBe(404);
+        expect(body.error, id).toContain('unknown project');
+      }
+      expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
     });
   });
 

@@ -299,7 +299,16 @@ function ProjectGroup({
       </button>
 
       {collapsed ? null : (
-        <div id={bodyId} data-slot="project-group-body" className="pl-3">
+        <div
+          id={bodyId}
+          data-slot="project-group-body"
+          // The gap and the rail are what make the header read as the PARENT of these rows.
+          // Without them the active group's `bg-muted` header sits flush against the active nav
+          // row's `bg-muted` and the two fuse into one block — the project name then reads as
+          // just another menu item. The rail is offset to sit under the chevron, so the whole
+          // body hangs off the same vertical the disclosure control is on.
+          className="mt-1 ml-[14px] border-l border-border pl-2"
+        >
           <nav aria-label={`${project.name} navigation`}>
             {visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable }).map((item) => {
               // Only the active group can own the current URL: the flat route map is

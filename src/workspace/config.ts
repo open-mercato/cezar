@@ -42,6 +42,11 @@ const workspaceProjectSchema = z
     addedAt: z.string().max(64).catch(''),
     lastOpenedAt: z.string().max(64).catch(''),
     source: z.enum(['local', 'checkout']).catch('local'),
+    /** Per-project cap on concurrently running tasks. Absent = inherit the
+     *  workspace `resources.maxParallel`. Bounded like the workspace cap; a bad
+     *  value degrades to "inherit" (`.catch(undefined)`) rather than a hard
+     *  default, and `.passthrough()` preserves the key across cezar round-trips. */
+    maxParallel: z.number().int().min(1).max(16).optional().catch(undefined),
   })
   .passthrough();
 

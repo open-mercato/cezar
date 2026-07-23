@@ -70,6 +70,24 @@ describe('engine', () => {
     expect(a2.run).not.toHaveBeenCalled(); // resolved from state → skipped
   });
 
+  it('a flag-less resume preserves the recorded external-proxy mode', async () => {
+    const externalStep = fakeStep('external');
+    const managedProxyStep = fakeStep('managed-proxy');
+    const strategy: PlatformStrategy = {
+      id: 'ubuntu-vps',
+      label: 'Ubuntu VPS',
+      preflight: async () => {},
+      steps: (ctx) => (ctx.state.externalProxy ? [externalStep] : [managedProxyStep]),
+    };
+
+    await runInstall(strategy, opts({ externalProxy: true }));
+    expect(loadServerState().externalProxy).toBe(true);
+
+    await runInstall(strategy, opts({ externalProxy: undefined }));
+    expect(loadServerState().externalProxy).toBe(true);
+    expect(managedProxyStep.run).not.toHaveBeenCalled();
+  });
+
   it('--reconfigure re-runs a named done step', async () => {
     const a = fakeStep('a');
     await runInstall(strategyOf([a]), opts());

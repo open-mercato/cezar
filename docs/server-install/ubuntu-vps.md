@@ -26,6 +26,9 @@ command is verified before the installer moves on.
 - At least one logged-in agent CLI on that user — `claude`, `codex`, or
   OpenCode (experimental). (The installer can install `gh` and the npm-based CLIs for you.)
 - For HTTPS: a domain with a DNS `A`/`AAAA` record pointing at the box.
+- **Ports 80/443 free.** If another reverse proxy already owns them (Dokploy,
+  Coolify, Caddy…), don't run the default install — see
+  [The box already has a reverse proxy](#the-box-already-has-a-reverse-proxy-dokploy-coolify-caddy).
 
 > Tools installed in `~/.local/bin` or via nvm are found automatically — the
 > installer merges your **login-shell PATH** before probing, so `claude`/`gh`
@@ -76,6 +79,69 @@ For each root action you're asked:
 - **"Run it now via sudo"** — the installer runs it for you and streams output.
 
 Your choice is remembered for the rest of the run.
+
+---
+
+## The box already has a reverse proxy (Dokploy, Coolify, Caddy…)
+
+The default install above assumes cezar owns the HTTP front. If something else
+already serves **:80/:443** — Dokploy/Coolify (which run **Traefik** in Docker),
+a hand-rolled nginx, Caddy — installing cezar's nginx would fight it for those
+ports. Use `--external-proxy`:
+
+```bash
+npx cezar-cli server-install --platform ubuntu-vps \
+  --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
+```
+
+That installs **the service only** — no nginx, no certbot. Steps run:
+`deps → autostart → identity`. Your proxy terminates TLS and enforces auth.
+
+```
+internet ──HTTPS──► your proxy (Traefik/Caddy/nginx) ──► cezar (172.17.0.1:4321)
+                    TLS + auth are YOURS to configure          systemd service
+```
+
+> ⚠️ **cezar has no built-in authentication.** In the default install nginx's
+> basic-auth is that gate; with `--external-proxy` there is none, and anyone who
+> can reach the bound host:port can run agents on your box. Put auth on the proxy
+> and keep the port off the public internet (ufw / cloud firewall).
+
+### Which `--bind-host`?
+
+| Your proxy runs… | `--bind-host` | Why |
+|---|---|---|
+| **in a container** (Dokploy/Coolify → Traefik) | `172.17.0.1` (docker bridge) | a container cannot dial the host's `127.0.0.1` |
+| **on the host** (nginx, Caddy, HAProxy) | omit (defaults to `127.0.0.1`) | loopback is reachable and stays private |
+
+Check your bridge address with `ip -brief addr show docker0`.
+
+### Wiring it to Dokploy / Traefik
+
+Traefik needs a route to a **host** address, so use a file-provider config
+(the installer prints this snippet, filled in, at the end of the run):
+
+```yaml
+http:
+  routers:
+    cezar:
+      rule: "Host(`cezar.example.com`)"
+      entryPoints: [websecure]
+      middlewares: [cezar-auth]
+      service: cezar
+      tls: { certResolver: letsencrypt }
+  services:
+    cezar:
+      loadBalancer:
+        servers: [{ url: "http://172.17.0.1:4321" }]
+  middlewares:
+    cezar-auth:
+      basicAuth:
+        users: ["me:$$apr1$$...."]   # htpasswd -nb me 'pass' — double every $
+```
+
+`server-deploy` and `server-uninstall` work the same in this mode (uninstall
+only removes the service — it never touches the proxy it doesn't own).
 
 ---
 
@@ -186,5 +252,8 @@ break other vhosts).
 | "no gh / claude installed" but you have them | Launched from a non-login shell without `~/.local/bin`/nvm on PATH. The current installer merges your login-shell PATH; update and re-run. |
 | certbot "verification failed" but it succeeded | Fixed — verification now reads the world-readable nginx vhost, not root-only `/etc/letsencrypt/live`. |
 | Cockpit unreachable, nginx fine | Ports 80/443 blocked. Check `ufw status` **and** any cloud firewall (Hetzner/AWS security groups). |
+| nginx won't start: `Address already in use` | Another proxy (Dokploy/Coolify → Traefik, Caddy) owns :80/:443. Re-run with `--external-proxy` (see above). `sudo ss -ltnp \| grep -E ':80\|:443'` shows who holds them. |
+| `run server-install as a normal sudo-capable user, not root` | You're `root`. `adduser cezar && usermod -aG sudo cezar`, `su - cezar`, log your agent CLI in **as that user**, then re-run. |
+| External-proxy install: proxy returns 502 | Traefik runs in a container and can't reach `127.0.0.1`. Reinstall with `--bind-host 172.17.0.1` (or your `docker0` address). |
 
 ← Back to [Remote access overview](./README.md)

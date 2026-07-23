@@ -520,9 +520,24 @@ On `ubuntu-vps` a single host can run several independent cockpits — add
 `--domain <host>` and each gets its own port, nginx site, login and service; a
 new domain never resumes or clobbers the first install.
 
+**Already running a reverse proxy?** If Dokploy, Coolify, Caddy or your own
+nginx already owns `:80/:443`, cezar's would fight it for the ports. Install the
+service only and let your proxy front it:
+
+```bash
+npx cezar-cli server-install --platform ubuntu-vps \
+  --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
+```
+
+`--bind-host` is only needed when the proxy runs in a **container** (Traefik
+can't reach the host's loopback); a host-installed proxy uses the `127.0.0.1`
+default. In this mode **your proxy must enforce authentication** — cezar has
+none of its own. [Details →](docs/server-install/ubuntu-vps.md#the-box-already-has-a-reverse-proxy-dokploy-coolify-caddy)
+
 | Provider | `--platform` | Public front | Guide |
 |----------|--------------|--------------|-------|
 | Ubuntu / Debian VPS | `ubuntu-vps` | nginx + Let's Encrypt HTTPS, htpasswd login, systemd | [Step-by-step →](docs/server-install/ubuntu-vps.md) |
+| Ubuntu + existing proxy | `ubuntu-vps --external-proxy` | your Dokploy/Traefik/Caddy front; cezar ships the service only | [Step-by-step →](docs/server-install/ubuntu-vps.md#the-box-already-has-a-reverse-proxy-dokploy-coolify-caddy) |
 | macOS + ngrok | `macosx-ngrok` | ngrok tunnel + `--basic-auth`, launchd | [Step-by-step →](docs/server-install/macosx-ngrok.md) |
 
 See the **[Remote access overview](docs/server-install/README.md)** for how it

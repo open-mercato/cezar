@@ -239,6 +239,15 @@ export interface RemoveProjectResponse {
   id: string;
 }
 
+/** `PATCH /api/projects/:projectId` (spec 2026-07-22-per-project-concurrency)
+ *  — sets or clears a project's per-project `maxParallel`. The entry carries
+ *  the same `status`/`branch` probe `GET /api/projects` attaches, so the
+ *  cockpit sees one project shape. `null` in the request clears the override
+ *  back to "inherit the workspace cap". */
+export interface UpdateProjectResponse {
+  project: ProjectListEntry;
+}
+
 /** `GET/PUT /api/workspace/config` (multi-project spec, step 2.7) — the
  *  settings slice of `~/.cezar/config.json`: global knobs ONLY, never the
  *  project registry (that is `GET /api/projects`' job). */
@@ -1296,6 +1305,72 @@ export function createApp(deps: ServerDeps): Hono {
     contexts.dispose(id);
     workspaceEvents.emit('project-removed', { id });
     const body: RemoveProjectResponse = { removed: true, id };
+    return c.json(body);
+  });
+
+  // Edit one field of an existing registry entry (spec
+  // 2026-07-22-per-project-concurrency): the per-project concurrency ceiling.
+  // A PATCH (not PUT) because it touches a single field, and a distinct route
+  // from POST (register-a-folder) to keep register vs. edit semantics clear.
+  // `maxParallel: null` clears the override back to "inherit the workspace
+  // cap". Bounds mirror `workspaceProjectSchema` (config.ts) exactly, so a
+  // value this route accepts can never be degraded away by the next load's
+  // `.catch`.
+  const updateProjectSchema = z.object({
+    maxParallel: z.number().int().min(1).max(16).nullable(),
+  });
+  app.patch('/api/projects/:projectId', async (c) => {
+    const raw = c.req.param('projectId');
+    // Same gate + 404 wording as DELETE: a malformed id is an unknown project.
+    if (!projectIdSchema.safeParse(raw).success) {
+      return c.json({ error: `unknown project: ${raw}` }, 404);
+    }
+    const parsed = updateProjectSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
+    }
+    // `default` is the boot alias the cockpit is allowed to use everywhere else.
+    const id = raw === 'default' ? await resolveBootProject() : raw;
+    const { maxParallel } = parsed.data;
+
+    // Read-first (mirroring DELETE, server.ts:1252-1258): a well-formed but
+    // unknown id must 404 WITHOUT rewriting the config — otherwise it would both
+    // do a needless full-config tmp+rename and, on a read-only home, surface the
+    // write failure as a 500 where the honest answer is 404.
+    let known = false;
+    try {
+      known = (await loadWorkspaceConfig()).projects.some((p) => p.id === id);
+    } catch {
+      // unreadable workspace — treat as unknown; the read-only case answers 404,
+      // not a 500 the caller cannot act on (same reasoning as DELETE).
+    }
+    if (!known) return c.json({ error: `unknown project: ${id}` }, 404);
+
+    let updated: WorkspaceProject | undefined;
+    try {
+      await mergeWriteWorkspaceConfig((config) => {
+        const entry = config.projects.find((p) => p.id === id);
+        if (!entry) return; // lost a race with a concurrent remove — answered below
+        // null clears the override; a number sets it. Mutated in place so
+        // `.passthrough()` keys on the entry survive.
+        if (maxParallel === null) delete entry.maxParallel;
+        else entry.maxParallel = maxParallel;
+        updated = entry;
+      });
+    } catch (err) {
+      // e.g. a read-only home — nothing was persisted (atomic tmp+rename).
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+    // Raced with a concurrent removal between the read and the write.
+    if (!updated) return c.json({ error: `unknown project: ${id}` }, 404);
+
+    // The new ceiling takes effect WITHOUT a restart: refresh the shared
+    // semaphore's snapshot and pump every manager — the same live-apply hook
+    // `PUT /api/workspace/config` fires for a workspace-cap change.
+    await deps.semaphore?.refresh();
+    const body: UpdateProjectResponse = {
+      project: { ...updated, ...(await probeProjectStatus(updated.root)) },
+    };
     return c.json(body);
   });
 

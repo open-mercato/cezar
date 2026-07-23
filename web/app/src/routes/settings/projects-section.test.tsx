@@ -66,7 +66,8 @@ type Answers = {
 function serve(answers: Answers = {}) {
   requests = []
   const registry: ProjectsResponse = {
-    projects: PROJECTS,
+    // Copies, not the shared PROJECTS objects: the PATCH handler mutates entries.
+    projects: PROJECTS.map((p) => ({ ...p })),
     bootProject: 'cezar',
     projectsDir: '~/cezar/projects',
   }
@@ -91,6 +92,15 @@ function serve(answers: Answers = {}) {
         config.browseRoot = String(body?.browseRoot ?? config.browseRoot)
         config.projectsDir = String(body?.projectsDir ?? config.projectsDir)
         return json(config)
+      }
+      if (url.startsWith('/api/projects/') && method === 'PATCH') {
+        const id = url.split('/').pop() ?? ''
+        const entry = registry.projects.find((p) => p.id === id)
+        if (!entry) return json({ error: `unknown project: ${id}` }, 404)
+        const mp = body?.maxParallel
+        if (mp === null) delete entry.maxParallel
+        else entry.maxParallel = mp as number
+        return json({ project: entry })
       }
       if (url.startsWith('/api/projects/') && method === 'DELETE') {
         const answer = answers.del ?? { status: 200, payload: { removed: true, id: url.split('/').pop() } }
@@ -140,6 +150,9 @@ const saveBrowse = () => document.querySelector<HTMLButtonElement>('[data-action
 const browseError = () => document.querySelector<HTMLElement>('[data-slot="projects-browse-root-error"]')
 const confirmButton = () => document.querySelector<HTMLButtonElement>('[data-action="projects-confirm-remove"]')
 const deletes = () => requests.filter((r) => r.method === 'DELETE')
+const patches = () => requests.filter((r) => r.method === 'PATCH')
+const maxParallelSelect = (id: string) =>
+  row(id)?.querySelector<HTMLSelectElement>('[data-slot="project-max-parallel"]')
 
 afterEach(() => {
   act(() => resetToasts())
@@ -291,6 +304,38 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain(error))
     // Refused means untouched — the row is still there.
     expect(row('shop-backend')).not.toBeNull()
+  })
+
+  it('pins a per-project max-parallel and can clear it back to inherit (2026-07-22)', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    const select = maxParallelSelect('shop-backend')
+    expect(select).not.toBeNull()
+    // Unset projects show the inherit option carrying the live workspace cap (2).
+    expect(select!.value).toBe('')
+    expect(select!.textContent).toContain('Inherit workspace (2)')
+
+    // Choosing a number PATCHes the per-project ceiling…
+    fireEvent.change(select!, { target: { value: '1' } })
+    await waitFor(() =>
+      expect(patches()).toEqual([
+        { method: 'PATCH', url: '/api/projects/shop-backend', body: { maxParallel: 1 } },
+      ]),
+    )
+    // …and the row reflects the persisted value after the query refreshes.
+    await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('1'))
+
+    // Selecting "Inherit" clears the override with an explicit null.
+    fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '' } })
+    await waitFor(() =>
+      expect(patches().at(-1)).toEqual({
+        method: 'PATCH',
+        url: '/api/projects/shop-backend',
+        body: { maxParallel: null },
+      }),
+    )
+    await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe(''))
   })
 
   it('disables Remove for the project cezar is serving', async () => {
