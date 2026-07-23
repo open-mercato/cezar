@@ -1,6 +1,6 @@
 # Runtime Provider Authentication Invalidation
 
-**Date:** 2026-07-23  
+**Date:** 2026-07-23
 **Status:** Approved
 
 ## Problem
