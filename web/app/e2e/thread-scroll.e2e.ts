@@ -84,6 +84,8 @@ const MAIN = `document.querySelector('[data-slot="main"]')`
 const nearBottom = `(() => { const m = ${MAIN}; return m.scrollHeight - m.scrollTop - m.clientHeight < 80 })()`
 const rowCount = () => browser.count('[data-slot="thread-row"]')
 const domSize = () => Number(browser.evaluate(`document.querySelectorAll('*').length`))
+const assistantWidth = () =>
+  Number(browser.evaluate(`document.querySelector('[data-slot="assistant-message"]')?.getBoundingClientRect().width ?? 0`))
 
 /**
  * Scroll away from the tail like a reader would — and INSIST, like a reader would.
@@ -157,13 +159,16 @@ afterAll(() => {
 describe('thread virtualization on a 1,000-row transcript', () => {
   let flatRows = 0
   let flatDom = 0
+  let flatAssistantWidth = 0
 
   it('force-flat renders every row (the before measurement)', () => {
     openThread('?thread=flat')
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('false')
     flatRows = rowCount()
     flatDom = domSize()
+    flatAssistantWidth = assistantWidth()
     expect(flatRows).toBe(ROWS) // the generator's own arithmetic, end to end
+    expect(flatAssistantWidth).toBeGreaterThan(200)
   }, 90_000)
 
   it('auto mode virtualizes past the threshold and keeps the DOM bounded', () => {
@@ -178,6 +183,9 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     expect(virtualRows).toBeGreaterThan(0)
     expect(virtualRows).toBeLessThan(flatRows / 10)
     expect(virtualDom).toBeLessThan(flatDom / 2)
+    const virtualAssistantWidth = assistantWidth()
+    expect(virtualAssistantWidth).toBeGreaterThan(200)
+    expect(Math.abs(virtualAssistantWidth - flatAssistantWidth)).toBeLessThan(2)
     // The numbers themselves are checkpoint material — persisted next to the screenshots.
     mkdirSync(artifactsDir, { recursive: true })
     writeFileSync(
