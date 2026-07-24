@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthService, type ProviderId } from '../core/provider-auth.js';
 import { RunStore, type RunRecord } from '../runs/store.js';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
+import { RunManager, type StartRunInput } from '../workflows/run.js';
 import type { WorkflowDef } from '../workflows/types.js';
 import { apiRequest } from './loopback-request.testkit.js';
 import { createApp } from './server.js';
@@ -64,7 +64,10 @@ describe('provider action gating', () => {
       runner: 'claude',
       steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
     });
-    if (backend) store.updateStep(run.id, 'task', { backend });
+    if (backend) {
+      store.updateRun(run.id, { currentStepId: 'task' });
+      store.updateStep(run.id, 'task', { backend, status: 'running' });
+    }
     return run;
   };
 
@@ -173,7 +176,7 @@ describe('provider action gating', () => {
     expect(continueRun).not.toHaveBeenCalled();
   });
 
-  it('blocks a continue using the persisted current backend before resuming the run', async () => {
+  it('uses the run runner, not a historical step backend, for a no-override continue', async () => {
     const run = createExistingRun('codex');
     const response = await apiRequest(app, `/api/runs/${run.id}/continue`, {
       method: 'POST',
@@ -181,8 +184,33 @@ describe('provider action gating', () => {
       body: '{}',
     });
 
-    await expectDisabled(response);
-    expect(continueRun).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(continueRun).toHaveBeenCalledOnce();
+  });
+
+  it('uses the active step backend, not a later historical step, for a live message', async () => {
+    const run = store.createRun({
+      title: 'Retrying',
+      workflow: 'mixed',
+      task: 'Retrying task',
+      runner: 'claude',
+      steps: [
+        { id: 'retry', name: 'Retry', kind: 'agent' },
+        { id: 'later', name: 'Later', kind: 'agent' },
+      ],
+    });
+    store.updateRun(run.id, { currentStepId: 'retry' });
+    store.updateStep(run.id, 'retry', { backend: 'claude', status: 'running' });
+    store.updateStep(run.id, 'later', { backend: 'codex', status: 'done' });
+
+    const response = await apiRequest(app, `/api/runs/${run.id}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'Continue retrying' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(sendMessage).toHaveBeenCalledOnce();
   });
 
   it('blocks starting an inbox todo with a disabled provider', async () => {
@@ -197,4 +225,92 @@ describe('provider action gating', () => {
     await expectDisabled(response);
     expect(startRun).not.toHaveBeenCalled();
   });
+});
+
+describe('provider availability preserves existing execution', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let runId: string | undefined;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedCodexBin = process.env.CEZ_CODEX_BIN;
+
+  beforeEach(() => {
+    process.env.CEZ_DRY_RUN = '1';
+    process.env.CEZ_CODEX_BIN = join(
+      process.cwd(),
+      'src/core/__fixtures__/codex/mock-codex-app-server.mjs',
+    );
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-provider-continuity-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterEach(() => {
+    if (runId) manager.cancel(runId);
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN;
+    else process.env.CEZ_CODEX_BIN = savedCodexBin;
+  });
+
+  const waitFor = async (predicate: () => boolean, timeoutMs = 15_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('run did not reach the expected state');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  it('dequeues a task created before disable and reaches its later provider step', async () => {
+    const workspaceConfig = memoryWorkspaceConfig([]);
+    const app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: 'test',
+      providerAuth: providerAuth(),
+      workspaceConfig,
+    });
+    const workflow: WorkflowDef = {
+      name: 'mixed-existing',
+      source: 'built-in',
+      steps: [
+        { id: 'claude', name: 'Claude', prompt: '{{task}}', runner: 'claude' },
+        { id: 'codex', name: 'Codex', prompt: '{{task}}', runner: 'codex' },
+      ],
+    };
+
+    const engine = manager as unknown as { pump: () => Promise<void> };
+    const pausedPump = vi.spyOn(engine, 'pump').mockResolvedValue();
+    const run = manager.startRun(workflow, {
+      task: 'mock:native-codex-ask choose a library',
+      runner: 'claude',
+      worktree: false,
+    });
+    runId = run.id;
+    expect(store.getRun(run.id)?.status).toBe('queued');
+
+    const disabled = await apiRequest(app, '/api/providers/codex/enabled', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(disabled.status).toBe(200);
+    pausedPump.mockRestore();
+    void engine.pump();
+
+    await waitFor(() => {
+      const current = store.getRun(run.id);
+      return current?.currentStepId === 'codex' && current.steps.find((step) => step.id === 'codex')?.status === 'waiting';
+    });
+
+    const current = store.getRun(run.id);
+    expect(current?.steps.map((step) => ({ id: step.id, status: step.status, backend: step.backend }))).toEqual([
+      { id: 'claude', status: 'done', backend: 'claude' },
+      { id: 'codex', status: 'waiting', backend: 'codex' },
+    ]);
+  }, 30_000);
 });

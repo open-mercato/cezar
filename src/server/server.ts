@@ -93,6 +93,7 @@ import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } fr
 import { createDraftPr } from './pr.js';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.js';
 import {
+  providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
   unavailableProviderMessage,
@@ -2062,7 +2063,7 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
-    const blocked = await providerActionError([providerForExistingRun(run)]);
+    const blocked = await providerActionError([providerForActiveRun(run)]);
     if (blocked) return c.json({ error: blocked }, 409);
     const content: ContentBlock[] = [
       ...parsed.data.images.map((img): ContentBlock => ({

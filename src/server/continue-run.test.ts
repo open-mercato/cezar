@@ -20,8 +20,10 @@ describe('POST /api/runs/:id/continue override', () => {
   let app: Hono;
   let runId: string;
   let captured: { id: string; opts: { text?: string; runner?: string; model?: string } } | undefined;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
 
   beforeEach(() => {
+    process.env.CEZ_DRY_RUN = '1';
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-continue-'));
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     captured = undefined;
@@ -43,6 +45,8 @@ describe('POST /api/runs/:id/continue override', () => {
   afterEach(() => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
   });
 
   const post = (body: unknown) =>
