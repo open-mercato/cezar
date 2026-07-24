@@ -273,6 +273,8 @@ export interface WorkspaceConfigResponse {
   effectiveSkillsAutoUpdate: boolean;
   resources: {
     maxParallel: number;
+    maxMonitoringSessions: number;
+    monitoringWakeIntervalMinutes: number | null;
     memoryLimitMb: number | null;
     worktreeRetentionDefault: number;
   };
@@ -1641,6 +1643,8 @@ export function createApp(deps: ServerDeps): Hono {
     effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
     resources: {
       maxParallel: config.resources.maxParallel,
+      maxMonitoringSessions: config.resources.maxMonitoringSessions,
+      monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
@@ -1657,6 +1661,8 @@ export function createApp(deps: ServerDeps): Hono {
     resources: z
       .object({
         maxParallel: z.number().int().min(1).max(16).optional(),
+        maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
+        monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       })
@@ -1704,6 +1710,12 @@ export function createApp(deps: ServerDeps): Hono {
         if (skillsAutoUpdate === null) delete config.skillsAutoUpdate;
         else if (skillsAutoUpdate !== undefined) config.skillsAutoUpdate = skillsAutoUpdate;
         if (resources?.maxParallel !== undefined) config.resources.maxParallel = resources.maxParallel;
+        if (resources?.maxMonitoringSessions !== undefined) {
+          config.resources.maxMonitoringSessions = resources.maxMonitoringSessions;
+        }
+        if (resources?.monitoringWakeIntervalMinutes !== undefined) {
+          config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
+        }
         if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
         if (resources?.worktreeRetentionDefault !== undefined) {
           config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;

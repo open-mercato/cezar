@@ -87,6 +87,8 @@ describe('the workspace settings API (step 2.7)', () => {
       effectiveSkillsAutoUpdate: true,
       resources: {
         maxParallel: 2,
+        maxMonitoringSessions: 2,
+        monitoringWakeIntervalMinutes: null,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
       },
@@ -107,7 +109,7 @@ describe('the workspace settings API (step 2.7)', () => {
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {
     expect(semaphore.maxParallel()).toBe(2); // the pre-PUT snapshot
     const res = await putConfig({
-      resources: { maxParallel: 5, memoryLimitMb: 2048 },
+      resources: { maxParallel: 5, maxMonitoringSessions: 3, monitoringWakeIntervalMinutes: 5, memoryLimitMb: 2048 },
     });
     expect(res.status).toBe(200);
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
@@ -117,6 +119,8 @@ describe('the workspace settings API (step 2.7)', () => {
       effectiveSkillsAutoUpdate: true,
       resources: {
         maxParallel: 5,
+        maxMonitoringSessions: 3,
+        monitoringWakeIntervalMinutes: 5,
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
       },
@@ -126,6 +130,8 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((rawConfig().resources as Record<string, unknown>).maxParallel).toBe(5);
     // The step-2.5 hook fired: the new cap applies WITHOUT a restart.
     expect(semaphore.maxParallel()).toBe(5);
+    expect(semaphore.maxMonitoringSessions()).toBe(3);
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBe(5);
     expect(semaphore.memoryLimitMb()).toBe(2048);
   });
 
@@ -134,6 +140,8 @@ describe('the workspace settings API (step 2.7)', () => {
     await putConfig({ resources: { worktreeRetentionDefault: 3 } });
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: null,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
     });

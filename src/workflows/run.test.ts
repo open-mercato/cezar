@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { ContentBlock } from '../core/agent-runner.js';
 import { createWorktree } from '../git-worktree.js';
 import { RunStore, type RunRecord } from '../runs/store.js';
+import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import { parseTaskMarkers } from '../runs/task-markers.js';
 import { appendTurnText, RunManager } from './run.js';
 import type { WorkflowDef } from './types.js';
@@ -638,6 +639,26 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
     const parked = store.getRun(record.id);
     expect(parked?.status).toBe('running'); // a sub-state of running, NOT waiting
     expect(parked?.activity).toBe('monitoring');
+    const state = (manager as unknown as { active: Map<string, { idleTimer?: NodeJS.Timeout }> }).active.get(record.id);
+    expect(state?.idleTimer).toBeUndefined(); // durable monitors do not inherit the 15-minute user-wait timer
+  }, 30_000);
+
+  it('optionally wakes a parked monitor without fabricating a user message', async () => {
+    manager.dispose();
+    const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, () => {
+      const path = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
+      if (!existsSync(path)) return false;
+      const ndjson = readFileSync(path, 'utf8');
+      return ndjson.includes('automatic monitoring wake-up (1/40)');
+    });
+    const events = readFileSync(join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string; message?: string });
+    expect(events.some((event) => event.type === 'note' && event.message?.includes('(1/40)'))).toBe(true);
+    expect(events.some((event) => event.type === 'user-message')).toBe(false);
   }, 30_000);
 
   it('a markerless turn-end still parks as waiting with no activity', async () => {

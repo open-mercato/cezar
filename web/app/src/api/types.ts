@@ -414,6 +414,8 @@ export interface WorkspaceConfigResponse {
   effectiveSkillsAutoUpdate: boolean
   resources: {
     maxParallel: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
     memoryLimitMb: number | null
     worktreeRetentionDefault: number
   }
@@ -428,6 +430,8 @@ export interface SetWorkspaceConfigInput {
   skillsAutoUpdate?: boolean | null
   resources?: {
     maxParallel?: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
     memoryLimitMb?: number | null
     worktreeRetentionDefault?: number
   }
