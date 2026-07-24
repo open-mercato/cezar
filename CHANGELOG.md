@@ -1,3 +1,40 @@
+# 0.9.1 (2026-07-24)
+
+## Highlights
+<!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
+
+## ✨ Features
+- ✨ Project-aware browser page titles (fixes #543). (#592) *(@pkarw)*
+
+## 🐛 Fixes
+- ⚡ Virtualize the diff and the task commit list. (#599) *(@patzick)*
+- 🐛 Repair concatenated task titles (fixes #623). (#627) *(@pkarw)*
+- 🐛 Prevent single-project registry leak (fixes #626). (#629) *(@pkarw)*
+- 🔐 Gate project edits in single-project mode (fixes #625). (#630) *(@pkarw)*
+- 🐛 Label Codex image view tool calls (fixes #593). (#631) *(@pkarw)*
+- 🐛 Keep the composer's runner and model aligned. (#632) *(@pkarw)*
+- 🔄 Coalesce codex/opencode streamed deltas into whole v1 text events. (#633) *(@pkarw)*
+- 🐛 Link per-project resource limits (fixes #634). (#635) *(@pkarw)*
+- 🐛 Preserve task title message boundaries. (#636) *(@pkarw)*
+- 🐛 Label Codex context compaction (fixes #596). (#639) *(@pkarw)*
+- 🐛 Avoid boot slug collisions (fixes #558). (#641) *(@pkarw)*
+- 🐛 Track issue number provenance (fixes #539). (#642) *(@pkarw)*
+- 🐛 Keep tool issue links display-only (fixes #538). (#643) *(@pkarw)*
+- 🐛 Auto-refresh the team-repo cache so codex reviews use current skills. (#644) *(@pkarw)*
+
+## 📝 Specs & Documentation
+- 📝 Document `CEZ_SINGLE_PROJECT` mode. (#597) *(@pkarw)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 Pin `CEZ_HOME` in specs that boot their own server. (#619) *(@pat-lewczuk)*
+- 🚀 Cover detached launcher lifecycle (fixes #574). (#640) *(@pkarw)*
+
+## 👥 Contributors
+
+- @pkarw
+- @patzick
+- @pat-lewczuk
+
 # 0.9.0 (2026-07-21)
 
 ## Highlights
