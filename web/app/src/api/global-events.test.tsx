@@ -1,5 +1,5 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, render, renderHook } from '@testing-library/react'
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -7,7 +7,7 @@ import { createUsageStore, type UsageStore } from './events'
 import { GlobalEventsProvider, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope } from './project-scope'
 import { createQueryClient } from './query-client'
-import { queryKeys, workspaceQueryKeys } from './queries'
+import { queryKeys, useProviderStatus, workspaceQueryKeys } from './queries'
 import type { ApiRun, ProviderStatusResponse, RunRecord } from './types'
 
 /**
@@ -136,6 +136,21 @@ function setVisibility(state: 'visible' | 'hidden'): void {
   act(() => {
     document.dispatchEvent(new Event('visibilitychange'))
   })
+}
+
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+function deferredResponse() {
+  let resolve!: (response: Response) => void
+  const promise = new Promise<Response>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 beforeEach(() => {
@@ -431,6 +446,74 @@ describe('useGlobalEvents — provider status', () => {
 
     expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBeUndefined()
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('ignores malformed and unknown unfetched provider events without starting a query', () => {
+    const { source } = mount()
+
+    source.emit('provider-status', 'not json{')
+    source.emit('provider-status', JSON.stringify({ provider: 'future', status: 'disconnected' }))
+
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('cancels a stale initial provider request and refetches after an SSE incident', async () => {
+    const initial = deferredResponse()
+    const replacement = deferredResponse()
+    const staleConnected = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    const latched = {
+      providers: [
+        {
+          provider: 'claude',
+          status: 'disconnected',
+          enabled: true,
+          authFailureId: 'incident-1',
+          hint: 'Reconnect, then try again.',
+        },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    vi.mocked(fetch).mockReturnValueOnce(initial.promise).mockReturnValueOnce(replacement.promise)
+
+    function ProviderProbe() {
+      const status = useProviderStatus()
+      return <output data-testid="provider-status">{status.data?.providers[0]?.status ?? 'pending'}</output>
+    }
+
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEventsProvider>
+          <ProviderProbe />
+        </GlobalEventsProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+
+    FakeEventSource.last.emit('provider-status', JSON.stringify({
+      provider: 'claude',
+      status: 'disconnected',
+      authFailureId: 'incident-1',
+      hint: 'Reconnect, then try again.',
+    }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+
+    await act(async () => initial.resolve(json(staleConnected)))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBeUndefined()
+    expect(document.querySelector('[data-testid="provider-status"]')?.textContent).not.toBe('connected')
+
+    await act(async () => replacement.resolve(json(latched)))
+    await waitFor(() => expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[0]).toMatchObject({ status: 'disconnected', authFailureId: 'incident-1' }))
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('applies provider status while a different project scope is active', () => {

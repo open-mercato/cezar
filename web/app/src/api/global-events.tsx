@@ -202,6 +202,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
     let disposed = false
+    let providerStatusRefetching = false
 
     const reopenLater = (): void => {
       if (disposed || reopenTimer !== undefined) return
@@ -263,10 +264,23 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         }
         const row = parseProviderStatusEventRow(payload)
         if (!row) return
-        queryClient.setQueryData<ProviderStatusResponse>(
-          workspaceQueryKeys.providerStatus,
-          (response) => applyProviderStatusRow(response, row),
-        )
+        const key = workspaceQueryKeys.providerStatus
+        const response = queryClient.getQueryData<ProviderStatusResponse>(key)
+        const updated = applyProviderStatusRow(response, row)
+        if (updated !== undefined) {
+          queryClient.setQueryData(key, updated)
+          return
+        }
+        // An additive row cannot safely seed the complete three-provider cache. If the first
+        // status fetch is still in flight, discard it and start a replacement after the server
+        // emitted this latch; otherwise an old green response could win the initial load.
+        if (providerStatusRefetching) return
+        providerStatusRefetching = true
+        void queryClient.cancelQueries({ queryKey: key, exact: true })
+          .then(() => queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'active' }))
+          .finally(() => {
+            providerStatusRefetching = false
+          })
       })
 
       source.addEventListener('error', () => {
