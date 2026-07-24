@@ -88,7 +88,7 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('done')} thread={reduceThread(authRequired)} />)
 
-    expect(screen.getByRole('alert').textContent).toContain('Codex needs authorization')
+    expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
     expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
       '/settings/agents#providers',
     )

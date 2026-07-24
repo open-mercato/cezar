@@ -258,10 +258,10 @@ export function ProviderAuthRequiredCard({
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
       <p className="text-[13px] font-semibold text-foreground">
-        {label} needs authorization
+        This run needed {label} authorization
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        Authorize {label} in Settings before trying again.
+        Review {label} settings before retrying.
       </p>
       <Link
         to="/settings/agents#providers"

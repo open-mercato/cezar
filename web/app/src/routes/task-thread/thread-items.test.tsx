@@ -41,10 +41,11 @@ describe('ProviderAuthRequiredCard', () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByRole('alert').textContent).toContain(`${label} needs authorization`)
+    expect(screen.getByRole('alert').textContent).toContain(`This run needed ${label} authorization`)
     expect(screen.getByRole('alert').textContent).toContain(
-      `Authorize ${label} in Settings before trying again.`,
+      `Review ${label} settings before retrying.`,
     )
+    expect(screen.getByRole('alert').textContent).not.toContain(`${label} needs authorization`)
     const link = screen.getByRole('link', { name: 'Open provider settings' })
     expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
     expect(link.getAttribute('tabindex')).not.toBe('-1')
