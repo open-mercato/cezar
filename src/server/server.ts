@@ -742,7 +742,7 @@ export function createApp(deps: ServerDeps): Hono {
   };
   const providerStatus = async (options?: { refresh?: boolean }): Promise<ProviderStatusResponse> => {
     const [discovered, workspace] = await Promise.all([
-      providerAuth.status(options?.refresh ? { refresh: true, recoverRuntimeFailures: true } : undefined),
+      providerAuth.status(options?.refresh ? { refresh: true } : undefined),
       workspaceConfig.load(),
     ]);
     return applyProviderEnablement(discovered, workspace.disabledProviders);

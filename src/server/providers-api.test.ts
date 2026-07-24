@@ -384,9 +384,9 @@ describe('workspace provider API', () => {
     expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");
   });
 
-  it('GET ?refresh=1 clears a runtime latch after a fresh connected probe', async () => {
+  it('GET ?refresh=1 retains a runtime latch after a fresh connected probe', async () => {
     const providerAuth = service();
-    providerAuth.reportRuntimeAuthFailure('claude');
+    const failure = providerAuth.reportRuntimeAuthFailure('claude');
     const server = app({ providerAuth });
 
     const response = await apiRequest(server, '/api/providers/status?refresh=1');
@@ -394,7 +394,13 @@ describe('workspace provider API', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       providers: expect.arrayContaining([
-        { provider: 'claude', status: 'connected', enabled: true },
+        {
+          provider: 'claude',
+          status: 'disconnected',
+          enabled: true,
+          hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+          authFailureId: failure?.authFailureId,
+        },
       ]),
     });
   });
