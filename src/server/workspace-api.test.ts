@@ -22,6 +22,7 @@ describe('the workspace settings API (step 2.7)', () => {
   const savedHome = process.env.CEZ_HOME;
   const savedBrowseRoot = process.env.CEZ_BROWSE_ROOT;
   const savedProjectsDir = process.env.CEZ_PROJECTS_DIR;
+  const savedSkillsAutoUpdate = process.env.CEZ_SKILLS_AUTO_UPDATE;
   let home: string;
   let repoRoot: string;
   let store: RunStore;
@@ -33,6 +34,7 @@ describe('the workspace settings API (step 2.7)', () => {
     process.env.CEZ_HOME = home; // paths.ts sends all workspace paths here
     delete process.env.CEZ_BROWSE_ROOT;
     delete process.env.CEZ_PROJECTS_DIR;
+    delete process.env.CEZ_SKILLS_AUTO_UPDATE;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-workspace-api-repo-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -57,6 +59,8 @@ describe('the workspace settings API (step 2.7)', () => {
     else process.env.CEZ_BROWSE_ROOT = savedBrowseRoot;
     if (savedProjectsDir === undefined) delete process.env.CEZ_PROJECTS_DIR;
     else process.env.CEZ_PROJECTS_DIR = savedProjectsDir;
+    if (savedSkillsAutoUpdate === undefined) delete process.env.CEZ_SKILLS_AUTO_UPDATE;
+    else process.env.CEZ_SKILLS_AUTO_UPDATE = savedSkillsAutoUpdate;
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -79,6 +83,8 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(body).toEqual({
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
+      skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: true,
       resources: {
         maxParallel: 2,
         memoryLimitMb: null,
@@ -107,6 +113,8 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
+      skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: true,
       resources: {
         maxParallel: 5,
         memoryLimitMb: 2048,
@@ -129,6 +137,27 @@ describe('the workspace settings API (step 2.7)', () => {
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
     });
+  });
+
+  it('PUT stores explicit auto-update values and null clears back to the inherited env value', async () => {
+    process.env.CEZ_SKILLS_AUTO_UPDATE = '0';
+    expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({
+      skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: false,
+    });
+
+    const explicit = (await (await putConfig({ skillsAutoUpdate: true })).json()) as WorkspaceConfigResponse;
+    expect(explicit).toMatchObject({ skillsAutoUpdate: true, effectiveSkillsAutoUpdate: true });
+    expect(rawConfig().skillsAutoUpdate).toBe(true);
+
+    const inherited = (await (await putConfig({ skillsAutoUpdate: null })).json()) as WorkspaceConfigResponse;
+    expect(inherited).toMatchObject({ skillsAutoUpdate: null, effectiveSkillsAutoUpdate: false });
+    expect(rawConfig().skillsAutoUpdate).toBeUndefined();
+  });
+
+  it('rejects invalid auto-update values without writing', async () => {
+    expect((await putConfig({ skillsAutoUpdate: 'false' })).status).toBe(400);
+    expect(() => readFileSync(workspaceConfigPath(), 'utf8')).toThrow();
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {

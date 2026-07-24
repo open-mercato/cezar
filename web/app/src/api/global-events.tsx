@@ -13,7 +13,7 @@ import {
   type UsageStore,
 } from './events'
 import { getApiScope } from './project-scope'
-import { queryKeys, workspaceQueryKeys } from './queries'
+import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import type {
   ApiRun,
   HealthResponse,
@@ -372,6 +372,10 @@ export function GlobalEventsProvider({ children }: { children: ReactNode }) {
   // ticks bleed into the next, and StrictMode's double-invoked render still yields exactly one.
   const [usage] = useState(createUsageStore)
   useGlobalEvents(usage)
+  // The ONE session-long `health` topic subscription (queries.ts): here, at the root that is
+  // mounted for the app's whole life, so health stays live continuously instead of flapping with
+  // the lifecycles of the ~15 `useHealth` readers below.
+  useHealthSubscription()
   return <UsageContext.Provider value={usage}>{children}</UsageContext.Provider>
 }
 

@@ -11,13 +11,17 @@ import type {
   StepState,
 } from '@/api/types'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
+import { Link } from '@/lib/project-router'
 
-import { ContinueAction } from './follow-up-engine'
+import { useContinueAction } from './follow-up-engine'
 
 /**
  * The follow-up composer's Continue control (#401): the runner + model pills default to the
  * run's current backend, so an untouched Continue posts nothing extra (backward compat); a pick
  * rides through to `POST /continue`; the runner pill is hidden on a single-backend host.
+ *
+ * The hook has no button of its own — the composer's send is what fires it — so the harness
+ * below supplies one, standing in for that send.
  */
 
 beforeAll(() => {
@@ -55,7 +59,7 @@ const HEALTH_MULTI: HealthResponse = {
   forge: null,
   // `followups` became a required capability in #471 (merged from main): irrelevant to the
   // Continue pills these tests drive, but the shape must be whole.
-  capabilities: { localHandoff: true, followups: true },
+  capabilities: { localHandoff: true, followups: true, singleProject: false },
 }
 
 type Recorded = { method: string; url: string; body?: unknown }
@@ -130,11 +134,35 @@ const makeRun = (extra: Partial<ApiRun> = {}): ApiRun => ({
   ...extra,
 })
 
-function renderAction(record: ApiRun, entry = '/') {
+/** Stands in for the thread composer: the pills, plus a send that submits `draft`. */
+function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
+  const action = useContinueAction(run)
+  if (!action.available) return null
+  if (!action.canContinue) {
+    return (
+      <div data-slot="follow-up-provider-gate">
+        <span>{action.reason}</span>
+        {!action.providerPending ? (
+          <Link to="/settings/agents#providers">Configure providers</Link>
+        ) : null}
+      </div>
+    )
+  }
+  return (
+    <>
+      {action.pills}
+      <button type="button" onClick={() => void action.continueWith(draft, [])}>
+        Continue
+      </button>
+    </>
+  )
+}
+
+function renderAction(record: ApiRun, draft = '', entry = '/') {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
-        <ContinueAction run={record} />
+        <Harness run={record} draft={draft} />
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -151,6 +179,15 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({})
+  })
+
+  it('carries the composer draft as the prompt the reopened session starts on', async () => {
+    serve()
+    renderAction(makeRun(), 'now also update the changelog')
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    // Only `text` — the pills were never touched, so the run keeps its backend.
+    expect(continueBody()).toEqual({ text: 'now also update the changelog' })
   })
 
   it('sends the chosen runner + model through to /continue', async () => {
@@ -287,7 +324,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
         ],
       },
     )
-    renderAction(makeRun(), '/p/acme/tasks/r1')
+    renderAction(makeRun(), '', '/p/acme/tasks/r1')
 
     const link = await screen.findByRole('link', { name: 'Configure providers' })
     expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')

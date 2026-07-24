@@ -14,6 +14,11 @@
  * `todos.json` (they get `HANDOFF_ONLY_INSTRUCTIONS` and an empty
  * `CEZ_TODOS_FILE`), the Inbox nav item is gone and the inbox endpoints refuse.
  * The per-task handoff journal is independent and runs either way.
+ *
+ * `singleProject` (spec 2026-07-21-cez-single-project): the workspace is
+ * deliberately constrained to the launch project when `CEZ_SINGLE_PROJECT=1`.
+ * Like the other opt-in capabilities, activation is strict: no other spelling
+ * enables it.
  */
 
 import { followupsEnabled } from '../handoff.js';
@@ -21,6 +26,7 @@ import { followupsEnabled } from '../handoff.js';
 export interface Capabilities {
   localHandoff: boolean;
   followups: boolean;
+  singleProject: boolean;
 }
 
 /** Every IPv4 address in 127.0.0.0/8, anchored. Anchoring is load-bearing: a
@@ -124,5 +130,6 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
+    singleProject: env.CEZ_SINGLE_PROJECT === '1',
   };
 }

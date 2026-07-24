@@ -6,12 +6,14 @@ import {
   FolderGit2Icon,
   FoldersIcon,
   GaugeIcon,
+  PackageCheckIcon,
   KeyboardIcon,
   NotebookPenIcon,
   PaletteIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
+import type { Capabilities } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
@@ -21,6 +23,7 @@ import { NotificationsSection } from './notifications-section'
 import { ProjectsSection } from './projects-section'
 import { PromptTemplatesSection } from './prompt-templates-section'
 import { ResourcesSection } from './resources-section'
+import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
 
 /**
@@ -50,6 +53,7 @@ export type SettingsSectionId =
   | 'notifications'
   | 'prompt-templates'
   | 'keyboard'
+  | 'skills'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -150,6 +154,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'skills',
+    title: 'Skills',
+    description: 'Updates for skills installed on this machine.',
+    icon: PackageCheckIcon,
+    component: SkillsSection,
+    scope: 'global',
+  },
+  {
     id: 'projects',
     title: 'Projects',
     description: 'The workspace registry and where GitHub checkouts land.',
@@ -173,6 +185,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  * entirely, and so does everything belonging to the OTHER scope. The two areas are rendered by
  * the same shell, so this filter is the only thing keeping them apart.
  */
-export function visibleSettingsSections(scope: SettingsScope): SettingsSection[] {
-  return SETTINGS_SECTIONS.filter((section) => !section.hidden && section.scope === scope)
+export function visibleSettingsSections(
+  scope: SettingsScope,
+  capabilities?: Pick<Capabilities, 'singleProject'>,
+): SettingsSection[] {
+  return SETTINGS_SECTIONS.filter(
+    (section) =>
+      !section.hidden &&
+      section.scope === scope &&
+      !(capabilities?.singleProject === true && section.id === 'projects'),
+  )
 }

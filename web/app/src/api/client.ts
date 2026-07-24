@@ -24,6 +24,7 @@ import type {
   GithubData,
   GroupResponse,
   HealthResponse,
+  ImageInput,
   LaunchKeyResponse,
   MessageInput,
   EditQueuedMessageResponse,
@@ -41,6 +42,8 @@ import type {
   ProjectsResponse,
   RegisterProjectResponse,
   RemoveProjectResponse,
+  UpdateProjectInput,
+  UpdateProjectResponse,
   RemoveTodoResponse,
   RepoBranchResponse,
   RepoCommitPayload,
@@ -64,6 +67,7 @@ import type {
   WorkflowsResponse,
   WorkspaceConfigResponse,
   WorkspaceUiState,
+  SkillsUpdateState,
 } from './types'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import { scopeApiPath } from './project-scope'
@@ -496,6 +500,17 @@ export function removeProject(projectId: string): Promise<RemoveProjectResponse>
   return mutate<RemoveProjectResponse>('DELETE', `/api/projects/${encodeURIComponent(projectId)}`)
 }
 
+/**
+ * Set or clear a project's per-project concurrency ceiling
+ * (`PATCH /api/projects/:projectId`, spec 2026-07-22). `maxParallel: null`
+ * clears the override back to "inherit the workspace cap"; an integer pins it.
+ * The server applies the new ceiling live (semaphore refresh), so the answer is
+ * the updated entry the pane swaps into its list.
+ */
+export function updateProject(projectId: string, input: UpdateProjectInput): Promise<UpdateProjectResponse> {
+  return mutate<UpdateProjectResponse>('PATCH', `/api/projects/${encodeURIComponent(projectId)}`, input)
+}
+
 // ---- run mutations ------------------------------------------------------------------------
 
 /** ×1 answers the run record; ×2/×3 answers `{ runs }` — narrow on `'runs' in result`. */
@@ -524,9 +539,12 @@ export function finishRun(id: string): Promise<FinishResponse> {
 }
 
 /** The follow-up composer's optional overrides for a Continue (#401): pick which backend and
- *  model handle the reopened session. Omitted fields keep the run's current backend/model. */
+ *  model handle the reopened session. Omitted fields keep the run's current backend/model.
+ *  `text`/`images` are the prompt the reopened session starts on — omitted, the engine opens
+ *  with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
+  images?: ImageInput[]
   runner?: Runner
   model?: string
 }
@@ -537,6 +555,7 @@ export interface ContinueOptions {
 export function continueRun(id: string, opts: ContinueOptions = {}): Promise<ContinueResponse> {
   const body: Record<string, unknown> = {}
   if (opts.text !== undefined) body.text = opts.text
+  if (opts.images !== undefined) body.images = opts.images
   if (opts.runner !== undefined) body.runner = opts.runner
   if (opts.model !== undefined) body.model = opts.model
   return mutate<ContinueResponse>('POST', runPath(id, '/continue'), body)
@@ -722,6 +741,22 @@ export function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceU
  *  (step 4.4) the checkout-root field. Workspace-level, so never scope-prefixed. */
 export function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceConfigResponse> {
   return get<WorkspaceConfigResponse>('/api/workspace/config', opts)
+}
+
+/** Cached Open Mercato update state for one registered project. The GET is immediate; the
+ * server may start a stale detection-only refresh after taking its snapshot. */
+export function getSkillsUpdate(projectId: string, opts?: ReadOptions): Promise<SkillsUpdateState> {
+  return get<SkillsUpdateState>(`/api/workspace/skills-update?projectId=${encodeURIComponent(projectId)}`, opts)
+}
+
+/** Force a bounded detection pass. The browser supplies identity only, never executable input. */
+export function checkSkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
+  return mutate<SkillsUpdateState>('POST', '/api/workspace/skills-update/check', { projectId })
+}
+
+/** Apply the server-owned, lock-authorized update set. Identity is the only browser input. */
+export function applySkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
+  return mutate<SkillsUpdateState>('POST', '/api/workspace/skills-update/apply', { projectId })
 }
 
 /** Partial update — absent keys stay untouched; answers the merged config. A `projectsDir`

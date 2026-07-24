@@ -278,6 +278,7 @@ export function pageTitleContext(pathname: string): PageTitleContext {
  *  stay stable — they are what teammates paste, and the legacy flat URLs redirect onto them.
  */
 export function AppRoutes() {
+  const capabilities = useHealth().data?.capabilities
   return (
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
@@ -445,20 +446,20 @@ export function AppRoutes() {
 
             Only the PROJECT-scoped sections live here (multi-project spec, step 3.5); the
             global ones are the top-level `/settings/global/*` block below. */}
-        <Route path="settings" element={<SettingsIndexRoute scope="project" />} />
+        <Route path="settings" element={<SettingsIndexRoute scope="project" capabilities={capabilities} />} />
         <Route path="settings/skills" element={<SettingsSkillsRedirect />} />
-        {visibleSettingsSections('project').map((section) => (
+        {visibleSettingsSections('project', capabilities).map((section) => (
           <Route
             key={section.id}
             path={`settings/${section.id}`}
-            element={<SettingsSectionRoute section={section} scope="project" />}
+            element={<SettingsSectionRoute section={section} scope="project" capabilities={capabilities} />}
           />
         ))}
         {/* A section that MOVED out of the project area keeps its old URL working: every
             pre-3.5 bookmark and every legacy flat `/settings/appearance` (which the redirect
             below turns into `/p/<boot>/settings/appearance`) lands on the global twin instead
             of a 404 — query and hash intact across both hops. */}
-        {visibleSettingsSections('global').map((section) => (
+        {visibleSettingsSections('global', capabilities).map((section) => (
           <Route
             key={section.id}
             path={`settings/${section.id}`}
@@ -477,12 +478,12 @@ export function AppRoutes() {
 
           Static segments outrank the `*` legacy redirect below in React Router's ranking, so
           these win regardless of order — listed here for readability. */}
-      <Route path="/settings/global" element={<SettingsIndexRoute scope="global" />} />
-      {visibleSettingsSections('global').map((section) => (
+      <Route path="/settings/global" element={<SettingsIndexRoute scope="global" capabilities={capabilities} />} />
+      {visibleSettingsSections('global', capabilities).map((section) => (
         <Route
           key={section.id}
           path={settingsSectionPath('global', section.id)}
-          element={<SettingsSectionRoute section={section} scope="global" />}
+          element={<SettingsSectionRoute section={section} scope="global" capabilities={capabilities} />}
         />
       ))}
 

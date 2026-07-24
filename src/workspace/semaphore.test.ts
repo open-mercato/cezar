@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.js';
 
@@ -6,10 +9,14 @@ import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.js';
  *  waiting-resume exemption, refresh-without-restart) lives in
  *  src/workflows/workspace-semaphore.test.ts against real RunManagers. */
 describe('WorkspaceSemaphore', () => {
-  const participant = (busy: number): SemaphoreParticipant & { pumped: number[] } => {
+  const participant = (
+    busy: number,
+    queuedAt: number | null = null,
+  ): SemaphoreParticipant & { pumped: number[] } => {
     const p = {
       pumped: [] as number[],
       busySlots: () => busy,
+      oldestQueuedAt: () => queuedAt,
       pump: () => {
         p.pumped.push(Date.now());
       },
@@ -51,6 +58,114 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.maxParallel()).toBe(7);
     expect(sem.memoryLimitMb()).toBe(1024);
     expect(a.pumped.length).toBe(1);
+  });
+
+  it('release() pumps EVERY participant, not just the one that freed the slot', async () => {
+    const sem = new WorkspaceSemaphore();
+    const a = participant(1);
+    const b = participant(0, 1000);
+    sem.register(a);
+    sem.register(b);
+    await sem.release();
+    expect(a.pumped.length).toBe(1);
+    expect(b.pumped.length).toBe(1); // the whole point: B's queue hears about A's freed slot
+  });
+
+  it('release() pumps the longest-waiting queue first; empty queues go last', async () => {
+    const order: string[] = [];
+    const named = (name: string, queuedAt: number | null): SemaphoreParticipant => ({
+      busySlots: () => 0,
+      oldestQueuedAt: () => queuedAt,
+      pump: () => {
+        order.push(name);
+      },
+    });
+    const sem = new WorkspaceSemaphore();
+    sem.register(named('idle', null));
+    sem.register(named('newer', 2000));
+    sem.register(named('older', 1000));
+    await sem.release();
+    expect(order).toEqual(['older', 'newer', 'idle']);
+  });
+
+  it('a release landing mid-sweep re-runs the sweep instead of being dropped', async () => {
+    const sem = new WorkspaceSemaphore();
+    let reentered = false;
+    const a: SemaphoreParticipant & { pumped: number } = {
+      pumped: 0,
+      busySlots: () => 0,
+      oldestQueuedAt: () => null,
+      pump: async () => {
+        a.pumped += 1;
+        if (!reentered) {
+          reentered = true;
+          await sem.release(); // a run settles while the sweep is in flight
+        }
+      },
+    };
+    sem.register(a);
+    await sem.release();
+    expect(a.pumped).toBe(2); // the nested release replayed the sweep
+  });
+
+  it('projectMaxParallel returns the per-project value when set, else the workspace cap', async () => {
+    // Key by realpath'd temp dirs so normalizeRootSync resolves them identically.
+    const dirs = mkdtempSync(join(tmpdir(), 'cez-sema-'));
+    const capped = join(dirs, 'capped');
+    const open = join(dirs, 'open');
+    mkdirSync(capped, { recursive: true });
+    mkdirSync(open, { recursive: true });
+    try {
+      let projectLimits = new Map<string, number>([[realpathSync(capped), 1]]);
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 4, memoryLimitMb: null, projectLimits }),
+      });
+      await sem.refresh();
+      // The registered project uses its own cap...
+      expect(sem.projectMaxParallel(capped)).toBe(1);
+      // ...a registered-but-unset project and an unknown root inherit the workspace cap.
+      expect(sem.projectMaxParallel(open)).toBe(4);
+      expect(sem.projectMaxParallel(join(dirs, 'never-registered'))).toBe(4);
+      // A refresh that changes the value is reflected immediately.
+      projectLimits = new Map<string, number>([[realpathSync(capped), 3]]);
+      await sem.refresh();
+      expect(sem.projectMaxParallel(capped)).toBe(3);
+    } finally {
+      rmSync(dirs, { recursive: true, force: true });
+    }
+  });
+
+  it('projectMaxParallel inherits the workspace cap when no projectLimits map is provided', () => {
+    // An older load stub (resource slice only) → every root inherits.
+    const sem = new WorkspaceSemaphore({ initial: { maxParallel: 6 } });
+    expect(sem.projectMaxParallel('/tmp/whatever')).toBe(6);
+  });
+
+  it('projectMaxParallel resolves a manager keyed by a symlinked root to the registry entry (spec Q7)', async () => {
+    // The spec's normalization guard: the registry stores the realpath'd root,
+    // but a manager may hold a *symlinked* spelling of the same directory. The
+    // lookup must realpath both, or the override silently falls back to the
+    // workspace cap. A real symlink is the only way to prove normalizeRootSync
+    // actually canonicalizes — an all-`/tmp` test passes even as a no-op.
+    const dirs = realpathSync(mkdtempSync(join(tmpdir(), 'cez-sema-link-')));
+    const real = join(dirs, 'real-root');
+    const link = join(dirs, 'link-root'); // a symlink pointing at real-root
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link);
+    try {
+      // Registry keys by the realpath'd root (what registerProject stores)…
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 4, memoryLimitMb: null, projectLimits: new Map([[real, 1]]) }),
+      });
+      await sem.refresh();
+      // …and a manager holding the symlinked spelling still resolves the cap.
+      expect(link).not.toBe(real); // guard: the two spellings really differ
+      expect(realpathSync(link)).toBe(real); // guard: the symlink resolves to it
+      expect(sem.projectMaxParallel(link)).toBe(1);
+      expect(sem.projectMaxParallel(real)).toBe(1);
+    } finally {
+      rmSync(dirs, { recursive: true, force: true });
+    }
   });
 
   it('a failed load keeps the last good cache (never degrades to defaults) and still pumps', async () => {

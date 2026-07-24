@@ -286,12 +286,18 @@ The mockups are static illustrative HTML in `assets/queued-session-prompt-stacki
 - placeholder: `Add to the prompt — sent when the run starts…`
 - a `data-slot="queued-hint"` line under the queued placeholder:
   `Messages you add now are folded into the prompt before the run starts.`
-- the `disabledAction` (`<ContinueAction>`) is **not** rendered — Continue is
+- the engine pills (`<ContinueAction>`) are **not** rendered — Continue is
   meaningless for a run that has not run.
 
 The existing `"Session closed — Continue to reopen."` copy stays exactly as-is for
 `review` / `done` / `failed` / `cancelled`. (`composer.e2e.ts:242` asserts that string
 against a run already driven to `done`, so it is unaffected — confirmed, not assumed.)
+
+> **Superseded for the closed statuses.** A later change (the closed-composer prompt,
+> below in *Resolved assumptions* Q3) made the composer authorable on a closed run that
+> HAS a resumable session too, so that copy now survives only on a closed run with no
+> session to resume — where it reads `"Session closed — no session to resume."`. The
+> `queued` branch described here is unchanged.
 
 **Thread rows** — `buildThreadRows` (`task-thread.tsx:97-124`) already renders the
 initial prompt from the record rather than an event; stacked messages extend the same
@@ -508,7 +514,7 @@ step is a local change.
 |---|---|---|---|
 | Q1 | Are stacked messages folded into the opening prompt, or delivered as separate turns after it? | **Folded into `{{task}}` at dequeue** | Follow-up turns reach only the first step of a chain and race the opening turn; folding is deterministic and matches "extend the prompt". Rejected alternative documented in Proposed Solution. |
 | Q2 | Is the initial prompt (`run.task`) itself editable? Removable? | **Editable, not removable** | The issue explicitly asks to "fix the prompt"; a run with no prompt is not a run. |
-| Q3 | Does the enabled composer apply to any other closed status (`review`, `done`, `cancelled`)? | **`queued` only** | Narrowest scope that closes the issue; those statuses have a working answer already (Continue). |
+| Q3 | Does the enabled composer apply to any other closed status (`review`, `done`, `cancelled`)? | **`queued` only** — *later superseded, see below* | Narrowest scope that closes the issue; those statuses have a working answer already (Continue). |
 | Q4 | Where does the stack live — new record field, or replayed from the NDJSON event log? | **New optional `queuedMessages` array on `RunRecord`** | Edits and deletes are mutations; the NDJSON log is append-only and must never be rewritten (`BACKWARD_COMPATIBILITY.md` §3). |
 | Q5 | New routes, or overload `POST /api/runs/:id/messages`? | **Both — overload POST, add PATCH/DELETE for edit/remove** | The overload keeps one submit path in the composer; edit/remove need addressable ids, so they get their own routes. All additive. |
 | Q6 | Do edits propagate across a variant group (`groupId`)? | **No — per run** | Variants exist to diverge; silent cross-writes would be surprising. Listed as future work. |
@@ -530,6 +536,35 @@ expressed over two fields.
 
 None of these assumptions is high-stakes: no protected surface is broken, no data is
 migrated, and every one of them is a reversible design choice rather than a commitment.
+
+### Q3 superseded — the closed composer also takes a prompt
+
+Q3 scoped the enabled composer to `queued` on the grounds that the closed statuses "have a
+working answer already (Continue)". They did not, quite: Continue was a bare button beside a
+**disabled** textarea, so "reopen it and tell it what to do next" meant continuing blind and
+then typing once the session came back — and `POST /continue` had accepted a `text` prompt
+since spec 003. The composer was the only thing not offering it.
+
+So the closed-but-resumable case now works like `queued`: the composer stays enabled, and its
+send button IS Continue.
+
+- placeholder: `Continue — add a prompt, or send to just reopen the session…`
+- gated on `runActionFlags(run).continueRun` — a session to resume, exactly the gate the
+  header's Continue button already used. A closed run with **no** session keeps a disabled
+  composer, now reading `"Session closed — no session to resume."` (the old copy offered a
+  Continue that run could not perform).
+- an empty draft still posts no `text`, so one-click Continue is byte-identical to before.
+- `<ContinueAction>` became the `useContinueAction` hook: the runner/model pills moved into
+  the enabled footer (`footerEnd`), so the typed prompt and the picked engine reach
+  `POST /continue` in ONE request. Its own ▶ button is gone — the composer's send replaces
+  it; the header keeps a labelled one for the one-click path.
+- `POST /continue` gained `images` (≤ 4, same bound and shape as `messageSchema`). Without
+  it the newly-enabled paperclip would have silently dropped pasted screenshots. They are
+  persisted as `pasted-<n>` like every other attachment, ride the `user-message` event so the
+  bubble renders them, and reach the reopened session both inline and as absolute paths.
+
+Still additive on every protected surface: one new optional body field, no new route, no SSE
+name, no record field.
 
 ## Future work (explicitly out of scope)
 

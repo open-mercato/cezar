@@ -220,10 +220,18 @@ export async function probeProjectStatus(
  * `missing` project is only ever *listed* — callers must never instantiate a
  * context for it.
  */
-export async function listProjects(): Promise<ProjectListEntry[]> {
+export interface ProjectListSelector {
+  /** Return only this registry id without mutating or pruning other rows. */
+  projectId: string;
+}
+
+export async function listProjects(selector?: ProjectListSelector): Promise<ProjectListEntry[]> {
   const config = await loadWorkspaceConfig();
+  const projects = selector
+    ? config.projects.filter((project) => project.id === selector.projectId)
+    : config.projects;
   return Promise.all(
-    config.projects.map(async (project) => ({ ...project, ...(await probeRoot(project.root)) })),
+    projects.map(async (project) => ({ ...project, ...(await probeRoot(project.root)) })),
   );
 }
 

@@ -162,7 +162,7 @@ describe('the GitHub tab against the live dry-run server', () => {
     const pr = gh.prs[0]
     if (!pr) return
 
-    browser.goto(`${baseUrl}/github/prs/${pr.number}`)
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}`)}`)
     browser.waitForFunction(`document.querySelector('[data-slot="gh-thread"]') !== null`)
 
     // The section is "Activity", not "Comments" — a twenty-row list headed `Comments · 2` would
@@ -202,7 +202,7 @@ describe('the GitHub tab against the live dry-run server', () => {
       `document.querySelector('[data-slot="gh-event-row"][data-kind="labeled"]') !== null`,
     )
 
-    browser.waitForFunction(`document.querySelector('nav a[href="/github"]') !== null`)
+    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
     browser.screenshot(`${artifactsDir}/github-thread-timeline.png`)
   })
 

@@ -17,13 +17,17 @@ import type { RunManager } from '../workflows/run.js';
 import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
 import { ProjectContexts } from './project-context.js';
 import { apiRequest } from './loopback-request.testkit.js';
-import { mergeWriteWorkspaceConfig } from '../workspace/config.js';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.js';
+import { workspaceConfigPath } from '../paths.js';
+import { WorkspaceSemaphore } from '../workspace/semaphore.js';
+import type { CloneRunner } from './checkout.js';
 import {
   WorkspaceEventBus,
   createApp,
   type ProjectsResponse,
   type RegisterProjectResponse,
   type ServerDeps,
+  type UpdateProjectResponse,
 } from './server.js';
 
 /**
@@ -40,7 +44,7 @@ interface HealthBody {
   checks: unknown[];
   defaultRunner?: string;
   forge: unknown;
-  capabilities: { localHandoff: boolean; followups: boolean };
+  capabilities: { localHandoff: boolean; followups: boolean; singleProject: boolean };
   projects: { id: string; name: string }[];
   bootProject: string;
 }
@@ -49,6 +53,7 @@ describe('workspace projects API', () => {
   const savedHome = process.env.CEZ_HOME;
   const savedRemote = process.env.CEZ_REMOTE;
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
+  const savedSingleProject = process.env.CEZ_SINGLE_PROJECT;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   let home: string;
   let repoRoot: string;
@@ -63,6 +68,7 @@ describe('workspace projects API', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     delete process.env.CEZ_REMOTE;
     delete process.env.CEZ_FOLLOWUPS;
+    delete process.env.CEZ_SINGLE_PROJECT;
     // Deterministic on any machine: no network, no real agent CLIs.
     process.env.CEZ_DRY_RUN = '1';
     clearProjectProbeCache();
@@ -77,6 +83,8 @@ describe('workspace projects API', () => {
     else process.env.CEZ_REMOTE = savedRemote;
     if (savedFollowups === undefined) delete process.env.CEZ_FOLLOWUPS;
     else process.env.CEZ_FOLLOWUPS = savedFollowups;
+    if (savedSingleProject === undefined) delete process.env.CEZ_SINGLE_PROJECT;
+    else process.env.CEZ_SINGLE_PROJECT = savedSingleProject;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
@@ -137,6 +145,36 @@ describe('workspace projects API', () => {
       expect(body.projectsDir).toBe('~/cezar/projects');
     });
 
+    it('keeps an unregistered boot project distinct from a registered project with the same slug', async () => {
+      const registeredRoot = join(otherRoot, basename(repoRoot));
+      mkdirSync(registeredRoot);
+      const registered = await registerProject(registeredRoot);
+      const contexts = new ProjectContexts({ listProjects });
+
+      const body = await getProjects({ contexts });
+      expect(registered.id).toBe(allocateProjectSlug(repoRoot, []));
+      expect(body.bootProject).toBe(allocateProjectSlug(repoRoot, [registered.id]));
+
+      const scoped = await apiRequest(makeApp({ contexts }), `/api/p/${registered.id}/repo`);
+      expect(scoped.status).toBe(200);
+      expect(contexts.peek(registered.id)?.root).toBe(await realpath(registeredRoot));
+      contexts.disposeAll();
+    });
+
+    it('pins flagged reads to the boot project without pruning stored projects', async () => {
+      const boot = await registerProject(repoRoot);
+      const other = await registerProject(otherRoot);
+      process.env.CEZ_SINGLE_PROJECT = '1';
+
+      const body = await getProjects({ bootProjectId: boot.id });
+      expect(body.projects.map((project) => project.id)).toEqual([boot.id]);
+      expect(body.bootProject).toBe(boot.id);
+      expect((await loadWorkspaceConfig()).projects.map((project) => project.id)).toEqual([
+        boot.id,
+        other.id,
+      ]);
+    });
+
     it('reports a deleted root as missing', async () => {
       const other = await registerProject(otherRoot);
       rmSync(otherRoot, { recursive: true, force: true });
@@ -149,6 +187,56 @@ describe('workspace projects API', () => {
       await registerProject(repoRoot);
       const body = await getProjects({ bootProjectId: 'plumbed-boot' });
       expect(body.bootProject).toBe('plumbed-boot');
+    });
+
+    it('serializes a per-project maxParallel when set, and omits it when absent (2026-07-22)', async () => {
+      await registerProject(repoRoot); // boot, no override → inherits
+      await registerProject(otherRoot);
+      await mergeWriteWorkspaceConfig((config) => {
+        const entry = config.projects.find((p) => p.root === realpathSync(otherRoot));
+        if (entry) entry.maxParallel = 3;
+      });
+      const body = await getProjects();
+      const byRoot = new Map(body.projects.map((p) => [p.root, p]));
+      expect(byRoot.get(realpathSync(otherRoot))?.maxParallel).toBe(3);
+      expect(byRoot.get(realpathSync(repoRoot))?.maxParallel).toBeUndefined();
+    });
+  });
+
+  describe('single-project management guards', () => {
+    it('refuses checkout before clone or registry side effects', async () => {
+      let cloneCalls = 0;
+      const cloneRunner: CloneRunner = async () => {
+        cloneCalls += 1;
+        return { ok: false, error: 'must not run' };
+      };
+      process.env.CEZ_SINGLE_PROJECT = '1';
+
+      const res = await apiRequest(makeApp({ cloneRunner }), '/api/projects/checkout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: 'open-mercato/cezar' }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'single-project mode is enabled; adding projects is disabled',
+      });
+      expect(cloneCalls).toBe(0);
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+    });
+
+    it('refuses filesystem browsing with the stable error', async () => {
+      process.env.CEZ_SINGLE_PROJECT = '1';
+      const res = await apiRequest(
+        makeApp(),
+        `/api/fs/browse?path=${encodeURIComponent(otherRoot)}`,
+      );
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'single-project mode is enabled; folder browsing is disabled',
+      });
     });
   });
 
@@ -166,6 +254,25 @@ describe('workspace projects API', () => {
         },
       };
     };
+
+    it('refuses registration in single-project mode before registry or event side effects', async () => {
+      const existing = await registerProject(repoRoot);
+      const bus = new WorkspaceEventBus();
+      const seen: string[] = [];
+      bus.on((event) => seen.push(event));
+      process.env.CEZ_SINGLE_PROJECT = '1';
+
+      const { status, body } = await post({ root: otherRoot }, { workspaceEvents: bus });
+
+      expect(status).toBe(409);
+      expect(body).toEqual({
+        error: 'single-project mode is enabled; adding projects is disabled',
+      });
+      expect((await loadWorkspaceConfig()).projects.map((project) => project.id)).toEqual([
+        existing.id,
+      ]);
+      expect(seen).toEqual([]);
+    });
 
     it('registers a NON-GIT folder and answers the entry — the spec\'s "any folder works"', async () => {
       // A plain temp dir with no `.git`: selectable in the dialog, registerable
@@ -329,6 +436,24 @@ describe('workspace projects API', () => {
       return out;
     };
 
+    it('refuses removal in single-project mode before registry or context side effects', async () => {
+      const other = await registerProject(otherRoot);
+      const contexts = new ProjectContexts({ listProjects });
+      process.env.CEZ_SINGLE_PROJECT = '1';
+
+      const { status, body } = await del(other.id, { contexts });
+
+      expect(status).toBe(409);
+      expect(body).toEqual({
+        error: 'single-project mode is enabled; removing projects is disabled',
+      });
+      expect((await loadWorkspaceConfig()).projects.map((project) => project.id)).toEqual([
+        other.id,
+      ]);
+      expect(contexts.peek(other.id)).toBeUndefined();
+      contexts.disposeAll();
+    });
+
     const del = async (id: string, over: Partial<ServerDeps> = {}) => {
       const res = await apiRequest(makeApp(over), `/api/projects/${id}`, {
         method: 'DELETE',
@@ -426,7 +551,112 @@ describe('workspace projects API', () => {
     });
   });
 
+  describe('PATCH /api/projects/:projectId — per-project maxParallel (2026-07-22)', () => {
+    /** A semaphore whose refresh() is observable — the route MUST call it so a
+     *  new ceiling applies without a restart (mirrors PUT /api/workspace/config). */
+    const countingSemaphore = () => {
+      let refreshes = 0;
+      const semaphore = new WorkspaceSemaphore({
+        load: () => {
+          refreshes += 1;
+          return Promise.resolve({ maxParallel: 2, memoryLimitMb: null });
+        },
+      });
+      return { semaphore, refreshes: () => refreshes };
+    };
+
+    const patch = async (id: string, body: unknown, over: Partial<ServerDeps> = {}) => {
+      const res = await apiRequest(makeApp(over), `/api/projects/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return {
+        status: res.status,
+        body: (await res.json()) as UpdateProjectResponse & { error?: string },
+      };
+    };
+
+    it('refuses edits in single-project mode before registry or semaphore side effects', async () => {
+      const other = await registerProject(otherRoot);
+      const before = readFileSync(workspaceConfigPath(), 'utf8');
+      const { semaphore, refreshes } = countingSemaphore();
+      process.env.CEZ_SINGLE_PROJECT = '1';
+
+      const { status, body } = await patch(other.id, { maxParallel: 1 }, { semaphore });
+
+      expect(status).toBe(409);
+      expect(body).toEqual({
+        error: 'single-project mode is enabled; editing projects is disabled',
+      });
+      expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
+      expect(refreshes()).toBe(0);
+    });
+
+    it('sets the per-project value, persists it, and refreshes the semaphore', async () => {
+      const other = await registerProject(otherRoot);
+      const { semaphore, refreshes } = countingSemaphore();
+      const { status, body } = await patch(other.id, { maxParallel: 1 }, { semaphore });
+      expect(status).toBe(200);
+      expect(body.project.id).toBe(other.id);
+      expect(body.project.maxParallel).toBe(1);
+      // Persisted to the registry, and reachable through the read route.
+      const listed = await getProjects();
+      expect(listed.projects.find((p) => p.id === other.id)?.maxParallel).toBe(1);
+      // The live-apply hook fired.
+      expect(refreshes()).toBe(1);
+    });
+
+    it('clears the override when maxParallel is null (back to inherit)', async () => {
+      await registerProject(otherRoot);
+      await mergeWriteWorkspaceConfig((config) => {
+        const entry = config.projects.find((p) => p.root === realpathSync(otherRoot));
+        if (entry) entry.maxParallel = 4;
+      });
+      const other = (await getProjects()).projects.find((p) => p.root === realpathSync(otherRoot))!;
+      expect(other.maxParallel).toBe(4);
+
+      const { status, body } = await patch(other.id, { maxParallel: null });
+      expect(status).toBe(200);
+      expect(body.project.maxParallel).toBeUndefined();
+      const listed = await getProjects();
+      expect(listed.projects.find((p) => p.id === other.id)?.maxParallel).toBeUndefined();
+    });
+
+    it('rejects an out-of-range value with a 400 and persists nothing', async () => {
+      const other = await registerProject(otherRoot);
+      for (const bad of [{ maxParallel: 0 }, { maxParallel: 99 }, { maxParallel: 1.5 }, {}]) {
+        const { status } = await patch(other.id, bad);
+        expect(status, JSON.stringify(bad)).toBe(400);
+      }
+      expect((await getProjects()).projects.find((p) => p.id === other.id)?.maxParallel).toBeUndefined();
+    });
+
+    it('404s an unknown id and a malformed one, and rewrites nothing (read-first, like DELETE)', async () => {
+      await registerProject(otherRoot);
+      // The config bytes before any 404 PATCH — a well-formed-unknown id must not
+      // rewrite the file (else a read-only home would 500 where 404 is honest).
+      const before = readFileSync(workspaceConfigPath(), 'utf8');
+      for (const id of ['nope', 'Not%20A%20Slug', 'a'.repeat(120)]) {
+        const { status, body } = await patch(id, { maxParallel: 1 });
+        expect(status, id).toBe(404);
+        expect(body.error, id).toContain('unknown project');
+      }
+      expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
+    });
+  });
+
   describe('GET /api/health — additive projects + bootProject', () => {
+    it('pins flagged health listings to the explicit boot identity', async () => {
+      const boot = await registerProject(repoRoot);
+      await registerProject(otherRoot);
+      process.env.CEZ_SINGLE_PROJECT = '1';
+
+      const body = await getHealth({ bootProjectId: boot.id });
+      expect(body.projects).toEqual([{ id: boot.id, name: boot.name }]);
+      expect(body.bootProject).toBe(boot.id);
+    });
+
     it('keeps the pre-workspace shape byte-identical and adds only projects + bootProject', async () => {
       const boot = await registerProject(repoRoot);
       const other = await registerProject(otherRoot);
@@ -457,6 +687,7 @@ describe('workspace projects API', () => {
       expect(body.capabilities).toEqual({
         localHandoff: true,
         followups: false,
+        singleProject: false,
       });
       // New fields: registered projects enumerated, boot project named.
       expect(body.projects.map((p) => p.id).sort()).toEqual([boot.id, other.id].sort());

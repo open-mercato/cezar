@@ -207,6 +207,56 @@ function stripDoneMarker(text: string): string {
     .join('\n')
 }
 
+/**
+ * Repair for legacy per-delta transcripts: codex/opencode runs recorded before the runners
+ * coalesced v1 `text` per item persisted one `text` line PER STREAMING TOKEN, so the fold
+ * synthesized one message per token ("github" / ".com" / "merc" / "ato" …, each its own
+ * paragraph) and the exact-match dedup never fired — no single token equals the v2 message.
+ * The tokens ARE the v2 message, just cut up: a run of consecutive v1 messages whose
+ * concatenation reassembles a v2 message of the turn (or all of them in order, when v1 tool
+ * suppression made several messages adjacent) is dropped as a whole; the v2 twin renders.
+ * The comparison ignores whitespace — the server dropped whitespace-only deltas at persist
+ * time — and strips markers on the CONCATENATION, catching `CEZ:DONE` split across tokens,
+ * which per-event stripping let through. A run that reassembles nothing is kept untouched.
+ */
+function dropLegacyDeltaRuns(draft: DraftTurn): void {
+  const norm = (text: string) => stripDoneMarker(text).replace(/\s+/g, '')
+  const v2Norms = new Set<string>()
+  const inOrder: string[] = []
+  for (const { origin, entry } of draft.entries) {
+    if (origin === 'v2' && entry.kind === 'message') {
+      const n = norm(entry.text)
+      v2Norms.add(n)
+      inOrder.push(n)
+    }
+  }
+  if (inOrder.length === 0) return
+  v2Norms.add(inOrder.join(''))
+  const kept: DraftEntry[] = []
+  let run: { entries: DraftEntry[]; texts: string[] } = { entries: [], texts: [] }
+  const flushRun = () => {
+    // Single entries already had their chance in the exact-match filter above — only a
+    // genuine run (≥2 fragments) is a delta artifact worth reassembling.
+    if (run.entries.length >= 2 && v2Norms.has(norm(run.texts.join('')))) {
+      run = { entries: [], texts: [] }
+      return
+    }
+    kept.push(...run.entries)
+    run = { entries: [], texts: [] }
+  }
+  for (const e of draft.entries) {
+    if (e.origin === 'v1' && e.entry.kind === 'message') {
+      run.entries.push(e)
+      run.texts.push(e.entry.text)
+    } else {
+      flushRun()
+      kept.push(e)
+    }
+  }
+  flushRun()
+  draft.entries = kept
+}
+
 /** v1 tool results are strings today; anything else is rendered as JSON rather than dropped. */
 function resultText(value: unknown): string {
   if (typeof value === 'string') return value
@@ -599,6 +649,7 @@ export function reduceThread(events: RunEvent[]): ThreadState {
       (e) =>
         !(e.origin === 'v1' && e.entry.kind === 'message' && v2Texts.has(stripDoneMarker(e.entry.text).trim())),
     )
+    dropLegacyDeltaRuns(draft)
   }
 
   return {

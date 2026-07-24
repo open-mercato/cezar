@@ -20,6 +20,12 @@ import { describe, expect, it } from 'vitest';
  *    and `/api/runs/:id/{cancel,…,git/push}` for eleven. They need expanding before comparison.
  * 2. Path params are spelled inconsistently across the two files, so both sides are normalized to
  *    a positional placeholder before being compared.
+ *
+ * SCOPE LIMIT worth knowing before trusting the inventory: this only sees paths registered as
+ * `app.get('…')`/`api.post('…')`/… An **upgrade-only** endpoint has no such registration — the
+ * `/api/ws` subscription bus (spec `2026-07-23-websocket-subscriptions.md`) is attached to the
+ * raw http server's `upgrade` event, not to Hono — so it is inventoried by hand in §2 and this
+ * guard can never catch it drifting. Any future upgrade route needs the same manual entry.
  */
 
 const REPO_ROOT = join(import.meta.dirname, '../..');

@@ -27,6 +27,8 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
   const state: WorkspaceConfigResponse = {
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
+    skillsAutoUpdate: null,
+    effectiveSkillsAutoUpdate: true,
     resources: { maxParallel: 2, memoryLimitMb: null, worktreeRetentionDefault: 10, ...resources },
   }
   const json = (payload: unknown, status = 200) =>
@@ -108,6 +110,15 @@ describe('Global settings → Resources', () => {
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { maxParallel: 6 } })
     expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/config')).toBe(false)
+  })
+
+  it('links workspace limits to the per-project controls', async () => {
+    serve()
+    renderResources()
+
+    const link = await screen.findByRole('link', { name: 'Configure per-project limits' })
+    expect(link.getAttribute('href')).toBe('/settings/global/projects')
+    expect(screen.getByText(/Need a different limit for one project/)).not.toBeNull()
   })
 
   it('saves a memory limit, and an empty field clears it back to "no limit"', async () => {

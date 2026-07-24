@@ -66,6 +66,11 @@ const TABLE: Array<{ name: string; input?: unknown; expected: ToolDisplay }> = [
   // read / search
   { name: 'Read', input: { file_path: 'package.json' }, expected: { toolKind: 'read', title: 'Read package.json' } },
   {
+    name: 'imageView',
+    input: { path: '/tmp/checkout-preview.png' },
+    expected: { toolKind: 'read', title: 'View image /tmp/checkout-preview.png' },
+  },
+  {
     name: 'Grep',
     input: { pattern: 'AgentEvent', path: 'src/core' },
     expected: { toolKind: 'search', title: 'Search AgentEvent', subtitle: 'src/core' },
@@ -117,6 +122,7 @@ const TABLE: Array<{ name: string; input?: unknown; expected: ToolDisplay }> = [
   // plan
   { name: 'TodoWrite', input: { todos: [] }, expected: { toolKind: 'plan', title: 'Update plan' } },
   { name: 'todoList', expected: { toolKind: 'plan', title: 'Update plan' } },
+  { name: 'contextCompaction', expected: { toolKind: 'other', title: 'Compacted context' } },
 
   // MCP, both naming schemes
   {

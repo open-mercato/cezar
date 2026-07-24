@@ -77,9 +77,12 @@ const AGENTS_CONFIG = {
 /** Seeds the step-3.2 route gates — boot id (legacy redirect) + registry (known-check) — so a
  *  flat entry URL lands scoped immediately. The boot project mounts UNSCOPED, so the exact
  *  `/api/*` paths this file's fetch stub matches stay byte-identical. */
-function gateSeededClient() {
+function gateSeededClient(singleProject = false) {
   const client = createQueryClient()
-  client.setQueryData(queryKeys.health, { bootProject: 'boot' })
+  client.setQueryData(queryKeys.health, {
+    bootProject: 'boot',
+    capabilities: { localHandoff: true, followups: true, singleProject },
+  })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [],
     bootProject: 'boot',
@@ -88,9 +91,9 @@ function gateSeededClient() {
   return client
 }
 
-function renderAt(entry: string) {
+function renderAt(entry: string, { singleProject = false }: { singleProject?: boolean } = {}) {
   render(
-    <QueryClientProvider client={gateSeededClient()}>
+    <QueryClientProvider client={gateSeededClient(singleProject)}>
       <ThemeProvider>
         <AppearanceProvider>
           <MemoryRouter initialEntries={[entry]}>
@@ -114,7 +117,7 @@ afterEach(() => {
 })
 
 const PROJECT_SECTIONS = ['agents', 'agent-config', 'worktrees', 'bookmarklets', 'prompt-templates']
-const GLOBAL_SECTIONS = ['appearance', 'notifications', 'resources', 'projects']
+const GLOBAL_SECTIONS = ['appearance', 'notifications', 'resources', 'skills', 'projects']
 
 describe('the section registry', () => {
   it('declares the spec §Settings sections, later ones hidden', () => {
@@ -134,6 +137,14 @@ describe('the section registry', () => {
     // No id may appear in both areas — the two navs would then link to two different pages
     // under the same name, and the `settings/<id>` legacy redirect would be ambiguous.
     expect(PROJECT_SECTIONS.filter((id) => GLOBAL_SECTIONS.includes(id))).toEqual([])
+  })
+
+  it('hides Projects only when the single-project capability is active', () => {
+    expect(visibleSettingsSections('global', { singleProject: true }).map((s) => s.id)).toEqual([
+      'appearance', 'notifications', 'resources', 'skills',
+    ])
+    expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+    expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
   })
 })
 
@@ -161,6 +172,9 @@ describe('the settings shell', () => {
     expect(nav.querySelector('[data-section="resources"]')?.getAttribute('href')).toBe(
       '/settings/global/resources',
     )
+    expect(nav.querySelector('[data-section="skills"]')?.getAttribute('href')).toBe(
+      '/settings/global/skills',
+    )
   })
 
   it('/settings is the project registry as an index — one card per visible section', () => {
@@ -186,6 +200,13 @@ describe('the settings shell', () => {
     expect(index.querySelector('[data-section="projects"]')?.getAttribute('href')).toBe(
       '/settings/global/projects',
     )
+  })
+
+  it('single-project mode removes Projects from the global index and navigation', () => {
+    renderAt('/settings/global', { singleProject: true })
+    expect(document.querySelector('[data-slot="settings-index"] [data-section="projects"]')).toBeNull()
+    expect(document.querySelector('[data-slot="settings-nav"] [data-section="projects"]')).toBeNull()
+    expect(document.querySelector('[data-section="resources"]')).not.toBeNull()
   })
 
   it('a moved section keeps its old URL working: /settings/appearance → the global twin', async () => {

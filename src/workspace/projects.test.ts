@@ -133,6 +133,40 @@ describe('workspace projects', () => {
   });
 
   describe('listProjects', () => {
+    it('keeps default reads unchanged and pins explicit reads without pruning the registry', async () => {
+      const first = await registerProject(makeDir('first'));
+      const second = await registerProject(makeDir('second'));
+
+      expect((await listProjects()).map((project) => project.id)).toEqual([first.id, second.id]);
+      expect((await listProjects({ projectId: second.id })).map((project) => project.id)).toEqual([
+        second.id,
+      ]);
+      expect((await loadWorkspaceConfig()).projects.map((project) => project.id)).toEqual([
+        first.id,
+        second.id,
+      ]);
+    });
+
+    it('returns an empty pinned read when the selected id is not registered', async () => {
+      await registerProject(makeDir('existing'));
+      expect(await listProjects({ projectId: 'unknown' })).toEqual([]);
+    });
+
+    it('keeps boot registration self-healing while reads are pinned', async () => {
+      const hidden = await registerProject(makeDir('hidden'));
+      const boot = await registerProject(makeDir('boot'));
+
+      expect((await listProjects({ projectId: boot.id })).map((project) => project.id)).toEqual([
+        boot.id,
+      ]);
+      const registeredAgain = await registerProject(boot.root);
+      expect(registeredAgain.id).toBe(boot.id);
+      expect((await loadWorkspaceConfig()).projects.map((project) => project.id)).toEqual([
+        hidden.id,
+        boot.id,
+      ]);
+    });
+
     it('reports a git repo as ok with its current branch', async () => {
       const root = makeRepo('gitful');
       await registerProject(root);

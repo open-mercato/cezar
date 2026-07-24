@@ -51,6 +51,8 @@ export type AppShellProps = {
   repo?: RepoChip | null
   /** Inbox badge count. Null/0 renders no badge. Step 3.2 feeds it from the SSE stream. */
   inboxCount?: number | null
+  /** A quiet, accessible marker on Skills when a checked update remains actionable. */
+  skillsUpdateAvailable?: boolean
   /** cezar version for the footer chip. Null until Step 3.1 reads it from `/api/health`. */
   version?: string | null
   /** The npm registry's newer version, when the server's update check found one (#368). The
@@ -67,6 +69,9 @@ export type AppShellProps = {
   /** Inbox gating (#471): `false` drops the Inbox nav item and its badge — the global inbox is
    *  opt-in via `CEZ_FOLLOWUPS=1`. Defaults to shown for the same reason as `forgeAvailable`. */
   inboxAvailable?: boolean
+  /** Single-project capability gating: hides workspace-expansion affordances. Defaults off so
+   *  standalone and older callers preserve the multi-project shell. */
+  singleProject?: boolean
   /** Global chrome banner, rendered in its own row above the scroller. Absent renders nothing —
    *  the slot is generic and currently unused (the #391 skills promo it once held is gone,
    *  replaced by the opt-in Import panel on the Skills page). */
@@ -117,12 +122,14 @@ export function AppShell({
   children,
   repo = null,
   inboxCount = null,
+  skillsUpdateAvailable = false,
   version = null,
   latestVersion = null,
   taskQuickList,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
+  singleProject = false,
   banner,
   projectGroups,
 }: AppShellProps) {
@@ -171,11 +178,13 @@ export function AppShell({
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.
     inboxCount: inboxAvailable ? inboxCount : null,
+    skillsUpdateAvailable,
     version,
     latestVersion,
     taskQuickList,
     toolsMenu,
     projectGroups,
+    singleProject,
   }
 
   return (
@@ -223,11 +232,13 @@ type NavProps = {
   items: NavItem[]
   repo: RepoChip | null
   inboxCount: number | null
+  skillsUpdateAvailable: boolean
   version: string | null
   latestVersion: string | null
   taskQuickList?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
+  singleProject: boolean
 }
 
 /** The desktop frame: a fixed 264px column, from `md` up. */
@@ -294,11 +305,13 @@ function SidebarContent({
   items,
   repo,
   inboxCount,
+  skillsUpdateAvailable,
   version,
   latestVersion,
   taskQuickList,
   toolsMenu,
   projectGroups,
+  singleProject,
   onNavigate,
   headerAction,
 }: NavProps & {
@@ -352,7 +365,7 @@ function SidebarContent({
             </kbd>
           </Link>
         </Button>
-        <AddProjectMenu />
+        {singleProject ? null : <AddProjectMenu />}
       </div>
 
       {projectGroups ? (
@@ -391,12 +404,21 @@ function SidebarContent({
                 >
                   <Icon className="size-4 shrink-0" aria-hidden="true" />
                   {item.label}
-                  {item.badge && inboxCount ? (
+                  {item.badge === 'inbox-count' && inboxCount ? (
                     <span
                       data-slot="nav-badge"
                       className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
                     >
                       {inboxCount}
+                    </span>
+                  ) : null}
+                  {item.badge === 'skills-update' && skillsUpdateAvailable ? (
+                    <span
+                      data-slot="nav-update-marker"
+                      className="ml-auto flex items-center"
+                    >
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">Skills update available</span>
                     </span>
                   ) : null}
                 </Link>

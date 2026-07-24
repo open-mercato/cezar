@@ -305,6 +305,37 @@ describe('runTitle — the one name every surface shows', () => {
       over: { title: 'Login 500 fix', titleSummary: 'Login 500 fix' },
       expected: 'Login 500 fix',
     },
+    {
+      label: 'legacy concatenated narration falls back without rewriting persisted state',
+      over: {
+        title: '469: /om-auto-review-pr',
+        titleSummary: 'Loading the pipeline config and tracker descriptor, then claim PR #469.Config loaded',
+      },
+      expected: '469: /om-auto-review-pr',
+    },
+    {
+      label: 'user-owned titles preserve punctuation byte-for-byte',
+      over: {
+        title: 'Release v2.Config migration',
+        titleSummary: 'Release v2.Config migration',
+        titleOrigin: 'user' as const,
+      },
+      expected: 'Release v2.Config migration',
+    },
+    {
+      label: 'marker-owned titles preserve punctuation byte-for-byte',
+      over: {
+        title: 'raw task',
+        titleSummary: 'Testing SDK.Config support',
+        titleOrigin: 'marker' as const,
+      },
+      expected: 'Testing SDK.Config support',
+    },
+    {
+      label: 'well-formed identifiers and acronyms remain untouched',
+      over: { title: 'raw task', titleSummary: 'updating README.md for OAuth2' },
+      expected: 'updating README.md for OAuth2',
+    },
   ])('$label', ({ over, expected }) => {
     expect(runTitle(run(over))).toBe(expected)
   })

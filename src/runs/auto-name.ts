@@ -183,6 +183,11 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext): Prom
 export function composeNameResult(rawText: string, ctx: NamerContext): NameResult | null {
   const parsed = parseStructured(rawText, namerResponseSchema);
   if (!parsed) return null;
+  // #623: a terse title is one phrase, not concatenated progress narration. Reject
+  // unambiguous missing sentence whitespace (the observed `.Config` / `.The`
+  // shape) and keep the honest heuristic title instead of trying to guess
+  // where a model's prose should have been split.
+  if (/[.!?][A-Z]/.test(parsed.title)) return null;
   const refs = refineTaskRefs(extractTaskRefs(ctx.task), ctx.skillName);
   const checked = crossCheckRefs(parsed, ctx.task, refs);
   const refNumber = checked.prNumber ?? checked.issueNumber ?? titleRefNumber(refs);

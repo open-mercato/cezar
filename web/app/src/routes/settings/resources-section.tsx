@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { GaugeIcon } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import { useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
@@ -110,6 +111,17 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
             ),
           )}
         </select>
+        <p className="text-[11px] text-soft-foreground">
+          Need a different limit for one project?{' '}
+          <Link
+            to="/settings/global/projects"
+            data-slot="resources-project-limits-link"
+            className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+          >
+            Configure per-project limits
+          </Link>
+          .
+        </p>
       </SettingsField>
 
       <SettingsField

@@ -17,6 +17,7 @@ import {
 } from './claude-cli-runner.js';
 import { parseAskRequest, type AskQuestion } from './ask.js';
 import { readNdjson } from './ndjson.js';
+import { V1TextCoalescer } from './v1-text-coalescer.js';
 import {
   CodexAppServerRpc,
   codexSpawnError,
@@ -104,9 +105,14 @@ class CodexSession implements AgentSession {
   private pendingUserInput: PendingUserInput | undefined;
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
-  /** agentMessage item ids that streamed deltas — so `item/completed` for the
-   *  same item doesn't re-emit the full text on top of the deltas. */
-  private readonly streamedItems = new Set<string>();
+  /** Streamed agentMessage deltas buffered per item — v1 `text` is emitted
+   *  once per completed item (claude parity: one event per complete block),
+   *  never per delta, so the persisted transcript and the headless CLI get
+   *  whole paragraphs. Streaming display rides protocol v2's `item.delta`. */
+  private readonly textCoalescer = new V1TextCoalescer((text) => {
+    this.textChunks.push(text);
+    this.emit({ type: 'text', text });
+  });
   private tokensUsed = 0;
   private ready!: Promise<void>;
   private autoEndTimer: NodeJS.Timeout | undefined;
@@ -204,6 +210,8 @@ class CodexSession implements AgentSession {
       if (this.spawnFailed) throw this.spawnFailed;
       if (sessionError) throw sessionError;
 
+      // Timeout/interrupt can end the read loop mid-item — recover buffered prose.
+      this.textCoalescer.flush();
       const text = this.textChunks.join('\n').trim();
       const base: AgentRunResult = {
         text,
@@ -384,12 +392,7 @@ class CodexSession implements AgentSession {
       }
       case 'item/agentMessage/delta': {
         const delta = typeof params.delta === 'string' ? params.delta : '';
-        if (delta) {
-          const itemId = stringField(params, 'itemId');
-          if (itemId) this.streamedItems.add(itemId);
-          this.textChunks.push(delta);
-          this.emit({ type: 'text', text: delta });
-        }
+        if (delta) this.textCoalescer.append(stringField(params, 'itemId'), delta);
         break;
       }
       case 'item/started': {
@@ -408,14 +411,9 @@ class CodexSession implements AgentSession {
         const type = stringField(item, 'type');
         const id = stringField(item, 'id') ?? '';
         if (type === 'agentMessage') {
-          // Some turns only send the final item (no deltas) → emit it then.
-          if (!id || !this.streamedItems.has(id)) {
-            const text = typeof item.text === 'string' ? item.text : '';
-            if (text) {
-              this.textChunks.push(text);
-              this.emit({ type: 'text', text });
-            }
-          }
+          // One v1 `text` per finished message — the snapshot's full text when
+          // present (also covers turns that send no deltas), else the deltas.
+          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined);
         } else if (type && !NON_TOOL_ITEMS.has(type) && id) {
           this.emit({
             type: 'tool-result',
@@ -438,6 +436,9 @@ class CodexSession implements AgentSession {
       case 'turn/failed': {
         this.pendingUserInput = undefined;
         this.activeTurnId = undefined;
+        // An interrupted/failed item never sees item/completed — surface its
+        // partial prose before the turn boundary (run.ts reads markers there).
+        this.textCoalescer.flush();
         this.emit({ type: 'turn-end' });
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);

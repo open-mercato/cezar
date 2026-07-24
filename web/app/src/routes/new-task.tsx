@@ -518,11 +518,6 @@ export function NewTaskRoute() {
                 ? 'Provider authentication could not be verified.'
                 : 'Connect an agent provider before starting a task.'
           }
-          disabledAction={
-            !providers.isPending ? (
-              <Link to="/settings/agents#providers">Configure providers</Link>
-            ) : undefined
-          }
           autocompleteSkills
           footerStart={
             <>
@@ -608,6 +603,14 @@ export function NewTaskRoute() {
           }
           footerEnd={
             <>
+              {!providersReady && !providers.isPending ? (
+                <Link
+                  to="/settings/agents#providers"
+                  className="text-xs font-medium text-foreground underline underline-offset-4"
+                >
+                  Configure providers
+                </Link>
+              ) : null}
               <ModeSegment
                 planFirst={draft.planFirst}
                 planning={planning}

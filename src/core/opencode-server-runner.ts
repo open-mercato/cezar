@@ -12,6 +12,7 @@ import { prependSystemPrompt } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.js';
 import { parseModelIdentity } from './model-identity.js';
+import { V1TextCoalescer } from './v1-text-coalescer.js';
 import {
   createOpencodeUiState,
   mapOpencodeEvent,
@@ -87,8 +88,16 @@ class OpencodeSession implements AgentSession {
   private readonly sse = new AbortController();
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
-  /** Per text-part cursor so we emit only newly-appended text (deltas). */
+  /** Per text-part cursor so only newly-appended text is buffered (deltas). */
   private readonly textSeen = new Map<string, number>();
+  /** Streamed part deltas buffered per part — v1 `text` is emitted once per
+   *  finished part (claude parity: one event per complete block), never per
+   *  delta, so the persisted transcript and the headless CLI get whole
+   *  paragraphs. Streaming display rides protocol v2's `item.delta`. */
+  private readonly textCoalescer = new V1TextCoalescer((text) => {
+    this.textChunks.push(text);
+    this.emit({ type: 'text', text });
+  });
   private readonly toolsSeen = new Set<string>();
   /** messageID → role. Parts carry no role; only assistant parts are surfaced
    *  (the user's own message also streams as parts over the same SSE feed). */
@@ -176,7 +185,11 @@ class OpencodeSession implements AgentSession {
       await this.exited;
       if (this.spawnFailed) throw this.spawnFailed;
 
-      const text = this.textChunks.join('').trim();
+      // Timeout/interrupt can cut the SSE feed mid-part — recover buffered prose.
+      this.textCoalescer.flush();
+      // Chunks are whole blocks now (one per finished part), so newline-join
+      // like the other runners, not the old delta concatenation.
+      const text = this.textChunks.join('\n').trim();
       const base: AgentRunResult = {
         text,
         toolCalls: this.toolCalls,
@@ -304,6 +317,9 @@ class OpencodeSession implements AgentSession {
       this.absorbUsage(res);
     } finally {
       this.turnInFlight = false;
+      // A part that never saw `time.end` (abort, server quirk) still surfaces
+      // its prose before the turn boundary (run.ts reads markers there).
+      this.textCoalescer.flush();
       this.emit({ type: 'turn-end' });
       if (this.opts.autoEndAfterFirstTurn && this.serverOpen && !this.autoEndTimer) {
         this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
@@ -394,10 +410,14 @@ class OpencodeSession implements AgentSession {
       const full = stringField(part, 'text') ?? '';
       const seen = this.textSeen.get(id) ?? 0;
       if (full.length > seen) {
-        const delta = full.slice(seen);
         this.textSeen.set(id, full.length);
-        this.textChunks.push(delta);
-        this.emit({ type: 'text', text: delta });
+        this.textCoalescer.append(id, full.slice(seen));
+      }
+      // `time.end` marks the part finished (same signal the v2 mapper uses) —
+      // emit the whole block once, preferring the snapshot's full text.
+      const time = part.time as Record<string, unknown> | undefined;
+      if (time && typeof time === 'object' && typeof time.end === 'number') {
+        this.textCoalescer.complete(id, full);
       }
     } else if (kind === 'tool') {
       const state = (part.state as Record<string, unknown> | undefined) ?? {};

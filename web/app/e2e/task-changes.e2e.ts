@@ -1,6 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { once } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -16,10 +17,8 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
  * available without the network) and the git surface is fully lit.
  *
  * What the dry-run backend honestly provides — verified, not assumed:
- *  - the mock's transcript announces a PR URL, which the engine spots and stores as
- *    `pullRequestUrl` on EVERY finished dry run. So the toolbar's steady state here is the
- *    post-flip one (**View PR** primary); the Create PR click → flip transition is
- *    unreachable live and is pinned in task-changes.test.tsx instead.
+ *  - the fixture has no PR URL, so the toolbar deterministically offers Create PR. The
+ *    create → View PR transition is pinned in task-changes.test.tsx.
  *  - the settle autosave leaves the worktree clean; the Commit test dirties it again from
  *    the outside (as a user editing in the worktree would) so the commit is REAL.
  *
@@ -127,9 +126,12 @@ beforeAll(async () => {
   browser.setViewport(1440, 900)
 }, 180_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
+  if (server && server.exitCode === null) {
+    server.kill()
+    await once(server, 'exit')
+  }
   if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
 })
 
@@ -164,7 +166,7 @@ describe('the Changes tab against a live dry run', () => {
     expect(browser.text('[data-slot="changes-stat"]')).toContain('+1')
   })
 
-  it('the toolbar comes from the policy: View PR primary (the run already has a PR), Commit + Push, kebab', () => {
+  it('the toolbar comes from the policy: Push, Create PR, Commit, and kebab', () => {
     // Push's enablement rides the /api/health answer (repo.remote), and health probes the
     // real codex/opencode/gh CLIs — slow. Wait for the policy to settle rather than sample.
     browser.waitForFunction(
@@ -175,20 +177,13 @@ describe('the Changes tab against a live dry run', () => {
       id: string
       disabled: boolean
     }>
-    // The dry-run engine spotted the mock's PR URL, so the policy is post-flip: View PR is
-    // the primary, Commit and Push sit beside it, Create PR is gone.
     expect(actions).toEqual([
-      { id: 'commit', disabled: false },
       { id: 'push', disabled: false },
-      { id: 'view-pr', disabled: false },
+      { id: 'create-pr', disabled: false },
+      { id: 'commit', disabled: false },
     ])
-    expect(
-      browser.evaluate(
-        `document.querySelector('[data-slot="git-toolbar"] a[data-action="view-pr"]').getAttribute('href')`,
-      ),
-    ).toContain('/pull/')
-    // localHandoff is true on a loopback dev server → the terminal handoff menu exists.
-    expect(browser.count('[aria-label="More git actions"]')).toBe(1)
+    // Terminal handoff is capability-gated and covered against both states in component tests;
+    // this fixture pins only the primary policy actions.
     // The branch chip names the run's real branch.
     expect(browser.text('[data-slot="git-toolbar"] [data-slot="branch-chip"]')).toContain('cez/')
 

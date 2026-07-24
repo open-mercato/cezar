@@ -70,7 +70,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, followups: true },
+  capabilities: { localHandoff: true, followups: true, singleProject: false },
   projects: [
     { id: BOOT, name: 'cezar' },
     { id: OTHER, name: 'shop-frontend' },
@@ -152,7 +152,13 @@ let requests: Recorded[]
 
 /** The two-project workspace, served on both the unscoped and the `/api/p/other` surface.
  *  `registry` narrows to a one-project workspace for the hidden-pill case. */
-function serve({ registry = REGISTRY }: { registry?: ProjectsResponse } = {}) {
+function serve({
+  registry = REGISTRY,
+  health = HEALTH,
+}: {
+  registry?: ProjectsResponse
+  health?: HealthResponse
+} = {}) {
   requests = []
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
@@ -166,7 +172,7 @@ function serve({ registry = REGISTRY }: { registry?: ProjectsResponse } = {}) {
 
       // Workspace-level: never scoped (project-scope.ts `WORKSPACE_LEVEL`).
       if (url === '/api/projects') return json(registry)
-      if (url === '/api/health') return json(HEALTH)
+      if (url === '/api/health') return json(health)
       if (url === '/api/providers/status') return json(PROVIDERS)
 
       // Split the scope off the path so each route is written once.
@@ -174,7 +180,7 @@ function serve({ registry = REGISTRY }: { registry?: ProjectsResponse } = {}) {
       const path = scoped ? `/api${url.slice(`/api/p/${OTHER}`.length)}` : url
       const pick = <T,>(boot: T, other: T): T => (scoped ? other : boot)
 
-      if (path === '/api/health') return json(HEALTH)
+      if (path === '/api/health') return json(health)
       if (path === '/api/skills') return json(pick(BOOT_SKILLS, OTHER_SKILLS))
       if (path === '/api/workflows' && method === 'GET') return json(pick(BOOT_WORKFLOWS, OTHER_WORKFLOWS))
       if (path === '/api/repo') return json(pick(REPO, OTHER_REPO))
@@ -252,11 +258,20 @@ describe('the new-task project pill', () => {
     expect(options[1]!.textContent).toContain('develop')
   })
 
-  it('stays hidden in a single-project workspace — nothing to choose between', async () => {
-    serve({ registry: { ...REGISTRY, projects: [REGISTRY.projects[0]!] } })
+  it('stays hidden when single-project mode pins the registry to the boot project', async () => {
+    serve({
+      // Health advertises the mode, but the composer deliberately has no capability gate: the
+      // ordinary pinned registry response is enough to collapse a choice with one option.
+      health: {
+        ...HEALTH,
+        capabilities: { ...HEALTH.capabilities, singleProject: true },
+      },
+      registry: { ...REGISTRY, projects: [REGISTRY.projects[0]!] },
+    })
     renderAt(`/p/${BOOT}/new`)
     await composerReady('om-fix')
     expect(screen.queryByRole('button', { name: 'Project' })).toBeNull()
+    expect(document.querySelector('[data-slot="source-pill"]')).not.toBeNull()
   })
 })
 

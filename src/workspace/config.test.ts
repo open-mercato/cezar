@@ -6,6 +6,7 @@ import { workspaceConfigPath } from '../paths.js';
 import {
   atomicTmpPath,
   defaultWorkspaceConfig,
+  effectiveSkillsAutoUpdate,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
 } from './config.js';
@@ -21,6 +22,7 @@ describe('workspace config', () => {
   const originalHome = process.env.CEZ_HOME;
   const originalBrowseRoot = process.env.CEZ_BROWSE_ROOT;
   const originalProjectsDir = process.env.CEZ_PROJECTS_DIR;
+  const originalSkillsAutoUpdate = process.env.CEZ_SKILLS_AUTO_UPDATE;
   let home: string;
 
   beforeEach(() => {
@@ -28,6 +30,7 @@ describe('workspace config', () => {
     process.env.CEZ_HOME = home; // paths.ts sends all workspace paths here
     delete process.env.CEZ_BROWSE_ROOT;
     delete process.env.CEZ_PROJECTS_DIR;
+    delete process.env.CEZ_SKILLS_AUTO_UPDATE;
   });
 
   afterEach(() => {
@@ -37,6 +40,8 @@ describe('workspace config', () => {
     else process.env.CEZ_BROWSE_ROOT = originalBrowseRoot;
     if (originalProjectsDir === undefined) delete process.env.CEZ_PROJECTS_DIR;
     else process.env.CEZ_PROJECTS_DIR = originalProjectsDir;
+    if (originalSkillsAutoUpdate === undefined) delete process.env.CEZ_SKILLS_AUTO_UPDATE;
+    else process.env.CEZ_SKILLS_AUTO_UPDATE = originalSkillsAutoUpdate;
     rmSync(home, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -94,6 +99,26 @@ describe('workspace config', () => {
       browseRoot: '/srv/source',
       projectsDir: '/srv/checkouts',
     });
+  });
+
+  it('resolves skills auto-update as explicit setting, then 0/1 env, then true', () => {
+    expect(effectiveSkillsAutoUpdate({}, {})).toBe(true);
+    expect(effectiveSkillsAutoUpdate({}, { CEZ_SKILLS_AUTO_UPDATE: '0' })).toBe(false);
+    expect(effectiveSkillsAutoUpdate({}, { CEZ_SKILLS_AUTO_UPDATE: '1' })).toBe(true);
+    expect(effectiveSkillsAutoUpdate({}, { CEZ_SKILLS_AUTO_UPDATE: 'invalid' })).toBe(true);
+    expect(effectiveSkillsAutoUpdate({ skillsAutoUpdate: false }, { CEZ_SKILLS_AUTO_UPDATE: '1' })).toBe(false);
+    expect(effectiveSkillsAutoUpdate({ skillsAutoUpdate: true }, { CEZ_SKILLS_AUTO_UPDATE: '0' })).toBe(true);
+  });
+
+  it('degrades a bad stored preference per-key and preserves raw absence on unrelated writes', async () => {
+    write({ skillsAutoUpdate: 'no', futureKey: true });
+    expect((await loadWorkspaceConfig()).skillsAutoUpdate).toBeUndefined();
+    await mergeWriteWorkspaceConfig((config) => {
+      config.resources.maxParallel = 3;
+    });
+    const raw = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as Record<string, unknown>;
+    expect(raw.skillsAutoUpdate).toBeUndefined();
+    expect(raw.futureKey).toBe(true);
   });
 
   it('round-trips a merge-written config, with the file at mode 0600', async () => {
@@ -213,6 +238,22 @@ describe('workspace config', () => {
     const config = await loadWorkspaceConfig();
     expect(config.projects.map((p) => p.id)).toEqual(['good', 'also-good']);
     expect(config.projects[1]?.source).toBe('local');
+  });
+
+  it('per-project maxParallel: keeps a valid value, degrades a bad one to inherit, absent stays absent', async () => {
+    write({
+      projects: [
+        { ...project('capped'), maxParallel: 1 }, // valid override
+        { ...project('too-big'), maxParallel: 999 }, // out of range → inherit (undefined)
+        project('inherits'), // no key → inherit (undefined)
+      ],
+    });
+    const config = await loadWorkspaceConfig();
+    // A bad maxParallel degrades that one key without evicting the entry.
+    expect(config.projects.map((p) => p.id)).toEqual(['capped', 'too-big', 'inherits']);
+    expect(config.projects[0]?.maxParallel).toBe(1);
+    expect(config.projects[1]?.maxParallel).toBeUndefined();
+    expect(config.projects[2]?.maxParallel).toBeUndefined();
   });
 
   it('memoryLimitMb keeps an explicit null and a real value', async () => {

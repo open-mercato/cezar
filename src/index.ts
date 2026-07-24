@@ -49,6 +49,14 @@ Options:
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
                               cockpit for this domain (own nginx site + service + port).
                               A new domain never resumes/clobbers the first install.
+      --external-proxy        server-install (ubuntu-vps): the box ALREADY has a
+                              reverse proxy owning :80/:443 (Dokploy/Traefik, Coolify,
+                              Caddy, your own nginx). Installs the service only — no
+                              nginx, no certbot. That proxy must provide TLS + auth.
+      --bind-host <host>      host the cockpit binds (default 127.0.0.1). Use with
+                              --external-proxy when the proxy runs in a container and
+                              cannot reach loopback (e.g. docker bridge 172.17.0.1).
+                              cezar has NO built-in auth — never expose this publicly.
       --yes                   server-install: accept safe defaults (never auto-sudo)
       --reconfigure <ids>     server-install: force re-run of step id(s), comma-separated
       --reinstall             server-install: force re-run of every step (full reinstall)
@@ -69,6 +77,8 @@ async function main(): Promise<void> {
       'no-open': { type: 'boolean', default: false },
       platform: { type: 'string' },
       domain: { type: 'string' },
+      'bind-host': { type: 'string' },
+      'external-proxy': { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       reconfigure: { type: 'string' },
       reinstall: { type: 'boolean', default: false },
@@ -97,7 +107,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'serve':
-      await serveCommand(repoRoot, Number(values.port), !values['no-open']);
+      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host']);
       return;
     case 'run':
       await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model);
@@ -107,7 +117,15 @@ async function main(): Promise<void> {
       return;
     case 'projects':
       // Registry-only (no server, no HTTP) — see workspace/projects-cli.ts.
-      process.exitCode = await runProjectsCommand(positionals.slice(1), { defaultRoot: repoRoot });
+      // In single-project mode a listing is a launch-context read: register
+      // the boot repo through the normal self-healing path and pin the output
+      // to that explicit identity. Mutations are left to their own guards.
+      const projectArgs = positionals.slice(1);
+      const isList = projectArgs.length === 0 || projectArgs[0] === 'list';
+      const bootProjectId = process.env.CEZ_SINGLE_PROJECT === '1' && isList
+        ? await initWorkspace(repoRoot)
+        : undefined;
+      process.exitCode = await runProjectsCommand(projectArgs, { defaultRoot: repoRoot, bootProjectId });
       return;
     case 'server-install':
       await serverCommand('install', repoRoot, values.platform, {
@@ -116,6 +134,8 @@ async function main(): Promise<void> {
         reinstall: Boolean(values.reinstall),
         domain: values.domain,
         port: portExplicit ? Number(values.port) : undefined,
+        externalProxy: Boolean(values['external-proxy']),
+        bindHost: values['bind-host'],
       });
       return;
     case 'server-deploy':
@@ -167,7 +187,12 @@ async function initWorkspace(repoRoot: string): Promise<string | undefined> {
 
 // ---- serve -----------------------------------------------------------------
 
-async function serveCommand(repoRoot: string, preferredPort: number, openBrowser: boolean): Promise<void> {
+async function serveCommand(
+  repoRoot: string,
+  preferredPort: number,
+  openBrowser: boolean,
+  bindHost?: string,
+): Promise<void> {
   const bootProjectId = await initWorkspace(repoRoot);
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
@@ -228,6 +253,17 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
   });
 
   const port = await pickPort(preferredPort);
+  // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
+  // whatever can reach the interface, and cezar itself has NO auth — it is only
+  // for a deliberate hosted setup where a reverse proxy in front provides TLS +
+  // auth (see `server-install --external-proxy`). Say so, loudly, every start.
+  if (bindHost && !['127.0.0.1', 'localhost', '::1'].includes(bindHost)) {
+    console.log(
+      `\n  ⚠ binding ${bindHost}:${port} — cezar has no built-in auth.\n` +
+        `    Only do this behind a reverse proxy that enforces authentication,\n` +
+        `    and make sure this interface is not reachable from the internet.\n`,
+    );
+  }
   startServer({
     repoRoot,
     store,
@@ -236,6 +272,7 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
     update,
     bootProjectId,
     semaphore,
+    bindHost,
     providerAuth,
     providerRuntimeAuth,
     workspaceEvents,
@@ -404,7 +441,15 @@ async function serverCommand(
   mode: 'install' | 'uninstall' | 'deploy',
   repoRoot: string,
   platform: string | undefined,
-  flags: { yes: boolean; reconfigure?: string; reinstall?: boolean; domain?: string; port?: number },
+  flags: {
+    yes: boolean;
+    reconfigure?: string;
+    reinstall?: boolean;
+    domain?: string;
+    port?: number;
+    externalProxy?: boolean;
+    bindHost?: string;
+  },
 ): Promise<void> {
   // Detection (claude/gh/codex) and tool installs resolve executables off the
   // process PATH. When the installer is launched from a non-login shell (an
@@ -484,6 +529,13 @@ async function serverCommand(
     instance,
     domain,
     port,
+    // Only an install decides proxy mode; deploy/uninstall read it back from
+    // the recorded state. Preserve an omitted flag as `undefined`: a flag-less
+    // resume must keep an external-proxy install external instead of flipping
+    // it back to cezar-managed nginx/SSL.
+    ...(mode === 'install'
+      ? { externalProxy: flags.externalProxy || undefined, bindHost: flags.bindHost }
+      : {}),
   };
 
   // e.g. "ubuntu-vps" or "ubuntu-vps, shop.example.com" for a named instance.

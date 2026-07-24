@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
-import type { Skill, WorkflowsResponse } from '@/api/types'
+import type { Skill, SkillsUpdateState, WorkflowsResponse } from '@/api/types'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 
@@ -54,11 +54,15 @@ function serve({
   refreshed = SKILLS,
   importable = [],
   workspaceUiState = {},
+  skillsUpdate,
+  appliedSkillsUpdate,
 }: {
   skills?: Skill[]
   refreshed?: Skill[]
   importable?: { name: string; description?: string }[]
   workspaceUiState?: Record<string, unknown>
+  skillsUpdate?: SkillsUpdateState
+  appliedSkillsUpdate?: SkillsUpdateState
 } = {}) {
   requests = []
   // The selection lives in the GLOBAL ui-state (`/api/workspace/ui-state`), whose PUT answers the
@@ -86,6 +90,14 @@ function serve({
         global = { ...global, ...(body as Record<string, unknown>) }
         return json(global)
       }
+      if (url === '/api/runs' && method === 'POST') {
+        return json({ id: 'upgrade-notes-run', status: 'queued', task: 'Apply upgrade notes' })
+      }
+      if (url === '/api/workspace/skills-update?projectId=boot') return json(skillsUpdate ?? UPDATE_CURRENT)
+      if (url === '/api/workspace/skills-update/check' && method === 'POST') return json(skillsUpdate ?? UPDATE_CURRENT)
+      if (url === '/api/workspace/skills-update/apply' && method === 'POST') {
+        return json(appliedSkillsUpdate ?? skillsUpdate ?? UPDATE_CURRENT)
+      }
       return new Promise<never>(() => {})
     }),
   )
@@ -106,14 +118,22 @@ function gateSeededClient() {
 }
 
 function renderAt(entry: string) {
+  const client = gateSeededClient()
   render(
-    <QueryClientProvider client={gateSeededClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
         <AppRoutes />
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
   )
+  return client
+}
+
+const UPDATE_CURRENT: SkillsUpdateState = {
+  status: 'current', available: false, autoUpdateEnabled: true, inherited: true,
+  checkedAt: '2026-07-22T12:00:00.000Z', updatedAt: null, needsUpgradeNotes: false,
+  scopes: [{ scope: 'project', status: 'current', available: false, skills: ['om-fix'], checkedAt: '2026-07-22T12:00:00.000Z', updatedAt: null }],
 }
 
 const rowNames = () =>
@@ -262,6 +282,143 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
           (r.body as { importedSkills?: unknown })?.importedSkills !== undefined,
       )
       .at(-1)?.body as { importedSkills: string[] } | undefined
+
+  it('renders available, updating/current actions, scope labels, and the persistent migration callout', async () => {
+    serve({ importable: IMPORTABLE, skillsUpdate: {
+      ...UPDATE_CURRENT, status: 'available', available: true, needsUpgradeNotes: true,
+      scopes: [{ ...UPDATE_CURRENT.scopes[0]!, status: 'available', available: true }],
+    } })
+    renderAt('/skills?skill=__import')
+    await waitFor(() => expect(document.querySelector('[data-action="skills-update-apply"]')?.textContent).toContain('Update now'))
+    const card = document.querySelector('[data-slot="skills-update-card"]')!
+    expect(card.textContent).toContain('Project installation · 1 tracked')
+    expect(card.textContent).not.toContain('/home/')
+    expect(document.querySelector('[data-slot="skills-upgrade-notes"]')?.textContent).toContain('/om-apply-upgrade-notes')
+    expect(document.body.textContent).toContain('checkboxes choose what cezar shows')
+  })
+
+  it('keeps the newer apply result when a slower check response arrives afterward', async () => {
+    let releaseCheck!: (value: Response) => void
+    const json = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+    serve({ importable: IMPORTABLE })
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/skills-update/check') return new Promise<Response>((resolve) => { releaseCheck = resolve })
+      if (url === '/api/workspace/skills-update/apply') return json({ ...UPDATE_CURRENT, updatedAt: '2026-07-22T13:00:00.000Z', needsUpgradeNotes: true })
+      if (url === '/api/workspace/skills-update?projectId=boot') return json(UPDATE_CURRENT)
+      if (url === '/api/skills') return json(SKILLS)
+      if (url.startsWith('/api/skills/importable')) return json(IMPORTABLE)
+      if (url === '/api/workflows') return json(WORKFLOWS)
+      if (url === '/api/workspace/ui-state') return json({})
+      return new Promise<never>(() => {})
+    })
+    const client = renderAt('/skills?skill=__import')
+    await waitFor(() => expect(document.querySelector('[data-action="skills-update-check"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="skills-update-check"]')!)
+    client.setQueryData(workspaceQueryKeys.skillsUpdate('boot'), { ...UPDATE_CURRENT, status: 'available', available: true, scopes: [{ ...UPDATE_CURRENT.scopes[0]!, status: 'available', available: true }] })
+    await waitFor(() => expect(document.querySelector('[data-action="skills-update-apply"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="skills-update-apply"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="skills-upgrade-notes"]')).not.toBeNull())
+    await act(async () => releaseCheck(json(UPDATE_CURRENT)))
+    expect(client.getQueryData<SkillsUpdateState>(workspaceQueryKeys.skillsUpdate('boot'))?.needsUpgradeNotes).toBe(true)
+  })
+
+  it('offers to start the upgrade-notes skill after a successful update', async () => {
+    serve({
+      importable: IMPORTABLE,
+      skillsUpdate: {
+        ...UPDATE_CURRENT,
+        status: 'available',
+        available: true,
+        scopes: [{ ...UPDATE_CURRENT.scopes[0]!, status: 'available', available: true }],
+      },
+      appliedSkillsUpdate: {
+        ...UPDATE_CURRENT,
+        updatedAt: '2026-07-23T16:00:00.000Z',
+        needsUpgradeNotes: true,
+      },
+    })
+    renderAt('/skills?skill=__import')
+
+    await waitFor(() => expect(document.querySelector('[data-action="skills-update-apply"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="skills-update-apply"]')!)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="skills-upgrade-notes-dialog"]')?.textContent).toContain(
+        'Apply the upgrade notes now?',
+      ),
+    )
+
+    fireEvent.click(Array.from(document.querySelectorAll('button')).find((button) => button.textContent === 'Yes, start session')!)
+    await waitFor(() =>
+      expect(
+        requests.find((request) => request.method === 'POST' && request.url === '/api/runs')?.body,
+      ).toMatchObject({
+        steps: [
+          {
+            skill: 'om-apply-upgrade-notes',
+            prompt: '{{task}}',
+          },
+        ],
+      }),
+    )
+  })
+
+  it('lets the user decline the upgrade-notes session', async () => {
+    serve({
+      importable: IMPORTABLE,
+      skillsUpdate: {
+        ...UPDATE_CURRENT,
+        status: 'available',
+        available: true,
+        scopes: [{ ...UPDATE_CURRENT.scopes[0]!, status: 'available', available: true }],
+      },
+      appliedSkillsUpdate: {
+        ...UPDATE_CURRENT,
+        updatedAt: '2026-07-23T16:00:00.000Z',
+        needsUpgradeNotes: true,
+      },
+    })
+    renderAt('/skills?skill=__import')
+
+    await waitFor(() => expect(document.querySelector('[data-action="skills-update-apply"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="skills-update-apply"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="skills-upgrade-notes-dialog"]')).not.toBeNull())
+    fireEvent.click(Array.from(document.querySelectorAll('button')).find((button) => button.textContent === 'No')!)
+
+    await waitFor(() => expect(document.querySelector('[data-slot="skills-upgrade-notes-dialog"]')).toBeNull())
+    expect(requests.some((request) => request.method === 'POST' && request.url === '/api/runs')).toBe(false)
+  })
+
+  it('does not claim a failed retry succeeded when its update timestamp is stale', async () => {
+    const previousUpdatedAt = '2026-07-23T16:00:00.000Z'
+    serve({
+      importable: IMPORTABLE,
+      skillsUpdate: {
+        ...UPDATE_CURRENT,
+        status: 'error',
+        updatedAt: previousUpdatedAt,
+        needsUpgradeNotes: true,
+        scopes: [{ ...UPDATE_CURRENT.scopes[0]!, status: 'error', available: true }],
+      },
+      appliedSkillsUpdate: {
+        ...UPDATE_CURRENT,
+        status: 'error',
+        updatedAt: previousUpdatedAt,
+        needsUpgradeNotes: true,
+        scopes: [{ ...UPDATE_CURRENT.scopes[0]!, status: 'error', available: true }],
+      },
+    })
+    renderAt('/skills?skill=__import')
+
+    await waitFor(() => expect(document.querySelector('[data-action="skills-update-apply"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="skills-update-apply"]')!)
+
+    await waitFor(() =>
+      expect(requests.some((request) => request.url === '/api/workspace/skills-update/apply')).toBe(true),
+    )
+    expect(document.querySelector('[data-slot="skills-upgrade-notes-dialog"]')).toBeNull()
+  })
 
   it('shows the pinned "Manage skills" entry only when a vendor repo has default skills', async () => {
     serve({ importable: IMPORTABLE })

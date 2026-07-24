@@ -35,7 +35,7 @@ import {
   UserBubble,
   WorkingIndicator,
 } from './thread-items'
-import { ContinueAction } from './follow-up-engine'
+import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
 import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
@@ -196,6 +196,14 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   // that has not run. Deliberately `queued` only: review/done/failed/cancelled keep the
   // existing copy and their Continue action.
   const queued = run.status === 'queued'
+  // …and the fourth: a closed run whose last session can be reopened. Continue used to be a
+  // bare button beside a DISABLED textarea, so "reopen it and say what to do next" meant
+  // continuing blind and then typing into the thread once the session came back. The composer
+  // stays authorable here instead: the draft is the prompt the reopened session starts on, and
+  // submitting an empty one is still the plain one-click Continue.
+  const continueAction = useContinueAction(run)
+  const hasContinuation = !sessionOpen && !queued && continueAction.available
+  const continuable = hasContinuation && continueAction.canContinue
   // A closed session can never settle its in-flight items — nothing in the reducer rewrites a
   // `running` item on `session.ended`, so an interrupted fan-out stays `running` in the
   // persisted stream forever. Without this, reopening it pulses `Agents · 0/1` above a dead
@@ -228,7 +236,10 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   )
   const sendMessage = useSendMessage(run.id)
   const activeProvider = useActiveProviderAvailability(run)
-  const providerBlocked = (sessionOpen || queued) && !activeProvider.usable
+  const activeProviderBlocked = (sessionOpen || queued) && !activeProvider.usable
+  const continuationProviderBlocked = hasContinuation && !continueAction.canContinue
+  const providerBlocked = activeProviderBlocked || continuationProviderBlocked
+  const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason
 
   // The queued-run affordances (#472), passed only while the run is queued — so the bubbles
   // go read-only on the next `run` SSE frame once it starts. The bubbles await these promises
@@ -379,22 +390,34 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
           ) : null}
 
           <Composer
-            onSubmit={(text, images) => sendMessage.mutateAsync({ text, images })}
-            disabled={(!sessionOpen && !queued) || providerBlocked}
-            disabledReason={providerBlocked ? activeProvider.reason : 'Session closed — Continue to reopen.'}
-            // Continue is meaningless for a run that has not run, so the queued branch
-            // renders no disabled action at all (it is not disabled in the first place).
-            disabledAction={
-              providerBlocked ? (
-                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                  <Link to="/settings/agents#providers" className="font-medium text-foreground underline underline-offset-4">
-                    Configure providers
-                  </Link>
-                </div>
-              ) : <ContinueAction run={run} />
+            onSubmit={
+              continuable
+                ? (text, images) => continueAction.continueWith(text, images)
+                : (text, images) => sendMessage.mutateAsync({ text, images })
             }
+            disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
+            // Only reachable now by a closed run with NO session to resume — which is exactly
+            // the one case where Continue is not on offer either. Left honest rather than
+            // rewritten: "closed" is all such a run can be told.
+            disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
+            // The engine pills ride the enabled footer, so the picked runner/model and the
+            // typed prompt reach `POST /continue` in one request.
+            footerEnd={
+              providerBlocked && !continueAction.providerPending ? (
+                <Link
+                  to="/settings/agents#providers"
+                  className="text-xs font-medium text-foreground underline underline-offset-4"
+                >
+                  Configure providers
+                </Link>
+              ) : continuable ? continueAction.pills : undefined
+            }
+            // Continuing with nothing typed is the legacy one-click Continue.
+            allowEmptySubmit={continuable}
+            sendAriaLabel={continuable ? 'Continue' : 'Send'}
             placeholder={
               queued ? 'Add to the prompt — sent when the run starts…'
+              : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
               : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
               : 'Message the agent — / for skills, @ for files…'
             }

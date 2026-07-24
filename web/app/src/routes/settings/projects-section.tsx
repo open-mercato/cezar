@@ -3,7 +3,13 @@ import { FoldersIcon } from 'lucide-react'
 import { useState } from 'react'
 
 import { putWorkspaceConfig } from '@/api/client'
-import { useProjects, useRemoveProject, useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
+import {
+  useProjects,
+  useRemoveProject,
+  useUpdateProject,
+  useWorkspaceConfig,
+  workspaceQueryKeys,
+} from '@/api/queries'
 import type { ProjectListEntry, ProjectsResponse, WorkspaceConfigResponse } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
 import {
@@ -48,6 +54,10 @@ import { SettingsField } from './settings-field'
 
 /** Which project the confirm dialog is about — `null` while it is closed. */
 type Confirming = ProjectListEntry | null
+
+/** Per-project concurrency bounds — mirror the workspace cap (resources-section.tsx). */
+const MAX_PARALLEL_MIN = 1
+const MAX_PARALLEL_MAX = 16
 
 /** Human wording for a registry status probe. `not-git` is fully usable (single-queue
  *  degraded mode), so it reads as a note rather than a fault; only `missing` is a problem. */
@@ -123,7 +133,7 @@ function ProjectsPane({
         footer="Only affects new checkouts; projects already registered keep their location."
         refreshProjects
       />
-      <RegistryTable registry={registry} />
+      <RegistryTable registry={registry} workspaceMax={config.resources.maxParallel} />
     </div>
   )
 }
@@ -230,7 +240,13 @@ function WorkspaceRootField({
   )
 }
 
-function RegistryTable({ registry }: { registry: ProjectsResponse }) {
+function RegistryTable({
+  registry,
+  workspaceMax,
+}: {
+  registry: ProjectsResponse
+  workspaceMax: number
+}) {
   const [confirming, setConfirming] = useState<Confirming>(null)
   const remove = useRemoveProject()
 
@@ -250,7 +266,7 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
   return (
     <SettingsField
       title="Registered projects"
-      hint="Every folder cezar has run in, plus the ones added from the GUI. Removing a project only unregisters it — no files on disk are deleted."
+      hint={`Every folder cezar has run in, plus the ones added from the GUI. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
     >
       {registry.projects.length === 0 ? (
         <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
@@ -264,6 +280,7 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
               <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
                 <th scope="col" className="px-3 py-2 font-medium">Project</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
+                <th scope="col" className="px-3 py-2 font-medium">Max parallel</th>
                 <th scope="col" className="px-3 py-2 font-medium">Added</th>
                 <th scope="col" className="px-3 py-2 font-medium text-right">Actions</th>
               </tr>
@@ -274,6 +291,7 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
                   key={project.id}
                   project={project}
                   isBoot={project.id === registry.bootProject}
+                  workspaceMax={workspaceMax}
                   disabled={remove.isPending}
                   onRemove={() => setConfirming(project)}
                 />
@@ -315,11 +333,13 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
 function ProjectRow({
   project,
   isBoot,
+  workspaceMax,
   disabled,
   onRemove,
 }: {
   project: ProjectListEntry
   isBoot: boolean
+  workspaceMax: number
   disabled: boolean
   onRemove: () => void
 }) {
@@ -342,6 +362,9 @@ function ProjectRow({
           <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
         ) : null}
       </td>
+      <td className="px-3 py-2">
+        <MaxParallelSelect project={project} workspaceMax={workspaceMax} />
+      </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortDate(project.addedAt)}</td>
       <td className="px-3 py-2 text-right">
         <Button
@@ -362,5 +385,61 @@ function ProjectRow({
         </Button>
       </td>
     </tr>
+  )
+}
+
+/**
+ * Per-project "Max parallel tasks" selector (spec 2026-07-22). `Inherit
+ * workspace (N)` is the unset default; `1..16` pins a per-project ceiling.
+ * Bound directly to the server value (`project.maxParallel`) and saved on
+ * change, mirroring the workspace `Max parallel` control (resources-section.tsx)
+ * — a failed save reverts because the value never leaves the server's, and the
+ * hook invalidates the projects query so a success re-renders the row. The
+ * workspace cap still clamps at runtime, which the section hint explains.
+ */
+function MaxParallelSelect({
+  project,
+  workspaceMax,
+}: {
+  project: ProjectListEntry
+  workspaceMax: number
+}) {
+  const update = useUpdateProject()
+  // `''` is the inherit sentinel; a number is an explicit per-project ceiling.
+  const value = project.maxParallel === undefined ? '' : String(project.maxParallel)
+  return (
+    <select
+      aria-label={`Max parallel tasks for ${project.name}`}
+      data-slot="project-max-parallel"
+      value={value}
+      disabled={update.isPending}
+      onChange={(event) => {
+        const raw = event.target.value
+        const next = raw === '' ? null : Number(raw)
+        update.mutate(
+          { id: project.id, maxParallel: next },
+          {
+            onSuccess: () =>
+              toast(
+                next === null
+                  ? `${project.name} inherits the workspace limit (${workspaceMax})`
+                  : `${project.name} runs at most ${next} task${next === 1 ? '' : 's'} at a time`,
+              ),
+            onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+          },
+        )
+      }}
+      className="block w-44 rounded-md border border-input bg-card px-2 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+    >
+      <option value="">Inherit workspace ({workspaceMax})</option>
+      {Array.from(
+        { length: MAX_PARALLEL_MAX - MAX_PARALLEL_MIN + 1 },
+        (_, i) => i + MAX_PARALLEL_MIN,
+      ).map((n) => (
+        <option key={n} value={n}>
+          {n}
+        </option>
+      ))}
+    </select>
   )
 }

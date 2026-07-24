@@ -61,12 +61,14 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.goto(`${baseUrl}/settings/global/appearance`)
     browser.waitForFunction(`document.querySelector('[data-route="settings-global-appearance"]') !== null`)
 
-    // The GLOBAL nav (step 3.5): the four sections of the mockup, and nothing project-scoped.
+    // The GLOBAL nav: the original four sections plus the Open Mercato skills preference,
+    // and nothing project-scoped.
     const nav = '[data-slot="settings-nav"][data-scope="global"]'
-    expect(browser.count(`${nav} [data-section]`)).toBe(4)
+    expect(browser.count(`${nav} [data-section]`)).toBe(5)
     expect(browser.count(`${nav} [data-section="appearance"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="notifications"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="resources"]`)).toBe(1)
+    expect(browser.count(`${nav} [data-section="skills"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="projects"]`)).toBe(1)
     // Project sections live in the OTHER area; hidden registry entries are nowhere at all.
     expect(browser.count(`${nav} [data-section="agents"]`)).toBe(0)

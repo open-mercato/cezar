@@ -103,6 +103,7 @@ export function HandToAgent({
 }) {
   const queryClient = useQueryClient()
   const uiState = useUiState()
+  const kindLabel = item.kind === 'pr' ? 'PR' : 'issue'
   // A skill deleted since it was toggled must not reach the server (legacy rule).
   const validSkills = selectedSkills.filter((name) => skills.some((skill) => skill.name === name))
   // The box is PRE-FILLED with the item's reference (#524) rather than starting empty: what you
@@ -186,6 +187,12 @@ export function HandToAgent({
       // The GitHub tab never starts variants, so the answer is a single record.
       const run = 'runs' in created ? created.runs[0] : created
       if (run) onQueued(item.url, run.id)
+      // The "✓ queued / View task →" affordance sits BELOW the button, which on a phone is
+      // typically off-screen or behind the keyboard right after the tap — so the hand-off also
+      // confirms itself as a toast, the way every other cockpit action does. Unconditional, not
+      // mobile-only: a second confirmation costs nothing on desktop, and a viewport-conditional
+      // toast is one more thing to get wrong.
+      toast(`Added to the queue — ${kindLabel} #${item.number}`)
       // Frequency sort (#408): every hand-off skill counts, mirroring the /new composer.
       // Only bump once the CURRENT map is actually known (`uiState.data` present). The PUT
       // merge is shallow (`uiStateSchema` passthrough, src/server/server.ts), so the client
@@ -317,7 +324,7 @@ export function HandToAgent({
           onClick={() => start.mutate()}
         >
           <PlayIcon aria-hidden="true" className="size-3.5" />
-          Run agent on this {item.kind === 'pr' ? 'PR' : 'issue'}
+          Run agent on this {kindLabel}
         </Button>
         <kbd
           aria-hidden="true"

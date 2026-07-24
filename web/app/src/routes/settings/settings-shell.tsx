@@ -1,5 +1,6 @@
 import { ChevronRightIcon } from 'lucide-react'
 import { Link as RouterLink, NavLink as RouterNavLink } from 'react-router'
+import type { Capabilities } from '@/api/types'
 import { Link as ScopedLink, NavLink as ScopedNavLink } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import { visibleSettingsSections, type SettingsScope, type SettingsSection } from './registry'
@@ -46,9 +47,11 @@ function navComponents(scope: SettingsScope) {
 function SectionNav({
   scope,
   activeId,
+  capabilities,
 }: {
   scope: SettingsScope
   activeId: SettingsSection['id'] | null
+  capabilities?: Pick<Capabilities, 'singleProject'>
 }) {
   const { NavLink } = navComponents(scope)
   return (
@@ -58,7 +61,7 @@ function SectionNav({
       data-scope={scope}
       className="hidden w-52 shrink-0 flex-col gap-1 border-r border-border p-3 md:flex"
     >
-      {visibleSettingsSections(scope).map((section) => (
+      {visibleSettingsSections(scope, capabilities).map((section) => (
         <NavLink
           key={section.id}
           to={settingsSectionPath(scope, section.id)}
@@ -88,9 +91,11 @@ function SectionNav({
 function SectionPills({
   scope,
   activeId,
+  capabilities,
 }: {
   scope: SettingsScope
   activeId: SettingsSection['id']
+  capabilities?: Pick<Capabilities, 'singleProject'>
 }) {
   const { NavLink } = navComponents(scope)
   return (
@@ -99,7 +104,7 @@ function SectionPills({
       data-slot="settings-nav-mobile"
       className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-border px-3 py-2.5 md:hidden"
     >
-      {visibleSettingsSections(scope).map((section) => (
+      {visibleSettingsSections(scope, capabilities).map((section) => (
         <NavLink
           key={section.id}
           to={settingsSectionPath(scope, section.id)}
@@ -123,9 +128,11 @@ function SectionPills({
 export function SettingsSectionRoute({
   section,
   scope,
+  capabilities,
 }: {
   section: SettingsSection
   scope: SettingsScope
+  capabilities?: Pick<Capabilities, 'singleProject'>
 }) {
   const Body = section.component
   return (
@@ -145,8 +152,8 @@ export function SettingsSectionRoute({
         ) : null}
       </header>
       <div className="flex flex-1 flex-col md:flex-row">
-        <SectionNav scope={scope} activeId={section.id} />
-        <SectionPills scope={scope} activeId={section.id} />
+        <SectionNav scope={scope} activeId={section.id} capabilities={capabilities} />
+        <SectionPills scope={scope} activeId={section.id} capabilities={capabilities} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Body />
         </div>
@@ -157,7 +164,10 @@ export function SettingsSectionRoute({
 
 /** The area's index: the same registry rendered as a stacked list of cards (the mobile drill-in
  *  page; on desktop it sits beside the nav as a plain directory). */
-export function SettingsIndexRoute({ scope }: { scope: SettingsScope }) {
+export function SettingsIndexRoute({ scope, capabilities }: {
+  scope: SettingsScope
+  capabilities?: Pick<Capabilities, 'singleProject'>
+}) {
   const { Link } = navComponents(scope)
   const global = scope === 'global'
   return (
@@ -171,12 +181,12 @@ export function SettingsIndexRoute({ scope }: { scope: SettingsScope }) {
         </p>
       </header>
       <div className="flex flex-1 flex-col md:flex-row">
-        <SectionNav scope={scope} activeId={null} />
+        <SectionNav scope={scope} activeId={null} capabilities={capabilities} />
         {/* No second h1 for small screens: the app shell's mobile top bar already titles the
             page "Settings" from the nav registry. */}
         <div className="flex min-w-0 flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
           <ul data-slot="settings-index" className="mx-auto flex w-full max-w-2xl flex-col gap-2.5">
-            {visibleSettingsSections(scope).map((section) => (
+            {visibleSettingsSections(scope, capabilities).map((section) => (
               <li key={section.id}>
                 <Link
                   to={settingsSectionPath(scope, section.id)}

@@ -7,7 +7,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { ContentBlock } from '../core/agent-runner.js';
 import { createWorktree } from '../git-worktree.js';
 import { RunStore, type RunRecord } from '../runs/store.js';
-import { RunManager } from './run.js';
+import { parseTaskMarkers } from '../runs/task-markers.js';
+import { appendTurnText, RunManager } from './run.js';
 import type { WorkflowDef } from './types.js';
 
 const run = promisify(execFile);
@@ -15,6 +16,28 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 const TURN_TEXT =
   "I'll catch the AuthError in the login handler so wrong passwords answer 401.\n\nDetails follow.";
+
+describe('appendTurnText', () => {
+  it.each(['initial execution', 'resumed execution'])(
+    'preserves a marker boundary before later commentary during %s',
+    () => {
+      const turnText = appendTurnText(
+        'Issue claimed.\n\nCEZ:PR=635\nCEZ:TITLE=linking per-project limits',
+        'The verification gate confirms the defect.',
+      );
+
+      expect(turnText).toContain('CEZ:TITLE=linking per-project limits\nThe verification');
+      expect(turnText).not.toContain('limitsThe');
+      expect(parseTaskMarkers(turnText).title).toBe('linking per-project limits');
+    },
+  );
+
+  it('matches runner result assembly for empty blocks and multiple complete text blocks', () => {
+    expect(appendTurnText('', 'first')).toBe('first');
+    expect(appendTurnText('first', '')).toBe('first');
+    expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
+  });
+});
 
 /**
  * Turn-end bookkeeping (#389, task auto-naming spec) against a REAL fixture
@@ -1065,6 +1088,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
 
   type Hydrate = (runId: string, input: { task: string }) => {
     task: string;
+    images?: ContentBlock[];
     stackedImages?: ContentBlock[];
   };
   const hydrate = (id: string, task: string) =>
@@ -1139,6 +1163,25 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
       type: 'image',
       source: { media_type: 'image/png', data: Buffer.from('the-bytes').toString('base64') },
     });
+  });
+
+  it('re-encodes initial task images from disk after a queued-run restart (#612)', () => {
+    const r = store.createRun({ title: 't', workflow: 'w', task: 'look at this', steps: [] });
+    const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'pasted-1.png'), 'the-task-bytes');
+    store.updateRun(r.id, { taskImages: [`/api/runs/${r.id}/images/pasted-1.png`] });
+
+    expect(hydrate(r.id, r.task).images).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: Buffer.from('the-task-bytes').toString('base64'),
+        },
+      },
+    ]);
   });
 
   /** Degrade, never fail the boot (AGENTS.md). */

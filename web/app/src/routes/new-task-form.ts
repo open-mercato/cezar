@@ -78,6 +78,17 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   ],
 }
 
+/** Keep recognized presets from another backend out of a runner's custom-model escape hatch
+ * (#480).
+ * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
+export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
+  if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
+  return Object.entries(MODELS_BY_RUNNER).some(
+    ([other, presets]) =>
+      other !== runner && presets.some((preset) => preset.id !== '' && preset.id === model),
+  )
+}
+
 export function modelsForRunner(
   runner: Runner,
   catalog?: RunnerModelCatalogResponse,
@@ -92,7 +103,7 @@ export function modelsForRunner(
     base.push({ id: model.id, label: model.label || model.id, desc: model.description })
   }
   for (const id of customIds) {
-    if (!id || seen.has(id)) continue
+    if (!id || seen.has(id) || modelConflictsWithRunner(id, runner)) continue
     seen.add(id)
     base.push({ id, label: id, desc: 'Custom or legacy model' })
   }

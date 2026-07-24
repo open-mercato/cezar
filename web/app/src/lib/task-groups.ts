@@ -74,16 +74,19 @@ export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
 /**
  * What every surface calls a run — the R1-marked plug-in point, now wired (R2 Step 2.4).
  *
- * `titleSummary ?? title`, per the server's contract (`api/types.ts`): `titleSummary` is the
- * auto-derived summary of the first agent turn, and a user's inline rename (`PATCH
- * /api/runs/:id`) writes BOTH fields, so an edit always wins over any past or future
- * auto-summary. Old records have no `titleSummary` and honestly show the raw title.
+ * `titleSummary ?? title`, per the server's contract (`api/types.ts`), except (#623) for malformed
+ * auto/legacy summaries whose sentence punctuation was persisted without following whitespace.
+ * Those fall back to the honest raw title at display time; persisted state is never rewritten.
+ * User and marker titles remain byte-for-byte authoritative.
  *
  * `??`, not `||`: the server never stores an empty summary (trimmed, 1–300 chars), so only
  * absence falls back — a falsy-but-present value would be a server bug worth seeing.
  */
 export function runTitle(run: RunRecord): string {
-  return run.titleSummary ?? run.title
+  const summary = run.titleSummary
+  if (summary === undefined) return run.title
+  const protectedTitle = run.titleOrigin === 'user' || run.titleOrigin === 'marker'
+  return !protectedTitle && /[.!?][A-Z]/.test(summary) ? run.title : summary
 }
 
 /**

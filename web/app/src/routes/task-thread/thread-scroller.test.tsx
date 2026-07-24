@@ -40,6 +40,7 @@ describe('ThreadRows — the threshold-switched renderer', () => {
     expect(rendered[0]!.className).toContain('[content-visibility:auto]')
     // Bubbles rely on flex alignment inside their row — every wrapper is a flex column.
     expect(rendered[0]!.className).toContain('flex-col')
+    expect(rendered[0]!.className).toContain('w-full')
   })
 
   it('virtual mode mounts the virtua container instead', () => {
@@ -51,6 +52,7 @@ describe('ThreadRows — the threshold-switched renderer', () => {
     // thread-scroll.e2e.ts's).
     const rendered = document.querySelectorAll('[data-slot="thread-row"]')
     expect(rendered.length).toBeLessThan(400)
+    for (const row of rendered) expect(row.className).toContain('w-full')
   })
 
   it('flat rows keep their content in render order', () => {

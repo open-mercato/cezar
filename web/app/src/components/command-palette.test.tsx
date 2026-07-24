@@ -70,7 +70,7 @@ function health(forgeAvailable: boolean): HealthResponse {
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, followups: true },
+    capabilities: { localHandoff: true, followups: true, singleProject: false },
   }
 }
 

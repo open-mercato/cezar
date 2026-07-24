@@ -1,3 +1,40 @@
+# 0.9.1 (2026-07-24)
+
+## Highlights
+A stabilization release that hardens single-project mode and sharpens the cockpit. Project edits and the registry are now correctly gated and isolated when `CEZ_SINGLE_PROJECT` is set (#625, #626), the diff and task commit list are virtualized for snappier scrolling on large runs (#599), and browser tabs finally carry project-aware titles (#543). Codex sessions read more clearly with labeled image-view tool calls and context compaction (#593, #596), while streamed deltas coalesce into whole text events (#633). A batch of run-fidelity fixes keeps task titles, issue-number provenance, and tool issue links accurate (#623, #539, #538).
+
+## ✨ Features
+- ✨ Project-aware browser page titles (fixes #543). (#592) *(@pkarw)*
+
+## 🐛 Fixes
+- ⚡ Virtualize the diff and the task commit list. (#599) *(@patzick)*
+- 🐛 Repair concatenated task titles (fixes #623). (#627) *(@pkarw)*
+- 🐛 Prevent single-project registry leak (fixes #626). (#629) *(@pkarw)*
+- 🔐 Gate project edits in single-project mode (fixes #625). (#630) *(@pkarw)*
+- 🐛 Label Codex image view tool calls (fixes #593). (#631) *(@pkarw)*
+- 🐛 Keep the composer's runner and model aligned. (#632) *(@pkarw)*
+- 🔄 Coalesce codex/opencode streamed deltas into whole v1 text events. (#633) *(@pkarw)*
+- 🐛 Link per-project resource limits (fixes #634). (#635) *(@pkarw)*
+- 🐛 Preserve task title message boundaries. (#636) *(@pkarw)*
+- 🐛 Label Codex context compaction (fixes #596). (#639) *(@pkarw)*
+- 🐛 Avoid boot slug collisions (fixes #558). (#641) *(@pkarw)*
+- 🐛 Track issue number provenance (fixes #539). (#642) *(@pkarw)*
+- 🐛 Keep tool issue links display-only (fixes #538). (#643) *(@pkarw)*
+- 🐛 Auto-refresh the team-repo cache so codex reviews use current skills. (#644) *(@pkarw)*
+
+## 📝 Specs & Documentation
+- 📝 Document `CEZ_SINGLE_PROJECT` mode. (#597) *(@pkarw)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 Pin `CEZ_HOME` in specs that boot their own server. (#619) *(@pat-lewczuk)*
+- 🚀 Cover detached launcher lifecycle (fixes #574). (#640) *(@pkarw)*
+
+## 👥 Contributors
+
+- @pkarw
+- @patzick
+- @pat-lewczuk
+
 # 0.9.0 (2026-07-21)
 
 ## Highlights

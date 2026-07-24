@@ -40,7 +40,7 @@ const HEALTH = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: true },
+  capabilities: { localHandoff: true, followups: true, singleProject: false },
   projects: [{ id: BOOT, name: 'cezar' }],
   bootProject: BOOT,
 }
@@ -93,12 +93,12 @@ function ProjectNavigationProbe() {
  *  the app shell supplies. With `seed` (the default) the health + registry answers the redirect
  *  gates need are already cached, the way a warm app has them; `seed: false` is the cold state
  *  where the boot id is still unknown. */
-function renderAt(entry: string, { seed = true }: { seed?: boolean } = {}) {
+function renderAt(entry: string, { seed = true, health = HEALTH }: { seed?: boolean; health?: typeof HEALTH } = {}) {
   const client = createQueryClient()
   if (seed) {
     // Scope is unset while seeding, so `queryKeys.health` is the unscoped `['default','health']`
     // key the legacy-redirect gate reads.
-    client.setQueryData(queryKeys.health, HEALTH)
+    client.setQueryData(queryKeys.health, health)
     client.setQueryData(workspaceQueryKeys.projects, REGISTRY)
   }
   render(
@@ -310,6 +310,7 @@ describe('the global settings area (/settings/global)', () => {
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
     ['/settings/global/resources', 'settings-global-resources', 'Resources'],
+    ['/settings/global/skills', 'settings-global-skills', 'Skills'],
     ['/settings/global/projects', 'settings-global-projects', 'Projects'],
   ]
   for (const [url, route, title] of GLOBAL_CASES) {
@@ -321,6 +322,14 @@ describe('the global settings area (/settings/global)', () => {
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
     })
   }
+
+  it('omits the Projects route when single-project mode is active', () => {
+    renderAt('/settings/global/projects', {
+      health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject: true } },
+    })
+    expect(routeName()).not.toBe('settings-global-projects')
+    expect(screen.queryByRole('heading', { level: 1, name: 'Projects' })).toBeNull()
+  })
 
   // A moved section's old URL, in both spellings a bookmark can have it.
   for (const id of ['appearance', 'notifications', 'resources']) {

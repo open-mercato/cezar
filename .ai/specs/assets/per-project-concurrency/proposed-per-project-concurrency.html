@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1200, initial-scale=1" />
+<title>Proposed UI — per-project max parallel tasks</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c232c; --border:#2b3440;
+    --text:#e6edf3; --muted:#8b949e; --accent:#3b82f6; --accent-soft:#1f2b46;
+    --amber:#d29922; --green:#3fb950;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:32px 24px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 24px;font-size:13px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:20px 22px;margin-bottom:20px}
+  .card h2{font-size:15px;margin:0 0 2px;display:flex;align-items:center;gap:8px}
+  .card .desc{color:var(--muted);font-size:12.5px;margin:0 0 16px}
+  .row{display:flex;align-items:center;justify-content:space-between;
+    padding:12px 14px;border:1px solid var(--border);border-radius:8px;
+    background:var(--panel2);margin-bottom:10px}
+  .row:last-child{margin-bottom:0}
+  .proj{display:flex;flex-direction:column;gap:2px}
+  .proj .name{font-weight:600}
+  .proj .path{color:var(--muted);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .ctrl{display:flex;align-items:center;gap:10px}
+  .ctrl label{color:var(--muted);font-size:12.5px}
+  select{background:#0d1117;color:var(--text);border:1px solid var(--border);
+    border-radius:6px;padding:6px 30px 6px 10px;font-size:13px;appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b949e'><path d='M2 4l4 4 4-4'/></svg>");
+    background-repeat:no-repeat;background-position:right 9px center;min-width:180px}
+  select.set{border-color:var(--accent);background-color:var(--accent-soft)}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+  .pill.seq{color:var(--amber);border-color:#5a4611;background:#241d0a}
+  .pill.inherit{color:var(--muted)}
+  .globalctrl{display:flex;align-items:center;gap:10px;padding:12px 14px;
+    border:1px solid var(--border);border-radius:8px;background:var(--panel2)}
+  .hint{color:var(--muted);font-size:12px;margin-top:14px;padding-left:2px;
+    border-left:2px solid var(--accent);padding:8px 0 8px 12px;background:rgba(59,130,246,.05)}
+  .badge{font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
+    color:#8b949e;border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:6px}
+  .new{color:var(--green);border-color:#1c3a24;background:#0c1f13}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Settings · Resources</h1>
+    <p class="sub">Mockup (illustrative) — proposed per-project concurrency control for FR #608.</p>
+
+    <div class="card">
+      <h2>Workspace resources</h2>
+      <p class="desc">Host-wide ceiling across <em>all</em> projects. Protects the machine, not any single project.</p>
+      <div class="globalctrl">
+        <label for="ws">Max parallel tasks (workspace)</label>
+        <select id="ws"><option>4</option></select>
+        <span class="pill">overall ceiling</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Projects <span class="badge new">new column</span></h2>
+      <p class="desc">Each project can cap its own concurrency below the workspace ceiling — for heavier memory profiles.</p>
+
+      <div class="row">
+        <div class="proj">
+          <span class="name">cezar</span>
+          <span class="path">/home/u/cezar</span>
+        </div>
+        <div class="ctrl">
+          <label>Max parallel tasks</label>
+          <select><option>Inherit workspace (4)</option></select>
+          <span class="pill inherit">inherits 4</span>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="proj">
+          <span class="name">mercato-development</span>
+          <span class="path">/home/u/mercato</span>
+        </div>
+        <div class="ctrl">
+          <label>Max parallel tasks</label>
+          <select class="set"><option>1</option></select>
+          <span class="pill seq">sequential</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="hint">The workspace cap still applies as an overall ceiling: a per-project value above it is
+      effectively clamped by the workspace limit (no error). A project set to <strong>1</strong> runs strictly one task at a time.</p>
+  </div>
+</body>
+</html>

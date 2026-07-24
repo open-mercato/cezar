@@ -158,6 +158,24 @@ describe('resolveCapabilities — followups (#471)', () => {
     expect(resolveCapabilities({ CEZ_FOLLOWUPS: '1', CEZ_REMOTE: '1' }, '0.0.0.0')).toEqual({
       localHandoff: false,
       followups: true,
+      singleProject: false,
     });
   });
+});
+
+describe('resolveCapabilities — singleProject', () => {
+  it('is off by default', () => {
+    expect(resolveCapabilities({}).singleProject).toBe(false);
+  });
+
+  it('is on with CEZ_SINGLE_PROJECT=1', () => {
+    expect(resolveCapabilities({ CEZ_SINGLE_PROJECT: '1' }).singleProject).toBe(true);
+  });
+
+  it.each(['0', 'true', 'yes', '', 'on'])(
+    'stays off for CEZ_SINGLE_PROJECT=%j — only an exact "1" opts in',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_SINGLE_PROJECT: value }).singleProject).toBe(false);
+    },
+  );
 });

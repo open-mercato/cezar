@@ -29,7 +29,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': { target: API_TARGET, changeOrigin: true },
+      // `ws: true` — /api/ws (the subscription socket) upgrades through the same proxy.
+      '/api': { target: API_TARGET, changeOrigin: true, ws: true },
     },
   },
 })

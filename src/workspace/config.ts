@@ -43,6 +43,11 @@ const workspaceProjectSchema = z
     addedAt: z.string().max(64).catch(''),
     lastOpenedAt: z.string().max(64).catch(''),
     source: z.enum(['local', 'checkout']).catch('local'),
+    /** Per-project cap on concurrently running tasks. Absent = inherit the
+     *  workspace `resources.maxParallel`. Bounded like the workspace cap; a bad
+     *  value degrades to "inherit" (`.catch(undefined)`) rather than a hard
+     *  default, and `.passthrough()` preserves the key across cezar round-trips. */
+    maxParallel: z.number().int().min(1).max(16).optional().catch(undefined),
   })
   .passthrough();
 
@@ -92,6 +97,9 @@ const workspaceConfigSchema = z
      *  `~` is expanded by the checkout flow, not here); validated writable
      *  when *changed*, never at load. */
     projectsDir: workspacePathSchema('CEZ_PROJECTS_DIR', '~/cezar/projects'),
+    /** Optional auto-update override. Absence inherits the environment/default
+     *  and must stay absent on unrelated merge-writes. */
+    skillsAutoUpdate: z.boolean().optional().catch(undefined),
     // Function-form default/catch: mutators (step 1.3's registerProject) edit
     // these objects in place, so parses must never share one reference.
     resources: resourcesSchema.default(() => ({})).catch(() => resourcesSchema.parse({})),
@@ -114,6 +122,17 @@ const workspaceConfigSchema = z
   .passthrough();
 
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+
+/** Resolve the auto-update preference without mutating or materializing it. */
+export function effectiveSkillsAutoUpdate(
+  config: Pick<WorkspaceConfig, 'skillsAutoUpdate'>,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (config.skillsAutoUpdate !== undefined) return config.skillsAutoUpdate;
+  if (env.CEZ_SKILLS_AUTO_UPDATE === '0') return false;
+  if (env.CEZ_SKILLS_AUTO_UPDATE === '1') return true;
+  return true;
+}
 
 /** The in-memory default — what a missing/corrupt file behaves like. */
 export function defaultWorkspaceConfig(): WorkspaceConfig {

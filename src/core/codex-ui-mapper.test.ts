@@ -349,7 +349,7 @@ describe('mapCodexNotification edge cases', () => {
     });
   });
 
-  it('review-mode items map to task tools; unknown item types stay visible as generic tools', () => {
+  it('review-mode and context-compaction items have human labels', () => {
     const [review] = mapCodexNotification(
       { method: 'item/started', params: { item: { type: 'enteredReviewMode', id: 'item_rv' } } },
       state,
@@ -359,13 +359,42 @@ describe('mapCodexNotification edge cases', () => {
       item: { kind: 'tool', id: 'item_rv', name: 'enteredReviewMode', toolKind: 'task', title: 'Review', status: 'running' },
     });
 
-    const [unknown] = mapCodexNotification(
+    const [compaction] = mapCodexNotification(
       { method: 'item/completed', params: { item: { type: 'contextCompaction', id: 'item_cc' } } },
       state,
     ).events;
-    expect(unknown).toMatchObject({
+    expect(compaction).toMatchObject({
       type: 'item.completed',
-      item: { kind: 'tool', id: 'item_cc', name: 'contextCompaction', toolKind: 'other', status: 'completed' },
+      item: {
+        kind: 'tool',
+        id: 'item_cc',
+        name: 'contextCompaction',
+        toolKind: 'other',
+        title: 'Compacted context',
+        status: 'completed',
+      },
+    });
+  });
+
+  it('labels imageView items with the inspected path', () => {
+    const [imageView] = mapCodexNotification(
+      {
+        method: 'item/completed',
+        params: { item: { type: 'imageView', id: 'item_image', path: '/tmp/checkout-preview.png' } },
+      },
+      state,
+    ).events;
+    expect(imageView).toEqual({
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 'item_image',
+        name: 'imageView',
+        toolKind: 'read',
+        title: 'View image /tmp/checkout-preview.png',
+        status: 'completed',
+        input: { type: 'imageView', id: 'item_image', path: '/tmp/checkout-preview.png' },
+      },
     });
   });
 

@@ -38,6 +38,7 @@ let baseUrl: string
 let bootProject: string
 let seedDir: string
 let restoreHome: () => void
+let singleProject = false
 
 let forgeAvailable = false
 let followupsAvailable = false
@@ -76,10 +77,11 @@ beforeAll(async () => {
   bootProject = await bootProjectId(baseUrl)
   const health = (await fetch(`${baseUrl}/api/health`).then((r) => r.json())) as {
     forge: { available: boolean } | null
-    capabilities: { followups: boolean }
+    capabilities: { followups: boolean; singleProject: boolean }
   }
   forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
+  singleProject = health.capabilities.singleProject
 
   // `ui-state.json` too: the collapse assertions below write into it, and a developer's scratch
   // home must not come out of this run holding `e2e-alpha: false`.
@@ -90,7 +92,7 @@ beforeAll(async () => {
   // what puts it first in the sidebar's most-recently-opened order, so the seeded siblings get
   // deliberately older ones rather than an empty string apiece.
   const existingBoot = readSharedProjects().find((project) => project.id === bootProject)
-  writeSharedProjects([
+  const bootEntry =
     existingBoot ?? {
       id: bootProject,
       root: repoRoot,
@@ -98,10 +100,22 @@ beforeAll(async () => {
       addedAt: '2026-07-20T00:00:00Z',
       lastOpenedAt: '2026-07-20T12:00:00Z',
       source: 'local',
-    },
-    { ...ALPHA, root: makeRepo('alpha'), lastOpenedAt: '2026-07-19T12:00:00Z', source: 'local' },
-    { ...BETA, root: makeRepo('beta'), lastOpenedAt: '2026-07-18T12:00:00Z', source: 'local' },
-  ])
+    }
+  const alphaEntry = {
+    ...ALPHA,
+    root: makeRepo('alpha'),
+    lastOpenedAt: '2026-07-19T12:00:00Z',
+    source: 'local' as const,
+  }
+  writeSharedProjects(
+    singleProject
+      ? [bootEntry, alphaEntry]
+      : [
+          bootEntry,
+          alphaEntry,
+          { ...BETA, root: makeRepo('beta'), lastOpenedAt: '2026-07-18T12:00:00Z', source: 'local' },
+        ],
+  )
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
@@ -169,7 +183,8 @@ function setGroupExpanded(projectId: string, expanded: boolean): void {
 }
 
 describe('the grouped multi-project sidebar', () => {
-  it('replaces the flat nav with one group per registered project', () => {
+  it('replaces the flat nav with one group per registered project', ({ skip }) => {
+    if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/'))
 
     expect(browser.isVisible('[data-slot="project-groups"]')).toBe(true)
@@ -200,7 +215,8 @@ describe('the grouped multi-project sidebar', () => {
     browser.screenshot(`${artifactsDir}/sidebar-project-groups.png`)
   })
 
-  it('scopes every group nav to its own project, and lights only the active one', () => {
+  it('scopes every group nav to its own project, and lights only the active one', ({ skip }) => {
+    if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/git'))
     setGroupExpanded(ALPHA.id, true)
     // The GitHub row waits on the health answer — settle it before sampling any group's nav,
@@ -235,7 +251,8 @@ describe('the grouped multi-project sidebar', () => {
     ).toBe(scoped(ALPHA.id, '/'))
   })
 
-  it('persists a collapse through the workspace ui-state, so a reload keeps it', async () => {
+  it('persists a collapse through the workspace ui-state, so a reload keeps it', async ({ skip }) => {
+    if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/'))
 
     // Shut the active group — the one case the default would re-open on its own, so a reload
@@ -260,5 +277,44 @@ describe('the grouped multi-project sidebar', () => {
       async () => expect((await workspaceUiState()).sidebar?.collapsed?.[bootProject]).toBe(false),
       { timeout: 10_000, interval: 200 }
     )
+  })
+})
+
+describe('the constrained single-project workspace', () => {
+  it('keeps flat navigation and removes every multi-project affordance', ({ skip }) => {
+    if (!singleProject) skip()
+
+    browser.goto(baseUrl + scoped(bootProject, '/'))
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="sidebar"] nav[aria-label="Main"]') !== null`,
+    )
+    // Health resolves after the shell's first paint; before that the safe default preserves the
+    // ordinary Add-project control. Wait for the capability-driven repaint, not merely the nav.
+    browser.waitForFunction(`document.querySelector('button[aria-label="Add project"]') === null`)
+
+    // The scratch registry still holds the two sibling rows seeded in beforeAll. The process
+    // capability, rather than destructive fixture trimming, must collapse every UI consumer.
+    expect(readSharedProjects().map((project) => project.id)).toEqual([bootProject, ALPHA.id])
+    expect(browser.count('[data-slot="project-groups"]')).toBe(0)
+    expect(browser.isVisible('[data-slot="sidebar"] nav[aria-label="Main"]')).toBe(true)
+    expect(browser.count('button[aria-label="Add project"]')).toBe(0)
+
+    browser.goto(`${baseUrl}/settings/global`)
+    browser.waitForFunction(`document.querySelector('[data-slot="settings-nav"]') !== null`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="settings-nav"] [data-section="projects"]') === null`,
+    )
+    expect(browser.count('[data-slot="settings-nav"] [data-section="projects"]')).toBe(0)
+    expect(browser.count('[data-slot="settings-index"] [data-section="projects"]')).toBe(0)
+
+    browser.goto(`${baseUrl}/settings/global/projects`)
+    browser.waitForFunction(`document.querySelector('[data-route="not-found"]') !== null`)
+    expect(browser.count('[data-route="settings-global-projects"]')).toBe(0)
+
+    browser.goto(baseUrl + scoped(bootProject, '/new'))
+    browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
+    expect(browser.count('[data-slot="project-pill"]')).toBe(0)
+
+    browser.screenshot(`${artifactsDir}/sidebar-single-project-constrained.png`)
   })
 })

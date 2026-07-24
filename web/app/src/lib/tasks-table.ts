@@ -82,6 +82,12 @@ export function taskPrUrl(run: RunRecord): string | undefined {
   return run.pullRequestUrl ?? run.referencedPullRequestUrl
 }
 
+/** Display-only issue association. Action gates must continue to use their created-resource
+ * fields directly; this accessor exists only for links painted by the cockpit. */
+export function taskIssueUrl(run: RunRecord): string | undefined {
+  return run.referencedIssueUrl
+}
+
 export interface TaskReference {
   kind: 'PR' | 'Issue'
   number: number
@@ -96,9 +102,10 @@ export function taskReference(run: RunRecord): TaskReference | undefined {
   if (pullRequestNumber && Number.isInteger(pullRequestNumber)) {
     return { kind: 'PR', number: pullRequestNumber, ...(pullRequestUrl ? { url: pullRequestUrl } : {}) }
   }
-  const issueNumber = run.issueNumber ?? (run.referencedIssueUrl ? Number(prNumber(run.referencedIssueUrl)) : undefined)
+  const issueUrl = taskIssueUrl(run)
+  const issueNumber = run.issueNumber ?? (issueUrl ? Number(prNumber(issueUrl)) : undefined)
   if (issueNumber && Number.isInteger(issueNumber)) {
-    return { kind: 'Issue', number: issueNumber, ...(run.referencedIssueUrl ? { url: run.referencedIssueUrl } : {}) }
+    return { kind: 'Issue', number: issueNumber, ...(issueUrl ? { url: issueUrl } : {}) }
   }
   return undefined
 }

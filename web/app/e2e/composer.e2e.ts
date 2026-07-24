@@ -224,7 +224,7 @@ describe('the thread composer against a live waiting session', () => {
     browser.fill('[data-slot="composer"] textarea', '')
   })
 
-  it('a closed session disables the composer with the legacy reason and a Continue way out', async () => {
+  it('a closed session keeps the composer authorable — sending it is Continue', async () => {
     // Finish the waiting session. When the mock's turns touched notes.md the run parks at
     // `review` first (the documented double-finish path) — accept that and finish again.
     await fetch(`${baseUrl}/api/runs/${runId}/finish`, { method: 'POST' })
@@ -234,14 +234,31 @@ describe('the thread composer against a live waiting session', () => {
     }
 
     browser.goto(`${baseUrl}/tasks/${runId}`)
+    // The run has a session to resume, so the composer stays live: the draft becomes the
+    // prompt the reopened session starts on, and its send button IS Continue.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="composer"] textarea')?.disabled === true`,
+      `document.querySelector('[data-slot="composer"] textarea')?.disabled === false`,
     )
     expect(
       browser.evaluate(`document.querySelector('[data-slot="composer"] textarea').placeholder`),
-    ).toBe('Session closed — Continue to reopen.')
-    expect(browser.text('[data-slot="composer-disabled-action"]')).toContain('Continue')
+    ).toBe('Continue — add a prompt, or send to just reopen the session…')
+    // Nothing typed still continues — the legacy one-click behavior.
+    expect(browser.isVisible('[aria-label="Continue"]')).toBe(true)
+    expect(
+      browser.evaluate(`document.querySelector('[aria-label="Continue"]').disabled`),
+    ).toBe(false)
+    // The engine pills moved into the live footer with it.
+    expect(browser.count('[data-slot="follow-up-engine"]')).toBe(1)
     expect(browser.count('[data-slot="paused-hint"]')).toBe(0)
     browser.screenshot(`${artifactsDir}/composer-closed.png`)
+
+    // …and typing a prompt then sending reopens the session on it.
+    browser.fill('[data-slot="composer"] textarea', 'one more thing: add a note')
+    browser.click('[aria-label="Continue"]')
+    await waitForStatus(baseUrl, runId, ['running', 'waiting'])
+    browser.waitForFunction(
+      `[...document.querySelectorAll('[data-slot="user-bubble"]')].some((b) =>
+        b.textContent.includes('one more thing: add a note'))`,
+    )
   }, 60_000)
 })

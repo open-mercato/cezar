@@ -12,6 +12,7 @@ import {
   useRefreshProviderStatus,
   useRetryProviderAuth,
   useHealth,
+  useHealthSubscription,
   useRunnerModels,
   usePatchRun,
   usePutAgentConfigFile,
@@ -19,6 +20,7 @@ import {
   useRunChanges,
   useRuns,
   useSkills,
+  useSkillsUpdate,
   workspaceQueryKeys,
 } from './queries'
 
@@ -64,6 +66,51 @@ const HEALTH = {
   repo: { root: '/home/me/cezar', branch: 'main' },
   checks: [],
   defaultRunner: 'claude',
+}
+
+/** Just enough WebSocket for useHealth's topic subscription (api/ws.ts): records the frames the
+ *  client sends, lets the test drive `open` and deliver server frames by hand. */
+class FakeHealthSocket {
+  static instances: FakeHealthSocket[] = []
+
+  readyState = 0 // CONNECTING
+  sent: string[] = []
+  private handlers = new Map<string, Set<(event: unknown) => void>>()
+
+  constructor(_url: string) {
+    FakeHealthSocket.instances.push(this)
+  }
+
+  addEventListener(name: string, handler: (event: unknown) => void): void {
+    let set = this.handlers.get(name)
+    if (!set) {
+      set = new Set()
+      this.handlers.set(name, set)
+    }
+    set.add(handler)
+  }
+
+  send(data: string): void {
+    this.sent.push(data)
+  }
+
+  close(): void {
+    this.readyState = 3
+    this.fire('close', {})
+  }
+
+  open(): void {
+    this.readyState = 1
+    this.fire('open', {})
+  }
+
+  message(frame: unknown): void {
+    this.fire('message', { data: JSON.stringify(frame) })
+  }
+
+  private fire(name: string, event: unknown): void {
+    for (const handler of this.handlers.get(name) ?? []) handler(event)
+  }
 }
 
 describe('useRunnerModels', () => {
@@ -418,6 +465,37 @@ describe('useSkills', () => {
   })
 })
 
+describe('useSkillsUpdate', () => {
+  it('polls a transient snapshot until the background server check converges', async () => {
+    fetchMock.mockResolvedValue(json({
+      status: 'idle',
+      available: false,
+      autoUpdateEnabled: false,
+      inherited: false,
+      checkedAt: null,
+      updatedAt: null,
+      scopes: [],
+      needsUpgradeNotes: false,
+    }))
+    const client = createQueryClient()
+    const key = workspaceQueryKeys.skillsUpdate('boot')
+    const { result } = renderHook(() => useSkillsUpdate('boot'), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await waitFor(() => expect(result.current.data?.status).toBe('idle'))
+
+    const query = client.getQueryCache().find({ queryKey: key })
+    const interval = query?.observers[0]?.options.refetchInterval
+    expect(typeof interval).toBe('function')
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(1_000)
+
+    client.setQueryData(key, { ...result.current.data!, status: 'current' })
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
+  })
+})
+
 describe('useHealth', () => {
   it('goes loading → data', async () => {
     fetchMock.mockResolvedValue(json(HEALTH))
@@ -446,20 +524,62 @@ describe('useHealth', () => {
     expect((result.current.error as ApiError).message).toBe('boom')
   })
 
-  // #369: a `git checkout` in a foreground, connected tab fires none of reconnect/visibility/
-  // pageshow, so the branch chip needs its own poll rather than relying solely on those.
-  it('polls, so a branch switched outside the cockpit is caught without a reconnect', async () => {
+  it('does not touch the socket on its own — it is a pure read', () => {
+    vi.stubGlobal('WebSocket', FakeHealthSocket)
+    fetchMock.mockResolvedValue(json(HEALTH))
+    renderHook(() => useHealth(), { wrapper: wrapper() })
+    // The subscription lives once at the root (useHealthSubscription), NOT per useHealth reader,
+    // so mounting a reader must open no socket and flap no subscribe/unsubscribe frame.
+    expect(FakeHealthSocket.instances).toHaveLength(0)
+  })
+
+  // #369 moved server-side: the branch-switched-in-a-terminal case is now the `health` topic on
+  // /api/ws (ws.ts) pushing a changed snapshot, not a per-tab refetchInterval. The ONE root-level
+  // useHealthSubscription folds those pushes into the same cache useHealth reads; the poll is gone.
+  it('useHealthSubscription folds pushed frames into the cache instead of polling', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('WebSocket', FakeHealthSocket)
       fetchMock.mockResolvedValue(json(HEALTH))
-      const { result } = renderHook(() => useHealth(), { wrapper: wrapper() })
+      // The root wiring (subscription) and a reader together, sharing one query client.
+      const client = createQueryClient()
+      const scopedWrapper = ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      )
+      const { result } = renderHook(
+        () => {
+          useHealthSubscription()
+          return useHealth()
+        },
+        { wrapper: scopedWrapper },
+      )
 
       await act(() => vi.advanceTimersByTimeAsync(0))
       expect(result.current.isSuccess).toBe(true)
       expect(fetchMock).toHaveBeenCalledTimes(1)
+      // Read `.data` BEFORE the push: v5 result props are tracked on access, and an observer
+      // that never had `data` read would not re-render when only `data` changes.
+      expect(result.current.data?.repo?.branch).toBe('main')
 
+      const ws = FakeHealthSocket.instances.at(-1)
+      if (!ws) throw new Error('useHealthSubscription never opened the topic socket')
+      act(() => ws.open())
+      expect(ws.sent.map((raw) => JSON.parse(raw))).toContainEqual({ type: 'subscribe', topic: 'health' })
+
+      act(() =>
+        ws.message({
+          type: 'event',
+          topic: 'health',
+          data: { ...HEALTH, repo: { ...HEALTH.repo, branch: 'feature' } },
+        }),
+      )
+      // Flush react-query's batched notify (scheduled, so fake timers hold it) before reading.
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(result.current.data?.repo?.branch).toBe('feature')
+
+      // The old refetchInterval cadence passes with no further request — pushed, not polled.
       await act(() => vi.advanceTimersByTimeAsync(5000))
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
     }

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, fixtureServeEnv } from './agent-browser'
 
 /**
  * Diff virtualization in a real browser (`components/diff/diff-scroll.ts` §"THE PERFORMANCE
@@ -128,7 +128,7 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', repo, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    { env: fixtureServeEnv(repo), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
   changedFiles = ((await (await fetch(`${baseUrl}/api/repo/changes`)).json()) as { files: unknown[] }).files.length

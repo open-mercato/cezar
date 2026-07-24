@@ -743,6 +743,32 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     expect(loaded?.issueNumber).toBe(433);
   });
 
+  it('keeps issue links from tool output display-only until the agent names them', () => {
+    const { store, run } = freshRun();
+    const issueUrl = 'https://github.com/open-mercato/cezar/issues/99';
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't1',
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran gh pr view',
+        status: 'completed',
+        input: { command: 'gh pr view 1' },
+        output: `PR body: Fixes ${issueUrl}`,
+      },
+    });
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBe(issueUrl);
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
+
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: `This run is about ${issueUrl}.`,
+    });
+    expect(store.getRun(run.id)?.issueNumber).toBe(99);
+  });
+
   it('seeds an issue link while the run is still queued', () => {
     const { store, run } = freshRun('Fix https://github.com/open-mercato/cezar/issues/554');
     const loaded = store.getRun(run.id);
@@ -765,12 +791,14 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
   });
 
   it('ambiguity clears the chip and takes back the number the janitor seeded', () => {
-    const { store, run } = freshRun();
-    store.appendEvent(run.id, {
+    const { store: firstStore, run } = freshRun();
+    firstStore.appendEvent(run.id, {
       type: 'result',
       result: 'See https://github.com/open-mercato/cezar/issues/1',
     });
-    expect(store.getRun(run.id)?.issueNumber).toBe(1);
+    expect(firstStore.getRun(run.id)?.issueNumber).toBe(1);
+    firstStore.flush();
+    const store = RunStore.open(dataDir, { keepLive: true });
     store.appendEvent(run.id, {
       type: 'result',
       result: 'Also https://github.com/open-mercato/cezar/issues/2',
@@ -778,6 +806,22 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     const loaded = store.getRun(run.id);
     expect(loaded?.referencedIssueUrl).toBeUndefined();
     expect(loaded?.issueNumber).toBeUndefined();
+  });
+
+  it('ambiguity preserves a prompt-derived issueNumber equal to the previous resolution', () => {
+    const { store, run } = freshRun('port the fix from issue 12 into issue 433');
+    store.updateRun(run.id, { issueNumber: 12 });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/cezar/issues/12',
+    });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Also https://github.com/open-mercato/cezar/issues/433',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBeUndefined();
+    expect(loaded?.issueNumber).toBe(12);
   });
 
   it('disambiguates several issue links by the number named in the task prompt', () => {

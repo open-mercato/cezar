@@ -287,6 +287,64 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
   })
 })
 
+describe('reduceThread — legacy per-delta transcripts (codex/opencode runs recorded before v1 text coalescing)', () => {
+  // Verbatim shape from a real broken recording: the codex runner used to emit one v1 `text`
+  // per streaming delta, so the file holds one line per token — and the exact-match dedup
+  // never fired, rendering one paragraph per token. The v2 item carries the whole message.
+  const full = 'QA done — see github.com/open-mercato/cezar/pull/628\n\nCEZ:DONE'
+  // Per-token persistence: the server stripped markers per event (a split marker slips
+  // through: CE / Z / :D / ONE) and dropped whitespace-only deltas entirely.
+  const tokens = ['QA', ' done', ' —', ' see', ' github', '.com', '/open', '-merc', 'ato', '/ce', 'zar', '/p', 'ull', '/', '628', 'CE', 'Z', ':D', 'ONE']
+
+  it('drops a token run that reassembles the v2 message — including the split CEZ:DONE', () => {
+    const events: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.started', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: '' } }),
+      line(3, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: full } }),
+      ...tokens.map((text, i) => line(4 + i, 'text', { text })),
+      line(40, 'turn.completed', { turnId: 'turn_1', stopReason: 'end_turn' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message'])
+    expect((turns[0]!.items[0] as UiMessageItem).id).toBe('item_1')
+    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('QA done — see github.com/open-mercato/cezar/pull/628')
+  })
+
+  it('drops one run spanning TWO v2 messages (v1 tool suppression made them adjacent)', () => {
+    const events: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'First thought.' } }),
+      line(3, 'item.completed', { item: { kind: 'message', id: 'item_2', role: 'assistant', text: 'Second thought.' } }),
+      line(4, 'text', { text: 'First' }),
+      line(5, 'text', { text: ' thought.' }),
+      line(6, 'text', { text: 'Second' }),
+      line(7, 'text', { text: ' thought.' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'message'])
+  })
+
+  it('keeps a run that reassembles NOTHING — v1-only prose never vanishes', () => {
+    const events: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Unrelated v2 prose.' } }),
+      line(3, 'text', { text: 'Two separate' }),
+      line(4, 'text', { text: 'v1-only messages.' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'message', 'message'])
+  })
+
+  it('does not touch v1-only transcripts (no v2 items — nothing to reassemble against)', () => {
+    const events: RunEvent[] = [
+      line(1, 'text', { text: 'First paragraph.' }),
+      line(2, 'text', { text: 'Second paragraph.' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'message'])
+  })
+})
+
 describe('reduceThread — live-stream mechanics', () => {
   it('item.delta appends to the right field; a later snapshot replaces the accumulation', () => {
     const events: RunEvent[] = [

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, fixtureServeEnv } from './agent-browser'
 import record from './fixtures/thread-run.record.json'
 
 /**
@@ -141,7 +141,7 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
   const commits = (await (await fetch(`${baseUrl}/api/runs/${RUN_ID}/commits`)).json()) as {
@@ -236,11 +236,19 @@ describe(`the task Commits tab on a ${COMMITS}-commit branch`, () => {
       if (m.scrollTop !== 0) { m.scrollTop = 0; m.dispatchEvent(new Event('scroll', { bubbles: true })); return false }
       return document.querySelector('[data-sha="${newestSha}"]') !== null
     })()`)
-    browser.click(`[data-slot="commit-row"][data-sha="${newestSha}"]`)
-
-    // The virtualized row is a real <Link>, not a positioned decoration.
+    // The virtualized row is a real link, not a positioned decoration. Navigate to its
+    // observed href explicitly: clicking a node while virtua re-parents its window can lose
+    // the browser event even though the product link itself is correct.
+    const href = browser.evaluate(
+      `document.querySelector('[data-slot="commit-row"][data-sha="${newestSha}"]').getAttribute('href')`,
+    ) as string
+    expect(href).toContain(`/commits/${newestSha}`)
+    browser.goto(`${baseUrl}${href}`)
     browser.waitForFunction(
-      `document.querySelector('[data-slot="task-commit"]') !== null && document.querySelector('[data-slot="diff-file"]') !== null`,
+      `document.querySelector('[data-slot="task-commit"]') !== null`,
+    )
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="diff-file"]') !== null`,
     )
   }, 60_000)
 })
