@@ -64,9 +64,11 @@ login` and `opencode auth list`: <https://opencode.ai/docs/cli/>. The installed 
 `login` help exposes both `login` and `login status`; parser fixtures pin the accepted output so
 unrecognized future output degrades to `unknown` rather than guessing.
 
-"Connected" means the CLI reports provider-owned stored authentication, including OAuth where
-the CLI supports it. cezar deliberately trusts the CLI's effective answer instead of trying to
-classify or reproduce the vendor's credential-precedence rules.
+`connected` means the CLI found provider-owned stored credentials, including OAuth where the CLI
+supports it. In Settings this is presented as **Credentials found** with a green dot; it is not a
+claim that the next model request will succeed. cezar deliberately trusts the CLI's effective
+discovery answer instead of trying to classify or reproduce the vendor's credential-precedence
+rules.
 
 ## Core model and detection
 
@@ -86,6 +88,7 @@ export type ProviderConnectionState =
 export interface ProviderStatus {
   provider: ProviderId;
   status: ProviderConnectionState;
+  enabled: boolean;
   hint?: string;
 }
 
@@ -121,18 +124,17 @@ an agent can discover that a token has been revoked after the vendor CLI reporte
 in. The status service keeps an in-memory latch per provider for that condition and reports the
 latched provider as disconnected with a safe, fixed reconnect hint.
 
-Ordinary 30-second polling preserves a latch, even when the vendor's stored-login probe remains
-connected. An explicit Check again request (`?refresh=1`) performs a fresh recovery probe; only
-a fresh connected result clears that provider's runtime latch. Connect itself preserves the
-latch—the user must complete the vendor flow and then check again—so a launched login command
-cannot prematurely claim recovery.
+Ordinary 30-second polling and **Check again** preserve a latch, even when the vendor's
+stored-login probe still finds credentials. Check again (`?refresh=1`) refreshes discovery only;
+it cannot turn a known runtime rejection green. Connect also preserves the latch, so a launched
+login command cannot prematurely claim recovery.
 
 The latch is generation-aware: every runtime rejection advances that provider's generation.
 Responses apply the current latch only after their asynchronous probes resolve, so an older
-in-flight result cannot restore green. Check again never joins a probe started before the
-request, and it clears only the generation present when its fresh probe began; a rejection
-arriving during recovery remains disconnected. Store observation is installed before startup
-recovery for the boot project and every lazy project context.
+in-flight result cannot restore green. Explicit **Try again** is an incident-safe recovery
+operation: it accepts the submitted opaque `authFailureId` and clears only that still-current
+incident. A stale or malformed incident cannot clear a newer rejection. Store observation is
+installed before startup recovery for the boot project and every lazy project context.
 
 The server emits the resulting change as an additive workspace `provider-status` SSE event. A
 duplicate v1/v2 runtime report causes no second transition. Raw runtime error text never leaves
@@ -143,6 +145,28 @@ A runtime-latched provider row includes an opaque `authFailureId`. The identifie
 that latch, is removed by successful explicit recovery, and changes if a later runtime rejection
 creates a new latch. It contains no vendor output or credential data.
 
+## Global availability and task recovery
+
+Provider enablement is a separate, global host-user preference, independent of credential
+discovery. It defaults to enabled and is persisted as the optional workspace-config
+`disabledProviders` list. A provider is usable only when:
+
+```text
+usable = enabled && status == connected
+```
+
+Disabling applies to new actions only: it removes the provider from new-task, follow-up, and
+other agent-starting choices, but never cancels, edits, or otherwise mutates existing tasks.
+Disabled cards keep their discovery state and green **Credentials found** signal, plus a visible
+**Disabled** state. The preference is global rather than project-scoped, so it persists through
+reloads and project switches.
+
+Every task that encounters an authoritative provider authentication rejection receives a safe,
+persisted `provider-auth-required` event containing only the provider, opaque incident id, and
+step context. It renders the task-local authorization recovery card (for example, “Claude Code
+needs authorization”) and its project-aware Settings link. The global runtime-authentication
+alert remains in place independently of that task-local history.
+
 ## HTTP API
 
 Provider credentials belong to the host user, not to a repository. Both routes are workspace
@@ -152,7 +176,8 @@ same-origin request guard.
 ### `GET /api/providers/status`
 
 Returns `ProviderStatusResponse`. `?refresh=1` bypasses the five-second completed-result cache
-for the Check again action. One failed provider does not fail the response; its row is
+for the Check again action, but does not clear a runtime-authentication incident. One failed
+provider does not fail the response; its row is
 `unknown`, so the route normally returns 200 even on a smaller or partially broken host.
 
 The route is deliberately separate from `/api/health`: health is CORS-open, latency-sensitive,
@@ -200,7 +225,8 @@ resulting token.
 Add provider response types, client methods, query keys, and a `useProviderStatus()` hook. The
 normal query uses a 30-second `refetchInterval`. It also refetches on window focus. Connect
 success invalidates the status query immediately; the explicit Check again control requests
-`?refresh=1` so a just-completed login is not hidden behind the short server cache.
+`?refresh=1` so a fresh discovery result is not hidden behind the short server cache. Only the
+incident-specific Try again action can clear the runtime-authentication latch.
 
 While the first status request is pending, the UI does not flash the missing-provider banner and
 does not invent a fallback provider. Task submission waits until provider status is known. A
@@ -213,7 +239,7 @@ Extend `web/app/src/routes/settings/agents-section.tsx`; do not add a separate P
 route. A Providers block with `id="providers"` appears first and gives each supported provider a
 card:
 
-- `connected`: green status and no login action;
+- `connected`: green **Credentials found** status and no login action;
 - `disconnected`: amber status, provider hint, Connect, and Check again;
 - `not-installed`: missing status and the install hint, with no Connect action;
 - `unknown`: verification warning and Check again, without asserting that credentials are
@@ -262,9 +288,9 @@ The helper feeds every interactive provider picker:
 - parallel-variant engine pills;
 - follow-up runner selection.
 
-Disconnected, not-installed, unknown, and still-loading providers are not selectable. When the
-connected set is empty, the new-task form disables submission and shows a direct link to the
-Providers block. Existing Agent config “not installed” badges continue to use health checks,
+Disabled, disconnected, not-installed, unknown, and still-loading providers are not selectable.
+When the usable set is empty, the new-task form disables submission and shows a direct link to
+the Providers block. Existing Agent config “not installed” badges continue to use health checks,
 because config-file visibility depends on installation rather than login.
 
 ## Security and privacy
