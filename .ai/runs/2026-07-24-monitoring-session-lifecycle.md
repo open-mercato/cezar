@@ -58,21 +58,21 @@ Keep `CEZ:MONITORING` sessions alive safely, bound their extra workspace capacit
 
 ### Phase 1: Configuration and scheduler accounting
 
-- [ ] 1.1 Extend workspace resource contracts
-- [ ] 1.2 Bound durable monitoring exemptions
-- [ ] 1.3 Cover scheduler and lifecycle regressions
+- [x] 1.1 Extend workspace resource contracts — 760a986
+- [x] 1.2 Bound durable monitoring exemptions — 760a986
+- [x] 1.3 Cover scheduler and lifecycle regressions — 760a986
 
 ### Phase 2: Periodic backend-neutral wake-up
 
-- [ ] 2.1 Extract synthetic follow-up delivery
-- [ ] 2.2 Implement monitoring wake timer and safety epoch
-- [ ] 2.3 Prove cross-backend and timer behavior
+- [x] 2.1 Extract synthetic follow-up delivery — 760a986
+- [x] 2.2 Implement monitoring wake timer and safety epoch — 760a986
+- [x] 2.3 Prove cross-backend and timer behavior — 760a986
 
 ### Phase 3: Settings UI and docs
 
-- [ ] 3.1 Add Resources controls
-- [ ] 3.2 Add component and browser coverage
-- [ ] 3.3 Document lifecycle and cost semantics
+- [x] 3.1 Add Resources controls — 413495d
+- [x] 3.2 Add component and browser coverage — 413495d
+- [x] 3.3 Document lifecycle and cost semantics — 413495d
 
 ### Phase 4: Verification and delivery
 
