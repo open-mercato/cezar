@@ -93,6 +93,11 @@ import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } fr
 import { createDraftPr } from './pr.js';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.js';
 import {
+  providerForExistingRun,
+  providersRequiredByWorkflow,
+  unavailableProviderMessage,
+} from './provider-action-gate.js';
+import {
   ASSET_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
@@ -747,6 +752,9 @@ export function createApp(deps: ServerDeps): Hono {
     ]);
     return applyProviderEnablement(discovered, workspace.disabledProviders);
   };
+  const providerActionError = async (
+    required: readonly ProviderId[],
+  ): Promise<string | null> => unavailableProviderMessage(required, await providerStatus());
   const openTerminal = deps.openTerminal ?? openInTerminal;
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
@@ -1770,6 +1778,8 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
+    if (blocked) return c.json({ error: blocked }, 409);
     return c.json(await planChain(repoRoot, parsed.data.task));
   });
 
@@ -1843,6 +1853,9 @@ export function createApp(deps: ServerDeps): Hono {
       workflow = workflows.find((w) => w.name === parsed.data.workflow);
       if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
     }
+    const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+    const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+    if (blocked) return c.json({ error: blocked }, 409);
     const images = parsed.data.images?.map((img): ContentBlock => ({
       type: 'image',
       source: { type: 'base64', media_type: img.mediaType, data: img.data },
@@ -2043,11 +2056,14 @@ export function createApp(deps: ServerDeps): Hono {
   api.post('/runs/:id/messages', async (c) => {
     const { store, manager } = c.get('project');
     const id = c.req.param('id');
-    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const run = store.getRun(id);
+    if (!run) return c.json({ error: 'not found' }, 404);
     const parsed = messageSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    const blocked = await providerActionError([providerForExistingRun(run)]);
+    if (blocked) return c.json({ error: blocked }, 409);
     const content: ContentBlock[] = [
       ...parsed.data.images.map((img): ContentBlock => ({
         type: 'image',
@@ -2062,14 +2078,14 @@ export function createApp(deps: ServerDeps): Hono {
     //   starting up  → buffered  · anything else → 409, exactly as before
     if (manager.sendMessage(id, content)) return c.json({ delivered: true });
 
-    const run = store.getRun(id);
-    const stack = run?.queuedMessages ?? [];
+    const currentRun = store.getRun(id);
+    const stack = currentRun?.queuedMessages ?? [];
     // Bounds apply only to a message that is actually about to be stacked. Without this
     // gate an over-long message posted to a *finished* run would answer `400 prompt too
     // long` when the truthful answer is `409 session closed`. The status read is safe
     // here because it only decides whether to reject EARLY — `enqueueMessage` still
     // re-checks against the engine's own queue before writing anything.
-    if (run?.status === 'queued') {
+    if (currentRun?.status === 'queued') {
       if (stack.length >= MAX_QUEUED_MESSAGES) {
         return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
       }
@@ -2077,7 +2093,7 @@ export function createApp(deps: ServerDeps): Hono {
       if (stackedImages + parsed.data.images.length > MAX_QUEUED_IMAGES) {
         return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
       }
-      const prospective = foldedLength(run.task, [...stack, { text: parsed.data.text }]);
+      const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
       if (prospective > MAX_FOLDED_TASK_CHARS) {
         return c.json(
           {
@@ -2172,13 +2188,16 @@ export function createApp(deps: ServerDeps): Hono {
   api.post('/runs/:id/continue', async (c) => {
     const { store, manager } = c.get('project');
     const id = c.req.param('id');
-    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const run = store.getRun(id);
+    if (!run) return c.json({ error: 'not found' }, 404);
     // Bounded resume text (#429); an empty/absent body still just re-runs on the
     // run's current backend, and a runner/model override reopens on that engine (#401).
     const parsed = continueSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
+    if (blocked) return c.json({ error: blocked }, 409);
     const result = manager.continueRun(id, {
       text: parsed.data.text,
       runner: parsed.data.runner,
@@ -2679,6 +2698,10 @@ export function createApp(deps: ServerDeps): Hono {
       const { workflows } = await loadWorkflows(repoRoot);
       workflow = workflows.find((w) => w.name === 'quick-task') ?? QUICK_TASK_WORKFLOW;
     }
+
+    const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+    const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+    if (blocked) return c.json({ error: blocked }, 409);
 
     const run = manager.startRun(workflow, {
       task,
