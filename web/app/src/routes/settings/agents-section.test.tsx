@@ -188,6 +188,28 @@ describe('the agents form', () => {
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(false)
   })
 
+  it('keeps a saved disabled runner selected and explains how to recover', async () => {
+    serve({
+      config: { defaultRunner: 'codex', defaultModels: { codex: 'gpt-5-codex' } },
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: false },
+          { provider: 'opencode', status: 'connected', enabled: true },
+        ],
+      },
+    })
+    renderAt('/settings/agents')
+
+    const codex = await screen.findByRole('radio', { name: 'codex' })
+    expect(codex.getAttribute('aria-checked')).toBe('true')
+    expect((codex as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').disabled).toBe(true)
+    expect(
+      screen.getByText('This provider is disabled. Enable it above or choose another provider.'),
+    ).toBeTruthy()
+  })
+
   it('disables only provider-specific controls while provider status is pending', async () => {
     serve({ providerStatusPending: true })
     renderAt('/settings/agents')

@@ -1,15 +1,17 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
-import { ApiError, connectProvider } from '@/api/client'
+import { ApiError, connectProvider, setProviderEnabled } from '@/api/client'
 import {
   useProviderStatus,
   useRefreshProviderStatus,
+  useRetryProviderAuth,
   workspaceQueryKeys,
 } from '@/api/queries'
-import type { ProviderId } from '@/api/types'
+import type { ProviderId, ProviderStatusResponse } from '@/api/types'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
 
@@ -20,7 +22,7 @@ const PROVIDERS = [
 ] as const
 
 const STATUS_PRESENTATION = {
-  connected: { label: 'Connected', tone: 'success' },
+  connected: { label: 'Credentials found', tone: 'success' },
   disconnected: { label: 'Not connected', tone: 'pending' },
   'not-installed': { label: 'Not installed', tone: 'neutral' },
   unknown: { label: 'Could not verify', tone: 'danger' },
@@ -36,14 +38,59 @@ interface ManualCommand {
 export function ProviderSettings() {
   const status = useProviderStatus()
   const refresh = useRefreshProviderStatus()
+  const retry = useRetryProviderAuth()
   const queryClient = useQueryClient()
   const [manual, setManual] = useState<ManualCommand | null>(null)
+  const writeChain = useRef<Promise<unknown>>(Promise.resolve())
+  const latestWrite = useRef(0)
+  const pendingWrites = useRef(0)
+  const lastConfirmed = useRef<ProviderStatusResponse | undefined>(status.data)
 
   useEffect(() => {
     if (manual && providerStatusFor(status.data, manual.provider)?.status === 'connected') {
       setManual(null)
     }
   }, [manual, status.data])
+
+  useEffect(() => {
+    if (pendingWrites.current === 0) lastConfirmed.current = status.data
+  }, [status.data])
+
+  const queueToggle = useCallback(
+    (provider: ProviderId, enabled: boolean) => {
+      const key = workspaceQueryKeys.providerStatus
+      const previous = queryClient.getQueryData<ProviderStatusResponse>(key)
+      if (!previous) return
+      const optimistic: ProviderStatusResponse = {
+        providers: previous.providers.map((row) =>
+          row.provider === provider ? { ...row, enabled } : row,
+        ),
+      }
+      pendingWrites.current += 1
+      queryClient.setQueryData(key, optimistic)
+      const seq = ++latestWrite.current
+      writeChain.current = writeChain.current.then(async () => {
+        try {
+          const confirmed = await setProviderEnabled(provider, enabled)
+          lastConfirmed.current = confirmed
+          if (seq === latestWrite.current) queryClient.setQueryData(key, confirmed)
+        } catch (error: unknown) {
+          if (seq === latestWrite.current) {
+            if (lastConfirmed.current) {
+              queryClient.setQueryData(key, lastConfirmed.current)
+            } else {
+              queryClient.removeQueries({ queryKey: key, exact: true })
+            }
+            void queryClient.invalidateQueries({ queryKey: key })
+            toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+          }
+        } finally {
+          pendingWrites.current -= 1
+        }
+      })
+    },
+    [queryClient],
+  )
 
   const connect = useMutation({
     mutationFn: connectProvider,
@@ -118,6 +165,7 @@ export function ProviderSettings() {
               : STATUS_PRESENTATION.unknown
           const isConnecting = connect.isPending && connect.variables === provider.id
           const canRefresh = state === 'disconnected' || state === 'unknown'
+          const incidentId = current?.authFailureId
 
           return (
             <Fragment key={provider.id}>
@@ -132,6 +180,7 @@ export function ProviderSettings() {
                     <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                       <StatusDot tone={presentation.tone} pulse={status.isPending} />
                       <span>{presentation.label}</span>
+                      {current?.enabled === false ? <span>Disabled</span> : null}
                     </div>
                     {state === 'not-installed' ? (
                       <p className="mt-1.5 text-xs text-soft-foreground">
@@ -147,6 +196,13 @@ export function ProviderSettings() {
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {state !== 'not-installed' ? (
+                      <Switch
+                        checked={current?.enabled ?? true}
+                        aria-label={`Use ${provider.label}`}
+                        onCheckedChange={(enabled) => queueToggle(provider.id, enabled)}
+                      />
+                    ) : null}
                     {canRefresh ? (
                       <Button
                         type="button"
@@ -171,8 +227,33 @@ export function ProviderSettings() {
                         {isConnecting ? 'Opening…' : 'Connect'}
                       </Button>
                     ) : null}
+                    {incidentId !== undefined ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={retry.isPending}
+                        onClick={() =>
+                          retry.mutate(
+                            { provider: provider.id, authFailureId: incidentId },
+                            {
+                              onSuccess: () => toast(`${provider.label} can be tried again.`),
+                              onError: (error) => toast(error.message, { tone: 'danger' }),
+                            },
+                          )
+                        }
+                      >
+                        Try again
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
+                {incidentId !== undefined ? (
+                  <p className="mt-2 text-xs text-soft-foreground">
+                    Use this after completing the provider sign-in flow. cezar cannot validate the
+                    credential without a task/model request; it will verify it on the next task.
+                  </p>
+                ) : null}
               </div>
 
               {manual?.provider === provider.id && state !== 'connected' ? (

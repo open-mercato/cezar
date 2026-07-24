@@ -119,14 +119,18 @@ function AgentsForm({
         >
           {RUNNERS.map((option) => {
             const checked = option.id === config.defaultRunner
+            const provider = providerStatusFor(providerStatus.data, option.id)
             const providerConnected =
               !providerStatus.isPending &&
               !providerStatus.isError &&
-              providerStatusFor(providerStatus.data, option.id)?.status === 'connected'
+              provider?.enabled === true &&
+              provider.status === 'connected'
             const providerReason = providerStatus.isPending
               ? 'Checking provider authentication…'
               : providerStatus.isError
                 ? 'Provider authentication could not be verified.'
+                : provider?.enabled === false
+                  ? 'This provider is disabled. Enable it above or choose another provider.'
                 : providerConnected
                   ? undefined
                   : 'Connect this provider before selecting it.'
@@ -150,6 +154,13 @@ function AgentsForm({
             )
           })}
         </div>
+        {!providerStatus.isPending &&
+        !providerStatus.isError &&
+        providerStatusFor(providerStatus.data, config.defaultRunner)?.enabled === false ? (
+          <p className="text-[13px] text-muted-foreground">
+            This provider is disabled. Enable it above or choose another provider.
+          </p>
+        ) : null}
       </Field>
 
       <Field
@@ -158,14 +169,18 @@ function AgentsForm({
       >
         <div className="flex max-w-md flex-col gap-2">
           {RUNNERS.map((runner) => {
+            const provider = providerStatusFor(providerStatus.data, runner.id)
             const providerConnected =
               !providerStatus.isPending &&
               !providerStatus.isError &&
-              providerStatusFor(providerStatus.data, runner.id)?.status === 'connected'
+              provider?.enabled === true &&
+              provider.status === 'connected'
             const providerReason = providerStatus.isPending
               ? 'Checking provider authentication…'
               : providerStatus.isError
                 ? 'Provider authentication could not be verified.'
+                : provider?.enabled === false
+                  ? 'This provider is disabled. Enable it above or choose another provider.'
                 : providerConnected
                   ? undefined
                   : 'Connect this provider before selecting it.'

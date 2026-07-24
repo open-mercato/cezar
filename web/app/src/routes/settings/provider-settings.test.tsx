@@ -18,6 +18,21 @@ const ALL_STATUSES: ProviderStatusResponse = {
 
 let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
+function json(body: unknown, code = 200) {
+  return new Response(JSON.stringify(body), {
+    status: code,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+function deferredResponse() {
+  let resolve!: (response: Response) => void
+  const promise = new Promise<Response>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 function serve({
   status = ALL_STATUSES,
   refreshStatus,
@@ -25,6 +40,9 @@ function serve({
   refreshStatusCode,
   connect = { opened: true, command: 'codex login' },
   connectCode = 200,
+  enabledResponses = [],
+  retry = status,
+  retryCode = 200,
 }: {
   status?: unknown
   refreshStatus?: unknown
@@ -32,13 +50,11 @@ function serve({
   refreshStatusCode?: number
   connect?: unknown
   connectCode?: number
+  enabledResponses?: Array<Response | Promise<Response>>
+  retry?: unknown
+  retryCode?: number
 } = {}) {
   requests = []
-  const json = (body: unknown, code = 200) =>
-    new Response(JSON.stringify(body), {
-      status: code,
-      headers: { 'content-type': 'application/json' },
-    })
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -55,6 +71,12 @@ function serve({
       }
       if (url === '/api/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
+      }
+      if (/^\/api\/providers\/(claude|codex|opencode)\/enabled$/.test(url) && method === 'PUT') {
+        return enabledResponses.shift() ?? json(status)
+      }
+      if (/^\/api\/providers\/(claude|codex|opencode)\/retry$/.test(url) && method === 'POST') {
+        return json(retry, retryCode)
       }
       return new Promise<never>(() => {})
     }),
@@ -93,7 +115,7 @@ describe('ProviderSettings', () => {
     serve()
     renderSettings()
 
-    await screen.findByText('Connected')
+    await within(card('claude')).findByText('Credentials found')
     expect(
       [...document.querySelectorAll('[data-slot="provider-card"]')].map((item) =>
         item.querySelector('h3')?.textContent,
@@ -101,25 +123,54 @@ describe('ProviderSettings', () => {
     ).toEqual(['Claude Code', 'Codex', 'OpenCode'])
   })
 
-  it('presents connected, disconnected, and not-installed states without false actions', async () => {
-    serve()
+  it('presents discovery truth, enablement, and runtime recovery without hiding diagnostics', async () => {
+    serve({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: false },
+          {
+            provider: 'opencode',
+            status: 'disconnected',
+            enabled: true,
+            authFailureId: 'open-1',
+            hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+          },
+        ],
+      },
+      refreshStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: false },
+          {
+            provider: 'opencode',
+            status: 'disconnected',
+            enabled: true,
+            authFailureId: 'open-1',
+            hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+          },
+        ],
+      },
+    })
     renderSettings()
 
-    await screen.findByText('Connected')
-    expect(within(card('claude')).getByText('Connected').previousElementSibling?.getAttribute('data-tone')).toBe(
+    await within(card('claude')).findByText('Credentials found')
+    expect(within(card('claude')).getByText('Credentials found').previousElementSibling?.getAttribute('data-tone')).toBe(
       'success',
     )
     expect(within(card('claude')).queryByRole('button', { name: 'Connect' })).toBeNull()
+    expect(screen.getByRole('switch', { name: 'Use Claude Code' })).toBeTruthy()
 
-    expect(within(card('codex')).getByText('Not connected').previousElementSibling?.getAttribute('data-tone')).toBe(
-      'pending',
-    )
-    expect(within(card('codex')).getByRole('button', { name: 'Connect' })).toBeTruthy()
-    expect(within(card('codex')).getByRole('button', { name: 'Check again' })).toBeTruthy()
+    expect(within(card('codex')).getByText('Credentials found').previousElementSibling?.getAttribute('data-tone')).toBe('success')
+    expect(within(card('codex')).getByText('Disabled')).toBeTruthy()
+    expect(screen.getByRole('switch', { name: 'Use Codex' })).toBeTruthy()
 
-    expect(within(card('opencode')).getByText('Not installed')).toBeTruthy()
-    expect(within(card('opencode')).getByText(/install OpenCode/i)).toBeTruthy()
-    expect(within(card('opencode')).queryByRole('button', { name: 'Connect' })).toBeNull()
+    expect(within(card('opencode')).getByRole('button', { name: 'Connect' })).toBeTruthy()
+    expect(within(card('opencode')).getByRole('button', { name: 'Try again' })).toBeTruthy()
+    expect(within(card('opencode')).getByText(/cezar cannot validate.*task/i)).toBeTruthy()
+    fireEvent.click(within(card('opencode')).getByRole('button', { name: 'Check again' }))
+    await within(card('opencode')).findByText('Not connected')
+    expect(within(card('opencode')).getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 
   it('describes unknown as a verification failure and never as disconnected', async () => {
@@ -200,7 +251,7 @@ describe('ProviderSettings', () => {
     expect(within(fallback).getByText('codex login --device-auth')).toBeTruthy()
     fireEvent.click(within(card('codex')).getByRole('button', { name: 'Check again' }))
 
-    await within(card('codex')).findByText('Connected')
+    await within(card('codex')).findByText('Credentials found')
     expect(screen.queryByRole('region', { name: 'Codex manual sign-in' })).toBeNull()
     expect(screen.queryByText('codex login --device-auth')).toBeNull()
   })
@@ -253,5 +304,121 @@ describe('ProviderSettings', () => {
     expect(within(codexCard).getByRole('button', { name: 'Connect' })).toBeTruthy()
     const failure = await screen.findByText('Provider refresh failed.')
     expect(failure.closest('[data-slot="toast"]')?.getAttribute('data-tone')).toBe('danger')
+  })
+
+  it('updates enablement immediately and restores the confirmed state when a write fails', async () => {
+    const failure = deferredResponse()
+    serve({ enabledResponses: [failure.promise] })
+    renderSettings()
+
+    const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
+    await within(card('claude')).findByText('Credentials found')
+    fireEvent.click(toggle)
+    expect(await within(card('claude')).findByText('Disabled')).toBeTruthy()
+    expect(requests).toContainEqual({
+      method: 'PUT',
+      url: '/api/providers/claude/enabled',
+      body: { enabled: false },
+    })
+
+    await act(() => failure.resolve(json({ error: 'Provider preference could not be saved.' }, 500)))
+    await waitFor(() => expect(within(card('claude')).queryByText('Disabled')).toBeNull())
+    expect(await screen.findByText('Provider preference could not be saved.')).toBeTruthy()
+  })
+
+  it('serializes rapid enablement toggles', async () => {
+    const first = deferredResponse()
+    const second = deferredResponse()
+    serve({ enabledResponses: [first.promise, second.promise] })
+    renderSettings()
+
+    const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
+    await within(card('claude')).findByText('Credentials found')
+    fireEvent.click(toggle)
+    await within(card('claude')).findByText('Disabled')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(1))
+
+    await act(() => first.resolve(json({
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: false },
+        { provider: 'codex', status: 'disconnected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })))
+    await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(2))
+    expect(requests.filter((request) => request.url.endsWith('/enabled')).map((request) => request.body)).toEqual([
+      { enabled: false },
+      { enabled: true },
+    ])
+    await act(() => second.resolve(json(ALL_STATUSES)))
+  })
+
+  it('does not let an earlier failed write roll back a later confirmed toggle', async () => {
+    const first = deferredResponse()
+    const second = deferredResponse()
+    serve({ enabledResponses: [first.promise, second.promise] })
+    renderSettings()
+
+    const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
+    await within(card('claude')).findByText('Credentials found')
+    fireEvent.click(toggle)
+    await within(card('claude')).findByText('Disabled')
+    fireEvent.click(toggle)
+    await act(() => first.resolve(json({ error: 'first write failed' }, 500)))
+    await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(2))
+    await act(() => second.resolve(json(ALL_STATUSES)))
+
+    await waitFor(() => expect(within(card('claude')).queryByText('Disabled')).toBeNull())
+    expect(screen.queryByText('first write failed')).toBeNull()
+  })
+
+  it('retries only the visible runtime incident and replaces the cached status', async () => {
+    const incidentStatus = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'disconnected', enabled: true },
+        { provider: 'opencode', status: 'disconnected', enabled: false, authFailureId: 'open-1' },
+      ],
+    }
+    serve({
+      status: incidentStatus,
+      retry: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: false },
+        ],
+      },
+    })
+    renderSettings()
+
+    fireEvent.click(await within(card('opencode')).findByRole('button', { name: 'Try again' }))
+    await waitFor(() =>
+      expect(requests).toContainEqual({
+        method: 'POST',
+        url: '/api/providers/opencode/retry',
+        body: { authFailureId: 'open-1' },
+      }),
+    )
+    expect(await within(card('opencode')).findByText('Credentials found')).toBeTruthy()
+    expect(within(card('opencode')).getByText('Disabled')).toBeTruthy()
+  })
+
+  it('keeps a stale retry incident visible and reports the server error', async () => {
+    const incidentStatus = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'newer-incident' },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+    serve({ status: incidentStatus, retry: { error: 'That incident is no longer current.' }, retryCode: 409 })
+    renderSettings()
+
+    fireEvent.click(await within(card('codex')).findByRole('button', { name: 'Try again' }))
+    expect(await within(card('codex')).findByText('Not connected')).toBeTruthy()
+    expect(within(card('codex')).getByRole('button', { name: 'Try again' })).toBeTruthy()
+    expect(await screen.findByText('That incident is no longer current.')).toBeTruthy()
   })
 })
