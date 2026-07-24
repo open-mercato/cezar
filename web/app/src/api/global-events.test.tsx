@@ -516,6 +516,72 @@ describe('useGlobalEvents — provider status', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
+  it('coalesces a second uncached provider event into one trailing refetch', async () => {
+    const initial = deferredResponse()
+    const replacement = deferredResponse()
+    const final = deferredResponse()
+    const staleConnected = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    const onlyClaudeIncident = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    const bothIncidents = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-b' },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    vi.mocked(fetch)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(replacement.promise)
+      .mockReturnValueOnce(final.promise)
+
+    function ProviderProbe() {
+      useProviderStatus()
+      return null
+    }
+
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEventsProvider>
+          <ProviderProbe />
+        </GlobalEventsProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+
+    FakeEventSource.last.emit('provider-status', JSON.stringify({
+      provider: 'claude', status: 'disconnected', authFailureId: 'incident-a',
+    }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    FakeEventSource.last.emit('provider-status', JSON.stringify({
+      provider: 'codex', status: 'disconnected', authFailureId: 'incident-b',
+    }))
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    await act(async () => initial.resolve(json(staleConnected)))
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await act(async () => replacement.resolve(json(onlyClaudeIncident)))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
+    await act(async () => final.resolve(json(bothIncidents)))
+
+    await waitFor(() => expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )).toEqual(bothIncidents))
+    await act(async () => {})
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
   it('applies provider status while a different project scope is active', () => {
     setApiScope('other-project')
     client.setQueryData(workspaceQueryKeys.providerStatus, CONNECTED_PROVIDERS)

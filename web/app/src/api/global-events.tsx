@@ -203,6 +203,24 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     let everOpened = false
     let disposed = false
     let providerStatusRefetching = false
+    let providerStatusDirty = false
+
+    const refetchUncachedProviderStatus = (): void => {
+      providerStatusRefetching = true
+      providerStatusDirty = false
+      const key = workspaceQueryKeys.providerStatus
+      void queryClient.cancelQueries({ queryKey: key, exact: true })
+        .then(() => queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'active' }))
+        .finally(() => {
+          if (disposed || !providerStatusDirty) {
+            providerStatusRefetching = false
+            return
+          }
+          // Coalesce every valid event received during this replacement into one trailing fetch.
+          // A further event during that fetch marks dirty again, so no status requests overlap.
+          refetchUncachedProviderStatus()
+        })
+    }
 
     const reopenLater = (): void => {
       if (disposed || reopenTimer !== undefined) return
@@ -271,16 +289,14 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           queryClient.setQueryData(key, updated)
           return
         }
-        // An additive row cannot safely seed the complete three-provider cache. If the first
-        // status fetch is still in flight, discard it and start a replacement after the server
-        // emitted this latch; otherwise an old green response could win the initial load.
-        if (providerStatusRefetching) return
-        providerStatusRefetching = true
-        void queryClient.cancelQueries({ queryKey: key, exact: true })
-          .then(() => queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'active' }))
-          .finally(() => {
-            providerStatusRefetching = false
-          })
+        // An additive row cannot safely seed the complete three-provider cache. Discard an old
+        // initial fetch and replace it after the server emitted this latch. Further valid rows
+        // while that replacement is in flight coalesce into one trailing fetch.
+        if (providerStatusRefetching) {
+          providerStatusDirty = true
+          return
+        }
+        refetchUncachedProviderStatus()
       })
 
       source.addEventListener('error', () => {
