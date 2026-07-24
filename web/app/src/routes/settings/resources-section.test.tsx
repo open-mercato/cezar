@@ -29,7 +29,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
-    resources: { maxParallel: 2, memoryLimitMb: null, worktreeRetentionDefault: 10, ...resources },
+    resources: { maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10, ...resources },
   }
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
@@ -81,6 +81,10 @@ const memoryInput = () =>
 const saveMemory = () =>
   document.querySelector<HTMLButtonElement>('[data-action="resources-save-memory"]')
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/workspace/config')
+const monitoringSelect = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-max-monitoring"]')
+const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
+const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
+const saveWake = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-monitoring-wake"]')
 
 afterEach(() => {
   act(() => resetToasts())
@@ -119,6 +123,29 @@ describe('Global settings → Resources', () => {
     const link = await screen.findByRole('link', { name: 'Configure per-project limits' })
     expect(link.getAttribute('href')).toBe('/settings/global/projects')
     expect(screen.getByText(/Need a different limit for one project/)).not.toBeNull()
+  })
+
+  it('saves the extra monitoring capacity and explains the two pools', async () => {
+    serve({ maxParallel: 4, maxMonitoringSessions: 2 })
+    renderResources()
+    await waitFor(() => expect(monitoringSelect()).not.toBeNull())
+    expect(screen.getByText(/Capacity: 4 active \+ 2 monitoring/)).not.toBeNull()
+    fireEvent.change(monitoringSelect()!, { target: { value: '3' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxMonitoringSessions: 3 } })
+  })
+
+  it('keeps wake-ups parked by default and saves an explicit interval', async () => {
+    serve({ monitoringWakeIntervalMinutes: null })
+    renderResources()
+    await waitFor(() => expect(wakeMode()).not.toBeNull())
+    expect(wakeMode()!.value).toBe('park')
+    expect(wakeInterval()).toBeNull()
+    fireEvent.change(wakeMode()!, { target: { value: 'interval' } })
+    expect(wakeInterval()!.value).toBe('5')
+    fireEvent.click(saveWake()!)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { monitoringWakeIntervalMinutes: 5 } })
   })
 
   it('saves a memory limit, and an empty field clears it back to "no limit"', async () => {

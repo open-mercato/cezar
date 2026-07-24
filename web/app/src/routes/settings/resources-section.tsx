@@ -30,6 +30,9 @@ import { SettingsField } from './settings-field'
 
 const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
+const MAX_MONITORING_MAX = 16
+const WAKE_INTERVAL_MIN = 1
+const WAKE_INTERVAL_MAX = 60
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
 const MEMORY_MIN_MB = 256
 
@@ -69,6 +72,18 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   // Memory edits locally and saves explicitly — an empty field means "no limit".
   const [memory, setMemory] = useState(
     config.resources.memoryLimitMb ? String(config.resources.memoryLimitMb) : '',
+  )
+  const configuredWake = config.resources.monitoringWakeIntervalMinutes ?? null
+  const [wakeMode, setWakeMode] = useState<'park' | 'interval'>(configuredWake === null ? 'park' : 'interval')
+  const [wakeInterval, setWakeInterval] = useState(String(configuredWake ?? 5))
+  const wakeNum = Number(wakeInterval)
+  const wakeInvalid = !Number.isInteger(wakeNum) || wakeNum < WAKE_INTERVAL_MIN || wakeNum > WAKE_INTERVAL_MAX
+  const wakeSaved = wakeMode === 'park'
+    ? configuredWake === null
+    : !wakeInvalid && configuredWake === wakeNum
+  const saveWake = () => save.mutate(
+    { resources: { monitoringWakeIntervalMinutes: wakeMode === 'park' ? null : wakeNum } },
+    { onSuccess: () => toast(wakeMode === 'park' ? 'Monitoring will stay parked' : `Monitoring will re-check every ${wakeNum} minutes`) },
   )
   const memoryNum = memory.trim() === '' ? 0 : Number(memory)
   const memoryInvalid =
@@ -122,6 +137,68 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           </Link>
           .
         </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Extra monitoring sessions"
+        hint="How many agent sessions may wait on CI, sub-agents, or monitored commands without using an active task slot. Extra sessions stay alive but pause the queue."
+      >
+        <select
+          aria-label="Extra monitoring sessions"
+          data-slot="resources-max-monitoring"
+          value={config.resources.maxMonitoringSessions ?? 2}
+          disabled={save.isPending}
+          onChange={(event) => save.mutate({ resources: { maxMonitoringSessions: Number(event.target.value) } })}
+          className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+        >
+          {Array.from({ length: MAX_MONITORING_MAX + 1 }, (_, n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <p className="text-[11px] text-soft-foreground">
+          Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
+        </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Monitoring wake-up"
+        hint="Park uses no model turns. Re-check sends the same agent a follow-up on this cadence until work completes or the 40-wakeup safety cap is reached."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Monitoring wake-up"
+            data-slot="resources-monitoring-wake-mode"
+            value={wakeMode}
+            disabled={save.isPending}
+            onChange={(event) => setWakeMode(event.target.value as 'park' | 'interval')}
+            className="rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            <option value="park">Park until resumed</option>
+            <option value="interval">Re-check on an interval</option>
+          </select>
+          {wakeMode === 'interval' ? (
+            <>
+              <input
+                type="number"
+                min={WAKE_INTERVAL_MIN}
+                max={WAKE_INTERVAL_MAX}
+                aria-label="Wake interval in minutes"
+                data-slot="resources-monitoring-wake-interval"
+                value={wakeInterval}
+                disabled={save.isPending}
+                onChange={(event) => setWakeInterval(event.target.value)}
+                className="block w-24 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+              />
+              <span className="text-xs text-soft-foreground">minutes</span>
+            </>
+          ) : null}
+          <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
+        </div>
+        {wakeMode === 'interval' && wakeInvalid ? (
+          <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
+        ) : (
+          <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
+        )}
       </SettingsField>
 
       <SettingsField
