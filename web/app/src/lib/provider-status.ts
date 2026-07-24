@@ -99,39 +99,52 @@ export function applyProviderStatusRow(
 }
 
 /**
- * Fold a complete HTTP answer into the workspace cache without allowing an older response to
- * erase an incident the SSE stream learned about while that request was in flight. A retry is
- * the sole clearing path, and it may clear only the id it submitted.
+ * Fold a complete HTTP answer into the workspace cache. A row is authoritative only when its
+ * cached value still matches the snapshot captured at request start; an SSE update in between
+ * wins. Retry is the sole clearing exception, and it may clear only the id it submitted.
  */
 export function mergeProviderStatusResponse(
+  requestStart: ProviderStatusResponse | undefined,
   cached: ProviderStatusResponse | undefined,
   response: ProviderStatusResponse,
   retryIncidentId?: string,
 ): ProviderStatusResponse {
+  const requestStartRows = completeProviderRows(requestStart)
   const cachedRows = completeProviderRows(cached)
   const responseRows = completeProviderRows(response)
-  if (cachedRows === null || responseRows === null) return response
+  if (responseRows === null || cachedRows === null) return response
+  if (requestStartRows === null) return { providers: cachedRows }
+  const requestStartByProvider = new Map(requestStartRows.map((row) => [row.provider, row]))
   const cachedByProvider = new Map(cachedRows.map((row) => [row.provider, row]))
 
   return {
     providers: responseRows.map((incoming) => {
+      const before = requestStartByProvider.get(incoming.provider)
       const current = cachedByProvider.get(incoming.provider)
-      if (
-        current?.authFailureId !== undefined
-        && current.authFailureId !== incoming.authFailureId
+      if (before === undefined || current === undefined) return current ?? incoming
+      const retryClearsCurrent = retryIncidentId !== undefined
+        && current.authFailureId === retryIncidentId
+        && incoming.authFailureId === undefined
+      const clearsDifferentIncident = retryIncidentId !== undefined
+        && current.authFailureId !== undefined
         && current.authFailureId !== retryIncidentId
-      ) {
-        const { hint: _hint, authFailureId: _authFailureId, ...discovery } = incoming
-        return {
-          ...discovery,
-          status: 'disconnected' as const,
-          ...(current.hint === undefined ? {} : { hint: current.hint }),
-          authFailureId: current.authFailureId,
-        }
+        && incoming.authFailureId === undefined
+      if (clearsDifferentIncident) return current
+      if (sameProviderStatusRow(before, current)) return incoming
+      if (retryClearsCurrent) {
+        return { ...incoming, enabled: current.enabled }
       }
-      return incoming
+      return current
     }),
   }
+}
+
+function sameProviderStatusRow(left: ProviderStatus, right: ProviderStatus): boolean {
+  return left.provider === right.provider
+    && left.status === right.status
+    && left.enabled === right.enabled
+    && left.hint === right.hint
+    && left.authFailureId === right.authFailureId
 }
 
 export function usableRunners(status: ProviderStatusResponse | undefined): Runner[] {

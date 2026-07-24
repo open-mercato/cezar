@@ -187,8 +187,12 @@ export function useProviderStatus() {
   return useQuery({
     queryKey: workspaceQueryKeys.providerStatus,
     queryFn: async ({ signal }) => {
+      const requestStart = queryClient.getQueryData<ProviderStatusResponse>(
+        workspaceQueryKeys.providerStatus,
+      )
       const response = await getProviderStatus(false, { signal })
       return mergeProviderStatusResponse(
+        requestStart,
         queryClient.getQueryData(workspaceQueryKeys.providerStatus),
         response,
       )
@@ -202,9 +206,10 @@ export function useRefreshProviderStatus() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => getProviderStatus(true),
-    onSuccess: (result) => queryClient.setQueryData<ProviderStatusResponse>(
+    onMutate: () => queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus),
+    onSuccess: (result, _variables, requestStart) => queryClient.setQueryData<ProviderStatusResponse>(
       workspaceQueryKeys.providerStatus,
-      (cached) => mergeProviderStatusResponse(cached, result),
+      (cached) => mergeProviderStatusResponse(requestStart, cached, result),
     ),
   })
 }
@@ -219,9 +224,10 @@ export function useRetryProviderAuth() {
       provider: ProviderId
       authFailureId: string
     }) => retryProviderAuth(provider, authFailureId),
-    onSuccess: (result, variables) => {
+    onMutate: () => queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus),
+    onSuccess: (result, variables, requestStart) => {
       queryClient.setQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus, (cached) =>
-        mergeProviderStatusResponse(cached, result, variables.authFailureId))
+        mergeProviderStatusResponse(requestStart, cached, result, variables.authFailureId))
     },
   })
 }

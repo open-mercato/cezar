@@ -59,7 +59,7 @@ export function ProviderSettings() {
   const retry = useRetryProviderAuth()
   const queryClient = useQueryClient()
   const [manual, setManual] = useState<ManualCommand | null>(null)
-  const writeChains = useRef(providerWriteState(Promise.resolve() as Promise<unknown>))
+  const writeChain = useRef<Promise<unknown>>(Promise.resolve())
   const latestWrites = useRef(providerWriteState(0))
   const pendingWrites = useRef(providerWriteState(0))
   const lastConfirmed = useRef<ProviderStatusResponse | undefined>(status.data)
@@ -99,7 +99,7 @@ export function ProviderSettings() {
       pendingWrites.current[provider] += 1
       queryClient.setQueryData(key, optimistic)
       const seq = ++latestWrites.current[provider]
-      writeChains.current[provider] = writeChains.current[provider].then(async () => {
+      writeChain.current = writeChain.current.then(async () => {
         try {
           const confirmed = await setProviderEnabled(provider, enabled)
           const confirmedEnabled = providerStatusFor(confirmed, provider)?.enabled

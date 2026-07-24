@@ -400,6 +400,40 @@ describe('ProviderSettings', () => {
     await within(card('codex')).findByText('Disabled')
   })
 
+  it('serializes cross-provider writes and retains both confirmed preferences', async () => {
+    const first = deferredResponse()
+    const second = deferredResponse()
+    serve({ enabledResponses: [first.promise, second.promise] })
+    renderSettings()
+
+    await screen.findByRole('switch', { name: 'Use Claude Code' })
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Claude Code' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Codex' }))
+
+    await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(1))
+    expect(requests.at(-1)).toMatchObject({ url: '/api/providers/claude/enabled', body: { enabled: false } })
+
+    await act(() => first.resolve(json({
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: false },
+        { provider: 'codex', status: 'disconnected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })))
+    await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(2))
+    expect(requests.at(-1)).toMatchObject({ url: '/api/providers/codex/enabled', body: { enabled: false } })
+
+    await act(() => second.resolve(json({
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: false },
+        { provider: 'codex', status: 'disconnected', enabled: false },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })))
+    await within(card('claude')).findByText('Disabled')
+    await within(card('codex')).findByText('Disabled')
+  })
+
   it('preserves a successful retry when a pending enablement write fails', async () => {
     const failure = deferredResponse()
     const incidentStatus = {

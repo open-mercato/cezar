@@ -129,28 +129,67 @@ describe('complete provider-status responses', () => {
     ],
   }
 
-  it('keeps a cached runtime incident over a stale complete response', () => {
-    expect(mergeProviderStatusResponse(INCIDENT, STALE_CONNECTED)).toEqual({
-      providers: [
-        {
-          provider: 'claude',
-          status: 'disconnected',
-          enabled: false,
-          hint: 'Reconnect, then try again.',
-          authFailureId: 'incident-2',
-        },
-        STALE_CONNECTED.providers[1],
-        STALE_CONNECTED.providers[2],
-      ],
-    })
+  it('keeps an incident that SSE added after the HTTP request started', () => {
+    expect(mergeProviderStatusResponse(STALE_CONNECTED, INCIDENT, STALE_CONNECTED)).toEqual(INCIDENT)
   })
 
   it('lets retry clear only the exact incident it submitted', () => {
-    expect(mergeProviderStatusResponse(INCIDENT, STALE_CONNECTED, 'incident-1').providers[0]).toMatchObject({
+    expect(mergeProviderStatusResponse(INCIDENT, INCIDENT, STALE_CONNECTED, 'incident-1').providers[0]).toMatchObject({
       authFailureId: 'incident-2',
       status: 'disconnected',
     })
-    expect(mergeProviderStatusResponse(INCIDENT, STALE_CONNECTED, 'incident-2')).toEqual(STALE_CONNECTED)
+    expect(mergeProviderStatusResponse(INCIDENT, INCIDENT, STALE_CONNECTED, 'incident-2')).toEqual(STALE_CONNECTED)
+  })
+
+  it('does not resurrect an incident after an SSE recovery changed the cache', () => {
+    const recovered = {
+      ...INCIDENT,
+      providers: [
+        { provider: 'claude' as const, status: 'connected' as const, enabled: true },
+        INCIDENT.providers[1]!,
+        INCIDENT.providers[2]!,
+      ],
+    }
+    const staleIncident = {
+      ...INCIDENT,
+      providers: [
+        { ...INCIDENT.providers[0]! },
+        INCIDENT.providers[1]!,
+        INCIDENT.providers[2]!,
+      ],
+    }
+
+    expect(mergeProviderStatusResponse(INCIDENT, recovered, staleIncident)).toEqual(recovered)
+  })
+
+  it('accepts an authoritative recovery when the cached incident has not changed', () => {
+    expect(mergeProviderStatusResponse(INCIDENT, INCIDENT, STALE_CONNECTED)).toEqual(STALE_CONNECTED)
+  })
+
+  it('accepts a newer incident from an authoritative response when no SSE changed the cache', () => {
+    const incidentB = {
+      ...INCIDENT,
+      providers: [
+        { ...INCIDENT.providers[0]!, authFailureId: 'incident-b' },
+        INCIDENT.providers[1]!,
+        INCIDENT.providers[2]!,
+      ],
+    }
+
+    expect(mergeProviderStatusResponse(INCIDENT, INCIDENT, incidentB)).toEqual(incidentB)
+  })
+
+  it('keeps an SSE incident that changed during an in-flight connected response', () => {
+    const incidentB = {
+      ...INCIDENT,
+      providers: [
+        { ...INCIDENT.providers[0]!, authFailureId: 'incident-b' },
+        INCIDENT.providers[1]!,
+        INCIDENT.providers[2]!,
+      ],
+    }
+
+    expect(mergeProviderStatusResponse(INCIDENT, incidentB, STALE_CONNECTED)).toEqual(incidentB)
   })
 })
 
