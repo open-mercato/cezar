@@ -1,7 +1,7 @@
 # Provider Availability and Task Authentication Recovery
 
 **Date:** 2026-07-24
-**Status:** Proposed
+**Status:** Approved
 
 ## Problem
 
