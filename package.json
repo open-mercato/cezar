@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/cezar",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Local cockpit for running and tracking AI agent tasks in your repo. Uses your logged-in `claude` CLI and `gh` — zero config, zero database.",
   "license": "MIT",
   "type": "module",
