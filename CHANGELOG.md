@@ -1,7 +1,7 @@
 # 0.9.1 (2026-07-24)
 
 ## Highlights
-<!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
+A stabilization release that hardens single-project mode and sharpens the cockpit. Project edits and the registry are now correctly gated and isolated when `CEZ_SINGLE_PROJECT` is set (#625, #626), the diff and task commit list are virtualized for snappier scrolling on large runs (#599), and browser tabs finally carry project-aware titles (#543). Codex sessions read more clearly with labeled image-view tool calls and context compaction (#593, #596), while streamed deltas coalesce into whole text events (#633). A batch of run-fidelity fixes keeps task titles, issue-number provenance, and tool issue links accurate (#623, #539, #538).
 
 ## ✨ Features
 - ✨ Project-aware browser page titles (fixes #543). (#592) *(@pkarw)*
