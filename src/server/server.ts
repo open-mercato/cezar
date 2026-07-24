@@ -182,6 +182,9 @@ const providerConnectSchema = z.object({
 
 const providerParamSchema = z.enum(PROVIDER_IDS);
 const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
+const providerRetrySchema = z.object({
+  authFailureId: z.string().min(1).max(128),
+}).strict();
 
 /** One row of the mirrored project-route table. */
 export interface ProjectRouteInfo {
@@ -1135,6 +1138,21 @@ export function createApp(deps: ServerDeps): Hono {
       await providerAuth.status(),
       workspace.disabledProviders,
     );
+    const row = result.providers.find(({ provider: id }) => id === provider.data);
+    if (row) workspaceEvents.emit('provider-status', row);
+    return c.json(result);
+  });
+
+  app.post('/api/providers/:provider/retry', async (c) => {
+    const provider = providerParamSchema.safeParse(c.req.param('provider'));
+    const body = providerRetrySchema.safeParse(await c.req.json().catch(() => null));
+    if (!provider.success || !body.success) {
+      return c.json({ error: 'provider and current authFailureId are required' }, 400);
+    }
+    if (!providerAuth.clearRuntimeAuthFailure(provider.data, body.data.authFailureId)) {
+      return c.json({ error: 'Authentication incident changed. Refresh and try again.' }, 409);
+    }
+    const result = await providerStatus({ refresh: true });
     const row = result.providers.find(({ provider: id }) => id === provider.data);
     if (row) workspaceEvents.emit('provider-status', row);
     return c.json(result);

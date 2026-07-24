@@ -323,6 +323,44 @@ describe('GET /api/workspace/events', () => {
     }]);
   });
 
+  it('broadcasts an enabled provider row after an incident-safe retry', async () => {
+    const ws = await openStream('/api/workspace/events');
+    await ws.readUntil('event: ping');
+    const run = store.createRun({
+      title: 'auth retry',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+
+    try {
+      delete process.env.CEZ_DRY_RUN;
+      store.appendEvent(run.id, {
+        type: 'error',
+        message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      });
+      await ws.readUntil('event: provider-status');
+      process.env.CEZ_DRY_RUN = '1';
+
+      const response = await apiRequest(app, '/api/providers/claude/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ authFailureId: 'auth-incident-1' }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await ws.readUntil('"enabled":true');
+      expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toContainEqual({
+        provider: 'claude',
+        status: 'connected',
+        enabled: true,
+      });
+    } finally {
+      process.env.CEZ_DRY_RUN = '1';
+    }
+  });
+
   it('a removed project re-added on the same slug resumes flowing on an already-open stream', async () => {
     const other = await buildOtherContext();
 

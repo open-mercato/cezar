@@ -335,7 +335,10 @@ these events get persisted as NDJSON), and asserts `toStrictEqual` against the
 - **NDJSON** — one append-only `runs/<id>.ndjson` per run, one JSON object per
   line (`seq`, `ts`, `type`, free extra keys). Never rewrite, reorder or
   re-number; readers skip bad lines. Both v1 and v2 events live here; a mixed
-  file is valid.
+  file is valid. Cezar-owned task events are additive too: for example,
+  `provider-auth-required` records only `{ provider, authFailureId, stepId? }`
+  when a runtime rejection needs user authorization; it never carries vendor
+  error text or credentials.
 - **SSE** — the server replays from NDJSON then streams live, deduped by `seq`.
   Event names: `run-event` (v1) and `ui-event` (v2 dotted types). These names are
   a protected contract (see `BACKWARD_COMPATIBILITY.md` §2).

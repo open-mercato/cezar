@@ -125,6 +125,16 @@ describe('workspace provider API', () => {
     },
   );
 
+  const retry = (server: ReturnType<typeof app>, provider: string, body: unknown) => apiRequest(
+    server,
+    `/api/providers/${provider}/retry`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+
   it('GET /api/providers/status returns all provider rows with global enablement', async () => {
     const workspaceConfig = memoryWorkspaceConfig(['codex']);
     const response = await apiRequest(app({
@@ -259,6 +269,75 @@ describe('workspace provider API', () => {
     await apiRequest(server, '/api/providers/status');
 
     expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it('POST /api/providers/:provider/retry clears only the current incident without enabling a disabled provider', async () => {
+    const providerAuth = service({}, undefined, () => 'auth-incident-1');
+    const incident = providerAuth.reportRuntimeAuthFailure('claude')?.status.authFailureId;
+    const workspaceConfig = memoryWorkspaceConfig(['claude']);
+    const workspaceEvents = new WorkspaceEventBus();
+    const seen: unknown[] = [];
+    workspaceEvents.on((event, data) => {
+      if (event === 'provider-status') seen.push(data);
+    });
+
+    const response = await retry(app({ providerAuth, workspaceConfig, workspaceEvents }), 'claude', {
+      authFailureId: incident,
+    });
+    const raw = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(raw)).toMatchObject({
+      providers: expect.arrayContaining([{
+        provider: 'claude',
+        status: 'connected',
+        enabled: false,
+      }]),
+    });
+    expect((await workspaceConfig.load()).disabledProviders).toEqual(['claude']);
+    expect(seen).toEqual([{
+      provider: 'claude',
+      status: 'connected',
+      enabled: false,
+    }]);
+    expect(raw).not.toContain('secret output');
+    expect(raw).not.toContain('secret error');
+  });
+
+  it('POST /api/providers/:provider/retry rejects a stale incident and retains the latch', async () => {
+    const providerAuth = service({}, undefined, () => 'auth-incident-1');
+    providerAuth.reportRuntimeAuthFailure('claude');
+    const server = app({ providerAuth });
+
+    const response = await retry(server, 'claude', { authFailureId: 'stale-incident' });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Authentication incident changed. Refresh and try again.',
+    });
+    await expect((await apiRequest(server, '/api/providers/status')).json()).resolves.toMatchObject({
+      providers: expect.arrayContaining([
+        expect.objectContaining({ provider: 'claude', authFailureId: 'auth-incident-1' }),
+      ]),
+    });
+  });
+
+  it.each([
+    ['/api/providers/future/retry', { authFailureId: 'auth-incident-1' }],
+    ['/api/providers/claude/retry', {}],
+    ['/api/providers/claude/retry', { authFailureId: '' }],
+    ['/api/providers/claude/retry', { authFailureId: 'auth-incident-1', extra: true }],
+  ])('POST /api/providers/:provider/retry rejects malformed input %#', async (path, body) => {
+    const response = await apiRequest(app(), path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'provider and current authFailureId are required',
+    });
   });
 
   it('changes API truth immediately after a runtime auth rejection', async () => {
@@ -399,7 +478,7 @@ describe('workspace provider API', () => {
           status: 'disconnected',
           enabled: true,
           hint: 'Authentication was rejected during a run. Reconnect, then check again.',
-          authFailureId: failure?.authFailureId,
+          authFailureId: failure?.status.authFailureId,
         },
       ]),
     });
@@ -418,10 +497,16 @@ describe('workspace provider API', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
     });
+    const retryResponse = await apiRequest(server, '/api/p/default/providers/claude/retry', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ authFailureId: 'auth-incident-1' }),
+    });
 
     expect(status.status).toBe(404);
     expect(connectResponse.status).toBe(404);
     expect(enabledResponse.status).toBe(404);
+    expect(retryResponse.status).toBe(404);
   });
 
   it('does not add provider fields or calls to /api/health', async () => {

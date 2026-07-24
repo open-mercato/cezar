@@ -24,8 +24,22 @@ export function watchProviderRuntimeAuthFailures(
       ? run.steps.find(({ id }) => id === event.stepId)
       : undefined;
     const provider: ProviderId = step?.backend ?? run.runner ?? 'claude';
-    const status = providerAuth.reportRuntimeAuthFailure(provider);
-    if (status) onInvalidated(status);
+    const report = providerAuth.reportRuntimeAuthFailure(provider);
+    if (!report) return;
+    if (report.transitioned) onInvalidated(report.status);
+
+    const duplicate = store.readEvents(runId).some((candidate) =>
+      candidate.type === 'provider-auth-required'
+      && candidate.provider === provider
+      && candidate.authFailureId === report.status.authFailureId);
+    if (!duplicate) {
+      store.appendEvent(runId, {
+        type: 'provider-auth-required',
+        provider,
+        authFailureId: report.status.authFailureId,
+        ...(event.stepId ? { stepId: event.stepId } : {}),
+      });
+    }
   };
 
   store.on('event', onEvent);

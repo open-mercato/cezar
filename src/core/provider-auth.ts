@@ -220,6 +220,18 @@ interface RuntimeAuthFailure {
   authFailureId: string;
 }
 
+/** One authoritative runtime authentication incident. The identifier is opaque
+ * and stable until the user explicitly acknowledges that exact incident. */
+export interface RuntimeAuthFailureReport {
+  status: ProviderStatus & {
+    status: 'disconnected';
+    authFailureId: string;
+  };
+  /** True only for the global latch edge, so callers can fan out one coarse
+   * status update while every affected task still records its own callout. */
+  transitioned: boolean;
+}
+
 export class ProviderAuthService {
   private readonly runCommand: RunProviderCommand;
   private readonly now: () => number;
@@ -250,20 +262,11 @@ export class ProviderAuthService {
     this.createAuthFailureId = options?.createAuthFailureId ?? randomUUID;
   }
 
-  status(options?: {
-    refresh?: boolean;
-    recoverRuntimeFailures?: boolean;
-  }): Promise<ProviderStatusResponse> {
+  status(options?: { refresh?: boolean }): Promise<ProviderStatusResponse> {
     if (process.env.CEZ_DRY_RUN === '1') {
       return Promise.resolve({
         providers: PROVIDER_IDS.map((provider) => ({ provider, status: 'connected' })),
       });
-    }
-
-    if (options?.recoverRuntimeFailures && options.refresh) {
-      const observedFailures = new Map(this.runtimeFailures);
-      return this.startFreshProbe().raw
-        .then((response) => this.recoverRuntimeFailures(response, observedFailures));
     }
 
     if (this.inFlight) {
@@ -276,7 +279,7 @@ export class ProviderAuthService {
     return this.startFreshProbe().visible;
   }
 
-  reportRuntimeAuthFailure(provider: ProviderId): ProviderStatus | null {
+  reportRuntimeAuthFailure(provider: ProviderId): RuntimeAuthFailureReport | null {
     if (process.env.CEZ_DRY_RUN === '1') return null;
     const current = this.runtimeFailures.get(provider);
     const failure: RuntimeAuthFailure = {
@@ -284,13 +287,24 @@ export class ProviderAuthService {
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
     };
     this.runtimeFailures.set(provider, failure);
-    if (current) return null;
     return {
-      provider,
-      status: 'disconnected',
-      hint: RUNTIME_AUTH_HINT,
-      authFailureId: failure.authFailureId,
+      status: {
+        provider,
+        status: 'disconnected',
+        hint: RUNTIME_AUTH_HINT,
+        authFailureId: failure.authFailureId,
+      },
+      transitioned: current === undefined,
     };
+  }
+
+  /** Clear only the incident the caller actually observed. A stale retry must
+   * never erase a rejection that arrived after the user began recovery. */
+  clearRuntimeAuthFailure(provider: ProviderId, authFailureId: string): boolean {
+    const current = this.runtimeFailures.get(provider);
+    if (!current || current.authFailureId !== authFailureId) return false;
+    this.runtimeFailures.delete(provider);
+    return true;
   }
 
   loginCommand(provider: ProviderId): string {
@@ -317,23 +331,6 @@ export class ProviderAuthService {
           : row;
       }),
     };
-  }
-
-  private recoverRuntimeFailures(
-    response: ProviderStatusResponse,
-    observedFailures: ReadonlyMap<ProviderId, RuntimeAuthFailure>,
-  ): ProviderStatusResponse {
-    for (const row of response.providers) {
-      const observedFailure = observedFailures.get(row.provider);
-      if (
-        row.status === 'connected'
-        && observedFailure !== undefined
-        && this.runtimeFailures.get(row.provider)?.generation === observedFailure.generation
-      ) {
-        this.runtimeFailures.delete(row.provider);
-      }
-    }
-    return this.withRuntimeFailures(response);
   }
 
   private startFreshProbe(): {

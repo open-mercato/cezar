@@ -89,6 +89,14 @@ describe('watchProviderRuntimeAuthFailures', () => {
       hint: expect.any(String),
       authFailureId: 'auth-incident-1',
     });
+    expect(store.readEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'provider-auth-required',
+        provider: 'codex',
+        authFailureId: 'auth-incident-1',
+        stepId: 'implement',
+      }),
+    ]));
   });
 
   it('falls back to the run backend when the event has no matching step', () => {
@@ -183,7 +191,7 @@ describe('watchProviderRuntimeAuthFailures', () => {
     expect(onInvalidated).not.toHaveBeenCalled();
   });
 
-  it('emits only once when v1 and v2 report the same provider failure', () => {
+  it('appends one safe task event when v1 and v2 report the same provider failure', () => {
     const onInvalidated = watch();
     const run = store.createRun({
       title: 'duplicate',
@@ -203,6 +211,48 @@ describe('watchProviderRuntimeAuthFailures', () => {
     });
 
     expect(onInvalidated).toHaveBeenCalledTimes(1);
+    const required = store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required');
+    expect(required).toHaveLength(1);
+    const { seq: _seq, ts: _ts, ...safe } = required[0]!;
+    expect(safe).toEqual({
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+    });
+  });
+
+  it('records the current incident on each affected task but invalidates the workspace once', () => {
+    const onInvalidated = watch();
+    const first = store.createRun({
+      title: 'first',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    const second = store.createRun({
+      title: 'second',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+
+    for (const run of [first, second]) {
+      store.appendEvent(run.id, {
+        type: 'error',
+        message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      });
+    }
+
+    expect(onInvalidated).toHaveBeenCalledTimes(1);
+    for (const run of [first, second]) {
+      expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+        .toEqual([expect.objectContaining({
+          provider: 'claude',
+          authFailureId: 'auth-incident-1',
+        })]);
+    }
   });
 
   it('unsubscribes cleanly', () => {

@@ -533,7 +533,7 @@ describe('ProviderAuthService', () => {
     expect(runCommand).toHaveBeenCalledTimes(6);
   });
 
-  it('keeps one incident id until recovery and creates a new id after recovery', async () => {
+  it('keeps one incident id until an explicit matching clear and creates a new id afterward', async () => {
     const ids = ['incident-1', 'incident-2'];
     const service = new ProviderAuthService({
       platform: 'linux',
@@ -541,38 +541,55 @@ describe('ProviderAuthService', () => {
       createAuthFailureId: () => ids.shift()!,
     });
 
-    expect(service.reportRuntimeAuthFailure('claude')).toEqual({
-      provider: 'claude',
-      status: 'disconnected',
-      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
-      authFailureId: 'incident-1',
+    const first = service.reportRuntimeAuthFailure('claude');
+    expect(first).not.toBeNull();
+    if (!first) throw new Error('runtime incident was not created');
+    expect(first).toEqual({
+      transitioned: true,
+      status: {
+        provider: 'claude',
+        status: 'disconnected',
+        hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+        authFailureId: 'incident-1',
+      },
     });
-    expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
+    expect(service.reportRuntimeAuthFailure('claude')).toEqual({
+      transitioned: false,
+      status: first.status,
+    });
     await expect(service.status()).resolves.toMatchObject({
       providers: expect.arrayContaining([
         expect.objectContaining({ provider: 'claude', authFailureId: 'incident-1' }),
       ]),
     });
 
-    await service.status({ refresh: true, recoverRuntimeFailures: true });
+    expect(service.clearRuntimeAuthFailure('claude', 'stale')).toBe(false);
+    expect(service.clearRuntimeAuthFailure('claude', first.status.authFailureId)).toBe(true);
 
     expect(service.reportRuntimeAuthFailure('claude')).toMatchObject({
-      authFailureId: 'incident-2',
+      status: { authFailureId: 'incident-2' },
     });
   });
 
-  it('clears a runtime latch only after an explicit fresh connected recovery probe', async () => {
+  it('does not clear a runtime latch when an ordinary fresh probe finds credentials', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
-    service.reportRuntimeAuthFailure('claude');
+    const report = service.reportRuntimeAuthFailure('claude');
+    expect(report).not.toBeNull();
+    if (!report) throw new Error('runtime incident was not created');
+    const incident = report.status.authFailureId;
 
-    await expect(service.status({ refresh: true }).then(({ providers }) => providers[0]))
-      .resolves.toMatchObject({ provider: 'claude', status: 'disconnected' });
-    await expect(service.status({
-      refresh: true,
-      recoverRuntimeFailures: true,
-    }).then(({ providers }) => providers[0])).resolves.toMatchObject({
-      provider: 'claude',
-      status: 'connected',
+    await expect(service.status({ refresh: true })).resolves.toMatchObject({
+      providers: expect.arrayContaining([expect.objectContaining({
+        provider: 'claude',
+        status: 'disconnected',
+        authFailureId: incident,
+      })]),
+    });
+    expect(service.clearRuntimeAuthFailure('claude', incident)).toBe(true);
+    await expect(service.status()).resolves.toMatchObject({
+      providers: expect.arrayContaining([
+        expect.objectContaining({ provider: 'claude', status: 'connected' }),
+      ]),
     });
   });
 
@@ -596,63 +613,29 @@ describe('ProviderAuthService', () => {
     });
   });
 
-  it('starts explicit recovery with a fresh probe instead of joining an older probe', async () => {
-    let releaseOlder!: () => void;
-    const olderWaiting = new Promise<void>((resolve) => { releaseOlder = resolve; });
-    let callCount = 0;
-    const runCommand = vi.fn(async (executable: string) => {
-      callCount += 1;
-      if (callCount <= 3) await olderWaiting;
-      return resultFor(executable);
+  it('rejects a stale clear after a newer incident replaces it', async () => {
+    const ids = ['incident-1', 'incident-2'];
+    const service = new ProviderAuthService({
+      runCommand: runner(),
+      createAuthFailureId: () => ids.shift()!,
     });
-    const service = new ProviderAuthService({ runCommand });
+    const firstReport = service.reportRuntimeAuthFailure('claude');
+    expect(firstReport).not.toBeNull();
+    if (!firstReport) throw new Error('runtime incident was not created');
+    const first = firstReport.status.authFailureId;
 
-    const older = service.status();
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
-    service.reportRuntimeAuthFailure('claude');
-    const recovery = service.status({ refresh: true, recoverRuntimeFailures: true });
+    expect(service.clearRuntimeAuthFailure('claude', first)).toBe(true);
+    const secondReport = service.reportRuntimeAuthFailure('claude');
+    expect(secondReport).not.toBeNull();
+    if (!secondReport) throw new Error('runtime incident was not created');
+    const second = secondReport.status.authFailureId;
 
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(6));
-    await expect(recovery.then(({ providers }) => providers[0])).resolves.toMatchObject({
-      provider: 'claude',
-      status: 'connected',
+    expect(service.clearRuntimeAuthFailure('claude', first)).toBe(false);
+    await expect(service.status()).resolves.toMatchObject({
+      providers: expect.arrayContaining([
+        expect.objectContaining({ provider: 'claude', authFailureId: second }),
+      ]),
     });
-    releaseOlder();
-    await expect(older).resolves.toBeDefined();
-  });
-
-  it('keeps a newer runtime failure that arrives during an explicit recovery probe', async () => {
-    let release!: () => void;
-    const waiting = new Promise<void>((resolve) => { release = resolve; });
-    const runCommand = vi.fn(async (executable: string) => {
-      await waiting;
-      return resultFor(executable);
-    });
-    const service = new ProviderAuthService({ runCommand });
-    service.reportRuntimeAuthFailure('claude');
-
-    const recovery = service.status({ refresh: true, recoverRuntimeFailures: true });
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
-    expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
-    release();
-
-    await expect(recovery.then(({ providers }) => providers[0])).resolves.toMatchObject({
-      provider: 'claude',
-      status: 'disconnected',
-    });
-  });
-
-  it('does not clear a runtime latch from a cached connected response', async () => {
-    const runCommand = runner();
-    const service = new ProviderAuthService({ runCommand });
-
-    await service.status();
-    service.reportRuntimeAuthFailure('claude');
-
-    await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'disconnected' } });
-    await expect(service.status({ recoverRuntimeFailures: true }).then(({ providers }) => providers[0]))
-      .resolves.toMatchObject({ provider: 'claude', status: 'disconnected' });
-    expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
   it('keeps CEZ_DRY_RUN connected and ignores runtime invalidation', async () => {
@@ -683,7 +666,7 @@ describe('ProviderAuthService', () => {
     expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
-  it('gives ordinary callers one shared visible promise for a recovery probe', async () => {
+  it('gives ordinary callers one shared visible promise for a fresh probe after a latch', async () => {
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     const runCommand = vi.fn(async (executable: string) => {
@@ -693,21 +676,15 @@ describe('ProviderAuthService', () => {
     const service = new ProviderAuthService({ runCommand });
     service.reportRuntimeAuthFailure('claude');
 
-    const recovery = service.status({ refresh: true, recoverRuntimeFailures: true });
-    const ordinary = service.status();
     const refresh = service.status({ refresh: true });
+    const ordinary = service.status();
 
     expect(refresh).toBe(ordinary);
-    expect(ordinary).not.toBe(recovery);
     await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
     release();
     await expect(ordinary.then(({ providers }) => providers[0])).resolves.toMatchObject({
       provider: 'claude',
       status: 'disconnected',
-    });
-    await expect(recovery.then(({ providers }) => providers[0])).resolves.toMatchObject({
-      provider: 'claude',
-      status: 'connected',
     });
   });
 
