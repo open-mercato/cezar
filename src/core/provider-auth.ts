@@ -149,7 +149,7 @@ function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionS
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
-    executable: () => 'claude',
+    executable: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
     statusArgs: ['auth', 'status', '--json'],
     loginArgs: ['auth', 'login'],
     installHint: 'Install Claude Code, then run `claude auth login`.',

@@ -122,11 +122,11 @@ multiple tabs do not fan out identical processes. An explicit refresh bypasses t
 cache while still joining an already-running probe. `CEZ_DRY_RUN=1` returns all three providers
 as connected mock providers and invokes no real CLI, preserving offline runner selection.
 
-Existing binary overrides remain authoritative: `CEZ_CODEX_BIN` and `CEZ_OPENCODE_BIN` select
-the executable used by both status and login commands. The executable is shell-quoted before it
-is rendered into the terminal command; every argument comes from the closed server descriptor.
-Claude continues to use `claude`, matching existing detection. No environment variable or
-configuration key is added, so `.env.example` does not change.
+Existing binary overrides remain authoritative: `CEZ_CLAUDE_BIN`, `CEZ_CODEX_BIN`, and
+`CEZ_OPENCODE_BIN` select the executable used by both status and login commands. The executable
+is shell-quoted before it is rendered into the terminal command; every argument comes from the
+closed server descriptor. No environment variable or configuration key is added, so
+`.env.example` does not change.
 
 ## Runtime invalidation
 

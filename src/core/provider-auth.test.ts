@@ -24,12 +24,14 @@ const connectedResults: Record<string, ProviderCommandResult> = {
 
 const originalEnv = {
   CEZ_DRY_RUN: process.env.CEZ_DRY_RUN,
+  CEZ_CLAUDE_BIN: process.env.CEZ_CLAUDE_BIN,
   CEZ_CODEX_BIN: process.env.CEZ_CODEX_BIN,
   CEZ_OPENCODE_BIN: process.env.CEZ_OPENCODE_BIN,
 };
 
 beforeEach(() => {
   delete process.env.CEZ_DRY_RUN;
+  delete process.env.CEZ_CLAUDE_BIN;
   delete process.env.CEZ_CODEX_BIN;
   delete process.env.CEZ_OPENCODE_BIN;
 });
@@ -699,6 +701,17 @@ describe('ProviderAuthService', () => {
     expect(runCommand).toHaveBeenCalledWith('/tools/opencode custom', ['auth', 'list'], 10_000);
     expect(service.loginCommand('codex')).toBe("'/tools/codex custom' login");
     expect(service.loginCommand('opencode')).toBe("'/tools/opencode custom' auth login");
+  });
+
+  it('uses the documented CEZ_CLAUDE_BIN override for both probe and login commands', async () => {
+    process.env.CEZ_CLAUDE_BIN = '/tools/claude custom';
+    const runCommand = runner((executable) =>
+      executable === '/tools/claude custom' ? connectedResults.claude! : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand, platform: 'linux' });
+
+    await service.status();
+    expect(runCommand).toHaveBeenCalledWith('/tools/claude custom', ['auth', 'status', '--json'], 10_000);
+    expect(service.loginCommand('claude')).toBe("'/tools/claude custom' auth login");
   });
 
   it('renders POSIX and Windows login commands safely for executable special characters', () => {

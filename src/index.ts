@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.js';
 import { ProviderAuthService } from './core/provider-auth.js';
+import { applyProviderEnablement } from './core/provider-availability.js';
 import { pruneOrphans } from './git-worktree.js';
 import { getRepoInfo } from './server/git.js';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.js';
@@ -19,8 +20,13 @@ import {
   ProviderRuntimeAuthObserver,
   recoverWithProviderRuntimeAuthObservation,
 } from './server/provider-auth-runtime.js';
+import {
+  providersRequiredByWorkflow,
+  unavailableProviderMessage,
+} from './server/provider-action-gate.js';
 import { checkForUpdate } from './update-check.js';
 import { printSkillsBanner } from './skills-banner.js';
+import { loadWorkspaceConfig } from './workspace/config.js';
 import { runMigrations } from './workspace/migrations.js';
 import { registerProject, shouldRegisterProject } from './workspace/projects.js';
 import { runProjectsCommand } from './workspace/projects-cli.js';
@@ -361,7 +367,32 @@ async function runCommand(
     return;
   }
 
+  const providerAuth = new ProviderAuthService();
+  const requiredProviders = providersRequiredByWorkflow(
+    workflow,
+    (await loadConfig(repoRoot)).defaultRunner,
+  );
+  if (requiredProviders.length > 0) {
+    const [discovered, workspace] = await Promise.all([
+      providerAuth.status(),
+      loadWorkspaceConfig(),
+    ]);
+    const blocked = unavailableProviderMessage(
+      requiredProviders,
+      applyProviderEnablement(discovered, workspace.disabledProviders),
+    );
+    if (blocked) {
+      console.error(blocked);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   const store = openStore(repoRoot);
+  // Headless tasks still appear in the cockpit later, so persist the same
+  // task-local recovery event when a credential expires after the preflight.
+  const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, () => {});
+  providerRuntimeAuth.watch(store);
   // Headless runs enforce the same workspace-level cap/memory limit (step
   // 2.5) — one refreshed semaphore, even with just one manager in play.
   const semaphore = new WorkspaceSemaphore();
