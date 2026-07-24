@@ -253,6 +253,28 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     expect(continueBody()).toEqual({ runner: 'codex' })
   })
 
+  it('excludes a connected disabled current runner and sends the enabled fallback', async () => {
+    serve(
+      HEALTH_MULTI,
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+    renderAction(makeRun({ runner: 'claude', model: 'opus' }))
+
+    const button = await screen.findByRole('button', { name: /continue/i })
+    expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
+    fireEvent.click(button)
+
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({ runner: 'codex' })
+  })
+
   it('shows project-aware setup guidance instead of controls when none are connected', async () => {
     serve(
       HEALTH_MULTI,

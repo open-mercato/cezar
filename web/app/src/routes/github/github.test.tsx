@@ -1103,6 +1103,31 @@ describe('the hand-to-agent backend pills (#401)', () => {
     await waitFor(() => expect(postedRun(sent)).toBeDefined())
     expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
   })
+
+  it('excludes a connected disabled default runner and sends the enabled fallback', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => jsonResponse(health(['claude', 'codex'])),
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'connected', enabled: false },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        } satisfies ProviderStatusResponse),
+    })
+    await openDetail()
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.click(run)
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
+  })
 })
 
 /**

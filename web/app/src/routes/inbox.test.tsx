@@ -479,6 +479,33 @@ describe('Run — backend selection (#401)', () => {
 
     await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'codex' }))
   })
+
+  it('excludes a connected disabled default runner and sends the enabled fallback', async () => {
+    const sent = stubFetch(
+      {},
+      TODOS,
+      ['claude', 'codex'],
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+    renderInbox()
+
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const card = cards()[0]!
+    const run = card.querySelector<HTMLButtonElement>('[data-action="todo-run"]')!
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(card.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    fireEvent.click(run)
+
+    await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'codex' }))
+  })
 })
 
 // ---- Acknowledge ------------------------------------------------------------------------------
