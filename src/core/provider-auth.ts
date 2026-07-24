@@ -49,7 +49,7 @@ const CACHE_TTL_MS = 5_000;
 const UNKNOWN_HINT = 'Authentication could not be verified. Try again.';
 const TIMEOUT_HINT = 'Authentication check timed out. Try again.';
 const RUNTIME_AUTH_HINT =
-  'Authentication was rejected during a run. Reconnect, then check again.';
+  'Authentication was rejected during a run. Reconnect, then try again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
 const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:failed to authenticate|authentication failed|unauthenticated|unauthorized)\b/i,

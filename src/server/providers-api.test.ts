@@ -366,7 +366,7 @@ describe('workspace provider API', () => {
     expect(seen).toEqual([{
       provider: 'claude',
       status: 'disconnected',
-      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+      hint: 'Authentication was rejected during a run. Reconnect, then try again.',
       authFailureId: 'auth-incident-1',
     }]);
     await expect((await apiRequest(server, '/api/providers/status')).json()).resolves
@@ -477,7 +477,7 @@ describe('workspace provider API', () => {
           provider: 'claude',
           status: 'disconnected',
           enabled: true,
-          hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+          hint: 'Authentication was rejected during a run. Reconnect, then try again.',
           authFailureId: failure?.status.authFailureId,
         },
       ]),

@@ -22,13 +22,13 @@ describe('provider-status SSE rows', () => {
     expect(parseProviderStatusEventRow({
       provider: 'claude',
       status: 'disconnected',
-      hint: 'Reconnect, then check again.',
+      hint: 'Reconnect, then try again.',
       authFailureId: 'incident-1',
       raw: 'private',
     })).toEqual({
       provider: 'claude',
       status: 'disconnected',
-      hint: 'Reconnect, then check again.',
+      hint: 'Reconnect, then try again.',
       authFailureId: 'incident-1',
     })
   })

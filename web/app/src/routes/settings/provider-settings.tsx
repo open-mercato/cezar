@@ -35,6 +35,18 @@ interface ManualCommand {
   command: string
 }
 
+function withProviderEnabled(
+  response: ProviderStatusResponse,
+  provider: ProviderId,
+  enabled: boolean,
+): ProviderStatusResponse {
+  return {
+    providers: response.providers.map((row) =>
+      row.provider === provider ? { ...row, enabled } : row,
+    ),
+  }
+}
+
 export function ProviderSettings() {
   const status = useProviderStatus()
   const refresh = useRefreshProviderStatus()
@@ -53,7 +65,20 @@ export function ProviderSettings() {
   }, [manual, status.data])
 
   useEffect(() => {
-    if (pendingWrites.current === 0) lastConfirmed.current = status.data
+    if (!status.data) return
+    if (pendingWrites.current === 0 || !lastConfirmed.current) {
+      lastConfirmed.current = status.data
+      return
+    }
+    // Status updates may arrive while a preference write is optimistic. Keep their current
+    // discovery/runtime fields, but retain the last server-confirmed enablement baseline for
+    // every pending preference so a later rollback only reverses that local intent.
+    lastConfirmed.current = {
+      providers: status.data.providers.map((row) => ({
+        ...row,
+        enabled: providerStatusFor(lastConfirmed.current, row.provider)?.enabled ?? row.enabled,
+      })),
+    }
   }, [status.data])
 
   const queueToggle = useCallback(
@@ -61,27 +86,39 @@ export function ProviderSettings() {
       const key = workspaceQueryKeys.providerStatus
       const previous = queryClient.getQueryData<ProviderStatusResponse>(key)
       if (!previous) return
-      const optimistic: ProviderStatusResponse = {
-        providers: previous.providers.map((row) =>
-          row.provider === provider ? { ...row, enabled } : row,
-        ),
-      }
+      if (!lastConfirmed.current) lastConfirmed.current = previous
+      const optimistic = withProviderEnabled(previous, provider, enabled)
       pendingWrites.current += 1
       queryClient.setQueryData(key, optimistic)
       const seq = ++latestWrite.current
       writeChain.current = writeChain.current.then(async () => {
         try {
           const confirmed = await setProviderEnabled(provider, enabled)
-          lastConfirmed.current = confirmed
-          if (seq === latestWrite.current) queryClient.setQueryData(key, confirmed)
+          const confirmedEnabled = providerStatusFor(confirmed, provider)?.enabled
+          if (confirmedEnabled === undefined) return
+          lastConfirmed.current = withProviderEnabled(
+            lastConfirmed.current ?? confirmed,
+            provider,
+            confirmedEnabled,
+          )
+          if (seq === latestWrite.current) {
+            const current = queryClient.getQueryData<ProviderStatusResponse>(key)
+            queryClient.setQueryData(
+              key,
+              current ? withProviderEnabled(current, provider, confirmedEnabled) : confirmed,
+            )
+          }
         } catch (error: unknown) {
           if (seq === latestWrite.current) {
-            if (lastConfirmed.current) {
+            const confirmedEnabled = providerStatusFor(lastConfirmed.current, provider)?.enabled
+            const current = queryClient.getQueryData<ProviderStatusResponse>(key)
+            if (current && confirmedEnabled !== undefined) {
+              queryClient.setQueryData(key, withProviderEnabled(current, provider, confirmedEnabled))
+            } else if (lastConfirmed.current) {
               queryClient.setQueryData(key, lastConfirmed.current)
             } else {
               queryClient.removeQueries({ queryKey: key, exact: true })
             }
-            void queryClient.invalidateQueries({ queryKey: key })
             toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
           }
         } finally {

@@ -290,13 +290,13 @@ describe('GET /api/workspace/events', () => {
       expect(body).toContain(
         'event: provider-status\n'
         + 'data: {"provider":"opencode","status":"disconnected",'
-        + '"hint":"Authentication was rejected during a run. Reconnect, then check again.",'
+        + '"hint":"Authentication was rejected during a run. Reconnect, then try again.",'
         + '"authFailureId":"auth-incident-1"}\n',
       );
       expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toEqual([{
         provider: 'opencode',
         status: 'disconnected',
-        hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+        hint: 'Authentication was rejected during a run. Reconnect, then try again.',
         authFailureId: 'auth-incident-1',
       }]);
     } finally {

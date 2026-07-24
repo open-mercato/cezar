@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ProviderStatusResponse } from '@/api/types'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { applyProviderStatusRow } from '@/lib/provider-status'
+import { workspaceQueryKeys } from '@/api/queries'
 import { ProviderSettings } from './provider-settings'
 
 const ALL_STATUSES: ProviderStatusResponse = {
@@ -96,6 +98,7 @@ function renderSettings() {
       </MemoryRouter>
     </QueryClientProvider>,
   )
+  return client
 }
 
 function card(provider: string): HTMLElement {
@@ -134,7 +137,7 @@ describe('ProviderSettings', () => {
             status: 'disconnected',
             enabled: true,
             authFailureId: 'open-1',
-            hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+            hint: 'Authentication was rejected during a run. Reconnect, then try again.',
           },
         ],
       },
@@ -147,7 +150,7 @@ describe('ProviderSettings', () => {
             status: 'disconnected',
             enabled: true,
             authFailureId: 'open-1',
-            hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+            hint: 'Authentication was rejected during a run. Reconnect, then try again.',
           },
         ],
       },
@@ -371,6 +374,77 @@ describe('ProviderSettings', () => {
 
     await waitFor(() => expect(within(card('claude')).queryByText('Disabled')).toBeNull())
     expect(screen.queryByText('first write failed')).toBeNull()
+  })
+
+  it('preserves a successful retry when a pending enablement write fails', async () => {
+    const failure = deferredResponse()
+    const incidentStatus = {
+      providers: [
+        {
+          provider: 'claude' as const,
+          status: 'disconnected' as const,
+          enabled: true,
+          authFailureId: 'incident-1',
+          hint: 'Authentication was rejected during a run. Reconnect, then try again.',
+        },
+        { provider: 'codex' as const, status: 'disconnected' as const, enabled: true },
+        { provider: 'opencode' as const, status: 'not-installed' as const, enabled: true },
+      ],
+    }
+    serve({
+      status: incidentStatus,
+      enabledResponses: [failure.promise],
+      retry: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+    renderSettings()
+
+    const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
+    fireEvent.click(toggle)
+    await within(card('claude')).findByText('Disabled')
+    fireEvent.click(within(card('claude')).getByRole('button', { name: 'Try again' }))
+    await within(card('claude')).findByText('Credentials found')
+
+    await act(() => failure.resolve(json({ error: 'Provider preference could not be saved.' }, 500)))
+    await within(card('claude')).findByText('Credentials found')
+    expect(within(card('claude')).queryByText('Disabled')).toBeNull()
+    expect(within(card('claude')).queryByRole('button', { name: 'Try again' })).toBeNull()
+  })
+
+  it('preserves a newer runtime incident from the provider-status cache when a toggle fails', async () => {
+    const failure = deferredResponse()
+    serve({ enabledResponses: [failure.promise] })
+    const client = renderSettings()
+
+    const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
+    await within(card('claude')).findByText('Credentials found')
+    fireEvent.click(toggle)
+    await within(card('claude')).findByText('Disabled')
+    act(() => {
+      client.setQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus, (current) =>
+        applyProviderStatusRow(current, {
+          provider: 'claude',
+          status: 'disconnected',
+          hint: 'Authentication was rejected during a run. Reconnect, then try again.',
+          authFailureId: 'incident-2',
+        }),
+      )
+    })
+    await within(card('claude')).findByRole('button', { name: 'Try again' })
+
+    await act(() => failure.resolve(json({ error: 'Provider preference could not be saved.' }, 500)))
+    await within(card('claude')).findByText('Not connected')
+    expect(within(card('claude')).getByText(/Reconnect, then try again/)).toBeTruthy()
+    expect(within(card('claude')).queryByText('Disabled')).toBeNull()
+    expect(client.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
+      enabled: true,
+      authFailureId: 'incident-2',
+    })
   })
 
   it('retries only the visible runtime incident and replaces the cached status', async () => {

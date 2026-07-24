@@ -549,7 +549,7 @@ describe('ProviderAuthService', () => {
       status: {
         provider: 'claude',
         status: 'disconnected',
-        hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+        hint: 'Authentication was rejected during a run. Reconnect, then try again.',
         authFailureId: 'incident-1',
       },
     });

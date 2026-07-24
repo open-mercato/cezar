@@ -379,7 +379,7 @@ describe('useGlobalEvents — provider status', () => {
       provider: 'claude',
       status: 'disconnected',
       enabled: true,
-      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+      hint: 'Authentication was rejected during a run. Reconnect, then try again.',
     }))
 
     expect(client.getQueryData<ProviderStatusResponse>(
@@ -388,7 +388,7 @@ describe('useGlobalEvents — provider status', () => {
       provider: 'claude',
       status: 'disconnected',
       enabled: true,
-      hint: 'Authentication was rejected during a run. Reconnect, then check again.',
+      hint: 'Authentication was rejected during a run. Reconnect, then try again.',
     })
     expect(fetch).not.toHaveBeenCalled()
   })
