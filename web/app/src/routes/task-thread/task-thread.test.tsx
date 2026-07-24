@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { ApiRun, RunEvent, RunStatus } from '@/api/types'
+import type { ApiRun, ProviderStatusResponse, RunEvent, RunStatus } from '@/api/types'
 
 import { buildThreadRows, TaskThreadRoute, ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
@@ -18,19 +18,22 @@ afterEach(() => {
 /** ThreadView now hosts the run header, whose hooks need a query client (mutations, the runs
  *  list) and a router (tabs, delete-navigates-home). Data assertions still drive the reduced
  *  fixture states directly — the providers are plumbing, not fixtures. */
-function renderView(ui: ReactElement) {
+function renderView(
+  ui: ReactElement,
+  providerStatus: ProviderStatusResponse = {
+    providers: [
+      { provider: 'claude', status: 'connected', enabled: true },
+      { provider: 'codex', status: 'not-installed', enabled: true },
+      { provider: 'opencode', status: 'not-installed', enabled: true },
+    ],
+  },
+) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const body =
         String(input) === '/api/providers/status'
-          ? {
-              providers: [
-                { provider: 'claude', status: 'connected', enabled: true },
-                { provider: 'codex', status: 'not-installed', enabled: true },
-                { provider: 'opencode', status: 'not-installed', enabled: true },
-              ],
-            }
+          ? providerStatus
           : []
       return Promise.resolve(
         new Response(JSON.stringify(body), {
@@ -169,6 +172,52 @@ describe('ThreadView', () => {
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
+  })
+
+  it.each([
+    ['disabled', { provider: 'claude', status: 'connected', enabled: false }, 'Claude Code is disabled. Enable it in Settings → Agents → Providers.'],
+    ['disconnected', { provider: 'claude', status: 'disconnected', enabled: true }, 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.'],
+  ] as const)('disables a queued composer when its active provider is %s', async (_case, claude, reason) => {
+    renderView(
+      <ThreadView run={run('queued', { runner: 'claude' })} thread={reduceThread([])} />,
+      {
+        providers: [
+          claude,
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+
+    const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+    await waitFor(() => expect(textarea.disabled).toBe(true))
+    expect(textarea.placeholder).toBe(reason)
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+  })
+
+  it('keeps a waiting composer enabled when a retrying current step uses a usable provider', async () => {
+    renderView(
+      <ThreadView
+        run={run('waiting', {
+          runner: 'claude',
+          currentStepId: 'retry',
+          steps: [{ id: 'retry', name: 'Retry', kind: 'agent', status: 'waiting', iterations: 2, tokensUsed: 0, backend: 'codex' }],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+      {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+
+    const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+    await waitFor(() => expect(textarea.disabled).toBe(false))
   })
 
   it('monitoring → no paused hint, "message" placeholder, and a "monitoring" pill (#490)', () => {

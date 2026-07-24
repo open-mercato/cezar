@@ -434,7 +434,16 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   }
 
   it('labels the CLI matching the run\'s own runner "(resume)"; a foreign CLI stays plain', async () => {
-    stubFetch({ '/api/open-targets': () => jsonResponse(openTargets(['cli:claude', 'cli:codex'])) })
+    stubFetch({
+      '/api/open-targets': () => jsonResponse(openTargets(['cli:claude', 'cli:codex'])),
+      '/api/providers/status': () => jsonResponse({
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      }),
+    })
     renderHeader(run('done', { runner: 'claude', worktreePath: '/tmp/wt' }))
     const menu = await openMenu()
     // The CLI targets load async (useOpenTargets) — findByRole waits them in, unlike the
@@ -451,7 +460,16 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   })
 
   it('picking a CLI target POSTs /open-in with that target id, resuming or not', async () => {
-    const sent = stubFetch({ '/api/open-targets': () => jsonResponse(openTargets(['cli:codex'])) })
+    const sent = stubFetch({
+      '/api/open-targets': () => jsonResponse(openTargets(['cli:codex'])),
+      '/api/providers/status': () => jsonResponse({
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      }),
+    })
     renderHeader(run('done', { runner: 'claude', worktreePath: '/tmp/wt' }))
     const menu = await openMenu()
     // Cross-runner (this run is Claude): Codex opens fresh, not "(resume)".
@@ -459,6 +477,33 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/runs/r1/open-in')?.body).toEqual({ target: 'cli:codex' })
     })
+  })
+
+  it.each([
+    ['disabled', { provider: 'codex', status: 'connected', enabled: false }],
+    ['disconnected', { provider: 'codex', status: 'disconnected', enabled: true }],
+  ] as const)('keeps non-agent targets while hiding %s Codex handoff targets', async (_case, codex) => {
+    stubFetch({
+      '/api/open-targets': () => jsonResponse({
+        targets: [
+          { id: 'cli:codex', label: 'Codex CLI' },
+          { id: 'idea', label: 'IntelliJ IDEA', icon: 'idea' },
+        ],
+      }),
+      '/api/providers/status': () => jsonResponse({
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          codex,
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      }),
+    })
+    renderHeader(run('done', { runner: 'codex', worktreePath: '/tmp/wt' }))
+    const menu = await openMenu()
+
+    expect(await within(menu).findByRole('menuitem', { name: 'IntelliJ IDEA' })).not.toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: /Terminal \(resume session\)/ })).toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: /Codex CLI/ })).toBeNull()
   })
 })
 

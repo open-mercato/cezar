@@ -2246,6 +2246,8 @@ export function createApp(deps: ServerDeps): Hono {
     }
     const sessionId = [...run.steps].reverse().find((s) => s.sessionId)?.sessionId;
     if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
+    const blocked = await providerActionError([providerForExistingRun(run)]);
+    if (blocked) return c.json({ error: blocked }, 409);
     const cwd = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
     const command = resumeCommand(run.runner, sessionId);
     // Fails closed on an id we do not recognise — see resumeCommand (#431).
@@ -2350,6 +2352,8 @@ export function createApp(deps: ServerDeps): Hono {
     // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
     const cliRunner = agentCliRunner(target);
     if (cliRunner) {
+      const blocked = await providerActionError([cliRunner]);
+      if (blocked) return c.json({ error: blocked }, 409);
       const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
       const sessionId = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId)?.sessionId;
       // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,

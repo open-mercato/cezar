@@ -1,9 +1,12 @@
 import { useState } from 'react'
 
 import { useSendMessage } from '@/api/queries'
+import type { ApiRun } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
+import { useActiveProviderAvailability } from './active-provider'
 import type { ThreadAsk } from './thread-state'
 import type { UiAskQuestion } from '@/protocol/ui-events'
 
@@ -23,8 +26,10 @@ function formatAnswer(question: UiAskQuestion, labels: string[]): string {
  * `POST /api/runs/:id/messages`), and the composer below stays enabled for a
  * free-form "Other". Once resolved, the card collapses to a compact summary.
  */
-export function AskCard({ ask, runId }: { ask: ThreadAsk; runId: string }) {
-  const sendMessage = useSendMessage(runId)
+export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
+  const sendMessage = useSendMessage(run.id)
+  const provider = useActiveProviderAvailability(run)
+  const providerBlocked = !provider.usable
   const questions = ask.questions
   // One-tap only when there is a single single-select question; every other
   // shape needs a combined Send so no question's answer is dropped.
@@ -70,9 +75,10 @@ export function AskCard({ ask, runId }: { ask: ThreadAsk; runId: string }) {
           <AskQuestionBlock
             key={question.id ?? index}
             question={question}
-            disabled={sendMessage.isPending}
+            disabled={sendMessage.isPending || providerBlocked}
             selected={selections[index] ?? []}
             onSelect={(labels) => {
+              if (providerBlocked) return
               if (oneTap) void sendMessage.mutateAsync({ text: formatAnswer(question, labels) })
               else setQuestion(index, labels)
             }}
@@ -81,7 +87,7 @@ export function AskCard({ ask, runId }: { ask: ThreadAsk; runId: string }) {
       </div>
       {oneTap ? null : (
         <div className="mt-3 flex items-center gap-2.5">
-          <Button size="sm" disabled={sendMessage.isPending || !allAnswered} onClick={sendAll}>
+          <Button size="sm" disabled={sendMessage.isPending || providerBlocked || !allAnswered} onClick={sendAll}>
             Send answer
           </Button>
           <span className="text-[11.5px] text-soft-foreground">
@@ -89,6 +95,14 @@ export function AskCard({ ask, runId }: { ask: ThreadAsk; runId: string }) {
           </span>
         </div>
       )}
+      {providerBlocked ? (
+        <div data-slot="ask-provider-gate" className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <span>{provider.reason}</span>
+          <Link to="/settings/agents#providers" className="font-medium text-foreground underline underline-offset-4">
+            Configure providers
+          </Link>
+        </div>
+      ) : null}
     </div>
   )
 }

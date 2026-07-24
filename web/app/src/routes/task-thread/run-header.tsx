@@ -37,7 +37,7 @@ import { Fragment, useState, type ReactNode } from 'react'
 import { useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
-import { queryKeys, useHealth, useOpenTargets, usePatchRun, useRunHandoff, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -67,10 +67,11 @@ import { deriveAttention } from '@/lib/attention'
 import { compactTokens } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { formatCost, workflowLabel } from '@/lib/tasks-table'
+import { usableRunners } from '@/lib/provider-status'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
-import { cliTargetResumes, finishTitle, resumeHint, runActionFlags } from './run-actions'
+import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { StepRail } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 
@@ -271,12 +272,25 @@ function OpenInMenu({
   onResume: () => void
 }) {
   const targets = useOpenTargets()
+  const providers = useProviderStatus()
   const open = useMutation({
     mutationFn: (target: string) => openRunIn(run.id, target),
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
-  const worktreeTargets = run.worktreePath ? (targets.data?.targets ?? []) : []
-  if (!canResume && worktreeTargets.length === 0) return null
+  const availableRunners = usableRunners(providers.data)
+  // The action routes remain authoritative for a stale browser. Once the complete status has
+  // arrived, hide only unavailable *agent* handoffs; editors, Finder, and file tools stay
+  // available because they do not launch a provider.
+  const agentAvailable = (runner: ApiRun['runner']) =>
+    !providers.isSuccess || availableRunners.includes(runner ?? 'claude')
+  const canResumeHere = canResume && agentAvailable(run.runner)
+  const worktreeTargets = run.worktreePath
+    ? (targets.data?.targets ?? []).filter((target) => {
+        const runner = cliTargetRunner(target.id)
+        return runner === undefined || agentAvailable(runner)
+      })
+    : []
+  if (!canResumeHere && worktreeTargets.length === 0) return null
 
   const copyPath = () => {
     const path = run.worktreePath
@@ -296,13 +310,13 @@ function OpenInMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {canResume ? (
+        {canResumeHere ? (
           <DropdownMenuItem data-target="terminal-resume" onSelect={onResume}>
             <SquareTerminalIcon aria-hidden="true" />
             Terminal (resume session)
           </DropdownMenuItem>
         ) : null}
-        {canResume && worktreeTargets.length > 0 ? <DropdownMenuSeparator /> : null}
+        {canResumeHere && worktreeTargets.length > 0 ? <DropdownMenuSeparator /> : null}
         {worktreeTargets.map((target) => {
           // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
           // session when one exists — label that explicitly so it reads as different from just
