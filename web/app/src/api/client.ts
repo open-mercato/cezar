@@ -420,6 +420,28 @@ export function connectProvider(provider: ProviderId): Promise<ProviderConnectRe
   return mutate<ProviderConnectResponse>('POST', '/api/providers/connect', { provider })
 }
 
+export function setProviderEnabled(
+  provider: ProviderId,
+  enabled: boolean,
+): Promise<ProviderStatusResponse> {
+  return mutate<unknown>(
+    'PUT',
+    `/api/providers/${encodeURIComponent(provider)}/enabled`,
+    { enabled },
+  ).then(parseProviderStatusResponse)
+}
+
+export function retryProviderAuth(
+  provider: ProviderId,
+  authFailureId: string,
+): Promise<ProviderStatusResponse> {
+  return mutate<unknown>(
+    'POST',
+    `/api/providers/${encodeURIComponent(provider)}/retry`,
+    { authFailureId },
+  ).then(parseProviderStatusResponse)
+}
+
 /**
  * Register an existing folder (`POST /api/projects`, step 4.2).
  *

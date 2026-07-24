@@ -81,9 +81,9 @@ describe('useResolvedEngine provider status', () => {
     stubResolverFetch({
       providers: {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -123,9 +123,9 @@ describe('useResolvedEngine provider status', () => {
     stubResolverFetch({
       providers: {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'unknown' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'unknown', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -135,6 +135,24 @@ describe('useResolvedEngine provider status', () => {
 
     expect(result.current.canRun).toBe(false)
     expect(result.current.runners).toEqual([])
+  })
+
+  it('excludes a connected but disabled provider while retaining an enabled fallback', async () => {
+    stubResolverFetch({
+      providers: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+
+    const { result } = renderResolved()
+    await waitFor(() => expect(result.current.canRun).toBe(true))
+
+    expect(result.current.runners).toEqual(['codex'])
+    expect(result.current.runner).toBe('codex')
   })
 })
 

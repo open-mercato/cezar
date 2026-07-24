@@ -10,9 +10,9 @@ import { ProviderSettings } from './provider-settings'
 
 const ALL_STATUSES: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'disconnected' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -126,9 +126,9 @@ describe('ProviderSettings', () => {
     serve({
       status: {
         providers: [
-          { provider: 'claude', status: 'connected' },
-          { provider: 'codex', status: 'unknown' },
-          { provider: 'opencode', status: 'connected' },
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'unknown', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: true },
         ],
       },
     })
@@ -187,9 +187,9 @@ describe('ProviderSettings', () => {
       connect: { error: 'Run this command manually.', command: 'codex login --device-auth' },
       refreshStatus: {
         providers: [
-          { provider: 'claude', status: 'connected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })

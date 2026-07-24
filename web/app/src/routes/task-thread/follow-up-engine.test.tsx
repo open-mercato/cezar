@@ -67,6 +67,7 @@ const providersForHealth = (health: HealthResponse): ProviderStatusResponse => (
     status: health.checks.some((check) => check.name === provider && check.available)
       ? 'connected' as const
       : 'not-installed' as const,
+    enabled: true,
   })),
 })
 
@@ -217,9 +218,9 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
       {},
       {
         providers: [
-          { provider: 'claude', status: 'connected' },
-          { provider: 'codex', status: 'disconnected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -236,9 +237,9 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
       {},
       {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -258,9 +259,9 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
       {},
       {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'unknown' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'unknown', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -287,9 +288,9 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
   it('never offers disconnected providers in the runner picker', async () => {
     const providers: ProviderStatusResponse = {
       providers: [
-        { provider: 'claude', status: 'connected' },
-        { provider: 'codex', status: 'disconnected' },
-        { provider: 'opencode', status: 'connected' },
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'disconnected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
       ],
     }
     serve(HEALTH_MULTI, {}, providers)

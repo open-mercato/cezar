@@ -66,12 +66,19 @@ export function ProviderBanner({
   }
 
   if (error) return null
-  if (normalized.providers.some((row) => row.status === 'connected')) return null
-
+  const usable = normalized.providers.some(
+    (row) => row.enabled && row.status === 'connected',
+  )
+  if (usable) return null
+  const credentialsExist = normalized.providers.some(
+    (row) => row.status === 'connected',
+  )
   const uncertain = normalized.providers.some((row) => row.status === 'unknown')
-  const message = uncertain
-    ? 'No connected provider could be verified.'
-    : 'No agent provider is connected.'
+  const message = credentialsExist
+    ? 'No agent provider is enabled.'
+    : uncertain
+      ? 'No connected provider could be verified.'
+      : 'No agent provider credentials were found.'
 
   return (
     <div

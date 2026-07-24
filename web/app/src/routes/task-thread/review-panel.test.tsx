@@ -77,9 +77,9 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (method === 'GET' && path === '/api/providers/status') {
         return jsonResponse({
           providers: [
-            { provider: 'claude', status: 'connected' },
-            { provider: 'codex', status: 'not-installed' },
-            { provider: 'opencode', status: 'not-installed' },
+            { provider: 'claude', status: 'connected', enabled: true },
+            { provider: 'codex', status: 'not-installed', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
           ],
         })
       }
@@ -238,9 +238,9 @@ describe('the review gate on the thread', () => {
       'GET /api/providers/status': () =>
         jsonResponse({
           providers: [
-            { provider: 'claude', status: 'disconnected' },
-            { provider: 'codex', status: 'unknown' },
-            { provider: 'opencode', status: 'not-installed' },
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'unknown', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
           ],
         }),
     })
@@ -264,9 +264,9 @@ describe('the review gate on the thread', () => {
       'GET /api/providers/status': () =>
         jsonResponse({
           providers: [
-            { provider: 'claude', status: 'disconnected' },
-            { provider: 'codex', status: 'connected' },
-            { provider: 'opencode', status: 'not-installed' },
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
           ],
         }),
     })

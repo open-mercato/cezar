@@ -66,7 +66,7 @@ import {
 } from '@/lib/skills'
 import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
-import { connectedRunners } from '@/lib/provider-status'
+import { usableRunners } from '@/lib/provider-status'
 
 import {
   bookmarkletRunBody,
@@ -194,7 +194,7 @@ export function NewTaskRoute() {
   }, [autoText, sourcesReady])
 
   const providers = useProviderStatus()
-  const runners = connectedRunners(providers.data)
+  const runners = usableRunners(providers.data)
   const defaultRunner = health.data?.defaultRunner
   const preferredRunner = defaultRunner ?? 'claude'
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null

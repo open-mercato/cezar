@@ -26,9 +26,9 @@ function renderView(ui: ReactElement) {
         String(input) === '/api/providers/status'
           ? {
               providers: [
-                { provider: 'claude', status: 'connected' },
-                { provider: 'codex', status: 'not-installed' },
-                { provider: 'opencode', status: 'not-installed' },
+                { provider: 'claude', status: 'connected', enabled: true },
+                { provider: 'codex', status: 'not-installed', enabled: true },
+                { provider: 'opencode', status: 'not-installed', enabled: true },
               ],
             }
           : []

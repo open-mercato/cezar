@@ -107,9 +107,9 @@ const REGISTRY: ProjectsResponse = {
 
 const PROVIDERS: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'disconnected' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 

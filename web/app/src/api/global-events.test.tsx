@@ -106,9 +106,9 @@ const BOOT = 'boot'
 
 const CONNECTED_PROVIDERS: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'connected' },
-    { provider: 'opencode', status: 'connected' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: false },
+    { provider: 'opencode', status: 'connected', enabled: true },
   ],
 }
 
@@ -378,6 +378,7 @@ describe('useGlobalEvents — provider status', () => {
     source.emit('provider-status', JSON.stringify({
       provider: 'claude',
       status: 'disconnected',
+      enabled: true,
       hint: 'Authentication was rejected during a run. Reconnect, then check again.',
     }))
 
@@ -386,6 +387,7 @@ describe('useGlobalEvents — provider status', () => {
     )?.providers[0]).toEqual({
       provider: 'claude',
       status: 'disconnected',
+      enabled: true,
       hint: 'Authentication was rejected during a run. Reconnect, then check again.',
     })
     expect(fetch).not.toHaveBeenCalled()
@@ -407,12 +409,14 @@ describe('useGlobalEvents — provider status', () => {
     source.emit('provider-status', JSON.stringify({
       provider: 'codex',
       status: 'disconnected',
+      enabled: false,
     }))
     expect(client.getQueryData<ProviderStatusResponse>(
       workspaceQueryKeys.providerStatus,
     )?.providers[1]).toEqual({
       provider: 'codex',
       status: 'disconnected',
+      enabled: false,
     })
     expect(fetch).not.toHaveBeenCalled()
   })
@@ -437,6 +441,7 @@ describe('useGlobalEvents — provider status', () => {
     source.emit('provider-status', JSON.stringify({
       provider: 'opencode',
       status: 'disconnected',
+      enabled: true,
     }))
 
     expect(client.getQueryData<ProviderStatusResponse>(
@@ -444,6 +449,7 @@ describe('useGlobalEvents — provider status', () => {
     )?.providers[2]).toEqual({
       provider: 'opencode',
       status: 'disconnected',
+      enabled: true,
     })
   })
 })

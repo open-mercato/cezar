@@ -33,9 +33,9 @@ function serve({
   putError = 'nope',
   providerStatus = {
     providers: [
-      { provider: 'claude', status: 'connected' },
-      { provider: 'codex', status: 'connected' },
-      { provider: 'opencode', status: 'connected' },
+      { provider: 'claude', status: 'connected', enabled: true },
+      { provider: 'codex', status: 'connected', enabled: true },
+      { provider: 'opencode', status: 'connected', enabled: true },
     ],
   },
   providerStatusCode = 200,
@@ -169,9 +169,9 @@ describe('the agents form', () => {
       config: { defaultRunner: 'codex', defaultModels: { codex: 'gpt-5-codex' } },
       providerStatus: {
         providers: [
-          { provider: 'claude', status: 'connected' },
-          { provider: 'codex', status: 'disconnected' },
-          { provider: 'opencode', status: 'connected' },
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: true },
         ],
       },
     })

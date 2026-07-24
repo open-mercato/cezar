@@ -9,17 +9,17 @@ import {
 
 const STATUS: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-    { provider: 'codex', status: 'connected' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
 const NEW_STATUS: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'disconnected', authFailureId: 'claude-2' },
-    { provider: 'codex', status: 'connected' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-2' },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -27,9 +27,9 @@ describe('visibleProviderAuthIncidents', () => {
   it('lists every undismissed incident in catalog order even when Codex is connected', () => {
     const status: ProviderStatusResponse = {
       providers: [
-        { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
-        { provider: 'codex', status: 'connected' },
-        { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
+        { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
       ],
     }
 

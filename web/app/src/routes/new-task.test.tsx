@@ -89,25 +89,25 @@ const HEALTH_NO_GIT: HealthResponse = {
 
 const PROVIDERS_CONNECTED: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'disconnected' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
 const PROVIDERS_MULTI: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'connected' },
-    { provider: 'opencode', status: 'disconnected' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
   ],
 }
 
 const PROVIDERS_NONE: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'disconnected' },
-    { provider: 'codex', status: 'not-installed' },
-    { provider: 'opencode', status: 'disconnected' },
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'not-installed', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
   ],
 }
 
@@ -379,6 +379,24 @@ describe('picker data flows', () => {
     expect(options.some((option) => option.textContent?.includes('opencode'))).toBe(false)
   })
 
+  it('excludes connected but disabled providers while retaining an enabled runner choice', async () => {
+    serve({
+      health: HEALTH_ALL,
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: false },
+        ],
+      },
+    })
+    renderNewTask()
+    await pillReady()
+
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    expect(textarea().disabled).toBe(false)
+  })
+
   it('gates variants on git: no repo → pill disabled with the honest reason, base pill gone', async () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
     renderNewTask()
@@ -533,9 +551,9 @@ describe('provider authentication gate', () => {
       health: { ...HEALTH_MULTI, defaultRunner: 'codex' },
       providerStatus: {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -564,9 +582,9 @@ describe('provider authentication gate', () => {
     serve({
       providerStatus: {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -582,9 +600,9 @@ describe('provider authentication gate', () => {
     serve({
       providerStatus: {
         providers: [
-          { provider: 'claude', status: 'unknown' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'unknown', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -999,9 +1017,9 @@ describe('bookmarklet auto-start', () => {
     serve({
       providerStatus: {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })

@@ -91,14 +91,15 @@ const connectedProviders = (backends: readonly string[]): ProviderStatusResponse
   providers: (['claude', 'codex', 'opencode'] as const).map((provider) => ({
     provider,
     status: backends.includes(provider) ? 'connected' as const : 'not-installed' as const,
+    enabled: true,
   })),
 })
 
 const PROVIDERS_NONE: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'disconnected' },
-    { provider: 'codex', status: 'unknown' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'unknown', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -458,9 +459,9 @@ describe('Run — backend selection (#401)', () => {
       {},
       {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     )

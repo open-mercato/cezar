@@ -7,9 +7,9 @@ import { ProviderBanner } from './provider-banner'
 
 const DEFINITIVE_MISSING: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'disconnected' },
-    { provider: 'codex', status: 'not-installed' },
-    { provider: 'opencode', status: 'disconnected' },
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'not-installed', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
   ],
 }
 
@@ -50,9 +50,9 @@ describe('ProviderBanner', () => {
     renderBanner({
       status: {
         providers: [
-          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
       error: true,
@@ -75,11 +75,11 @@ describe('ProviderBanner', () => {
     expect(screen.queryByText(secret)).toBeNull()
   })
 
-  it('renders nothing when any provider is connected', () => {
+  it('renders nothing when any provider is enabled and connected', () => {
     const { container } = renderBanner({
       status: {
         providers: DEFINITIVE_MISSING.providers.map((row) =>
-          row.provider === 'claude' ? { provider: 'claude', status: 'connected' } : row,
+          row.provider === 'claude' ? { provider: 'claude', status: 'connected', enabled: true } : row,
         ),
       },
     })
@@ -87,14 +87,28 @@ describe('ProviderBanner', () => {
     expect(container.innerHTML).toBe('')
   })
 
+  it('shows the disabled message when credentials exist but every provider is disabled', () => {
+    renderBanner({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+
+    expect(screen.getByRole('status').textContent).toContain('No agent provider is enabled.')
+  })
+
   it('shows every runtime incident even while another provider is connected', () => {
     const onDismiss = vi.fn()
     renderBanner({
       status: {
         providers: [
-          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
+          { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
         ],
       },
       onDismissAuthFailures: onDismiss,
@@ -116,9 +130,9 @@ describe('ProviderBanner', () => {
   it('hides a matching dismissed incident while a newer incident resurfaces', () => {
     const status: ProviderStatusResponse = {
       providers: [
-        { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-        { provider: 'codex', status: 'connected' },
-        { provider: 'opencode', status: 'not-installed' },
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
       ],
     }
     const hidden = renderBanner({ status, dismissals: { claude: 'claude-1' } })
@@ -142,9 +156,9 @@ describe('ProviderBanner', () => {
     renderBanner({
       status: {
         providers: [
-          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'not-installed' },
+          { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -157,9 +171,9 @@ describe('ProviderBanner', () => {
   it('reveals the generic safety banner after the runtime incident is dismissed', () => {
     const status: ProviderStatusResponse = {
       providers: [
-        { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-        { provider: 'codex', status: 'not-installed' },
-        { provider: 'opencode', status: 'disconnected' },
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+        { provider: 'codex', status: 'not-installed', enabled: true },
+        { provider: 'opencode', status: 'disconnected', enabled: true },
       ],
     }
     const view = renderBanner({ status })
@@ -180,13 +194,13 @@ describe('ProviderBanner', () => {
     )
 
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByRole('status').textContent).toContain('No agent provider is connected.')
+    expect(screen.getByRole('status').textContent).toContain('No agent provider credentials were found.')
   })
 
-  it('says no provider is connected when every row is definitive and none is connected', () => {
+  it('says no provider credentials were found when every row is definitive and none is connected', () => {
     renderBanner()
 
-    expect(screen.getByRole('status').textContent).toContain('No agent provider is connected.')
+    expect(screen.getByRole('status').textContent).toContain('No agent provider credentials were found.')
     expect(document.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe(
       'pending',
     )
@@ -196,7 +210,7 @@ describe('ProviderBanner', () => {
     renderBanner({
       status: {
         providers: DEFINITIVE_MISSING.providers.map((row) =>
-          row.provider === 'claude' ? { provider: 'claude', status: 'unknown' } : row,
+          row.provider === 'claude' ? { provider: 'claude', status: 'unknown', enabled: true } : row,
         ),
       },
     })

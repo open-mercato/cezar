@@ -33,7 +33,9 @@ import {
   removeTodo,
   runFileRawUrl,
   sendMessage,
+  setProviderEnabled,
   startTodo,
+  retryProviderAuth,
 } from './client'
 import { setApiScope } from './project-scope'
 
@@ -61,9 +63,9 @@ function reply(body: unknown, init: ResponseInit = {}): void {
 
 const VALID_PROVIDER_STATUS = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'disconnected' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -107,6 +109,20 @@ describe('request shapes', () => {
       path: '/api/providers/connect',
       method: 'POST',
       body: { provider: 'codex' },
+    },
+    {
+      name: 'setProviderEnabled',
+      call: () => setProviderEnabled('codex', false),
+      path: '/api/providers/codex/enabled',
+      method: 'PUT',
+      body: { enabled: false },
+    },
+    {
+      name: 'retryProviderAuth',
+      call: () => retryProviderAuth('claude', 'incident-1'),
+      path: '/api/providers/claude/retry',
+      method: 'POST',
+      body: { authFailureId: 'incident-1' },
     },
     { name: 'getRunnerModels', call: () => getRunnerModels(), path: '/api/models?runner=codex', method: 'GET' },
     { name: 'getRuns', call: () => getRuns(), path: '/api/runs', method: 'GET' },
@@ -262,7 +278,7 @@ describe('request shapes', () => {
   ]
 
   it.each(cases)('$name hits $method $path', async ({ call, path, method, body }) => {
-    reply(path.startsWith('/api/providers/status') ? VALID_PROVIDER_STATUS : { ok: true })
+    reply(path.startsWith('/api/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
     await call()
 
     const sent = lastCall()

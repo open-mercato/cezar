@@ -10,6 +10,7 @@ import {
   queryKeys,
   useProviderStatus,
   useRefreshProviderStatus,
+  useRetryProviderAuth,
   useHealth,
   useRunnerModels,
   usePatchRun,
@@ -70,9 +71,9 @@ describe('useRunnerModels', () => {
 describe('provider status workspace query', () => {
   const PROVIDERS = {
     providers: [
-      { provider: 'claude', status: 'connected' },
-      { provider: 'codex', status: 'disconnected', hint: 'Run codex login.' },
-      { provider: 'opencode', status: 'not-installed' },
+      { provider: 'claude', status: 'connected', enabled: true },
+      { provider: 'codex', status: 'disconnected', enabled: true, hint: 'Run codex login.' },
+      { provider: 'opencode', status: 'not-installed', enabled: true },
     ],
   }
 
@@ -170,9 +171,9 @@ describe('provider status workspace query', () => {
   it('refreshes explicitly and replaces the workspace cache', async () => {
     const refreshed = {
       providers: [
-        { provider: 'claude', status: 'disconnected' },
-        { provider: 'codex', status: 'connected' },
-        { provider: 'opencode', status: 'not-installed' },
+        { provider: 'claude', status: 'disconnected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
       ],
     }
     fetchMock.mockResolvedValue(json(refreshed))
@@ -187,6 +188,53 @@ describe('provider status workspace query', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/providers/status?refresh=1')
     expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(refreshed)
+  })
+
+  it('retries a matching provider incident and replaces the confirmed workspace cache', async () => {
+    const confirmed = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: false },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+    fetchMock.mockResolvedValue(json(confirmed))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useRetryProviderAuth(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate({ provider: 'claude', authFailureId: 'incident-1' }))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock).toHaveBeenCalledWith('/api/providers/claude/retry', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ authFailureId: 'incident-1' }),
+    }))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(confirmed)
+  })
+
+  it('keeps the last confirmed provider cache when retry fails', async () => {
+    const prior = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: 'stale incident' }), { status: 409 }))
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.providerStatus, prior)
+    const { result } = renderHook(() => useRetryProviderAuth(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate({ provider: 'claude', authFailureId: 'incident-1' }))
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(prior)
   })
 })
 

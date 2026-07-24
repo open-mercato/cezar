@@ -3,23 +3,23 @@ import { describe, expect, it } from 'vitest'
 import type { ProviderStatusResponse } from '@/api/types'
 import {
   applyProviderStatusRow,
-  connectedRunners,
-  parseProviderStatusRow,
+  parseProviderStatusEventRow,
   parseProviderStatusResponse,
   providerStatusFor,
+  usableRunners,
 } from './provider-status'
 
 const CONNECTED: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'connected' },
-    { provider: 'opencode', status: 'connected' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'connected', enabled: true },
   ],
 }
 
 describe('provider-status SSE rows', () => {
   it('parses one coarse provider-status SSE row', () => {
-    expect(parseProviderStatusRow({
+    expect(parseProviderStatusEventRow({
       provider: 'claude',
       status: 'disconnected',
       hint: 'Reconnect, then check again.',
@@ -43,10 +43,10 @@ describe('provider-status SSE rows', () => {
     { provider: 'claude', status: 'disconnected', authFailureId: 'a'.repeat(129) },
     { provider: 'claude', status: 'connected', authFailureId: 'incident-1' },
   ])('rejects malformed provider-status SSE rows: %#', (value) => {
-    expect(parseProviderStatusRow(value)).toBeNull()
+    expect(parseProviderStatusEventRow(value)).toBeNull()
   })
 
-  it('replaces one row immutably without inventing a missing cache', () => {
+  it('merges one row immutably without inventing a missing cache', () => {
     expect(applyProviderStatusRow(undefined, {
       provider: 'claude',
       status: 'disconnected',
@@ -57,11 +57,33 @@ describe('provider-status SSE rows', () => {
       status: 'disconnected',
     })).toEqual({
       providers: [
-        { provider: 'claude', status: 'disconnected' },
+        { provider: 'claude', status: 'disconnected', enabled: true },
         CONNECTED.providers[1],
         CONNECTED.providers[2],
       ],
     })
+  })
+
+  it('preserves cached enablement for an additive runtime event and accepts preference enablement', () => {
+    const runtime = applyProviderStatusRow(CONNECTED, {
+      provider: 'claude',
+      status: 'disconnected',
+      authFailureId: 'incident-1',
+    })
+    expect(runtime?.providers[0]).toEqual({
+      provider: 'claude',
+      status: 'disconnected',
+      enabled: true,
+      authFailureId: 'incident-1',
+    })
+
+    const preference = applyProviderStatusRow(runtime, {
+      provider: 'claude',
+      status: 'disconnected',
+      enabled: false,
+      authFailureId: 'incident-1',
+    })
+    expect(preference?.providers[0]?.enabled).toBe(false)
   })
 })
 
@@ -71,16 +93,16 @@ describe('parseProviderStatusResponse', () => {
       parseProviderStatusResponse({
         ignored: 'private top-level value',
         providers: [
-          { provider: 'opencode', status: 'unknown', hint: 'Try again.', raw: 'private' },
-          { provider: 'claude', status: 'connected', account: 'private@example.test' },
-          { provider: 'codex', status: 'disconnected' },
+          { provider: 'opencode', status: 'unknown', enabled: true, hint: 'Try again.', raw: 'private' },
+          { provider: 'claude', status: 'connected', enabled: true, account: 'private@example.test' },
+          { provider: 'codex', status: 'disconnected', enabled: false },
         ],
       }),
     ).toEqual({
       providers: [
-        { provider: 'claude', status: 'connected' },
-        { provider: 'codex', status: 'disconnected' },
-        { provider: 'opencode', status: 'unknown', hint: 'Try again.' },
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'disconnected', enabled: false },
+        { provider: 'opencode', status: 'unknown', enabled: true, hint: 'Try again.' },
       ],
     })
   })
@@ -141,58 +163,68 @@ describe('parseProviderStatusResponse', () => {
   ])('rejects %s', (_case, value) => {
     expect(() => parseProviderStatusResponse(value)).toThrow('Invalid provider status response')
   })
+
+  it('requires enabled on every complete response row', () => {
+    expect(() => parseProviderStatusResponse({
+      providers: [
+        { provider: 'claude', status: 'connected' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    })).toThrow('Invalid provider status response')
+  })
 })
 
-describe('connectedRunners', () => {
-  it('returns only connected providers in canonical order', () => {
+describe('usableRunners', () => {
+  it('returns only enabled connected providers in canonical order', () => {
     const status: ProviderStatusResponse = {
       providers: [
-        { provider: 'opencode', status: 'connected' },
-        { provider: 'claude', status: 'connected' },
-        { provider: 'codex', status: 'connected' },
+        { provider: 'opencode', status: 'connected', enabled: false },
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: false },
       ],
     }
 
-    expect(connectedRunners(status)).toEqual(['claude', 'codex', 'opencode'])
+    expect(usableRunners(status)).toEqual(['claude'])
   })
 
   it('returns [] for undefined/pending status', () => {
-    expect(connectedRunners(undefined)).toEqual([])
+    expect(usableRunners(undefined)).toEqual([])
   })
 
   it('degrades a malformed successful response to no verified providers', () => {
-    expect(connectedRunners({} as ProviderStatusResponse)).toEqual([])
-    expect(connectedRunners({ providers: [null] } as unknown as ProviderStatusResponse)).toEqual([])
-    expect(connectedRunners({
+    expect(usableRunners({} as ProviderStatusResponse)).toEqual([])
+    expect(usableRunners({ providers: [null] } as unknown as ProviderStatusResponse)).toEqual([])
+    expect(usableRunners({
       providers: [{ provider: 'claude', status: 'connected' }],
-    })).toEqual([])
+    } as unknown as ProviderStatusResponse)).toEqual([])
   })
 
   it('does not fall back to claude when none is connected', () => {
-    expect(connectedRunners({ providers: [] })).toEqual([])
+    expect(usableRunners({ providers: [] })).toEqual([])
   })
 
   it('excludes disconnected, not-installed, and unknown rows', () => {
     const status: ProviderStatusResponse = {
       providers: [
-        { provider: 'claude', status: 'disconnected' },
-        { provider: 'codex', status: 'not-installed' },
-        { provider: 'opencode', status: 'unknown' },
+        { provider: 'claude', status: 'disconnected', enabled: true },
+        { provider: 'codex', status: 'not-installed', enabled: true },
+        { provider: 'opencode', status: 'unknown', enabled: true },
       ],
     }
 
-    expect(connectedRunners(status)).toEqual([])
+    expect(usableRunners(status)).toEqual([])
   })
 })
 
 describe('providerStatusFor', () => {
   it('returns the matching provider row', () => {
-    const codex = { provider: 'codex', status: 'disconnected', hint: 'Run codex login.' } as const
+    const codex = { provider: 'codex', status: 'disconnected', enabled: true, hint: 'Run codex login.' } as const
     const status: ProviderStatusResponse = {
       providers: [
-        { provider: 'claude', status: 'connected' },
+        { provider: 'claude', status: 'connected', enabled: true },
         codex,
-        { provider: 'opencode', status: 'not-installed' },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
       ],
     }
 
@@ -206,6 +238,6 @@ describe('providerStatusFor', () => {
     ).toBeUndefined()
     expect(providerStatusFor({
       providers: [{ provider: 'claude', status: 'connected' }],
-    }, 'claude')).toBeUndefined()
+    } as unknown as ProviderStatusResponse, 'claude')).toBeUndefined()
   })
 })

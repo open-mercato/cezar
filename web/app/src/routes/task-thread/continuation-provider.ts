@@ -1,12 +1,12 @@
 import { useProviderStatus } from '@/api/queries'
 import type { ApiRun, Runner } from '@/api/types'
-import { connectedRunners } from '@/lib/provider-status'
+import { usableRunners } from '@/lib/provider-status'
 import { resolveRunner } from '@/routes/new-task-form'
 
 /** One provider decision for every UI path that reopens an existing agent session. */
 export function useContinuationProvider(run: ApiRun, pickedRunner: Runner | null = null) {
   const providers = useProviderStatus()
-  const runners = connectedRunners(providers.data)
+  const runners = usableRunners(providers.data)
   const currentRunner = (run.runner ?? 'claude') as Runner
   const runner = resolveRunner(pickedRunner, runners, currentRunner)
   const currentRunnerConnected = runners.includes(currentRunner)

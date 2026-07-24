@@ -1,7 +1,7 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
-import { applyProviderStatusRow, parseProviderStatusRow } from '@/lib/provider-status'
+import { applyProviderStatusRow, parseProviderStatusEventRow } from '@/lib/provider-status'
 import {
   applyRunDeleted,
   applyRunEvent,
@@ -261,7 +261,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         } catch {
           return
         }
-        const row = parseProviderStatusRow(payload)
+        const row = parseProviderStatusEventRow(payload)
         if (!row) return
         queryClient.setQueryData<ProviderStatusResponse>(
           workspaceQueryKeys.providerStatus,

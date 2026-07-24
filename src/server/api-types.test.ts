@@ -141,9 +141,14 @@ const guards = {
   runEvent: true satisfies Exact<RunEvent, WebRunEvent>,
   processUsage: true satisfies Exact<ProcessUsage, WebProcessUsage>,
   backendCheck: true satisfies Exact<BackendCheck, WebBackendCheck>,
-  providerStatus: true satisfies Exact<ProviderStatus, WebProviderStatus>,
-  providerStatusKeys: true satisfies ExactKeys<ProviderStatus, WebProviderStatus>,
-  providerStatusResponse: true satisfies Exact<ProviderStatusResponse, WebProviderStatusResponse>,
+  // The core row remains additive for workspace events, while every complete HTTP response is
+  // enriched with the required preference by applyProviderEnablement().
+  providerStatus: true satisfies Exact<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusKeys: true satisfies ExactKeys<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusResponse: true satisfies Exact<
+    { providers: Array<ProviderStatus & { enabled: boolean }> },
+    WebProviderStatusResponse
+  >,
   providerStatusResponseKeys: true satisfies ExactKeys<ProviderStatusResponse, WebProviderStatusResponse>,
   repoInfo: true satisfies Exact<RepoInfo, WebRepoInfo>,
   statusEntry: true satisfies Exact<StatusEntry, WebStatusEntry>,

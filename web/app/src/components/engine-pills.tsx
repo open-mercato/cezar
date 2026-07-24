@@ -1,7 +1,7 @@
 import { useConfig, useHealth, useProviderStatus, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@/api/types'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
-import { connectedRunners } from '@/lib/provider-status'
+import { usableRunners } from '@/lib/provider-status'
 import {
   modelsForRunner,
   modelCatalogStatus,
@@ -14,7 +14,7 @@ import {
  * (#401): the Inbox card's "▶ Run" and the GitHub tab's "Run agent on this issue/PR".
  *
  * It exists so those two cannot drift from the composer: the resolution quartet
- * (`connectedRunners` → `resolveRunner` → `modelsForRunner` → `resolveModel`) and the
+ * (`usableRunners` → `resolveRunner` → `modelsForRunner` → `resolveModel`) and the
  * "hide the runner pill on a single-backend host" rule live here once, read from the same
  * provider/health/config queries new-task.tsx reads. The composer itself keeps its own inline copy —
  * it threads the pills through a persisted draft and a variants pill this pair has no notion of.
@@ -49,7 +49,7 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   const providers = useProviderStatus()
   const config = useConfig()
   const catalog = useRunnerModels()
-  const runners = connectedRunners(providers.data)
+  const runners = usableRunners(providers.data)
   const defaultRunner = health.data?.defaultRunner
   const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
   return {

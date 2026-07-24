@@ -145,25 +145,25 @@ const SKILLS: Skill[] = [
 
 const PROVIDERS_CONNECTED: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'not-installed' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'not-installed', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
 const PROVIDERS_MULTI: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'connected' },
-    { provider: 'opencode', status: 'disconnected' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
   ],
 }
 
 const PROVIDERS_NONE: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'disconnected' },
-    { provider: 'codex', status: 'unknown' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'unknown', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -1085,9 +1085,9 @@ describe('the hand-to-agent backend pills (#401)', () => {
       'GET /api/providers/status': () =>
         jsonResponse({
           providers: [
-            { provider: 'claude', status: 'disconnected' },
-            { provider: 'codex', status: 'connected' },
-            { provider: 'opencode', status: 'not-installed' },
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
           ],
         } satisfies ProviderStatusResponse),
     })

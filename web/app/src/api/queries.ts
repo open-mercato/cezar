@@ -45,9 +45,10 @@ import {
   removeProject,
   sendMessage,
   putAgentConfigFile,
+  retryProviderAuth,
 } from './client'
 import { queryScope } from './project-scope'
-import type { CheckoutProjectInput, MessageInput, PatchRunInput, SetAgentConfigInput } from './types'
+import type { CheckoutProjectInput, MessageInput, PatchRunInput, ProviderId, SetAgentConfigInput } from './types'
 
 /**
  * Query keys, in one place and exported, because they are a contract rather than an
@@ -186,6 +187,22 @@ export function useRefreshProviderStatus() {
   return useMutation({
     mutationFn: () => getProviderStatus(true),
     onSuccess: (result) => queryClient.setQueryData(workspaceQueryKeys.providerStatus, result),
+  })
+}
+
+export function useRetryProviderAuth() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      provider,
+      authFailureId,
+    }: {
+      provider: ProviderId
+      authFailureId: string
+    }) => retryProviderAuth(provider, authFailureId),
+    onSuccess: (result) => {
+      queryClient.setQueryData(workspaceQueryKeys.providerStatus, result)
+    },
   })
 }
 

@@ -56,9 +56,9 @@ const TODOS = [
 
 const PROVIDERS: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'connected' },
-    { provider: 'codex', status: 'disconnected' },
-    { provider: 'opencode', status: 'not-installed' },
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -279,16 +279,16 @@ describe('sidebar wiring', () => {
       '/api/todos': [],
       '/api/providers/status': {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'not-installed' },
-          { provider: 'opencode', status: 'disconnected' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'not-installed', enabled: true },
+          { provider: 'opencode', status: 'disconnected', enabled: true },
         ],
       },
     })
     renderShell('/p/cezar/')
 
     const banner = await screen.findByRole('status')
-    expect(banner.textContent).toContain('No agent provider is connected.')
+    expect(banner.textContent).toContain('No agent provider credentials were found.')
     expect(document.querySelector('[data-slot="banner-slot"]')?.contains(banner)).toBe(true)
   })
 
@@ -298,9 +298,9 @@ describe('sidebar wiring', () => {
       '/api/todos': [],
       '/api/providers/status': {
         providers: [
-          { provider: 'claude', status: 'disconnected' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
         ],
       },
     })

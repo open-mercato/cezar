@@ -13,9 +13,9 @@ const fetchMock = vi.fn<typeof fetch>()
 
 const INCIDENTS: ProviderStatusResponse = {
   providers: [
-    { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-    { provider: 'codex', status: 'connected' },
-    { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
+    { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
   ],
 }
 
@@ -139,9 +139,9 @@ describe('ProviderBannerContainer', () => {
     const confirmed: WorkspaceUiState = { appearance: { accent: 'lime' } }
     seed(client, confirmed, {
       providers: [
-        { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-        { provider: 'codex', status: 'connected' },
-        { provider: 'opencode', status: 'disconnected' },
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'disconnected', enabled: true },
       ],
     })
     const answerPuts: Array<(response: Response) => void> = []
@@ -161,9 +161,9 @@ describe('ProviderBannerContainer', () => {
     act(() => {
       client.setQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus, {
         providers: [
-          { provider: 'claude', status: 'disconnected', authFailureId: 'claude-1' },
-          { provider: 'codex', status: 'connected' },
-          { provider: 'opencode', status: 'disconnected', authFailureId: 'open-1' },
+          { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
         ],
       })
     })

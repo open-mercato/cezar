@@ -50,9 +50,9 @@ function serve(uiState: Record<string, unknown> = {}) {
       if (url === '/api/providers/status')
         return json({
           providers: [
-            { provider: 'claude', status: 'connected' },
-            { provider: 'codex', status: 'connected' },
-            { provider: 'opencode', status: 'connected' },
+            { provider: 'claude', status: 'connected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'connected', enabled: true },
           ],
         })
       if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [], source: 'unavailable', stale: false })
