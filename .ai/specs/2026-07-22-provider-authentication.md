@@ -88,14 +88,24 @@ export type ProviderConnectionState =
 export interface ProviderStatus {
   provider: ProviderId;
   status: ProviderConnectionState;
-  enabled: boolean;
+  /** Present on workspace-enriched rows; absent on raw discovery rows and some SSE rows. */
+  enabled?: boolean;
   hint?: string;
+  /** Present only for a current, runtime-latched disconnected incident. */
+  authFailureId?: string;
 }
 
+/** Complete workspace HTTP response: all three providers, ordered, with enablement applied. */
 export interface ProviderStatusResponse {
-  providers: ProviderStatus[];
+  providers: Array<ProviderStatus & { enabled: boolean }>;
 }
 ```
+
+`ProviderStatus` is the additive core row shared by discovery, runtime invalidation, and workspace
+SSE. The server applies the global preference before returning a complete HTTP response, so REST
+clients always receive every provider with required `enabled`; the browser may merge an unstamped
+SSE row whose optional `enabled` field is absent into that cached complete response. An
+`authFailureId` is opaque and is present only on the current runtime-latched `disconnected` row.
 
 All three probes run concurrently with a 10-second per-process timeout, matching existing host
 tool probes. Each provider always produces one row, in `claude`, `codex`, `opencode` order:
@@ -136,10 +146,10 @@ operation: it accepts the submitted opaque `authFailureId` and clears only that 
 incident. A stale or malformed incident cannot clear a newer rejection. Store observation is
 installed before startup recovery for the boot project and every lazy project context.
 
-The server emits the resulting change as an additive workspace `provider-status` SSE event. A
-duplicate v1/v2 runtime report causes no second transition. Raw runtime error text never leaves
-the server: the response and event carry only the provider id, disconnected state, and fixed
-hint.
+The server emits the resulting latch transition as an additive, workspace-level
+`provider-status` SSE event. A duplicate v1/v2 runtime report causes no second transition. Raw
+runtime error text never leaves the server: that event carries only the provider id, disconnected
+state, fixed hint, and opaque `authFailureId` (not a project stamp or vendor output).
 
 A runtime-latched provider row includes an opaque `authFailureId`. The identifier stays stable for
 that latch, is removed by successful explicit recovery, and changes if a later runtime rejection
@@ -169,16 +179,19 @@ alert remains in place independently of that task-local history.
 
 ## HTTP API
 
-Provider credentials belong to the host user, not to a repository. Both routes are workspace
-routes mounted once, outside `/api/p/:projectId`, and remain protected by the existing global
-same-origin request guard.
+Provider credentials belong to the host user, not to a repository. All four provider endpoints
+are workspace routes mounted once, outside `/api/p/:projectId`, and remain protected by the
+existing global same-origin request guard.
 
 ### `GET /api/providers/status`
 
-Returns `ProviderStatusResponse`. `?refresh=1` bypasses the five-second completed-result cache
-for the Check again action, but does not clear a runtime-authentication incident. One failed
-provider does not fail the response; its row is
-`unknown`, so the route normally returns 200 even on a smaller or partially broken host.
+Returns the complete `ProviderStatusResponse`: exactly the three ordered provider rows, each with
+required `enabled`, plus optional `hint` and current runtime `authFailureId`. `?refresh=1`
+bypasses the five-second completed-result cache for the Check again action, but does not clear a
+runtime-authentication incident. The query accepts only the literal `refresh=1`; another value is
+`400 { error: 'refresh must be 1 when provided' }`. One failed provider does not fail the
+response; its row is `unknown`, so the route normally returns 200 even on a smaller or partially
+broken host.
 
 The route is deliberately separate from `/api/health`: health is CORS-open, latency-sensitive,
 and covered by a backwards-compatibility contract. Authentication state is neither necessary
@@ -186,7 +199,7 @@ nor appropriate on that surface.
 
 ### `POST /api/providers/connect`
 
-The JSON body is validated with Zod:
+The strict JSON body is validated with Zod (no extra keys):
 
 ```ts
 { provider: 'claude' | 'codex' | 'opencode' }
@@ -213,12 +226,37 @@ Behavior:
   copyable `command`.
 - When `capabilities.localHandoff` is false, the route never attempts a local GUI launch. It
   returns 409 with the command and tells the user to run it on the cezar host.
-- Invalid JSON or provider ids return 400 `{ error }`, following the server's mutating-route
-  pattern.
+- Invalid JSON or provider ids return
+  `400 { error: 'provider must be claude, codex, or opencode' }`.
+- If the selected provider row cannot be found after a fresh probe, the route returns
+  `500 { error: 'Authentication could not be verified. Try again.' }`. The route's 409 responses
+  always include the copyable command; they cover not-installed, unknown, hosted-handoff, and
+  terminal-launch cases.
 
 Launching the vendor CLI is the maximum safe automation: the CLI owns browser authorization,
 callback handling, credential storage, and consent. cezar neither observes nor receives the
 resulting token.
+
+### `PUT /api/providers/:provider/enabled`
+
+The provider path is the closed provider enum and the JSON body is the strict shape
+`{ enabled: boolean }`; malformed JSON, an unknown provider, a non-boolean value, or extra keys
+returns `400 { error: 'provider and enabled boolean are required' }`. A successful request merge-writes the global
+`disabledProviders` preference, returns the complete `ProviderStatusResponse`, and emits the
+selected enriched provider row as workspace `provider-status`. A preference-write failure returns
+`500 { error: 'Provider preference could not be saved.' }` and emits no event. The response does
+not change discovery or clear a runtime incident.
+
+### `POST /api/providers/:provider/retry`
+
+Try again uses the closed provider path and strict JSON `{ authFailureId: string }`. Missing,
+malformed, unknown-provider, empty, or extra-key input returns
+`400 { error: 'provider and current authFailureId are required' }`. It clears only the submitted
+current runtime incident, then force-refreshes discovery, returns the complete
+`ProviderStatusResponse`, and emits the selected enriched provider row. If the incident is stale
+or no longer current, it returns
+`409 { error: 'Authentication incident changed. Refresh and try again.' }` and preserves the
+current latch. Retry never enables a disabled provider; it has no preference-write 500 path.
 
 ## Client model and refresh behavior
 
@@ -237,17 +275,22 @@ as proof that every account is disconnected.
 
 Extend `web/app/src/routes/settings/agents-section.tsx`; do not add a separate Providers settings
 route. A Providers block with `id="providers"` appears first and gives each supported provider a
-card:
+card. The controls are a state/action matrix, not a claim that discovery proves a live model
+request:
 
-- `connected`: green **Credentials found** status and no login action;
-- `disconnected`: amber status, provider hint, Connect, and Check again;
-- `not-installed`: missing status and the install hint, with no Connect action;
-- `unknown`: verification warning and Check again, without asserting that credentials are
-  absent.
+| Card state | Discovery label | Available actions |
+| --- | --- | --- |
+| `connected` | green **Credentials found** | Enable/Disable |
+| `disconnected` | amber **Not connected** | Enable/Disable, Connect, Check again, and Try again only for a current runtime incident |
+| `not-installed` | **Not installed** with install hint | no enablement, Connect, Check again, or Try again control |
+| `unknown` | **Could not verify** | Enable/Disable and Check again, without asserting that credentials are absent |
 
-Connect calls the POST route. A successful terminal launch shows a toast explaining that the
-vendor flow must be completed there. A 409 carrying `command` reveals a copyable manual command;
-other failures use the server's message verbatim.
+Enable/Disable calls the PUT route. Connect calls the POST route; a successful terminal launch
+shows a toast explaining that the vendor flow must be completed there. A 409 carrying `command`
+reveals a copyable manual command; other failures use the server's message verbatim. Check again
+uses `GET /api/providers/status?refresh=1` and refreshes discovery only. Try again posts the
+visible opaque `authFailureId` to the retry route only when that current runtime incident exists;
+it explains that cezar cannot validate the credential without a later task/model request.
 
 The existing project-specific Default runner and Default models controls remain where they are.
 Every provider stays visible for discoverability, but controls for anything other than
