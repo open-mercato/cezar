@@ -17,7 +17,9 @@ import {
   PROVIDER_IDS,
   ProviderAuthService,
   type ProviderId,
+  type ProviderStatusResponse,
 } from '../core/provider-auth.js';
+import { applyProviderEnablement } from '../core/provider-availability.js';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.js';
 import { currentUsage, onUsage } from '../core/process-usage.js';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.js';
@@ -143,6 +145,11 @@ export interface ServerDeps {
   modelCatalog?: RunnerModelCatalog;
   /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
   providerAuth?: ProviderAuthService;
+  /** Global provider enablement preferences. Tests may inject an in-memory store. */
+  workspaceConfig?: {
+    load: typeof loadWorkspaceConfig;
+    mergeWrite: typeof mergeWriteWorkspaceConfig;
+  };
   /** Shared runtime rejection observer. The CLI injects the instance already
    *  watching the boot store before recovery; createApp builds one for legacy
    *  callers and tests. */
@@ -166,6 +173,9 @@ const projectIdSchema = z.union([z.literal('default'), z.string().regex(PROJECT_
 const providerConnectSchema = z.object({
   provider: z.enum(PROVIDER_IDS),
 }).strict();
+
+const providerParamSchema = z.enum(PROVIDER_IDS);
+const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
 
 /** One row of the mirrored project-route table. */
 export interface ProjectRouteInfo {
@@ -726,6 +736,17 @@ export function createApp(deps: ServerDeps): Hono {
     adapters: { codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) } },
   });
   const providerAuth = deps.providerAuth ?? new ProviderAuthService();
+  const workspaceConfig = deps.workspaceConfig ?? {
+    load: loadWorkspaceConfig,
+    mergeWrite: mergeWriteWorkspaceConfig,
+  };
+  const providerStatus = async (options?: { refresh?: boolean }): Promise<ProviderStatusResponse> => {
+    const [discovered, workspace] = await Promise.all([
+      providerAuth.status(options?.refresh ? { refresh: true, recoverRuntimeFailures: true } : undefined),
+      workspaceConfig.load(),
+    ]);
+    return applyProviderEnablement(discovered, workspace.disabledProviders);
+  };
   const openTerminal = deps.openTerminal ?? openInTerminal;
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
@@ -1081,11 +1102,33 @@ export function createApp(deps: ServerDeps): Hono {
   app.get('/api/providers/status', async (c) => {
     const query = z.object({ refresh: z.literal('1').optional() }).safeParse(c.req.query());
     if (!query.success) return c.json({ error: 'refresh must be 1 when provided' }, 400);
-    const refresh = query.data.refresh === '1';
-    return c.json(await providerAuth.status({
-      refresh,
-      recoverRuntimeFailures: refresh,
-    }));
+    return c.json(await providerStatus({ refresh: query.data.refresh === '1' }));
+  });
+
+  app.put('/api/providers/:provider/enabled', async (c) => {
+    const provider = providerParamSchema.safeParse(c.req.param('provider'));
+    const body = providerEnabledSchema.safeParse(await c.req.json().catch(() => null));
+    if (!provider.success || !body.success) {
+      return c.json({ error: 'provider and enabled boolean are required' }, 400);
+    }
+    let workspace: WorkspaceConfig;
+    try {
+      workspace = await workspaceConfig.mergeWrite((config) => {
+        const disabled = new Set(config.disabledProviders);
+        if (body.data.enabled) disabled.delete(provider.data);
+        else disabled.add(provider.data);
+        config.disabledProviders = PROVIDER_IDS.filter((id) => disabled.has(id));
+      });
+    } catch {
+      return c.json({ error: 'Provider preference could not be saved.' }, 500);
+    }
+    const result = applyProviderEnablement(
+      await providerAuth.status(),
+      workspace.disabledProviders,
+    );
+    const row = result.providers.find(({ provider: id }) => id === provider.data);
+    if (row) workspaceEvents.emit('provider-status', row);
+    return c.json(result);
   });
 
   app.post('/api/providers/connect', async (c) => {

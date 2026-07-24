@@ -9,12 +9,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function parseProviderStatusRow(value: unknown): ProviderStatus | null {
   if (!isRecord(value)) return null
-  const { provider, status, hint, authFailureId } = value
+  const { provider, status, enabled, hint, authFailureId } = value
   if (
     typeof provider !== 'string'
     || !RUNNER_ORDER.includes(provider as Runner)
     || typeof status !== 'string'
     || !PROVIDER_STATES.has(status)
+    || (enabled !== undefined && typeof enabled !== 'boolean')
     || (hint !== undefined && typeof hint !== 'string')
     || (
       authFailureId !== undefined
@@ -29,6 +30,7 @@ export function parseProviderStatusRow(value: unknown): ProviderStatus | null {
   return {
     provider: provider as Runner,
     status: status as ProviderStatus['status'],
+    ...(enabled === undefined ? {} : { enabled }),
     ...(hint === undefined ? {} : { hint }),
     ...(authFailureId === undefined ? {} : { authFailureId }),
   }

@@ -50,6 +50,7 @@ export type ProviderConnectionState =
 export interface ProviderStatus {
   provider: ProviderId
   status: ProviderConnectionState
+  enabled?: boolean
   hint?: string
   authFailureId?: string
 }

@@ -333,17 +333,17 @@ describe('response parsing', () => {
     reply({
       ignored: 'top-level raw value',
       providers: [
-        { provider: 'opencode', status: 'unknown', hint: 'Try again.', raw: 'private' },
-        { provider: 'claude', status: 'connected', account: 'private@example.test' },
-        { provider: 'codex', status: 'disconnected', authFailureId: 'incident-1', raw: 'private' },
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true, raw: 'private' },
+        { provider: 'claude', status: 'connected', enabled: false, account: 'private@example.test' },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1', raw: 'private' },
       ],
     })
 
     await expect(getProviderStatus()).resolves.toEqual({
       providers: [
-        { provider: 'claude', status: 'connected' },
-        { provider: 'codex', status: 'disconnected', authFailureId: 'incident-1' },
-        { provider: 'opencode', status: 'unknown', hint: 'Try again.' },
+        { provider: 'claude', status: 'connected', enabled: false },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true },
       ],
     })
   })

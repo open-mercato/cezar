@@ -9,6 +9,7 @@ import {
   type RunProviderCommand,
 } from '../core/provider-auth.js';
 import { RunStore } from '../runs/store.js';
+import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
 import { RunManager } from '../workflows/run.js';
 import { ProjectContexts } from './project-context.js';
 import { apiRequest } from './loopback-request.testkit.js';
@@ -36,6 +37,20 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
 const providerForExecutable = (executable: string): ProviderId => {
   if (executable === 'claude' || executable === 'codex' || executable === 'opencode') return executable;
   throw new Error(`unexpected executable: ${executable}`);
+};
+
+const memoryWorkspaceConfig = (disabledProviders: ProviderId[] = []) => {
+  let config: WorkspaceConfig = {
+    ...defaultWorkspaceConfig(),
+    disabledProviders,
+  };
+  return {
+    load: async () => config,
+    mergeWrite: async (mutator: (current: WorkspaceConfig) => WorkspaceConfig | void) => {
+      config = mutator(config) ?? config;
+      return config;
+    },
+  };
 };
 
 describe('workspace provider API', () => {
@@ -85,6 +100,7 @@ describe('workspace provider API', () => {
     openTerminal?: (cwd: string, command: string) => Promise<boolean>;
     bindHost?: string;
     workspaceEvents?: WorkspaceEventBus;
+    workspaceConfig?: ReturnType<typeof memoryWorkspaceConfig>;
     contexts?: ProjectContexts;
   } = {}) => createApp({
     repoRoot: root,
@@ -95,6 +111,7 @@ describe('workspace provider API', () => {
     openTerminal: options.openTerminal,
     bindHost: options.bindHost,
     workspaceEvents: options.workspaceEvents,
+    workspaceConfig: options.workspaceConfig,
     contexts: options.contexts,
   });
 
@@ -108,23 +125,112 @@ describe('workspace provider API', () => {
     },
   );
 
-  it('GET /api/providers/status returns all provider rows', async () => {
+  it('GET /api/providers/status returns all provider rows with global enablement', async () => {
+    const workspaceConfig = memoryWorkspaceConfig(['codex']);
     const response = await apiRequest(app({
       providerAuth: service({ claude: 'connected', codex: 'disconnected', opencode: 'not-installed' }),
+      workspaceConfig,
     }), '/api/providers/status');
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       providers: [
-        { provider: 'claude', status: 'connected' },
-        { provider: 'codex', status: 'disconnected' },
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'disconnected', enabled: false },
         {
           provider: 'opencode',
           status: 'not-installed',
           hint: 'Install OpenCode, then run `opencode auth login`.',
+          enabled: true,
         },
       ],
     });
+  });
+
+  it('PUT /api/providers/:provider/enabled updates the global preference and emits one enriched row', async () => {
+    const workspaceConfig = memoryWorkspaceConfig(['codex']);
+    const workspaceEvents = new WorkspaceEventBus();
+    const seen: unknown[] = [];
+    workspaceEvents.on((event, data) => {
+      if (event === 'provider-status') seen.push(data);
+    });
+    const server = app({ workspaceConfig, workspaceEvents });
+
+    const disabled = await apiRequest(server, '/api/providers/claude/enabled', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    expect(disabled.status).toBe(200);
+    const body = await disabled.json() as { providers: unknown[] };
+    expect(body.providers).toContainEqual({
+      provider: 'claude',
+      status: 'connected',
+      enabled: false,
+    });
+    expect((await workspaceConfig.load()).disabledProviders).toEqual(['claude', 'codex']);
+    expect(seen).toEqual([{
+      provider: 'claude',
+      status: 'connected',
+      enabled: false,
+    }]);
+
+    const enabled = await apiRequest(server, '/api/providers/claude/enabled', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    expect(enabled.status).toBe(200);
+    const enabledBody = await enabled.json() as { providers: unknown[] };
+    expect(enabledBody.providers).toContainEqual({
+      provider: 'claude',
+      status: 'connected',
+      enabled: true,
+    });
+    expect((await workspaceConfig.load()).disabledProviders).toEqual(['codex']);
+    expect(seen).toEqual([
+      { provider: 'claude', status: 'connected', enabled: false },
+      { provider: 'claude', status: 'connected', enabled: true },
+    ]);
+  });
+
+  it.each([
+    ['/api/providers/future/enabled', { enabled: false }],
+    ['/api/providers/claude/enabled', { enabled: 'no' }],
+    ['/api/providers/claude/enabled', undefined],
+    ['/api/providers/claude/enabled', { enabled: false, extra: true }],
+  ])('PUT /api/providers/:provider/enabled rejects invalid input %#', async (path, body) => {
+    const response = await apiRequest(app(), path, {
+      method: 'PUT',
+      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'provider and enabled boolean are required' });
+  });
+
+  it('PUT /api/providers/:provider/enabled returns a fixed error and emits nothing when preference saving fails', async () => {
+    const workspaceConfig = memoryWorkspaceConfig();
+    const mergeWrite = vi.spyOn(workspaceConfig, 'mergeWrite').mockRejectedValue(new Error('read-only home'));
+    const workspaceEvents = new WorkspaceEventBus();
+    const seen: unknown[] = [];
+    workspaceEvents.on((event, data) => {
+      if (event === 'provider-status') seen.push(data);
+    });
+
+    const response = await apiRequest(app({ workspaceConfig, workspaceEvents }), '/api/providers/claude/enabled', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Provider preference could not be saved.' });
+    expect(mergeWrite).toHaveBeenCalledOnce();
+    expect(seen).toEqual([]);
   });
 
   it('GET ?refresh=1 bypasses the completed provider cache', async () => {
@@ -288,7 +394,7 @@ describe('workspace provider API', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       providers: expect.arrayContaining([
-        { provider: 'claude', status: 'connected' },
+        { provider: 'claude', status: 'connected', enabled: true },
       ]),
     });
   });
@@ -301,9 +407,15 @@ describe('workspace provider API', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: 'claude' }),
     });
+    const enabledResponse = await apiRequest(server, '/api/p/default/providers/claude/enabled', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
 
     expect(status.status).toBe(404);
     expect(connectResponse.status).toBe(404);
+    expect(enabledResponse.status).toBe(404);
   });
 
   it('does not add provider fields or calls to /api/health', async () => {

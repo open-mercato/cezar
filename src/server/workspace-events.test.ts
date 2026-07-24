@@ -304,6 +304,25 @@ describe('GET /api/workspace/events', () => {
     }
   });
 
+  it('broadcasts a global provider preference change with its enablement state', async () => {
+    const ws = await openStream('/api/workspace/events');
+    await ws.readUntil('event: ping');
+
+    const response = await apiRequest(app, '/api/providers/codex/enabled', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await ws.readUntil('event: provider-status');
+    expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toEqual([{
+      provider: 'codex',
+      status: 'connected',
+      enabled: false,
+    }]);
+  });
+
   it('a removed project re-added on the same slug resumes flowing on an already-open stream', async () => {
     const other = await buildOtherContext();
 
