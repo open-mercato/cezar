@@ -28,6 +28,7 @@ import {
   ContextGroup,
   ImageItem,
   NoteLine,
+  ProviderAuthRequiredCard,
   ReasoningItem,
   ToolCard,
   ToolStreak,
@@ -457,5 +458,7 @@ function ThreadEntryView({ entry, scope, runId }: { entry: ThreadEntry; scope: s
       return <ImageItem image={entry} />
     case 'ask':
       return <AskCard ask={entry} runId={runId} />
+    case 'provider-auth-required':
+      return <ProviderAuthRequiredCard incident={entry} />
   }
 }

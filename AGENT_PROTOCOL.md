@@ -143,6 +143,13 @@ Every v1 event stays **derivable** from the v2 stream, so a consumer can migrate
 one panel at a time. New work should read v2; v1 exists for the console renderer
 and old recordings.
 
+### Cezar-owned run metadata events
+
+`provider-auth-required` is not emitted by a backend runner. The server derives it
+from an authoritative v1/v2 authentication error, persists a provider id, opaque
+incident id, and optional `stepId`, and the cockpit renders recovery guidance. It
+does not change backend parity or expose the raw error.
+
 ---
 
 ## 3. v2 `UiEvent` — the normalized protocol (`src/core/ui-events.ts`)

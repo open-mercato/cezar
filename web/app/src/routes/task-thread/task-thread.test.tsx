@@ -81,6 +81,19 @@ const EVENTS: RunEvent[] = [
 ]
 
 describe('ThreadView', () => {
+  it('keeps provider authorization recovery visible after the run reaches done', () => {
+    const authRequired = [
+      line(1, 'provider-auth-required', { provider: 'codex', authFailureId: 'incident-1' }),
+      line(2, 'done'),
+    ]
+    renderView(<ThreadView run={run('done')} thread={reduceThread(authRequired)} />)
+
+    expect(screen.getByRole('alert').textContent).toContain('Codex needs authorization')
+    expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+  })
+
   it('renders the task as the leading user bubble and the v1 reply as another', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     const bubbles = document.querySelectorAll('[data-slot="user-bubble"]')
