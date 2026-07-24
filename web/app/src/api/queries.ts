@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
+import { mergeProviderStatusResponse } from '@/lib/provider-status'
+
 import {
   browseFs,
   checkoutProject,
@@ -48,7 +50,14 @@ import {
   retryProviderAuth,
 } from './client'
 import { queryScope } from './project-scope'
-import type { CheckoutProjectInput, MessageInput, PatchRunInput, ProviderId, SetAgentConfigInput } from './types'
+import type {
+  CheckoutProjectInput,
+  MessageInput,
+  PatchRunInput,
+  ProviderId,
+  ProviderStatusResponse,
+  SetAgentConfigInput,
+} from './types'
 
 /**
  * Query keys, in one place and exported, because they are a contract rather than an
@@ -174,9 +183,16 @@ export function useRunnerModels() {
 }
 
 export function useProviderStatus() {
+  const queryClient = useQueryClient()
   return useQuery({
     queryKey: workspaceQueryKeys.providerStatus,
-    queryFn: ({ signal }) => getProviderStatus(false, { signal }),
+    queryFn: async ({ signal }) => {
+      const response = await getProviderStatus(false, { signal })
+      return mergeProviderStatusResponse(
+        queryClient.getQueryData(workspaceQueryKeys.providerStatus),
+        response,
+      )
+    },
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   })
@@ -186,7 +202,10 @@ export function useRefreshProviderStatus() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => getProviderStatus(true),
-    onSuccess: (result) => queryClient.setQueryData(workspaceQueryKeys.providerStatus, result),
+    onSuccess: (result) => queryClient.setQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+      (cached) => mergeProviderStatusResponse(cached, result),
+    ),
   })
 }
 
@@ -200,8 +219,9 @@ export function useRetryProviderAuth() {
       provider: ProviderId
       authFailureId: string
     }) => retryProviderAuth(provider, authFailureId),
-    onSuccess: (result) => {
-      queryClient.setQueryData(workspaceQueryKeys.providerStatus, result)
+    onSuccess: (result, variables) => {
+      queryClient.setQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus, (cached) =>
+        mergeProviderStatusResponse(cached, result, variables.authFailureId))
     },
   })
 }

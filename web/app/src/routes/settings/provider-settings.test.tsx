@@ -376,6 +376,30 @@ describe('ProviderSettings', () => {
     expect(screen.queryByText('first write failed')).toBeNull()
   })
 
+  it('rolls back and reports a failed Claude write despite a later Codex write', async () => {
+    const claudeFailure = deferredResponse()
+    const codexSuccess = deferredResponse()
+    serve({ enabledResponses: [claudeFailure.promise, codexSuccess.promise] })
+    renderSettings()
+
+    await screen.findByRole('switch', { name: 'Use Claude Code' })
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Claude Code' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Codex' }))
+
+    await act(() => claudeFailure.resolve(json({ error: 'Claude preference failed.' }, 500)))
+    await within(card('claude')).findByText('Credentials found')
+    expect(await screen.findByText('Claude preference failed.')).toBeTruthy()
+
+    await act(() => codexSuccess.resolve(json({
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'disconnected', enabled: false },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })))
+    await within(card('codex')).findByText('Disabled')
+  })
+
   it('preserves a successful retry when a pending enablement write fails', async () => {
     const failure = deferredResponse()
     const incidentStatus = {

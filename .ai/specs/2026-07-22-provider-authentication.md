@@ -41,9 +41,10 @@ user explicitly asks to check again.
 - cezar does not install missing CLIs automatically.
 - cezar does not validate billing, quotas, model access, or network reachability. A connected
   credential can still fail later for reasons only the provider can diagnose.
-- This change does not add a run-start API preflight. Direct API callers and workflow step-level
-  runner overrides retain the runner's existing fail-loud behavior because credentials can
-  expire between any preflight and process spawn.
+- Request shapes remain compatible, but every new agent-starting action now applies a
+  provider-availability gate before it starts a runner. A request that requires a disabled
+  provider or unavailable credentials receives the fixed 409 recovery message; existing runs
+  continue unchanged, and credentials can still expire between that gate and process spawn.
 - `/api/health` remains byte-shape compatible and does not gain authentication fields or extra
   probes.
 
@@ -354,7 +355,8 @@ because config-file visibility depends on installation rather than login.
 - Missing CLIs and read-only or hosted environments remain supported.
 - The Tools menu keeps reporting installed tools from `/api/health`; authentication belongs only
   to the new provider surface.
-- Old direct API clients can still submit runs exactly as before.
+- Old direct API clients keep their existing request shapes. Their new agent actions receive the
+  same fixed 409 response when a required provider is disabled or its credentials are unavailable.
 
 ## Test plan
 

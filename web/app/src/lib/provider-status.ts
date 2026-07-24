@@ -82,10 +82,55 @@ export function applyProviderStatusRow(
   const providers = completeProviderRows(response)
   if (providers === null) return undefined
   return {
-    providers: providers.map((candidate) =>
-      candidate.provider === row.provider
-        ? { ...candidate, ...row, enabled: row.enabled ?? candidate.enabled }
-        : candidate),
+    providers: providers.map((candidate) => {
+      if (candidate.provider !== row.provider) return candidate
+      // An event row owns discovery/runtime status. Only enablement is additive because runtime
+      // rows intentionally omit the workspace preference; carrying old hints or incident ids
+      // through a connected recovery would otherwise leave another tab falsely red.
+      return {
+        provider: row.provider,
+        status: row.status,
+        enabled: row.enabled ?? candidate.enabled,
+        ...(row.hint === undefined ? {} : { hint: row.hint }),
+        ...(row.authFailureId === undefined ? {} : { authFailureId: row.authFailureId }),
+      }
+    }),
+  }
+}
+
+/**
+ * Fold a complete HTTP answer into the workspace cache without allowing an older response to
+ * erase an incident the SSE stream learned about while that request was in flight. A retry is
+ * the sole clearing path, and it may clear only the id it submitted.
+ */
+export function mergeProviderStatusResponse(
+  cached: ProviderStatusResponse | undefined,
+  response: ProviderStatusResponse,
+  retryIncidentId?: string,
+): ProviderStatusResponse {
+  const cachedRows = completeProviderRows(cached)
+  const responseRows = completeProviderRows(response)
+  if (cachedRows === null || responseRows === null) return response
+  const cachedByProvider = new Map(cachedRows.map((row) => [row.provider, row]))
+
+  return {
+    providers: responseRows.map((incoming) => {
+      const current = cachedByProvider.get(incoming.provider)
+      if (
+        current?.authFailureId !== undefined
+        && current.authFailureId !== incoming.authFailureId
+        && current.authFailureId !== retryIncidentId
+      ) {
+        const { hint: _hint, authFailureId: _authFailureId, ...discovery } = incoming
+        return {
+          ...discovery,
+          status: 'disconnected' as const,
+          ...(current.hint === undefined ? {} : { hint: current.hint }),
+          authFailureId: current.authFailureId,
+        }
+      }
+      return incoming
+    }),
   }
 }
 

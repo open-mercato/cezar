@@ -41,6 +41,14 @@ function json(body: unknown): Response {
   })
 }
 
+function deferredResponse() {
+  let resolve!: (response: Response) => void
+  const promise = new Promise<Response>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 /** A client per test: a shared cache would let one test's data satisfy the next test's query,
  *  and "loading → data" would pass without a fetch ever happening. */
 function wrapper() {
@@ -190,6 +198,60 @@ describe('provider status workspace query', () => {
     expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(refreshed)
   })
 
+  it('does not let a deferred polling response clear an SSE runtime incident', async () => {
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+
+    await act(async () => deferred.resolve(json(PROVIDERS)))
+
+    expect(client.getQueryData<typeof PROVIDERS>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
+      status: 'disconnected',
+      authFailureId: 'sse-1',
+    })
+  })
+
+  it('does not let a deferred refresh response clear an SSE runtime incident', async () => {
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    const { result } = renderHook(() => useRefreshProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate())
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+
+    await act(async () => deferred.resolve(json(PROVIDERS)))
+
+    expect(client.getQueryData<typeof PROVIDERS>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
+      status: 'disconnected',
+      authFailureId: 'sse-1',
+    })
+  })
+
   it('retries a matching provider incident and replaces the confirmed workspace cache', async () => {
     const confirmed = {
       providers: [
@@ -213,6 +275,41 @@ describe('provider status workspace query', () => {
       body: JSON.stringify({ authFailureId: 'incident-1' }),
     }))
     expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(confirmed)
+  })
+
+  it('does not let a deferred retry clear a newer SSE runtime incident', async () => {
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'retry-1', hint: 'Reconnect.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+    const { result } = renderHook(() => useRetryProviderAuth(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate({ provider: 'claude', authFailureId: 'retry-1' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-2', hint: 'Reconnect again.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+
+    await act(async () => deferred.resolve(json(PROVIDERS)))
+
+    expect(client.getQueryData<typeof PROVIDERS>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
+      status: 'disconnected',
+      authFailureId: 'sse-2',
+    })
   })
 
   it('keeps the last confirmed provider cache when retry fails', async () => {

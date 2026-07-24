@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { ProviderStatusResponse } from '@/api/types'
 import {
   applyProviderStatusRow,
+  mergeProviderStatusResponse,
   parseProviderStatusEventRow,
   parseProviderStatusResponse,
   providerStatusFor,
@@ -84,6 +85,72 @@ describe('provider-status SSE rows', () => {
       authFailureId: 'incident-1',
     })
     expect(preference?.providers[0]?.enabled).toBe(false)
+  })
+
+  it('clears status-owned runtime fields when a recovery row omits them', () => {
+    const incident = applyProviderStatusRow(CONNECTED, {
+      provider: 'claude',
+      status: 'disconnected',
+      hint: 'Reconnect, then try again.',
+      authFailureId: 'incident-1',
+    })
+
+    expect(applyProviderStatusRow(incident, {
+      provider: 'claude',
+      status: 'connected',
+    })?.providers[0]).toEqual({
+      provider: 'claude',
+      status: 'connected',
+      enabled: true,
+    })
+  })
+})
+
+describe('complete provider-status responses', () => {
+  const STALE_CONNECTED: ProviderStatusResponse = {
+    providers: [
+      { provider: 'claude', status: 'connected', enabled: false },
+      { provider: 'codex', status: 'connected', enabled: true },
+      { provider: 'opencode', status: 'not-installed', enabled: true },
+    ],
+  }
+
+  const INCIDENT: ProviderStatusResponse = {
+    providers: [
+      {
+        provider: 'claude',
+        status: 'disconnected',
+        enabled: true,
+        hint: 'Reconnect, then try again.',
+        authFailureId: 'incident-2',
+      },
+      { provider: 'codex', status: 'connected', enabled: true },
+      { provider: 'opencode', status: 'not-installed', enabled: true },
+    ],
+  }
+
+  it('keeps a cached runtime incident over a stale complete response', () => {
+    expect(mergeProviderStatusResponse(INCIDENT, STALE_CONNECTED)).toEqual({
+      providers: [
+        {
+          provider: 'claude',
+          status: 'disconnected',
+          enabled: false,
+          hint: 'Reconnect, then try again.',
+          authFailureId: 'incident-2',
+        },
+        STALE_CONNECTED.providers[1],
+        STALE_CONNECTED.providers[2],
+      ],
+    })
+  })
+
+  it('lets retry clear only the exact incident it submitted', () => {
+    expect(mergeProviderStatusResponse(INCIDENT, STALE_CONNECTED, 'incident-1').providers[0]).toMatchObject({
+      authFailureId: 'incident-2',
+      status: 'disconnected',
+    })
+    expect(mergeProviderStatusResponse(INCIDENT, STALE_CONNECTED, 'incident-2')).toEqual(STALE_CONNECTED)
   })
 })
 

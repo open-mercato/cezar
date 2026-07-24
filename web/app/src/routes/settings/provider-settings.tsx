@@ -21,6 +21,12 @@ const PROVIDERS = [
   { id: 'opencode', label: 'OpenCode', login: 'opencode auth login' },
 ] as const
 
+const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
+  claude: value,
+  codex: value,
+  opencode: value,
+})
+
 const STATUS_PRESENTATION = {
   connected: { label: 'Credentials found', tone: 'success' },
   disconnected: { label: 'Not connected', tone: 'pending' },
@@ -53,9 +59,9 @@ export function ProviderSettings() {
   const retry = useRetryProviderAuth()
   const queryClient = useQueryClient()
   const [manual, setManual] = useState<ManualCommand | null>(null)
-  const writeChain = useRef<Promise<unknown>>(Promise.resolve())
-  const latestWrite = useRef(0)
-  const pendingWrites = useRef(0)
+  const writeChains = useRef(providerWriteState(Promise.resolve() as Promise<unknown>))
+  const latestWrites = useRef(providerWriteState(0))
+  const pendingWrites = useRef(providerWriteState(0))
   const lastConfirmed = useRef<ProviderStatusResponse | undefined>(status.data)
 
   useEffect(() => {
@@ -66,17 +72,19 @@ export function ProviderSettings() {
 
   useEffect(() => {
     if (!status.data) return
-    if (pendingWrites.current === 0 || !lastConfirmed.current) {
+    if (Object.values(pendingWrites.current).every((count) => count === 0) || !lastConfirmed.current) {
       lastConfirmed.current = status.data
       return
     }
     // Status updates may arrive while a preference write is optimistic. Keep their current
-    // discovery/runtime fields, but retain the last server-confirmed enablement baseline for
-    // every pending preference so a later rollback only reverses that local intent.
+    // discovery/runtime fields, but retain each pending provider's server-confirmed enablement
+    // baseline so a later rollback only reverses that provider's local intent.
     lastConfirmed.current = {
       providers: status.data.providers.map((row) => ({
         ...row,
-        enabled: providerStatusFor(lastConfirmed.current, row.provider)?.enabled ?? row.enabled,
+        enabled: pendingWrites.current[row.provider] > 0
+          ? providerStatusFor(lastConfirmed.current, row.provider)?.enabled ?? row.enabled
+          : row.enabled,
       })),
     }
   }, [status.data])
@@ -88,10 +96,10 @@ export function ProviderSettings() {
       if (!previous) return
       if (!lastConfirmed.current) lastConfirmed.current = previous
       const optimistic = withProviderEnabled(previous, provider, enabled)
-      pendingWrites.current += 1
+      pendingWrites.current[provider] += 1
       queryClient.setQueryData(key, optimistic)
-      const seq = ++latestWrite.current
-      writeChain.current = writeChain.current.then(async () => {
+      const seq = ++latestWrites.current[provider]
+      writeChains.current[provider] = writeChains.current[provider].then(async () => {
         try {
           const confirmed = await setProviderEnabled(provider, enabled)
           const confirmedEnabled = providerStatusFor(confirmed, provider)?.enabled
@@ -101,7 +109,7 @@ export function ProviderSettings() {
             provider,
             confirmedEnabled,
           )
-          if (seq === latestWrite.current) {
+          if (seq === latestWrites.current[provider]) {
             const current = queryClient.getQueryData<ProviderStatusResponse>(key)
             queryClient.setQueryData(
               key,
@@ -109,7 +117,7 @@ export function ProviderSettings() {
             )
           }
         } catch (error: unknown) {
-          if (seq === latestWrite.current) {
+          if (seq === latestWrites.current[provider]) {
             const confirmedEnabled = providerStatusFor(lastConfirmed.current, provider)?.enabled
             const current = queryClient.getQueryData<ProviderStatusResponse>(key)
             if (current && confirmedEnabled !== undefined) {
@@ -122,7 +130,7 @@ export function ProviderSettings() {
             toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
           }
         } finally {
-          pendingWrites.current -= 1
+          pendingWrites.current[provider] -= 1
         }
       })
     },
