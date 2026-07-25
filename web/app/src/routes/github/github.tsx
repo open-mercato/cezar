@@ -3,6 +3,8 @@ import {
   ArrowLeftIcon,
   CheckIcon,
   CircleDotIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ExternalLinkIcon,
   GitPullRequestIcon,
   MessageSquareIcon,
@@ -16,8 +18,8 @@ import { useParams } from 'react-router'
 
 import { Link, Navigate } from '@/lib/project-router'
 
-import { getGithub, getGithubComments, putUiState } from '@/api/client'
-import { queryKeys, useGithub, useGithubComments, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { getGithub, getGithubComments, getGithubPrChanges, putUiState } from '@/api/client'
+import { queryKeys, useGithub, useGithubComments, useGithubPrChanges, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
@@ -26,6 +28,7 @@ import type {
   UiState,
 } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { Diff, type DiffFileChange } from '@/components/diff'
 import type { EnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
 import { TabLink } from '@/components/tab-link'
@@ -89,7 +92,7 @@ export function GithubIndexRoute() {
   return <GithubRoute view="issues" />
 }
 
-export function GithubRoute({ view }: { view: GithubView }) {
+export function GithubRoute({ view, changes = false }: { view: GithubView; changes?: boolean }) {
   const { n } = useParams()
   const fast = useGithub()
   // Two-shot: the full fetch waits for the fast one to prove the forge reachable.
@@ -374,7 +377,7 @@ export function GithubRoute({ view }: { view: GithubView }) {
         )}
       >
         {selected ? (
-          <GithubDetail item={selected} listPath={listPath} colors={labelColors}>
+          <GithubDetail item={selected} listPath={listPath} colors={labelColors} changes={changes}>
             <HandToAgent
               key={selected.url}
               item={selected}
@@ -569,11 +572,13 @@ function GithubDetail({
   listPath,
   colors,
   children,
+  changes,
 }: {
   item: GithubItem
   listPath: string
   colors: Record<string, string>
   children: ReactNode
+  changes: boolean
 }) {
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
   const hasDiffStat = item.kind === 'pr' && Boolean(item.additions || item.deletions)
@@ -627,6 +632,13 @@ function GithubDetail({
 
       <h2 className="mt-2 text-xl leading-snug font-semibold">{item.title}</h2>
 
+      {item.kind === 'pr' ? (
+        <nav aria-label="Pull request detail" className="mt-4 flex border-b border-border">
+          <TabLink to={`/github/prs/${item.number}`} active={!changes}>Conversation</TabLink>
+          <TabLink to={`/github/prs/${item.number}/changes`} active={changes}>Changes</TabLink>
+        </nav>
+      ) : null}
+
       {item.labels.length > 0 || item.checks ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {item.labels.map((label) => (
@@ -636,6 +648,7 @@ function GithubDetail({
         </div>
       ) : null}
 
+      {changes && item.kind === 'pr' ? <GithubPrChanges item={item} /> : <>
       <div data-slot="gh-body" className="mt-5 text-sm">
         {item.body ? (
           <Markdown>{item.body}</Markdown>
@@ -647,7 +660,79 @@ function GithubDetail({
       <GithubThread item={item} colors={colors} />
 
       {children}
+      </>}
     </article>
+  )
+}
+
+function GithubPrChanges({ item }: { item: GithubItem }) {
+  const queryClient = useQueryClient()
+  const query = useGithubPrChanges(item.number)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string | null>(null)
+  const data = query.data
+  const files = data?.available
+    ? data.files.filter((file) => file.path.toLowerCase().includes(filter.toLowerCase()))
+    : []
+  const current = files.findIndex((file) => file.path === selected)
+  useEffect(() => {
+    if (files.length > 0 && !files.some((file) => file.path === selected)) setSelected(files[0]!.path)
+  }, [data?.available ? data.headSha : '', filter])
+  const refresh = async () => {
+    const oldHead = data?.available ? data.headSha : null
+    const next = await getGithubPrChanges(item.number, { refresh: true })
+    queryClient.setQueryData(['github', 'pr-changes', item.number], next)
+    if (next.available && oldHead && oldHead !== next.headSha) {
+      setSelected(next.files[0]?.path ?? null)
+      toast('The reviewed revision changed.')
+    }
+  }
+  if (query.isPending) return <p aria-live="polite" className="mt-6 text-sm text-muted-foreground">Loading changed files…</p>
+  if (query.isError || !data) return <p className="mt-6 text-sm text-danger">Changed files could not be loaded.</p>
+  if (!data.available) return <p className="mt-6 text-sm text-muted-foreground">{data.reason}</p>
+  const diffFiles: DiffFileChange[] = files.map((file) => ({
+    path: file.path,
+    ...(file.previousPath ? { oldPath: file.previousPath } : {}),
+    status: file.status === 'removed' ? 'deleted' : file.status === 'changed' ? 'modified' : file.status,
+    adds: file.additions,
+    dels: file.deletions,
+    binary: file.patchUnavailableReason === 'binary',
+    patch: file.patch ?? '',
+  }))
+  const fallback = isHttpUrl(item.url) ? `${item.url}/files` : null
+  const active = files.find((file) => file.path === selected)
+  return (
+    <section data-slot="gh-pr-changes" className="mt-5 min-w-0">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <strong>{data.files.length} changed files</strong>
+        <span className="text-success">+{data.additions}</span>
+        <span className="text-danger">−{data.deletions}</span>
+        <span className="font-mono text-muted-foreground" title={data.headSha}>head {data.headSha.slice(0, 8)}</span>
+        <Button type="button" variant="outline" size="sm" className="ml-auto min-h-11" onClick={() => void refresh()}>Refresh</Button>
+      </div>
+      {data.truncated ? <p role="status" className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">{data.reason ?? 'This response is incomplete.'} {fallback ? <a href={fallback} target="_blank" rel="noopener noreferrer" className="underline">Open all files on GitHub</a> : null}</p> : null}
+      <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <aside className="min-w-0">
+          <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
+          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm lg:hidden">
+            {files.map((file) => <option key={file.path}>{file.path}</option>)}
+          </select>
+          <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
+            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left text-xs', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status} · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
+          </ul>
+        </aside>
+        <div className="min-w-0">
+          <div className="mb-2 flex justify-end gap-1">
+            <Button aria-label="Previous file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current <= 0} onClick={() => setSelected(files[current - 1]?.path ?? null)}><ChevronLeftIcon /></Button>
+            <Button aria-label="Next file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current < 0 || current >= files.length - 1} onClick={() => setSelected(files[current + 1]?.path ?? null)}><ChevronRightIcon /></Button>
+          </div>
+          {files.length === 0 ? <p className="text-sm text-muted-foreground">No changed files match this filter.</p> : <>
+            <Diff files={diffFiles.filter((file) => file.path === selected)} wrap className="min-w-0" />
+            {active && !active.patch ? <p className="rounded-b border border-border p-3 text-xs text-muted-foreground">Patch unavailable: {active.patchUnavailableReason ?? 'not-provided'}.</p> : null}
+          </>}
+        </div>
+      </div>
+    </section>
   )
 }
 

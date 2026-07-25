@@ -9,6 +9,7 @@ import {
   getConfig,
   getGithub,
   getGithubComments,
+  getGithubPrChanges,
   getGroup,
   getHealth,
   getLaunchKey,
@@ -754,5 +755,15 @@ export function useGithubComments(kind: 'issue' | 'pr', number: number, enabled 
     queryFn: ({ signal }) => getGithubComments(kind, number, {}, { signal }),
     enabled,
     staleTime: 60_000,
+  })
+}
+
+export function useGithubPrChanges(number: number | undefined) {
+  return useQuery({
+    queryKey: ['github', 'pr-changes', number ?? 0],
+    queryFn: ({ signal }) => getGithubPrChanges(number as number, {}, { signal }),
+    enabled: number !== undefined,
+    staleTime: 60_000,
+    retry: false,
   })
 }

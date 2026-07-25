@@ -22,6 +22,7 @@ import type {
   GitPushResponse,
   GithubCommentsData,
   GithubData,
+  GithubPrChangesData,
   GroupResponse,
   HealthResponse,
   ImageInput,
@@ -364,6 +365,14 @@ export function getGithubComments(
   // "actually go and ask gh", exactly as `getGithub` can.
   const search = params.refresh ? '?refresh=1' : ''
   return get<GithubCommentsData>(`/api/github/comments/${kind}/${number}${search}`, opts)
+}
+
+export function getGithubPrChanges(
+  number: number,
+  params: { refresh?: boolean } = {},
+  opts?: ReadOptions,
+): Promise<GithubPrChangesData> {
+  return get<GithubPrChangesData>(`/api/github/prs/${number}/changes${params.refresh ? '?refresh=1' : ''}`, opts)
 }
 
 /** The run's worktree diff against its base, as unified-diff text. Also the plain-text
