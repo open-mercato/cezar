@@ -41,6 +41,8 @@ Honor additive `interactive: true` skill metadata in New Task so untouched Auton
 
 ## Progress
 
+PR: #665
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Metadata and contracts
