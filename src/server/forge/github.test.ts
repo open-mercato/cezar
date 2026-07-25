@@ -150,11 +150,11 @@ describe('normalizeMergeState', () => {
       allow_squash_merge: true,
       allow_rebase_merge: true,
       squash_merge_commit_title: 'PR_TITLE',
-    });
+    }, { readable: true, requiredChecks: ['test'] });
     expect(state.methods).toEqual(['squash', 'rebase']);
     expect(state.defaultMethod).toBe('squash');
     expect(state.canMerge).toBe(true);
-    expect(state.checks[0]).toMatchObject({ name: 'test', state: 'passing', required: null });
+    expect(state.checks[0]).toMatchObject({ name: 'test', state: 'passing', required: true });
   });
 
   it('never presents unknown rules or a changed review decision as ready', () => {
@@ -162,12 +162,17 @@ describe('normalizeMergeState', () => {
       allow_merge_commit: true,
       allow_squash_merge: true,
       allow_rebase_merge: true,
-    }).eligibility).toBe('unknown');
+    }, { readable: true, requiredChecks: [] }).eligibility).toBe('unknown');
     expect(normalizeMergeState({ ...ready, reviewDecision: 'CHANGES_REQUESTED' }, {
       allow_merge_commit: true,
       allow_squash_merge: true,
       allow_rebase_merge: true,
-    }).eligibility).toBe('blocked');
+    }, { readable: true, requiredChecks: [] }).eligibility).toBe('blocked');
+    expect(normalizeMergeState(ready, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }).eligibility).toBe('unknown');
   });
 });
 

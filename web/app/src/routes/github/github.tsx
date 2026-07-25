@@ -679,6 +679,11 @@ function GithubMergeBox({ number }: { number: number }) {
   const state = mergeState.data?.available ? mergeState.data.mergeState : null
   const [method, setMethod] = useState<GithubMergeMethod | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const refreshMergeState = useMutation({
+    mutationFn: () => getGithubPrMergeState(number, { refresh: true }),
+    onSuccess: (data) => queryClient.setQueryData(queryKeys.githubMergeState(number), data),
+    onError: (error) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
+  })
   const selectedMethod = method && state?.methods.includes(method)
     ? method
     : state?.defaultMethod ?? state?.methods[0] ?? null
@@ -738,10 +743,10 @@ function GithubMergeBox({ number }: { number: number }) {
               type="button"
               variant="ghost"
               size="sm"
-              disabled={mergeState.isFetching}
-              onClick={() => void mergeState.refetch()}
+              disabled={refreshMergeState.isPending}
+              onClick={() => refreshMergeState.mutate()}
             >
-              <RefreshCwIcon aria-hidden="true" className={cn('size-3.5', mergeState.isFetching && 'animate-spin')} />
+              <RefreshCwIcon aria-hidden="true" className={cn('size-3.5', refreshMergeState.isPending && 'animate-spin')} />
               Refresh
             </Button>
           </div>

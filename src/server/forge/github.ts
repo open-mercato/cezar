@@ -1291,6 +1291,10 @@ function mergeCheckState(check: z.infer<typeof mergeCheckSchema>): ForgePrCheck[
 export function normalizeMergeState(
   raw: unknown,
   policyRaw: unknown,
+  requirements: { readable: boolean; requiredChecks: string[] } = {
+    readable: false,
+    requiredChecks: [],
+  },
 ): ForgePrMergeState {
   const pr = mergePrSchema.parse(raw);
   const policy = repoMergePolicySchema.parse(policyRaw);
@@ -1313,7 +1317,7 @@ export function normalizeMergeState(
   const checks: ForgePrCheck[] = (pr.statusCheckRollup ?? []).map((check) => ({
     name: check.name,
     state: mergeCheckState(check),
-    required: null,
+    required: requirements.readable ? requirements.requiredChecks.includes(check.name) : null,
     ...(check.detailsUrl?.startsWith('https://') || check.detailsUrl?.startsWith('http://')
       ? { url: check.detailsUrl }
       : {}),
@@ -1345,6 +1349,12 @@ export function normalizeMergeState(
   } else if (reviewDecision === 'changes-requested' || reviewDecision === 'review-required') {
     eligibility = 'blocked';
     blockers.push({ code: 'reviews', message: reviewDecision === 'changes-requested' ? 'Changes were requested.' : 'A required review is missing.' });
+  } else if (reviewDecision === 'unknown' || !requirements.readable) {
+    eligibility = 'unknown';
+    blockers.push({
+      code: 'rules-unknown',
+      message: 'GitHub could not confirm review and branch-protection requirements.',
+    });
   } else if (checks.some((check) => check.state === 'pending') || pr.mergeStateStatus?.toUpperCase() === 'UNSTABLE') {
     eligibility = 'pending';
     blockers.push({ code: 'pending', message: 'Checks or GitHub mergeability are still pending.' });
@@ -1401,6 +1411,7 @@ async function fetchPrMergeState(
           statusCheckRollup: [{ name: 'test', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/mock/repo/actions' }],
         },
         { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true },
+        { readable: true, requiredChecks: ['test'] },
       ),
     };
   }
@@ -1409,16 +1420,25 @@ async function fetchPrMergeState(
   const hit = mergeStateCache.get(key);
   if (!refresh && hit && Date.now() - hit.at < MERGE_CACHE_MS) return hit.value;
   try {
-    const [prOut, policyOut] = await Promise.all([
-      gh(repoRoot, [
-        'pr', 'view', String(number), '--json',
-        'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup',
-      ]),
+    const prOut = await gh(repoRoot, [
+      'pr', 'view', String(number), '--json',
+      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup',
+    ]);
+    const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
+    const [policyOut, requiredChecks] = await Promise.all([
       gh(repoRoot, ['api', `repos/${repoRef.owner}/${repoRef.repo}`]),
+      gh(repoRoot, [
+        'api',
+        `repos/${repoRef.owner}/${repoRef.repo}/branches/${encodeURIComponent(parsedPr.baseRefName)}/protection/required_status_checks`,
+        '--jq',
+        '[.contexts[]?, .checks[]?.context] | unique',
+      ])
+        .then((output) => ({ readable: true, requiredChecks: z.array(z.string()).parse(JSON.parse(output)) }))
+        .catch(() => ({ readable: false, requiredChecks: [] as string[] })),
     ]);
     const value: ForgePrMergeStateResult = {
       available: true,
-      mergeState: normalizeMergeState(JSON.parse(prOut), JSON.parse(policyOut)),
+      mergeState: normalizeMergeState(parsedPr, JSON.parse(policyOut), requiredChecks),
     };
     mergeStateCache.set(key, { at: Date.now(), value });
     return value;
