@@ -84,12 +84,12 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     store.updateRun(run.id, { status: 'running', activity: 'monitoring' });
     store.flush();
 
-    const reopened = RunStore.open(dataDir);
+    const reopened = RunStore.open(dataDir, { keepLive: true });
     expect(reopened.getRun(run.id)?.activity).toBe('monitoring');
     // Resume/terminal transitions clear it back to a plain running/other state.
     reopened.updateRun(run.id, { status: 'running', activity: undefined });
     reopened.flush();
-    expect(RunStore.open(dataDir).getRun(run.id)?.activity).toBeUndefined();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(run.id)?.activity).toBeUndefined();
   });
 
   it('round-trips the monitoring deadline and clears monitoring state on terminal writes', () => {
@@ -102,6 +102,18 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(store.getRun(run.id)).toMatchObject({ status: 'done' });
     expect(store.getRun(run.id)?.activity).toBeUndefined();
     expect(store.getRun(run.id)?.monitoringWakeAt).toBeUndefined();
+  });
+
+  it('salvages a malformed wake deadline and stale terminal monitoring activity', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([{
+      ...LEGACY_RUN,
+      activity: 'monitoring',
+      monitoringWakeAt: 'not-a-date',
+    }]), 'utf8');
+    const loaded = RunStore.open(dataDir).getRun(LEGACY_RUN.id);
+    expect(loaded?.status).toBe('done');
+    expect(loaded?.activity).toBeUndefined();
+    expect(loaded?.monitoringWakeAt).toBeUndefined();
   });
 
   it('still loads an old runs.json that predates activity (#490)', () => {

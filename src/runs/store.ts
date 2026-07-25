@@ -107,7 +107,7 @@ const runRecordSchema = z.object({
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
   activity: z.enum(['monitoring']).optional(),
   /** Exact server-computed deadline for the next automatic monitoring check. */
-  monitoringWakeAt: z.string().datetime().optional(),
+  monitoringWakeAt: z.string().datetime().optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -351,6 +351,10 @@ export class RunStore extends EventEmitter {
               for (const step of run.steps) {
                 if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
               }
+            }
+            if (!['running', 'waiting', 'queued'].includes(run.status)) {
+              run.activity = undefined;
+              run.monitoringWakeAt = undefined;
             }
             store.runs.set(run.id, run);
           }
