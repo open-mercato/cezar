@@ -54,13 +54,13 @@ The source document is read from `origin/pr-658` for this run and intentionally 
 
 ### Phase 1: Server contract
 
-- [ ] 1.1 Add normalized forge PR-change schemas/types and GitHub driver behavior
-- [ ] 1.2 Add caching and the project-scoped PR changes route
+- [x] 1.1 Add normalized forge PR-change schemas/types and GitHub driver behavior — d74470f
+- [x] 1.2 Add caching and the project-scoped PR changes route — d74470f
 
 ### Phase 2: Cockpit view
 
-- [ ] 2.1 Add client/query support, PR-only navigation, and deep-link routing
-- [ ] 2.2 Build the responsive Changes view and unit coverage
+- [x] 2.1 Add client/query support, PR-only navigation, and deep-link routing — c63dc07
+- [x] 2.2 Build the responsive Changes view and unit coverage — c63dc07
 - [ ] 2.3 Extend real-browser coverage
 
 ### Phase 3: Verification and review
