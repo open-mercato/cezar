@@ -32,6 +32,34 @@ export interface NewTaskDraft {
   generateFollowups: boolean | null
 }
 
+export function resolveComposerRunMode(input: {
+  hasGit: boolean
+  variants: number
+  forceWorktree?: boolean
+  planFirst: boolean
+  explicitAutonomous: boolean | null
+  explicitWorktree: boolean | null
+  configuredAutonomous: boolean | 'source-dependent'
+  configuredWorktree: boolean
+  source: TaskSource['source']
+  interactiveRecommendation?: boolean
+}): { autonomous: boolean; worktree: boolean } {
+  const autonomousFallback = input.configuredAutonomous === 'source-dependent'
+    ? input.source === 'skill'
+    : input.configuredAutonomous
+  const recommendation = input.interactiveRecommendation === true ? false : undefined
+  return {
+    autonomous: input.planFirst
+      ? false
+      : (input.explicitAutonomous ?? recommendation ?? autonomousFallback),
+    worktree: !input.hasGit
+      ? false
+      : input.variants > 1 || input.forceWorktree === true
+        ? true
+        : (input.explicitWorktree ?? recommendation ?? input.configuredWorktree),
+  }
+}
+
 const EMPTY: NewTaskDraft = {
   text: '',
   source: null,

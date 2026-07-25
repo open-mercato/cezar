@@ -105,7 +105,7 @@ describe('model option resolution', () => {
   })
 })
 
-describe('resolveSource (legacy lastTask validation + defaultTaskSource)', () => {
+describe('resolveSource (candidate validation + cold quick-task default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
 
@@ -119,8 +119,9 @@ describe('resolveSource (legacy lastTask validation + defaultTaskSource)', () =>
     ).toEqual({ source: 'workflow', ref: 'fix-and-verify' })
   })
 
-  it('defaults to the FIRST SKILL (skills-first, feedback 2026-07-11), then first workflow, then quick-task', () => {
-    expect(resolveSource([], skills, workflows)).toEqual({ source: 'skill', ref: 'om-fix' })
+  it('defaults cold to quick-task, then first skill when quick-task is unavailable', () => {
+    expect(resolveSource([], skills, workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
+    expect(resolveSource([], skills, [workflow('fix-and-verify')])).toEqual({ source: 'skill', ref: 'om-fix' })
     expect(resolveSource([], [], workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
     expect(resolveSource([], [], [])).toEqual({ source: 'workflow', ref: 'quick-task' })
   })

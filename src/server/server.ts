@@ -67,6 +67,7 @@ import {
   effectiveSkillsAutoUpdate,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
+  effectiveComposerDefault,
   type WorkspaceConfig,
   type WorkspaceProject,
 } from '../workspace/config.js';
@@ -309,6 +310,12 @@ export interface WorkspaceConfigResponse {
   /** Stored override; null means inherit CEZ_SKILLS_AUTO_UPDATE, then true. */
   skillsAutoUpdate: boolean | null;
   effectiveSkillsAutoUpdate: boolean;
+  composerDefaults: {
+    autonomous: boolean | null;
+    worktree: boolean | null;
+    inheritedAutonomous: boolean | 'source-dependent';
+    inheritedWorktree: boolean;
+  };
   resources: {
     maxParallel: number;
     memoryLimitMb: number | null;
@@ -1804,6 +1811,21 @@ export function createApp(deps: ServerDeps): Hono {
     projectsDir: config.projectsDir,
     skillsAutoUpdate: config.skillsAutoUpdate ?? null,
     effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
+    composerDefaults: {
+      autonomous: config.composerDefaults.autonomous ?? null,
+      worktree: config.composerDefaults.worktree ?? null,
+      inheritedAutonomous:
+        process.env.CEZ_AUTONOMOUS_DEFAULT === '0'
+          ? false
+          : process.env.CEZ_AUTONOMOUS_DEFAULT === '1'
+            ? true
+            : 'source-dependent',
+      inheritedWorktree: effectiveComposerDefault(
+        undefined,
+        process.env.CEZ_WORKTREE_DEFAULT,
+        true,
+      ),
+    },
     resources: {
       maxParallel: config.resources.maxParallel,
       memoryLimitMb: config.resources.memoryLimitMb,
@@ -1819,6 +1841,12 @@ export function createApp(deps: ServerDeps): Hono {
     browseRoot: z.string().trim().min(1).max(4096).optional(),
     projectsDir: z.string().trim().min(1).max(4096).optional(),
     skillsAutoUpdate: z.boolean().nullable().optional(),
+    composerDefaults: z
+      .object({
+        autonomous: z.boolean().nullable().optional(),
+        worktree: z.boolean().nullable().optional(),
+      })
+      .optional(),
     resources: z
       .object({
         maxParallel: z.number().int().min(1).max(16).optional(),
@@ -1832,7 +1860,7 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
-    const { browseRoot, projectsDir, skillsAutoUpdate, resources } = parsed.data;
+    const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources } = parsed.data;
     for (const [configuredRoot, create] of [
       [browseRoot, false],
       [projectsDir, true],
@@ -1868,6 +1896,14 @@ export function createApp(deps: ServerDeps): Hono {
         if (projectsDir !== undefined) config.projectsDir = projectsDir;
         if (skillsAutoUpdate === null) delete config.skillsAutoUpdate;
         else if (skillsAutoUpdate !== undefined) config.skillsAutoUpdate = skillsAutoUpdate;
+        if (composerDefaults?.autonomous === null) delete config.composerDefaults.autonomous;
+        else if (composerDefaults?.autonomous !== undefined) {
+          config.composerDefaults.autonomous = composerDefaults.autonomous;
+        }
+        if (composerDefaults?.worktree === null) delete config.composerDefaults.worktree;
+        else if (composerDefaults?.worktree !== undefined) {
+          config.composerDefaults.worktree = composerDefaults.worktree;
+        }
         if (resources?.maxParallel !== undefined) config.resources.maxParallel = resources.maxParallel;
         if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
         if (resources?.worktreeRetentionDefault !== undefined) {
