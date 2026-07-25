@@ -65,7 +65,15 @@ export interface ThreadAsk {
   answer?: string
 }
 
-export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk
+/** A persisted, cezar-owned recovery marker for a provider's runtime authentication failure. */
+export interface ThreadProviderAuthRequired {
+  kind: 'provider-auth-required'
+  id: string
+  provider: 'claude' | 'codex' | 'opencode'
+  authFailureId: string
+}
+
+export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk | ThreadProviderAuthRequired
 
 export interface ThreadTurn {
   /** Stable render key, assigned in arrival order (`turn-1`, `turn-2`, …). Not the protocol
@@ -175,6 +183,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
+  return value === 'claude' || value === 'codex' || value === 'opencode' ? value : undefined
 }
 
 /** The engine's turn-end markers (`CEZ:DONE`, `CEZ:MONITORING` from #490) plus the in-band
@@ -535,6 +547,18 @@ export function reduceThread(events: RunEvent[]): ThreadState {
           exitCode,
         }
         currentTurn().entries.push({ origin: 'meta', entry: item })
+        break
+      }
+      case 'provider-auth-required': {
+        // Cezar-owned persisted metadata: accept only the closed provider set and an opaque,
+        // bounded incident id. A malformed historical/future line costs itself, never a turn.
+        const provider = providerId(event.provider)
+        const authFailureId = str(event.authFailureId)
+        if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
+        currentTurn().entries.push({
+          origin: 'meta',
+          entry: { kind: 'provider-auth-required', id: `v1:${event.seq}`, provider, authFailureId },
+        })
         break
       }
       case 'image': {

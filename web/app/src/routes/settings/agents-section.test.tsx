@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
-import type { ConfigResponse, RepoResponse, Runner } from '@/api/types'
+import type { ConfigResponse, ProviderStatusResponse, RepoResponse, Runner } from '@/api/types'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 
@@ -31,8 +31,27 @@ function serve({
   config = {},
   putStatus = 200,
   putError = 'nope',
-}: { config?: Partial<ConfigResponse>; putStatus?: number; putError?: string } = {}) {
+  providerStatus = {
+    providers: [
+      { provider: 'claude', status: 'connected', enabled: true },
+      { provider: 'codex', status: 'connected', enabled: true },
+      { provider: 'opencode', status: 'connected', enabled: true },
+    ],
+  },
+  providerStatusCode = 200,
+  providerStatusPending = false,
+  providerStatusAfterFirstError,
+}: {
+  config?: Partial<ConfigResponse>
+  putStatus?: number
+  putError?: string
+  providerStatus?: unknown
+  providerStatusCode?: number
+  providerStatusPending?: boolean
+  providerStatusAfterFirstError?: string
+} = {}) {
   requests = []
+  let providerStatusReads = 0
   const state: ConfigResponse = {
     baseBranch: null,
     defaultRunner: 'claude',
@@ -55,6 +74,16 @@ function serve({
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
       if (url === '/api/config' && method === 'GET') return json(state)
+      if (url === '/api/providers/status' && method === 'GET') {
+        if (providerStatusPending) return new Promise<never>(() => {})
+        if (providerStatusReads++ > 0 && providerStatusAfterFirstError) {
+          return json({ error: providerStatusAfterFirstError }, 500)
+        }
+        return json(providerStatus, providerStatusCode)
+      }
+      if (url === '/api/providers/status?refresh=1' && method === 'GET') {
+        return json(providerStatus, providerStatusCode)
+      }
       if (url === '/api/config' && method === 'PUT') {
         if (putStatus !== 200) return json({ error: putError }, putStatus)
         // The server's merge semantics, mimicked: null clears, defaultModels merges per runner.
@@ -88,6 +117,9 @@ function serve({
  *  `/api/*` paths this file's fetch stub matches stay byte-identical. */
 function gateSeededClient() {
   const client = createQueryClient()
+  client.setDefaultOptions({
+    queries: { ...client.getDefaultOptions().queries, retry: false },
+  })
   client.setQueryData(queryKeys.health, { bootProject: 'boot' })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [],
@@ -98,14 +130,16 @@ function gateSeededClient() {
 }
 
 function renderAt(entry: string) {
+  const client = gateSeededClient()
   render(
-    <QueryClientProvider client={gateSeededClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
         <AppRoutes />
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
   )
+  return client
 }
 
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/config')
@@ -118,6 +152,113 @@ afterEach(() => {
 })
 
 describe('the agents form', () => {
+  it('puts the anchored Providers section first', async () => {
+    serve()
+    renderAt('/settings/agents')
+
+    await waitFor(() => expect(form()).not.toBeNull())
+    const providers = document.querySelector<HTMLElement>('[data-slot="provider-settings"]')!
+    expect(providers.id).toBe('providers')
+    expect(providers.className).toContain('scroll-mt-20')
+    expect(providers.className).not.toContain('scroll-mt-6')
+    expect(form()?.firstElementChild).toBe(providers)
+  })
+
+  it('keeps a saved disconnected runner selected while disabling its runner and model controls', async () => {
+    serve({
+      config: { defaultRunner: 'codex', defaultModels: { codex: 'gpt-5-codex' } },
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: true },
+        ],
+      },
+    })
+    renderAt('/settings/agents')
+
+    const codex = await screen.findByRole('radio', { name: 'codex' })
+    expect(codex.getAttribute('aria-checked')).toBe('true')
+    expect((codex as HTMLButtonElement).disabled).toBe(true)
+    const model = screen.getByLabelText<HTMLSelectElement>('Default model for codex')
+    expect(model.value).toBe('gpt-5-codex')
+    expect(model.disabled).toBe(true)
+
+    expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(false)
+  })
+
+  it('keeps a saved disabled runner selected and explains how to recover', async () => {
+    serve({
+      config: { defaultRunner: 'codex', defaultModels: { codex: 'gpt-5-codex' } },
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: false },
+          { provider: 'opencode', status: 'connected', enabled: true },
+        ],
+      },
+    })
+    renderAt('/settings/agents')
+
+    const codex = await screen.findByRole('radio', { name: 'codex' })
+    expect(codex.getAttribute('aria-checked')).toBe('true')
+    expect((codex as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').disabled).toBe(true)
+    expect(
+      screen.getByText('This provider is disabled. Enable it above or choose another provider.'),
+    ).toBeTruthy()
+  })
+
+  it('disables only provider-specific controls while provider status is pending', async () => {
+    serve({ providerStatusPending: true })
+    renderAt('/settings/agents')
+
+    const claude = await screen.findByRole('radio', { name: 'claude' })
+    expect((claude as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
+    expect((screen.getByLabelText<HTMLTextAreaElement>('System prompt')).disabled).toBe(false)
+    expect((screen.getByLabelText<HTMLButtonElement>('Live title updates')).disabled).toBe(false)
+  })
+
+  it('keeps unrelated settings usable when provider status errors', async () => {
+    serve({ providerStatus: { error: 'probe failed' }, providerStatusCode: 500 })
+    renderAt('/settings/agents')
+
+    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
+    expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
+    expect(screen.getByLabelText<HTMLButtonElement>('Review changes before finishing').disabled).toBe(false)
+  })
+
+  it('keeps unrelated settings usable and provider controls disabled for malformed status data', async () => {
+    const secret = 'unexpected-provider-payload'
+    serve({
+      providerStatus: { providers: [null, { provider: 'future', status: secret }] },
+    })
+    renderAt('/settings/agents')
+
+    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
+    expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
+    expect(screen.queryByText(secret)).toBeNull()
+  })
+
+  it('disables provider controls when a failed refresh leaves connected data cached', async () => {
+    serve({ providerStatusAfterFirstError: 'refresh probe failed' })
+    const client = renderAt('/settings/agents')
+
+    const claude = await screen.findByRole('radio', { name: 'claude' })
+    expect((claude as HTMLButtonElement).disabled).toBe(false)
+    await act(() => client.refetchQueries({ queryKey: workspaceQueryKeys.providerStatus }))
+
+    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
+    expect((claude as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
+  })
+
   it('renders every knob from GET /api/config', async () => {
     serve({
       config: {

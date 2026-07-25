@@ -538,6 +538,49 @@ describe('reduceThread — check-output (check steps, v1-only by nature)', () =>
   })
 })
 
+describe('reduceThread — provider authorization recovery', () => {
+  it('persists a valid provider authorization incident in its failure turn', () => {
+    expect(reduceThread([
+      line(1, 'provider-auth-required', {
+        provider: 'claude',
+        authFailureId: 'incident-1',
+        stepId: 'work',
+      }),
+    ]).turns[0]?.items).toEqual([{
+      kind: 'provider-auth-required',
+      id: 'v1:1',
+      provider: 'claude',
+      authFailureId: 'incident-1',
+    }])
+  })
+
+  it.each([
+    ['an unknown provider', { provider: 'future', authFailureId: 'incident-1' }],
+    ['a blank incident id', { provider: 'claude', authFailureId: '' }],
+    ['an overlong incident id', { provider: 'claude', authFailureId: 'x'.repeat(129) }],
+    ['a malformed payload', { provider: ['claude'], authFailureId: 'incident-1' }],
+  ])('ignores %s without losing surrounding transcript entries', (_name, payload) => {
+    const { turns } = reduceThread([
+      line(1, 'note', { message: 'before' }),
+      line(2, 'provider-auth-required', payload),
+      line(3, 'note', { message: 'after' }),
+    ])
+    expect(turns[0]?.items).toEqual([
+      { kind: 'note', id: 'v1:1', text: 'before', tone: 'dim' },
+      { kind: 'note', id: 'v1:3', text: 'after', tone: 'dim' },
+    ])
+  })
+
+  it('replays the persisted incident deterministically', () => {
+    const events = [
+      line(1, 'turn.started', { turnId: 'turn-1' }),
+      line(2, 'provider-auth-required', { provider: 'codex', authFailureId: 'incident-2' }),
+      line(3, 'turn.completed', { turnId: 'turn-1', stopReason: 'error' }),
+    ]
+    expect(reduceThread(events)).toEqual(reduceThread(events))
+  })
+})
+
 describe('threadFooter', () => {
   const cases = [
     ['waiting', undefined, { state: 'waiting' }],

@@ -38,8 +38,8 @@ export interface RunnerOption {
   desc: string
 }
 
-/** The selectable agent backends (legacy `RUNNERS`). Only those detected on the host via
- *  /api/health checks are offered. */
+/** The agent-backend catalog (legacy `RUNNERS`). Installation-only compatibility surfaces use
+ *  `availableRunners`; the new-task composer filters this catalog by connected provider status. */
 export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
@@ -195,7 +195,8 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
- *  - `runner` only when it differs from what the server would choose by default;
+ *  - `runner` omitted only when it equals a known server default (unknown defaults and connected
+ *    fallbacks stay explicit);
  *  - `model`/`variants`/`images` only when they say something (`''`/1/empty mean "default").
  */
 export function buildCreateRunBody(opts: {
@@ -203,8 +204,6 @@ export function buildCreateRunBody(opts: {
   source: TaskSource
   model: string
   runner: Runner
-  runnerCount: number
-  /** What an omitted runner resolves to on the server. */
   defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
@@ -226,7 +225,7 @@ export function buildCreateRunBody(opts: {
     source,
     model,
     runner,
-    defaultRunner = runner,
+    defaultRunner,
     variants,
     images,
     worktree,

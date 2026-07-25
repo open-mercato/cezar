@@ -1,10 +1,17 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { HealthResponse, RepoResponse, Skill, WorkflowsResponse } from '@/api/types'
+import { workspaceQueryKeys } from '@/api/queries'
+import type {
+  HealthResponse,
+  ProviderStatusResponse,
+  RepoResponse,
+  Skill,
+  WorkflowsResponse,
+} from '@/api/types'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
 import { resetDraft, writeDraft } from './new-task-draft'
@@ -64,10 +71,44 @@ const HEALTH_MULTI: HealthResponse = {
   ],
 }
 
+const HEALTH_ALL: HealthResponse = {
+  ...HEALTH,
+  checks: [
+    { name: 'claude', available: true },
+    { name: 'codex', available: true },
+    { name: 'opencode', available: true },
+    { name: 'git', available: true },
+  ],
+}
+
 const HEALTH_NO_GIT: HealthResponse = {
   ...HEALTH,
   repo: null,
   checks: [{ name: 'claude', available: true }],
+}
+
+const PROVIDERS_CONNECTED: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
+const PROVIDERS_MULTI: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
+  ],
+}
+
+const PROVIDERS_NONE: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'not-installed', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
+  ],
 }
 
 const SKILLS: Skill[] = [
@@ -115,8 +156,25 @@ const FALLBACK_PLAN = {
 type Recorded = { method: string; url: string; body?: unknown }
 let requests: Recorded[]
 
+function deferredJson<T>() {
+  let resolve!: (response: Response) => void
+  return {
+    fetch: () => new Promise<Response>((done) => { resolve = done }),
+    release: (payload: T) =>
+      resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+  }
+}
+
 function serve(overrides: {
-  health?: HealthResponse
+  health?: HealthResponse | (() => Promise<Response>)
+  /** Host authentication state, or a delayed answer for pending/refresh tests. */
+  providerStatus?: ProviderStatusResponse | (() => Promise<Response>)
+  providerStatusStatus?: number
   skills?: Skill[]
   workflows?: WorkflowsResponse
   repo?: RepoResponse
@@ -135,6 +193,8 @@ function serve(overrides: {
 } = {}) {
   const data = {
     health: HEALTH,
+    providerStatus: PROVIDERS_CONNECTED,
+    providerStatusStatus: 200,
     skills: SKILLS,
     workflows: WORKFLOWS,
     repo: REPO,
@@ -158,7 +218,14 @@ function serve(overrides: {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/health') return json(data.health)
+      if (url === '/api/health') {
+        return typeof data.health === 'function' ? data.health() : json(data.health)
+      }
+      if (url === '/api/providers/status') {
+        return typeof data.providerStatus === 'function'
+          ? data.providerStatus()
+          : json(data.providerStatus, data.providerStatusStatus)
+      }
       if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/skills') return json(data.skills)
       if (url === '/api/workflows' && method === 'GET') return json(data.workflows)
@@ -190,11 +257,13 @@ function LocationProbe() {
 }
 
 function renderNewTask(entry = '/new') {
-  return render(
-    <QueryClientProvider client={createQueryClient()}>
+  const client = createQueryClient()
+  const rendered = render(
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/new" element={<NewTaskRoute />} />
+          <Route path="/p/:projectId/new" element={<NewTaskRoute />} />
           <Route path="*" element={<div data-testid="elsewhere" />} />
         </Routes>
         <LocationProbe />
@@ -202,6 +271,7 @@ function renderNewTask(entry = '/new') {
       </MemoryRouter>
     </QueryClientProvider>,
   )
+  return { ...rendered, client }
 }
 
 const textarea = () => screen.getByLabelText('Describe a task for the agent') as HTMLTextAreaElement
@@ -210,7 +280,10 @@ const location = () => screen.getByTestId('location').textContent
 
 /** The pickers resolve once workflows+skills+ui-state answered — wait for the real label. */
 async function pillReady(label = 'om-fix') {
-  await waitFor(() => expect(sourcePill().textContent).toContain(label))
+  await waitFor(() => {
+    expect(sourcePill().textContent).toContain(label)
+    expect(textarea().disabled).toBe(false)
+  })
 }
 
 const startTask = async () => {
@@ -229,9 +302,10 @@ describe('the hero surface', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
     expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
-    // ⌘N drops you here to type — the caret must already be in the box.
-    expect(document.activeElement).toBe(textarea())
     await pillReady()
+    // ⌘N drops you here to type — after the provider check enables the composer, the caret
+    // must land in the box without the user clicking it.
+    await waitFor(() => expect(document.activeElement).toBe(textarea()))
   })
 
   it('suggested chips fill the textarea (and only fill — no fetch, no navigation)', async () => {
@@ -259,7 +333,7 @@ describe('picker data flows', () => {
   })
 
   it('shows the runner pill with >1 backend, and switching runner swaps the model presets', async () => {
-    serve({ health: HEALTH_MULTI })
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
     await pillReady()
 
@@ -290,12 +364,45 @@ describe('picker data flows', () => {
     expect(labels.some((l) => l.includes('opus'))).toBe(false)
   })
 
+  it('excludes disconnected providers from the runner choices even when health detects them', async () => {
+    serve({ health: HEALTH_ALL, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+
+    const runnerPill = document.querySelector('[data-slot="runner-pill"]') as HTMLElement
+    fireEvent.pointerDown(runnerPill)
+    const options = await screen.findAllByRole('menuitemradio')
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining('claude'),
+      expect.stringContaining('codex'),
+    ])
+    expect(options.some((option) => option.textContent?.includes('opencode'))).toBe(false)
+  })
+
+  it('excludes connected but disabled providers while retaining an enabled runner choice', async () => {
+    serve({
+      health: HEALTH_ALL,
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: false },
+        ],
+      },
+    })
+    renderNewTask()
+    await pillReady()
+
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    expect(textarea().disabled).toBe(false)
+  })
+
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
       text: '', source: null, runner: 'codex', model: 'claude-opus-4-8', variants: 1,
       planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
     })
-    serve({ health: HEALTH_MULTI })
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
     await pillReady()
 
@@ -397,6 +504,151 @@ describe('picker data flows', () => {
       const visible = [...document.querySelectorAll('[data-slot="source-option"]')]
       expect(visible).toHaveLength(0)
     })
+  })
+})
+
+// ---- provider authentication gate -------------------------------------------------------------
+
+describe('provider authentication gate', () => {
+  it('keeps a pending status honest without claiming that providers are missing', async () => {
+    let release!: (response: Response) => void
+    serve({
+      providerStatus: () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    })
+    renderNewTask()
+
+    await waitFor(() => expect(sourcePill().textContent).toContain('om-fix'))
+    expect(textarea().disabled).toBe(true)
+    expect(textarea().placeholder).toBe('Checking agent providers…')
+    expect(screen.queryByRole('link', { name: 'Configure providers' })).toBeNull()
+    expect(document.body.textContent).not.toContain('Connect an agent provider')
+
+    release(
+      new Response(JSON.stringify(PROVIDERS_CONNECTED), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  })
+
+  it('disables Start and Plan and links to project-aware provider settings when none connect', async () => {
+    serve({ providerStatus: PROVIDERS_NONE })
+    renderNewTask('/p/acme/new')
+
+    await waitFor(() =>
+      expect(textarea().placeholder).toBe('Connect an agent provider before starting a task.'),
+    )
+    expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('radio', { name: 'Plan first' }))
+    expect((screen.getByRole('button', { name: 'Plan task' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/p/acme/settings/agents#providers',
+    )
+  })
+
+  it('disables submission with verification-failed copy and setup guidance on a status error', async () => {
+    serve({ providerStatus: { providers: [] }, providerStatusStatus: 404 })
+    renderNewTask()
+
+    await waitFor(() =>
+      expect(textarea().placeholder).toBe('Provider authentication could not be verified.'),
+    )
+    expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+  })
+
+  it('one connected provider suppresses the runner pill but leaves submission enabled', async () => {
+    serve({
+      health: { ...HEALTH_MULTI, defaultRunner: 'codex' },
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+    renderNewTask()
+    await pillReady()
+
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.change(textarea(), { target: { value: 'Use the only connected provider' } })
+    expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('sends the connected runner explicitly when health has not revealed the server default yet', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    serve({ health: delayedHealth.fetch })
+    renderNewTask()
+    await pillReady()
+
+    fireEvent.change(textarea(), { target: { value: 'Start before health resolves' } })
+    await startTask()
+
+    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    delayedHealth.release(HEALTH)
+  })
+
+  it('posts an explicit connected fallback when the configured default is disconnected', async () => {
+    serve({
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+    renderNewTask()
+    await pillReady()
+    fireEvent.change(textarea(), { target: { value: 'Fall back safely' } })
+    await startTask()
+
+    expect((postedBody() as Record<string, unknown>).runner).toBe('codex')
+  })
+
+  it('stays enabled when one provider is connected and another status is unknown', async () => {
+    serve({
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'unknown', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+    renderNewTask()
+    await pillReady()
+    fireEvent.change(textarea(), { target: { value: 'Known-good provider wins' } })
+    await startTask()
+
+    expect((postedBody() as Record<string, unknown>).runner).toBe('codex')
+  })
+
+  it('a status refresh enables an already-open form without a reload', async () => {
+    let current = PROVIDERS_NONE
+    serve({
+      providerStatus: () =>
+        Promise.resolve(
+          new Response(JSON.stringify(current), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        ),
+    })
+    const { client } = renderNewTask()
+    await waitFor(() =>
+      expect(textarea().placeholder).toBe('Connect an agent provider before starting a task.'),
+    )
+
+    current = PROVIDERS_CONNECTED
+    await client.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
+    await waitFor(() => expect(textarea().disabled).toBe(false))
   })
 })
 
@@ -683,6 +935,93 @@ describe('bookmarklet auto-start', () => {
   const runsPosted = () => requests.filter((r) => r.method === 'POST' && r.url === '/api/runs')
   const keyFetched = () => requests.some((r) => r.method === 'GET' && r.url === '/api/launch-key')
 
+  it('waits for provider status before a valid signed bookmarklet starts', async () => {
+    let release!: (response: Response) => void
+    serve({
+      providerStatus: () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    })
+    renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() =>
+      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true),
+    )
+    expect(keyFetched()).toBe(false)
+    expect(runsPosted()).toHaveLength(0)
+
+    release(
+      new Response(JSON.stringify(PROVIDERS_CONNECTED), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    expect(runsPosted()).toHaveLength(1)
+  })
+
+  it('waits for health and sends Claude explicitly when the eventual server default is Codex', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    const delayedProviders = deferredJson<ProviderStatusResponse>()
+    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
+    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.url === '/api/health')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
+    })
+    await act(async () => {
+      delayedProviders.release(PROVIDERS_CONNECTED)
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
+    )
+    expect(keyFetched()).toBe(false)
+    expect(runsPosted()).toHaveLength(0)
+
+    delayedHealth.release({ ...HEALTH, defaultRunner: 'codex' })
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    expect(runsPosted().map((request) => request.body)).toEqual([
+      {
+        task: 'hello',
+        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
+        runner: 'claude',
+      },
+    ])
+  })
+
+  it('waits for health and keeps the protected body implicit when the eventual default is Claude', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    const delayedProviders = deferredJson<ProviderStatusResponse>()
+    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
+    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.url === '/api/health')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
+    })
+    await act(async () => {
+      delayedProviders.release(PROVIDERS_CONNECTED)
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
+    )
+    expect(keyFetched()).toBe(false)
+    expect(runsPosted()).toHaveLength(0)
+
+    delayedHealth.release(HEALTH)
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    expect(runsPosted().map((request) => request.body)).toEqual([
+      {
+        task: 'hello',
+        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
+      },
+    ])
+  })
+
   it('valid key + auto=1 + skill/ref → starts unattended with the exact legacy body, then the thread', async () => {
     serve()
     renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
@@ -697,6 +1036,40 @@ describe('bookmarklet auto-start', () => {
     expect(location()).toBe('/tasks/r1')
     // Unattended starts do not rewrite the sticky lastTask (legacy parity).
     expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/ui-state')).toBe(false)
+  })
+
+  it('uses an explicit connected fallback when the saved server default is disconnected', async () => {
+    serve({
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+    renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+
+    expect(runsPosted().map((request) => request.body)).toEqual([
+      {
+        task: 'hello',
+        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
+        runner: 'codex',
+      },
+    ])
+  })
+
+  it('keeps the prefilled composer disabled and does not POST when none are connected', async () => {
+    serve({ providerStatus: PROVIDERS_NONE })
+    renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() =>
+      expect(textarea().placeholder).toBe('Connect an agent provider before starting a task.'),
+    )
+    expect(textarea().value).toBe('hello')
+    expect(runsPosted()).toHaveLength(0)
+    expect(screen.getByRole('link', { name: 'Configure providers' })).toBeTruthy()
   })
 
   it('ref only (no skill) + valid key → quick-task, exactly like legacy', async () => {
@@ -978,6 +1351,48 @@ describe('the plan flow', () => {
       ],
     })
     await waitFor(() => expect(location()).toBe('/tasks/planned-1'))
+  })
+
+  it('▶ Start sends the connected runner explicitly when health is still pending', async () => {
+    const delayedHealth = deferredJson<HealthResponse>()
+    serve({ health: delayedHealth.fetch, createRun: { id: 'planned-before-health' } })
+    renderNewTask()
+    await planTask('Plan before health resolves')
+
+    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
+    await waitFor(() => expect(postedBody()).toBeDefined())
+
+    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    delayedHealth.release(HEALTH)
+  })
+
+  it('does not start a reviewed plan after provider status loses every connection', async () => {
+    let current = PROVIDERS_CONNECTED
+    serve({
+      providerStatus: () =>
+        Promise.resolve(
+          new Response(JSON.stringify(current), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        ),
+    })
+    const { client } = renderNewTask()
+    await planTask('Wait for a connected provider')
+
+    current = PROVIDERS_NONE
+    await client.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
+    await waitFor(() => expect(textarea().disabled).toBe(true))
+    const start = document.querySelector<HTMLButtonElement>('[data-slot="plan-start"]')!
+    expect(start.disabled).toBe(true)
+    expect(screen.getByText('Connect an agent provider before starting a task.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+    start.removeAttribute('disabled')
+    fireEvent.click(start)
+
+    expect(requests.some((request) => request.url === '/api/runs')).toBe(false)
   })
 
   it('▶ Start carries the follow-up opt-out from the composer and remembers it', async () => {

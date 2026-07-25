@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type QueuedMessage, type RunRecord } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { apiRequest } from './loopback-request.testkit.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 import { createApp } from './server.js';
 
 /**
@@ -75,7 +76,13 @@ describe('queued prompt stack routes (#472)', () => {
       deferMessage: () => rung === 'starting',
     } as unknown as RunManager;
 
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {

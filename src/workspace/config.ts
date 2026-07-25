@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.js';
 import { workspaceConfigPath } from '../paths.js';
 
 /**
@@ -69,6 +70,21 @@ const workspacePathSchema = (envName: 'CEZ_BROWSE_ROOT' | 'CEZ_PROJECTS_DIR', fa
   return z.string().min(1).max(4096).default(defaultValue).catch(defaultValue);
 };
 
+const providerIdSet = new Set<string>(PROVIDER_IDS);
+
+const disabledProvidersSchema = z
+  .array(z.unknown())
+  .default(() => [])
+  .catch(() => [])
+  .transform((values): ProviderId[] => {
+    const seen = new Set<ProviderId>();
+    for (const value of values) {
+      if (typeof value !== 'string' || !providerIdSet.has(value)) continue;
+      seen.add(value as ProviderId);
+    }
+    return PROVIDER_IDS.filter((provider) => seen.has(provider));
+  });
+
 const workspaceConfigSchema = z
   .object({
     /** Migration cursor (src/workspace/migrations.ts). Absent/bad → 0, which
@@ -87,6 +103,8 @@ const workspaceConfigSchema = z
     // Function-form default/catch: mutators (step 1.3's registerProject) edit
     // these objects in place, so parses must never share one reference.
     resources: resourcesSchema.default(() => ({})).catch(() => resourcesSchema.parse({})),
+    /** Host-wide provider preferences; absent means every provider is enabled. */
+    disabledProviders: disabledProvidersSchema,
     /** Per-entry salvage: a corrupt entry is dropped, the rest of the registry
      *  survives (a whole-array `.catch([])` would evict every project over one
      *  bad row). */

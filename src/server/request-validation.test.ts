@@ -8,6 +8,7 @@ import type { RunManager, StartRunInput } from '../workflows/run.js';
 import type { WorkflowDef } from '../workflows/types.js';
 import { createApp } from './server.js';
 import { apiRequest } from './loopback-request.testkit.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 
 /**
  * Tightened request validation (#429): the mutating routes now bound their
@@ -41,7 +42,13 @@ describe('request validation bounds (#429)', () => {
         return { ok: true };
       },
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {

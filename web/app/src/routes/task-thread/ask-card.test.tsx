@@ -1,18 +1,48 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AskCard } from './ask-card'
 import type { ThreadAsk } from './thread-state'
+import type { ApiRun, ProviderStatusResponse } from '@/api/types'
 
 const mutateAsync = vi.fn().mockResolvedValue({})
+let providerStatus: ProviderStatusResponse
 vi.mock('@/api/queries', () => ({
   useSendMessage: () => ({ mutateAsync, isPending: false }),
+  useProviderStatus: () => ({ data: providerStatus, isSuccess: true }),
 }))
 
 afterEach(() => {
   cleanup()
   mutateAsync.mockClear()
+  providerStatus = {
+    providers: [
+      { provider: 'claude', status: 'connected', enabled: true },
+      { provider: 'codex', status: 'not-installed', enabled: true },
+      { provider: 'opencode', status: 'not-installed', enabled: true },
+    ],
+  }
 })
+
+const activeRun: ApiRun = {
+  id: 'r1',
+  title: 'Task',
+  workflow: 'quick-task',
+  task: 'Task',
+  status: 'waiting',
+  createdAt: '2026-07-24T00:00:00.000Z',
+  tokensUsed: 0,
+  archived: false,
+  runner: 'claude',
+  steps: [],
+}
+
+const renderAsk = (ask: ThreadAsk) => render(
+  <MemoryRouter>
+    <AskCard ask={ask} run={activeRun} />
+  </MemoryRouter>,
+)
 
 const singleAsk: ThreadAsk = {
   kind: 'ask',
@@ -64,7 +94,7 @@ const twoQuestionAsk: ThreadAsk = {
 
 describe('AskCard', () => {
   it('renders the header, question and each option with its description', () => {
-    render(<AskCard ask={singleAsk} runId="r1" />)
+    renderAsk(singleAsk)
     expect(screen.getByText('Library')).toBeTruthy()
     expect(screen.getByText('Which date library should I standardize on?')).toBeTruthy()
     expect(screen.getByRole('button', { name: /date-fns/ })).toBeTruthy()
@@ -72,14 +102,14 @@ describe('AskCard', () => {
   })
 
   it('a single single-select question sends "header: label" on one tap (no Send button)', () => {
-    render(<AskCard ask={singleAsk} runId="r1" />)
+    renderAsk(singleAsk)
     expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
   })
 
   it('multiple questions: one Send posts every answer in one combined message', () => {
-    render(<AskCard ask={twoQuestionAsk} runId="r1" />)
+    renderAsk(twoQuestionAsk)
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
     // Answering only the first question does NOT send, and does not resolve.
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
@@ -94,7 +124,7 @@ describe('AskCard', () => {
   })
 
   it('multi-select: Send is disabled until options are picked, then sends the comma-joined labels', () => {
-    render(<AskCard ask={multiAsk} runId="r1" />)
+    renderAsk(multiAsk)
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
     expect(send.disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: /Profile/ }))
@@ -105,9 +135,31 @@ describe('AskCard', () => {
   })
 
   it('a resolved ask collapses to a compact answered summary with no option buttons', () => {
-    render(<AskCard ask={{ ...singleAsk, resolved: true, answer: 'Library: date-fns' }} runId="r1" />)
+    renderAsk({ ...singleAsk, resolved: true, answer: 'Library: date-fns' })
     expect(screen.getByText('Answered')).toBeTruthy()
     expect(screen.getByText('Library: date-fns')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /date-fns/ })).toBeNull()
+  })
+
+  it.each([
+    ['disabled', { provider: 'claude', status: 'connected', enabled: false }, 'Claude Code is disabled. Enable it in Settings → Agents → Providers.'],
+    ['disconnected', { provider: 'claude', status: 'disconnected', enabled: true }, 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.'],
+  ] as const)('disables Ask submissions when its active provider is %s', (_case, claude, reason) => {
+    providerStatus = {
+      providers: [
+        claude,
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+
+    renderAsk(singleAsk)
+
+    expect((screen.getByRole('button', { name: /date-fns/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(reason)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+    expect(mutateAsync).not.toHaveBeenCalled()
   })
 })

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.js';
 import type { RunManager, StartRunInput } from '../workflows/run.js';
 import type { WorkflowDef } from '../workflows/types.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 import { createApp } from './server.js';
 
 /**
@@ -33,7 +34,13 @@ describe('request-origin guard (#426)', () => {
       startRun: (_workflow: WorkflowDef, input: StartRunInput) =>
         store.createRun({ title: 't', workflow: '(planned)', task: input.task, steps: [] }),
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {
@@ -300,7 +307,13 @@ describe('request-origin guard — hosted mode (#426)', () => {
       startRun: (_workflow: WorkflowDef, input: StartRunInput) =>
         store.createRun({ title: 't', workflow: '(planned)', task: input.task, steps: [] }),
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {

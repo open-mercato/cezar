@@ -25,6 +25,8 @@ function commandPath(command: string): string {
   return execFileSync('/bin/sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).trim();
 }
 
+const hasSetsid = spawnSync('/bin/sh', ['-c', 'command -v setsid'], { stdio: 'ignore' }).status === 0;
+
 function makeFixture(withSetsid: boolean): { root: string; path: string } {
   const root = mkdtempSync(join(tmpdir(), 'cez-test-env-launcher-'));
   fixtures.push(root);
@@ -81,50 +83,54 @@ function descriptor(root: string): { baseUrl: string; app: { pid: number } } {
 }
 
 for (const withSetsid of [true, false]) {
-  test(`generated launcher survives its caller and stops by descriptor PID (${withSetsid ? 'setsid' : 'nohup fallback'})`, async () => {
-    const fixture = makeFixture(withSetsid);
-    const env = { ...process.env, PATH: fixture.path, TEST_ENV_CACHE_TTL_SECONDS: '600' };
-    const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
-    const down = join(fixture.root, '.ai/scripts/test-env-down.sh');
-    const callerPidFile = join(fixture.root, 'caller.pid');
+  test(
+    `generated launcher survives its caller and stops by descriptor PID (${withSetsid ? 'setsid' : 'nohup fallback'})`,
+    { skip: withSetsid && !hasSetsid ? 'setsid is not available on this platform' : false },
+    async () => {
+      const fixture = makeFixture(withSetsid);
+      const env = { ...process.env, PATH: fixture.path, TEST_ENV_CACHE_TTL_SECONDS: '600' };
+      const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
+      const down = join(fixture.root, '.ai/scripts/test-env-down.sh');
+      const callerPidFile = join(fixture.root, 'caller.pid');
 
-    const coldCommand = withSetsid ? commandPath('setsid') : '/bin/sh';
-    const coldArgs = withSetsid
-      ? ['/bin/sh', '-c', 'echo $$ > "$2"; sh "$1"', 'launcher-parent', up, callerPidFile]
-      : ['-c', 'echo $$ > "$2"; sh "$1"', 'launcher-parent', up, callerPidFile];
-    const cold = spawnSync(coldCommand, coldArgs, {
-      cwd: tmpdir(),
-      encoding: 'utf8',
-      env,
-      timeout: 20_000,
-    });
-    assert.equal(cold.status, 0, cold.stderr);
-    assert.match(cold.stdout, /TEST_ENV_REUSED=0/);
+      const coldCommand = withSetsid ? commandPath('setsid') : '/bin/sh';
+      const coldArgs = withSetsid
+        ? ['/bin/sh', '-c', 'echo $$ > "$2"; sh "$1"', 'launcher-parent', up, callerPidFile]
+        : ['-c', 'echo $$ > "$2"; sh "$1"', 'launcher-parent', up, callerPidFile];
+      const cold = spawnSync(coldCommand, coldArgs, {
+        cwd: tmpdir(),
+        encoding: 'utf8',
+        env,
+        timeout: 20_000,
+      });
+      assert.equal(cold.status, 0, cold.stderr);
+      assert.match(cold.stdout, /TEST_ENV_REUSED=0/);
 
-    const first = descriptor(fixture.root);
-    launchedPids.add(first.app.pid);
-    if (withSetsid) {
-      const callerPid = Number(readFileSync(callerPidFile, 'utf8').trim());
-      try {
-        process.kill(-callerPid, 'SIGTERM');
-      } catch (error) {
-        assert.equal((error as NodeJS.ErrnoException).code, 'ESRCH');
+      const first = descriptor(fixture.root);
+      launchedPids.add(first.app.pid);
+      if (withSetsid) {
+        const callerPid = Number(readFileSync(callerPidFile, 'utf8').trim());
+        try {
+          process.kill(-callerPid, 'SIGTERM');
+        } catch (error) {
+          assert.equal((error as NodeJS.ErrnoException).code, 'ESRCH');
+        }
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
       }
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-    }
-    assert.equal(process.kill(first.app.pid, 0), true);
-    const health = await fetch(`${first.baseUrl}/api/health`).then((response) => response.json());
-    assert.deepEqual(health, { ok: true });
+      assert.equal(process.kill(first.app.pid, 0), true);
+      const health = await fetch(`${first.baseUrl}/api/health`).then((response) => response.json());
+      assert.deepEqual(health, { ok: true });
 
-    const warm = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
-    assert.equal(warm.status, 0, warm.stderr);
-    assert.match(warm.stdout, /TEST_ENV_REUSED=1/);
-    assert.equal(descriptor(fixture.root).app.pid, first.app.pid);
+      const warm = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+      assert.equal(warm.status, 0, warm.stderr);
+      assert.match(warm.stdout, /TEST_ENV_REUSED=1/);
+      assert.equal(descriptor(fixture.root).app.pid, first.app.pid);
 
-    const stopped = spawnSync('/bin/sh', [down], { encoding: 'utf8', env, timeout: 20_000 });
-    assert.equal(stopped.status, 0, stopped.stderr);
-    assert.match(stopped.stdout, /TEST_ENV_STATUS=stopped/);
-    assert.throws(() => process.kill(first.app.pid, 0));
-    launchedPids.delete(first.app.pid);
-  });
+      const stopped = spawnSync('/bin/sh', [down], { encoding: 'utf8', env, timeout: 20_000 });
+      assert.equal(stopped.status, 0, stopped.stderr);
+      assert.match(stopped.stdout, /TEST_ENV_STATUS=stopped/);
+      assert.throws(() => process.kill(first.app.pid, 0));
+      launchedPids.delete(first.app.pid);
+    },
+  );
 }

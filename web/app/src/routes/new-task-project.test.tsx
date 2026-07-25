@@ -4,7 +4,14 @@ import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { HealthResponse, ProjectsResponse, RepoResponse, Skill, WorkflowsResponse } from '@/api/types'
+import type {
+  HealthResponse,
+  ProjectsResponse,
+  ProviderStatusResponse,
+  RepoResponse,
+  Skill,
+  WorkflowsResponse,
+} from '@/api/types'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 
@@ -98,6 +105,14 @@ const REGISTRY: ProjectsResponse = {
   projectsDir: '~/cezar/projects',
 }
 
+const PROVIDERS: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
 /** Each project ships its OWN skills — the pill's whole promise. */
 const BOOT_SKILLS: Skill[] = [
   { name: 'om-fix', description: 'Fix an issue end to end', body: '', path: '/p/om-fix.md', source: 'ai' },
@@ -158,6 +173,7 @@ function serve({
       // Workspace-level: never scoped (project-scope.ts `WORKSPACE_LEVEL`).
       if (url === '/api/projects') return json(registry)
       if (url === '/api/health') return json(health)
+      if (url === '/api/providers/status') return json(PROVIDERS)
 
       // Split the scope off the path so each route is written once.
       const scoped = url.startsWith(`/api/p/${OTHER}/`)
@@ -208,7 +224,10 @@ const pathname = () => screen.getByTestId('location').textContent
 
 /** The composer is only settled once the pickers resolved against the mounted scope. */
 async function composerReady(sourceLabel: string) {
-  await waitFor(() => expect(sourcePill().textContent).toContain(sourceLabel))
+  await waitFor(() => {
+    expect(sourcePill().textContent).toContain(sourceLabel)
+    expect(textarea().disabled).toBe(false)
+  })
 }
 
 /** Open the project pill and pick a project by id. */

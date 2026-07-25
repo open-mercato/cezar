@@ -18,6 +18,8 @@ import type {
   RepoCommitPayload as WebRepoCommitPayload,
   LogEntry as WebLogEntry,
   ProcessUsage as WebProcessUsage,
+  ProviderStatus as WebProviderStatus,
+  ProviderStatusResponse as WebProviderStatusResponse,
   RepoInfo as WebRepoInfo,
   RunEvent as WebRunEvent,
   QueuedMessage as WebQueuedMessage,
@@ -53,6 +55,7 @@ import type {
 } from '../../web/app/src/protocol/ui-events.js';
 import type { BackendCheck } from '../core/backend-detect.js';
 import type { ProcessUsage } from '../core/process-usage.js';
+import type { ProviderStatus, ProviderStatusResponse } from '../core/provider-auth.js';
 import type { ToolDisplay } from '../core/tool-display.js';
 import type {
   FileDiff,
@@ -138,6 +141,15 @@ const guards = {
   runEvent: true satisfies Exact<RunEvent, WebRunEvent>,
   processUsage: true satisfies Exact<ProcessUsage, WebProcessUsage>,
   backendCheck: true satisfies Exact<BackendCheck, WebBackendCheck>,
+  // The core row remains additive for workspace events, while every complete HTTP response is
+  // enriched with the required preference by applyProviderEnablement().
+  providerStatus: true satisfies Exact<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusKeys: true satisfies ExactKeys<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusResponse: true satisfies Exact<
+    { providers: Array<ProviderStatus & { enabled: boolean }> },
+    WebProviderStatusResponse
+  >,
+  providerStatusResponseKeys: true satisfies ExactKeys<ProviderStatusResponse, WebProviderStatusResponse>,
   repoInfo: true satisfies Exact<RepoInfo, WebRepoInfo>,
   statusEntry: true satisfies Exact<StatusEntry, WebStatusEntry>,
   logEntry: true satisfies Exact<LogEntry, WebLogEntry>,

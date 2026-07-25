@@ -1,4 +1,4 @@
-import type { CreateRunInput } from '@/api/types'
+import type { CreateRunInput, Runner } from '@/api/types'
 
 import { buildCreateRunBody, type TaskSource } from './new-task-form'
 import type { NewTaskParams } from './new-task-params'
@@ -22,9 +22,14 @@ import type { NewTaskParams } from './new-task-params'
 /** The exact unattended-start body. Legacy sent the ref as the literal step prompt with
  *  `task: ref` alongside; Step 1.1's `buildCreateRunBody` sends `prompt: '{{task}}'` with the
  *  same `task` — identical after template substitution, and pinned that way so the bookmarklet
- *  path and the composer submit can never drift apart. No model/runner/variants: legacy's
- *  bookmarklet start never sent them (the server defaults everything). */
-export function bookmarkletRunBody(params: NewTaskParams): CreateRunInput {
+ *  path and the composer submit can never drift apart. The runner stays absent when the
+ *  resolved connected runner is the server default; a connected fallback is explicit so the
+ *  server cannot resolve the request back to a disconnected default. */
+export function bookmarkletRunBody(
+  params: NewTaskParams,
+  runner: Runner,
+  defaultRunner: Runner,
+): CreateRunInput {
   const source: TaskSource =
     params.skill !== ''
       ? { source: 'skill', ref: params.skill }
@@ -33,8 +38,8 @@ export function bookmarkletRunBody(params: NewTaskParams): CreateRunInput {
     task: params.ref,
     source,
     model: '',
-    runner: 'claude',
-    runnerCount: 1, // single-backend shape: `runner` stays off the wire, like legacy
+    runner,
+    defaultRunner,
     variants: 1,
     images: [],
     // Absent for every saved bookmarklet (legacy links have no `todo`), so this stays off the

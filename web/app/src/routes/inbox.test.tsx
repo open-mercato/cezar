@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { RunRecord, TodoItem } from '@/api/types'
+import type { ProviderStatusResponse, RunRecord, TodoItem } from '@/api/types'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { InboxRoute, isTodoRunnable, visibleTodos } from './inbox'
@@ -87,14 +87,31 @@ const health = (backends: readonly string[] = ['claude']) => ({
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
+const connectedProviders = (backends: readonly string[]): ProviderStatusResponse => ({
+  providers: (['claude', 'codex', 'opencode'] as const).map((provider) => ({
+    provider,
+    status: backends.includes(provider) ? 'connected' as const : 'not-installed' as const,
+    enabled: true,
+  })),
+})
+
+const PROVIDERS_NONE: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'unknown', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
 /** Fetch stub in the house style (github.test.tsx): records requests, serves the fixtures,
  *  and lets a test override specific `METHOD path` keys. Stateful like the real server: a
  *  DELETE really removes the entry, so the invalidation refetch answers without it. */
 function stubFetch(
-  overrides: Record<string, () => Response> = {},
+  overrides: Record<string, () => Response | Promise<Response>> = {},
   todos: TodoItem[] = TODOS,
   backends: readonly string[] = ['claude'],
   defaultModels: Record<string, string> = {},
+  providers: ProviderStatusResponse = connectedProviders(backends),
 ): SentRequest[] {
   const sent: SentRequest[] = []
   let inbox = [...todos]
@@ -114,6 +131,7 @@ function stubFetch(
       if (method === 'GET' && path === '/api/runs') return jsonResponse([RUN_1])
       // The runner/model pills (#401) read the host's backends and the per-runner defaults.
       if (method === 'GET' && path === '/api/health') return jsonResponse(health(backends))
+      if (method === 'GET' && path === '/api/providers/status') return jsonResponse(providers)
       if (method === 'GET' && path === '/api/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (method === 'GET' && path === '/api/config') return jsonResponse({ defaultModels })
       if (method === 'DELETE' && path.startsWith('/api/todos/')) {
@@ -148,14 +166,16 @@ async function pick(card: HTMLElement, slot: string, label: string) {
   fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
 }
 
-function renderInbox() {
+function renderInbox(entry = '/inbox') {
   render(
     <QueryClientProvider client={createQueryClient()}>
-      <MemoryRouter initialEntries={['/inbox']}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/inbox" element={<InboxRoute />} />
+          <Route path="/p/:projectId/inbox" element={<InboxRoute />} />
           {/* Navigation probe: where Run's success is supposed to land (legacy selectRun hop). */}
           <Route path="/tasks/:id" element={<div data-slot="thread-probe" />} />
+          <Route path="/p/:projectId/tasks/:id" element={<div data-slot="thread-probe" />} />
         </Routes>
         <Toaster />
       </MemoryRouter>
@@ -164,6 +184,10 @@ function renderInbox() {
 }
 
 const cards = () => [...document.querySelectorAll<HTMLElement>('[data-slot="todo-card"]')]
+const waitForRunnable = (card: HTMLElement = cards()[0]!) =>
+  waitFor(() =>
+    expect(card.querySelector<HTMLButtonElement>('[data-action="todo-run"]')?.disabled).toBe(false),
+  )
 
 // ---- the visibility rule ----------------------------------------------------------------------
 
@@ -247,6 +271,7 @@ describe('Run', () => {
     renderInbox()
 
     await waitFor(() => expect(cards()).toHaveLength(2))
+    await waitForRunnable()
     fireEvent.click(cards()[0]!.querySelector('[data-action="todo-run"]')!)
 
     await waitFor(() =>
@@ -262,6 +287,7 @@ describe('Run', () => {
     renderInbox()
 
     await waitFor(() => expect(cards()).toHaveLength(2))
+    await waitForRunnable()
     fireEvent.click(cards()[0]!.querySelector('[data-action="todo-run"]')!)
 
     // The server's own words, verbatim (ApiError rule).
@@ -282,6 +308,20 @@ describe('Run — backend selection (#401)', () => {
     fireEvent.click(cards()[0]!.querySelector('[data-action="todo-run"]')!)
 
     await waitFor(() => expect(startBody(sent, 't1')).toBeUndefined())
+  })
+
+  it('sends the connected runner explicitly when provider status resolves before health', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => new Promise<Response>(() => {}),
+    })
+    renderInbox()
+
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const run = cards()[0]!.querySelector<HTMLButtonElement>('[data-action="todo-run"]')!
+    await waitFor(() => expect(run.disabled).toBe(false))
+    fireEvent.click(run)
+
+    await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'claude' }))
   })
 
   it('an untouched card honors Settings → Agents defaultModels — the one real behavior change', async () => {
@@ -367,6 +407,104 @@ describe('Run — backend selection (#401)', () => {
     const note = cards()[1]!
     expect(note.querySelector('[data-slot="todo-engine"]')).toBeNull()
     expect(note.querySelector('[data-slot="model-pill"]')).toBeNull()
+  })
+
+  it('keeps agent actions unavailable with no connected provider while non-agent actions remain enabled', async () => {
+    const sent = stubFetch(
+      { 'GET /api/providers/status': () => jsonResponse(PROVIDERS_NONE) },
+    )
+    renderInbox('/p/acme/inbox')
+
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const runnable = cards()[0]!
+    const note = cards()[1]!
+    const run = runnable.querySelector<HTMLButtonElement>('[data-action="todo-run"]')!
+    const dismiss = runnable.querySelector<HTMLButtonElement>('[data-action="todo-dismiss"]')!
+    const acknowledge = note.querySelector<HTMLButtonElement>('[data-action="todo-acknowledge"]')!
+
+    await waitFor(() => expect(run.disabled).toBe(true))
+    expect(dismiss.disabled).toBe(false)
+    expect(acknowledge.disabled).toBe(false)
+    expect(runnable.querySelector<HTMLButtonElement>('[data-slot="model-pill"]')?.disabled).toBe(
+      true,
+    )
+    expect(screen.getAllByRole('link', { name: 'Configure providers' })[0]?.getAttribute('href')).toBe(
+      '/p/acme/settings/agents#providers',
+    )
+
+    // Defense in depth: bypass the DOM's disabled affordance and make the React handler fire.
+    run.removeAttribute('disabled')
+    fireEvent.click(run)
+    await act(() => Promise.resolve())
+    expect(sent.some((request) => request.method === 'POST')).toBe(false)
+  })
+
+  it('describes a provider route error as failed verification, not disconnection', async () => {
+    stubFetch({
+      'GET /api/providers/status': () =>
+        jsonResponse({ error: 'provider probe failed' }, 404),
+    })
+    renderInbox()
+
+    expect(await screen.findByText('Provider authentication could not be verified.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('No agent provider is connected')
+    expect(screen.getAllByRole('link', { name: 'Configure providers' }).length).toBeGreaterThan(0)
+  })
+
+  it('explicitly sends the sole connected fallback when it differs from the server default', async () => {
+    const sent = stubFetch(
+      {},
+      TODOS,
+      ['claude'],
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+    renderInbox()
+
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const card = cards()[0]!
+    await waitFor(() =>
+      expect(card.querySelector<HTMLButtonElement>('[data-action="todo-run"]')?.disabled).toBe(
+        false,
+      ),
+    )
+    expect(card.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.click(card.querySelector('[data-action="todo-run"]')!)
+
+    await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'codex' }))
+  })
+
+  it('excludes a connected disabled default runner and sends the enabled fallback', async () => {
+    const sent = stubFetch(
+      {},
+      TODOS,
+      ['claude', 'codex'],
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+    renderInbox()
+
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const card = cards()[0]!
+    const run = card.querySelector<HTMLButtonElement>('[data-action="todo-run"]')!
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(card.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    fireEvent.click(run)
+
+    await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'codex' }))
   })
 })
 
@@ -499,6 +637,9 @@ describe('Add instructions', () => {
         if (method === 'GET' && path === '/api/todos') return jsonResponse(TODOS)
         if (method === 'GET' && path === '/api/runs') return jsonResponse([RUN_1])
         if (method === 'GET' && path === '/api/ui-state') return jsonResponse(uiState)
+        if (method === 'GET' && path === '/api/providers/status') {
+          return jsonResponse(connectedProviders(['claude']))
+        }
         if (method === 'POST' && path === '/api/todos/t1/start') return jsonResponse({ run: STARTED_RUN }, 201)
         return jsonResponse({ error: 'not found' }, 404)
       }),
@@ -537,19 +678,23 @@ describe('Add instructions', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="thread-probe"]')).not.toBeNull())
 
     const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/todos/t1/start')
-    expect(posted?.body).toEqual({ prompt: 'Also add a regression test.' })
+    expect(posted?.body).toEqual({
+      runner: 'claude',
+      prompt: 'Also add a regression test.',
+    })
   })
 
-  it('leaving the instructions box empty sends no body at all — the pre-#413 call shape', async () => {
+  it('leaving instructions empty sends only the cold-load-safe runner', async () => {
     const sent = stubFetchCapturingBody()
     renderInbox()
     await waitFor(() => expect(cards()).toHaveLength(2))
+    await waitForRunnable()
 
     fireEvent.click(cards()[0]!.querySelector('[data-action="todo-run"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="thread-probe"]')).not.toBeNull())
 
     const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/todos/t1/start')
-    expect(posted?.body).toBeUndefined()
+    expect(posted?.body).toEqual({ runner: 'claude' })
   })
 
   it('an opened composer can be collapsed again, keeping the draft', async () => {

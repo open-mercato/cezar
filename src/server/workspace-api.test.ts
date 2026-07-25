@@ -293,6 +293,33 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(await (await apiRequest(app, '/api/ui-state')).json()).toEqual({});
   });
 
+  it('accepts bounded provider auth failure dismissals', async () => {
+    const response = await putUiState({
+      dismissedProviderAuthFailures: {
+        claude: 'incident-1',
+        opencode: 'incident-9',
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      dismissedProviderAuthFailures: {
+        claude: 'incident-1',
+        opencode: 'incident-9',
+      },
+    });
+  });
+
+  it.each([
+    ['an unknown provider', { future: 'incident-1' }],
+    ['an empty incident ID', { claude: '' }],
+    ['a non-string incident ID', { claude: 1 }],
+    ['an overlong incident ID', { claude: 'a'.repeat(129) }],
+  ])('rejects provider auth failure dismissals with %s without writing state', async (_case, dismissals) => {
+    const response = await putUiState({ dismissedProviderAuthFailures: dismissals });
+    expect(response.status).toBe(400);
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
+  });
+
   it('unknown keys pass through and survive later PUTs (additive, like the per-repo route)', async () => {
     await putUiState({ futurePref: { nested: 1 } });
     await putUiState({ notifications: { enabled: true } });
