@@ -65,4 +65,4 @@ Give the PR Conversation view an authoritative GitHub-shaped merge box and an ex
 
 ### Phase 3: End-to-end verification
 
-- [ ] 3.1 Extend dry-run and browser coverage for ready, confirmed merge, stale rejection, blocked state, and mobile; run the full validation gate.
+- [x] 3.1 Extend dry-run and browser coverage for ready, confirmed merge, stale rejection, blocked state, and mobile; run the full validation gate. — 550507c3
