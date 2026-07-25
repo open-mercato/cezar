@@ -106,6 +106,8 @@ const runRecordSchema = z.object({
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
   activity: z.enum(['monitoring']).optional(),
+  /** Exact server-computed deadline for the next automatic monitoring check. */
+  monitoringWakeAt: z.string().datetime().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -425,7 +427,12 @@ export class RunStore extends EventEmitter {
     if (Object.prototype.hasOwnProperty.call(patch, 'issueNumber')) {
       delete run.referencedIssueNumberSeeded;
     }
-    Object.assign(run, this.redactPatch(patch));
+    const normalized = { ...patch };
+    if (normalized.status && !['running', 'waiting', 'queued'].includes(normalized.status)) {
+      normalized.activity = undefined;
+      normalized.monitoringWakeAt = undefined;
+    }
+    Object.assign(run, this.redactPatch(normalized));
     this.touch(run);
     return run;
   }

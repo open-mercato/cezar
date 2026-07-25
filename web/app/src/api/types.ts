@@ -129,6 +129,8 @@ export interface RunRecord {
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work
    *  (spec 2026-07-18-subagent-monitoring-status, #490). Absent on old runs; cleared on resume/end. */
   activity?: RunActivity
+  /** Exact ISO-8601 deadline for the next automatic monitoring check. */
+  monitoringWakeAt?: string
   createdAt: string
   startedAt?: string
   finishedAt?: string

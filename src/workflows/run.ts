@@ -369,9 +369,9 @@ export class RunManager {
   dispose(): void {
     this.offUsage();
     this.offSemaphore();
-    for (const state of this.active.values()) {
+    for (const [runId, state] of this.active) {
       this.clearIdleTimer(state);
-      this.clearMonitoringWakeTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       this.clearAutosaveTimer(state);
       state.releaseRepoRoot?.();
       state.releaseRepoRoot = undefined;
@@ -753,7 +753,7 @@ export class RunManager {
     if (state) state.releaseRepoRoot = undefined;
     this.waiting.delete(runId);
     this.monitoring.delete(runId);
-    if (state) this.clearMonitoringWakeTimer(state);
+    if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
@@ -1151,7 +1151,7 @@ export class RunManager {
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       this.clearIdleTimer(state);
-      this.clearMonitoringWakeTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
       this.monitoring.delete(runId);
       // Clear any `monitoring` activity — the agent is actively working again
@@ -1431,7 +1431,7 @@ export class RunManager {
               this.store.updateRun(runId, { status: 'waiting', activity: undefined });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
               this.monitoring.delete(runId);
-              this.clearMonitoringWakeTimer(state);
+              this.clearMonitoringWakeTimer(state, runId);
             }
             this.waiting.add(runId);
             if (!monitoring) this.armIdleTimer(runId, state);
@@ -1956,7 +1956,7 @@ export class RunManager {
             this.store.updateRun(runId, { status: 'waiting', activity: undefined });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
             this.monitoring.delete(runId);
-            this.clearMonitoringWakeTimer(state);
+            this.clearMonitoringWakeTimer(state, runId);
           }
           this.waiting.add(runId);
           if (!monitoring) this.armIdleTimer(runId, state);
@@ -2051,7 +2051,7 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.monitoring.delete(runId);
       this.waiting.delete(runId);
-      this.clearMonitoringWakeTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       state.session = undefined;
       state.currentStepId = undefined;
       state.interrupt = () => undefined;
@@ -2081,7 +2081,7 @@ export class RunManager {
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
     this.monitoring.delete(runId);
-    this.clearMonitoringWakeTimer(state);
+    this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
@@ -2350,11 +2350,11 @@ export class RunManager {
   private armMonitoringWakeTimer(runId: string, state: ActiveRun): void {
     const minutes = this.semaphore.monitoringWakeIntervalMinutes();
     if (minutes === null) {
-      this.clearMonitoringWakeTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       return;
     }
     if ((state.monitoringWakeups ?? 0) >= MAX_AUTO_CONTINUES) {
-      this.clearMonitoringWakeTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       this.store.appendEvent(runId, {
         type: 'note',
         message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
@@ -2362,10 +2362,13 @@ export class RunManager {
       return;
     }
     if (state.monitoringWakeTimer && state.monitoringWakeIntervalMinutes === minutes) return;
-    this.clearMonitoringWakeTimer(state);
+    this.clearMonitoringWakeTimer(state, runId);
     state.monitoringWakeIntervalMinutes = minutes;
+    const deadline = Date.now() + minutes * 60_000;
+    this.store.updateRun(runId, { monitoringWakeAt: new Date(deadline).toISOString() });
     state.monitoringWakeTimer = setTimeout(() => {
       state.monitoringWakeTimer = undefined;
+      this.store.updateRun(runId, { monitoringWakeAt: undefined });
       if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
       const wakeups = state.monitoringWakeups ?? 0;
       if (wakeups >= MAX_AUTO_CONTINUES) {
@@ -2381,14 +2384,15 @@ export class RunManager {
         message: `automatic monitoring wake-up (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES})`,
       });
       this.deliverMessage(runId, [{ type: 'text', text: MONITORING_WAKE_NUDGE }], false);
-    }, minutes * 60_000);
+    }, Math.max(0, deadline - Date.now()));
     state.monitoringWakeTimer.unref?.();
   }
 
-  private clearMonitoringWakeTimer(state: ActiveRun): void {
+  private clearMonitoringWakeTimer(state: ActiveRun, runId?: string): void {
     if (state.monitoringWakeTimer) clearTimeout(state.monitoringWakeTimer);
     state.monitoringWakeTimer = undefined;
     state.monitoringWakeIntervalMinutes = undefined;
+    if (runId) this.store.updateRun(runId, { monitoringWakeAt: undefined });
   }
 
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).

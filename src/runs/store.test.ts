@@ -92,6 +92,18 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(RunStore.open(dataDir).getRun(run.id)?.activity).toBeUndefined();
   });
 
+  it('round-trips the monitoring deadline and clears monitoring state on terminal writes', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    const deadline = '2026-07-25T10:15:00.000Z';
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeAt: deadline });
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBe(deadline);
+    store.updateRun(run.id, { status: 'done' });
+    expect(store.getRun(run.id)).toMatchObject({ status: 'done' });
+    expect(store.getRun(run.id)?.activity).toBeUndefined();
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBeUndefined();
+  });
+
   it('still loads an old runs.json that predates activity (#490)', () => {
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     const store = RunStore.open(dataDir);
