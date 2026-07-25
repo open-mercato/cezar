@@ -45,14 +45,14 @@ Honor additive `interactive: true` skill metadata in New Task so untouched Auton
 
 ### Phase 1: Metadata and contracts
 
-- [ ] 1.1 Extend skill discovery with strict scalar recognition and parser coverage
-- [ ] 1.2 Mirror metadata through the web skills API contract
+- [x] 1.1 Extend skill discovery with strict scalar recognition and parser coverage — 048e5b9e
+- [x] 1.2 Mirror metadata through the web skills API contract — 048e5b9e
 
 ### Phase 2: Composer behavior
 
-- [ ] 2.1 Extract and test the pure run-mode resolver
-- [ ] 2.2 Wire selected skill metadata into New Task
-- [ ] 2.3 Add accessible explanatory copy and route regression coverage
+- [x] 2.1 Extract and test the pure run-mode resolver — 048e5b9e
+- [x] 2.2 Wire selected skill metadata into New Task — 048e5b9e
+- [x] 2.3 Add accessible explanatory copy and route regression coverage — 048e5b9e
 
 ### Phase 3: Verification
 
