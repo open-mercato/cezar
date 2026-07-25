@@ -3284,6 +3284,41 @@ export function createApp(deps: ServerDeps): Hono {
     );
   });
 
+  const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });
+  const mergeBodySchema = z.object({
+    method: z.enum(['merge', 'squash', 'rebase']),
+    expectedHeadSha: z.string().regex(/^[0-9a-f]{40}$/),
+  }).strict();
+
+  api.get('/github/prs/:number/merge-state', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsed = mergeNumberParams.safeParse({ number: c.req.param('number') });
+    if (!parsed.success) return c.json({ error: 'invalid pull request number' }, 400);
+    const forge = resolveForge(await getRepoInfo(repoRoot));
+    if (!forge?.prMergeState) return c.json({ available: false, reason: 'GitHub merge state is unavailable' });
+    return c.json(await forge.prMergeState(parsed.data.number, { refresh: c.req.query('refresh') === '1' }));
+  });
+
+  api.post('/github/prs/:number/merge', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsedNumber = mergeNumberParams.safeParse({ number: c.req.param('number') });
+    if (!parsedNumber.success) return c.json({ error: 'invalid pull request number' }, 400);
+    const body = mergeBodySchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'invalid merge request' }, 400);
+    const forge = resolveForge(await getRepoInfo(repoRoot));
+    if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
+    const result = await forge.mergePR(parsedNumber.data.number, body.data);
+    if (result.merged) return c.json(result);
+    return c.json(
+      {
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.current ? { current: result.current } : {}),
+      },
+      result.status,
+    );
+  });
+
   // ---- repo view -----------------------------------------------------------
   api.get('/repo', async (c) => {
     const { root: repoRoot } = c.get('project');

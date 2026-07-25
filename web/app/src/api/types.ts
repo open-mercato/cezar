@@ -743,6 +743,44 @@ export interface GithubData {
   labelColors?: Record<string, string>
 }
 
+export type GithubMergeMethod = 'merge' | 'squash' | 'rebase'
+
+export interface GithubPrMergeState {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | 'merged'
+  isDraft: boolean
+  headRef: string
+  baseRef: string
+  headSha: string
+  mergeable: 'mergeable' | 'conflicting' | 'unknown'
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown'
+  checks: Array<{
+    name: string
+    state: 'passing' | 'failing' | 'pending' | 'unknown'
+    required: boolean | null
+    url?: string
+  }>
+  methods: GithubMergeMethod[]
+  defaultMethod: GithubMergeMethod | null
+  eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown'
+  blockers: Array<{ code: string; message: string }>
+  canMerge: boolean
+}
+
+export type GithubPrMergeStateResponse =
+  | { available: true; mergeState: GithubPrMergeState }
+  | { available: false; reason: string }
+
+export interface GithubMergeResponse {
+  merged: true
+  number: number
+  url: string
+  method: GithubMergeMethod
+  mergeCommitSha?: string
+}
+
 /** One comment or PR review summary in an issue/PR thread (`GET /api/github/comments/…`, #499). */
 export interface GithubComment {
   id: number
