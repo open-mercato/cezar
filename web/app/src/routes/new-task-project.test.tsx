@@ -269,7 +269,7 @@ describe('the new-task project pill', () => {
       registry: { ...REGISTRY, projects: [REGISTRY.projects[0]!] },
     })
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('om-fix')
+    await composerReady('quick-task')
     expect(screen.queryByRole('button', { name: 'Project' })).toBeNull()
     expect(document.querySelector('[data-slot="source-pill"]')).not.toBeNull()
   })
@@ -281,7 +281,7 @@ describe('switching project', () => {
   it('re-resolves the skills, workflows and config pickers against the new project', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('om-fix')
+    await composerReady('quick-task')
 
     // The boot project reads the unscoped legacy surface (step 3.1) …
     fireEvent.click(sourcePill())
@@ -310,7 +310,7 @@ describe('switching project', () => {
   it('keeps drafts isolated per project — one composer never leaks into the other', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('om-fix')
+    await composerReady('quick-task')
     fireEvent.change(textarea(), { target: { value: 'fix the cezar flake' } })
 
     await switchProject(OTHER)
@@ -331,14 +331,14 @@ describe('switching project', () => {
     // Switching back restores what was typed there, untouched by the detour.
     await switchProject(BOOT)
     await waitFor(() => expect(pathname()).toBe(`/p/${BOOT}/new`))
-    await composerReady('om-fix')
+    await composerReady('quick-task')
     expect(textarea().value).toBe('fix the cezar flake')
   })
 
   it('submits to the SELECTED project and clears only that project’s draft text', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('om-fix')
+    await composerReady('quick-task')
     fireEvent.change(textarea(), { target: { value: 'left behind in cezar' } })
 
     await switchProject(OTHER)
