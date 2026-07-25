@@ -45,6 +45,19 @@ export class GithubPrNotFoundError extends Error {}
 
 const prDiffCache = new Map<string, { at: number; data: ForgePrDiffResult }>();
 
+export type PrFilesPageRunner = (page: number) => Promise<string>;
+
+/** Fetch no more than the three GitHub pages represented by the public 300-file response cap. */
+export async function fetchPrFilePages(runPage: PrFilesPageRunner): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let page = 1; page <= GH_PR_DIFF_FILE_CAP / 100; page++) {
+    const next = z.array(z.unknown()).parse(JSON.parse(await runPage(page)));
+    rows.push(...next);
+    if (next.length < 100) break;
+  }
+  return rows;
+}
+
 export async function fetchGithubPrDiff(
   repoRoot: string,
   number: number,
@@ -58,11 +71,15 @@ export async function fetchGithubPrDiff(
     const key = `${repoRoot}\0${number}\0${head}`;
     const hit = prDiffCache.get(key);
     if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
-    const rows = z
-      .array(ghPrFileSchema)
-      .parse(JSON.parse(await gh(repoRoot, ['api', `repos/{owner}/{repo}/pulls/${number}/files`, '--paginate'], 30_000)));
+    const rows = z.array(ghPrFileSchema).parse(
+      await fetchPrFilePages((page) =>
+        gh(repoRoot, ['api', `repos/{owner}/{repo}/pulls/${number}/files?per_page=100&page=${page}`], 30_000),
+      ),
+    );
     const limited = rows.slice(0, GH_PR_DIFF_FILE_CAP);
-    let responseTruncated = rows.length > limited.length;
+    // A full third page may have a successor. Without fetching a 301st file, conservatively call
+    // the response partial rather than claiming completeness we cannot prove.
+    let responseTruncated = rows.length >= GH_PR_DIFF_FILE_CAP;
     const reasons: string[] = responseTruncated ? [`Only the first ${GH_PR_DIFF_FILE_CAP} files are shown.`] : [];
     const files = limited.map((row) => {
       let patch = row.patch;
