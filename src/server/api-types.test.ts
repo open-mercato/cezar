@@ -9,6 +9,8 @@ import type {
   GithubCommentsData as WebGithubCommentsData,
   GithubData as WebGithubData,
   GithubItem as WebGithubItem,
+  GithubMergeMethod as WebGithubMergeMethod,
+  GithubPrMergeState as WebGithubPrMergeState,
   GithubTimelineEvent as WebGithubTimelineEvent,
   GithubTimelineEventKind as WebGithubTimelineEventKind,
   GroupResponse as WebGroupResponse,
@@ -80,6 +82,7 @@ import type { WorkflowLoadIssue, loadWorkflows } from '../workflows/load.js';
 import type { WorkflowDef, WorkflowStepDef } from '../workflows/types.js';
 import type { Capabilities } from './capabilities.js';
 import type { ForgeAvailability, ForgeKind } from './forge/index.js';
+import type { ForgeMergeMethod, ForgePrMergeState } from './forge/types.js';
 import type { BranchResult, ChangedFile, ChangesPayload, CommitPayload, DirEntry } from './git-changes.js';
 import type {
   ForgeComment,
@@ -165,6 +168,9 @@ const guards = {
   todoItem: true satisfies Exact<TodoItem, WebTodoItem>,
   githubItem: true satisfies Exact<GithubItem, WebGithubItem>,
   githubData: true satisfies Exact<GithubData, WebGithubData>,
+  githubMergeMethod: true satisfies Exact<ForgeMergeMethod, WebGithubMergeMethod>,
+  githubPrMergeState: true satisfies Exact<ForgePrMergeState, WebGithubPrMergeState>,
+  githubPrMergeStateKeys: true satisfies ExactKeys<ForgePrMergeState, WebGithubPrMergeState>,
   // The comment-thread payload (#499) and its timeline events (#525). ForgeComment was left
   // unpinned when #499 landed, which is exactly the drift this closes: `GET
   // /api/github/comments/:kind/:number` is a second consumer contract on the protected /api/github
