@@ -56,4 +56,4 @@ Honor additive `interactive: true` skill metadata in New Task so untouched Auton
 
 ### Phase 3: Verification
 
-- [ ] 3.1 Run validation and browser smoke verification
+- [x] 3.1 Run validation and browser smoke verification — validation passed; browser evidence follows on the PR
