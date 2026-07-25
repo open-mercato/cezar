@@ -59,9 +59,9 @@ Give the PR Conversation view an authoritative GitHub-shaped merge box and an ex
 
 ### Phase 2: Guarded mutation
 
-- [ ] 2.1 Add strict merge input validation, fresh expected-head preflight, sanitized GitHub mutation mapping, and an in-flight guard.
-- [ ] 2.2 Add the project-scoped POST route, error mapping, cache invalidation, origin protection, and cross-project tests.
-- [ ] 2.3 Add method selection, confirmation/focus behavior, mutation reconciliation, duplicate-submit prevention, and query invalidation.
+- [x] 2.1 Add strict merge input validation, fresh expected-head preflight, sanitized GitHub mutation mapping, and an in-flight guard. — 7b9af684
+- [x] 2.2 Add the project-scoped POST route, error mapping, cache invalidation, origin protection, and cross-project tests. — 69bf1b2a
+- [x] 2.3 Add method selection, confirmation/focus behavior, mutation reconciliation, duplicate-submit prevention, and query invalidation. — 7b9af684
 
 ### Phase 3: End-to-end verification
 
