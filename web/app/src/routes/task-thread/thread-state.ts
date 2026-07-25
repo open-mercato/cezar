@@ -182,12 +182,18 @@ function str(value: unknown): string | undefined {
  *  2026-07-18-task-ref-markers). v1 `text` lines arrive pre-stripped by the server; v2 message
  *  items carry the raw text, so display strips them here. Named `stripDoneMarker` for
  *  continuity — it now strips every protocol marker. Mirrors `stripTaskMarkers` in
- *  `src/runs/task-markers.ts`. */
-function stripDoneMarker(text: string): string {
-  const trailing = text
+ *  `src/runs/task-markers.ts`.
+ *
+ *  `stripAsk` gates the `CEZ:ASK` strip on the turn actually holding an ask card (#473): the
+ *  card is the only other place the questions exist, so a marker whose card never materialized
+ *  (invalid payload, or the session died before turn-end) must stay visible as raw text — the
+ *  user can still read the question and answer via the composer. Hiding it would delete the
+ *  question from the thread entirely. */
+function stripDoneMarker(text: string, stripAsk: boolean): string {
+  let trailing = text
     .replace(/\s*CEZ:DONE\s*$/, '')
     .replace(/\s*CEZ:MONITORING\s*$/, '')
-    .replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '')
+  if (stripAsk) trailing = trailing.replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '')
   if (!trailing.includes('CEZ:')) return trailing
   return trailing
     .split('\n')
@@ -540,18 +546,22 @@ export function reduceThread(events: RunEvent[]): ThreadState {
   }
 
   return {
-    turns: turns.map((draft) => ({
-      id: draft.id,
-      ...(draft.turnId !== undefined ? { turnId: draft.turnId } : {}),
-      ...(draft.userMessage !== undefined ? { userMessage: draft.userMessage } : {}),
-      ...(draft.planEntries !== undefined ? { planEntries: draft.planEntries } : {}),
-      ...(draft.completed !== undefined ? { completed: draft.completed } : {}),
-      items: draft.entries.map(({ entry }) =>
-        entry.kind === 'message' && entry.role === 'assistant'
-          ? { ...entry, text: stripDoneMarker(entry.text) }
-          : entry,
-      ),
-    })),
+    turns: turns.map((draft) => {
+      // The ask card renders the questions, so only then is the marker redundant (#473).
+      const hasAskCard = draft.entries.some(({ entry }) => entry.kind === 'ask')
+      return {
+        id: draft.id,
+        ...(draft.turnId !== undefined ? { turnId: draft.turnId } : {}),
+        ...(draft.userMessage !== undefined ? { userMessage: draft.userMessage } : {}),
+        ...(draft.planEntries !== undefined ? { planEntries: draft.planEntries } : {}),
+        ...(draft.completed !== undefined ? { completed: draft.completed } : {}),
+        items: draft.entries.map(({ entry }) =>
+          entry.kind === 'message' && entry.role === 'assistant'
+            ? { ...entry, text: stripDoneMarker(entry.text, hasAskCard) }
+            : entry,
+        ),
+      }
+    }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
   }
 }

@@ -87,9 +87,14 @@ async function respond(userText, imageCount) {
   // AskUser card path (park `waiting` + emit `ask.requested`) is testable dry.
   // `mock:ask-bad` → a MALFORMED marker (invalid JSON), to prove graceful
   // degradation: the run still parks `waiting`, no ask card, prose preserved.
+  // `mock:ask-invalid` → syntactically valid JSON that FAILS the ask schema
+  // (empty questions) — the shape behind the blank-question bug: no card will
+  // ever render it, so the marker must survive in the v1 text.
   const askMarker = userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
-    : userText.includes('mock:ask')
+    : userText.includes('mock:ask-invalid')
+      ? '\n\nCEZ:ASK {"questions":[]}'
+      : userText.includes('mock:ask')
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({
           questions: [
