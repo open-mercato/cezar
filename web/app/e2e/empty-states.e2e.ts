@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 
 /**
  * The CenteredState surfaces (Step 4.1), in a real browser: the no-tasks hero on the overview
@@ -47,6 +47,11 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 const STATE = '[data-slot="centered-state"]'
 
@@ -58,9 +63,10 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' }
+    { env: fixtureServeEnv(dataRoot), stdio: 'ignore' }
   )
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   browser = AgentBrowser.open(`e2e-empty-states-${process.pid}`)
   browser.setViewport(1440, 900)
@@ -74,7 +80,7 @@ afterAll(() => {
 
 describe('tasks overview — no tasks yet', () => {
   beforeAll(() => {
-    browser.goto(`${baseUrl}/`)
+    browser.goto(`${baseUrl}${scoped('/')}`)
     // The empty state is async: it may render only after /api/runs has answered [].
     browser.waitForFunction(`document.querySelector('[data-slot="tasks-empty"]') !== null`)
   })
@@ -90,7 +96,7 @@ describe('tasks overview — no tasks yet', () => {
     expect(browser.text(`[data-slot="tasks-empty"] p`)).toBe('Describe a task to get started.')
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="tasks-empty"] a[href="/new"]').textContent.trim()`
+        `document.querySelector('[data-slot="tasks-empty"] a[href="${scoped('/new')}"]').textContent.trim()`
       )
     ).toBe('New task')
     // And no table pretending otherwise.
@@ -113,7 +119,7 @@ describe('tasks overview — no tasks yet', () => {
 
 describe('the 404 route', () => {
   beforeAll(() => {
-    browser.goto(`${baseUrl}/definitely-not-a-route`)
+    browser.goto(`${baseUrl}${scoped('/definitely-not-a-route')}`)
     browser.waitForFunction(`document.querySelector('[data-route="not-found"]') !== null`)
   })
 
@@ -127,8 +133,8 @@ describe('the 404 route', () => {
   })
 
   it('walks back to the tasks overview through the action', () => {
-    browser.click(`[data-route="not-found"] a[href="/"]`)
-    browser.waitForFunction(`location.pathname === '/'`)
+    browser.click(`[data-route="not-found"] a[href="${scoped('/')}"]`)
+    browser.waitForFunction(`location.pathname === '${scoped('/')}'`)
     expect(browser.count('[data-route="tasks"]')).toBe(1)
   })
 })

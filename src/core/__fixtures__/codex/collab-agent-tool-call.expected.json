@@ -1,0 +1,69 @@
+[
+  {
+    "type": "turn.started",
+    "turnId": "turn_collab"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "item_spawn",
+      "name": "spawnAgent",
+      "toolKind": "task",
+      "title": "Task: Inspect the mapper",
+      "status": "running",
+      "input": {
+        "prompt": "Inspect the mapper",
+        "model": "gpt-5.4"
+      }
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "item_child_cmd",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran rg requestUserInput",
+      "status": "running",
+      "input": {
+        "command": ["rg", "requestUserInput"]
+      },
+      "parentItemId": "item_spawn"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "item_child_early",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran",
+      "status": "running",
+      "parentItemId": "item_spawn"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_child_early",
+    "field": "output",
+    "delta": "early child output"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "item_spawn",
+      "name": "spawnAgent",
+      "toolKind": "task",
+      "title": "Task: Inspect the mapper",
+      "status": "completed",
+      "input": {
+        "prompt": "Inspect the mapper",
+        "model": "gpt-5.4"
+      }
+    }
+  }
+]

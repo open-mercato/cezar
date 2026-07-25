@@ -1,0 +1,299 @@
+/* Worktree file editing (#530) — mockup token sheet.
+ *
+ * Values copied verbatim from the real app's single source of truth,
+ * `web/app/src/styles/index.css` (the only file allowed to carry raw hex —
+ * enforced by `web/app/src/design-guardian.test.ts`). Dark is the app default;
+ * add class="light" on <html> for the light theme, exactly as the pre-paint
+ * script in `web/app/index.html` does.
+ *
+ * The classes below are hand-written equivalents of the real Tailwind v4
+ * utilities used by `task-files.tsx`, `files-tree.tsx` and `file-preview.tsx`,
+ * so these static files stay openable straight from disk with no build step.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  color-scheme: dark;
+
+  --background: #0d0d0d;
+  --foreground: #ffffff;
+  --card: #171717;
+  --card-2: #1c1c1c;
+  --sidebar: var(--card);
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --soft-foreground: #7b7b7b;
+  --border: #262626;
+  --input: #262626;
+  --contrast: #ebebeb;
+  --contrast-foreground: #171717;
+
+  --accent-lime: #a8f372;
+  --primary: var(--accent-lime);
+  --primary-foreground: #0d0d0d;
+  --violet: #8f86e8;
+  --violet-foreground: #ffffff;
+  --ring: #a8f372;
+
+  --danger: #ef4444;
+  --danger-foreground: #ffffff;
+  --success: #10b981;
+  --pending: #fbbf24;
+
+  --diff-add-bg: rgba(16, 185, 129, 0.1);
+  --diff-del-bg: rgba(239, 68, 68, 0.1);
+
+  --grad: linear-gradient(135deg, #b4f372 12%, #eefb63 58%, #bc9aff 100%);
+
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+
+  /* shiki syntax highlighting (dark) — what SYN_THEME in
+     web/app/src/lib/highlighter.ts emits as inline `color` values */
+  --syn-key: #c4b5fd;
+  --syn-str: #86efac;
+  --syn-fn: #93c5fd;
+  --syn-com: #6b7280;
+  --syn-num: #fca5a5;
+  --syn-punc: #9ca3af;
+  --syn-var: #e5e7eb;
+
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --shadow-xs: 0 1px 2px 0 rgba(10, 13, 20, 0.03);
+  --shadow-md: 0 16px 32px -12px rgba(14, 18, 27, 0.1);
+}
+
+html.light {
+  color-scheme: light;
+
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-2: #fbfbfb;
+  --sidebar: #fafafa;
+  --muted: #f7f7f7;
+  --muted-foreground: #5c5c5c;
+  --soft-foreground: #a3a3a3;
+  --border: #ebebeb;
+  --input: #ebebeb;
+  --contrast: #262626;
+  --contrast-foreground: #ffffff;
+  --ring: #171717;
+
+  --diff-add-bg: rgba(16, 185, 129, 0.08);
+  --diff-del-bg: rgba(239, 68, 68, 0.07);
+
+  --syn-key: #7c3aed;
+  --syn-str: #15803d;
+  --syn-fn: #1d4ed8;
+  --syn-com: #9ca3af;
+  --syn-num: #b91c1c;
+  --syn-punc: #6b7280;
+  --syn-var: #111827;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font: 400 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+code, pre, kbd, textarea.code { font-family: var(--mono); }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+h1, h2, h3, p { margin: 0; }
+::placeholder { color: var(--soft-foreground); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 99px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- primitives (ui/button.tsx, components/pill.tsx) ---------- */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 36px; padding: 0 14px; border-radius: var(--radius);
+  font-size: 13.5px; font-weight: 600; white-space: nowrap;
+}
+.btn-sm { height: 30px; padding: 0 10px; font-size: 12.5px; border-radius: var(--radius-sm); }
+.btn-primary { background: var(--primary); color: var(--primary-foreground); }
+.btn-contrast { background: var(--contrast); color: var(--contrast-foreground); }
+.btn-outline { border: 1px solid var(--border); background: var(--card); }
+.btn-ghost { color: var(--muted-foreground); }
+.btn-danger-ghost { color: var(--danger); }
+.btn[disabled] { opacity: .5; cursor: default; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; background: var(--muted);
+  font-size: 12px; font-weight: 500; color: var(--muted-foreground); white-space: nowrap;
+}
+.dot { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+.dot-success { background: var(--success); }
+.dot-pending { background: var(--pending); }
+.dot-danger { background: var(--danger); }
+
+.chip-branch {
+  border: 1px solid var(--border); background: var(--card);
+  border-radius: var(--radius-sm); padding: 1px 6px;
+  font: 500 11px var(--mono);
+}
+
+/* ---------- app shell (components/app-shell.tsx) ---------- */
+
+.shell { display: flex; min-height: 100vh; overflow: hidden; }
+.sidebar {
+  width: 264px; flex: none; display: flex; flex-direction: column;
+  background: var(--sidebar); border-right: 1px solid var(--border);
+}
+.side-head { display: flex; align-items: center; gap: 9px; padding: 14px 12px 10px; }
+.brand-tile {
+  width: 26px; height: 26px; border-radius: 7px; background: var(--grad);
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  color: #1b1b1b; font-weight: 700; font-size: 15px;
+}
+.side-head .name { font-weight: 600; font-size: 15px; }
+.side-section { padding: 6px 10px; }
+.side-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--soft-foreground); padding: 10px 12px 4px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  height: 34px; padding: 0 10px; border-radius: var(--radius);
+  font-size: 13.5px; font-weight: 500; color: var(--muted-foreground);
+}
+.nav-item.active { background: var(--muted); color: var(--foreground); font-weight: 600; }
+.task-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; border-radius: var(--radius-sm); text-align: left;
+}
+.task-row.active { background: var(--muted); }
+.task-row .t {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ---------- run header (routes/task-thread/run-header.tsx) ---------- */
+
+.run-head {
+  border-bottom: 1px solid var(--border); background: var(--background);
+  padding: 12px 24px 0; flex: none;
+}
+.run-head .inner { margin: 0 auto; width: 100%; max-width: 820px; }
+.run-title { display: flex; align-items: center; gap: 8px; }
+.run-title h1 { font-size: 15px; font-weight: 600; min-width: 0; }
+.run-meta {
+  margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 8px; font-size: 12px; color: var(--muted-foreground);
+}
+.run-meta .sep { color: var(--soft-foreground); }
+.run-tabs { margin-top: 10px; display: flex; align-items: flex-end; gap: 4px; }
+.tab {
+  margin-bottom: -1px; display: flex; align-items: center; height: 32px;
+  border-bottom: 2px solid transparent; border-radius: var(--radius) var(--radius) 0 0;
+  padding: 0 12px; font-size: 13px; font-weight: 500; color: var(--muted-foreground);
+}
+.tab.active { border-bottom-color: var(--foreground); font-weight: 600; color: var(--foreground); }
+
+/* ---------- files split (routes/task-git/task-files.tsx) ---------- */
+
+.files-split {
+  display: flex; min-height: 0; flex: 0 0 auto; align-items: flex-start;
+  gap: 20px; padding: 16px 24px;
+}
+.files-aside { width: 288px; flex: none; }
+.files-main { min-width: 0; flex: 1; }
+
+/* tree (files-tree.tsx) */
+.tree { min-width: 0; font-size: 13px; }
+.tree ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.tree button {
+  display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px;
+  border-radius: var(--radius-sm); padding: 4px 6px; text-align: left;
+  color: var(--muted-foreground);
+}
+.tree button.active { background: var(--muted); font-weight: 500; color: var(--foreground); }
+.tree .ic { width: 14px; height: 14px; flex: none; }
+.tree .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree .dir .nm { font-weight: 500; }
+.tree .sz {
+  margin-left: auto; flex: none; padding-left: 8px;
+  font: 400 11px var(--mono); font-variant-numeric: tabular-nums; color: var(--soft-foreground);
+}
+
+/* preview pane (file-preview.tsx) */
+.pane { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+.pane-head {
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+  padding: 8px 16px; font-size: 12px;
+}
+.pane-head .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 12px var(--mono); }
+.pane-head .size { flex: none; font-variant-numeric: tabular-nums; color: var(--soft-foreground); }
+.pane-head .spacer { margin-left: auto; }
+
+/* code body — the exact geometry of file-preview.tsx's CodeLines, which the
+   editor overlay must reproduce to the pixel (see §Syntax highlighting in edit mode) */
+.code { padding: 8px 0; font: 400 12px/1.7 var(--mono); overflow-x: auto; }
+.code .ln { display: flex; padding: 0 16px; }
+.code .gutter {
+  width: 40px; flex: none; padding-right: 12px; text-align: right;
+  user-select: none; font-variant-numeric: tabular-nums; color: var(--soft-foreground);
+}
+.code .src { min-width: 0; flex: 1; white-space: pre; padding-right: 16px; tab-size: 8; }
+.k { color: var(--syn-key); }
+.s { color: var(--syn-str); }
+.f { color: var(--syn-fn); }
+.c { color: var(--syn-com); }
+.n { color: var(--syn-num); }
+.p { color: var(--syn-punc); }
+.v { color: var(--syn-var); }
+
+/* ---------- banners ---------- */
+
+.banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  border-bottom: 1px solid var(--border); padding: 10px 16px; font-size: 12.5px;
+}
+.banner .body { flex: 1; min-width: 0; }
+.banner .body strong { font-weight: 600; }
+.banner .body p { color: var(--muted-foreground); margin-top: 2px; line-height: 1.5; }
+.banner .acts { display: flex; gap: 6px; flex: none; }
+.banner-warn { background: color-mix(in srgb, var(--pending) 10%, transparent); }
+.banner-danger { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.banner-info { background: color-mix(in srgb, var(--muted) 55%, transparent); }
+.banner .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+.ic-warn { color: var(--pending); }
+.ic-danger { color: var(--danger); }
+.ic-muted { color: var(--muted-foreground); }
+
+/* ---------- centered state (components/centered-state.tsx) ---------- */
+
+.centered {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 48px 24px; text-align: center;
+}
+.centered .inner { display: flex; width: 100%; max-width: 448px; flex-direction: column; align-items: center; gap: 16px; }
+.centered .tile {
+  display: flex; width: 72px; height: 72px; align-items: center; justify-content: center;
+  border-radius: 18px; border: 1px solid var(--border); background: var(--card);
+  color: var(--foreground); box-shadow: var(--shadow-xs);
+}
+.centered .tile.danger { border-color: color-mix(in srgb, var(--danger) 20%, transparent); background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+.centered h2 { font-size: 24px; font-weight: 600; }
+.centered p { font-size: 14px; color: var(--muted-foreground); }
+
+/* ---------- mockup caption (not part of the app) ---------- */
+
+.caption {
+  border-top: 1px dashed var(--border); margin: 0 24px; padding: 12px 0 20px;
+  font-size: 11.5px; color: var(--soft-foreground); line-height: 1.6;
+}
+.caption b { color: var(--muted-foreground); font-weight: 600; }

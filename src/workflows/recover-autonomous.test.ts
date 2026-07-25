@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.js';
+import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import { RunManager } from './run.js';
 
 const run = promisify(execFile);
@@ -18,7 +19,8 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  *
  * The review-gate outcome after recovery is driven by the *record's* persisted
  * `autonomous` (which `settleSuccess`/group-pick read and which recover never
- * overwrites); this test pins that invariant. `maxParallel: 0` keeps the queue
+ * overwrites); this test pins that invariant. A workspace semaphore capped at 0
+ * (the cap is workspace-level since spec 2026-07-20, step 2.5) keeps the queue
  * from dispatching, so nothing spawns.
  */
 describe('recover() and the autonomous flag (#489)', () => {
@@ -28,13 +30,14 @@ describe('recover() and the autonomous flag (#489)', () => {
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-recover-auto-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ maxParallel: 0 }), 'utf8');
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
   });
+
+  const frozen = () => new WorkspaceSemaphore({ initial: { maxParallel: 0 } });
 
   afterEach(() => {
     store.flush();
@@ -64,7 +67,7 @@ describe('recover() and the autonomous flag (#489)', () => {
     const id = queuedRun(true);
     expect(store.getRun(id)?.autonomous).toBe(true);
 
-    await new RunManager(store, repoRoot).recover();
+    await new RunManager(store, repoRoot, { semaphore: frozen() }).recover();
 
     // Still recovered (queued), still autonomous — so a later settleSuccess lands it at `done`.
     expect(store.getRun(id)?.status).toBe('queued');
@@ -73,7 +76,7 @@ describe('recover() and the autonomous flag (#489)', () => {
 
   it('leaves a non-autonomous recovered run non-autonomous', async () => {
     const id = queuedRun(false);
-    await new RunManager(store, repoRoot).recover();
+    await new RunManager(store, repoRoot, { semaphore: frozen() }).recover();
     expect(store.getRun(id)?.autonomous).toBe(false);
   });
 });

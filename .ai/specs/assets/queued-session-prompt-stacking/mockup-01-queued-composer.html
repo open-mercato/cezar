@@ -1,0 +1,97 @@
+<!doctype html>
+<!-- Illustrative mockup for spec 2026-07-21-queued-session-prompt-stacking (#472).
+     Static HTML, no app code, no external requests. Placeholder data only. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mockup 01 — queued run, composer enabled</title>
+<style>
+  :root {
+    --background: #ffffff; --foreground: #171717; --card: #ffffff; --card-2: #fbfbfb;
+    --muted: #f7f7f7; --muted-foreground: #5c5c5c; --border: #ebebeb;
+    --accent-lime: #a8f372; --soft: #8a8a8a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--background); color: var(--foreground);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .frame { width: 1040px; margin: 0 auto; padding: 24px; }
+  .banner {
+    font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--soft);
+    border: 1px dashed var(--border); border-radius: 6px; padding: 6px 10px; margin-bottom: 16px;
+  }
+  .card { border: 1px solid var(--border); border-radius: 12px; background: var(--card); overflow: hidden; }
+  .header { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .title { font-weight: 600; font-size: 15px; }
+  .chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border);
+  }
+  .body { padding: 22px 18px; min-height: 300px; display: flex; flex-direction: column; gap: 18px; }
+  .bubble {
+    align-self: flex-end; max-width: 74%; background: var(--muted); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 13px; font-size: 13.5px; white-space: pre-wrap;
+  }
+  .queued-state { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 0 8px; text-align: center; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; background: #d9a441; box-shadow: 0 0 0 4px rgba(217,164,65,.14); }
+  .queued-state p { margin: 0; }
+  .queued-head { font-size: 13px; font-weight: 500; }
+  .queued-sub { font-size: 12px; color: var(--soft); }
+  .queued-hint {
+    font-size: 12px; color: var(--muted-foreground); background: var(--card-2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 11px; margin-top: 8px;
+  }
+  .composer-wrap { border-top: 1px solid var(--border); padding: 14px 18px 16px; background: var(--card-2); }
+  .composer {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card);
+    padding: 11px 13px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .placeholder { color: var(--soft); font-size: 13.5px; }
+  .composer-row { display: flex; align-items: center; justify-content: space-between; }
+  .icons { display: flex; gap: 8px; color: var(--soft); font-size: 15px; }
+  .send {
+    background: var(--accent-lime); color: #0d0d0d; border: none; border-radius: 8px;
+    padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  }
+  .callout {
+    margin-top: 14px; font-size: 12px; color: var(--muted-foreground);
+    border-left: 3px solid var(--accent-lime); padding: 4px 0 4px 10px;
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="banner">Illustrative mockup · spec 2026-07-21-queued-session-prompt-stacking · proposed UI</div>
+    <div class="card">
+      <div class="header">
+        <span class="title">Add rate limiting to the public API</span>
+        <span class="chip">queued</span>
+        <span class="chip">(planned)</span>
+      </div>
+      <div class="body">
+        <div class="bubble">Add a rate limiter to the public API routes. Use a token bucket, 60 req/min per IP, and return 429 with a Retry-After header.</div>
+        <div class="queued-state">
+          <span class="dot"></span>
+          <p class="queued-head">Waiting for a free agent slot — #3 in queue</p>
+          <p class="queued-sub">(planned) · starts automatically when a slot frees up</p>
+          <p class="queued-hint">Messages you add now are folded into the prompt before the run starts.</p>
+        </div>
+      </div>
+      <div class="composer-wrap">
+        <div class="composer">
+          <div class="placeholder">Add to the prompt — sent when the run starts…</div>
+          <div class="composer-row">
+            <div class="icons">/ &nbsp; @ &nbsp; 📎</div>
+            <button class="send">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="callout">Changed vs. today: the composer is <strong>enabled</strong> instead of disabled with
+      “Session closed — Continue to reopen.”, it carries a queue-specific placeholder, the
+      <em>Continue</em> action is not offered, and a hint explains when the message is delivered.</p>
+  </div>
+</body>
+</html>

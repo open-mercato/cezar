@@ -3,11 +3,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   DEFAULT_SERVER_INSTANCE,
+  agentHomePaths,
   cezarHomeDir,
   instanceSlug,
   serverInstancesDir,
   serverLockPath,
   serverStatePath,
+  workspaceConfigPath,
+  workspaceUiStatePath,
 } from './paths.js';
 
 describe('paths', () => {
@@ -33,6 +36,18 @@ describe('paths', () => {
     process.env.CEZ_HOME = '/tmp/cez-home-test';
     expect(serverStatePath(DEFAULT_SERVER_INSTANCE)).toBe('/tmp/cez-home-test/server.json');
     expect(serverLockPath(DEFAULT_SERVER_INSTANCE)).toBe('/tmp/cez-home-test/server.install.lock');
+  });
+
+  it('workspace config/ui-state live directly under the cezar home', () => {
+    delete process.env.CEZ_HOME;
+    expect(workspaceConfigPath()).toBe(join(homedir(), '.cezar', 'config.json'));
+    expect(workspaceUiStatePath()).toBe(join(homedir(), '.cezar', 'ui-state.json'));
+  });
+
+  it('workspace paths honor the CEZ_HOME override', () => {
+    process.env.CEZ_HOME = '/tmp/cez-home-test';
+    expect(workspaceConfigPath()).toBe('/tmp/cez-home-test/config.json');
+    expect(workspaceUiStatePath()).toBe('/tmp/cez-home-test/ui-state.json');
   });
 
   it('a named instance lives under server-instances/, keyed by slug', () => {
@@ -69,4 +84,28 @@ it('an EMPTY CEZ_HOME falls back to the default instead of a relative cwd path',
     if (original === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = original;
   }
+});
+
+describe('agentHomePaths', () => {
+  it('defaults to the agents\' documented home directories', () => {
+    const paths = agentHomePaths({ HOME: '/home/u' } as NodeJS.ProcessEnv);
+    expect(paths.claude).toBe('/home/u/.claude');
+    expect(paths.codex).toBe('/home/u/.codex');
+    expect(paths.opencodeConfig).toBe('/home/u/.config/opencode');
+  });
+
+  it('honors agent-specific home overrides', () => {
+    const paths = agentHomePaths({
+      HOME: '/home/u',
+      CODEX_HOME: '/opt/codex',
+      XDG_CONFIG_HOME: '/xdg',
+    } as NodeJS.ProcessEnv);
+    expect(paths.codex).toBe('/opt/codex');
+    expect(paths.opencodeConfig).toBe('/xdg/opencode');
+  });
+
+  it('falls back to USERPROFILE when HOME is unset', () => {
+    const paths = agentHomePaths({ USERPROFILE: 'C:\\Users\\u' } as unknown as NodeJS.ProcessEnv);
+    expect(paths.claude).toContain('.claude');
+  });
 });

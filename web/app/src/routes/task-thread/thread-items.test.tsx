@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { RunEvent } from '@/api/types'
@@ -10,10 +11,46 @@ import subagentTask from '../../../../../src/core/__fixtures__/claude/subagent-t
 import thinkingEditWriteTodo from '../../../../../src/core/__fixtures__/claude/thinking-edit-write-todo.expected.json'
 import opencodeToolLifecycle from '../../../../../src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
-import { ContextGroup, isNearBottom, OUTPUT_CLAMP_LINES, ReasoningItem, ToolCard, ToolStreak } from './thread-items'
+import {
+  ContextGroup,
+  isNearBottom,
+  OUTPUT_CLAMP_LINES,
+  ProviderAuthRequiredCard,
+  ReasoningItem,
+  ToolCard,
+  ToolStreak,
+} from './thread-items'
 import { reduceThread } from './thread-state'
 
 afterEach(cleanup)
+
+describe('ProviderAuthRequiredCard', () => {
+  it.each([
+    ['claude', 'Claude Code'],
+    ['codex', 'Codex'],
+    ['opencode', 'OpenCode'],
+  ] as const)('renders accessible fixed recovery guidance for %s', (provider, label) => {
+    render(
+      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
+        <ProviderAuthRequiredCard incident={{
+          kind: 'provider-auth-required',
+          id: 'v1:2',
+          provider,
+          authFailureId: 'incident-1',
+        }} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('alert').textContent).toContain(`This run needed ${label} authorization`)
+    expect(screen.getByRole('alert').textContent).toContain(
+      `Review ${label} settings before retrying.`,
+    )
+    expect(screen.getByRole('alert').textContent).not.toContain(`${label} needs authorization`)
+    const link = screen.getByRole('link', { name: 'Open provider settings' })
+    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
+    expect(link.getAttribute('tabindex')).not.toBe('-1')
+  })
+})
 
 /**
  * The tool cards, driven by REAL items: every fixture item below is pulled verbatim out of the
@@ -176,7 +213,7 @@ describe('ReasoningItem', () => {
     const twoLines = `Orienting on the project structure…\nThen I will read the README.`
     render(<ReasoningItem text={twoLines} />)
     const button = screen.getByRole('button', { name: /Thinking — Orienting on the project structure/ })
-    expect(button.textContent).toContain('…')
+    expect(document.querySelector('[data-slot="reasoning"]')?.textContent).toContain('…')
     expect(screen.queryByText(/Then I will read the README/)).toBeNull()
     fireEvent.click(button)
     expect(screen.getByText(/Then I will read the README/)).toBeTruthy()
@@ -184,8 +221,33 @@ describe('ReasoningItem', () => {
 
   it('a single-line reasoning (the golden fixture text) shows whole with no ellipsis', () => {
     render(<ReasoningItem text={text} />)
-    expect(screen.getByRole('button').textContent).toBe(`Thinking — ${text}`)
+    expect(screen.getByRole('button', { name: `Thinking — ${text}` })).toBeTruthy()
+    expect(document.querySelector('[data-slot="reasoning"]')?.textContent).toContain(`Thinking — ${text}`)
   })
+
+  it('renders Markdown in the compact preview and expanded reasoning without nested controls', () => {
+    render(<ReasoningItem text={'**Assessing the lock** with `gh api`.\n\n- inspect owner\n- release safely'} />)
+
+    const trigger = screen.getByRole('button', { name: /Thinking — Assessing the lock/ })
+    const reasoning = document.querySelector('[data-slot="reasoning"]')!
+    expect(reasoning.querySelector('[data-streamdown="strong"]')?.textContent).toBe('Assessing the lock')
+    expect(trigger.querySelector('a, button')).toBeNull()
+    expect(reasoning.textContent).not.toContain('**')
+
+    fireEvent.click(trigger)
+    expect(reasoning.querySelector('[data-streamdown="inline-code"]')?.textContent).toBe('gh api')
+    expect(reasoning.querySelectorAll('[data-streamdown="list-item"]')).toHaveLength(2)
+  })
+
+  // #528 — an empty item must not leave a bare, un-expandable "Thinking —" row.
+  it.each([['', 'empty'], ['   ', 'spaces'], ['\n\t ', 'whitespace']])(
+    'renders nothing for %s text (%s)',
+    (empty) => {
+      const { container } = render(<ReasoningItem text={empty} />)
+      expect(container.innerHTML).toBe('')
+      expect(screen.queryByRole('button')).toBeNull()
+    },
+  )
 })
 
 describe('ContextGroup + ToolStreak', () => {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 
 /**
  * The full-screen /new composer (R4 Steps 1.1 + 1.3) end-to-end against a LIVE dry-run server:
@@ -49,6 +49,11 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2) —
+ *  what the cockpit's own links and its post-submit navigations actually spell. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 beforeAll(async () => {
   // A REAL git repo: the run needs a worktree, and the base-branch pill needs branches.
@@ -80,9 +85,10 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(1440, 900)
@@ -96,11 +102,13 @@ afterAll(() => {
 
 describe('the full-screen /new against a live dry-run server', () => {
   it('the sidebar CTA client-navigates to the React hero, focus already in the textarea', () => {
-    browser.goto(`${baseUrl}/`)
-    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] a[href="/new"]') !== null`)
-    browser.click('[data-slot="sidebar"] a[href="/new"]')
+    browser.goto(`${baseUrl}${scoped('/')}`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="sidebar"] a[href="${scoped('/new')}"]') !== null`,
+    )
+    browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}/new`)
+    expect(browser.url()).toBe(`${baseUrl}${scoped('/new')}`)
     expect(browser.text('h1')).toBe('What should the agent work on?')
     expect(browser.isVisible('[data-slot="twinkle-backdrop"]')).toBe(true)
     expect(
@@ -163,7 +171,7 @@ describe('the full-screen /new against a live dry-run server', () => {
     browser.click('[data-slot="composer"] textarea')
     browser.fill('[data-slot="composer"] textarea', 'Draft a spec for the new-task hero e2e.')
     browser.click('[aria-label="Start task"]')
-    browser.waitForFunction(`location.pathname.startsWith('/tasks/')`)
+    browser.waitForFunction(`location.pathname.startsWith('${scoped('/tasks/')}')`)
 
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
     expect(runId).not.toBe('')
@@ -188,7 +196,7 @@ describe('the full-screen /new against a live dry-run server', () => {
   }, 90_000)
 
   it('back on /new the picked source stuck and the spent draft is gone; iPhone hero screenshot', () => {
-    browser.click('[data-slot="sidebar"] a[href="/new"]')
+    browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('spec-writer')`,
     )
@@ -218,7 +226,7 @@ describe('the bookmarklet contract on full /new loads (spec 011, Step 1.3)', () 
       `${baseUrl}/new?skill=lint-fix&ref=hello&auto=1&key=${encodeURIComponent(key)}`,
     )
     // Unattended: no clicks from here — the cockpit takes us to the thread by itself.
-    browser.waitForFunction(`location.pathname.startsWith('/tasks/')`)
+    browser.waitForFunction(`location.pathname.startsWith('${scoped('/tasks/')}')`)
 
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
     const record = (await (await fetch(`${baseUrl}/api/runs/${runId}`)).json()) as {
@@ -249,7 +257,9 @@ describe('the bookmarklet contract on full /new loads (spec 011, Step 1.3)', () 
 
     // The key (right or wrong) never survives in the URL, and no run started.
     browser.waitForFunction(`location.search === ''`)
-    expect(browser.url()).toBe(`${baseUrl}/new`)
+    // The legacy flat `/new?…` the bookmarklet grammar guarantees landed on the scoped twin —
+    // the redirect BACKWARD_COMPATIBILITY.md's bookmarklet contract now rests on.
+    expect(browser.url()).toBe(`${baseUrl}${scoped('/new')}`)
     expect(await runCount()).toBe(before)
   }, 90_000)
 

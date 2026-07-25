@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
-  ArrowUpRightIcon,
   ListChecksIcon,
   PencilIcon,
   PlusIcon,
@@ -10,7 +9,7 @@ import {
   SearchXIcon,
 } from 'lucide-react'
 import * as React from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
@@ -21,6 +20,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
+import { ReferenceChip } from '@/components/reference-chip'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
@@ -31,14 +31,13 @@ import {
   filterRuns,
   finishedRunCount,
   formatCost,
-  prNumber,
-  taskPrUrl,
+  taskReference,
   usageCells,
   workflowLabel,
   type UsageCell,
 } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
-import { cn, isHttpUrl } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 /**
  * The Tasks overview — the table that IS the home at `/` (spec, "Task list & table", per PR
@@ -144,7 +143,7 @@ export function TasksOverview({
                     <Th>Workflow</Th>
                     <Th>Branch</Th>
                     <Th>±</Th>
-                    <Th>PR</Th>
+                    <Th>Ref</Th>
                     <Th right>Tokens</Th>
                     <Th right>Cost</Th>
                     <Th right>CPU</Th>
@@ -334,7 +333,7 @@ function TableRow({
   const attention = deriveAttention(run)
   const to = `/tasks/${run.id}`
   const cost = formatCost(run.costUsd)
-  const prUrl = taskPrUrl(run)
+  const reference = taskReference(run)
 
   return (
     <tr
@@ -358,9 +357,7 @@ function TableRow({
       <td className={TD_BASE}>{run.branch ? <BranchChip branch={run.branch} /> : <Dash />}</td>
       {/* ± — refreshed on every turn-end (#389); still an honest dash on records that predate it. */}
       <td className={TD_BASE}>{run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : <Dash />}</td>
-      <td className={TD_BASE}>
-        {prUrl ? <PrChip url={prUrl} taskTitle={runTitle(run)} /> : <Dash />}
-      </td>
+      <td className={TD_BASE}>{reference ? <ReferenceChip reference={reference} taskTitle={runTitle(run)} /> : <Dash />}</td>
       <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
         {compactTokens(run.tokensUsed)}
       </td>
@@ -473,7 +470,7 @@ function TaskCard({
   const navigate = useNavigate()
   const attention = deriveAttention(run)
   const to = `/tasks/${run.id}`
-  const prUrl = taskPrUrl(run)
+  const reference = taskReference(run)
 
   return (
     <div
@@ -526,8 +523,8 @@ function TaskCard({
             ) : null}
           </>
         )}
-        {prUrl ? (
-          <PrChip url={prUrl} taskTitle={runTitle(run)} className="h-5" />
+        {reference ? (
+          <ReferenceChip reference={reference} taskTitle={runTitle(run)} className="h-5" />
         ) : null}
       </div>
     </div>
@@ -552,40 +549,6 @@ function BranchChip({ branch }: { branch: string }) {
     <span className="rounded-[6px] bg-muted px-1.5 py-0.5 font-mono text-[11.5px] font-medium text-muted-foreground">
       {branch}
     </span>
-  )
-}
-
-/** The out-of-app link. One style for every PR — the record carries no merged/closed state to
- *  honestly split violet-open from green-merged (that is R5's forge driver). */
-function PrChip({ url, taskTitle, className }: { url: string; taskTitle: string; className?: string }) {
-  const num = prNumber(url)
-  const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border border-violet/35 px-2 font-mono text-[11px] font-semibold text-violet',
-    className
-  )
-  // href protocol guard (#431): render a link only for http(s) URLs; a
-  // non-http value (e.g. a `javascript:` PR URL scraped from a transcript)
-  // degrades to inert text instead of an executable link.
-  if (!isHttpUrl(url)) {
-    return (
-      <span data-slot="pr-chip" className={chipClass} title={url}>
-        {num ? `#${num}` : 'PR'}
-      </span>
-    )
-  }
-  return (
-    <a
-      data-slot="pr-chip"
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={url}
-      aria-label={`Open the pull request for ${taskTitle}`}
-      className={cn(chipClass, 'hover:bg-violet/10')}
-    >
-      {num ? `#${num}` : 'PR'}
-      <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />
-    </a>
   )
 }
 

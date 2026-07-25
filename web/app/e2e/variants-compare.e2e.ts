@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 
 /**
  * The variants compare view (R3 Step 2.3) end-to-end, against a LIVE ×2 dry run — spec 010
@@ -63,6 +63,12 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
+
 let groupId: string
 let idA: string
 let idB: string
@@ -83,9 +89,13 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    // CEZ_REVIEW_GATE=1 because this spec is ABOUT the gate: it is opt-in (#489, default OFF),
+    // so pinning it here is what makes the parked-at-review fixture reproducible instead of
+    // depending on whatever the operator happens to export.
+    { env: fixtureServeEnv(dataRoot, { CEZ_REVIEW_GATE: '1' }), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   const created = (await (
     await fetch(`${baseUrl}/api/runs`, {
@@ -123,17 +133,17 @@ afterAll(() => {
 
 describe('the variants compare view against two settled dry runs', () => {
   it('the tasks overview offers the compare strip once every variant is terminal', () => {
-    browser.goto(`${baseUrl}/`)
+    browser.goto(`${baseUrl}${scoped('/')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="compare-strip"]') !== null`)
     expect(
       browser.evaluate(
         `document.querySelector('[data-slot="compare-strip"] a')?.getAttribute('href')`,
       ),
-    ).toBe(`/compare/${groupId}`)
+    ).toBe(scoped(`/compare/${groupId}`))
   })
 
   it('renders a column per variant with letter, status, spend, --stat and Progress', () => {
-    browser.goto(`${baseUrl}/compare/${groupId}`)
+    browser.goto(`${baseUrl}${scoped(`/compare/${groupId}`)}`)
     browser.waitForFunction(`document.querySelectorAll('[data-slot="variant-column"]').length === 2`)
 
     expect(browser.text('h1')).toContain('Improve the project notes')
@@ -187,7 +197,7 @@ describe('the variants compare view against two settled dry runs', () => {
     browser.click(`[data-slot="confirm-pick"]`)
 
     // Navigation to the winner's thread, where the review gate renders (A parked at review).
-    browser.waitForFunction(`location.pathname === '/tasks/${idA}'`)
+    browser.waitForFunction(`location.pathname === '${scoped(`/tasks/${idA}`)}'`)
     browser.waitForFunction(`document.querySelector('[data-slot="review-panel"]') !== null`)
     browser.screenshot(`${artifactsDir}/variants-compare-picked.png`)
 

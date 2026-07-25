@@ -1,12 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.js';
 import { type AgentSession } from '../core/claude-cli-runner.js';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.js';
 import { createRunner } from '../core/runner-factory.js';
 import type { RunnerId } from '../core/agent-runner.js';
+import { modelConflictsWithRunner } from '../core/model-presets.js';
+import {
+  ModelIdentityError,
+  formatModelIdentity,
+  normalizeModelForBackend,
+} from '../core/model-identity.js';
 import {
   HANDOFF_ONLY_INSTRUCTIONS,
   HANDOFF_INSTRUCTIONS,
@@ -19,17 +25,20 @@ import { todosPath } from '../todos.js';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.js';
 import { discoverSkills, type Skill } from '../skills.js';
 import { materializeSkillDir } from '../skills-remote.js';
-import { loadConfig } from '../config.js';
+import { seedAgentConfigLocalLayer } from '../agent-config/seed.js';
+import { loadConfig, resolveWorktreeRetention } from '../config.js';
 import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.js';
 import { getRepoInfo } from '../server/git.js';
 import { loadWorkflows } from './load.js';
-import type { RunRecord, RunStore } from '../runs/store.js';
+import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.js';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.js';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.js';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.js';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.js';
 import { reviewGateEnabled } from '../runs/review-gate.js';
+import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import { UiEventSink } from '../runs/ui-event-sink.js';
+import type { UiEvent } from '../core/ui-events.js';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
 
 const CHECK_OUTPUT_CAP = 20_000;
@@ -54,6 +63,17 @@ const DONE_MARKER_RE = /CEZ:DONE\s*$/;
  * backends can't split the marker across text events.
  */
 const MONITORING_MARKER_RE = /CEZ:MONITORING\s*$/;
+/**
+ * Preserve boundaries between complete assistant text blocks while a turn is
+ * accumulated for marker parsing. The runners join these same v1 blocks with
+ * newlines in `AgentRunResult`; matching that contract here prevents a
+ * trailing `CEZ:TITLE=` block from absorbing later commentary (#623).
+ */
+export function appendTurnText(current: string, next: string): string {
+  if (!current) return next;
+  if (!next) return current;
+  return `${current}\n${next}`;
+}
 /** Strip a trailing marker from one text event so transcripts stay free of
  *  protocol noise. Delta backends may split the marker across events — then
  *  it stays visible; detection above is unaffected. */
@@ -92,9 +112,17 @@ interface ActiveRun {
   session?: AgentSession;
   currentStepId?: string;
   idleTimer?: NodeJS.Timeout;
+  monitoringWakeTimer?: NodeJS.Timeout;
+  monitoringWakeIntervalMinutes?: number;
+  monitoringWakeups?: number;
   autosaveTimer?: NodeJS.Timeout;
-  /** Running counter for persisted agent screenshots (`screenshot-<n>.png`). */
-  imageSeq?: number;
+  /* The screenshot counter lives on `RunManager.queuedImageSeq` (#472), keyed by
+   * run id — a queued run persists attachments with no `ActiveRun` at all. */
+  /** Has a session EVER opened on this run (#472)? `session` alone cannot answer
+   *  it — teardown sets it back to `undefined`, so a closed session and one that
+   *  never opened look identical. This distinguishes "still starting up, buffer
+   *  the message" from "genuinely closed, 409". */
+  sessionEverOpened?: boolean;
   /** Autonomous mode (#autonomous): never park at `waiting` — auto-nudge the agent to keep
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
@@ -108,14 +136,16 @@ interface ActiveRun {
 const MAX_AUTO_CONTINUES = 40;
 const AUTONOMOUS_NUDGE =
   'Continue working autonomously until the task is fully complete. Do not ask me for confirmation or clarification — make reasonable assumptions and proceed. When everything is done, end the session with your done signal.';
+const MONITORING_WAKE_NUDGE =
+  'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
 
 export interface StartRunInput {
   task: string;
   model?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
-  /** Screenshots pasted into the new-task form — delivered once, with the
-   *  first agent step's opening message. */
+  /** Screenshots pasted into the new-task form — persisted when the run is
+   *  created and delivered once, with the first agent step's opening message. */
   images?: ContentBlock[];
   /** Per-run system-prompt override (`POST /api/runs`, programmatic callers).
    *  Replaces the `config.json` default for this run — see
@@ -133,6 +163,13 @@ export interface StartRunInput {
   /** Follow-up inbox generation (spec 007, #444). Omitted means enabled for
    *  compatibility; the handoff journal runs either way. */
   generateFollowups?: boolean;
+  /** Attachments from the queued prompt stack (#472), re-encoded from disk by
+   *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
+   *  are persisted into `taskImages` by `startRun()` — folding
+   *  the stack's (already-persisted) files in there would write duplicate files
+   *  and make the task bubble render the stack's images as its own. In-memory
+   *  only: rebuilt from the record on every hydration, never persisted. */
+  stackedImages?: ContentBlock[];
 }
 
 /**
@@ -171,6 +208,30 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
  * issue/PR (#357). `path` is only ever an absolute path under
  * `.ai/cezar/runs/<runId>-images/` (see `RunManager.persistImage`).
  */
+/** Inverse of `persistImage`'s extension mapping (#472) — a persisted attachment
+ *  is re-encoded from disk at dequeue and needs its media type back. */
+export function mediaTypeFor(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase();
+  return ext === 'jpg' ? 'image/jpeg'
+    : ext === 'webp' ? 'image/webp'
+    : ext === 'gif' ? 'image/gif'
+    : 'image/png';
+}
+
+/** Highest `<prefix>-<n>.<ext>` suffix already present in a run's image dir (#472).
+ *  `screenshot-*` and `pasted-*` share one numbering space, so this scans both and
+ *  returns 0 for a missing/empty directory. */
+export function highestImageSeq(dir: string): number {
+  try {
+    return readdirSync(dir).reduce((max, name) => {
+      const m = /^(?:screenshot|pasted)-(\d+)\./.exec(name);
+      return m ? Math.max(max, Number(m[1])) : max;
+    }, 0);
+  } catch {
+    return 0;
+  }
+}
+
 export interface PersistedAttachment {
   name: string;
   url: string;
@@ -216,10 +277,13 @@ const VARIANT_HINTS: Record<string, string | undefined> = {
  * relay live to the GUI). No GitHub choreography — agent steps and shell
  * checks with bounded retry loops, plus live sessions: the last agent step
  * stays open for follow-ups (`waiting`) until "finish", idle timeout, or
- * cancel. Runs queue behind `maxParallel` slots and each run executes in its
+ * cancel. Runs queue behind the workspace-wide `maxParallel` slots (the shared
+ * `WorkspaceSemaphore`, spec 2026-07-20 step 2.5) and each run executes in its
  * own git worktree on a `cez/<id8>` branch (spec 006), autosave-committed at
  * turn end and before a draft PR — plus every 90 s when opted in via
- * CEZ_AUTOSAVE=1 (#471). The user's working tree is never touched.
+ * CEZ_AUTOSAVE=1 (#471). Each autosave records its trigger in the commit
+ * subject, so the always-on flushes are not mistaken for the opt-in timer.
+ * The user's working tree is never touched.
  */
 export class RunManager {
   private readonly active = new Map<string, ActiveRun>();
@@ -234,8 +298,20 @@ export class RunManager {
   // timeout already bounds how long a session can sit open. Invariant:
   // `waiting ⊆ active` — always cleared together via dropActive().
   private readonly waiting = new Set<string>();
+  /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
+  private readonly monitoring = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
+  /** Per-run image counter behind `pasted-<n>` / `screenshot-<n>` (#472). Lives on
+   *  the manager rather than the `ActiveRun` so a *queued* run — which has no
+   *  `ActiveRun` at all — can persist attachments. Seeded lazily from disk. */
+  private readonly queuedImageSeq = new Map<string, number>();
+  /** Messages that landed in the dequeue → session-open gap (#472), flushed as
+   *  ordinary follow-up turns the moment the session opens. In-memory only. */
+  private readonly deferredMessages = new Map<string, ContentBlock[][]>();
   private pumping = false;
+  /** A pump that arrived while one was in flight — replayed by `pump()`'s own
+   *  loop so a slot freed mid-sweep is never a lost wakeup. */
+  private pumpAgain = false;
   /**
    * Runs normally isolate in worktrees and may execute in parallel. When that
    * isolation is unavailable (or explicitly disabled), serialize access to
@@ -250,26 +326,83 @@ export class RunManager {
    *  triggers one pause, not a burst. Cleared in dropActive when the run leaves the registry. */
   private readonly memoryPausing = new Set<string>();
 
+  /** Unsubscribe handle for the constructor's `onUsage` subscription — released
+   *  by dispose() so a torn-down manager stops receiving sampler ticks. */
+  private readonly offUsage: () => void;
+
+  /** The workspace-wide parallel-cap semaphore + cached resource config
+   *  (spec 2026-07-20, step 2.5). Boot constructs ONE and every manager shares
+   *  it; the private fallback keeps single-manager callers and tests working. */
+  private readonly semaphore: WorkspaceSemaphore;
+
+  /** Unregister handle for this manager's semaphore membership — released by
+   *  dispose() so a torn-down project stops counting against the cap. */
+  private readonly offSemaphore: () => void;
+
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
+    options: { semaphore?: WorkspaceSemaphore } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
+    this.offSemaphore = this.semaphore.register({
+      busySlots: () => this.busySlots(),
+      pump: () => this.pump(),
+      oldestQueuedAt: () => this.oldestQueuedAt(),
+    });
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
-    onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
+    this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
   }
 
   /**
-   * Pause any active run whose whole process tree exceeds `config.memoryLimitMb`, freeing its
-   * slot so the queue advances (#memory-guard). "Pause" closes the session — freeing the tree's
+   * Release everything this manager owns without touching run records
+   * (multi-project workspace, spec 2026-07-20: a removed project's context is
+   * torn down while the process lives on). Unsubscribes the shared usage
+   * sampler — before dispose() existed that subscription lived for the whole
+   * process — clears every per-run idle/autosave timer, releases any held
+   * repo-root locks, and empties the queued state so nothing fires later.
+   * Live sessions are NOT ended here: run lifecycle stays the caller's policy;
+   * dispose only guarantees the manager makes no further moves on its own.
+   */
+  dispose(): void {
+    this.offUsage();
+    this.offSemaphore();
+    for (const [runId, state] of this.active) {
+      this.clearIdleTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
+      this.clearAutosaveTimer(state);
+      state.releaseRepoRoot?.();
+      state.releaseRepoRoot = undefined;
+    }
+    this.active.clear();
+    this.waiting.clear();
+    this.starting.clear();
+    this.queue.length = 0;
+    this.pendingJobs.clear();
+    this.memoryPausing.clear();
+    this.lastNamerKey.clear();
+  }
+
+  /**
+   * Pause any active run whose whole process tree exceeds the WORKSPACE
+   * `resources.memoryLimitMb`, freeing its slot so the queue advances
+   * (#memory-guard). "Pause" closes the session — freeing the tree's
    * memory — and leaves the run resumable via Continue; a loud warning explains why. No-op when
    * no limit is set or the sampler has no data (e.g. `ps`/PowerShell unavailable).
    */
   private async enforceMemoryLimit(snapshot: Record<string, ProcessUsage>): Promise<void> {
-    const runIds = Object.keys(snapshot);
+    // The sampler is module-global (one `ps` for the whole process), so with
+    // multiple projects a snapshot carries EVERY project's runs. Act only on
+    // rows this manager owns (multi-project spec, step 2.4).
+    const runIds = Object.keys(snapshot).filter((runId) => this.active.has(runId));
     if (runIds.length === 0) return;
-    const limitMb = (await loadConfig(this.repoRoot)).memoryLimitMb;
+    // Workspace limit from the shared semaphore's in-memory cache (step 2.5:
+    // refreshed at boot and on PUT /api/workspace/config — never N per-tick
+    // file reads across N projects). Legacy per-repo `memoryLimitMb` keys are
+    // ignored post-migration.
+    const limitMb = this.semaphore.memoryLimitMb();
     if (!limitMb || limitMb <= 0) return;
     const limitBytes = limitMb * 1024 * 1024;
     for (const runId of runIds) {
@@ -340,6 +473,19 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow as unknown as Record<string, unknown> });
+    // Initial pasted images must be visible while the run is still queued (#612),
+    // and must survive a restart before a slot opens. Persist them before the job
+    // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
+    // from these URLs when a recovered run eventually starts.
+    if (input.images?.length) {
+      const persisted = input.images
+        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+        .map((b) => this.persistImage(run.id, b.source.media_type, b.source.data, 'pasted'))
+        .filter((saved): saved is PersistedAttachment => saved !== null);
+      if (persisted.length) {
+        this.store.updateRun(run.id, { taskImages: persisted.map((saved) => saved.url) });
+      }
+    }
     // Step-0 reference extraction (task auto-naming spec): the regex layer's
     // numbers persist immediately; the namer may add the kind it verified later.
     const skillHint = workflow.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
@@ -379,44 +525,110 @@ export class RunManager {
   }
 
   /**
-   * Start queued runs while parallel slots are free. `maxParallel` comes from
-   * `.ai/cezar/config.json` (default 2); a non-git directory degrades to 1
-   * sequential run in the repo root (spec 006 degradation rule).
+   * Slots this manager holds against the workspace-wide cap. `waiting` runs
+   * don't hold a slot (#347): an idle claude process costs memory but no
+   * tokens, queued work progressing matters more, and the idle timeout already
+   * bounds how long a session can sit open. Because the exemption lives HERE —
+   * in the count, not in any acquire path — a message into a `waiting` run
+   * (sendMessage) resumes it immediately even when that momentarily exceeds
+   * `maxParallel`, including when other projects saturate the cap.
+   */
+  private busySlots(): number {
+    const ordinaryWaiting = this.waiting.size - this.monitoring.size;
+    const exemptMonitoring = Math.min(this.monitoring.size, this.semaphore.maxMonitoringSessions());
+    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring;
+  }
+
+  /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
+   *  key when a freed slot is broadcast), or null when nothing is queued.
+   *  `queue` is FIFO — `startRun` pushes and `recover()` re-queues by
+   *  `createdAt` — so the head is the oldest. */
+  private oldestQueuedAt(): number | null {
+    const head = this.queue[0];
+    if (!head) return null;
+    const createdAt = this.store.getRun(head)?.createdAt;
+    const ms = createdAt ? Date.parse(createdAt) : Number.NaN;
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  /**
+   * A slot this manager held just came free. Pump the whole WORKSPACE, not
+   * just this manager: `maxParallel` is counted across every project, so the
+   * run that should take the slot is the workspace's oldest queued one — which
+   * usually sits in another project's queue. Pumping only `this` is what left
+   * a queued run in project B stuck at `queued` while project A's runs came
+   * and went. `release()` pumps this manager too, so it replaces the local
+   * `pump()` at every slot-freeing transition.
+   */
+  private releaseSlot(): void {
+    void this.semaphore.release();
+  }
+
+  /**
+   * Start queued runs while parallel slots are free. A run starts only under
+   * BOTH ceilings: the WORKSPACE `resources.maxParallel` (default 2, counted
+   * across every manager — spec 2026-07-20, step 2.5) AND this project's own
+   * per-project `maxParallel` when the registry sets one (spec 2026-07-22,
+   * inherits the workspace cap when unset). Legacy per-repo `maxParallel` keys
+   * are ignored. A non-git directory degrades to 1 sequential run in the repo
+   * root (spec 006 degradation rule), which is always the tighter bound.
    */
   private async pump(): Promise<void> {
-    if (this.pumping) return;
+    this.reconcileMonitoringWakeTimers();
+    // A pump requested while one is in flight can't just be dropped: the
+    // in-flight pass may already have read capacity (it awaits `getRepoInfo`
+    // before the first check), so a slot freed in that window would be lost
+    // until the next unrelated event. Re-run the sweep instead.
+    if (this.pumping) {
+      this.pumpAgain = true;
+      return;
+    }
     this.pumping = true;
     try {
-      const repo = await getRepoInfo(this.repoRoot);
-      const maxParallel = repo ? (await loadConfig(this.repoRoot)).maxParallel : 1;
-      // `waiting` runs don't hold a slot (#347). A message into a waiting run
-      // resumes it even when that momentarily exceeds maxParallel — resumed
-      // conversations must never be blocked by the queue.
-      const busy = () => this.active.size + this.starting.size - this.waiting.size;
-      while (this.queue.length > 0 && busy() < maxParallel) {
-        const runId = this.queue.shift();
-        if (!runId) break;
-        const job = this.pendingJobs.get(runId);
-        this.pendingJobs.delete(runId);
-        if (!job) continue;
-        this.starting.add(runId);
-        void this.execute(runId, job.workflow, job.input).catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          this.store.updateRun(runId, {
-            status: 'failed',
-            error: `engine crashed: ${message}`,
-            finishedAt: new Date().toISOString(),
+      do {
+        this.pumpAgain = false;
+        const repo = await getRepoInfo(this.repoRoot);
+        const maxParallel = this.semaphore.maxParallel();
+        // Per-project ceiling (spec 2026-07-22-per-project-concurrency): this
+        // project never runs more than its own configured `maxParallel`; absent
+        // an override it equals the workspace cap, so behavior is unchanged.
+        const projectMax = this.semaphore.projectMaxParallel(this.repoRoot);
+        // `waiting` runs don't hold a slot (#347) — see busySlots(). The check
+        // below is the only slot gate: resumes never pass through it. A run
+        // starts only under BOTH the workspace cap and this project's ceiling.
+        const capacity = () =>
+          this.semaphore.busy() < maxParallel &&
+          this.busySlots() < projectMax &&
+          (repo !== null || this.busySlots() < 1);
+        while (this.queue.length > 0 && capacity()) {
+          const runId = this.queue.shift();
+          if (!runId) break;
+          const job = this.pendingJobs.get(runId);
+          this.pendingJobs.delete(runId);
+          if (!job) continue;
+          this.starting.add(runId);
+          // Rebuild the prompt from the store at the last instant (#472), so an edit
+          // or a stacked message that landed while the run waited is honored. Entered
+          // in the same synchronous tick as the `pendingJobs.delete` above, so no
+          // handler can observe a half-dequeued run.
+          const input = this.hydrateQueuedInput(runId, job.input);
+          void this.execute(runId, job.workflow, input).catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            this.store.updateRun(runId, {
+              status: 'failed',
+              error: `engine crashed: ${message}`,
+              finishedAt: new Date().toISOString(),
+            });
+            const state = this.active.get(runId);
+            if (state) {
+              this.clearIdleTimer(state);
+              this.clearAutosaveTimer(state);
+            }
+            this.starting.delete(runId);
+            this.dropActive(runId);
           });
-          const state = this.active.get(runId);
-          if (state) {
-            this.clearIdleTimer(state);
-            this.clearAutosaveTimer(state);
-          }
-          this.starting.delete(runId);
-          this.dropActive(runId);
-          void this.pump();
-        });
-      }
+        }
+      } while (this.pumpAgain);
     } finally {
       this.pumping = false;
     }
@@ -453,7 +665,11 @@ export class RunManager {
           }
           this.pendingJobs.set(run.id, {
             workflow,
-            input: {
+            // Folded through the same helper `pump()` uses (#472) so a restart
+            // carries the stack. Idempotent: hydration always composes from
+            // `run.task` + the stack, never from an already-folded `input.task`,
+            // so re-hydrating at dequeue yields the same string, not a doubled one.
+            input: this.hydrateQueuedInput(run.id, {
               task: run.task,
               model: run.model,
               runner: run.runner,
@@ -463,7 +679,7 @@ export class RunManager {
               // recovered queued autonomous run would run non-autonomously (no
               // auto-nudge) and later wrongly park at `review`.
               autonomous: run.autonomous,
-            },
+            }),
           });
           this.queue.push(run.id);
           this.store.appendEvent(run.id, { type: 'lifecycle', message: 'cezar restarted — task re-queued' });
@@ -507,10 +723,9 @@ export class RunManager {
         finishedAt,
         currentStepId: undefined,
       });
-      const resumed = this.continueRun(
-        run.id,
-        'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.',
-      );
+      const resumed = this.continueRun(run.id, {
+        text: 'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.',
+      });
       this.store.appendEvent(run.id, {
         type: 'lifecycle',
         message: resumed.ok
@@ -537,9 +752,15 @@ export class RunManager {
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.waiting.delete(runId);
+    this.monitoring.delete(runId);
+    if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
+    // The run's slot is gone from busySlots() as of the deletes above — hand it
+    // to the workspace's oldest queued run, in ANY project. Every terminal path
+    // funnels through here, so this one call covers them all.
+    this.releaseSlot();
     // A run leaving the active registry is a terminal transition (done/review/
     // failed/cancelled) — the one moment the finished-worktree count can grow.
     // Enforce count-based retention (#483) here so a single hook covers every
@@ -553,7 +774,7 @@ export class RunManager {
    *  lifecycle. `review`/live runs are excluded by the selector. */
   private async enforceRetention(): Promise<void> {
     try {
-      const keep = (await loadConfig(this.repoRoot)).worktreeRetention;
+      const keep = await resolveWorktreeRetention(this.repoRoot);
       await reclaimWorktrees(this.repoRoot, this.store, keep);
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
@@ -606,7 +827,7 @@ export class RunManager {
       abort();
     };
     this.waiting.add(runId);
-    void this.pump();
+    this.releaseSlot();
     try {
       await Promise.race([previous, cancelled]);
     } finally {
@@ -641,11 +862,263 @@ export class RunManager {
   }
 
   /**
+   * Fold a queued run's persisted prompt — `run.task` plus everything stacked
+   * onto it (#472) — into the job input that is about to execute.
+   *
+   * Called from `pump()` immediately before `execute()`, which makes the RECORD
+   * the single source of truth for a queued run's prompt. Before this, the
+   * executing copy lived in `pendingJobs` (memory) while the record held a
+   * second one, so an edit that PATCHed the record silently did nothing until a
+   * restart. `recover()` rebuilds through the same helper, so both paths agree.
+   *
+   * **Read-only, and that is load-bearing.** It composes into the in-memory
+   * `input` and never writes the folded string back to `RunRecord.task`; the
+   * task and its stack stay separate on disk for the life of the run. Writing
+   * back would re-append the whole stack on every recovery and compound without
+   * bound — asserted directly by a test.
+   */
+  private hydrateQueuedInput(runId: string, input: StartRunInput): StartRunInput {
+    const run = this.store.getRun(runId);
+    if (!run) return input;
+    const stack = run.queuedMessages ?? [];
+
+    const task = [run.task, ...stack.map((m) => m.text)]
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join('\n\n');
+
+    const readImages = (urls: string[], kind: 'task' | 'queued'): ContentBlock[] => {
+      const images: ContentBlock[] = [];
+      for (const url of urls) {
+        const name = url.split('/').pop();
+        if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
+        try {
+          const data = readFileSync(join(this.dataDir, 'runs', `${runId}-images`, name));
+          images.push({
+            type: 'image',
+            source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
+          });
+        } catch {
+          // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
+          // or the file is unreadable — start with the text and say which image went.
+          this.store.appendEvent(runId, {
+            type: 'note',
+            message: `${kind} attachment ${name} could not be read — starting without it`,
+          });
+        }
+      }
+      return images;
+    };
+
+    // Keep the original in-memory blocks for a live process (including the
+    // best-effort case where persistence failed). Recovery has no such copy,
+    // so rebuild it from the durable task-image URLs.
+    const images = input.images?.length ? input.images : readImages(run.taskImages ?? [], 'task');
+    const stackedImages = readImages(stack.flatMap((m) => m.images ?? []), 'queued');
+
+    return {
+      ...input,
+      task,
+      ...(images.length ? { images } : { images: undefined }),
+      ...(stackedImages.length ? { stackedImages } : { stackedImages: undefined }),
+    };
+  }
+
+  /**
+   * Still waiting for a slot? Checked against the engine's own queue rather than
+   * the record's `status` (#472): the record is written by `execute()` a tick
+   * after `pump()` dequeues, so a status read can see `queued` for a run that has
+   * already started. `pendingJobs` is deleted synchronously at dequeue, so it is
+   * the authoritative answer for "can this prompt still be amended".
+   */
+  private isQueued(runId: string): boolean {
+    return this.pendingJobs.has(runId);
+  }
+
+  /** Split `ContentBlock[]` into the persisted shape a stacked message holds. */
+  private toQueuedMessage(runId: string, content: ContentBlock[]): QueuedMessage {
+    const text = content
+      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+    const images = content
+      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
+      .filter((saved): saved is PersistedAttachment => saved !== null)
+      .map((saved) => saved.url);
+    return {
+      id: randomUUID(),
+      text,
+      ...(images.length ? { images } : {}),
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Append a prompt message onto a still-queued run (#472). Returns the stored
+   * entry, or null when the run has already started — the caller then falls
+   * through to `deferMessage`.
+   */
+  enqueueMessage(runId: string, content: ContentBlock[]): QueuedMessage | null {
+    if (!this.isQueued(runId)) return null;
+    const run = this.store.getRun(runId);
+    if (!run) return null;
+    const message = this.toQueuedMessage(runId, content);
+    this.store.updateRun(runId, { queuedMessages: [...(run.queuedMessages ?? []), message] });
+    return message;
+  }
+
+  /** Edit a stacked message in place. Omitted fields retain their current value. */
+  editQueuedMessage(
+    runId: string,
+    msgId: string,
+    edit: { text?: string; images?: ContentBlock[] },
+  ): QueuedMessage | null {
+    if (!this.isQueued(runId)) return null;
+    const run = this.store.getRun(runId);
+    const stack = run?.queuedMessages;
+    if (!stack) return null;
+    const at = stack.findIndex((m) => m.id === msgId);
+    if (at < 0) return null;
+    const current = stack[at]!;
+    const replacementImages = edit.images === undefined
+      ? current.images
+      : this.toQueuedMessage(runId, edit.images).images;
+    const replacement: QueuedMessage = {
+      id: msgId,
+      text: edit.text ?? current.text,
+      ...(replacementImages?.length ? { images: replacementImages } : {}),
+      createdAt: current.createdAt,
+    };
+    const next = [...stack];
+    next[at] = replacement;
+    this.store.updateRun(runId, { queuedMessages: next });
+    // Images the edit dropped are now orphans.
+    this.dropOrphanImages(runId, stack[at]!.images ?? [], next);
+    return replacement;
+  }
+
+  /** Remove a stacked message and its now-orphaned attachments. */
+  removeQueuedMessage(runId: string, msgId: string): boolean {
+    if (!this.isQueued(runId)) return false;
+    const run = this.store.getRun(runId);
+    const stack = run?.queuedMessages;
+    if (!stack) return false;
+    const target = stack.find((m) => m.id === msgId);
+    if (!target) return false;
+    const next = stack.filter((m) => m.id !== msgId);
+    this.store.updateRun(runId, { queuedMessages: next });
+    this.dropOrphanImages(runId, target.images ?? [], next);
+    return true;
+  }
+
+  /**
+   * Delete image files no longer referenced by anything (#472). Best effort — a
+   * leftover file is harmless and goes with the run. Never touches a URL still
+   * referenced by another stacked entry or by the initial prompt's `taskImages`.
+   */
+  private dropOrphanImages(runId: string, candidates: string[], stack: QueuedMessage[]): void {
+    if (!candidates.length) return;
+    const run = this.store.getRun(runId);
+    const referenced = new Set([
+      ...(run?.taskImages ?? []),
+      ...stack.flatMap((m) => m.images ?? []),
+    ]);
+    for (const url of candidates) {
+      if (referenced.has(url)) continue;
+      const name = url.split('/').pop();
+      // Defend the join against a crafted URL: only a bare file name may be deleted.
+      if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
+      try {
+        rmSync(join(this.dataDir, 'runs', `${runId}-images`, name), { force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+
+  /**
+   * Edit the initial prompt of a still-queued run (#472). Re-derives the
+   * heuristic title and the PR/issue chips, but never re-runs the LLM namer —
+   * it already fired at creation and a second model call per edit is unjustified.
+   */
+  editTask(runId: string, task: string): boolean {
+    if (!this.isQueued(runId)) return false;
+    const run = this.store.getRun(runId);
+    if (!run) return false;
+    const workflow = this.pendingJobs.get(runId)?.workflow;
+    const skillHint = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
+    const refs = refineTaskRefs(extractTaskRefs(task), skillHint);
+    // Hand-edited titles always win (#389): `user` beats the heuristic, and a
+    // `marker` title the agent declared beats it too.
+    const keepTitle = run.titleOrigin === 'user' || run.titleOrigin === 'marker';
+    this.store.updateRun(runId, {
+      task,
+      ...(keepTitle || !workflow ? {} : { title: makeRunTitle(task, workflow) }),
+      ...(refs.prNumber !== undefined ? { prNumber: refs.prNumber } : {}),
+      ...(refs.issueNumber !== undefined ? { issueNumber: refs.issueNumber } : {}),
+    });
+    return true;
+  }
+
+  /**
+   * Buffer a message that arrived in the gap between dequeue and session-open
+   * (#472). `pump()` has already folded the stack and `execute()` is spawning the
+   * backend, so there is nothing left to amend and no session to deliver into —
+   * without this rung the message would 409, a genuinely dropped message in the
+   * feature built to stop dropping them. Flushed as an ordinary follow-up turn
+   * the instant the session opens; dropped if the run never starts, which the
+   * existing error path already surfaces.
+   *
+   * The buffer lives on the manager rather than the `ActiveRun` because the
+   * `ActiveRun` does not exist yet for part of this window.
+   */
+  deferMessage(runId: string, content: ContentBlock[]): boolean {
+    // The window spans two sub-states: `starting` (no `ActiveRun` yet) and the
+    // longer stretch where the `ActiveRun` exists but the backend is still being
+    // spawned. `execute()` deletes the run from `starting` as soon as it builds
+    // the state — seconds before the session opens — so checking `starting`
+    // alone would reopen exactly the drop this rung exists to close.
+    const state = this.active.get(runId);
+    const startingUp = this.starting.has(runId) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
+    if (!startingUp) return false;
+    const pending = this.deferredMessages.get(runId) ?? [];
+    pending.push(content);
+    this.deferredMessages.set(runId, pending);
+    return true;
+  }
+
+  /** Deliver anything `deferMessage` buffered, once the session is live. */
+  private flushDeferred(runId: string): void {
+    const pending = this.deferredMessages.get(runId);
+    if (!pending?.length) return;
+    // Re-buffer whatever the session refused rather than dropping it. `sendMessage`
+    // answers false when the session is not open yet — and silently losing a message
+    // here would be precisely the failure `deferMessage` exists to prevent. Anything
+    // left over is retried by the next session that opens on this run.
+    const unsent = pending.filter((content) => !this.sendMessage(runId, content));
+    if (unsent.length) this.deferredMessages.set(runId, unsent);
+    else this.deferredMessages.delete(runId);
+  }
+
+  /**
    * Deliver a user message into the run's live claude session (mid-turn or
    * while `waiting`). Returns false when there is no open session — the GUI
    * then offers "Continue" instead.
    */
   sendMessage(runId: string, content: ContentBlock[]): boolean {
+    const delivered = this.deliverMessage(runId, content, true);
+    if (delivered) {
+      const state = this.active.get(runId);
+      if (state) state.monitoringWakeups = 0;
+      this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
+    }
+    return delivered;
+  }
+
+  /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
+   * bookkeeping without masquerading as user-authored transcript messages. */
+  private deliverMessage(runId: string, content: ContentBlock[], userAuthored: boolean): boolean {
     const state = this.active.get(runId);
     if (!state?.session?.open || state.cancelled) return false;
 
@@ -656,18 +1129,20 @@ export class RunManager {
     // Persist the attached images so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    const persisted = content
+    const persisted = userAuthored ? content
       .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => this.persistImage(runId, state, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null);
+      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
+      .filter((saved): saved is PersistedAttachment => saved !== null) : [];
     const images = persisted.map((saved) => saved.url);
-    this.store.appendEvent(runId, {
-      type: 'user-message',
-      stepId: state.currentStepId,
-      text,
-      imageCount: content.filter((b) => b.type === 'image').length,
-      images,
-    });
+    if (userAuthored) {
+      this.store.appendEvent(runId, {
+        type: 'user-message',
+        stepId: state.currentStepId,
+        text,
+        imageCount: content.filter((b) => b.type === 'image').length,
+        images,
+      });
+    }
 
     // Tell the agent where the pasted files live on disk (#357): the base64 blocks below still
     // ride along so the model can *view* them, but a real path is what lets it *operate* on them
@@ -677,7 +1152,9 @@ export class RunManager {
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       this.clearIdleTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
+      this.monitoring.delete(runId);
       // Clear any `monitoring` activity — the agent is actively working again
       // (spec 2026-07-18-subagent-monitoring-status, #490).
       this.store.updateRun(runId, { status: 'running', activity: undefined });
@@ -716,7 +1193,10 @@ export class RunManager {
    * behaves exactly like an interactive step: `waiting` after each turn,
    * messages via sendMessage, closed by finish/idle/cancel.
    */
-  continueRun(runId: string, text?: string): { ok: boolean; error?: string } {
+  continueRun(
+    runId: string,
+    opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string } = {},
+  ): { ok: boolean; error?: string } {
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
@@ -724,13 +1204,60 @@ export class RunManager {
     if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
-    const sessionId = [...run.steps].reverse().find((s) => s.sessionId)?.sessionId;
-    if (!sessionId) return { ok: false, error: 'no agent session to resume' };
+    const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
+    if (!sessionStep?.sessionId) return { ok: false, error: 'no agent session to resume' };
+    const targetRunner = opts.runner ?? run.runner ?? 'claude';
+    // Session ids are provider-owned opaque values. New records carry explicit
+    // affinity; for legacy records, the run's current runner is the conservative
+    // owner until a continuation emits a new, attributed session id (#562).
+    const sessionBackend = sessionStep.backend ?? run.runner ?? 'claude';
+    const resume = sessionBackend === targetRunner;
+
+    // Follow-up runner/model override (#401): the composer lets the user pick which backend and
+    // model handle this continuation. Omitted → the run's current backend/model is kept
+    // (backward compat). A provided choice is persisted BEFORE scheduling, so it becomes the
+    // run's current backend — `runContinuation` reads it off the record, later continuations
+    // default to it, and the header reflects the active engine. An empty model ('') clears the
+    // pin, letting the runner pick the model (auto).
+    if (opts.runner !== undefined || opts.model !== undefined) {
+      // Guard the pairing before persisting anything: the model override applies to the runner
+      // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
+      // same resolution `runContinuation` reads off the record). A model that is recognizably
+      // another runner's preset would corrupt the run; free-form/custom ids pass untouched.
+      if (opts.model && modelConflictsWithRunner(opts.model, targetRunner)) {
+        return { ok: false, error: `model '${opts.model}' is not a ${targetRunner} model` };
+      }
+      // A runner switch that carries NO explicit model must not leave the previous backend's pin
+      // on the record: the guard above only sees `opts.model`, so without this an inherited
+      // `opus` would survive a switch to codex and `runContinuation` would hand it to the codex
+      // runner. Clearing (not rejecting) is right — the pin belonged to the old backend and is
+      // meaningless for the new one, which is exactly what the composer already displays (auto).
+      // Only a recognizably foreign preset is cleared; a free-form/custom id is left alone.
+      const inheritedPinIsForeign =
+        opts.model === undefined &&
+        run.model !== undefined &&
+        modelConflictsWithRunner(run.model, targetRunner);
+      this.store.updateRun(runId, {
+        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        ...(opts.model !== undefined
+          ? { model: opts.model === '' ? undefined : opts.model }
+          : inheritedPinIsForeign
+            ? { model: undefined }
+            : {}),
+      });
+    }
 
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
-    void this.runContinuation(runId, stepId, sessionId, text?.trim() || 'Continue.').catch(
+    void this.runContinuation(
+      runId,
+      stepId,
+      resume ? sessionStep.sessionId : undefined,
+      targetRunner,
+      opts.text?.trim() || 'Continue.',
+      opts.images ?? [],
+    ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.store.updateRun(runId, {
@@ -739,7 +1266,6 @@ export class RunManager {
           finishedAt: new Date().toISOString(),
         });
         this.dropActive(runId);
-        void this.pump();
       },
     );
     return { ok: true };
@@ -748,8 +1274,13 @@ export class RunManager {
   private async runContinuation(
     runId: string,
     stepId: string,
-    sessionId: string,
+    sessionId: string | undefined,
+    backend: RunnerId,
     prompt: string,
+    /** Screenshots pasted into the follow-up composer — delivered with the
+     *  reopened session's opening message, exactly like a live-session
+     *  message's attachments. */
+    images: ContentBlock[] = [],
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -782,7 +1313,6 @@ export class RunManager {
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
         this.dropActive(runId);
-        void this.pump();
         return;
       }
     }
@@ -801,28 +1331,44 @@ export class RunManager {
       iterations: 1,
       startedAt: new Date().toISOString(),
       sessionId,
+      backend,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
-    this.store.appendEvent(runId, { type: 'user-message', stepId, text: prompt, imageCount: 0 });
+    // Attachments pasted into the follow-up composer, on the same terms as a live-session
+    // message (#357): persisted to the run's own image store so the thread renders the bubble's
+    // images rather than a bare count, and handed to the agent BOTH as base64 blocks (so it can
+    // view them) and as absolute paths appended to the prompt (so it can operate on them — and
+    // because codex/opencode drop image blocks before they reach the model).
+    const attachments = images
+      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
+      .filter((saved): saved is PersistedAttachment => saved !== null);
+    this.store.appendEvent(runId, {
+      type: 'user-message',
+      stepId,
+      text: prompt,
+      imageCount: images.filter((b) => b.type === 'image').length,
+      ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
+    });
 
     let stepCost = 0;
     let turnText = '';
     const sink = this.makeUiSink(runId, stepId);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
-        const saved = this.persistImage(runId, state, event.mediaType, event.data);
+        const saved = this.persistImage(runId, event.mediaType, event.data);
         if (saved) this.store.appendEvent(runId, { type: 'image', stepId, ...saved });
         return;
       }
       if (event.type === 'text') {
-        turnText += event.text;
+        turnText = appendTurnText(turnText, event.text);
         const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
       this.store.appendEvent(runId, { ...event, stepId });
       if (event.type === 'session') {
-        this.store.updateStep(runId, stepId, { sessionId: event.sessionId });
+        this.store.updateStep(runId, stepId, { sessionId: event.sessionId, backend });
       }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, stepId, { tokensUsed: event.tokensUsed });
@@ -879,13 +1425,18 @@ export class RunManager {
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
               this.store.updateStep(runId, stepId, { status: 'running' });
+              this.monitoring.add(runId);
+              this.clearIdleTimer(state);
+              this.armMonitoringWakeTimer(runId, state);
             } else {
               this.store.updateRun(runId, { status: 'waiting', activity: undefined });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
+              this.monitoring.delete(runId);
+              this.clearMonitoringWakeTimer(state, runId);
             }
             this.waiting.add(runId);
-            this.armIdleTimer(runId, state);
-            void this.pump();
+            if (!monitoring) this.armIdleTimer(runId, state);
+            this.releaseSlot();
           }
         }
         appendHandoffHeartbeat(
@@ -896,7 +1447,45 @@ export class RunManager {
       }
     };
 
-    const runner = createRunner(record?.runner ?? 'claude');
+    // Backend + model come off the record: the run's current backend by default, or the
+    // follow-up override that `continueRun` persisted before scheduling (#401).
+    const continueBackend = backend;
+    // Apply the SAME canonical-identity gate the first spawn applies (#405, review M1).
+    // A follow-up may switch both runner and model (#401), so without this the record keeps
+    // asserting the identity the run STARTED with while a different model serves the turn —
+    // the exact defect this PR exists to remove — and the raw record string reaches the CLI
+    // in the un-normalised wire form the first step already converted away (`anthropic/opus`
+    // instead of `opus`). Fail loud here too rather than let the backend pick a default.
+    let continueModel: string | undefined;
+    try {
+      const normalized = normalizeModelForBackend(continueBackend, record?.model);
+      continueModel = normalized?.backendModel;
+      this.store.updateRun(runId, {
+        modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
+      });
+    } catch (err) {
+      if (!(err instanceof ModelIdentityError)) throw err;
+      const failedAt = new Date().toISOString();
+      sink.sessionEnded('error', err.message);
+      this.store.updateStep(runId, stepId, {
+        status: 'failed',
+        error: err.message,
+        finishedAt: failedAt,
+      });
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error: `continue failed: ${err.message}`,
+        finishedAt: failedAt,
+        currentStepId: undefined,
+      });
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `continue failed — ${err.message}`,
+      });
+      this.dropActive(runId);
+      return;
+    }
+    const runner = createRunner(continueBackend);
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -906,19 +1495,23 @@ export class RunManager {
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
-        userPrompt: prompt,
+        userPrompt: attachments.length ? `${prompt}\n\n${pastedAttachmentsText(attachments)}` : prompt,
+        ...(images.length ? { images } : {}),
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
         additionalDirectories: [join(this.dataDir, 'runs')],
         env: this.agentEnv(runId, generateFollowups),
+        model: continueModel,
         sessionId,
-        resume: true,
+        resume: sessionId !== undefined,
         timeoutMs: 0,
       },
       onEvent,
-      { onUiEvent: (event) => sink.handle(event) },
+      { onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event) },
     );
     state.session = session;
+    state.sessionEverOpened = true;
+    this.flushDeferred(runId);
     state.currentStepId = stepId;
     state.interrupt = () => session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
@@ -954,9 +1547,8 @@ export class RunManager {
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
-      if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd);
+      if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'turn end');
       this.dropActive(runId);
-      void this.pump();
     }
   }
 
@@ -982,11 +1574,24 @@ export class RunManager {
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
     // the record so the UI/API can show what the run actually used.
     const extraSystemPrompt = resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt);
+    // Canonical provider/model identity (#405) — the normalised `provider/model`
+    // the task ran with, persisted for cost attribution / reproducible replay
+    // beside the free-text `model`. Best-effort here (a per-step `runner`/`model`
+    // can still override below); the authoritative fail-loud gate is at spawn.
+    let modelIdentity: string | undefined;
+    try {
+      const normalized = normalizeModelForBackend(taskBackend, input.model);
+      modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
+    } catch {
+      // An unresolvable task-level model surfaces loudly at the step below; the
+      // metadata echo stays absent rather than guessing.
+    }
     this.store.updateRun(runId, {
       status: 'running',
       startedAt: new Date().toISOString(),
       runner: taskBackend,
       systemPrompt: extraSystemPrompt,
+      modelIdentity,
     });
     emit({ type: 'lifecycle', message: `run started — workflow "${workflow.name}" (runner: ${taskBackend})` });
 
@@ -1031,6 +1636,12 @@ export class RunManager {
           baseBranch: wt.baseBranch,
         });
         emit({ type: 'note', message: `worktree ready — branch ${wt.branch} (base ${wt.baseBranch})` });
+        // Seed from this manager's project root: each multi-project context has
+        // its own manager/repoRoot and must never copy another project's layer.
+        const seededConfig = await seedAgentConfigLocalLayer(this.repoRoot, state.cwd).catch(() => []);
+        if (seededConfig.length > 0) {
+          emit({ type: 'note', message: `seeded personal agent config: ${seededConfig.join(', ')}` });
+        }
         this.armAutosave(state);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1044,7 +1655,6 @@ export class RunManager {
         });
         emit({ type: 'lifecycle', message: `run failed — ${error}` });
         this.dropActive(runId);
-        void this.pump();
         return;
       }
     } else {
@@ -1071,24 +1681,24 @@ export class RunManager {
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
-    // Persist the task's attached images so the thread's initial bubble can render them
-    // (#image-display); they still ride the first agent step's opening message below.
-    // `pasted` prefix (#357) marks these as user attachments on disk and keeps their
-    // absolute paths so runAgentStep can tell the agent where to find the real files.
-    let startAttachments: PersistedAttachment[] = [];
-    if (input.images?.length) {
-      const persisted = input.images
-        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-        .map((b) => this.persistImage(runId, state, b.source.media_type, b.source.data, 'pasted'))
-        .filter((saved): saved is PersistedAttachment => saved !== null);
-      if (persisted.length) {
-        this.store.updateRun(runId, { taskImages: persisted.map((p) => p.url) });
-        startAttachments = persisted;
-      }
-    }
+    // `startRun` already persisted task images so a queued bubble can render them
+    // (#612). Reuse those files for the agent-facing path note instead of minting
+    // duplicate pasted files when execution finally begins.
+    let startAttachments: PersistedAttachment[] = (this.store.getRun(runId)?.taskImages ?? [])
+      .map((url): PersistedAttachment | null => {
+        const name = url.split('/').pop();
+        if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) return null;
+        const path = join(this.dataDir, 'runs', `${runId}-images`, name);
+        return existsSync(path) ? { name, url, path } : null;
+      })
+      .filter((saved): saved is PersistedAttachment => saved !== null);
     // Task screenshots go with the FIRST agent step's opening message only —
-    // later steps and retry loops run in fresh sessions without them.
-    let startImages = input.images;
+    // later steps and retry loops run in fresh sessions without them. Stacked
+    // attachments (#472) ride along too, but are NOT re-persisted above: they
+    // already live on disk, and adding them to `taskImages` would both duplicate
+    // the files and make the task bubble claim the stack's images as its own.
+    let startImages =
+      input.stackedImages?.length ? [...(input.images ?? []), ...input.stackedImages] : input.images;
 
     const lastAgentIdx = findLastAgentStepIndex(workflow);
 
@@ -1177,7 +1787,7 @@ export class RunManager {
 
     // Final autosave: the branch always ends holding the finished state.
     this.clearAutosaveTimer(state);
-    if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd);
+    if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'run finalize');
 
     const finishedAt = new Date().toISOString();
     if (state.cancelled) {
@@ -1197,7 +1807,6 @@ export class RunManager {
     }
     this.clearIdleTimer(state);
     this.dropActive(runId);
-    void this.pump();
   }
 
   /** Returns an error message, or null on success. */
@@ -1271,7 +1880,8 @@ export class RunManager {
     }
 
     const sessionId = randomUUID();
-    this.store.updateStep(runId, step.id, { sessionId });
+    const backend = step.runner ?? taskBackend;
+    this.store.updateStep(runId, step.id, { sessionId, backend });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
     const startTokens = stepRecord?.tokensUsed ?? 0;
@@ -1280,12 +1890,12 @@ export class RunManager {
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
-        const saved = this.persistImage(runId, state, event.mediaType, event.data);
+        const saved = this.persistImage(runId, event.mediaType, event.data);
         if (saved) emit({ type: 'image', stepId: step.id, ...saved });
         return;
       }
       if (event.type === 'text') {
-        turnText += event.text;
+        turnText = appendTurnText(turnText, event.text);
         const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
@@ -1293,7 +1903,7 @@ export class RunManager {
       emit({ ...event, stepId: step.id });
       if (event.type === 'session') {
         // Codex/OpenCode mint their own session id — persist it so resume works.
-        this.store.updateStep(runId, step.id, { sessionId: event.sessionId });
+        this.store.updateStep(runId, step.id, { sessionId: event.sessionId, backend });
       }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, step.id, { tokensUsed: startTokens + event.tokensUsed });
@@ -1340,13 +1950,18 @@ export class RunManager {
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
+            this.monitoring.add(runId);
+            this.clearIdleTimer(state);
+            this.armMonitoringWakeTimer(runId, state);
           } else {
             this.store.updateRun(runId, { status: 'waiting', activity: undefined });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
+            this.monitoring.delete(runId);
+            this.clearMonitoringWakeTimer(state, runId);
           }
           this.waiting.add(runId);
-          this.armIdleTimer(runId, state);
-          void this.pump(); // the freed slot can start a queued run right away
+          if (!monitoring) this.armIdleTimer(runId, state);
+          this.releaseSlot(); // the freed slot can start a queued run right away — in any project
         }
         // Cez's own heartbeat — the handoff stays current even when the
         // agent forgets to write (spec 007).
@@ -1358,7 +1973,27 @@ export class RunManager {
       }
     };
 
-    const runner = createRunner(step.runner ?? taskBackend);
+    const stepBackend = step.runner ?? taskBackend;
+    // Normalise the selected model to canonical `provider/model` and back to the
+    // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
+    // unresolvable model (e.g. a bare id on opencode) returns the step error
+    // instead of letting the backend silently substitute its default.
+    let backendModel: string | undefined;
+    try {
+      const normalized = normalizeModelForBackend(stepBackend, step.model ?? input.model);
+      backendModel = normalized?.backendModel;
+      // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
+      // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`
+      // override makes it assert a model that never ran. Re-write it here, from the resolved
+      // step identity, so the record — the product of this PR — is always one that ran.
+      this.store.updateRun(runId, {
+        modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
+      });
+    } catch (err) {
+      if (err instanceof ModelIdentityError) return err.message;
+      throw err;
+    }
+    const runner = createRunner(stepBackend);
     let session: AgentSession;
     try {
       session = runner.startSession(
@@ -1380,18 +2015,23 @@ export class RunManager {
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: [join(this.dataDir, 'runs')],
           env: this.agentEnv(runId, followupsEnabled() && input.generateFollowups !== false),
-          model: step.model ?? input.model,
+          model: backendModel,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.
           timeoutMs: interactive ? 0 : undefined,
         },
         onEvent,
-        { autoEndAfterFirstTurn: !interactive, onUiEvent: (event) => sink.handle(event) },
+        {
+          autoEndAfterFirstTurn: !interactive,
+          onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+        },
       );
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
     state.session = session;
+    state.sessionEverOpened = true;
+    this.flushDeferred(runId);
     state.currentStepId = step.id;
     state.interrupt = () => session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
@@ -1410,6 +2050,9 @@ export class RunManager {
     } finally {
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
+      this.monitoring.delete(runId);
+      this.waiting.delete(runId);
+      this.clearMonitoringWakeTimer(state, runId);
       state.session = undefined;
       state.currentStepId = undefined;
       state.interrupt = () => undefined;
@@ -1430,6 +2073,20 @@ export class RunManager {
       persist: (event) => this.store.appendEvent(runId, { ...event, stepId }),
       emitLive: (event) => this.store.emitEphemeral(runId, { ...event, stepId }),
     });
+  }
+
+  /** Native backend asks arrive before turn-end. Persist and park immediately
+   * so the cockpit shows attention and the run releases its workspace slot. */
+  private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
+    sink.handle(event);
+    if (event.type !== 'ask.requested' || state.cancelled) return;
+    this.clearIdleTimer(state);
+    this.monitoring.delete(runId);
+    this.clearMonitoringWakeTimer(state, runId);
+    this.waiting.add(runId);
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+    if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
+    this.releaseSlot();
   }
 
   /**
@@ -1621,7 +2278,6 @@ export class RunManager {
    */
   private persistImage(
     runId: string,
-    state: ActiveRun,
     mediaType: string,
     data: string,
     namePrefix: string = 'screenshot',
@@ -1633,13 +2289,32 @@ export class RunManager {
         : /webp/.test(mediaType) ? 'webp'
         : /gif/.test(mediaType) ? 'gif'
         : 'img';
-      state.imageSeq = (state.imageSeq ?? 0) + 1;
-      const name = `${namePrefix}-${state.imageSeq}.${ext}`;
       const dir = join(this.dataDir, 'runs', `${runId}-images`);
       mkdirSync(dir, { recursive: true });
-      const path = join(dir, name);
-      writeFileSync(path, Buffer.from(data, 'base64'));
-      return { name, url: `/api/runs/${runId}/images/${name}`, path };
+      // Seed from the highest numeric suffix already on disk, NOT the file count:
+      // `screenshot-*` and `pasted-*` share one numbering space, so counting would
+      // re-issue a live number after any deletion. Only matters on the first write
+      // of a process (restart case) — afterwards the map is authoritative.
+      let seq = this.queuedImageSeq.get(runId);
+      if (seq === undefined) seq = highestImageSeq(dir);
+      // `persistImage` is fully synchronous, so two pastes cannot interleave between
+      // the read of the counter and the write. The exclusive-create flag is the
+      // belt-and-braces guard for a stale seed: it degrades to a renamed file rather
+      // than a silent overwrite.
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        seq += 1;
+        const name = `${namePrefix}-${seq}.${ext}`;
+        const path = join(dir, name);
+        try {
+          writeFileSync(path, Buffer.from(data, 'base64'), { flag: 'wx' });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
+          throw err;
+        }
+        this.queuedImageSeq.set(runId, seq);
+        return { name, url: `/api/runs/${runId}/images/${name}`, path };
+      }
+      return null;
     } catch {
       return null;
     }
@@ -1666,13 +2341,73 @@ export class RunManager {
     }
   }
 
+  private reconcileMonitoringWakeTimers(): void {
+    for (const runId of this.monitoring) {
+      const state = this.active.get(runId);
+      if (state) this.armMonitoringWakeTimer(runId, state);
+    }
+  }
+
+  private armMonitoringWakeTimer(runId: string, state: ActiveRun): void {
+    const minutes = this.semaphore.monitoringWakeIntervalMinutes();
+    if (minutes === null) {
+      this.clearMonitoringWakeTimer(state, runId);
+      return;
+    }
+    if ((state.monitoringWakeups ?? 0) >= MAX_AUTO_CONTINUES) {
+      this.clearMonitoringWakeTimer(state, runId);
+      if (!this.store.getRun(runId)?.monitoringWakeCapReached) {
+        this.store.updateRun(runId, { monitoringWakeCapReached: true });
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
+        });
+      }
+      return;
+    }
+    if (state.monitoringWakeTimer && state.monitoringWakeIntervalMinutes === minutes) return;
+    this.clearMonitoringWakeTimer(state, runId);
+    state.monitoringWakeIntervalMinutes = minutes;
+    this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
+    const deadline = Date.now() + minutes * 60_000;
+    this.store.updateRun(runId, { monitoringWakeAt: new Date(deadline).toISOString() });
+    state.monitoringWakeTimer = setTimeout(() => {
+      state.monitoringWakeTimer = undefined;
+      this.store.updateRun(runId, { monitoringWakeAt: undefined });
+      if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
+      const wakeups = state.monitoringWakeups ?? 0;
+      if (wakeups >= MAX_AUTO_CONTINUES) {
+        this.store.updateRun(runId, { monitoringWakeCapReached: true });
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
+        });
+        return;
+      }
+      state.monitoringWakeups = wakeups + 1;
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `automatic monitoring wake-up (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES})`,
+      });
+      this.deliverMessage(runId, [{ type: 'text', text: MONITORING_WAKE_NUDGE }], false);
+    }, Math.max(0, deadline - Date.now()));
+    state.monitoringWakeTimer.unref?.();
+  }
+
+  private clearMonitoringWakeTimer(state: ActiveRun, runId?: string): void {
+    if (state.monitoringWakeTimer) clearTimeout(state.monitoringWakeTimer);
+    state.monitoringWakeTimer = undefined;
+    state.monitoringWakeIntervalMinutes = undefined;
+    if (runId) this.store.updateRun(runId, { monitoringWakeAt: undefined });
+  }
+
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).
    *  Opt-in via CEZ_AUTOSAVE=1 (#471) — see periodicAutosaveEnabled. */
   private armAutosave(state: ActiveRun): void {
     if (!periodicAutosaveEnabled()) return;
     if (state.cwd === this.repoRoot || state.autosaveTimer) return;
     state.autosaveTimer = setInterval(() => {
-      void autosaveCommit(state.cwd);
+      void autosaveCommit(state.cwd, 'periodic');
     }, AUTOSAVE_INTERVAL_MS);
     state.autosaveTimer.unref?.();
   }
@@ -1776,13 +2511,35 @@ export function makeRunTitle(task: string, workflow: WorkflowDef): string {
   return chars.length > 80 ? `${chars.slice(0, 79).join('').trimEnd()}…` : chars.join('');
 }
 
-/** Skill identity is context, while the Markdown body remains instructions. */
-export function skillSystemPrompt(skill: Pick<Skill, 'name' | 'description' | 'body'>): string {
-  return [
+/**
+ * Skill identity is context, while the Markdown body remains instructions.
+ *
+ * For an on-disk skill we also hand the agent the ABSOLUTE directory of the
+ * installed copy. A run executes in an isolated worktree that has no local
+ * `.agents/skills` (gitignored, absent in a fresh checkout), so without this
+ * the agent cannot read the skill's companion files (`references/*.md`) — or,
+ * worse, reads a stale copy materialized from the team-repo cache. The path
+ * resolves against the MAIN project root (`discoverSkills(repoRoot)`), i.e. the
+ * current `npx skills`-installed copy, so a worktree agent and the main
+ * checkout read the exact same, up-to-date files. Team skills are omitted here:
+ * they are materialized into the worktree separately (see the call site).
+ */
+export function skillSystemPrompt(
+  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source'>>,
+): string {
+  const lines = [
     `Selected skill: /${skill.name}`,
     ...(skill.description ? [`Description: ${skill.description}`] : []),
-    '',
-    'Skill instructions:',
-    skill.body.trim(),
-  ].join('\n');
+  ];
+  if (skill.source && skill.source !== 'team' && skill.path) {
+    const dir = dirname(skill.path);
+    lines.push(
+      '',
+      `Skill files are installed on disk at: ${dir}`,
+      `Read any file this skill references (for example references/*.md) from that absolute directory. ` +
+        `It is the current installed copy — use it even though your working directory is a separate worktree that does not contain the skill.`,
+    );
+  }
+  lines.push('', 'Skill instructions:', skill.body.trim());
+  return lines.join('\n');
 }

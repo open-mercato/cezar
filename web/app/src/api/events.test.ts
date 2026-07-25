@@ -6,6 +6,7 @@ import {
   createUsageStore,
   mergeRun,
   parseGlobalEvent,
+  parseWorkspaceEvent,
   type GlobalEvent,
 } from './events'
 import type { ApiRun, RunRecord } from './types'
@@ -52,6 +53,42 @@ describe('parseGlobalEvent', () => {
 
   it.each(cases)('%s + %j → %j', (name, data, expected) => {
     expect(parseGlobalEvent(name, data)).toEqual(expected)
+  })
+})
+
+describe('parseWorkspaceEvent', () => {
+  // The workspace stream's stamped envelopes (step 2.8) → today's GlobalEvent + the owner.
+  // The reducers must never learn the wire changed: every unwrapped event below is exactly
+  // the shape parseGlobalEvent produced from the legacy stream.
+  const cases: Array<[string, string, { project: string | null; event: GlobalEvent } | null]> = [
+    ['ping', '', { project: null, event: { type: 'ping' } }],
+    // `run` grows a project key riding ON the record — the parser strips it back off.
+    ['run', JSON.stringify({ ...run('r1'), project: 'a' }), { project: 'a', event: { type: 'run', run: run('r1') } }],
+    ['run-deleted', '{"id":"r1","project":"a"}', { project: 'a', event: { type: 'run-deleted', id: 'r1' } }],
+    // Array/record payloads have nowhere to carry a stamp, so they arrive wrapped.
+    ['todos', '{"project":"a","items":[]}', { project: 'a', event: { type: 'todos', items: [] } }],
+    [
+      'usage',
+      JSON.stringify({ project: 'a', usage: { r1: SAMPLE } }),
+      { project: 'a', event: { type: 'usage', usage: { r1: SAMPLE } } },
+    ],
+    // No stamp, no owner, no way to route it — dropped whole rather than guessed at.
+    ['run', JSON.stringify(run('r1')), null],
+    ['run', JSON.stringify({ ...run('r1'), project: '' }), null],
+    ['run-deleted', '{"id":"r1"}', null],
+    ['todos', '{"items":[]}', null],
+    ['usage', JSON.stringify({ r1: SAMPLE }), null],
+    // And the same garbage tolerance as the legacy parser: one bad frame costs one frame.
+    ['run', 'not json', null],
+    ['run', '{"project":"a"}', null],
+    ['run-deleted', '{"project":"a","id":""}', null],
+    ['todos', '{"project":"a","items":{"not":"an array"}}', null],
+    ['usage', '{"project":"a","usage":[]}', null],
+    ['project-added', '{"project":"a"}', null],
+  ]
+
+  it.each(cases)('%s + %j → %j', (name, data, expected) => {
+    expect(parseWorkspaceEvent(name, data)).toEqual(expected)
   })
 })
 

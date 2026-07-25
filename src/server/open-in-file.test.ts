@@ -19,6 +19,7 @@ vi.mock('./open-in-app.js', async (importOriginal) => {
 });
 
 import { openFileInDefaultApp } from './open-in-app.js';
+import { apiRequest } from './loopback-request.testkit.js';
 
 describe("POST /api/runs/:id/open-in — target 'default' (local-mode file open, #365)", () => {
   let repoRoot: string;
@@ -49,7 +50,8 @@ describe("POST /api/runs/:id/open-in — target 'default' (local-mode file open,
   });
 
   const post = (body: unknown, over: Partial<ServerDeps> = {}) =>
-    createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over }).request(
+    apiRequest(
+      createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over }),
       `/api/runs/${runId}/open-in`,
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
     );
@@ -161,7 +163,7 @@ describe("POST /api/runs/:id/open-in — target 'default' (local-mode file open,
 
   it('404s for an unknown run before any gate', async () => {
     const app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
-    const res = await app.request('/api/runs/nope/open-in', {
+    const res = await apiRequest(app, '/api/runs/nope/open-in', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target: 'default', path: 'logo.png' }),

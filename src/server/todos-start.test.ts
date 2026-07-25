@@ -8,13 +8,21 @@ import type { RunManager, StartRunInput } from '../workflows/run.js';
 import type { WorkflowDef } from '../workflows/types.js';
 import type { TodoItem } from '../todos.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 
 /**
- * `POST /api/todos/:id/start` (spec 007, extended by #413): the "▶ Run" flow that turns an
- * inbox entry into a task. #413 adds an OPTIONAL `prompt` body field — extra instructions (e.g.
- * a prompt template inserted in the Inbox composer) appended to the suggested/summary task text.
- * A request with no body at all (the pre-#413 client) must behave exactly as before — that is
- * this file's main contract; 404/409 are pinned too since nothing else covered this route.
+ * `POST /api/todos/:id/start` (spec 007, extended by #401 + #413): the "▶ Run" flow that turns
+ * an inbox entry into a task. Two optional body knobs share the one request:
+ *  - #401 runner/model — the Inbox card's pills pick which backend runs the follow-up; the
+ *    parsed override reaches `startRun` verbatim, a bad runner is a 400, and — unlike `/continue`
+ *    — an omitted field means "host default" (there is no prior backend to keep, this is a START).
+ *  - #413 prompt — extra instructions (e.g. a template inserted in the composer) appended to the
+ *    suggested/summary task text.
+ * A request with no body at all (every client before the pills and the composer) must behave
+ * exactly as before — the bodyless POST starts on the host's `defaultRunner` with no extra
+ * instructions. 404/409 and the malformed-body 400 are pinned here too. Capturing stub, per the
+ * continue-run/start-run pattern.
  */
 describe('POST /api/todos/:id/start', () => {
   let repoRoot: string;
@@ -31,8 +39,8 @@ describe('POST /api/todos/:id/start', () => {
 
   beforeEach(() => {
     // #471 (merged from main): the follow-up inbox is opt-in and this route 409s without the
-    // capability. These assertions are about the #413 prompt field, so it is switched on
-    // explicitly rather than inherited from whatever the dev box exports.
+    // capability. These assertions are about the #401/#413 body, so it is switched on explicitly
+    // rather than inherited from whatever the dev box exports.
     process.env.CEZ_FOLLOWUPS = '1';
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-todos-start-'));
     dataDir = join(repoRoot, '.ai/cezar');
@@ -44,7 +52,13 @@ describe('POST /api/todos/:id/start', () => {
         return store.createRun({ title: 't', workflow: '(inbox)', task: input.task, steps: [] });
       },
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {
@@ -55,16 +69,27 @@ describe('POST /api/todos/:id/start', () => {
   });
 
   const start = (id: string, body?: unknown) =>
-    app.request(`/api/todos/${encodeURIComponent(id)}/start`, {
+    apiRequest(app, `/api/todos/${encodeURIComponent(id)}/start`, {
       method: 'POST',
       ...(body === undefined
         ? {}
         : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     });
 
+  // ---- route guards ---------------------------------------------------------------------------
+
   it('404s an unknown id', async () => {
     writeTodos([]);
     const res = await start('nope');
+    expect(res.status).toBe(404);
+    expect(captured).toBeUndefined();
+  });
+
+  it('404s for an unknown todo before validating the body', async () => {
+    writeTodos([]);
+    // A bad runner would be a 400 on a real entry, but "not found" wins — the todo is checked
+    // before the body is parsed, so a missing id never leaks body-validation errors.
+    const res = await start('missing', { runner: 'gemini' });
     expect(res.status).toBe(404);
     expect(captured).toBeUndefined();
   });
@@ -75,6 +100,17 @@ describe('POST /api/todos/:id/start', () => {
     expect(res.status).toBe(409);
     expect(captured).toBeUndefined();
   });
+
+  it('409s an already-started entry, override or not', async () => {
+    writeTodos([
+      { id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing', startedTaskId: 'run-9' },
+    ]);
+    const res = await start('todo-1', { runner: 'codex' });
+    expect(res.status).toBe(409);
+    expect(captured).toBeUndefined();
+  });
+
+  // ---- #413 prompt ----------------------------------------------------------------------------
 
   it('a request with no body at all keeps the pre-#413 task exactly (backward compat)', async () => {
     writeTodos([
@@ -135,7 +171,7 @@ describe('POST /api/todos/:id/start', () => {
 
   it('rejects a malformed JSON body with a 400 — it must not pass as "no body"', async () => {
     writeTodos([{ id: 't1', summary: 'Ship it' }]);
-    const res = await app.request('/api/todos/t1/start', {
+    const res = await apiRequest(app, '/api/todos/t1/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{"prompt": "unterminated',
@@ -147,7 +183,7 @@ describe('POST /api/todos/:id/start', () => {
 
   it('a zero-length body is still the body-less case, not a 400', async () => {
     writeTodos([{ id: 't1', summary: 'Ship it' }]);
-    const res = await app.request('/api/todos/t1/start', {
+    const res = await apiRequest(app, '/api/todos/t1/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '',
@@ -169,5 +205,63 @@ describe('POST /api/todos/:id/start', () => {
     // No such skill on disk in this scratch repo → falls back to quick-task, same as before #413.
     expect(res.status).toBe(201);
     expect(captured?.task).toBe('Ship it\n\nExtra note.');
+  });
+
+  // ---- #401 runner/model override -------------------------------------------------------------
+
+  it('plumbs a runner + model override through to startRun', async () => {
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+    const res = await start('todo-1', { runner: 'codex', model: 'gpt-5.1-codex' });
+    expect(res.status).toBe(201);
+    expect(captured?.runner).toBe('codex');
+    expect(captured?.model).toBe('gpt-5.1-codex');
+    // The follow-up's own prompt still drives the task — the override only picks the engine.
+    expect(captured?.task).toBe('Do the thing');
+  });
+
+  it('a bodyless POST omits both — the host default runs it, exactly as before #401', async () => {
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+    const res = await start('todo-1');
+    expect(res.status).toBe(201);
+    expect(captured?.runner).toBeUndefined();
+    expect(captured?.model).toBeUndefined();
+  });
+
+  it('an empty JSON body omits both too', async () => {
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+    const res = await start('todo-1', {});
+    expect(res.status).toBe(201);
+    expect(captured?.runner).toBeUndefined();
+    expect(captured?.model).toBeUndefined();
+  });
+
+  it('accepts a model on its own (single-backend host sends no runner)', async () => {
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+    const res = await start('todo-1', { model: 'opus' });
+    expect(res.status).toBe(201);
+    expect(captured?.model).toBe('opus');
+    expect(captured?.runner).toBeUndefined();
+  });
+
+  it('rejects an unknown runner with a 400 and never starts a run', async () => {
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+    const res = await start('todo-1', { runner: 'gemini' });
+    expect(res.status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
+  // ---- #401 + #413 together (the merge) -------------------------------------------------------
+
+  it('carries a runner/model override and an extra prompt on the same Run', async () => {
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+    const res = await start('todo-1', {
+      runner: 'codex',
+      model: 'gpt-5.1-codex',
+      prompt: 'And add a regression test.',
+    });
+    expect(res.status).toBe(201);
+    expect(captured?.runner).toBe('codex');
+    expect(captured?.model).toBe('gpt-5.1-codex');
+    expect(captured?.task).toBe('Do the thing\n\nAnd add a regression test.');
   });
 });

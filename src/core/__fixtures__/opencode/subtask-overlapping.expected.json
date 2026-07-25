@@ -1,0 +1,13 @@
+[
+  {"type":"session.started","sessionId":"ses_01J8ZE00MAIN","backend":"opencode"},
+  {"type":"turn.started","turnId":"turn_1"},
+  {"type":"item.started","item":{"kind":"tool","id":"prt_task_a","name":"subtask","toolKind":"task","title":"Task: Task A","status":"running","input":{"prompt":"Inspect A","description":"Task A","agent":"general"}}},
+  {"type":"item.completed","item":{"kind":"tool","id":"prt_child_a","name":"grep","toolKind":"search","title":"Search A","status":"completed","input":{"pattern":"A"},"output":"a.ts","parentItemId":"prt_task_a"}},
+  {"type":"item.started","item":{"kind":"tool","id":"prt_task_b","name":"subtask","toolKind":"task","title":"Task: Task B","status":"running","input":{"prompt":"Inspect B","description":"Task B","agent":"general"}}},
+  {"type":"item.completed","item":{"kind":"tool","id":"prt_child_b","name":"grep","toolKind":"search","title":"Search B","status":"completed","input":{"pattern":"B"},"output":"b.ts","parentItemId":"prt_task_b"}},
+  {"type":"item.completed","item":{"kind":"tool","id":"prt_child_a_late","name":"read","toolKind":"read","title":"Read a.ts","status":"completed","input":{"filePath":"a.ts"},"output":"A","parentItemId":"prt_task_a"}},
+  {"type":"item.completed","item":{"kind":"tool","id":"prt_task_a","name":"subtask","toolKind":"task","title":"Task: Task A","status":"completed","input":{"prompt":"Inspect A","description":"Task A","agent":"general"}}},
+  {"type":"item.completed","item":{"kind":"tool","id":"prt_child_b_late","name":"read","toolKind":"read","title":"Read b.ts","status":"completed","input":{"filePath":"b.ts"},"output":"B","parentItemId":"prt_task_b"}},
+  {"type":"item.completed","item":{"kind":"tool","id":"prt_task_b","name":"subtask","toolKind":"task","title":"Task: Task B","status":"completed","input":{"prompt":"Inspect B","description":"Task B","agent":"general"}}},
+  {"type":"turn.completed","turnId":"turn_1","stopReason":"end_turn"}
+]

@@ -400,27 +400,69 @@ async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> 
 // DNS/TCP), so each source gets one implicit attempt per process. "Refresh"
 // always retries.
 const cloneAttempted = new Set<string>();
-let teamSkills: Skill[] = [];
-let firstLoadStarted = false;
+// Isolated review worktrees have no local `.agents/skills` (gitignored, absent
+// in a fresh checkout), so codex reads skills straight from this global bare
+// cache. A clone left by an earlier run — or one this long-running process
+// fetched hours ago — silently serves a stale template. Passive loads therefore
+// fetch on the first touch per process and then at most once per TTL, keeping
+// the cache current without a manual "Refresh" and without fetching on every
+// catalog read. `refresh` (the explicit button / #613's post-update
+// invalidateCatalog) still fetches unconditionally.
+const PASSIVE_FETCH_TTL_MS = 6 * 60 * 60 * 1_000;
+const lastFetchByRepo = new Map<string, number>();
 
 /**
- * The current team-skill list, straight from memory. The first call kicks off
- * an async background load (clone + list) and returns immediately — the GUI
- * refetches, so remote skills appear moments later instead of blocking the
- * first `GET /api/skills`.
+ * Whether a passive (non-`refresh`) load should `git fetch` an existing bare
+ * clone: yes on the first touch this process, and yes once the last fetch is
+ * older than `ttlMs`. Pure so the freshness policy is unit-tested without git.
+ */
+export function shouldPassiveFetch(opts: {
+  attempted: boolean;
+  fetchedAt: number;
+  now: number;
+  ttlMs: number;
+}): boolean {
+  return !opts.attempted || opts.now - opts.fetchedAt > opts.ttlMs;
+}
+// Both maps are keyed by `repoRoot` (multi-project workspace, step 2.6): each
+// project resolves its own `.ai/cezar/config.json` → `skillsRepos`, so one
+// project's team-skill list must never be served under another project's scope.
+const teamSkillsByRoot = new Map<string, Skill[]>();
+const firstLoadByRoot = new Map<string, Promise<Skill[]>>();
+
+function initialTeamSkillsLoad(repoRoot: string): Promise<Skill[]> {
+  const existing = firstLoadByRoot.get(repoRoot);
+  if (existing) return existing;
+  const load = loadTeamSkills(repoRoot, false).catch(() => teamSkillsByRoot.get(repoRoot) ?? []);
+  firstLoadByRoot.set(repoRoot, load);
+  return load;
+}
+
+/**
+ * The current team-skill list for this project, straight from memory. The
+ * first call per `repoRoot` kicks off an async background load (clone + list)
+ * and returns immediately — the GUI refetches, so remote skills appear moments
+ * later instead of blocking the first `GET /api/skills`.
  */
 export function getTeamSkillsCached(repoRoot: string): Skill[] {
-  if (!firstLoadStarted) {
-    firstLoadStarted = true;
-    void loadTeamSkills(repoRoot, false).catch(() => undefined);
-  }
-  return teamSkills;
+  void initialTeamSkillsLoad(repoRoot);
+  return teamSkillsByRoot.get(repoRoot) ?? [];
+}
+
+/**
+ * Wait for the same non-refreshing load kicked off by `getTeamSkillsCached`.
+ * The normal catalog read stays immediate; callers use this only for a
+ * background convergence read after they have already rendered local skills.
+ */
+export function waitForTeamSkills(repoRoot: string): Promise<Skill[]> {
+  return initialTeamSkillsLoad(repoRoot);
 }
 
 /** Refresh: clone missing sources, `git fetch` existing ones, reload the list. */
 export async function refreshTeamSkills(repoRoot: string): Promise<Skill[]> {
-  firstLoadStarted = true;
-  return loadTeamSkills(repoRoot, true);
+  const load = loadTeamSkills(repoRoot, true).catch(() => teamSkillsByRoot.get(repoRoot) ?? []);
+  firstLoadByRoot.set(repoRoot, load);
+  return load;
 }
 
 async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill[]> {
@@ -433,9 +475,21 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
         const { bareDir, created } = await ensureBareClone(src.repo);
         if (!created) await fetchAll(bareDir);
         cloneAttempted.add(src.repo);
-      } else if (!cloneAttempted.has(src.repo)) {
+        lastFetchByRepo.set(src.repo, Date.now());
+      } else if (
+        shouldPassiveFetch({
+          attempted: cloneAttempted.has(src.repo),
+          fetchedAt: lastFetchByRepo.get(src.repo) ?? 0,
+          now: Date.now(),
+          ttlMs: PASSIVE_FETCH_TTL_MS,
+        })
+      ) {
         cloneAttempted.add(src.repo);
-        await ensureBareClone(src.repo);
+        const { bareDir, created } = await ensureBareClone(src.repo);
+        // A clone left by an earlier run is very likely behind origin; fetch it
+        // so worktree reviews never read a stale skills template.
+        if (!created) await fetchAll(bareDir);
+        lastFetchByRepo.set(src.repo, Date.now());
       }
     } catch {
       // offline / no access — list whatever an older clone has (or nothing)
@@ -450,6 +504,6 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
       // degrade: this source contributes nothing
     }
   }
-  teamSkills = out;
+  teamSkillsByRoot.set(repoRoot, out);
   return out;
 }

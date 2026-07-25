@@ -1,0 +1,12 @@
+
+> @open-mercato/cezar@0.8.0 typecheck
+> npm run typecheck:server && npm run typecheck:web
+
+
+> @open-mercato/cezar@0.8.0 typecheck:server
+> tsc --noEmit -p tsconfig.test.json
+
+
+> @open-mercato/cezar@0.8.0 typecheck:web
+> tsc --noEmit -p web/app/tsconfig.json
+

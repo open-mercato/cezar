@@ -4,6 +4,9 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
+    // TypeScript 7 defaults `types` to `[]` rather than "every package under @types",
+    // so this Node CLI has to ask for the Node globals by name.
+    "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -14,8 +17,9 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  // Build config: tests are excluded so they never reach `dist` (and the published tarball).
+  // Build config: tests and their `*.testkit.ts` helpers are excluded so they never reach
+  // `dist` (and the published tarball).
   // They are still typechecked — tsconfig.test.json adds them back, and `npm run typecheck` runs both.
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/*.testkit.ts"]
 }

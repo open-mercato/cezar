@@ -1,11 +1,19 @@
 import { ChevronRightIcon } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Virtualizer, type VirtualizerHandle } from 'virtua'
 
 import type { DiffStat } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { highlight, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
 import { cn } from '@/lib/utils'
 
+import {
+  diffRenderMode,
+  diffRowCount,
+  estimateFileHeight,
+  fileKey,
+  widestLineChars,
+} from './diff-scroll'
 import { ImagePreview, shouldPreviewImage } from './image-preview'
 
 import {
@@ -39,6 +47,23 @@ import { overlaySegments } from './word-diff'
 /** Past this many patch lines a file skips syntax highlighting — plaintext beats jank. */
 const HIGHLIGHT_MAX_LINES = 1500
 
+/** Stable empty map, so a file with no expanded gaps keeps prop identity across renders. */
+const NO_GAPS: ExpandedGaps = new Map()
+
+/**
+ * The card element for a path, matched on `dataset` rather than an attribute selector: a
+ * repository path may contain any of `"`, `[`, `]` or a backslash, and `CSS.escape` — the
+ * only correct way to embed one in a selector — is absent in some DOM implementations.
+ * Comparing the property sidesteps both problems.
+ */
+export function findFileElement(root: ParentNode | null, path: string): HTMLElement | undefined {
+  if (!root) return undefined
+  for (const element of root.querySelectorAll<HTMLElement>('[data-slot="diff-file"]')) {
+    if (element.dataset.path === path) return element
+  }
+  return undefined
+}
+
 export function DiffView({
   files,
   mode = 'unified',
@@ -46,6 +71,7 @@ export function DiffView({
   loadFileText,
   imageSrc,
   onOpenInApp,
+  viewRef,
   className,
 }: DiffProps) {
   const stat: DiffStat = useMemo(
@@ -56,25 +82,188 @@ export function DiffView({
     }),
     [files],
   )
+
+  // PER-FILE STATE LIVES HERE, not in the card. Virtualization unmounts off-screen cards, and
+  // a collapsed file or an expanded context gap must survive scrolling away and back — state
+  // inside the card would silently reset. Keyed by `fileKey`, so a refetch that returns the
+  // same files (the Changes tab polls every 4s while a run is active) keeps both.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  const [expandedByFile, setExpandedByFile] = useState<ReadonlyMap<string, ExpandedGaps>>(() => new Map())
+
+  const toggleFile = useCallback((key: string) => {
+    setCollapsed((previous) => {
+      const next = new Set(previous)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
+  }, [])
+
+  const expandGap = useCallback(
+    async (file: DiffFileChange, gap: ContextGap) => {
+      if (!loadFileText) return
+      const text = await loadFileText(file.path)
+      if (text === null) return // unavailable (binary/too large/deleted) — the gap stays honest
+      const lines = contextLinesForGap(gap, text.split('\n'))
+      setExpandedByFile((previous) => {
+        const key = fileKey(file)
+        const next = new Map(previous)
+        return next.set(key, new Map(previous.get(key) ?? NO_GAPS).set(gap.beforeHunk, lines))
+      })
+    },
+    [loadFileText],
+  )
+
+  const rowCount = useMemo(() => diffRowCount(files), [files])
+  // The `?diff=` override is a measurement/debugging seam, not reactive state — read once so
+  // this module stays router-free (it renders in tests and in the repo view alike).
+  const [search] = useState(() => (typeof window === 'undefined' ? '' : window.location.search))
+  const renderMode = diffRenderMode(search, rowCount)
+
+  const scrollElRef = useRef<HTMLElement | null>(null)
+  const virtualizerRef = useRef<VirtualizerHandle | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  useImperativeHandle(
+    viewRef,
+    () => ({
+      scrollToPath: (path: string) => {
+        const index = files.findIndex((file) => file.path === path)
+        if (index === -1) return
+        const handle = virtualizerRef.current
+        // Virtualized: the target may not be mounted, so the scroll goes through the index.
+        // Flat: the element is always there, and scrollIntoView keeps the smooth behavior.
+        if (handle) handle.scrollToIndex(index, { align: 'start' })
+        else findFileElement(rootRef.current, path)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      },
+    }),
+    [files],
+  )
+
+  const card = (file: DiffFileChange) => {
+    const key = fileKey(file)
+    return (
+      <DiffFileCard
+        file={file}
+        open={!collapsed.has(key)}
+        onToggle={() => toggleFile(key)}
+        expanded={expandedByFile.get(key) ?? NO_GAPS}
+        onExpand={(gap) => void expandGap(file, gap)}
+        mode={mode}
+        wrap={wrap}
+        canExpand={loadFileText !== undefined}
+        imageSrc={imageSrc}
+        onOpenInApp={onOpenInApp}
+      />
+    )
+  }
+
   return (
-    <div data-slot="diff" data-mode={mode} className={cn('flex min-w-0 flex-col gap-3', className)}>
-      <p data-slot="diff-totals" className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+    <div
+      ref={(el) => {
+        rootRef.current = el
+        if (el) scrollElRef.current = el.closest<HTMLElement>('[data-slot="main"]')
+      }}
+      data-slot="diff"
+      data-mode={mode}
+      className={cn('flex min-w-0 flex-col', className)}
+    >
+      <p data-slot="diff-totals" className="flex items-center gap-2 px-1 pb-3 text-xs text-muted-foreground">
         <span>
           {stat.files} {stat.files === 1 ? 'file' : 'files'} changed
         </span>
         <DiffStatLabel stat={stat} />
       </p>
-      {files.map((file) => (
-        <DiffFileCard
-          key={`${file.oldPath ?? ''}→${file.path}`}
-          file={file}
-          mode={mode}
-          wrap={wrap}
-          loadFileText={loadFileText}
-          imageSrc={imageSrc}
-          onOpenInApp={onOpenInApp}
-        />
-      ))}
+      {renderMode === 'virtual' ? (
+        <VirtualFiles files={files} handleRef={virtualizerRef} scrollElRef={scrollElRef} card={card} />
+      ) : (
+        <div data-slot="diff-files" data-virtualized="false">
+          {files.map((file) => (
+            // content-visibility skips style/layout/paint for off-screen cards; the
+            // intrinsic-size hint keeps the scrollbar stable before a skipped card is first
+            // measured. The card spacing that used to be the column's `gap` is this wrapper's
+            // bottom padding, so flat and virtualized modes measure identically.
+            <div
+              key={fileKey(file)}
+              data-slot="diff-file-slot"
+              style={{ containIntrinsicBlockSize: `auto ${estimateFileHeight(file)}px` }}
+              className="pb-3 [content-visibility:auto]"
+            >
+              {card(file)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The file cards through virtua, on the app shell's scroller (`[data-slot="main"]`) — the one
+ * scroll owner, exactly as the thread does it. No `shift`: a diff only ever changes in place,
+ * so start-anchored offsets stay correct.
+ *
+ * No measurement cache (the thread's `CacheSnapshot` trick): virtua's snapshot is only valid
+ * at the item count it was taken at, and a diff's file list changes under an active run's
+ * 4s poll. Re-estimating a few dozen cards costs nothing next to mis-applying a stale one.
+ */
+function VirtualFiles({
+  files,
+  handleRef,
+  scrollElRef,
+  card,
+}: {
+  files: DiffFileChange[]
+  handleRef: React.RefObject<VirtualizerHandle | null>
+  scrollElRef: React.RefObject<HTMLElement | null>
+  card: (file: DiffFileChange) => React.ReactNode
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+
+  // virtua needs the distance between the scroller's content start and the virtualizer (the
+  // run header, toolbar and totals line above it). Measured, not assumed — header height
+  // varies by breakpoint and content. A stale value only shifts the overscan window
+  // (buffered), so re-measuring on viewport resize is enough.
+  //
+  // The scroller is resolved from THIS component's own element, not handed down from the
+  // parent's ref callback: React attaches refs child-first, so a parent element's callback
+  // runs AFTER this layout effect: the ref would still be null here, `measure()` would bail,
+  // and with stable deps it would never run again — pinning startMargin at 0 forever.
+  const [startMargin, setStartMargin] = useState(0)
+  useLayoutEffect(() => {
+    const measure = () => {
+      const container = containerRef.current
+      const scroller = scrollElRef.current
+      if (!container || !scroller) return
+      setStartMargin(
+        Math.max(
+          0,
+          Math.round(
+            container.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop,
+          ),
+        ),
+      )
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [scrollElRef])
+
+  return (
+    <div
+      ref={(el) => {
+        containerRef.current = el
+        if (el) scrollElRef.current = el.closest<HTMLElement>('[data-slot="main"]')
+      }}
+      data-slot="diff-files"
+      data-virtualized="true"
+    >
+      <Virtualizer ref={handleRef} scrollRef={scrollElRef} startMargin={startMargin}>
+        {files.map((file) => (
+          <div key={fileKey(file)} data-slot="diff-file-slot" className="pb-3">
+            {card(file)}
+          </div>
+        ))}
+      </Virtualizer>
     </div>
   )
 }
@@ -86,23 +275,35 @@ const STATUS_BADGE: Partial<Record<DiffFileChange['status'], string>> = {
   copied: 'copied',
 }
 
-/** One file: sticky header (path, status, ±, collapse) over the row grid. */
+/**
+ * One file: sticky header (path, status, ±, collapse) over the row grid.
+ *
+ * Fully controlled — `open` and `expanded` live in {@link DiffView} so they survive the
+ * unmount virtualization performs when this card scrolls off screen.
+ */
 function DiffFileCard({
   file,
+  open,
+  onToggle,
+  expanded,
+  onExpand,
   mode,
   wrap,
-  loadFileText,
+  canExpand,
   imageSrc,
   onOpenInApp,
 }: {
   file: DiffFileChange
+  open: boolean
+  onToggle: () => void
+  expanded: ExpandedGaps
+  onExpand: (gap: ContextGap) => void
   mode: 'unified' | 'split'
   wrap: boolean
-  loadFileText?: (path: string) => Promise<string | null>
+  canExpand: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
 }) {
-  const [open, setOpen] = useState(true)
   const badge = STATUS_BADGE[file.status]
   return (
     <section
@@ -119,7 +320,7 @@ function DiffFileCard({
           type="button"
           data-slot="diff-file-header"
           aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
+          onClick={onToggle}
           className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
         >
           <ChevronRightIcon
@@ -158,9 +359,11 @@ function DiffFileCard({
       {open ? (
         <DiffFileBody
           file={file}
+          expanded={expanded}
+          onExpand={onExpand}
           mode={mode}
           wrap={wrap}
-          loadFileText={loadFileText}
+          canExpand={canExpand}
           imageSrc={imageSrc}
           onOpenInApp={onOpenInApp}
         />
@@ -171,33 +374,28 @@ function DiffFileCard({
 
 function DiffFileBody({
   file,
+  expanded,
+  onExpand,
   mode,
   wrap,
-  loadFileText,
+  canExpand,
   imageSrc,
   onOpenInApp,
 }: {
   file: DiffFileChange
+  expanded: ExpandedGaps
+  onExpand: (gap: ContextGap) => void
   mode: 'unified' | 'split'
   wrap: boolean
-  loadFileText?: (path: string) => Promise<string | null>
+  canExpand: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
 }) {
   const parsed = useMemo(() => parsePatch(file.patch), [file.patch])
   // The trailing (after-last-hunk) region has an unknown length — only offer it when a
   // loader can actually materialize it, and never for fully-new or deleted files.
-  const expandable = loadFileText !== undefined && file.status !== 'added' && file.status !== 'deleted'
+  const expandable = canExpand && file.status !== 'added' && file.status !== 'deleted'
   const gaps = useMemo(() => contextGaps(parsed.hunks, expandable), [parsed.hunks, expandable])
-  const [expanded, setExpanded] = useState<ExpandedGaps>(new Map())
-
-  const expandGap = async (gap: ContextGap) => {
-    if (!loadFileText) return
-    const text = await loadFileText(file.path)
-    if (text === null) return // unavailable (binary/too large/deleted) — the gap stays honest
-    const lines = contextLinesForGap(gap, text.split('\n'))
-    setExpanded((previous) => new Map(previous).set(gap.beforeHunk, lines))
-  }
 
   // One ordered list of every displayed line (hunks + expanded context) — the highlighting
   // unit. Both layouts reference the same HunkLine objects, so tokens map by identity.
@@ -224,6 +422,19 @@ function DiffFileBody({
     [mode, parsed.hunks, gaps, expanded],
   )
 
+  // The horizontal-scroll floor for `content-visibility` (see `widestLineChars`). Unified
+  // no-wrap only: that is the one layout where the body scrolls horizontally on the widest
+  // LINE. Wrapped rows never exceed the box, and split mode's two columns are a grid sized by
+  // the container, so neither can have its scrollWidth pulled in by a size-contained row.
+  // `7rem` is the gutters (old/new line numbers + marker + the content's right padding).
+  const widthFloor = useMemo(
+    () =>
+      mode === 'unified' && !wrap
+        ? { minInlineSize: `calc(${widestLineChars(file.patch)}ch + 7rem)` }
+        : undefined,
+    [mode, wrap, file.patch],
+  )
+
   // Only images with no text diff to lose take the preview branch — see `shouldPreviewImage`.
   // An SVG git reports as text keeps its rows below, exactly as `DiffFallback` renders it.
   if (shouldPreviewImage(file)) {
@@ -241,7 +452,6 @@ function DiffFileBody({
     const index = lineIndex.get(line)
     return index === undefined ? null : (tokens[index] ?? null)
   }
-  const canExpand = loadFileText !== undefined && file.status !== 'added' && file.status !== 'deleted'
 
   return (
     <div
@@ -249,16 +459,28 @@ function DiffFileBody({
       data-wrap={wrap || undefined}
       className={cn('py-1 font-mono text-xs leading-[1.7]', !wrap && 'overflow-x-auto')}
     >
-      {rows
-        ? rows.map((row, index) => (
-            <UnifiedRowView key={index} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={canExpand ? expandGap : undefined} />
-          ))
-        : null}
-      {splitRows
-        ? splitRows.map((row, index) => (
-            <SplitRowView key={index} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={canExpand ? expandGap : undefined} />
-          ))
-        : null}
+      {/* Every row gets `content-visibility: auto` — the tier that bounds the cost of ONE
+          enormous file, which card-level virtualization cannot (its rows are a single item).
+          Applied through a child selector rather than a wrapper element per row: an extra
+          node per line is the very cost this is here to remove. The intrinsic-size hint is
+          DIFF_ROW_ESTIMATE_PX; `auto` lets a once-rendered row remember its real height.
+          `min-inline-size` is the horizontal-scroll floor — see `widestLineChars`. */}
+      <div
+        data-slot="diff-rows"
+        style={widthFloor}
+        className="[&>*]:[contain-intrinsic-block-size:auto_20px] [&>*]:[content-visibility:auto]"
+      >
+        {rows
+          ? rows.map((row, index) => (
+              <UnifiedRowView key={index} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+            ))
+          : null}
+        {splitRows
+          ? splitRows.map((row, index) => (
+              <SplitRowView key={index} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+            ))
+          : null}
+      </div>
       {parsed.truncated ? <Note>Patch truncated by the server — counts above remain exact.</Note> : null}
     </div>
   )
@@ -424,7 +646,7 @@ function SplitCell({
     <div
       data-slot="diff-cell"
       data-line={line.kind}
-      className={cn('flex min-w-0', LINE_BG[line.kind], side === 'new' && 'border-l border-border/40')}
+      className={cn('flex min-w-0 overflow-x-auto', LINE_BG[line.kind], side === 'new' && 'border-l border-border/40')}
     >
       <Gutter value={side === 'old' ? line.oldLine : line.newLine} />
       <span className="w-4 shrink-0 text-soft-foreground select-none">{MARKER[line.kind]}</span>

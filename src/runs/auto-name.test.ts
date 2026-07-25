@@ -95,6 +95,13 @@ describe('composeNameResult', () => {
     expect(composeNameResult('{"nope": true}', ctx)).toBeNull();
   });
 
+  it.each([
+    'Loading the pipeline config and tracker descriptor, then claim PR #469.Config loaded',
+    'Reading the handoff file for context.The task is UI QA verification of PR #476',
+  ])('rejects concatenated progress narration: %s', (title) => {
+    expect(composeNameResult(JSON.stringify({ title }), ctx)).toBeNull();
+  });
+
   it('drops hallucinated refs but keeps the validated title', () => {
     const raw = '{"title": "renaming the settings page", "pr": 999}';
     expect(composeNameResult(raw, { task: 'rename the settings page' })).toEqual({

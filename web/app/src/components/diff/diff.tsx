@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState, type ComponentType } from 'react'
 
 import type { DiffStat } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -68,14 +68,31 @@ export function Diff(props: DiffProps) {
  * the engine chunk can. Split mode degrades to unified; that is documented degradation, not
  * a bug.
  */
-export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, className }: DiffProps) {
+export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewRef, className }: DiffProps) {
   const stat: DiffStat = {
     adds: files.reduce((sum, file) => sum + file.adds, 0),
     dels: files.reduce((sum, file) => sum + file.dels, 0),
     files: files.length,
   }
+  // The fallback never virtualizes, so every file IS in the DOM — the handle a consumer's
+  // file tree calls resolves straight to the element. Without this the tree would silently
+  // stop scrolling whenever the engine chunk failed to load. Matched on `dataset` rather than
+  // an attribute selector, for the reasons `diff-view.tsx`'s `findFileElement` spells out
+  // (this stays inline rather than importing that helper: it lives in the lazy engine chunk,
+  // and the fallback exists precisely for when that chunk is unreachable).
+  const root = useRef<HTMLDivElement | null>(null)
+  useImperativeHandle(viewRef, () => ({
+    scrollToPath: (path: string) => {
+      for (const element of root.current?.querySelectorAll<HTMLElement>('[data-slot="diff-file"]') ?? []) {
+        if (element.dataset.path === path) {
+          element.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          return
+        }
+      }
+    },
+  }))
   return (
-    <div data-slot="diff" data-fallback="true" className={cn('flex min-w-0 flex-col gap-3', className)}>
+    <div ref={root} data-slot="diff" data-fallback="true" className={cn('flex min-w-0 flex-col gap-3', className)}>
       <p data-slot="diff-totals" className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
         <span>
           {stat.files} {stat.files === 1 ? 'file' : 'files'} changed

@@ -1,0 +1,66 @@
+{
+  "id": "7c0f1a52-9d3e-4b61-8a24-5f6e0c1d2b34",
+  "title": "mock:subagents",
+  "workflow": "quick-task",
+  "task": "mock:subagents",
+  "runner": "claude",
+  "status": "done",
+  "createdAt": "2026-07-14T20:28:13.997Z",
+  "tokensUsed": 3620,
+  "archived": false,
+  "steps": [
+    {
+      "id": "task",
+      "name": "Do the task",
+      "kind": "agent",
+      "status": "done",
+      "iterations": 1,
+      "tokensUsed": 3620,
+      "startedAt": "2026-07-14T20:28:14.062Z",
+      "sessionId": "40169e05-629f-4d7c-853c-8a2a197255e4",
+      "costUsd": 0.0352,
+      "finishedAt": "2026-07-14T20:28:17.155Z"
+    },
+    {
+      "id": "verify",
+      "name": "Verify",
+      "kind": "check",
+      "status": "done",
+      "iterations": 1,
+      "tokensUsed": 0,
+      "startedAt": "2026-07-14T20:28:17.160Z",
+      "finishedAt": "2026-07-14T20:28:17.411Z"
+    }
+  ],
+  "workflowDef": {
+    "name": "quick-task",
+    "description": "One agent run on your task \u2014 no ceremony.",
+    "source": "built-in",
+    "steps": [
+      {
+        "id": "task",
+        "name": "Do the task",
+        "prompt": "{{task}}"
+      },
+      {
+        "id": "verify",
+        "name": "Verify",
+        "command": "npm test"
+      }
+    ]
+  },
+  "startedAt": "2026-07-14T20:28:14.004Z",
+  "worktreePath": "/tmp/cezar-fixture-subagents/.ai/cezar/worktrees/7c0f1a52-9d3e-4b61-8a24-5f6e0c1d2b34",
+  "branch": "cez/7c0f1a52",
+  "baseBranch": "main",
+  "costUsd": 0.0352,
+  "titleSummary": "\u2014 a parallel fan-out of two sub-agents",
+  "diffStat": {
+    "files": 1,
+    "adds": 1,
+    "dels": 0
+  },
+  "peakRssBytes": 50987008,
+  "peakProcCount": 1,
+  "finishedAt": "2026-07-14T20:28:17.180Z"
+}

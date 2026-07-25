@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 
 /**
  * The task quick-list, in a real browser, against a real cezar serving real runs.
@@ -155,9 +155,14 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
 
 const ROW = '[data-slot="task-row"]'
 const TILE = '[data-slot="group-tile"]'
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2).
+ *  Every in-app link the cockpit renders is scoped, so every href assertion below is too. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 /** An element's `textContent`, not the provider's `get text` — that returns *rendered* text, so a
  *  flex row comes back newline-separated and every assertion here would be about whitespace. */
@@ -180,12 +185,13 @@ beforeAll(async () => {
   const port = await freePort()
   baseUrl = `http://localhost:${port}`
   server = spawn(process.execPath, [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'], {
-    // CEZ_DRY_RUN so this instance reaches no network and needs no agent login, exactly as the
-    // shared test env does. Nothing in this spec starts a run, but the boot probes the backends.
-    env: { ...process.env, CEZ_DRY_RUN: '1' },
+    // Dry-run + a pinned CEZ_HOME, exactly as the shared test env does — see `fixtureServeEnv`.
+    // Nothing in this spec starts a run, but the boot probes the backends.
+    env: fixtureServeEnv(dataRoot),
     stdio: 'ignore',
   })
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   browser = AgentBrowser.open(runId)
   browser.setViewport(1440, 900)
@@ -199,7 +205,7 @@ afterAll(() => {
 
 describe('task quick-list', () => {
   beforeAll(() => {
-    browser.goto(`${baseUrl}/`)
+    browser.goto(`${baseUrl}${scoped('/')}`)
     // The list is async — it renders once `/api/runs` answers.
     browser.waitForFunction(`document.querySelector('[data-slot="quick-list"]') !== null`)
   })
@@ -272,7 +278,7 @@ describe('task quick-list', () => {
 
   it('links a row to its task, and the PR chip to the PR', () => {
     expect(browser.evaluate(`document.querySelector('[data-run-id="fix-done"] a').getAttribute('href')`)).toBe(
-      '/tasks/fix-done'
+      scoped('/tasks/fix-done')
     )
 
     const chip = browser.evaluate(`(() => {
@@ -299,7 +305,7 @@ describe('task quick-list', () => {
     // Each variant is still its own deep link.
     expect(
       browser.evaluate(`document.querySelector('${ROW}[data-run-id="fix-var-b"] a').getAttribute('href')`)
-    ).toBe('/tasks/fix-var-b')
+    ).toBe(scoped('/tasks/fix-var-b'))
 
     browser.screenshot(`${artifactsDir}/quick-list-expanded.png`)
 
@@ -308,7 +314,10 @@ describe('task quick-list', () => {
   })
 
   it('lights the row for the task the route has open', () => {
+    // A LEGACY flat deep link, on purpose: pre-multi-project bookmarks must still land, and the
+    // cockpit rewrites them onto the boot project's scoped twin (BACKWARD_COMPATIBILITY.md).
     browser.goto(`${baseUrl}/tasks/fix-done`)
+    browser.waitForFunction(`location.pathname === '${scoped('/tasks/fix-done')}'`)
     browser.waitForFunction(`document.querySelector('${ROW}[data-active]') !== null`)
 
     expect(browser.evaluate(`[...document.querySelectorAll('${ROW}[data-active]')].map((r) => r.dataset.runId)`)).toEqual(
@@ -318,7 +327,7 @@ describe('task quick-list', () => {
   })
 
   it('switches to the archived view, and back', () => {
-    browser.goto(`${baseUrl}/`)
+    browser.goto(`${baseUrl}${scoped('/')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="quick-list"]') !== null`)
     expect(textOf('[data-slot="view-tab"][data-view="active"]')).toBe('Active5')
     expect(textOf('[data-slot="view-tab"][data-view="archived"]')).toBe('Archived1')
@@ -349,7 +358,7 @@ describe('tasks table overview', () => {
 
   beforeAll(() => {
     browser.setViewport(1440, 900)
-    browser.goto(`${baseUrl}/`)
+    browser.goto(`${baseUrl}${scoped('/')}`)
     browser.waitForFunction(`document.querySelectorAll('${TABLE_ROW}').length > 0`)
   })
 
@@ -408,9 +417,9 @@ describe('tasks table overview', () => {
     expect(browser.text('[data-slot="compare-strip"]')).toContain('Add skills autocomplete to composer')
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="compare-strip"] a[href^="/compare/"]').getAttribute('href')`
+        `document.querySelector('[data-slot="compare-strip"] a[href$="/compare/fix-group-1"]').getAttribute('href')`
       )
-    ).toBe('/compare/fix-group-1')
+    ).toBe(scoped('/compare/fix-group-1'))
   })
 
   it('flips both the table and the sidebar from the header tabs — one shared state', () => {
@@ -438,9 +447,9 @@ describe('tasks table overview', () => {
 
   it('opens the task from a row click', () => {
     browser.click(`${TABLE_ROW}[data-run-id="fix-done"]`)
-    browser.waitForFunction(`location.pathname === '/tasks/fix-done'`)
-    expect(browser.url()).toContain('/tasks/fix-done')
-    browser.goto(`${baseUrl}/`)
+    browser.waitForFunction(`location.pathname === '${scoped('/tasks/fix-done')}'`)
+    expect(browser.url()).toContain(scoped('/tasks/fix-done'))
+    browser.goto(`${baseUrl}${scoped('/')}`)
     browser.waitForFunction(`document.querySelectorAll('${TABLE_ROW}').length > 0`)
   })
 
@@ -478,14 +487,14 @@ describe('tasks table overview', () => {
 
   it('reflows to cards plus a New-task FAB at phone width, with no horizontal overflow', () => {
     browser.setViewport(390, 844)
-    browser.goto(`${baseUrl}/`)
+    browser.goto(`${baseUrl}${scoped('/')}`)
     browser.waitForFunction(`document.querySelectorAll('[data-slot="task-card"]').length > 0`)
 
     expect(browser.count('[data-slot="task-card"]')).toBe(5)
     expect(browser.isVisible('[data-slot="new-task-fab"]')).toBe(true)
     expect(
       browser.evaluate(`document.querySelector('[data-slot="new-task-fab"]').getAttribute('href')`)
-    ).toBe('/new')
+    ).toBe(scoped('/new'))
     // The table is the desktop framing — at phone width the cards replace it, not join it.
     expect(
       browser.evaluate(`getComputedStyle(document.querySelector('[data-slot="tasks-table"]')).display`)
@@ -509,6 +518,7 @@ describe('empty quick-list', () => {
   let emptyServer: ChildProcess
   let emptyRoot: string
   let emptyUrl: string
+  let emptyProject: string
 
   beforeAll(async () => {
     emptyRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-empty-'))
@@ -517,9 +527,10 @@ describe('empty quick-list', () => {
     emptyServer = spawn(
       process.execPath,
       [join(repoRoot, 'dist/index.js'), 'serve', '--repo', emptyRoot, '--port', String(port), '--no-open'],
-      { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' }
+      { env: fixtureServeEnv(emptyRoot), stdio: 'ignore' }
     )
     await waitForHealth(emptyUrl)
+    emptyProject = await bootProjectId(emptyUrl)
   }, 60_000)
 
   afterAll(() => {
@@ -528,7 +539,7 @@ describe('empty quick-list', () => {
   })
 
   it('shows the honest empty state — a fresh cezar has nothing to list', () => {
-    browser.goto(`${emptyUrl}/`)
+    browser.goto(`${emptyUrl}/p/${emptyProject}/`)
     browser.waitForFunction(`document.querySelector('[data-slot="quick-list"]') !== null`)
 
     expect(browser.text('[data-slot="quick-list"]')).toContain('No tasks yet — describe one.')

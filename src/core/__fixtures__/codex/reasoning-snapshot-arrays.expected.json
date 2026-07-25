@@ -1,0 +1,52 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "th_snapshot",
+    "backend": "codex"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_snapshot"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "item_snapshot",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "item_snapshot",
+      "text": "Inspecting the merge conflict.\nChoosing the compatible resolution."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_message",
+      "role": "assistant",
+      "text": "",
+      "phase": "final"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_message",
+      "role": "assistant",
+      "text": "The conflict is resolved.",
+      "phase": "final"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_snapshot",
+    "stopReason": "end_turn"
+  }
+]

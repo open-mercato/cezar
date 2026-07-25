@@ -1,0 +1,32 @@
+[
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "item_spawn_new",
+      "name": "spawnAgent",
+      "toolKind": "task",
+      "title": "Task: Review the runner",
+      "status": "running",
+      "input": {
+        "prompt": "Review the runner",
+        "model": "gpt-5.4"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "item_spawn_new",
+      "name": "spawnAgent",
+      "toolKind": "task",
+      "title": "Task: Review the runner",
+      "status": "completed",
+      "input": {
+        "prompt": "Review the runner",
+        "model": "gpt-5.4"
+      }
+    }
+  }
+]

@@ -96,7 +96,10 @@ Notable fields (full doc-comments in the source):
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes
   unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.
-  Treat the default as full shell access in `cwd`, not a sandbox.
+  Treat the default `auto` permission mode as full shell access, not a
+  sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
+  OpenCode auto-approves every permission. Configurable restrictive modes are
+  specified by `2026-07-17-permission-modes` (#475).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
 
@@ -140,6 +143,13 @@ Every v1 event stays **derivable** from the v2 stream, so a consumer can migrate
 one panel at a time. New work should read v2; v1 exists for the console renderer
 and old recordings.
 
+### Cezar-owned run metadata events
+
+`provider-auth-required` is not emitted by a backend runner. The server derives it
+from an authoritative v1/v2 authentication error, persists a provider id, opaque
+incident id, and optional `stepId`, and the cockpit renders recovery guidance. It
+does not change backend parity or expose the raw error.
+
 ---
 
 ## 3. v2 `UiEvent` — the normalized protocol (`src/core/ui-events.ts`)
@@ -171,7 +181,8 @@ type UiItem = UiMessageItem | UiReasoningItem | UiToolItem;
   `diffs?: FileDiff[]`, `locations?`, `exitCode?`, `parentItemId?`.
 
 `parentItemId` nests subagent work under the tool item that spawned it (claude
-`parent_tool_use_id`, opencode `subtask` parts, codex review items).
+`parent_tool_use_id`, opencode `subtask` parts, Codex collaboration receiver
+thread ids).
 
 ### Enumerations
 
@@ -210,8 +221,8 @@ type UiEvent =
   | UiImageEvent;            // 'image'            — itemId?, mediaType, data (base64; manager re-emits URL)
 ```
 
-**AskUser (`ask.requested`, #473).** Unlike every other `UiEvent`, this one is
-**not** produced by a per-backend mapper. The agent asks a structured
+**AskUser (`ask.requested`, #473, #565).** The portable path remains
+backend-neutral: the agent asks a structured
 multiple-choice question by ending a turn with a `CEZ:ASK <json>` control marker
 (a sibling of `CEZ:DONE` / `CEZ:MONITORING`); the RunManager detects it on the
 *assembled* turn text — uniform across claude, codex and opencode with no mapper
@@ -220,8 +231,12 @@ work — validates the payload (`src/core/ask.ts`, modeled on Claude Code's
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
 chips; the user's pick (or a free-form reply) rides the normal reply seam
 (`POST /api/runs/:id/messages`), and the card resolves client-side when that
-message lands (no `ask.resolved` event). A malformed marker degrades to plain
-text — the prose fallback is never made worse. A native `AskUserQuestion`
+message lands (no `ask.resolved` event). Codex additionally bridges its native
+`item/tool/requestUserInput` server request onto the same event and routes the
+next answer back as the documented JSON-RPC response. Malformed or unsupported
+native requests receive an error response rather than hanging the turn. A
+malformed marker degrades to plain text — the prose fallback is never made
+worse. A native `AskUserQuestion`
 control-protocol bridge for claude (the `control_request can_use_tool` path) is a
 possible future enhancement; the marker is the portable baseline.
 
@@ -244,10 +259,10 @@ transport into `UiEvent`s. The authoritative table is
 | `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) |
 | message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts |
 | reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts |
-| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) |
+| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) |
 | `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata |
 | `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool |
-| subagent nesting (`parentItemId`) | `parent_tool_use_id` | *(no wire parent attribution — review-mode task items instead)* | child-session parts under a `subtask` |
+| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` |
 | `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` |
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
@@ -288,11 +303,15 @@ or a new fixture set forgets one — a named row fails. The matrix:
 - tool status `running`, `completed`, `failed`
 - reasoning items (thinking / reasoning items / reasoning parts)
 - structured diffs (Edit input / fileChange.changes / patch parts)
-- sub-agent task items (Task / review-mode items / subtask parts)
+- sub-agent task items (Task / review-mode span / subtask parts) — one item per
+  sub-agent: codex's `enteredReviewMode`/`exitedReviewMode` pair folds into a
+  single `task` item with a running→completed lifecycle, so a consumer counting
+  task items counts agents, not frames (spec
+  `.ai/specs/2026-07-20-grouped-subagent-display.md`, #474)
 - `usage.updated` with raw token counts
 - `turn.completed` with a `stopReason`
-- sub-agent **nesting** via `parentItemId` (claude + opencode; codex has no wire
-  parent attribution, so its cell is the review-mode task items)
+- sub-agent **nesting** via `parentItemId` (all three backends; Codex uses
+  collaboration receiver thread ids when child notifications are subscribed)
 
 A new backend is not "done" until it produces every row.
 
@@ -323,7 +342,10 @@ these events get persisted as NDJSON), and asserts `toStrictEqual` against the
 - **NDJSON** — one append-only `runs/<id>.ndjson` per run, one JSON object per
   line (`seq`, `ts`, `type`, free extra keys). Never rewrite, reorder or
   re-number; readers skip bad lines. Both v1 and v2 events live here; a mixed
-  file is valid.
+  file is valid. Cezar-owned task events are additive too: for example,
+  `provider-auth-required` records only `{ provider, authFailureId, stepId? }`
+  when a runtime rejection needs user authorization; it never carries vendor
+  error text or credentials.
 - **SSE** — the server replays from NDJSON then streams live, deduped by `seq`.
   Event names: `run-event` (v1) and `ui-event` (v2 dotted types). These names are
   a protected contract (see `BACKWARD_COMPATIBILITY.md` §2).

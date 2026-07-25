@@ -1,8 +1,7 @@
 import { MoonIcon, PlusIcon } from 'lucide-react'
 import * as React from 'react'
-import { useNavigate } from 'react-router'
-
 import { useHealth, useRuns, useSkills, useUiState } from '@/api/queries'
+import { useNavigate } from '@/lib/project-router'
 import type { RunRecord } from '@/api/types'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'

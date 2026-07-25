@@ -66,6 +66,11 @@ const TABLE: Array<{ name: string; input?: unknown; expected: ToolDisplay }> = [
   // read / search
   { name: 'Read', input: { file_path: 'package.json' }, expected: { toolKind: 'read', title: 'Read package.json' } },
   {
+    name: 'imageView',
+    input: { path: '/tmp/checkout-preview.png' },
+    expected: { toolKind: 'read', title: 'View image /tmp/checkout-preview.png' },
+  },
+  {
     name: 'Grep',
     input: { pattern: 'AgentEvent', path: 'src/core' },
     expected: { toolKind: 'search', title: 'Search AgentEvent', subtitle: 'src/core' },
@@ -96,9 +101,28 @@ const TABLE: Array<{ name: string; input?: unknown; expected: ToolDisplay }> = [
   },
   { name: 'task', input: {}, expected: { toolKind: 'task', title: 'Task', subtitle: undefined } },
 
+  // agent / skill (claude's current subagent + skill spellings)
+  {
+    name: 'Agent',
+    input: { description: 'Review the diff', subagent_type: 'code-reviewer' },
+    expected: { toolKind: 'task', title: 'Agent: Review the diff', subtitle: 'code-reviewer' },
+  },
+  {
+    name: 'Agent',
+    input: { subagent_type: 'Explore' },
+    expected: { toolKind: 'task', title: 'Agent: Explore', subtitle: undefined },
+  },
+  {
+    name: 'Skill',
+    input: { skill: 'om-auto-fix-issue', args: '529' },
+    expected: { toolKind: 'task', title: 'Skill: om-auto-fix-issue', subtitle: '529' },
+  },
+  { name: 'Skill', input: {}, expected: { toolKind: 'task', title: 'Skill', subtitle: undefined } },
+
   // plan
   { name: 'TodoWrite', input: { todos: [] }, expected: { toolKind: 'plan', title: 'Update plan' } },
   { name: 'todoList', expected: { toolKind: 'plan', title: 'Update plan' } },
+  { name: 'contextCompaction', expected: { toolKind: 'other', title: 'Compacted context' } },
 
   // MCP, both naming schemes
   {
@@ -164,7 +188,7 @@ describe('web protocol mirror — toolDisplay says exactly what the server says'
       { file_path: { not: 'a string' } },
       Object.create(null),
     ];
-    const names = ['Bash', 'fileChange', 'Read', 'Grep', 'Task', 'mcpToolCall', 'TotallyUnknown'];
+    const names = ['Bash', 'fileChange', 'Read', 'Grep', 'Task', 'Agent', 'Skill', 'mcpToolCall', 'TotallyUnknown'];
     for (const name of names) {
       for (const input of junkInputs) {
         expect(webToolDisplay(name, input)).toEqual(toolDisplay(name, input));

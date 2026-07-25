@@ -157,8 +157,9 @@ describe('iOS sweep — every primary view at 390×844', () => {
     sweep('workflows', '/workflows', '[data-slot="wb-main"]')
   })
 
-  it('/settings/appearance', () => {
-    sweep('settings-appearance', '/settings/appearance', '[data-route="settings-appearance"]')
+  // Global settings live outside `/p/:projectId` (step 3.5) — swept at their real URLs.
+  it('/settings/global/appearance', () => {
+    sweep('settings-appearance', '/settings/global/appearance', '[data-route="settings-global-appearance"]')
   })
 
   it('/settings/skills', () => {
@@ -171,8 +172,12 @@ describe('iOS sweep — every primary view at 390×844', () => {
     sweep('settings-agents', '/settings/agents', '[data-route="settings-agents"]')
   })
 
-  it('/settings/notifications', () => {
-    sweep('settings-notifications', '/settings/notifications', '[data-route="settings-notifications"]')
+  it('/settings/global/notifications', () => {
+    sweep(
+      'settings-notifications',
+      '/settings/global/notifications',
+      '[data-route="settings-global-notifications"]',
+    )
   })
 
   it('/new (full-screen composer)', () => {

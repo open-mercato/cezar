@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { CheckIcon, InboxIcon, PlayIcon, TriangleAlertIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate } from '@/lib/project-router'
 
 import { removeTodo, startTodo } from '@/api/client'
 import { queryKeys, useHealth, useRuns, useTodos, useUiState } from '@/api/queries'
 import type { TodoItem } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { EnginePills, engineBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -155,6 +156,11 @@ function TodoCard({
   const queryClient = useQueryClient()
   const uiState = useUiState()
 
+  // Per card, not per route (#401): each card starts its OWN run, so "run this one on codex"
+  // must not silently re-aim the card below it. Reset is free — a started card leaves the list.
+  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null })
+  const resolved = useResolvedEngine(engine)
+
   // "Add instructions" (#413): collapsed by default, local to the card (see the doc block
   // above for why nothing here needs to persist across a reload).
   const [notesOpen, setNotesOpen] = useState(false)
@@ -173,8 +179,20 @@ function TodoCard({
   }
 
   const start = useMutation({
-    mutationFn: () => startTodo(todo.id, notes.trim() || undefined),
-    onSuccess: ({ run }) => {
+    // The engine pick (#401) and the "Add instructions" prompt (#413) ride the same Run: the
+    // body rules live in engineBody so this surface and the GitHub tab cannot disagree, and the
+    // trimmed note joins them as `prompt`. Both are optional — an untouched card on a
+    // single-backend host with no note sends the bodyless POST this endpoint always has.
+    mutationFn: async () => {
+      if (!resolved.canRun) return null
+      return startTodo(todo.id, {
+        ...engineBody(resolved),
+        prompt: notes.trim() || undefined,
+      })
+    },
+    onSuccess: (result) => {
+      if (result === null) return
+      const { run } = result
       // The server rewrote todos.json (SSE will confirm); the invalidations just refuse to
       // wait for the file watcher's debounce.
       void queryClient.invalidateQueries({ queryKey: queryKeys.todos })
@@ -264,7 +282,7 @@ function TodoCard({
                 size="sm"
                 data-action="todo-run"
                 title="Start a task from this follow-up"
-                disabled={busy}
+                disabled={busy || !resolved.canRun}
                 onClick={() => start.mutate()}
               >
                 <PlayIcon aria-hidden="true" className="size-3" />
@@ -298,6 +316,31 @@ function TodoCard({
           )}
         </div>
       </div>
+
+      {/* Only a runnable card gets pills (#401) — an acknowledge-only note has no run to aim.
+          Indented under the summary, above the instructions composer, so the two per-card
+          Run knobs (engine + prompt) read as one group. */}
+      {runnable ? (
+        <div data-slot="todo-engine" className="flex flex-wrap items-center gap-2 pl-5">
+          <EnginePills pick={engine} onChange={setEngine} disabled={busy || !resolved.canRun} />
+          {!resolved.providerPending && !resolved.canRun ? (
+            <span
+              data-slot="todo-provider-gate"
+              className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+            >
+              {resolved.providerError
+                ? 'Provider authentication could not be verified.'
+                : 'Connect an agent provider to run this follow-up.'}
+              <Link
+                to="/settings/agents#providers"
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                Configure providers
+              </Link>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Instructions are carried by Run, so they only make sense on a runnable
           follow-up (#440): a note-only entry has no Run to carry them, and a

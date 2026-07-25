@@ -33,6 +33,42 @@ export function readTestEnv(): EnvDescriptor {
   }
 }
 
+/**
+ * The environment for a spec-owned `cezar serve` over a throwaway `dataRoot`.
+ *
+ * `CEZ_DRY_RUN` is why these boots need no network and no agent login. `CEZ_HOME` is why they
+ * are *isolated*: since the multi-project workspace landed, booting in an unregistered folder
+ * APPENDS it to `~/.cezar/config.json`, so an unpinned fixture server would (a) litter the
+ * developer's real registry with a dead `/tmp/cezar-e2e-…` entry per run and (b) make every
+ * spec order-dependent — once the registry holds more than one project the sidebar renders
+ * the grouped multi-project shell instead of the flat one these specs assert against.
+ * Pinning it inside `dataRoot` means the spec's own `rmSync(dataRoot)` cleans it up too.
+ *
+ * The shared test env pins the same variable under `.ai/qa/cez-home`
+ * (`.ai/scripts/test-env-up.sh`); this is that rule for the specs that boot their own server.
+ */
+export function fixtureServeEnv(
+  dataRoot: string,
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  return { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: resolve(dataRoot, '.cez-home'), ...extra }
+}
+
+/**
+ * The id of the project a server booted in — the `/p/<projectId>` prefix every cockpit URL
+ * carries since the multi-project spec's step 3.2.
+ *
+ * Specs resolve it from the live server rather than deriving it from the fixture's folder name:
+ * the slug is allocated by the registry (lowercased, deduplicated), so only the server knows it.
+ */
+export async function bootProjectId(baseUrl: string): Promise<string> {
+  const { bootProject } = (await (await fetch(`${baseUrl}/api/projects`)).json()) as {
+    bootProject: string
+  }
+  if (!bootProject) throw new Error(`cezar e2e: ${baseUrl}/api/projects named no boot project`)
+  return bootProject
+}
+
 export class AgentBrowser {
   // A unique session per run, per the descriptor's rules — never attach to a user's profile.
   private constructor(

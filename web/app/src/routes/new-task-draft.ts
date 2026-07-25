@@ -9,6 +9,9 @@ import type { TaskSource } from './new-task-form'
  * form falls back to persisted/last-used/default values, so an untouched draft never shadows a
  * fresher `lastTask` from the server. Images are deliberately NOT persisted (multi-MB base64
  * would blow the ~5 MB localStorage quota); everything the pickers hold is.
+ *
+ * Every entry point takes the project the draft belongs to (multi-project spec, step 3.4) —
+ * see `storageKey` below for what scopes what.
  */
 export interface NewTaskDraft {
   text: string
@@ -43,6 +46,21 @@ const EMPTY: NewTaskDraft = {
 
 const STORAGE_KEY = 'cez-new-task-draft'
 
+/**
+ * The per-project storage key (multi-project spec, "New task": `cez-new-task-draft:<projectId>`).
+ *
+ * Drafts are project state — a half-typed task for the shop frontend must not surface in the
+ * cezar composer when the project pill swaps scope — so each project gets its own key.
+ *
+ * `null` (the argument's default) keeps the BARE legacy key. That is the same "unscoped means
+ * byte-identical" invariant the rest of step 3.1 keeps (`scopeApiPath`, `queryScope`): the boot
+ * project mounts unscoped, so its draft stays exactly where it has always been and a task typed
+ * before this upgrade is still there after it. Only non-boot projects pay the suffix.
+ */
+function storageKey(projectId: string | null): string {
+  return projectId === null ? STORAGE_KEY : `${STORAGE_KEY}:${projectId}`
+}
+
 /** Coerce arbitrary parsed JSON back into a NewTaskDraft, defaulting anything malformed — the
  *  store must survive a hand-edited or older-shape localStorage value without throwing. */
 function normalize(raw: unknown): NewTaskDraft {
@@ -71,24 +89,30 @@ function isSource(raw: unknown): raw is TaskSource {
 }
 
 // In-memory cache mirrors storage so reads stay synchronous and cheap; storage is the source of
-// truth across reloads.
-let cache: NewTaskDraft | null = null
+// truth across reloads. Keyed by storage key, so one open cockpit holds every project's draft
+// independently — swapping the pill back and forth never round-trips through a stale singleton.
+const cache = new Map<string, NewTaskDraft>()
 
-export function readDraft(): NewTaskDraft {
-  if (cache) return { ...cache }
+export function readDraft(projectId: string | null = null): NewTaskDraft {
+  const key = storageKey(projectId)
+  const cached = cache.get(key)
+  if (cached) return { ...cached }
+  let draft: NewTaskDraft
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    cache = stored ? normalize(JSON.parse(stored)) : { ...EMPTY }
+    const stored = localStorage.getItem(key)
+    draft = stored ? normalize(JSON.parse(stored)) : { ...EMPTY }
   } catch {
-    cache = { ...EMPTY } // private mode / bad JSON — start clean, still works this session
+    draft = { ...EMPTY } // private mode / bad JSON — start clean, still works this session
   }
-  return { ...cache }
+  cache.set(key, draft)
+  return { ...draft }
 }
 
-export function writeDraft(next: NewTaskDraft): void {
-  cache = { ...next }
+export function writeDraft(next: NewTaskDraft, projectId: string | null = null): void {
+  const key = storageKey(projectId)
+  cache.set(key, { ...next })
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cache))
+    localStorage.setItem(key, JSON.stringify(next))
   } catch {
     // Storage disabled/full — the in-memory cache still survives navigation this session.
   }
@@ -96,15 +120,18 @@ export function writeDraft(next: NewTaskDraft): void {
 
 /** After a successful submit: the text is spent, the picker choices remain — the next task
  *  usually runs the same way (legacy keeps its pills too). */
-export function clearDraftText(): void {
-  writeDraft({ ...readDraft(), text: '' })
+export function clearDraftText(projectId: string | null = null): void {
+  writeDraft({ ...readDraft(projectId), text: '' }, projectId)
 }
 
-/** Test isolation — null the cache too, so the next read re-consults storage (a fresh page). */
+/** Test isolation — drop EVERY project's cache and stored draft, so the next read re-consults
+ *  storage (a fresh page). */
 export function resetDraft(): void {
-  cache = null
+  cache.clear()
   try {
-    localStorage.removeItem(STORAGE_KEY)
+    for (const key of Object.keys(localStorage)) {
+      if (key === STORAGE_KEY || key.startsWith(`${STORAGE_KEY}:`)) localStorage.removeItem(key)
+    }
   } catch {
     // ignore
   }

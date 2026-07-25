@@ -7,6 +7,8 @@ import { RunStore } from '../runs/store.js';
 import type { RunManager, StartRunInput } from '../workflows/run.js';
 import type { WorkflowDef } from '../workflows/types.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 
 /**
  * `POST /api/runs` `systemPrompt` (R2 2.3) — the programmatic per-run
@@ -35,7 +37,13 @@ describe('POST /api/runs systemPrompt', () => {
         return store.createRun({ title: 't', workflow: '(planned)', task: input.task, steps: [] });
       },
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {
@@ -46,7 +54,7 @@ describe('POST /api/runs systemPrompt', () => {
   });
 
   const post = (body: unknown) =>
-    app.request('/api/runs', {
+    apiRequest(app, '/api/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -127,7 +135,13 @@ describe('POST /api/runs generateFollowups — the CEZ_FOLLOWUPS ceiling (#471)'
         return store.createRun({ title: 't', workflow: '(planned)', task: input.task, steps: [] });
       },
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
     delete process.env.CEZ_FOLLOWUPS;
   });
 
@@ -139,7 +153,7 @@ describe('POST /api/runs generateFollowups — the CEZ_FOLLOWUPS ceiling (#471)'
   });
 
   const post = (body: unknown) =>
-    app.request('/api/runs', {
+    apiRequest(app, '/api/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

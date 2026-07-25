@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
 
 /**
  * Anti-buffering contract for both SSE endpoints (#424): `no-transform` +
@@ -31,7 +32,7 @@ describe('SSE responses defeat intermediary buffering', () => {
   });
 
   async function headersOf(path: string): Promise<Headers> {
-    const res = await app.request(path);
+    const res = await apiRequest(app, path);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     await res.body?.cancel();

@@ -100,6 +100,7 @@ const LANG_LOADERS: Record<string, () => Promise<unknown>> = {
   html: () => import('@shikijs/langs/html'),
   diff: () => import('@shikijs/langs/diff'),
   yaml: () => import('@shikijs/langs/yaml'),
+  toml: () => import('@shikijs/langs/toml'),
   go: () => import('@shikijs/langs/go'),
   rust: () => import('@shikijs/langs/rust'),
   sql: () => import('@shikijs/langs/sql'),

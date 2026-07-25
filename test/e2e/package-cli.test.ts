@@ -73,9 +73,13 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
       { cwd: fixtureRepo },
     );
 
+    // CEZ_HOME pins every workspace write (migrations, project registry,
+    // server.json) to a temp dir — booting the real CLI must never touch the
+    // developer's real ~/.cezar.
+    const cezHome = join(root, 'cez-home');
     const run = await execFile(process.execPath, [cliPath, 'run', 'mock:done', '--repo', fixtureRepo], {
       cwd: consumerDir,
-      env: { ...process.env, CEZ_DRY_RUN: '1' },
+      env: { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: cezHome },
       timeout: 60_000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -87,10 +91,102 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.equal(runs.length, 1);
     assert.ok(['done', 'review'].includes(runs[0]?.status ?? ''), 'the dry-run workflow should finish successfully');
 
+    // Boot wiring (spec 2026-07-20-multi-project-workspace, step 1.5): the
+    // headless run migrated ~/.cezar and registered the boot repo.
+    const workspace = JSON.parse(await readFile(join(cezHome, 'config.json'), 'utf8')) as {
+      schemaVersion: number;
+      disabledProviders?: string[];
+      projects: Array<{ name: string; root: string }>;
+    };
+    assert.ok(workspace.schemaVersion >= 1, 'boot runs the workspace migrations');
+    assert.ok(
+      workspace.projects.some((p) => p.name === 'fixture-repo'),
+      'a headless run registers the boot repo in the workspace registry',
+    );
+
+    workspace.disabledProviders = ['claude'];
+    await writeFile(join(cezHome, 'config.json'), `${JSON.stringify(workspace, null, 2)}\n`, 'utf8');
+    await assert.rejects(
+      execFile(process.execPath, [cliPath, 'run', 'mock:done must stay blocked', '--repo', fixtureRepo], {
+        cwd: consumerDir,
+        env: { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: cezHome },
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      }),
+      (error: unknown) => {
+        const result = error as { stderr?: string };
+        assert.match(result.stderr ?? '', /Claude Code is disabled/);
+        return true;
+      },
+      'headless run must honor the global provider preference',
+    );
+    const runsAfterDisabledAttempt = JSON.parse(
+      await readFile(join(fixtureRepo, '.ai', 'cezar', 'runs.json'), 'utf8'),
+    ) as Array<{ status: string }>;
+    assert.equal(runsAfterDisabledAttempt.length, 1, 'a disabled provider must not create a run');
+    workspace.disabledProviders = [];
+    await writeFile(join(cezHome, 'config.json'), `${JSON.stringify(workspace, null, 2)}\n`, 'utf8');
+
+    const claudeShim = join(root, 'claude-shim.mjs');
+    await writeFile(
+      claudeShim,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.join(' ') === 'auth status --json') {
+  process.stdout.write('{"loggedIn":true}\\n');
+} else {
+  process.stdout.write('{"type":"system","subtype":"init","session_id":"auth-failure-session"}\\n');
+  process.stdout.write('{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate. API Error: 401 OAuth access token has been revoked.","usage":{"input_tokens":0,"output_tokens":0},"total_cost_usd":0}\\n');
+}
+`,
+      { mode: 0o755 },
+    );
+    await execFile(
+      process.execPath,
+      [cliPath, 'run', 'exercise runtime auth rejection', '--repo', fixtureRepo],
+      {
+        cwd: consumerDir,
+        env: {
+          ...process.env,
+          CEZ_CLAUDE_BIN: claudeShim,
+          CEZ_HOME: cezHome,
+        },
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    ).catch(() => undefined);
+    const runsAfterAuthFailure = JSON.parse(
+      await readFile(join(fixtureRepo, '.ai', 'cezar', 'runs.json'), 'utf8'),
+    ) as Array<{ id: string }>;
+    assert.equal(runsAfterAuthFailure.length, 2, 'the runtime-auth fixture creates exactly one run');
+    const authFailureRun = runsAfterAuthFailure.at(0);
+    assert.ok(authFailureRun, 'the auth-failure fixture creates a run');
+    const authFailureEvents = (await readFile(
+      join(fixtureRepo, '.ai', 'cezar', 'runs', `${authFailureRun.id}.ndjson`),
+      'utf8',
+    )).trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.ok(
+      authFailureEvents.some((event) =>
+        event.type === 'provider-auth-required'
+        && event.provider === 'claude'
+        && typeof event.authFailureId === 'string'),
+      'headless runtime rejection must persist provider recovery guidance',
+    );
+
+    // `cezar projects` (step 5.2) reads the same registry with no server
+    // running — the ssh-into-the-box view of Settings → Projects.
+    const projects = await execFile(process.execPath, [cliPath, 'projects'], {
+      cwd: consumerDir,
+      env: { ...process.env, CEZ_HOME: cezHome },
+      timeout: 30_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    assert.match(projects.stdout, /fixture-repo/);
+    assert.match(projects.stdout, /1 project\(s\)/);
+
     // server-install / server-uninstall dry-run round-trip. CEZ_HOME isolates
     // ~/.cezar/server.json to a temp dir; CEZ_DRY_RUN performs no real sudo.
     assert.match(help.stdout, /cezar server-install/);
-    const cezHome = join(root, 'cez-home');
     const serverEnv = { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: cezHome };
     const serverExec = { cwd: consumerDir, env: serverEnv, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 } as const;
 
@@ -119,6 +215,23 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     };
     assert.deepEqual(reversed.steps, {}, 'server-uninstall reverses every step');
     assert.equal(reversed.installed, false, 'server-uninstall clears installed');
+
+    await execFile(
+      process.execPath,
+      [cliPath, 'server-install', '--platform', 'ubuntu-vps', '--external-proxy', '--yes', '--repo', fixtureRepo],
+      serverExec,
+    );
+    await execFile(
+      process.execPath,
+      [cliPath, 'server-install', '--platform', 'ubuntu-vps', '--yes', '--repo', fixtureRepo],
+      serverExec,
+    );
+    const resumedExternal = JSON.parse(await readFile(join(cezHome, 'server.json'), 'utf8')) as {
+      externalProxy?: boolean;
+      steps: Record<string, unknown>;
+    };
+    assert.equal(resumedExternal.externalProxy, true, 'a flag-less resume preserves external-proxy mode');
+    assert.ok(!resumedExternal.steps['nginx-proxy'], 'a flag-less resume does not add cezar-managed nginx');
 
     // Unknown platform exits non-zero.
     await assert.rejects(

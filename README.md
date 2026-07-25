@@ -5,8 +5,8 @@
 **Parallel coding agents orchestrator** — a local cockpit for running and
 tracking AI coding-agent tasks in your repo.
 
-Type a task, pick a workflow and an agent — **Claude Code, Codex or OpenCode,
-or a mix of them per step** — and watch it work live: steps, tool calls,
+Type a task, pick a workflow and an agent — **Claude Code, Codex or OpenCode
+(experimental), or a mix of them per step** — and watch it work live: steps, tool calls,
 tokens, diffs, in a browser cockpit that runs entirely on your machine.
 Your CLI logins, your `gh`, your files. No accounts, no database, no cloud.
 
@@ -21,7 +21,7 @@ your phone, working your backlog while you're away.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#license)
 ![Node 20+](https://img.shields.io/badge/Node-20%2B-339933)
-![TypeScript 5.x](https://img.shields.io/badge/TypeScript-5.x-3178c6)
+![TypeScript 7.x](https://img.shields.io/badge/TypeScript-7.x-3178c6)
 ![Zero config](https://img.shields.io/badge/config-zero-success)
 ![No database](https://img.shields.io/badge/database-none-success)
 
@@ -106,7 +106,7 @@ and an orchestrator keeps a whole queue of them moving.
   Take it over interactively in one click (`claude --resume <id>`), or continue it
   in-process from the cockpit.
 - 🔀 **Locked into one agent vendor.** Most tools wed you to a single CLI. cezar
-  drives **Claude Code, Codex and OpenCode** through one runner seam — set a
+  drives **Claude Code, Codex and OpenCode (experimental)** through one runner seam — set a
   default, pick a backend per task, or mix them inside one workflow (implement
   with one agent, review with another) — and through **OpenCode** you can point
   a run at **open-source or local models**, not just the big vendors. See
@@ -251,7 +251,8 @@ Three words, no jargon — **task**, **skill**, **chain**:
 Five moves that make the cockpit worth the browser tab:
 
 - 🗃️ **Queue + orchestration.** Start as many tasks as you like: cezar runs up to
-  `maxParallel` at once (default **2**; a non-git directory always runs one) and
+  `maxParallel` at once across every project (default **2**; a non-git directory
+  always runs one) and
   holds the rest in a FIFO queue with visible positions (`#1`, `#2`, …). Cancel a
   queued task before it starts; the queue even survives a cockpit restart —
   everything still `queued` is re-enqueued in order. It's the orchestration layer
@@ -300,6 +301,71 @@ The cockpit is a React app served pre-built from the package — `npx cezar-cli`
 still means no build step and no dev server on your machine — with a dark/light
 theme, a ⌘K command palette, and bookmarklets that launch a task straight from
 a GitHub page.
+
+---
+
+## Multiple projects, one cockpit
+
+One `cezar serve` hosts **every repo you work in**, not just the one you started
+it in. Each repo cezar boots in registers itself in a per-user registry at
+`~/.cezar/config.json` — the workspace file that also holds the global knobs
+(the parallel cap, the memory ceiling, the browse root, and the checkout root). Nothing is added to
+the repo: per-project state stays exactly where it was, in that repo's
+`.ai/cezar/`.
+
+Every view is project-scoped:
+
+```
+/p/<projectId>/            tasks · git · github · skills · workflows · settings
+```
+
+`<projectId>` is a slug derived from the folder name (`my-app`, then `my-app-2`
+on a collision), and `/p/default/…` always means the project cezar was started
+in. The sidebar shows one collapsible group per project — each with its own nav
+and task list — and the new-task composer names the project it will run in.
+
+**Adding a project** — the **+** button beside *New task*:
+
+- 📂 **Open local folder…** browses from the configured browse root
+  (**Settings → Projects**, default `~/`) in a folder picker and
+  registers the folder you pick.
+- ⬇️ **Clone from GitHub…** clones with your logged-in `gh` into the checkout
+  root (**Settings → Projects**, default `~/cezar/projects`) with live progress,
+  then registers the clone. Close the dialog and the clone is killed and its
+  partial directory removed.
+
+Removing a project (**Settings → Projects**) drops the registry entry only — the
+repo and its `.ai/cezar/` are never touched, so re-adding it later finds all its
+tasks intact. The project cezar is currently serving can't be removed: it
+re-registers itself at the next start.
+
+**From the terminal** — the same registry, no cockpit required (handy over ssh):
+
+```bash
+cezar projects                    # list: id, branch or status, path
+cezar projects add ~/code/api     # register a folder (defaults to the current repo)
+cezar projects remove api         # drop the registry entry; the repo is untouched
+```
+
+These read and write `~/.cezar/config.json` directly, so they work with the
+server stopped, and `CEZ_HOME` selects which workspace they operate on.
+
+Settings split along the same line: **Agents**, **Worktrees**, **Bookmarklets**,
+**Prompt templates** and **MCP** describe one repo and live under
+`/p/<projectId>/settings`; **Appearance**, **Notifications**, **Resources**,
+**Projects** and **Keyboard** are yours or the machine's and live at
+`/settings/global`.
+
+**Old URLs keep working.** Every unprefixed path — `/`, `/tasks/<id>`,
+`/settings`, and the whole `/api/…` surface — still answers exactly as before,
+bound to the project cezar was started in; the cockpit redirects flat paths to
+their `/p/<boot>/…` twin. Existing bookmarks, bookmarklets and scripts need no
+change.
+
+> **Hosted cockpit?** The folder picker is confined to the independent browse
+> root. Set `CEZ_BROWSE_ROOT` narrowly before first boot (or save it in
+> **Settings → Projects**) when a remote viewer should not enumerate the host's
+> whole home. Clones continue to use the separate checkout root.
 
 ---
 
@@ -362,10 +428,14 @@ Useful environment variables:
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
 | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
-| `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) `cezar autosave` commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. |
+| `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
+| `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
+| `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
+| `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
+| `CEZ_SINGLE_PROJECT=1` | Opt into a launch-project-only cockpit: only the exact value `1` enables it. Project add, edit, checkout, folder browsing, and removal are refused and only the launch project is shown. Off by default; stored registry rows are retained, so unsetting it and restarting restores the full multi-project workspace without migration or data loss. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
@@ -373,7 +443,7 @@ Useful environment variables:
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Agents toggle overrides this default. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Agents toggle overrides this; autonomous runs always skip it. |
-| `CEZ_NO_BANNER=1` | Skip the `open-mercato/skills` banner on `cezar serve` startup. Dismissing the same banner in the cockpit silences the terminal one too. |
+| `CEZ_NO_BANNER=1` | Skip the `open-mercato/skills` banner on `cezar serve` startup. (The cockpit no longer shows a banner — its skills now live on the Skills page's Manage panel — so this env var is the terminal banner's only switch.) |
 
 ---
 
@@ -385,8 +455,12 @@ cezar is not married to one vendor. Every agent step runs through a single
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
 | **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` → `acceptEdits` + approval UI). |
-| **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; runs its own `workspace-write` sandbox with `approvalPolicy: never` and network access on. |
-| **OpenCode** | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
+| **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
+| **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
+
+> ⚠️ **OpenCode support is experimental.** The runner works but is less battle-tested
+> than the Claude Code and Codex backends, and OpenCode auto-approves every permission
+> (it ignores `allowedTools`). Treat it as a preview and expect rough edges.
 
 On startup cezar probes which CLIs are installed and the cockpit only offers
 the backends it found — install any one of the three and you're operational.
@@ -448,9 +522,24 @@ On `ubuntu-vps` a single host can run several independent cockpits — add
 `--domain <host>` and each gets its own port, nginx site, login and service; a
 new domain never resumes or clobbers the first install.
 
+**Already running a reverse proxy?** If Dokploy, Coolify, Caddy or your own
+nginx already owns `:80/:443`, cezar's would fight it for the ports. Install the
+service only and let your proxy front it:
+
+```bash
+npx cezar-cli server-install --platform ubuntu-vps \
+  --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
+```
+
+`--bind-host` is only needed when the proxy runs in a **container** (Traefik
+can't reach the host's loopback); a host-installed proxy uses the `127.0.0.1`
+default. In this mode **your proxy must enforce authentication** — cezar has
+none of its own. [Details →](docs/server-install/ubuntu-vps.md#the-box-already-has-a-reverse-proxy-dokploy-coolify-caddy)
+
 | Provider | `--platform` | Public front | Guide |
 |----------|--------------|--------------|-------|
 | Ubuntu / Debian VPS | `ubuntu-vps` | nginx + Let's Encrypt HTTPS, htpasswd login, systemd | [Step-by-step →](docs/server-install/ubuntu-vps.md) |
+| Ubuntu + existing proxy | `ubuntu-vps --external-proxy` | your Dokploy/Traefik/Caddy front; cezar ships the service only | [Step-by-step →](docs/server-install/ubuntu-vps.md#the-box-already-has-a-reverse-proxy-dokploy-coolify-caddy) |
 | macOS + ngrok | `macosx-ngrok` | ngrok tunnel + `--basic-auth`, launchd | [Step-by-step →](docs/server-install/macosx-ngrok.md) |
 
 See the **[Remote access overview](docs/server-install/README.md)** for how it
@@ -473,7 +562,6 @@ never blocks startup):
   // path as `./name`, not a bare `name`. Pin `ref` to a full commit SHA to freeze
   // the source against a moving branch head — cezar verifies it resolves to
   // exactly that commit, and reports it as `team.commit`.
-  "maxParallel": 2,          // how many tasks may run at once (non-git dirs always run 1)
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode"
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
@@ -483,6 +571,27 @@ never blocks startup):
 
 Run data (`runs.json`, NDJSON event logs, worktrees, `todos.json`) is
 git-ignored automatically; your workflows and skills stay committable.
+
+Settings that belong to *you* rather than to a repo — the parallel cap
+(`maxParallel`, default **2**), the per-task memory ceiling and the checkout
+root — live once in `~/.cezar/config.json`, alongside the
+[project registry](#multiple-projects-one-cockpit), and are edited from
+**Settings → Resources** and **Settings → Projects**. A `maxParallel` left over
+in a repo's `.ai/cezar/config.json` is imported into the workspace file the
+first time cezar boots there, and ignored afterwards.
+
+### Editing the agents' own config (Settings → Agent config)
+
+cezar picks *which* agent runs; **Settings → Agent config** lets you edit *how* it
+behaves — the raw config files Claude, Codex and OpenCode read for settings,
+MCP, and memory. In the multi-project cockpit the section is project-scoped:
+repo-relative files resolve from the selected project's root, while user-scope
+files continue to resolve from the agent's home.
+
+Each file keeps its native format and vendor-documented precedence. Tracked
+files reach task worktrees after commit; Claude's gitignored personal layer is
+seeded into each run's worktree. Editing is a local-machine capability, so a
+hosted cockpit (`CEZ_REMOTE=1`) is read-only and never serves home-file contents.
 
 ---
 

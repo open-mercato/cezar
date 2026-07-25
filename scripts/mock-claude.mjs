@@ -118,6 +118,21 @@ async function respond(userText, imageCount) {
   // `mock:slow` → hold the turn for ~25 s so queue states are observable.
   if (userText.includes('mock:slow')) await sleep(25_000);
 
+  // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
+  // the credential failure in an `is_error` result even though its subtype is
+  // `success`, rather than emitting a dedicated error frame.
+  if (userText.includes('mock:auth-error')) {
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+
   // `mock:md` → answer with a markdown-rich reply (#346 QA: tables, nested
   // lists, emphasis, fences, quotes) instead of the scripted turn.
   if (userText.includes('mock:md')) {
@@ -150,6 +165,119 @@ async function respond(userText, imageCount) {
     });
     await sleep(100);
     emit({ type: 'result', subtype: 'success', result: md, usage: { input_tokens: 100, output_tokens: 200 }, total_cost_usd: 0.001 });
+    return;
+  }
+
+  // `mock:subagents` → a parallel fan-out: two `Task` spawns whose child items
+  // carry `parent_tool_use_id`, interleaved the way a real fan-out interleaves,
+  // then their results. Makes the Agents dock and its drill-down sheet reachable
+  // under CEZ_DRY_RUN=1 for QA, screenshots and the e2e smoke (spec
+  // `.ai/specs/2026-07-20-grouped-subagent-display.md` §"Testability hook", #474).
+  // Derived from the `subagent-task.ndjson` golden fixture's wire shape.
+  if (userText.includes('mock:subagents')) {
+    const agents = [
+      {
+        id: `toolu_task_a_${turn}`,
+        description: 'Audit the auth flow',
+        subagent_type: 'general-purpose',
+        steps: [
+          { text: 'Scanning the auth middleware.' },
+          { tool: 'Grep', id: `toolu_sub_a1_${turn}`, input: { pattern: 'session', path: 'src' }, result: 'src/middleware.ts:12:  clearSession()' },
+          { tool: 'Read', id: `toolu_sub_a2_${turn}`, input: { file_path: 'src/middleware.ts' }, result: 'export function middleware() { clearSession() }' },
+        ],
+        result: 'The session cookie is dropped in src/middleware.ts:12 (clearSession on every redirect).',
+      },
+      {
+        id: `toolu_task_b_${turn}`,
+        description: 'Review the store layer',
+        subagent_type: 'code-reviewer',
+        steps: [
+          { text: 'Reading the runs store.' },
+          { tool: 'Bash', id: `toolu_sub_b1_${turn}`, input: { command: 'npm test -- runs/store' }, result: '12 passed' },
+        ],
+        result: 'Store layer looks correct; one debounce edge case worth a follow-up.',
+      },
+    ];
+
+    // Both spawns first — that is what makes it a FAN-OUT rather than two
+    // sequential agents, and what the dock's "N/M" odometer counts.
+    for (const agent of agents) {
+      emit({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: agent.id,
+              name: 'Task',
+              input: { description: agent.description, prompt: `${agent.description}.`, subagent_type: agent.subagent_type },
+            },
+          ],
+          usage: { input_tokens: 900, output_tokens: 95 },
+        },
+        parent_tool_use_id: null,
+      });
+      await sleep(200);
+    }
+
+    // Children, interleaved across agents so the activity lines visibly race.
+    const maxSteps = Math.max(...agents.map((agent) => agent.steps.length));
+    for (let i = 0; i < maxSteps; i += 1) {
+      for (const agent of agents) {
+        const step = agent.steps[i];
+        if (!step) continue;
+        if (step.text !== undefined) {
+          emit({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: step.text }], usage: { input_tokens: 300, output_tokens: 25 } },
+            parent_tool_use_id: agent.id,
+          });
+        } else {
+          emit({
+            type: 'assistant',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'tool_use', id: step.id, name: step.tool, input: step.input }],
+              usage: { input_tokens: 40, output_tokens: 50 },
+            },
+            parent_tool_use_id: agent.id,
+          });
+          await sleep(250);
+          emit({
+            type: 'user',
+            message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: step.id, content: step.result }] },
+            parent_tool_use_id: agent.id,
+          });
+        }
+        await sleep(250);
+      }
+    }
+
+    // The spawns settle — `parent_tool_use_id: null`, they belong to the main turn.
+    for (const agent of agents) {
+      emit({
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: agent.id, content: agent.result }] },
+        parent_tool_use_id: null,
+      });
+      await sleep(200);
+    }
+
+    const summary = 'Both sub-agents reported back: the redirect drops the cookie in src/middleware.ts:12, and the store layer is clean. (dry-run mock)';
+    emit({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: summary }], usage: { input_tokens: 400, output_tokens: 60 } },
+      parent_tool_use_id: null,
+    });
+    await sleep(150);
+    emit({
+      type: 'result',
+      subtype: 'success',
+      result: summary,
+      usage: { input_tokens: 2100, output_tokens: 380 },
+      total_cost_usd: 0.0512,
+    });
     return;
   }
 

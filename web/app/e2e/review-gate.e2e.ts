@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, fixtureServeEnv } from './agent-browser'
 
 /**
  * The review gate (R3 Step 2.2) end-to-end, against a LIVE dry run — cezar's core promise
@@ -80,7 +80,10 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    // CEZ_REVIEW_GATE=1 because this spec is ABOUT the gate: it is opt-in (#489, default OFF),
+    // so pinning it here is what makes the parked-at-review fixture reproducible instead of
+    // depending on whatever the operator happens to export.
+    { env: fixtureServeEnv(dataRoot, { CEZ_REVIEW_GATE: '1' }), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
 
@@ -126,15 +129,11 @@ describe('the review gate against a live parked run', () => {
       browser.count('[data-slot="diff-file-body"] .bg-diff-add'),
     ).toBeGreaterThanOrEqual(1)
     // All three exits are offered; nothing has merged anything. The dry-run mock prints a PR
-    // URL in its reply, and the store's transcript sniffer picks it up as `pullRequestUrl` —
-    // so the third exit is the no-duplicates PR ↗ link, not the Draft PR button (that button's
-    // success/409 semantics are pinned in review-panel.test.tsx).
+    // This fixture deliberately has no PR URL, so the third exit is the deterministic Draft PR
+    // action. The post-creation PR-link state and duplicate guard are component-tested.
     expect(browser.isVisible('[data-slot="review-send-back"]')).toBe(true)
-    expect(browser.isVisible('[data-slot="review-panel"] [data-slot="pr-link"]')).toBe(true)
-    expect(
-      browser.evaluate(`document.querySelector('[data-slot="review-panel"] [data-slot="pr-link"]').href`),
-    ).toBe('https://github.com/open-mercato/demo/pull/123')
-    expect(browser.count('[data-slot="review-draft-pr"]')).toBe(0)
+    expect(browser.count('[data-slot="review-panel"] [data-slot="pr-link"]')).toBe(0)
+    expect(browser.isVisible('[data-slot="review-draft-pr"]')).toBe(true)
     expect(browser.isVisible('[data-slot="review-accept"]')).toBe(true)
     // The panel sits below the transcript in an inner scroll region — bring it into the
     // viewport so the capture shows the review surface, not the top of the thread.

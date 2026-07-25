@@ -9,6 +9,7 @@
 > [new task](assets/2026-07-20-multi-project-workspace/new-task-project.html) ·
 > [global settings](assets/2026-07-20-multi-project-workspace/settings-global.html)
 > — light/dark screenshots alongside each `.html`.
+> Implementation evidence: [independent project folders](assets/2026-07-20-multi-project-workspace/settings-project-roots-dark.png).
 
 ## TLDR
 
@@ -19,7 +20,7 @@ lists every project as a collapsible group with its own Tasks / Git / GitHub /
 Skills / Workflows / Settings, the ten most recent tasks and a "More…" link;
 every page URL carries the project id (`/p/<projectId>/…`) so any pane
 deep-links. Projects can also be added from the GUI: browse the server's home
-folder, or `gh`-clone a GitHub URL into a configurable checkout root
+folder from a configurable browse root, or `gh`-clone a GitHub URL into an independent checkout root
 (default `~/cezar/projects/<name>`). Global preferences — appearance,
 notifications, resources — move from per-repo files into `~/.cezar`, and a new
 boot-time config-migration step upgrades existing installs so the user running
@@ -138,7 +139,7 @@ is never served under another's scope. Everything else is closure plumbing.
 | Project contexts | `src/server/project-context.ts` (new) | Lazy `Map<projectId, ProjectContext>`; builds `{store, manager, dataDir, launchKey}` per project (launch-key ensured at context build, today's `server.ts:372`); dispose on removal closes the store **and** calls a new `RunManager.dispose()` (unsubscribes its `onUsage` listener — `run.ts:252` currently never unsubscribes — and clears timers/queue). |
 | Route multiplexing | `src/server/server.ts` (edit) | Register every project route once under `/api/p/:projectId/*`; resolve the context from the param; keep unprefixed aliases bound to the boot project. |
 | Global settings API | `src/server/server.ts` (edit) | `GET/PUT /api/workspace/config`, `GET/PUT /api/workspace/ui-state` (backed by `~/.cezar/{config,ui-state}.json`). |
-| Folder browser + checkout | `src/server/fs-browse.ts`, `src/server/checkout.ts` (new) | `GET /api/fs/browse` (home-rooted dir listing) and `POST /api/projects/checkout` (`gh repo clone` into the checkout root). |
+| Folder browser + checkout | `src/server/fs-browse.ts`, `src/server/checkout.ts` (new) | `GET /api/fs/browse` (`browseRoot`-rooted dir listing) and `POST /api/projects/checkout` (`gh repo clone` into the independent checkout root). |
 | De-singletonized todos | `src/todos.ts` (edit) | Watcher/emitter per `dataDir` (`Map`), scoped `onTodosChanged(dataDir, cb)`. |
 | Per-project cache keying | `src/server/forge/github.ts`, `src/skills-remote.ts` (edit) | Key the GitHub list cache, GitHub comments cache and team-skills cache by project (`repoRoot`), following the pattern `detectCache` already uses (`forge/github.ts:641`). |
 | Scoped usage fan-out | `src/core/process-usage.ts` + `run.ts` (edit) | Managers filter usage snapshots to their own runIds; SSE relays only the owning project's samples. |
@@ -230,6 +231,7 @@ and acquires slots normally.
 ```jsonc
 {
   "schemaVersion": 1,                    // migration cursor (int, .catch(0))
+  "browseRoot": "~/",                    // folder-browser root; validated writable on change
   "projectsDir": "~/cezar/projects",     // checkout root; validated writable on change
   "resources": {                          // moved from per-repo config.json
     "maxParallel": 2,                     // workspace-wide cap, 1-16
@@ -341,8 +343,8 @@ difference until they add a second project.
 | `POST /api/projects` | `{ root } → { project }` | Registers an existing folder (folder-browser flow). 400 non-absolute/nonexistent path; 409 already registered (returns the existing entry). |
 | `POST /api/projects/checkout` | `{ url, name? } → { project }` \| `{ error }` | `gh repo clone <url> <projectsDir>/<name>`; zod-validates `url` as a GitHub repo URL/`owner/name`; 409 target dir exists; degrades to `{ error, reason }` when `gh` is unavailable (mirrors `github.ts` degradation). Long-running: answers when the clone finishes; the dialog shows progress from `checkout-progress` SSE events. |
 | `DELETE /api/projects/:projectId` | `{ ok: true }` | Unregisters only. 409 while the project has running tasks. Never deletes files. |
-| `GET /api/fs/browse?path=` | `{ path, parent, dirs: [{name, path, isRepo}] }` | Directories only, rooted at `homedir()`; rejects paths escaping home (realpath check); dotfolders hidden by default, `showHidden=1` opts in. In `CEZ_REMOTE=1` mode restricted to `projectsDir` (browsing an exposed host's whole home from a browser is the one place local and hosted trust differ). |
-| `GET/PUT /api/workspace/config` | global settings (`projectsDir`, `resources`) | `PUT projectsDir` validates: expand `~`, `mkdir -p`, probe writability (`access W_OK` + create/delete a probe file); on failure → 400 `{ error: "not writable: …" }` and no change. |
+| `GET /api/fs/browse?path=` | `{ path, parent, dirs: [{name, path, isRepo}] }` | Directories only, rooted at `browseRoot`; rejects paths escaping it (realpath check); dotfolders hidden by default, `showHidden=1` opts in. |
+| `GET/PUT /api/workspace/config` | global settings (`browseRoot`, `projectsDir`, `resources`) | Each root validates independently on PUT: expand `~`; require `browseRoot` to already be a directory, use `mkdir -p` for `projectsDir`, then probe writability (`access W_OK` + create/delete a probe file). On failure → 400 `{ error }` and no change. Defaults come from `CEZ_BROWSE_ROOT` (`~/`) and `CEZ_PROJECTS_DIR` (`~/cezar/projects`). |
 | `GET/PUT /api/workspace/ui-state` | global GUI state | Same merge/cap semantics as the per-repo ui-state route. |
 
 ### Project-scoped (mirrored)
@@ -477,15 +479,16 @@ own skills and settings), and submit posts to
   renders accordingly.
 - **Global settings** (`/settings/global/…`) — Appearance, Notifications,
   Resources (workspace-wide `maxParallel`/`memoryLimitMb`), and **Projects**:
-  the registry list (name, path, status, remove) and the **checkout root**
-  field (default `~/cezar/projects`) whose save button validates writability
+  the registry list (name, path, status, remove), the **browse root** (default
+  `~/`) and the independent **checkout root** (default `~/cezar/projects`),
+  whose save buttons validate writability
   server-side and surfaces the 400 reason inline (mockup shows the error
   state).
 
 ### Add project (mockup: `add-project.html`)
 
 Option A — **Open local folder**: a dialog listing directories from
-`GET /api/fs/browse`, starting at `~`, breadcrumb navigation, git repos marked
+`GET /api/fs/browse`, starting at `browseRoot`, breadcrumb navigation, git repos marked
 with a badge; selecting a folder calls `POST /api/projects` and navigates to
 `/p/<new>/`. Non-git folders are allowed (cezar degrades exactly as `cezar
 serve` in a non-git dir does today).
@@ -520,12 +523,12 @@ bookmarklets keep working via the redirect (boot project).
 | Run started in project B while A's tasks run | Independent stores/managers; workspace semaphore caps total agent processes at global `maxParallel`. |
 | `gh` missing / unauthenticated | Clone option disabled with reason (same degradation contract as the GitHub pane). |
 | Clone fails mid-way (network, auth) | Partial target dir removed if the clone created it; dialog shows the error; nothing registered. |
-| `projectsDir` set to unwritable path | 400 with reason on save; setting unchanged (validated server-side, shown inline). |
+| `browseRoot` or `projectsDir` set to an unwritable path | 400 with reason on save; setting unchanged (validated server-side, shown inline). A missing browse root is rejected; a missing checkout root is created recursively. |
 | Checkout target already exists | 409; offer "register the existing folder instead". |
 | Migration crashes mid-run | `schemaVersion` unbumped → re-run next boot; steps idempotent. |
 | Older cezar run after the new one | Reads its per-repo files as always (they were left in place); ignores `~/.cezar/config.json` extras (`.passthrough()` both ways). |
 | Boot in a folder while home has 40 registered projects | Contexts are lazy; only the boot project (plus any the user touches) instantiates. Sidebar virtualizes/scrolls; collapsed groups cost one registry row. |
-| Hosted mode (`CEZ_REMOTE=1`) | Whole workspace is reachable through the one exposed cockpit — by design now (the operator's own projects). `fs/browse` restricted to `projectsDir`; `open-in-*` capability gating unchanged. Documented in `.env.example`. |
+| Hosted mode (`CEZ_REMOTE=1`) | Whole workspace is reachable through the one exposed cockpit — by design now (the operator's own projects). `fs/browse` is restricted to `browseRoot`; operators should set `CEZ_BROWSE_ROOT` narrowly when the default home root is too broad. `open-in-*` capability gating is unchanged. Documented in `.env.example`. |
 
 ## Risks & Impact Review
 
@@ -559,10 +562,10 @@ bookmarklets keep working via the redirect (boot project).
   doesn't widen network exposure (same port, same loopback bind) and degrades
   to today's single-project behavior when the registry is empty/unavailable —
   zero-config compliant (state written, never required).
-- **Zero-config check.** No new required file, no new env var; `projectsDir`
-  has a working default; the registry is a side effect of running; migrations
-  are invisible and optional-to-succeed. The one new knob (`projectsDir`) is
-  justified: a checkout target is a genuine user choice.
+- **Zero-config check.** No required file or env var; `browseRoot` and
+  `projectsDir` have working environment-backed defaults; the registry is a
+  side effect of running; migrations are invisible and optional-to-succeed.
+  Browse and checkout locations are independent user choices.
 - **Server-install alignment.** Unchanged mechanics: host-level state stays at
   `~/.cezar/server.json` + `~/.cezar/server-instances/<slug>.json` and
   coexists with `config.json` in the same home. The topology *simplifies*: one
@@ -708,16 +711,16 @@ Each phase ships independently and leaves the app fully working.
 
 ### Phase 4 — Add project GUI
 
-4.1 `GET /api/fs/browse` (home-rooted, realpath containment, dirs only,
-    `CEZ_REMOTE` restriction). *Test:* escape attempts rejected; isRepo flag.
+4.1 `GET /api/fs/browse` (`browseRoot`-rooted, realpath containment, dirs only).
+    *Test:* escape attempts rejected; environment default; isRepo flag.
 4.2 Folder-browser dialog → `POST /api/projects`. *Test:* register + navigate;
     non-git allowed.
 4.3 `POST /api/projects/checkout` + `checkout-progress` SSE + partial-clone
     cleanup; dialog flow. *Test:* dry-run fake clone; error surfaces; existing
     dir 409 path.
-4.4 Global Projects settings pane: list/remove, `projectsDir` field with
-    inline validation error. *Test:* 400 reason rendered; running-tasks 409 on
-    remove.
+4.4 Global Projects settings pane: list/remove, independent `browseRoot` and
+    `projectsDir` fields with inline validation errors. *Test:* 400 reason
+    rendered; recursive creation; running-tasks 409 on remove.
 
 ### Phase 5 — Docs + alignment
 

@@ -53,3 +53,21 @@ invented:
 every line reuses the verbatim wire shapes of `thread-run.ndjson` above (v2 `turn.*`/`item.*`
 events with their v1 twins on one `seq` clock), repeated. The run record is
 `thread-run.record.json` re-ided with only the fields the scenario needs overridden.
+
+## Sub-agent fan-out transcript (#474 — Agents dock, drill-down sheet)
+
+`subagents-run.ndjson` is a REAL transcript with NO synthetic extension: the verbatim NDJSON a
+`CEZ_DRY_RUN=1` cezar persisted for a quick-task run whose task was `mock:subagents`. That
+trigger (`scripts/mock-claude.mjs`) replays a parallel fan-out — two `Task` spawns, then their
+children interleaved with `parent_tool_use_id`, then the tool_results — which is exactly the
+shape the Agents dock groups. The only edit is timestamp normalization (`ts` values rewritten
+to a fixed 2026-07-21 sequence) so the fixture is stable; `seq` order and every payload are
+untouched.
+
+- `subagents-run.record.json` — the `runs.json` entry, derived from `thread-run.record.json`
+  with the id, title/task, branch and worktree path swapped for this run. Status `done`, so the
+  store's `recover()` leaves it alone.
+
+To regenerate: build, boot `CEZ_DRY_RUN=1 node dist/index.js serve --repo <tmp-git-repo>`,
+start a task whose text is `mock:subagents`, wait for it to settle, then copy
+`<tmp>/.ai/cezar/runs/<id>.ndjson` here and normalize the timestamps.

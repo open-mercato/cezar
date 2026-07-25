@@ -17,6 +17,11 @@ import { AgentBrowser, readTestEnv } from './agent-browser'
  * (BACKWARD_COMPATIBILITY.md §1): promoting the generator to its own subpage must not
  * change a single character of it, and the legacy `/settings/skills?skill=__bm` entry point
  * must keep working. Both are pinned below.
+ *
+ * Multi-project (spec, step 3.6): the generated path gained a `/p/<projectId>` prefix and the
+ * key is that project's own. That is a compatible change only because the flat spelling still
+ * lands — so the last describe drives a saved LEGACY bookmarklet URL through a real browser
+ * and proves the redirect delivers it, query intact, into the boot project's composer.
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
@@ -31,6 +36,9 @@ const BETA = 'e2e-bm-beta-skill'
 let browser: AgentBrowser
 let baseUrl: string
 let createdSkillsDir = false
+/** The id the running server registered this checkout under — what its URLs and its generated
+ *  bookmarklets must name, and where every legacy flat URL redirects. */
+let bootProject = ''
 
 const linkIn = (slot: string) => `[data-slot="${slot}"] [data-slot="bm-link"]`
 const hrefOf = (selector: string) =>
@@ -52,8 +60,11 @@ const clearFilter = () => {
   for (let i = 0; i < length; i += 1) browser.press('Backspace')
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
+  bootProject = ((await (await fetch(`${baseUrl}/api/projects`)).json()) as { bootProject: string })
+    .bootProject
+  expect(bootProject).toBeTruthy()
   createdSkillsDir = !existsSync(skillsDir)
   mkdirSync(skillsDir, { recursive: true })
   writeFileSync(
@@ -97,8 +108,10 @@ describe('settings → bookmarklets against the live dry-run server', () => {
     waitForGeneratedHref(linkIn('bm-generic'))
     const generic = hrefOf(linkIn('bm-generic'))
 
-    // The protected deep-link grammar (BACKWARD_COMPATIBILITY.md §1), baked with the real key.
-    expect(generic).toContain(`'/new?'+q`)
+    // The protected deep-link grammar (BACKWARD_COMPATIBILITY.md §1), baked with the real key,
+    // now under this project's own URL prefix (multi-project spec, step 3.6). The whole target
+    // is asserted — origin AND scope — because the generated code opens it as one absolute URL.
+    expect(generic).toContain(`open('${baseUrl}/p/${bootProject}/new?'+q,'_blank')`)
     expect(generic).toMatch(/auto=0&key=[^&]+&ref=/)
     // A real key, not the empty-string fallback of a failed fetch.
     expect(generic).toMatch(/key=[^&]+&/)
@@ -151,6 +164,56 @@ describe('settings → bookmarklets against the live dry-run server', () => {
     browser.goto(`${baseUrl}/settings/skills?skill=__bm`)
     browser.waitForFunction(`document.querySelector('[data-slot="bookmarklet-panel"]') !== null`)
     waitForGeneratedHref(linkIn('bm-generic'))
-    expect(hrefOf(linkIn('bm-generic'))).toContain(`'/new?'+q`)
+    expect(hrefOf(linkIn('bm-generic'))).toContain(`/p/${bootProject}/new?'+q`)
+  })
+})
+
+/**
+ * The compatibility half of step 3.6. Adding the `/p/<id>` prefix is only safe because every
+ * bookmarklet already sitting in somebody's bookmarks bar — generated before this release, with
+ * the flat `/new?…` path — still lands. Driven here in a real browser (a full cold page load at
+ * the legacy URL, exactly as `open()` from github.com performs it), not just in the router unit
+ * tests, because the redirect also depends on the server serving index.html for `/p/*`.
+ */
+describe('legacy flat bookmarklet URLs keep landing (BACKWARD_COMPATIBILITY.md §1)', () => {
+  it("the generated key is the server's own — the target scope will accept it", async () => {
+    const scoped = (await (
+      await fetch(`${baseUrl}/api/p/${encodeURIComponent(bootProject)}/launch-key`)
+    ).json()) as { key: string }
+    expect(scoped.key).toBeTruthy()
+
+    browser.goto(`${baseUrl}/p/${encodeURIComponent(bootProject)}/settings/bookmarklets`)
+    waitForGeneratedHref(linkIn('bm-generic'))
+    // The URL names the project AND carries that project's `.ai/cezar/launch-key` secret.
+    expect(hrefOf(linkIn('bm-generic'))).toContain(`/p/${bootProject}/new?'+q`)
+    expect(hrefOf(linkIn('bm-generic'))).toContain(`key=${scoped.key}&ref=`)
+  })
+
+  it('a pre-3.6 flat /new?… bookmarklet redirects into the boot project with its query intact', () => {
+    // Byte-for-byte the grammar an old bookmarklet emits. auto=0 so it only prefills — this
+    // spec proves delivery, not the unattended start (new-task.e2e owns that).
+    browser.goto(`${baseUrl}/new?skill=${ALPHA}&auto=0&key=stale-key&ref=legacy%20bookmarklet%20task`)
+    browser.waitForFunction(
+      `document.querySelector('[data-route="new"] [data-slot="composer"]') !== null`,
+    )
+
+    // Normalized to the scoped twin — the address bar names the project the redirect chose.
+    browser.waitForFunction(`location.pathname === '/p/${bootProject}/new'`)
+    // Every param survived the hop: the task text and the skill both arrived.
+    expect(browser.evaluate(`document.querySelector('[data-slot="composer"] textarea').value`)).toBe(
+      'legacy bookmarklet task',
+    )
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('${ALPHA}')`,
+    )
+    // The composer consumes its own query, so the stale key never lingers in the address bar.
+    browser.waitForFunction(`location.search === ''`)
+    browser.screenshot(`${artifactsDir}/settings-bookmarklets-legacy-redirect.png`)
+  })
+
+  it('the legacy flat /settings/bookmarklets URL normalizes to the scoped subpage', () => {
+    browser.goto(`${baseUrl}/settings/bookmarklets`)
+    browser.waitForFunction(`document.querySelector('[data-slot="bookmarklet-panel"]') !== null`)
+    browser.waitForFunction(`location.pathname === '/p/${bootProject}/settings/bookmarklets'`)
   })
 })

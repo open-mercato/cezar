@@ -1,0 +1,70 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "th_01J9RSN0001",
+    "backend": "codex"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_01J9RSN01"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "item_rsn_1",
+      "text": "Checking the sink"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_rsn_1",
+    "field": "reasoning",
+    "delta": "The deltas never reach disk, "
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_rsn_1",
+    "field": "reasoning",
+    "delta": "so the completed snapshot has to carry the text."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "item_rsn_1",
+      "text": "The deltas never reach disk, so the completed snapshot has to carry the text."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_msg_1",
+      "role": "assistant",
+      "text": "",
+      "phase": "final"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_msg_1",
+    "field": "text",
+    "delta": "Reasoning now survives a reload."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_msg_1",
+      "role": "assistant",
+      "text": "Reasoning now survives a reload.",
+      "phase": "final"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_01J9RSN01",
+    "stopReason": "end_turn"
+  }
+]

@@ -1,7 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { CheckIcon, ChevronRightIcon, ScaleIcon, SearchXIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { useParams } from 'react-router'
+
+import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, pickVariant } from '@/api/client'
 import { queryKeys, useGroup, useRuns } from '@/api/queries'

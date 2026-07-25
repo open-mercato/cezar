@@ -10,6 +10,8 @@ import type { RunManager, StartRunInput } from '../workflows/run.js';
 import type { RunRecord } from '../runs/store.js';
 import type { WorkflowDef } from '../workflows/types.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 
 /**
  * `POST /api/runs` `todoId` (#374) — the audit trail across the composer detour.
@@ -58,7 +60,13 @@ describe('POST /api/runs todoId', () => {
           });
         }),
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {
@@ -67,7 +75,7 @@ describe('POST /api/runs todoId', () => {
   });
 
   const post = (body: unknown) =>
-    app.request('/api/runs', {
+    apiRequest(app, '/api/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

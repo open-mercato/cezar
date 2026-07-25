@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>cezar — Files tab, edit mode (dirty) · #530 mockup</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  /* The overlay editor. Every declaration shared by `.editor-pre` and `.editor-ta` is
+     load-bearing: the two boxes must agree on font, metrics, padding, tab stops and
+     wrapping or the caret drifts from the glyph it is supposed to sit on. This mockup
+     renders a REAL textarea over a REAL token layer, so the screenshot is evidence of
+     the alignment invariant rather than a picture of it. */
+  .editor { position: relative; padding: 8px 0; }
+  .editor-gutter {
+    position: absolute; top: 8px; left: 16px; width: 40px;
+    padding-right: 12px; text-align: right; user-select: none; pointer-events: none;
+    font: 400 12px/1.7 var(--mono); font-variant-numeric: tabular-nums;
+    color: var(--soft-foreground);
+  }
+  .editor-pre, .editor-ta {
+    margin: 0; border: 0; outline: none; background: transparent;
+    font: 400 12px/1.7 var(--mono);
+    padding: 0 16px 0 56px;      /* px-4 (16) + w-10 gutter (40). The gutter's
+                                    pr-3 is INSIDE its 40px under border-box —
+                                    adding it again is a 12px caret drift. */
+    white-space: pre; tab-size: 8; overflow-wrap: normal; word-break: normal;
+    letter-spacing: normal;
+  }
+  .editor-pre { color: var(--syn-var); min-height: 100%; }
+  .editor-ta {
+    position: absolute; inset: 8px 0; width: 100%; height: calc(100% - 16px);
+    resize: none; overflow: auto;
+    color: transparent; caret-color: var(--foreground);
+  }
+  .editor-ta::selection { background: color-mix(in srgb, var(--primary) 30%, transparent); }
+  .editor-dirty-line { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="side-head"><span class="brand-tile">c</span><span class="name">cezar</span></div>
+    <div class="side-section">
+      <div class="nav-item active">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h12"/></svg>
+        Tasks
+      </div>
+      <div class="nav-item">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/></svg>
+        Git
+      </div>
+    </div>
+    <div class="side-label">Recent</div>
+    <div class="side-section">
+      <div class="task-row active"><span class="dot dot-pending"></span><span class="t">worktree file editing</span></div>
+      <div class="task-row"><span class="dot dot-success"></span><span class="t">multi-project workspace</span></div>
+    </div>
+  </aside>
+
+  <div class="main">
+
+    <header class="run-head">
+      <div class="inner">
+        <div class="run-title">
+          <h1>worktree file editing</h1>
+          <span class="pill"><span class="dot dot-pending"></span>running</span>
+        </div>
+        <div class="run-meta">
+          <span>om-auto-create-pr</span>
+          <span class="sep">·</span>
+          <span class="chip-branch">spec/worktree-file-editing</span>
+        </div>
+        <div class="run-tabs">
+          <span class="tab">Session</span>
+          <span class="tab">Changes</span>
+          <span class="tab">Commits</span>
+          <span class="tab active">Files</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="files-split">
+
+      <aside class="files-aside">
+        <nav class="tree" aria-label="Worktree files">
+          <ul>
+            <li>
+              <button class="dir">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(90deg)"><path d="m9 18 6-6-6-6"/></svg>
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                <span class="nm">src</span>
+              </button>
+              <ul>
+                <li>
+                  <button class="dir" style="padding-left: 20px">
+                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(90deg)"><path d="m9 18 6-6-6-6"/></svg>
+                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                    <span class="nm">server</span>
+                  </button>
+                  <ul>
+                    <li><button style="padding-left: 52px" class="active" aria-current="true">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">capabilities.ts</span>
+                      <span class="sz" style="color: var(--primary)">● 2.5 kB</span>
+                    </button></li>
+                    <li><button style="padding-left: 52px">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">git-changes.ts</span><span class="sz">21.8 kB</span>
+                    </button></li>
+                    <li><button style="padding-left: 52px">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">server.ts</span><span class="sz">64.2 kB</span>
+                    </button></li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </nav>
+      </aside>
+
+      <section class="files-main">
+        <div class="pane">
+
+          <header class="pane-head">
+            <span class="path">src/server/capabilities.ts</span>
+            <span class="pill" style="padding: 1px 8px; font-size: 11px;">unsaved</span>
+            <span class="spacer"></span>
+            <span class="size">2.5 kB</span>
+            <button class="btn btn-sm btn-ghost">Cancel</button>
+            <button class="btn btn-sm btn-primary">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+              Save
+            </button>
+          </header>
+
+          <div class="banner banner-info">
+            <svg class="ic ic-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            <div class="body">
+              <strong>Saving writes straight into the worktree — it does not commit.</strong>
+              <p>The agent is running in this checkout. Review the edit on the
+                 <span style="color: var(--foreground); font-weight: 500;">Changes</span> tab and commit it there.</p>
+            </div>
+          </div>
+
+          <div class="editor">
+            <div class="editor-gutter">42<br />43<br />44<br />45<br />46<br />47<br />48<br />49<br />50<br />51<br />52<br />53<br />54<br />55<br />56</div>
+<pre class="editor-pre" aria-hidden="true"><span class="k">export</span> <span class="k">function</span> <span class="f">resolveCapabilities</span><span class="p">(</span><span class="v">env</span><span class="p">:</span> <span class="f">NodeJS</span><span class="p">.</span><span class="f">ProcessEnv</span><span class="p">,</span> <span class="v">bindHost</span><span class="p">?:</span> <span class="k">string</span><span class="p">):</span> <span class="f">Capabilities</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="p">{</span>
+    <span class="k">localHandoff</span><span class="p">:</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_REMOTE</span> <span class="p">!==</span> <span class="s">'1'</span> <span class="p">&amp;&amp;</span> <span class="f">isLoopbackHost</span><span class="p">(</span><span class="v">bindHost</span><span class="p">),</span>
+    <span class="k">fileEdit</span><span class="p">:</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_REMOTE</span> <span class="p">!==</span> <span class="s">'1'</span> <span class="p">&amp;&amp;</span> <span class="f">isLoopbackHost</span><span class="p">(</span><span class="v">bindHost</span><span class="p">)</span> <span class="p">&amp;&amp;</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_NO_FILE_EDIT</span> <span class="p">!==</span> <span class="s">'1'</span><span class="p">,</span>
+    <span class="c">// Deliberately not re-derived here: RunManager enforces the same predicate,</span>
+    <span class="c">// and two spellings of "is the inbox on" would eventually disagree.</span>
+    <span class="k">followups</span><span class="p">:</span> <span class="f">followupsEnabled</span><span class="p">(</span><span class="v">env</span><span class="p">),</span>
+  <span class="p">};</span>
+<span class="p">}</span>
+
+<span class="c">/** Loopback only — a bind on 0.0.0.0 is reachable from the network. */</span>
+<span class="k">function</span> <span class="f">isLoopbackHost</span><span class="p">(</span><span class="v">host</span><span class="p">?:</span> <span class="k">string</span><span class="p">):</span> <span class="k">boolean</span> <span class="p">{</span>
+  <span class="k">if</span> <span class="p">(!</span><span class="v">host</span><span class="p">)</span> <span class="k">return</span> <span class="k">true</span><span class="p">;</span>
+  <span class="k">return</span> <span class="v">host</span> <span class="p">===</span> <span class="s">'127.0.0.1'</span> <span class="p">||</span> <span class="v">host</span> <span class="p">===</span> <span class="s">'::1'</span> <span class="p">||</span> <span class="v">host</span> <span class="p">===</span> <span class="s">'localhost'</span><span class="p">;</span>
+<span class="p">}</span></pre>
+<textarea class="editor-ta" spellcheck="false">export function resolveCapabilities(env: NodeJS.ProcessEnv, bindHost?: string): Capabilities {
+  return {
+    localHandoff: env.CEZ_REMOTE !== '1' &amp;&amp; isLoopbackHost(bindHost),
+    fileEdit: env.CEZ_REMOTE !== '1' &amp;&amp; isLoopbackHost(bindHost) &amp;&amp; env.CEZ_NO_FILE_EDIT !== '1',
+    // Deliberately not re-derived here: RunManager enforces the same predicate,
+    // and two spellings of "is the inbox on" would eventually disagree.
+    followups: followupsEnabled(env),
+  };
+}
+
+/** Loopback only — a bind on 0.0.0.0 is reachable from the network. */
+function isLoopbackHost(host?: string): boolean {
+  if (!host) return true;
+  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
+}</textarea>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+    <p class="caption">
+      <b>Edit mode, dirty.</b> The read-only <code>&lt;pre&gt;</code> is replaced by the overlay
+      editor: a transparent-text <code>&lt;textarea&gt;</code> stacked on the same Shiki token layer
+      the preview renders, so highlighting survives typing and the file looks identical either
+      side of the Edit button. Header gains <b>Cancel</b> + <b>Save</b> and an <code>unsaved</code>
+      pill; the tree marks the dirty file. The uncommitted-honesty banner is permanent while
+      editing — the write lands in a checkout an agent is actively running in.
+      <b>This mockup uses a real <code>&lt;textarea&gt;</code> over a real token layer</b>, so the
+      caret you see sitting exactly on its glyph is the alignment invariant of
+      §Syntax highlighting in edit mode being demonstrated, not drawn. It is a
+      <b>fixed-density approximation</b>: the text column sits at
+      <code>px-4 (16) + w-10 (40) = 56px</code>, but Tailwind derives both from
+      <code>--spacing</code>, which the app overrides per density — so the real control
+      must compute this offset, never hardcode it.
+    </p>
+
+  </div>
+</div>
+</body>
+</html>

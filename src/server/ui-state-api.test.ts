@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
 
 /**
  * `GET/PUT /api/ui-state` (#408 — the `skillUsage` addition). The contract under test: the
@@ -36,9 +37,9 @@ describe('the ui-state API — skillUsage (#408)', () => {
   const uiStatePath = () => join(repoRoot, '.ai/cezar', 'ui-state.json');
   const rawFile = () => JSON.parse(readFileSync(uiStatePath(), 'utf8')) as Record<string, unknown>;
 
-  const get = () => app.request('/api/ui-state');
+  const get = () => apiRequest(app, '/api/ui-state');
   const put = (body: unknown) =>
-    app.request('/api/ui-state', {
+    apiRequest(app, '/api/ui-state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

@@ -1,0 +1,121 @@
+<!doctype html>
+<!-- Illustrative mockup for spec 2026-07-21-queued-session-prompt-stacking (#472).
+     Static HTML, no app code, no external requests. Placeholder data only. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mockup 02 — stacked messages, edit and remove</title>
+<style>
+  :root {
+    --background: #ffffff; --foreground: #171717; --card: #ffffff; --card-2: #fbfbfb;
+    --muted: #f7f7f7; --muted-foreground: #5c5c5c; --border: #ebebeb;
+    --accent-lime: #a8f372; --soft: #8a8a8a; --danger: #b4342f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--background); color: var(--foreground);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .frame { width: 1040px; margin: 0 auto; padding: 24px; }
+  .banner {
+    font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--soft);
+    border: 1px dashed var(--border); border-radius: 6px; padding: 6px 10px; margin-bottom: 16px;
+  }
+  .card { border: 1px solid var(--border); border-radius: 12px; background: var(--card); overflow: hidden; }
+  .header { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .title { font-weight: 600; font-size: 15px; }
+  .chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border);
+  }
+  .body { padding: 22px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .row { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+  .bubble {
+    max-width: 74%; background: var(--muted); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 13px; font-size: 13.5px; white-space: pre-wrap;
+  }
+  .bubble.first { border-left: 3px solid var(--accent-lime); }
+  .actions { display: flex; gap: 12px; font-size: 11.5px; color: var(--soft); padding-right: 3px; }
+  .actions button {
+    background: none; border: none; padding: 0; font: inherit; color: var(--soft); cursor: pointer;
+  }
+  .actions button.remove { color: var(--danger); }
+  .label { font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--soft); }
+  .editor {
+    max-width: 74%; width: 74%; border: 1px solid var(--foreground); border-radius: 12px;
+    background: var(--card); padding: 10px 12px; display: flex; flex-direction: column; gap: 9px;
+  }
+  .editor textarea {
+    border: none; outline: none; resize: none; font: inherit; font-size: 13.5px;
+    color: var(--foreground); background: transparent; width: 100%; height: 46px;
+  }
+  .editor-row { display: flex; justify-content: space-between; align-items: center; }
+  .hint { font-size: 11px; color: var(--soft); }
+  .btns { display: flex; gap: 8px; }
+  .btn {
+    border: 1px solid var(--border); background: var(--card); border-radius: 7px;
+    padding: 4px 11px; font-size: 12px; cursor: pointer; color: var(--foreground);
+  }
+  .btn.primary { background: var(--accent-lime); border-color: var(--accent-lime); color: #0d0d0d; font-weight: 600; }
+  .queued-state { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 0 4px; text-align: center; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; background: #d9a441; box-shadow: 0 0 0 4px rgba(217,164,65,.14); }
+  .queued-state p { margin: 0; }
+  .queued-head { font-size: 13px; font-weight: 500; }
+  .queued-sub { font-size: 12px; color: var(--soft); }
+  .callout {
+    margin-top: 14px; font-size: 12px; color: var(--muted-foreground);
+    border-left: 3px solid var(--accent-lime); padding: 4px 0 4px 10px;
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="banner">Illustrative mockup · spec 2026-07-21-queued-session-prompt-stacking · proposed UI</div>
+    <div class="card">
+      <div class="header">
+        <span class="title">Add rate limiting to the public API</span>
+        <span class="chip">queued</span>
+        <span class="chip">#3 in queue</span>
+      </div>
+      <div class="body">
+
+        <div class="row">
+          <span class="label">initial prompt</span>
+          <div class="bubble first">Add a rate limiter to the public API routes. Use a token bucket, 60 req/min per IP, and return 429 with a Retry-After header.</div>
+          <div class="actions"><button>Edit</button></div>
+        </div>
+
+        <div class="row">
+          <div class="bubble">Skip the /api/health route — the bookmarklets poll it and must not be throttled.</div>
+          <div class="actions"><button>Edit</button><button class="remove">Remove</button></div>
+        </div>
+
+        <div class="row">
+          <span class="label">editing</span>
+          <div class="editor">
+            <textarea>Add a unit test for the 429 path, and make the limit configurable per route.</textarea>
+            <div class="editor-row">
+              <span class="hint">Esc to cancel</span>
+              <span class="btns">
+                <button class="btn">Cancel</button>
+                <button class="btn primary">Save</button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="queued-state">
+          <span class="dot"></span>
+          <p class="queued-head">Waiting for a free agent slot — #3 in queue</p>
+          <p class="queued-sub">(planned) · starts automatically when a slot frees up</p>
+        </div>
+      </div>
+    </div>
+    <p class="callout">Each stacked message is its own bubble with <strong>Edit</strong> and <strong>Remove</strong>;
+      the initial prompt gets <strong>Edit</strong> only (a run with no prompt is not a run). All affordances
+      disappear the moment the run leaves <code>queued</code>. At start the task and every stacked message are
+      folded into <code>{{task}}</code>, in order.</p>
+  </div>
+</body>
+</html>

@@ -53,7 +53,12 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   ['tool status: running', (events) => hasToolStatus(events, 'running')],
   ['tool status: completed', (events) => hasToolStatus(events, 'completed')],
   ['tool status: failed', (events) => hasToolStatus(events, 'failed')],
-  ['reasoning items (thinking / reasoning items / reasoning parts)', (events) => items(events).some((item) => item.kind === 'reasoning')],
+  // Non-empty is the point: a reasoning item with no text renders as a dead
+  // "Thinking —" row, so presence alone is not parity (#528).
+  [
+    'reasoning items (thinking / reasoning items / reasoning parts)',
+    (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
+  ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && (item.diffs?.length ?? 0) > 0),

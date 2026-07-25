@@ -56,6 +56,12 @@ interface MessageUsage {
   readonly stepsCost: number | null;
 }
 
+interface SubtaskScope {
+  readonly id: string;
+  readonly title: string;
+  readonly input?: unknown;
+}
+
 export interface OpencodeUiMapperState {
   /** The main session id (from POST /session) — the SSE bus is server-wide,
    *  so this is what separates our events from a subtask's child session. */
@@ -81,9 +87,12 @@ export interface OpencodeUiMapperState {
   /** Serialized last plan — todowrite snapshots are idempotent, so identical
    *  replacements emit no duplicate `plan.updated`. */
   readonly lastPlanJson: string | null;
-  /** Active subtask scope: its id becomes `parentItemId` for child-session
-   *  items; the child's `session.idle` completes it. */
-  readonly subtask: { id: string; title: string; input?: unknown } | null;
+  /** Child session id → subtask scope. Foreign parts are attributed only to
+   *  their own child session; that session's idle completes the scope. */
+  readonly subtasks: ReadonlyMap<string, SubtaskScope>;
+  /** Subtask parts do not carry the child session id. Bind one on the first
+   *  foreign event only while attribution is unambiguous. */
+  readonly unboundSubtasks: readonly SubtaskScope[];
   readonly usageByMessage: ReadonlyMap<string, MessageUsage>;
   /** Last emitted session totals — usage.updated fires only on change. */
   readonly lastUsage: { total: number; cost: number | null } | null;
@@ -107,7 +116,8 @@ export function createOpencodeUiState(): OpencodeUiMapperState {
     endedItems: new Set(),
     tools: new Map(),
     lastPlanJson: null,
-    subtask: null,
+    subtasks: new Map(),
+    unboundSubtasks: [],
     usageByMessage: new Map(),
     lastUsage: null,
   };
@@ -173,6 +183,11 @@ function mapMessageInfo(props: Record<string, unknown>, state: OpencodeUiMapperS
   const id = str(info.id);
   const role = str(info.role);
   let next = state;
+  const messageSession = str(info.sessionID);
+  const foreign = messageSession !== undefined && state.sessionId !== null && messageSession !== state.sessionId;
+  if (foreign && messageSession !== undefined) {
+    next = resolveSubtask(messageSession, next).state;
+  }
   if (id !== undefined && role !== undefined && state.msgRoles.get(id) !== role) {
     const msgRoles = new Map(state.msgRoles);
     msgRoles.set(id, role);
@@ -208,12 +223,15 @@ function mapPart(props: Record<string, unknown>, state: OpencodeUiMapperState): 
   const id = str(part.id) ?? messageID;
   if (type === undefined || id === undefined) return { events: [], state };
 
-  // Foreign-session parts are the active subtask's child session — they nest
-  // under it; without a subtask scope they are another session's traffic.
+  // Foreign-session parts nest only under the subtask bound to that child
+  // session. A newly seen child can claim the sole unbound subtask; with two
+  // candidates attribution is ambiguous, so the event is dropped.
   const partSession = str(part.sessionID);
   const foreign = partSession !== undefined && state.sessionId !== null && partSession !== state.sessionId;
-  if (foreign && state.subtask === null) return { events: [], state };
-  const parentItemId = foreign && state.subtask !== null ? state.subtask.id : undefined;
+  const resolved = foreign && partSession !== undefined ? resolveSubtask(partSession, state) : undefined;
+  if (foreign && resolved?.subtask === undefined) return { events: [], state };
+  state = resolved?.state ?? state;
+  const parentItemId = resolved?.subtask?.id;
 
   // Only assistant parts surface — the user's own prompt streams as parts
   // over the same feed. Role is known early (message.updated precedes its
@@ -503,7 +521,7 @@ function mapSubtask(
     state: {
       ...state,
       startedItems: new Set(state.startedItems).add(id),
-      subtask: { id, title: item.title, input: item.input },
+      unboundSubtasks: [...state.unboundSubtasks, { id, title: item.title, input: item.input }],
     },
   };
 }
@@ -541,29 +559,35 @@ function mapIdle(props: Record<string, unknown>, state: OpencodeUiMapperState): 
   const sid = str(props.sessionID);
   const isMain = sid === undefined || state.sessionId === null || sid === state.sessionId;
   if (!isMain) {
-    if (state.subtask === null) return { events: [], state };
-    const item: UiToolItem = {
-      kind: 'tool',
-      id: state.subtask.id,
-      name: 'subtask',
-      toolKind: 'task',
-      title: state.subtask.title,
-      status: 'completed',
+    if (sid === undefined) return { events: [], state };
+    const resolved = resolveSubtask(sid, state);
+    if (resolved.subtask === undefined) return { events: [], state };
+    const subtasks = new Map(resolved.state.subtasks);
+    subtasks.delete(sid);
+    return {
+      events: [{ type: 'item.completed', item: completedSubtask(resolved.subtask) }],
+      state: { ...resolved.state, subtasks },
     };
-    if (state.subtask.input !== undefined) item.input = state.subtask.input;
-    return { events: [{ type: 'item.completed', item }], state: { ...state, subtask: null } };
   }
   // Idle with no turn in flight (or a repeated idle) closes nothing.
   if (state.currentTurnId === null) return { events: [], state };
+  const openSubtasks = [...state.subtasks.values(), ...state.unboundSubtasks];
   return {
     events: [
+      ...openSubtasks.map((subtask): UiEvent => ({ type: 'item.completed', item: completedSubtask(subtask) })),
       {
         type: 'turn.completed',
         turnId: state.currentTurnId,
         stopReason: state.turnErrored ? 'error' : 'end_turn',
       },
     ],
-    state: { ...state, currentTurnId: null, turnErrored: false },
+    state: {
+      ...state,
+      currentTurnId: null,
+      turnErrored: false,
+      subtasks: new Map(),
+      unboundSubtasks: [],
+    },
   };
 }
 
@@ -572,12 +596,41 @@ function mapIdle(props: Record<string, unknown>, state: OpencodeUiMapperState): 
 function mapSessionError(props: Record<string, unknown>, state: OpencodeUiMapperState): OpencodeUiMapping {
   const sid = str(props.sessionID);
   const foreign = sid !== undefined && state.sessionId !== null && sid !== state.sessionId;
-  if (foreign && state.subtask === null) return { events: [], state };
+  const resolved = foreign && sid !== undefined ? resolveSubtask(sid, state) : undefined;
+  if (foreign && resolved?.subtask === undefined) return { events: [], state };
+  state = resolved?.state ?? state;
   const message = errorText(props.error) ?? 'opencode session error';
   return {
     events: [{ type: 'session.error', message, fatal: false }],
     state: { ...state, turnErrored: state.currentTurnId !== null ? true : state.turnErrored },
   };
+}
+
+function resolveSubtask(
+  sessionId: string,
+  state: OpencodeUiMapperState,
+): { state: OpencodeUiMapperState; subtask?: SubtaskScope } {
+  const existing = state.subtasks.get(sessionId);
+  if (existing !== undefined) return { state, subtask: existing };
+  if (state.unboundSubtasks.length !== 1) return { state };
+  const subtask = state.unboundSubtasks[0];
+  if (subtask === undefined) return { state };
+  const subtasks = new Map(state.subtasks);
+  subtasks.set(sessionId, subtask);
+  return { state: { ...state, subtasks, unboundSubtasks: [] }, subtask };
+}
+
+function completedSubtask(subtask: SubtaskScope): UiToolItem {
+  const item: UiToolItem = {
+    kind: 'tool',
+    id: subtask.id,
+    name: 'subtask',
+    toolKind: 'task',
+    title: subtask.title,
+    status: 'completed',
+  };
+  if (subtask.input !== undefined) item.input = subtask.input;
+  return item;
 }
 
 // ---- telemetry ----------------------------------------------------------------

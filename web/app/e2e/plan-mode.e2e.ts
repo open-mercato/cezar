@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 
 /**
  * Plan mode end-to-end (R4 Step 1.2, #383 + spec 008) against a LIVE dry-run server. Under
@@ -48,6 +48,11 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 beforeAll(async () => {
   // A real git repo — ▶ Start creates a worktree for the planned run.
@@ -71,9 +76,10 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(1440, 900)
@@ -113,9 +119,9 @@ async function clickStepControl(selector: string, expected: string): Promise<voi
 
 describe('plan mode against a live dry-run server', () => {
   it('Plan first selects visibly (#383) and submit produces the review overlay, not a run', () => {
-    browser.goto(`${baseUrl}/`)
-    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] a[href="/new"]') !== null`)
-    browser.click('[data-slot="sidebar"] a[href="/new"]')
+    browser.goto(`${baseUrl}${scoped('/')}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] a[href="${scoped('/new')}"]') !== null`)
+    browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="mode-plan"]') !== null`)
     // Sources must have LOADED before submitting — a plan submit races the workflows/skills
     // queries otherwise and is (correctly) rejected with the "still loading" toast. The pill
@@ -235,7 +241,7 @@ describe('plan mode against a live dry-run server', () => {
     )
 
     browser.click('[data-slot="plan-start"]')
-    browser.waitForFunction(`location.pathname.startsWith('/tasks/')`)
+    browser.waitForFunction(`location.pathname.startsWith('${scoped('/tasks/')}')`)
 
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
     expect(runId).not.toBe('')
@@ -253,7 +259,7 @@ describe('plan mode against a live dry-run server', () => {
   }, 90_000)
 
   it('back on /new: plan mode stuck (draft store) and the spent draft text is gone', () => {
-    browser.click('[data-slot="sidebar"] a[href="/new"]')
+    browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="mode-plan"]') !== null`)
     expect(
       browser.evaluate(`document.querySelector('[data-slot="mode-plan"]').getAttribute('aria-checked')`),

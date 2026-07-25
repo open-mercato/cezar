@@ -280,4 +280,45 @@ describe('resolveAutoApply', () => {
     expect(typed.text).toBe('mine')
     expect(resolveAutoApply('', typed.applied, 'AUTO')).toEqual({ text: 'AUTO', applied: 'AUTO' })
   })
+
+  // `base` — the GitHub hand-off's pre-filled item reference (#524).
+  describe('with a pre-filled base', () => {
+    it('stacks auto-applied text BELOW the base instead of wiping it', () => {
+      expect(resolveAutoApply('BASE', '', 'AUTO', 'BASE')).toEqual({
+        text: 'BASE\n\nAUTO',
+        applied: 'BASE\n\nAUTO',
+      })
+    })
+
+    it('deselecting returns to the bare base, not to an empty box', () => {
+      expect(resolveAutoApply('BASE\n\nAUTO', 'BASE\n\nAUTO', '', 'BASE')).toEqual({
+        text: 'BASE',
+        applied: '',
+      })
+    })
+
+    it('a user edit is still never overwritten', () => {
+      expect(resolveAutoApply('BASE\n\nmine', '', 'AUTO', 'BASE')).toEqual({
+        text: 'BASE\n\nmine',
+        applied: '',
+      })
+    })
+
+    it('clearing the box by hand STILL opts back in — the base must not trap it', () => {
+      // `applied` reports only genuinely auto-applied text, never the bare base; otherwise an
+      // emptied box would match neither `base` nor `previousAuto` and auto-apply would be dead
+      // for that item forever.
+      const mounted = resolveAutoApply('BASE', '', '', 'BASE')
+      expect(mounted).toEqual({ text: 'BASE', applied: '' })
+      expect(resolveAutoApply('', mounted.applied, 'AUTO', 'BASE')).toEqual({
+        text: 'BASE\n\nAUTO',
+        applied: 'BASE\n\nAUTO',
+      })
+    })
+
+    it('no base is byte-identical to the three-argument rule', () => {
+      expect(resolveAutoApply('', '', 'AUTO', '')).toEqual(resolveAutoApply('', '', 'AUTO'))
+      expect(resolveAutoApply('mine', '', 'AUTO', '')).toEqual(resolveAutoApply('mine', '', 'AUTO'))
+    })
+  })
 })

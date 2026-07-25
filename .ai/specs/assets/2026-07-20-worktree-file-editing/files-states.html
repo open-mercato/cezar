@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>cezar — Files tab, not-editable and gated states · #530 mockup</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  .sheet { padding: 28px 32px 40px; max-width: 1180px; margin: 0 auto; }
+  .sheet > h1 { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+  .sheet > .lede { color: var(--muted-foreground); font-size: 13px; margin-top: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 26px; }
+  .cell > .label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--soft-foreground); margin-bottom: 8px;
+  }
+  .cell > .note { font-size: 11.5px; color: var(--soft-foreground); margin-top: 8px; line-height: 1.6; }
+  .cell > .note code { font-size: 11px; }
+  html, body { overflow: auto; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <h1>Files tab — when the Edit button is <i>not</i> there</h1>
+  <p class="lede">
+    Editability is decided by the server (<code>editable</code> / <code>editableReason</code> on the
+    <code>GET</code>, <code>fileEdit</code> on <code>/api/health</code>) and never re-derived in the
+    browser. Each pane below is the same <code>file-preview.tsx</code> card in a different state.
+  </p>
+
+  <div class="grid">
+
+    <div class="cell">
+      <div class="label">Not valid UTF-8 — <code>editable: false</code></div>
+      <div class="pane">
+        <header class="pane-head">
+          <span class="path">fixtures/legacy-cp1252.txt</span>
+          <span class="spacer"></span>
+          <span class="size">1.2 kB</span>
+        </header>
+        <div class="banner banner-warn">
+          <svg class="ic ic-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <div class="body">
+            <strong>Read-only — this file is not valid UTF-8.</strong>
+            <p>The preview below substitutes replacement characters. Saving it back would write
+               those substitutions over your bytes, so editing is refused.</p>
+          </div>
+        </div>
+        <div class="code" data-lang="plaintext">
+          <div class="ln"><span class="gutter">1</span><span class="src">Rapport g<span style="color: var(--danger)">�</span>n<span style="color: var(--danger)">�</span>ral — 2024</span></div>
+          <div class="ln"><span class="gutter">2</span><span class="src">Auteur : Fran<span style="color: var(--danger)">�</span>ois Lef<span style="color: var(--danger)">�</span>vre</span></div>
+          <div class="ln"><span class="gutter">3</span><span class="src">Co<span style="color: var(--danger)">�</span>t estim<span style="color: var(--danger)">�</span> : 12 500 <span style="color: var(--danger)">�</span></span></div>
+        </div>
+      </div>
+      <p class="note">
+        The NUL-byte binary sniff passes this file, which is exactly why the strict
+        (<code>fatal: true</code>) decode is the gate. <code>content</code> is still returned —
+        removing it would be a breaking response change and would blank a preview that works today.
+      </p>
+    </div>
+
+    <div class="cell">
+      <div class="label">Hosted mode / kill switch — <code>fileEdit: false</code></div>
+      <div class="pane">
+        <header class="pane-head">
+          <span class="path">src/server/capabilities.ts</span>
+          <span class="spacer"></span>
+          <span class="size">2.4 kB</span>
+        </header>
+        <div class="code" data-lang="typescript">
+          <div class="ln"><span class="gutter">42</span><span class="src"><span class="k">export</span> <span class="k">function</span> <span class="f">resolveCapabilities</span><span class="p">(</span><span class="v">env</span><span class="p">:</span> <span class="f">NodeJS</span><span class="p">.</span><span class="f">ProcessEnv</span><span class="p">)</span> <span class="p">{</span></span></div>
+          <div class="ln"><span class="gutter">43</span><span class="src">  <span class="k">return</span> <span class="p">{</span></span></div>
+          <div class="ln"><span class="gutter">44</span><span class="src">    <span class="k">localHandoff</span><span class="p">:</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_REMOTE</span> <span class="p">!==</span> <span class="s">'1'</span><span class="p">,</span></span></div>
+          <div class="ln"><span class="gutter">45</span><span class="src">    <span class="k">followups</span><span class="p">:</span> <span class="f">followupsEnabled</span><span class="p">(</span><span class="v">env</span><span class="p">),</span></span></div>
+          <div class="ln"><span class="gutter">46</span><span class="src">  <span class="p">};</span></span></div>
+          <div class="ln"><span class="gutter">47</span><span class="src"><span class="p">}</span></span></div>
+        </div>
+      </div>
+      <p class="note">
+        No banner, no disabled button, <b>no affordance at all</b> — a hosted cockpit looks like
+        today's read-only Files tab. Hiding the button is UX only; the <code>409</code> from the
+        route is the actual control, re-derived server-side per request.
+      </p>
+    </div>
+
+    <div class="cell">
+      <div class="label">No grammar for this extension — highlighting degrades, editing does not</div>
+      <div class="pane">
+        <header class="pane-head">
+          <span class="path">Dockerfile</span>
+          <span class="spacer"></span>
+          <span class="size">640 B</span>
+          <button class="btn btn-sm btn-outline">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>
+            Edit
+          </button>
+        </header>
+        <div class="code" data-lang="plaintext">
+          <div class="ln"><span class="gutter">1</span><span class="src">FROM node:22-alpine</span></div>
+          <div class="ln"><span class="gutter">2</span><span class="src">WORKDIR /app</span></div>
+          <div class="ln"><span class="gutter">3</span><span class="src">COPY package*.json ./</span></div>
+          <div class="ln"><span class="gutter">4</span><span class="src">RUN npm ci --omit=dev</span></div>
+          <div class="ln"><span class="gutter">5</span><span class="src">CMD ["node", "dist/index.js"]</span></div>
+        </div>
+      </div>
+      <p class="note">
+        <code>langForPath('Dockerfile')</code> is <code>null</code> (no dot), so the preview already
+        renders it untinted as <code>data-lang="plaintext"</code>. The editor must land on the
+        <b>same</b> plaintext, not an error and not a different fallback — identical bytes must look
+        identical either side of the Edit button. Editability is a UTF-8 question, never a
+        grammar-coverage one.
+      </p>
+    </div>
+
+    <div class="cell">
+      <div class="label">Past the preview cap — <code>tooLarge</code></div>
+      <div class="pane">
+        <header class="pane-head">
+          <span class="path">web/dist/assets/index-D4f2a1.js</span>
+          <span class="spacer"></span>
+          <span class="size">1.8 MB</span>
+        </header>
+        <div class="centered">
+          <div class="inner">
+            <div class="tile">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M12 11v4M12 18h.01"/></svg>
+            </div>
+            <h2>Too large to preview</h2>
+            <p>1.8 MB — past the preview cap. Open it in your editor instead.</p>
+          </div>
+        </div>
+      </div>
+      <p class="note">
+        Unchanged from today. <code>hash</code> is omitted for <code>tooLarge</code> and
+        <code>binary</code> files, so there is no <code>baseHash</code> to send and the
+        <code>PUT</code> could not be satisfied even if the button were forged.
+      </p>
+    </div>
+
+    <div class="cell" style="grid-column: 1 / -1">
+      <div class="label">Phase 2 — the agent overwrote a saved edit</div>
+      <div class="pane">
+        <header class="pane-head">
+          <span class="path">src/server/capabilities.ts</span>
+          <span class="spacer"></span>
+          <span class="size">2.4 kB</span>
+          <button class="btn btn-sm btn-outline">Edit</button>
+        </header>
+        <div class="banner banner-warn">
+          <svg class="ic ic-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></svg>
+          <div class="body">
+            <strong>The agent rewrote this file after you saved it.</strong>
+            <p>Your saved version was recorded and can be restored — the guard cannot stop a write
+               that arrives after yours, only make the loss visible.</p>
+          </div>
+          <div class="acts">
+            <button class="btn btn-sm btn-outline">View my saved version</button>
+          </div>
+        </div>
+        <div class="code" data-lang="typescript">
+          <div class="ln"><span class="gutter">42</span><span class="src"><span class="k">export</span> <span class="k">function</span> <span class="f">resolveCapabilities</span><span class="p">(</span><span class="v">env</span><span class="p">:</span> <span class="f">NodeJS</span><span class="p">.</span><span class="f">ProcessEnv</span><span class="p">)</span> <span class="p">{</span></span></div>
+          <div class="ln"><span class="gutter">43</span><span class="src">  <span class="c">// rewritten by the agent at 11:42:07</span></span></div>
+          <div class="ln"><span class="gutter">44</span><span class="src">  <span class="k">return</span> <span class="f">buildCapabilities</span><span class="p">(</span><span class="v">env</span><span class="p">);</span></span></div>
+          <div class="ln"><span class="gutter">45</span><span class="src"><span class="p">}</span></span></div>
+        </div>
+      </div>
+      <p class="note">
+        This is the direction the <code>baseHash</code> guard <b>cannot</b> cover: the agent sends no
+        <code>baseHash</code>, so nothing rejects its write. The banner and the
+        <code>file-edited</code> snapshot are the whole answer — the loss becomes visible and
+        recoverable rather than prevented. Phase 1 ships the snapshot; Phase 2 ships this banner.
+      </p>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

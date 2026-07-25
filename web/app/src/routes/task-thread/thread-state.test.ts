@@ -80,6 +80,57 @@ describe('reduceThread — golden v2 fixtures', () => {
   })
 })
 
+describe('reduceThread — item ids across workflow steps', () => {
+  it('keeps earlier reasoning when a resumed step restarts its item ids', () => {
+    const { turns } = reduceThread([
+      line(1, 'turn.started', { turnId: 'turn_1', stepId: 'initial' }),
+      line(2, 'item.started', {
+        item: { kind: 'reasoning', id: 'item_1', text: 'Earlier thinking survives.' },
+        stepId: 'initial',
+      }),
+      line(3, 'item.completed', {
+        item: { kind: 'reasoning', id: 'item_1', text: 'Earlier thinking survives.' },
+        stepId: 'initial',
+      }),
+      line(4, 'turn.completed', { turnId: 'turn_1', stopReason: 'end_turn', stepId: 'initial' }),
+      line(5, 'turn.started', { turnId: 'turn_1', stepId: 'resume' }),
+      line(6, 'item.started', {
+        item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Resumed response.' },
+        stepId: 'resume',
+      }),
+      line(7, 'item.completed', {
+        item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Resumed response.' },
+        stepId: 'resume',
+      }),
+    ])
+
+    expect(turns).toHaveLength(2)
+    expect(turns[0]!.items).toEqual([
+      { kind: 'reasoning', id: 'item_1', text: 'Earlier thinking survives.' },
+    ])
+    expect(turns[1]!.items).toEqual([
+      { kind: 'message', id: 'item_1', role: 'assistant', text: 'Resumed response.' },
+    ])
+  })
+
+  it('retains bare-id lifecycle updates for legacy events without stepId', () => {
+    const { turns } = reduceThread([
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.started', {
+        item: { kind: 'message', id: 'item_1', role: 'assistant', text: '' },
+      }),
+      line(3, 'item.delta', { itemId: 'item_1', field: 'text', delta: 'Legacy response.' }),
+      line(4, 'item.completed', {
+        item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Legacy response.' },
+      }),
+    ])
+
+    expect(turns[0]!.items).toEqual([
+      { kind: 'message', id: 'item_1', role: 'assistant', text: 'Legacy response.' },
+    ])
+  })
+})
+
 describe('reduceThread — v1-only fallback (pre-v2 transcripts)', () => {
   // Verbatim shapes from a real pre-R2 transcript (.ai/cezar/runs/2d012907….ndjson), trimmed.
   const v1Only: RunEvent[] = [
@@ -195,6 +246,102 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     const { turns } = reduceThread(withTools)
     expect(kinds(turns[0]!.items)).toEqual(['tool'])
     expect((turns[0]!.items[0] as UiToolItem).status).toBe('completed')
+  })
+
+  // The vanishing-message regression: a turn can be v2-covered for TOOLS while its prose exists
+  // only as a v1 `text` line (claude's `msg.result` fallback — see claude-ui-mapper's mapResult).
+  // The old blanket "drop every v1 item once the latch flips" deleted that message a moment
+  // after it rendered, leaving tool cards with no prose. Membership in v2 is now decided by
+  // text, so an untwinned line survives.
+  it('keeps a v1 text that has NO v2 message twin, even in a v2-covered turn', () => {
+    const resultFallback: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'text', { text: 'Prose that only v1 ever described.' }),
+      line(3, 'item.started', {
+        item: { kind: 'tool', id: 'toolu_A', name: 'Bash', toolKind: 'execute', title: 'Ran npm test', status: 'running' },
+      }),
+      line(4, 'item.completed', {
+        item: { kind: 'tool', id: 'toolu_A', name: 'Bash', toolKind: 'execute', title: 'Ran npm test', status: 'completed' },
+      }),
+    ]
+    const { turns } = reduceThread(resultFallback)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'tool'])
+    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('Prose that only v1 ever described.')
+  })
+
+  // The two vocabularies normalize markers differently — the server strips `CEZ:` from v1 `text`
+  // before persisting, v2 items carry it raw — so the twin match has to strip both sides or
+  // every final message in a run would render twice.
+  it('matches a v1 twin against a v2 message whose text still carries its CEZ marker', () => {
+    const finalTurn: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.started', {
+        item: { kind: 'tool', id: 'toolu_A', name: 'Bash', toolKind: 'execute', title: 'Ran x', status: 'completed' },
+      }),
+      line(3, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'All done.\n\nCEZ:DONE' } }),
+      line(4, 'text', { text: 'All done.' }), // the server-stripped v1 twin
+    ]
+    const { turns } = reduceThread(finalTurn)
+    expect(kinds(turns[0]!.items)).toEqual(['tool', 'message'])
+    expect((turns[0]!.items[1] as UiMessageItem).text).toBe('All done.')
+  })
+})
+
+describe('reduceThread — legacy per-delta transcripts (codex/opencode runs recorded before v1 text coalescing)', () => {
+  // Verbatim shape from a real broken recording: the codex runner used to emit one v1 `text`
+  // per streaming delta, so the file holds one line per token — and the exact-match dedup
+  // never fired, rendering one paragraph per token. The v2 item carries the whole message.
+  const full = 'QA done — see github.com/open-mercato/cezar/pull/628\n\nCEZ:DONE'
+  // Per-token persistence: the server stripped markers per event (a split marker slips
+  // through: CE / Z / :D / ONE) and dropped whitespace-only deltas entirely.
+  const tokens = ['QA', ' done', ' —', ' see', ' github', '.com', '/open', '-merc', 'ato', '/ce', 'zar', '/p', 'ull', '/', '628', 'CE', 'Z', ':D', 'ONE']
+
+  it('drops a token run that reassembles the v2 message — including the split CEZ:DONE', () => {
+    const events: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.started', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: '' } }),
+      line(3, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: full } }),
+      ...tokens.map((text, i) => line(4 + i, 'text', { text })),
+      line(40, 'turn.completed', { turnId: 'turn_1', stopReason: 'end_turn' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message'])
+    expect((turns[0]!.items[0] as UiMessageItem).id).toBe('item_1')
+    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('QA done — see github.com/open-mercato/cezar/pull/628')
+  })
+
+  it('drops one run spanning TWO v2 messages (v1 tool suppression made them adjacent)', () => {
+    const events: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'First thought.' } }),
+      line(3, 'item.completed', { item: { kind: 'message', id: 'item_2', role: 'assistant', text: 'Second thought.' } }),
+      line(4, 'text', { text: 'First' }),
+      line(5, 'text', { text: ' thought.' }),
+      line(6, 'text', { text: 'Second' }),
+      line(7, 'text', { text: ' thought.' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'message'])
+  })
+
+  it('keeps a run that reassembles NOTHING — v1-only prose never vanishes', () => {
+    const events: RunEvent[] = [
+      line(1, 'turn.started', { turnId: 'turn_1' }),
+      line(2, 'item.completed', { item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Unrelated v2 prose.' } }),
+      line(3, 'text', { text: 'Two separate' }),
+      line(4, 'text', { text: 'v1-only messages.' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'message', 'message'])
+  })
+
+  it('does not touch v1-only transcripts (no v2 items — nothing to reassemble against)', () => {
+    const events: RunEvent[] = [
+      line(1, 'text', { text: 'First paragraph.' }),
+      line(2, 'text', { text: 'Second paragraph.' }),
+    ]
+    const { turns } = reduceThread(events)
+    expect(kinds(turns[0]!.items)).toEqual(['message', 'message'])
   })
 })
 
@@ -388,6 +535,49 @@ describe('reduceThread — check-output (check steps, v1-only by nature)', () =>
       line(3, 'check-output', { stepId: 'verify', command: 'npm test', text: 'ok', exitCode: 0 }),
     ])
     expect(kinds(turns[0]!.items)).toEqual(['message', 'tool'])
+  })
+})
+
+describe('reduceThread — provider authorization recovery', () => {
+  it('persists a valid provider authorization incident in its failure turn', () => {
+    expect(reduceThread([
+      line(1, 'provider-auth-required', {
+        provider: 'claude',
+        authFailureId: 'incident-1',
+        stepId: 'work',
+      }),
+    ]).turns[0]?.items).toEqual([{
+      kind: 'provider-auth-required',
+      id: 'v1:1',
+      provider: 'claude',
+      authFailureId: 'incident-1',
+    }])
+  })
+
+  it.each([
+    ['an unknown provider', { provider: 'future', authFailureId: 'incident-1' }],
+    ['a blank incident id', { provider: 'claude', authFailureId: '' }],
+    ['an overlong incident id', { provider: 'claude', authFailureId: 'x'.repeat(129) }],
+    ['a malformed payload', { provider: ['claude'], authFailureId: 'incident-1' }],
+  ])('ignores %s without losing surrounding transcript entries', (_name, payload) => {
+    const { turns } = reduceThread([
+      line(1, 'note', { message: 'before' }),
+      line(2, 'provider-auth-required', payload),
+      line(3, 'note', { message: 'after' }),
+    ])
+    expect(turns[0]?.items).toEqual([
+      { kind: 'note', id: 'v1:1', text: 'before', tone: 'dim' },
+      { kind: 'note', id: 'v1:3', text: 'after', tone: 'dim' },
+    ])
+  })
+
+  it('replays the persisted incident deterministically', () => {
+    const events = [
+      line(1, 'turn.started', { turnId: 'turn-1' }),
+      line(2, 'provider-auth-required', { provider: 'codex', authFailureId: 'incident-2' }),
+      line(3, 'turn.completed', { turnId: 'turn-1', stopReason: 'error' }),
+    ]
+    expect(reduceThread(events)).toEqual(reduceThread(events))
   })
 })
 

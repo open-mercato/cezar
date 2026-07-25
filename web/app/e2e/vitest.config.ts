@@ -16,6 +16,11 @@ export default defineConfig({
     include: ['**/*.e2e.ts'],
     // One browser session, one server: parallel specs would fight over both.
     fileParallelism: false,
+    // Pins the shared env's workspace registry to the single-project shape before any spec runs,
+    // and restores it afterwards — otherwise whatever the operator last registered in the
+    // gitignored `.ai/qa/cez-home` decides whether the sidebar renders its flat or its grouped
+    // shell, and every spec asserting flat-shell selectors becomes a coin flip. See the module.
+    globalSetup: ['./workspace-registry.ts'],
     // A real browser is slower than jsdom, but a smoke test that needs more than this is broken.
     testTimeout: 60_000,
     hookTimeout: 60_000,

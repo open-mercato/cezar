@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -13,12 +13,20 @@ import { prependSystemPrompt } from './agent-runner.js';
 import {
   AUTO_END_DELAY_MS,
   DEFAULT_RUN_TIMEOUT_MS,
-  EOF_KILL_GRACE_MS,
-  EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.js';
-import { buildChildEnv } from './agent-env.js';
+import { parseAskRequest, type AskQuestion } from './ask.js';
 import { readNdjson } from './ndjson.js';
+import { V1TextCoalescer } from './v1-text-coalescer.js';
+import {
+  CodexAppServerRpc,
+  codexSpawnError,
+  endCodexAppServer,
+  resolveCodexExecutable,
+  spawnCodexAppServer,
+  type CodexAppServerMessage,
+  waitForCodexAppServerExit,
+} from './codex-app-server-transport.js';
 import {
   codexSessionStarted,
   createCodexUiState,
@@ -43,8 +51,11 @@ export interface CodexRunnerOptions {
  * `thread/resume` to reopen a stored thread for "Continue".
  *
  * Auth = the host's logged-in ChatGPT/Codex session (or CODEX_API_KEY). The
- * agent runs autonomously via `sandbox: workspace-write` + `approvalPolicy:
- * never` — Codex has no per-tool allowlist, so `spec.allowedTools` is ignored.
+ * agent runs autonomously via `sandbox: danger-full-access` +
+ * `approvalPolicy: never`, matching cezar's default auto permission mode
+ * (spec 2026-07-17-permission-modes). Codex has no per-tool allowlist, so
+ * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
+ * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
 export class CodexAppServerRunner implements AgentRunner {
   readonly backend = 'codex' as const;
@@ -54,7 +65,7 @@ export class CodexAppServerRunner implements AgentRunner {
   private lastSession: CodexSession | null = null;
 
   constructor(opts: CodexRunnerOptions = {}) {
-    this.bin = opts.bin ?? process.env.CEZ_CODEX_BIN ?? 'codex';
+    this.bin = resolveCodexExecutable(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   }
 
@@ -77,9 +88,9 @@ export class CodexAppServerRunner implements AgentRunner {
   }
 }
 
-interface Pending {
-  resolve: (result: Record<string, unknown>) => void;
-  reject: (err: Error) => void;
+interface PendingUserInput {
+  readonly rpcId: number | string;
+  readonly questions: AskQuestion[];
 }
 
 /** One live `codex app-server` process driving a single thread. */
@@ -87,18 +98,23 @@ class CodexSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
 
   private readonly child!: ChildProcessWithoutNullStreams;
+  private readonly rpc!: CodexAppServerRpc;
   private stdinOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
-  private nextId = 1;
-  private readonly pending = new Map<number, Pending>();
+  private pendingUserInput: PendingUserInput | undefined;
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
-  /** agentMessage item ids that streamed deltas — so `item/completed` for the
-   *  same item doesn't re-emit the full text on top of the deltas. */
-  private readonly streamedItems = new Set<string>();
+  /** Streamed agentMessage deltas buffered per item — v1 `text` is emitted
+   *  once per completed item (claude parity: one event per complete block),
+   *  never per delta, so the persisted transcript and the headless CLI get
+   *  whole paragraphs. Streaming display rides protocol v2's `item.delta`. */
+  private readonly textCoalescer = new V1TextCoalescer((text) => {
+    this.textChunks.push(text);
+    this.emit({ type: 'text', text });
+  });
   private tokensUsed = 0;
-  private ready: Promise<void>;
+  private ready!: Promise<void>;
   private autoEndTimer: NodeJS.Timeout | undefined;
   private eofTermTimer: NodeJS.Timeout | undefined;
   private eofKillTimer: NodeJS.Timeout | undefined;
@@ -117,25 +133,14 @@ class CodexSession implements AgentSession {
     private readonly opts: SessionOptions,
   ) {
     try {
-      // Give the workspace-write sandbox network access so agent tools that need the network
-      // (gh, npm, git over https) work — otherwise `gh` fails with "error connecting to
-      // api.github.com" under codex while the same tool works under claude (#codex-network).
-      // `-c` is codex's documented config override (dotted key, TOML value); opt out with
-      // CEZ_CODEX_NETWORK=0.
-      const args = ['app-server'];
-      if (process.env.CEZ_CODEX_NETWORK !== '0') {
-        args.push('-c', 'sandbox_workspace_write.network_access=true');
-      }
-      this.child = nodeSpawn(bin, args, {
-        cwd: spec.cwd,
-        env: buildChildEnv({ backend: 'codex', extraEnv: spec.env }),
-      });
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
+      this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
-      throw wrapSpawnError(err, bin);
+      throw codexSpawnError(err, bin);
     }
 
     this.child.on('error', (err: NodeJS.ErrnoException) => {
-      this.spawnFailed = wrapSpawnError(err, bin);
+      this.spawnFailed = codexSpawnError(err, bin);
     });
     const stderrChunks: string[] = [];
     this.child.stderr.setEncoding('utf8');
@@ -163,20 +168,33 @@ class CodexSession implements AgentSession {
     this.ready = this.bootstrap();
 
     this.result = (async (): Promise<AgentRunResult> => {
+      let sessionError: unknown;
       try {
-        for await (const line of readNdjson(this.child.stdout)) {
-          if (this.timedOut) break;
-          let msg: JsonRpcMessage;
-          try {
-            msg = JSON.parse(line) as JsonRpcMessage;
-          } catch {
-            continue; // not JSON-RPC — skip
+        const readLoop = async () => {
+          for await (const line of readNdjson(this.child.stdout)) {
+            if (this.timedOut) break;
+            let msg: CodexAppServerMessage;
+            try {
+              msg = JSON.parse(line) as CodexAppServerMessage;
+            } catch {
+              continue; // not JSON-RPC — skip
+            }
+            this.emitUi((state) => mapCodexNotification(msg, state));
+            this.dispatch(msg);
           }
-          this.emitUi((state) => mapCodexNotification(msg, state));
-          this.dispatch(msg);
-        }
+        };
+        // Start consuming stdout before awaiting bootstrap: JSON-RPC responses
+        // read here settle the initialize/thread/turn requests. Owning both
+        // promises makes every bootstrap rejection part of session.result.
+        await Promise.all([this.ready, readLoop()]);
       } catch (err) {
-        if (!this.timedOut) throw err;
+        if (!this.timedOut) {
+          sessionError = err;
+          // Bootstrap failed before a usable turn exists. Closing stdin lets
+          // app-server exit normally; end() also owns the TERM/KILL watchdog
+          // if a broken child ignores EOF.
+          this.end();
+        }
       } finally {
         if (deadline) clearTimeout(deadline);
         if (killTimer) clearTimeout(killTimer);
@@ -184,14 +202,16 @@ class CodexSession implements AgentSession {
         this.stdinOpen = false;
       }
 
-      const exitCode = await waitForExit(this.child);
+      const exitCode = await waitForCodexAppServerExit(this.child);
       if (this.eofTermTimer) clearTimeout(this.eofTermTimer);
       if (this.eofKillTimer) clearTimeout(this.eofKillTimer);
-      for (const p of this.pending.values()) p.reject(new Error('codex app-server exited'));
-      this.pending.clear();
+      this.rpc.rejectPending();
 
       if (this.spawnFailed) throw this.spawnFailed;
+      if (sessionError) throw sessionError;
 
+      // Timeout/interrupt can end the read loop mid-item — recover buffered prose.
+      this.textCoalescer.flush();
       const text = this.textChunks.join('\n').trim();
       const base: AgentRunResult = {
         text,
@@ -236,6 +256,12 @@ class CodexSession implements AgentSession {
     }
     const text = textOf(content);
     if (!text) return true;
+    if (this.pendingUserInput) {
+      const pending = this.pendingUserInput;
+      this.pendingUserInput = undefined;
+      this.rpc.respond({ id: pending.rpcId, result: { answers: userInputAnswers(pending.questions, text) } });
+      return true;
+    }
     // Wait for the thread to exist, then steer the live turn or start a new one.
     void this.ready
       .then(() => this.startOrSteerTurn(text))
@@ -248,27 +274,24 @@ class CodexSession implements AgentSession {
 
   end(): void {
     if (!this.stdinOpen) return;
+    this.rejectPendingUserInput('session ended');
     this.stdinOpen = false;
     try {
-      this.child.stdin.end();
+      endCodexAppServer(this.child, (term, kill) => {
+        this.eofTermTimer = term;
+        this.eofKillTimer = kill;
+      });
     } catch {
       // already gone
     }
-    this.eofTermTimer = setTimeout(() => {
-      if (this.child.exitCode == null && !this.child.killed) this.child.kill('SIGTERM');
-      this.eofKillTimer = setTimeout(() => {
-        if (this.child.exitCode == null && !this.child.killed) this.child.kill('SIGKILL');
-      }, EOF_KILL_GRACE_MS);
-      this.eofKillTimer.unref?.();
-    }, EOF_TERM_GRACE_MS);
-    this.eofTermTimer.unref?.();
   }
 
   interrupt(): void {
     this.stdinOpen = false;
+    this.rejectPendingUserInput('turn interrupted');
     // Best-effort graceful cancel of the in-flight turn, then hard stop.
     if (this.threadId && this.activeTurnId) {
-      void this.request('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId }).catch(
+      void this.rpc.request('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId }).catch(
         () => undefined,
       );
     }
@@ -278,23 +301,22 @@ class CodexSession implements AgentSession {
   // ---- protocol -----------------------------------------------------------
 
   private async bootstrap(): Promise<void> {
-    await this.request('initialize', {
-      clientInfo: { name: 'cezar', title: 'cezar', version: '0.1.0' },
-      capabilities: { experimentalApi: true },
-    });
-    this.notify('initialized', {});
+    await this.rpc.initialize();
 
     const overrides = {
       model: this.spec.model,
       cwd: this.spec.cwd,
-      sandbox: 'workspace-write',
+      // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
+      // keeps container installs working when bubblewrap cannot create a UID map (#563).
+      // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
+      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
       approvalPolicy: 'never',
     };
     if (this.spec.resume && this.spec.sessionId) {
-      await this.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
+      await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
       this.threadId = this.spec.sessionId;
     } else {
-      const res = await this.request('thread/start', clean(overrides));
+      const res = await this.rpc.request('thread/start', clean(overrides));
       this.threadId = threadIdOf(res) ?? this.spec.sessionId;
     }
     if (this.threadId) {
@@ -316,49 +338,50 @@ class CodexSession implements AgentSession {
     if (!this.threadId) return;
     const input = [{ type: 'text', text, text_elements: [] }];
     if (this.activeTurnId) {
-      await this.request('turn/steer', {
+      await this.rpc.request('turn/steer', {
         threadId: this.threadId,
         input,
         expectedTurnId: this.activeTurnId,
       });
       return;
     }
-    const res = await this.request('turn/start', { threadId: this.threadId, input });
+    // Ask the app-server for reasoning summaries; without this the model runs
+    // with its default (no summary), so the reasoning thread stays empty even
+    // though the mapper and UI can render it. The override persists for this
+    // turn and every subsequent turn, so seeding it on turn/start is enough.
+    const res = await this.rpc.request('turn/start', {
+      threadId: this.threadId,
+      input,
+      summary: reasoningSummary(),
+    });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }
 
-  private request(method: string, params: unknown): Promise<Record<string, unknown>> {
-    const id = this.nextId++;
-    const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
-    this.write({ id, method, params });
-    return promise;
-  }
-
-  private notify(method: string, params: unknown): void {
-    this.write({ method, params });
-  }
-
-  private write(obj: unknown): void {
-    if (this.child.stdin.destroyed) return;
-    try {
-      this.child.stdin.write(`${JSON.stringify(obj)}\n`);
-    } catch {
-      // stdin gone — the read loop will settle the session
-    }
-  }
-
-  private dispatch(msg: JsonRpcMessage): void {
-    if (typeof msg.id === 'number' && (msg.result !== undefined || msg.error !== undefined)) {
-      const p = this.pending.get(msg.id);
-      if (!p) return;
-      this.pending.delete(msg.id);
-      if (msg.error) p.reject(new Error(errorText(msg.error)));
-      else p.resolve((msg.result as Record<string, unknown>) ?? {});
+  private dispatch(msg: CodexAppServerMessage): void {
+    if (this.rpc.dispatchResponse(msg)) return;
+    if (msg.method === 'item/tool/requestUserInput' && (typeof msg.id === 'number' || typeof msg.id === 'string')) {
+      this.handleUserInputRequest(msg.id, msg.params ?? {});
       return;
     }
     if (typeof msg.method === 'string') this.handleNotification(msg.method, msg.params ?? {});
+  }
+
+  private handleUserInputRequest(rpcId: number | string, params: Record<string, unknown>): void {
+    const questions = codexAskQuestions(params.questions);
+    if (!questions) {
+      this.rpc.respond({ id: rpcId, error: { code: -32602, message: 'unsupported or malformed requestUserInput payload' } });
+      return;
+    }
+    if (this.pendingUserInput) this.rejectPendingUserInput('superseded by a newer requestUserInput');
+    this.pendingUserInput = { rpcId, questions };
+    this.opts.onUiEvent?.({ type: 'ask.requested', requestId: `codex-${String(rpcId)}`, questions });
+  }
+
+  private rejectPendingUserInput(message: string): void {
+    const pending = this.pendingUserInput;
+    if (!pending) return;
+    this.pendingUserInput = undefined;
+    this.rpc.respond({ id: pending.rpcId, error: { code: -32000, message } });
   }
 
   private handleNotification(method: string, params: Record<string, unknown>): void {
@@ -369,12 +392,7 @@ class CodexSession implements AgentSession {
       }
       case 'item/agentMessage/delta': {
         const delta = typeof params.delta === 'string' ? params.delta : '';
-        if (delta) {
-          const itemId = stringField(params, 'itemId');
-          if (itemId) this.streamedItems.add(itemId);
-          this.textChunks.push(delta);
-          this.emit({ type: 'text', text: delta });
-        }
+        if (delta) this.textCoalescer.append(stringField(params, 'itemId'), delta);
         break;
       }
       case 'item/started': {
@@ -382,7 +400,7 @@ class CodexSession implements AgentSession {
         const type = stringField(item, 'type');
         // Only tool-like items become tool events; message/reasoning stream as text.
         if (type && !NON_TOOL_ITEMS.has(type)) {
-          const id = stringField(item, 'id') ?? `item-${this.nextId++}`;
+          const id = stringField(item, 'id') ?? `item-${this.rpc.allocateId()}`;
           this.toolCalls.push({ id, name: type, input: item });
           this.emit({ type: 'tool-call', id, tool: type, input: item });
         }
@@ -393,14 +411,9 @@ class CodexSession implements AgentSession {
         const type = stringField(item, 'type');
         const id = stringField(item, 'id') ?? '';
         if (type === 'agentMessage') {
-          // Some turns only send the final item (no deltas) → emit it then.
-          if (!id || !this.streamedItems.has(id)) {
-            const text = typeof item.text === 'string' ? item.text : '';
-            if (text) {
-              this.textChunks.push(text);
-              this.emit({ type: 'text', text });
-            }
-          }
+          // One v1 `text` per finished message — the snapshot's full text when
+          // present (also covers turns that send no deltas), else the deltas.
+          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined);
         } else if (type && !NON_TOOL_ITEMS.has(type) && id) {
           this.emit({
             type: 'tool-result',
@@ -419,8 +432,13 @@ class CodexSession implements AgentSession {
         }
         break;
       }
-      case 'turn/completed': {
+      case 'turn/completed':
+      case 'turn/failed': {
+        this.pendingUserInput = undefined;
         this.activeTurnId = undefined;
+        // An interrupted/failed item never sees item/completed — surface its
+        // partial prose before the turn boundary (run.ts reads markers there).
+        this.textCoalescer.flush();
         this.emit({ type: 'turn-end' });
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
@@ -454,16 +472,62 @@ class CodexSession implements AgentSession {
 
 // ---- helpers --------------------------------------------------------------
 
-interface JsonRpcMessage {
-  id?: number | string;
-  method?: string;
-  params?: Record<string, unknown>;
-  result?: unknown;
-  error?: unknown;
+function codexAskQuestions(value: unknown): AskQuestion[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null;
+  const questions: unknown[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const question = raw as Record<string, unknown>;
+    if (question.isSecret === true) return null;
+    const id = stringField(question, 'id');
+    const header = stringField(question, 'header');
+    const prompt = stringField(question, 'question');
+    if (!id || !header || !prompt || !Array.isArray(question.options)) return null;
+    const options = question.options.map((option) => {
+      if (!option || typeof option !== 'object' || Array.isArray(option)) return null;
+      const record = option as Record<string, unknown>;
+      const label = stringField(record, 'label');
+      const description = stringField(record, 'description');
+      return label ? { label, ...(description ? { description } : {}) } : null;
+    }).filter((option): option is { label: string; description?: string } => option !== null);
+    questions.push({ id, header, question: prompt, options, multiSelect: false });
+  }
+  return parseAskRequest({ questions })?.questions ?? null;
+}
+
+function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
+  const lines = text.split(/\r?\n/);
+  const hasStructuredAnswer = questions.some((question) => lines.some((line) => line.startsWith(`${question.header}:`)));
+  const answers: Record<string, { answers: string[] }> = {};
+  for (const [index, question] of questions.entries()) {
+    const prefix = `${question.header}:`;
+    const matching = lines.find((line) => line.startsWith(prefix));
+    const raw = matching?.slice(prefix.length).trim() ?? (!hasStructuredAnswer && index === 0 ? text.trim() : '');
+    answers[question.id ?? String(index)] = {
+      answers: raw === '' ? [] : raw.split(',').map((answer) => answer.trim()).filter(Boolean),
+    };
+  }
+  return answers;
 }
 
 /** ThreadItem `type`s that are conversation text, not tool activity. */
 const NON_TOOL_ITEMS = new Set(['agentMessage', 'userMessage', 'reasoning', 'plan']);
+
+const REASONING_SUMMARIES = new Set(['auto', 'concise', 'detailed', 'none']);
+
+/**
+ * The reasoning-summary override sent on `turn/start` (TurnStartParams.summary).
+ * Defaults to `auto` so reasoning is visible out of the box — without it the
+ * app-server runs with its own default (no summary) and the reasoning thread
+ * stays empty even when the model reasons. `CEZ_CODEX_REASONING` overrides the
+ * default (`auto`/`concise`/`detailed`, or `none` to opt out); an unrecognized
+ * value falls back to `auto`.
+ */
+export function reasoningSummary(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.CEZ_CODEX_REASONING?.trim().toLowerCase();
+  if (!raw) return 'auto';
+  return REASONING_SUMMARIES.has(raw) ? raw : 'auto';
+}
 
 function textOf(content: ContentBlock[]): string {
   return content
@@ -505,48 +569,10 @@ function tokenTotal(params: Record<string, unknown>): number {
   return typeof total === 'number' ? total : 0;
 }
 
-function errorText(error: unknown): string {
-  if (error && typeof error === 'object' && 'message' in error) {
-    return String((error as { message: unknown }).message);
-  }
-  return typeof error === 'string' ? error : JSON.stringify(error);
-}
-
 function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
     return String(value);
   }
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
-  if (child.exitCode != null) return Promise.resolve(child.exitCode);
-  return new Promise((resolve) => {
-    let done = false;
-    const fin = (code: number | null) => {
-      if (done) return;
-      done = true;
-      clearTimeout(safety);
-      resolve(code);
-    };
-    child.once('close', (code) => fin(code));
-    child.once('exit', (code) => fin(code));
-    child.once('error', () => fin(child.exitCode ?? null));
-    const safety = setTimeout(
-      () => fin(child.exitCode ?? null),
-      EOF_TERM_GRACE_MS + EOF_KILL_GRACE_MS + KILL_GRACE_MS + 5_000,
-    );
-    safety.unref?.();
-  });
-}
-
-function wrapSpawnError(err: unknown, bin: string): Error {
-  const code = (err as NodeJS.ErrnoException | undefined)?.code;
-  if (code === 'ENOENT') {
-    return new Error(
-      `\`${bin}\` not found on PATH — install the Codex CLI (npm i -g @openai/codex) and run \`codex\` once to log in`,
-    );
-  }
-  return err instanceof Error ? err : new Error(String(err));
 }

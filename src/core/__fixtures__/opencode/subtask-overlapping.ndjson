@@ -1,0 +1,12 @@
+{"type":"message.updated","properties":{"info":{"id":"msg_main","sessionID":"ses_01J8ZE00MAIN","role":"assistant"}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_task_a","messageID":"msg_main","sessionID":"ses_01J8ZE00MAIN","type":"subtask","prompt":"Inspect A","description":"Task A","agent":"general"}}}
+{"type":"message.updated","properties":{"info":{"id":"msg_child_a","sessionID":"ses_child_a","role":"assistant","parentID":"ses_01J8ZE00MAIN"}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_child_a","messageID":"msg_child_a","sessionID":"ses_child_a","type":"tool","tool":"grep","state":{"status":"completed","input":{"pattern":"A"},"output":"a.ts"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_task_b","messageID":"msg_main","sessionID":"ses_01J8ZE00MAIN","type":"subtask","prompt":"Inspect B","description":"Task B","agent":"general"}}}
+{"type":"message.updated","properties":{"info":{"id":"msg_child_b","sessionID":"ses_child_b","role":"assistant","parentID":"ses_01J8ZE00MAIN"}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_child_b","messageID":"msg_child_b","sessionID":"ses_child_b","type":"tool","tool":"grep","state":{"status":"completed","input":{"pattern":"B"},"output":"b.ts"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_child_a_late","messageID":"msg_child_a","sessionID":"ses_child_a","type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"a.ts"},"output":"A"}}}}
+{"type":"session.idle","properties":{"sessionID":"ses_child_a"}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_child_b_late","messageID":"msg_child_b","sessionID":"ses_child_b","type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"b.ts"},"output":"B"}}}}
+{"type":"session.idle","properties":{"sessionID":"ses_child_b"}}
+{"type":"session.idle","properties":{"sessionID":"ses_01J8ZE00MAIN"}}

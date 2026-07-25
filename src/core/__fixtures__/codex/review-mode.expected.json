@@ -15,7 +15,7 @@
       "id": "item_rv_1",
       "name": "enteredReviewMode",
       "toolKind": "task",
-      "title": "Entered review mode",
+      "title": "Review",
       "status": "running"
     }
   },
@@ -47,10 +47,10 @@
     "type": "item.completed",
     "item": {
       "kind": "tool",
-      "id": "item_rv_2",
-      "name": "exitedReviewMode",
+      "id": "item_rv_1",
+      "name": "enteredReviewMode",
       "toolKind": "task",
-      "title": "Exited review mode",
+      "title": "Review",
       "status": "completed"
     }
   },

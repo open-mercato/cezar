@@ -1,23 +1,30 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
+import { applyProviderStatusRow, parseProviderStatusEventRow } from '@/lib/provider-status'
 import {
   applyRunDeleted,
   applyRunEvent,
   createUsageStore,
   EMPTY_USAGE,
   mergeRun,
-  parseGlobalEvent,
+  parseWorkspaceEvent,
   type GlobalEvent,
   type UsageStore,
 } from './events'
-import { queryKeys } from './queries'
-import type { ApiRun, ProcessUsage } from './types'
+import { getApiScope } from './project-scope'
+import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
+import type {
+  ApiRun,
+  HealthResponse,
+  ProcessUsage,
+  ProviderStatusResponse,
+} from './types'
 
 /**
- * The app's one connection to `GET /api/events`, and the two halves of the sync doctrine
- * (spec, "Architecture"): the stream is for immediacy, the REST endpoints are authoritative, and
- * on reconnect or a tab-visibility flip we refetch and reconcile.
+ * The app's one connection to `GET /api/workspace/events`, and the two halves of the sync
+ * doctrine (spec, "Architecture"): the stream is for immediacy, the REST endpoints are
+ * authoritative, and on reconnect or a tab-visibility flip we refetch and reconcile.
  *
  * Immediacy is cache patching, not refetching: a live run emits a `run` event per step transition
  * and per token update, and invalidating the list on each would turn one agent into a request
@@ -25,9 +32,19 @@ import type { ApiRun, ProcessUsage } from './types'
  * in place (events.ts), and the authoritative refetch happens exactly when we know we may have
  * missed something: at reconnect, and when a tab (or a phone that slept through an hour of the
  * run) comes back.
+ *
+ * Multi-project (spec, step 3.1): the one stream carries EVERY project's events, each stamped
+ * with its owner. This layer unwraps the envelope (events.ts) and applies only the active
+ * project's events — the mounted scope's, or the boot project's when unscoped — so the caches
+ * (which are keyed by that same scope, queries.ts) never see another project's data. One
+ * connection for the whole workspace, not one per project: same per-origin socket-budget
+ * argument as ever, and a project switch changes the filter, not the socket.
+ *
+ * Provider authentication is host-wide rather than project-owned. Its dedicated unstamped event
+ * bypasses that project filter and patches only an already-fetched workspace cache.
  */
 
-const SSE_URL = '/api/events'
+const SSE_URL = '/api/workspace/events'
 
 /** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */
@@ -44,9 +61,39 @@ const REOPEN_DELAY_MS = 3_000
 const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
 
 /**
+ * The workspace-only names (server: `WorkspaceEventName`). Unlike the list above these are not
+ * project-stamped and never patch a run cache — they are registry news, so they invalidate the
+ * projects query (the sidebar grows/loses a group without a reload) and fan out to whoever
+ * subscribed via `onWorkspaceEvent`.
+ */
+const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress'] as const
+
+type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number]
+
+const workspaceListeners = new Set<(name: WorkspaceEventName, payload: unknown) => void>()
+
+/**
+ * Subscribe to the workspace-level events on the one stream. Returns an unsubscribe.
+ *
+ * A module-level registry rather than a React context because the subscriber (the clone dialog,
+ * step 4.3) is mounted far from the provider and cares about exactly one event id — a context
+ * carrying every payload would re-render the whole tree on each `git clone` progress line.
+ * Payloads are handed over RAW (parsed JSON, unvalidated): each listener knows the shape of the
+ * event it asked for, and inventing a second parser here would only duplicate events.ts.
+ */
+export function onWorkspaceEvent(
+  listener: (name: WorkspaceEventName, payload: unknown) => void,
+): () => void {
+  workspaceListeners.add(listener)
+  return () => {
+    workspaceListeners.delete(listener)
+  }
+}
+
+/**
  * Refetch the authoritative endpoints.
  *
- * These three because they are the ones the stream can leave stale:
+ * These are the endpoints the stream can leave stale:
  * - runs: the summaries the stream patches (`invalidate(['runs'])` covers the list and every
  *   single-run query under it — that is what the hierarchical keys in queries.ts are for);
  * - todos: the inbox the `todos` event replaces;
@@ -54,7 +101,9 @@ const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
  *   branch switch — so this reconcile alone only catches a switch across a reconnect or a tab
  *   coming back; a checkout in a foreground, connected tab is covered by `useHealth`'s own poll
  *   instead (#369). Invalidating it here too costs nothing extra and keeps this list a complete
- *   "everything the stream can leave stale" note.
+ *   "everything the stream can leave stale" note;
+ * - worktrees: run terminal transitions and reclaim operations change the resources panel;
+ * - provider status: runtime authentication failures patch this workspace-wide cache live.
  *
  * `invalidateQueries` and not `refetchQueries`: it refetches what is actually rendered and marks
  * the rest stale for whenever it next mounts. A background tab with fifty cached runs should not
@@ -66,6 +115,18 @@ function reconcile(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: queryKeys.health })
   // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
   void queryClient.invalidateQueries({ queryKey: queryKeys.worktrees })
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
+}
+
+/**
+ * The project whose events this cockpit currently applies: the mounted scope, or — unscoped —
+ * the boot project `GET /api/health` names (`bootProject`, additive field). Undefined only in
+ * the unscoped moments before health's first answer; stamped events are dropped then, which is
+ * harmless by the doctrine — the authoritative queries are fetching right at that moment, and
+ * the reducers refuse to invent caches from stream messages anyway.
+ */
+function activeProject(queryClient: QueryClient): string | undefined {
+  return getApiScope() ?? (queryClient.getQueryData(queryKeys.health) as HealthResponse | undefined)?.bootProject
 }
 
 /** Fold one stream message into the cache. The reducers it calls are pure and table-tested in
@@ -141,6 +202,25 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
     let disposed = false
+    let providerStatusRefetching = false
+    let providerStatusDirty = false
+
+    const refetchUncachedProviderStatus = (): void => {
+      providerStatusRefetching = true
+      providerStatusDirty = false
+      const key = workspaceQueryKeys.providerStatus
+      void queryClient.cancelQueries({ queryKey: key, exact: true })
+        .then(() => queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'active' }))
+        .finally(() => {
+          if (disposed || !providerStatusDirty) {
+            providerStatusRefetching = false
+            return
+          }
+          // Coalesce every valid event received during this replacement into one trailing fetch.
+          // A further event during that fetch marks dirty again, so no status requests overlap.
+          refetchUncachedProviderStatus()
+        })
+    }
 
     const reopenLater = (): void => {
       if (disposed || reopenTimer !== undefined) return
@@ -164,10 +244,60 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
 
       for (const name of EVENT_NAMES) {
         source.addEventListener(name, (event) => {
-          const parsed = parseGlobalEvent(name, (event as MessageEvent<string>).data)
-          if (parsed) applyGlobalEvent(queryClient, usage, parsed)
+          const parsed = parseWorkspaceEvent(name, (event as MessageEvent<string>).data)
+          if (!parsed) return
+          // Another project's news patches nothing here: this scope's caches hold this
+          // project's data only, and the reconcile-on-switch (3.2's provider swap) refetches
+          // the rest. `ping` (project null) always passes — liveness is not project-owned.
+          if (parsed.project !== null && parsed.project !== activeProject(queryClient)) return
+          applyGlobalEvent(queryClient, usage, parsed.event)
         })
       }
+
+      for (const name of WORKSPACE_EVENT_NAMES) {
+        source.addEventListener(name, (event) => {
+          let payload: unknown
+          try {
+            payload = JSON.parse((event as MessageEvent<string>).data)
+          } catch {
+            return
+          }
+          // A registry mutation changes the sidebar for every open tab, not just the one that
+          // clicked. `checkout-progress` is deliberately NOT in this branch: a clone emits a
+          // line every few hundred ms, and re-listing the registry on each would turn one clone
+          // into a request flood (the dialog's own success handler invalidates once, at the end).
+          if (name !== 'checkout-progress') {
+            void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
+          }
+          for (const listener of [...workspaceListeners]) listener(name, payload)
+        })
+      }
+
+      source.addEventListener('provider-status', (event) => {
+        let payload: unknown
+        try {
+          payload = JSON.parse((event as MessageEvent<string>).data)
+        } catch {
+          return
+        }
+        const row = parseProviderStatusEventRow(payload)
+        if (!row) return
+        const key = workspaceQueryKeys.providerStatus
+        const response = queryClient.getQueryData<ProviderStatusResponse>(key)
+        const updated = applyProviderStatusRow(response, row)
+        if (updated !== undefined) {
+          queryClient.setQueryData(key, updated)
+          return
+        }
+        // An additive row cannot safely seed the complete three-provider cache. Discard an old
+        // initial fetch and replace it after the server emitted this latch. Further valid rows
+        // while that replacement is in flight coalesce into one trailing fetch.
+        if (providerStatusRefetching) {
+          providerStatusDirty = true
+          return
+        }
+        refetchUncachedProviderStatus()
+      })
 
       source.addEventListener('error', () => {
         // An ordinary drop leaves the stream CONNECTING and the browser retries it on its own —
@@ -242,6 +372,10 @@ export function GlobalEventsProvider({ children }: { children: ReactNode }) {
   // ticks bleed into the next, and StrictMode's double-invoked render still yields exactly one.
   const [usage] = useState(createUsageStore)
   useGlobalEvents(usage)
+  // The ONE session-long `health` topic subscription (queries.ts): here, at the root that is
+  // mounted for the app's whole life, so health stays live continuously instead of flapping with
+  // the lifecycles of the ~15 `useHealth` readers below.
+  useHealthSubscription()
   return <UsageContext.Provider value={usage}>{children}</UsageContext.Provider>
 }
 

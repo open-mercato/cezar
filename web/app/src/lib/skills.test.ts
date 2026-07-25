@@ -31,17 +31,17 @@ describe('isProjectSkill / orderSkills (#377)', () => {
     expect(isProjectSkill(skill({ name: 'b', source: 'cezar' }))).toBe(true)
     expect(isProjectSkill(skill({ name: 'c', source: 'agents' }))).toBe(true)
     expect(isProjectSkill(skill({ name: 'd', source: 'global' }))).toBe(false)
-    expect(isProjectSkill(skill({ name: 'e', source: 'team' }))).toBe(false)
+    expect(isProjectSkill(skill({ name: 'e', source: 'team' }))).toBe(true)
   })
 
-  it('orders project before global/team, stably within each half', () => {
+  it('orders local and team project skills before user-global skills, stably within each tier', () => {
     const ordered = orderSkills([
       skill({ name: 'g1', source: 'global' }),
       skill({ name: 'p1', source: 'agents' }),
       skill({ name: 'g2', source: 'team' }),
       skill({ name: 'p2', source: 'ai' }),
     ])
-    expect(ordered.map((s) => s.name)).toEqual(['p1', 'p2', 'g1', 'g2'])
+    expect(ordered.map((s) => s.name)).toEqual(['p1', 'g2', 'p2', 'g1'])
   })
 })
 

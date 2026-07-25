@@ -1,6 +1,8 @@
 import { ArrowLeftIcon, GitCommitHorizontalIcon, SearchXIcon, TriangleAlertIcon } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { useParams } from 'react-router'
+
+import { Link } from '@/lib/project-router'
 
 import { ApiError } from '@/api/client'
 import { useRun, useRunCommit, useRunCommits } from '@/api/queries'
@@ -13,6 +15,7 @@ import { useIsDesktop } from '@/lib/use-desktop'
 
 import { isRunActive } from '../task-thread/run-actions'
 import { RunHeader } from '../task-thread/run-header'
+import { CommitList } from './commit-list'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 import { DiffViewToggles } from './diff-controls'
 
@@ -64,26 +67,15 @@ function CommitsView({ run }: { run: ApiRun }) {
           subtitle="This task hasn't committed anything on its branch. Autosave commits and any the agent makes appear here."
         />
       ) : (
-        <ul data-slot="task-commits" className="mx-auto flex w-full max-w-[820px] flex-col divide-y divide-border px-2 py-1 md:px-4">
-          {commits.data.commits.map((commit: RunCommit) => (
-            <li key={commit.sha}>
-              <Link
-                data-slot="commit-row"
-                data-sha={commit.sha}
-                to={`/tasks/${run.id}/commits/${commit.sha}`}
-                className="flex min-w-0 items-baseline gap-3 rounded-sm px-2 py-2.5 hover:bg-muted"
-              >
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                  {commit.sha.slice(0, 8)}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{commit.subject}</span>
-                <span className="hidden shrink-0 text-[11px] text-soft-foreground sm:inline">
-                  {commit.author} · {commit.when}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <CommitList
+          slot="task-commits"
+          className="mx-auto w-full max-w-[820px]"
+          commits={commits.data.commits.map((commit: RunCommit) => ({
+            ...commit,
+            shaLabel: commit.sha.slice(0, 8),
+            href: `/tasks/${run.id}/commits/${commit.sha}`,
+          }))}
+        />
       )}
     </div>
   )

@@ -1,0 +1,125 @@
+[test-env] build cache hit — skipping npm run build
+[test-env] starting cezar on http://127.0.0.1:58951 (CEZ_DRY_RUN=1)
+[test-env] healthy after 1s
+TEST_ENV_STATUS=running
+TEST_ENV_BASE_URL=http://127.0.0.1:58951
+TEST_ENV_DESCRIPTOR=.ai/qa/test-env.json
+TEST_ENV_REUSED=0
+BROWSER_PROVIDER=agent-browser
+BROWSER_INSTALLED=1
+
+ RUN  v4.1.10 /home/pkarw/Projects/cezar/.ai/cezar/worktrees/d89e350f-8a3f-49a3-aa6d-a485293f1d8e/web/app/e2e
+
+ ❯ |e2e| review-gate.e2e.ts (5 tests | 1 failed) 9160ms
+     × shows the banner and the real worktree diff as per-file sections 148ms
+ ❯ |e2e| task-changes.e2e.ts (6 tests | 1 failed) 7866ms
+     × the toolbar comes from the policy: View PR primary (the run already has a PR), Commit + Push, kebab 54ms
+ ❯ |e2e| repo-git.e2e.ts (5 tests | 1 failed) 6111ms
+     × /git/branches renders the live branch list with the checkout marked current 668ms
+ ❯ |e2e| project-groups.e2e.ts (3 tests | 1 failed) 28254ms
+     × scopes every group nav to its own project, and lights only the active one 25232ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |e2e| project-groups.e2e.ts > the grouped multi-project sidebar > scopes every group nav to its own project, and lights only the active one
+Error: cezar e2e: agent-browser wait --fn document.querySelector('[data-slot="project-group"][data-project="e2e-alpha"] [data-slot="project-group-body"]') !== null failed
+ ❯ AgentBrowser.run agent-browser.ts:98:13
+     96|       })
+     97|     } catch (cause) {
+     98|       throw new Error(`cezar e2e: agent-browser ${args.join(' ')} fail…
+       |             ^
+     99|     }
+    100|     const parsed = JSON.parse(stdout) as { success: boolean; data?: un…
+ ❯ AgentBrowser.waitForFunction agent-browser.ts:150:10
+ ❯ project-groups.e2e.ts:170:13
+
+Caused by: Error: Command failed: /home/pkarw/.local/bin/agent-browser --session e2e-project-groups-3020405 wait --fn document.querySelector('[data-slot="project-group"][data-project="e2e-alpha"] [data-slot="project-group-body"]') !== null --json
+ ❯ AgentBrowser.run agent-browser.ts:91:16
+ ❯ AgentBrowser.waitForFunction agent-browser.ts:150:10
+ ❯ project-groups.e2e.ts:170:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 1, signal: null, output: [ null, '{"success":false,"data":null,"error":"Wait timed out after 25000ms"}\n', '' ], pid: 3020872, stdout: '{"success":false,"data":null,"error":"Wait timed out after 25000ms"}\n', stderr: '' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |e2e| repo-git.e2e.ts > the repo view against the live dry-run server > /git/branches renders the live branch list with the checkout marked current
+AssertionError: expected +0 to be 1 // Object.is equality
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ repo-git.e2e.ts:147:59
+    145|     expect(browser.count('[data-slot="branch-row"]')).toBe(repo.branch…
+    146|     // Exactly the current branch wears the marker (READ-ONLY: nothing…
+    147|     expect(browser.count('[data-slot="branch-current"]')).toBe(1)
+       |                                                           ^
+    148|     expect(
+    149|       browser.evaluate(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |e2e| review-gate.e2e.ts > the review gate against a live parked run > shows the banner and the real worktree diff as per-file sections
+Error: cezar e2e: agent-browser is visible [data-slot="review-panel"] [data-slot="pr-link"] failed
+ ❯ AgentBrowser.run agent-browser.ts:98:13
+     96|       })
+     97|     } catch (cause) {
+     98|       throw new Error(`cezar e2e: agent-browser ${args.join(' ')} fail…
+       |             ^
+     99|     }
+    100|     const parsed = JSON.parse(stdout) as { success: boolean; data?: un…
+ ❯ AgentBrowser.isVisible agent-browser.ts:132:17
+ ❯ review-gate.e2e.ts:136:20
+
+Caused by: Error: Command failed: /home/pkarw/.local/bin/agent-browser --session e2e-review-3005938 is visible [data-slot="review-panel"] [data-slot="pr-link"] --json
+ ❯ AgentBrowser.run agent-browser.ts:91:16
+ ❯ AgentBrowser.isVisible agent-browser.ts:132:17
+ ❯ review-gate.e2e.ts:136:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 1, signal: null, output: [ null, '{"success":false,"data":null,"error":"Element not found. Verify the selector is correct and the element exists in the DOM."}\n', '' ], pid: 3006633, stdout: '{"success":false,"data":null,"error":"Element not found. Verify the selector is correct and the element exists in the DOM."}\n', stderr: '' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  |e2e| task-changes.e2e.ts > the Changes tab against a live dry run > the toolbar comes from the policy: View PR primary (the run already has a PR), Commit + Push, kebab
+AssertionError: expected [ …(3) ] to deeply equal [ …(3) ]
+
+- Expected
++ Received
+
+  [
+    {
+      "disabled": false,
+-     "id": "commit",
++     "id": "push",
+    },
+    {
+      "disabled": false,
+-     "id": "push",
++     "id": "create-pr",
+    },
+    {
+      "disabled": false,
+-     "id": "view-pr",
++     "id": "commit",
+    },
+  ]
+
+ ❯ task-changes.e2e.ts:180:21
+    178|     // The dry-run engine spotted the mock's PR URL, so the policy is …
+    179|     // the primary, Commit and Push sit beside it, Create PR is gone.
+    180|     expect(actions).toEqual([
+       |                     ^
+    181|       { id: 'commit', disabled: false },
+    182|       { id: 'push', disabled: false },
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  4 failed | 22 passed (26)
+      Tests  4 failed | 165 passed | 4 skipped (173)
+   Start at  09:01:10
+   Duration  180.11s (transform 411ms, setup 0ms, import 798ms, tests 175.90s, environment 2ms)
+
+TEST_E2E_STATUS=failed

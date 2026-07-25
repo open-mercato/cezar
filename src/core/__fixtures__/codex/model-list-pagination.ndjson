@@ -1,0 +1,3 @@
+{"id":1,"result":{}}
+{"id":2,"result":{"data":[{"model":"first","displayName":"First","description":"First page"}],"nextCursor":"page-2"}}
+{"id":3,"result":{"data":[{"model":"second","displayName":"Second","description":"Second page"}],"nextCursor":null}}

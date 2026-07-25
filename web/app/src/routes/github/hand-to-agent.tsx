@@ -10,11 +10,13 @@ import {
   ZapIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Link } from 'react-router'
+import { Link } from '@/lib/project-router'
 
 import { createRun, putUiState } from '@/api/client'
 import { queryKeys, useUiState } from '@/api/queries'
 import type { GithubItem, Skill, WorkflowDef } from '@/api/types'
+import { EnginePills, engineBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
+import { chipClass } from '@/components/picker-pill'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -29,7 +31,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { toast } from '@/components/ui/toaster'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SkillPreviewDialog } from '@/components/skill-detail'
-import { githubRunBody } from '@/lib/github-task'
+import { githubRunBody, githubTaskRef } from '@/lib/github-task'
 import {
   autoApplyText,
   insertTemplate,
@@ -61,6 +63,7 @@ import { readFollowupPrompt, writeFollowupPrompt } from './hand-to-agent-draft'
  * `github.tsx` also persists it to localStorage (#408) so it survives a reload and pre-fills a
  * hand-off you have never touched (`hand-to-agent-draft.ts`). `skills` arrives already ordered
  * most-used → project → global (`orderSkillsByUsage`, #519) — this component just renders it.
+ * The runner/model pills (#401) are route state for the same reason.
  *
  * The selected skills render as an always-visible chip row OUTSIDE the dropdown — the legacy
  * invariant "the filter can't hide your selection", carried over: cmdk may filter the list,
@@ -79,6 +82,8 @@ export function HandToAgent({
   onWorkflowChange,
   selectedSkills,
   onSkillsChange,
+  engine,
+  onEngineChange,
   queuedRunId,
   onQueued,
 }: {
@@ -89,23 +94,40 @@ export function HandToAgent({
   onWorkflowChange: (workflow: string | null) => void
   selectedSkills: readonly string[]
   onSkillsChange: (skills: readonly string[]) => void
+  /** Which backend runs it (#401) — route state, like the pickers above. */
+  engine: EnginePick
+  onEngineChange: (engine: EnginePick) => void
   /** The run already queued from this item, if any — renders the "✓ queued" affordance. */
   queuedRunId: string | null
   onQueued: (url: string, runId: string) => void
 }) {
   const queryClient = useQueryClient()
   const uiState = useUiState()
+  const kindLabel = item.kind === 'pr' ? 'PR' : 'issue'
   // A skill deleted since it was toggled must not reach the server (legacy rule).
   const validSkills = selectedSkills.filter((name) => skills.some((skill) => skill.name === name))
-  // Optional custom prompt (#gh-custom-prompt): empty → the default "Fix GitHub issue #N …"
-  // text. The route remounts this component per item (key={item.url}); the DRAFT — not plain
-  // component state (#408) — restores whatever was typed for THIS item, so switching away and
-  // back (or a page refresh) never loses it.
-  const [prompt, setPrompt] = useState(() => readFollowupPrompt(item.url))
+  // The box is PRE-FILLED with the item's reference (#524) rather than starting empty: what you
+  // see is what the agent gets, and it is editable — the previous "empty means the default
+  // prompt" contract made the composed text invisible, so a user typing their own instruction
+  // could not tell the item context had been dropped. Refs only, never the quoted body: a wall
+  // of issue text is unreadable in a box you are meant to edit, and the URL is right there.
+  // Captured ONCE per mount, not recomputed per render: `prompt` is seeded from it, so the two
+  // must not drift. The tab loads GitHub data twice (a fast batch, then a `limit: 1000` refetch
+  // that replaces it — github.tsx), and the component is keyed by `item.url`, not by title — so a
+  // title that differs between the two payloads would otherwise leave `prompt !== base`, which
+  // reads as "user-owned": the pre-fill would be persisted as a draft and auto-apply would stop.
+  const [base] = useState(() => githubTaskRef(item))
+  // The route remounts this component per item (key={item.url}); the DRAFT — not plain component
+  // state (#408) — restores whatever was typed for THIS item, so switching away and back (or a
+  // page refresh) never loses it. No draft stored → the pre-fill.
+  const [prompt, setPrompt] = useState(() => readFollowupPrompt(item.url) || base)
+  const resolved = useResolvedEngine(engine)
   const promptRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
-    writeFollowupPrompt(item.url, prompt)
-  }, [item.url, prompt])
+    // An untouched box stores NOTHING — persisting the pre-fill would leave a draft behind for
+    // every GitHub item ever opened, which is exactly what the store's "no trace" rule avoids.
+    writeFollowupPrompt(item.url, prompt === base ? '' : prompt)
+  }, [item.url, prompt, base])
 
   // Follow-up prompt templates (#413): built-in unless the user has edited them in Settings →
   // Prompt templates (`ui-state.json`'s `promptTemplates`).
@@ -115,7 +137,11 @@ export function HandToAgent({
   )
   const insertPromptTemplate = (snippet: string) => {
     const el = promptRef.current
-    const caret = el?.selectionStart ?? prompt.length
+    // An UNTOUCHED box reports `selectionStart === 0`, which since #524's pre-fill would splice
+    // the template ABOVE the item reference — so an untouched box appends instead. Once the user
+    // has edited it the caret is theirs and is honoured as before (it survives the blur onto the
+    // template menu), keeping `insertTemplate`'s mid-text case alive.
+    const caret = prompt === base ? prompt.length : (el?.selectionStart ?? prompt.length)
     const result = insertTemplate(prompt, caret, snippet)
     setPrompt(result.text)
     // Restore focus + caret after the state update repaints the textarea. The menu's Popover
@@ -137,19 +163,36 @@ export function HandToAgent({
   useEffect(() => {
     // Reads/writes go through refs, never a setState updater: StrictMode double-invokes those in
     // dev, which would double-apply the ref bookkeeping (the composer's #double-paste hazard).
-    const resolved = resolveAutoApply(promptRefValue.current, autoAppliedRef.current, autoText)
-    autoAppliedRef.current = resolved.applied
-    if (resolved.text !== promptRefValue.current) setPrompt(resolved.text)
+    // `base` is passed so the PRE-FILLED reference still reads as "untouched" and auto-applied
+    // template text stacks below it instead of wiping it (#524).
+    const autoApplied = resolveAutoApply(
+      promptRefValue.current,
+      autoAppliedRef.current,
+      autoText,
+      base,
+    )
+    autoAppliedRef.current = autoApplied.applied
+    if (autoApplied.text !== promptRefValue.current) setPrompt(autoApplied.text)
     // `autoText` is a derived STRING, so this fires only when the assigned set really changes —
     // not on every render that rebuilds the skills array.
-  }, [autoText])
+  }, [autoText, base])
 
   const start = useMutation({
-    mutationFn: () => createRun(githubRunBody(item, workflow, validSkills, prompt)),
+    mutationFn: async () => {
+      if (!resolved.canRun) return null
+      return createRun(githubRunBody(item, workflow, validSkills, prompt, engineBody(resolved)))
+    },
     onSuccess: (created) => {
+      if (created === null) return
       // The GitHub tab never starts variants, so the answer is a single record.
       const run = 'runs' in created ? created.runs[0] : created
       if (run) onQueued(item.url, run.id)
+      // The "✓ queued / View task →" affordance sits BELOW the button, which on a phone is
+      // typically off-screen or behind the keyboard right after the tap — so the hand-off also
+      // confirms itself as a toast, the way every other cockpit action does. Unconditional, not
+      // mobile-only: a second confirmation costs nothing on desktop, and a viewport-conditional
+      // toast is one more thing to get wrong.
+      toast(`Added to the queue — ${kindLabel} #${item.number}`)
       // Frequency sort (#408): every hand-off skill counts, mirroring the /new composer.
       // Only bump once the CURRENT map is actually known (`uiState.data` present). The PUT
       // merge is shallow (`uiStateSchema` passthrough, src/server/server.ts), so the client
@@ -170,7 +213,8 @@ export function HandToAgent({
       // only the store would leave the textarea showing text that no longer exists anywhere —
       // text that then vanishes on the next remount.
       writeFollowupPrompt(item.url, '')
-      setPrompt('')
+      setPrompt(base)
+      autoAppliedRef.current = ''
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     },
     onError: (error) => toast(error.message, { tone: 'danger' }),
@@ -189,7 +233,7 @@ export function HandToAgent({
       }) && (event.metaKey || event.ctrlKey) // multi-line box: bare Enter inserts a newline
     if (!shouldSubmit) return
     event.preventDefault()
-    if (!start.isPending) start.mutate()
+    if (!start.isPending && resolved.canRun) start.mutate()
   }
 
   const toggleSkill = (name: string) =>
@@ -214,6 +258,27 @@ export function HandToAgent({
           selected={validSkills}
           onToggle={toggleSkill}
         />
+        <EnginePills
+          pick={engine}
+          onChange={onEngineChange}
+          disabled={start.isPending || !resolved.canRun}
+        />
+        {!resolved.providerPending && !resolved.canRun ? (
+          <span
+            data-slot="gh-provider-gate"
+            className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+          >
+            {resolved.providerError
+              ? 'Provider authentication could not be verified.'
+              : 'Connect an agent provider to run this item.'}
+            <Link
+              to="/settings/agents#providers"
+              className="font-medium text-foreground underline underline-offset-4"
+            >
+              Configure providers
+            </Link>
+          </span>
+        ) : null}
         <PromptTemplateMenu templates={templates} onInsert={insertPromptTemplate} />
       </div>
 
@@ -247,7 +312,7 @@ export function HandToAgent({
         value={prompt}
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={submitShortcut}
-        placeholder={`Add instructions for the agent… (empty uses the default "${item.kind === 'pr' ? 'Address' : 'Fix'} #${item.number}" prompt)`}
+        placeholder={`Instructions for the agent… (#${item.number} and its link are always sent)`}
         className="mt-3 min-h-20 text-[13px]"
       />
 
@@ -255,11 +320,11 @@ export function HandToAgent({
         <Button
           variant="contrast"
           data-action="gh-run"
-          disabled={start.isPending}
+          disabled={start.isPending || !resolved.canRun}
           onClick={() => start.mutate()}
         >
           <PlayIcon aria-hidden="true" className="size-3.5" />
-          Run agent on this {item.kind === 'pr' ? 'PR' : 'issue'}
+          Run agent on this {kindLabel}
         </Button>
         <kbd
           aria-hidden="true"
@@ -286,10 +351,6 @@ export function HandToAgent({
     </section>
   )
 }
-
-/** The pickers' shared trigger chip — the /new footer's pill grammar. */
-const triggerClass =
-  'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
 
 /**
  * The workflow dropdown: single-select, and — legacy parity — selecting the chosen workflow
@@ -322,7 +383,7 @@ function WorkflowPicker({
           type="button"
           data-slot="gh-workflow-trigger"
           aria-label="Choose a workflow"
-          className={cn(triggerClass, value && 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
+          className={cn(chipClass, value && 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
         >
           <WorkflowIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
           <span className="max-w-44 truncate">{value ?? 'workflow'}</span>
@@ -452,7 +513,7 @@ function SkillsPicker({
             type="button"
             data-slot="gh-skills-trigger"
             aria-label="Choose skills"
-            className={cn(triggerClass, selected.length > 0 && 'border-foreground/60 font-semibold text-foreground')}
+            className={cn(chipClass, selected.length > 0 && 'border-foreground/60 font-semibold text-foreground')}
           >
             <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
             skills{selected.length > 0 ? ` · ${selected.length}` : ''}

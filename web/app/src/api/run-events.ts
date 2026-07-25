@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { scopeApiPath } from './project-scope'
 import type { RunEvent } from './types'
 
 /**
@@ -112,7 +113,10 @@ export function useRunEvents(runId: string | undefined): RunEvent[] {
       // A fresh socket resets the clock: replay is about to arrive, so it must not be judged
       // stale before its first frame lands.
       lastFrameAt = Date.now()
-      source = new Source(`/api/runs/${encodeURIComponent(runId)}/events`)
+      // Scoped per project like every client.ts path (spec 3.1) — unscoped this is the
+      // byte-identical legacy URL. Read per (re)open, but the scope only changes with the
+      // route, which unmounts this hook first.
+      source = new Source(scopeApiPath(`/api/runs/${encodeURIComponent(runId)}/events`))
       for (const name of RUN_EVENT_NAMES) source.addEventListener(name, onFrame)
       source.addEventListener('ping', onPing)
       source.addEventListener('error', () => {

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
-import { readdir, rm } from 'node:fs/promises';
+import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { isSafeGitRef } from './git-refs.js';
 
@@ -242,13 +242,87 @@ export async function removeWorktree(
 }
 
 /**
+ * Why an autosave commit happened. Only `periodic` is gated (behind
+ * `CEZ_AUTOSAVE=1`, #471) — the three flushes always run so the branch ends
+ * holding the finished state. Before this was recorded, all four wrote the bare
+ * message `cezar autosave`, so a user who had opted out of the periodic timer
+ * still saw `cezar autosave` in `git log` and reasonably concluded the opt-out
+ * was broken. Only commit *spacing* (~90 s ⇒ timer) told them apart.
+ */
+export type AutosaveReason = 'periodic' | 'turn end' | 'run finalize' | 'pre-PR';
+
+/**
+ * What an autosave attempt did. `refused` and `failed` are distinct from
+ * `nothing-to-do` because one call site must act on them: the pre-PR flush is
+ * the *last* one, so anything other than `committed`/`nothing-to-do` there
+ * means the branch leaves the box without the run's final state and the user
+ * has to be told (see createDraftPr). A bare boolean could not carry that.
+ */
+export type AutosaveResult = 'committed' | 'nothing-to-do' | 'refused' | 'failed';
+
+/**
+ * Leftover merge-conflict markers, anchored at line start as git writes them.
+ * All three must appear *in order*: a bare `=======` line is ordinary Markdown
+ * (a setext heading underline), and any of the three alone — or the pair
+ * `<<<<<<<`/`>>>>>>>` in either order — occurs legitimately in checked-in
+ * patch fixtures and in docs that demonstrate conflict markers. Requiring the
+ * full ordered triple is what separates a real conflict from a file that
+ * merely talks about one.
+ */
+const CONFLICT_START = /^<{7}(?:\s|$)/;
+const CONFLICT_MID = /^={7}(?:\s|$)/;
+const CONFLICT_END = /^>{7}(?:\s|$)/;
+
+/**
+ * Largest file the marker scan will read. Autosave runs as often as every 90 s,
+ * and decoding a large tracked file into a JS string each time is a real memory
+ * cost for a check that only ever looks at a few marker lines. Oversized files
+ * are skipped, which fails *open* — consistent with the rest of this guard,
+ * where a false negative costs noise and a false positive costs the recovery
+ * point.
+ */
+const MARKER_SCAN_MAX_BYTES = 2_000_000;
+
+/** Does this file carry a complete, ordered conflict hunk? */
+function hasConflictMarkers(text: string): boolean {
+  let want: 0 | 1 | 2 = 0; // 0: `<<<<<<<`, 1: `=======`, 2: `>>>>>>>`
+  for (const line of text.split('\n')) {
+    if (want === 0) {
+      if (CONFLICT_START.test(line)) want = 1;
+    } else if (want === 1) {
+      if (CONFLICT_MID.test(line)) want = 2;
+    } else if (CONFLICT_END.test(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Stage and commit everything in the worktree as a "cezar autosave" commit
  * (janitor pattern) — the agent's progress is always recoverable from the
  * `cez/<id8>` branch history. Quietly a no-op when nothing changed.
+ *
+ * The message carries `reason` so the opt-in periodic timer and the always-on
+ * flushes are distinguishable in `git log`; the `cezar autosave` prefix is kept
+ * so existing log greps still match.
+ *
+ * Refuses to commit a worktree that is mid-merge or still carries conflict
+ * markers: the incident behind #471 was an autosave capturing a half-resolved
+ * merge, and a blind `git add -A` would do it again.
  */
-export async function autosaveCommit(dir: string): Promise<boolean> {
+export async function autosaveCommit(dir: string, reason: AutosaveReason): Promise<AutosaveResult> {
   const status = await git(dir, ['status', '--porcelain']);
-  if (!status.ok || !status.stdout.trim()) return false;
+  if (!status.ok || !status.stdout.trim()) return 'nothing-to-do';
+  const unresolved = await unresolvedConflicts(dir, status.stdout);
+  if (unresolved) {
+    // Losing one recovery point beats poisoning the branch with a commit that
+    // does not build. For the periodic and turn-end flushes the next one picks
+    // the work up once the merge resolves; the pre-PR flush has no next one,
+    // which is why callers get `refused` rather than a bare `false`.
+    console.warn(`[cezar] skipping ${reason} autosave in ${dir}: ${unresolved}`);
+    return 'refused';
+  }
   await git(dir, ['add', '-A']);
   // Commit as the CURRENT git user, so the branch's commits (and any PR opened from it) are
   // attributed to the real author and pass CLA / attribution checks. The old hardcoded
@@ -263,9 +337,96 @@ export async function autosaveCommit(dir: string): Promise<boolean> {
     'commit',
     '--no-verify',
     '-m',
-    'cezar autosave',
+    `cezar autosave (${reason})`,
   ]);
-  return commit.ok;
+  return commit.ok ? 'committed' : 'failed';
+}
+
+/**
+ * Is the worktree mid-merge or still carrying conflict markers? Returns a
+ * human-readable reason, or `null` when it is safe to autosave.
+ *
+ * Two independent checks, because they catch different failures: porcelain `U`
+ * codes catch an *unresolved* merge, while the marker scan catches the worse
+ * case — someone ran `git add` on a file they had not finished resolving, which
+ * clears the `U` code but leaves `<<<<<<<` in the text.
+ */
+async function unresolvedConflicts(dir: string, porcelain: string): Promise<string | null> {
+  const entries = porcelain.split('\n').filter(Boolean);
+  const unmerged = entries.filter((line) => {
+    const xy = line.slice(0, 2);
+    // Unmerged per `git status` docs: any side U, plus the AA / DD collisions.
+    return xy.includes('U') || xy === 'AA' || xy === 'DD';
+  });
+  const firstUnmerged = unmerged[0];
+  if (firstUnmerged) {
+    return `${unmerged.length} unmerged path(s), e.g. ${firstUnmerged.slice(3)}`;
+  }
+  // Deleted paths have no content to scan. Untracked (`??`) ones are skipped
+  // even though `git add -A` will commit them: a conflict always lands in a
+  // tracked file, whereas an untracked fixture or doc that legitimately
+  // contains marker-shaped lines would otherwise wedge every autosave. False
+  // negatives here cost noise; false positives would cost the recovery point.
+  const candidates = entries
+    .filter((line) => !line.startsWith('D ') && !line.startsWith(' D') && !line.startsWith('??'))
+    .map((line) => {
+      // A rename reads `old -> new`; the new path is what gets committed.
+      const raw = line.slice(3).trim();
+      const path = raw.includes(' -> ') ? (raw.split(' -> ')[1] ?? raw) : raw;
+      return unquotePath(path);
+    });
+  for (const path of candidates) {
+    // Read the working tree, not the index: this runs before `git add -A`, so
+    // the on-disk copy is what would be committed. Binary files decode to
+    // mojibake rather than throwing, but cannot match the anchored marker
+    // pattern; unreadable paths (races, symlinks) are skipped, not fatal.
+    let text: string;
+    try {
+      const full = join(dir, path);
+      if ((await stat(full)).size > MARKER_SCAN_MAX_BYTES) continue;
+      text = await readFile(full, 'utf8');
+    } catch {
+      continue;
+    }
+    if (hasConflictMarkers(text)) {
+      return `leftover conflict markers in ${path}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Undo `git status --porcelain` path quoting. Git quotes a path containing a
+ * space or a non-ASCII byte, escaping the latter as octal — `café.txt` reads
+ * back as `"caf\303\251.txt"`. Stripping the quotes alone leaves those escapes
+ * literal, so the file would not open and a real conflict in it would go
+ * unnoticed. Decoding the octal bytes as UTF-8 restores the actual name.
+ */
+function unquotePath(path: string): string {
+  if (!path.startsWith('"') || !path.endsWith('"')) return path;
+  const inner = path.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < inner.length; i += 1) {
+    if (inner[i] !== '\\') {
+      bytes.push(...Buffer.from(inner[i] as string, 'utf8'));
+      continue;
+    }
+    const next = inner[i + 1] as string | undefined;
+    if (next === undefined) break;
+    const octal = inner.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(octal)) {
+      bytes.push(parseInt(octal, 8));
+      i += 3;
+      continue;
+    }
+    // C-style single-character escapes git also emits.
+    const simple: Record<string, number> = { n: 10, t: 9, r: 13, '"': 34, '\\': 92 };
+    const escaped = simple[next];
+    if (escaped === undefined) bytes.push(...Buffer.from(next, 'utf8'));
+    else bytes.push(escaped);
+    i += 1;
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 
 /** Does this repo/worktree resolve a git author identity (name + email)? Ambient config wins so

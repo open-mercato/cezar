@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>cezar — Files tab, save conflict (409) · #530 mockup</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  .editor { position: relative; padding: 8px 0; }
+  .editor-gutter {
+    position: absolute; top: 8px; left: 16px; width: 40px;
+    padding-right: 12px; text-align: right; user-select: none; pointer-events: none;
+    font: 400 12px/1.7 var(--mono); font-variant-numeric: tabular-nums;
+    color: var(--soft-foreground);
+  }
+  .editor-pre, .editor-ta {
+    margin: 0; border: 0; outline: none; background: transparent;
+    font: 400 12px/1.7 var(--mono);
+    padding: 0 16px 0 56px;   /* px-4 (16) + w-10 gutter (40), border-box */
+    white-space: pre; tab-size: 8; overflow-wrap: normal; word-break: normal;
+  }
+  .editor-pre { color: var(--syn-var); }
+  .editor-ta {
+    position: absolute; inset: 8px 0; width: 100%; height: calc(100% - 16px);
+    resize: none; overflow: auto; color: transparent; caret-color: var(--foreground);
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="side-head"><span class="brand-tile">c</span><span class="name">cezar</span></div>
+    <div class="side-section">
+      <div class="nav-item active">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h12"/></svg>
+        Tasks
+      </div>
+    </div>
+    <div class="side-label">Recent</div>
+    <div class="side-section">
+      <div class="task-row active"><span class="dot dot-pending"></span><span class="t">worktree file editing</span></div>
+      <div class="task-row"><span class="dot dot-success"></span><span class="t">multi-project workspace</span></div>
+    </div>
+  </aside>
+
+  <div class="main">
+
+    <header class="run-head">
+      <div class="inner">
+        <div class="run-title">
+          <h1>worktree file editing</h1>
+          <span class="pill"><span class="dot dot-pending"></span>running</span>
+        </div>
+        <div class="run-meta">
+          <span>om-auto-create-pr</span><span class="sep">·</span>
+          <span class="chip-branch">spec/worktree-file-editing</span>
+        </div>
+        <div class="run-tabs">
+          <span class="tab">Session</span><span class="tab">Changes</span>
+          <span class="tab">Commits</span><span class="tab active">Files</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="files-split">
+
+      <aside class="files-aside">
+        <nav class="tree" aria-label="Worktree files">
+          <ul>
+            <li>
+              <button class="dir">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(90deg)"><path d="m9 18 6-6-6-6"/></svg>
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                <span class="nm">src</span>
+              </button>
+              <ul>
+                <li>
+                  <button class="dir" style="padding-left: 20px">
+                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(90deg)"><path d="m9 18 6-6-6-6"/></svg>
+                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                    <span class="nm">server</span>
+                  </button>
+                  <ul>
+                    <li><button style="padding-left: 52px" class="active" aria-current="true">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">capabilities.ts</span>
+                      <span class="sz" style="color: var(--danger)">● 2.5 kB</span>
+                    </button></li>
+                    <li><button style="padding-left: 52px">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">server.ts</span><span class="sz">64.2 kB</span>
+                    </button></li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </nav>
+      </aside>
+
+      <section class="files-main">
+        <div class="pane">
+
+          <header class="pane-head">
+            <span class="path">src/server/capabilities.ts</span>
+            <span class="pill" style="padding: 1px 8px; font-size: 11px;">unsaved</span>
+            <span class="spacer"></span>
+            <span class="size">2.5 kB</span>
+            <button class="btn btn-sm btn-ghost">Cancel</button>
+            <button class="btn btn-sm btn-primary" disabled>Save</button>
+          </header>
+
+          <div class="banner banner-danger">
+            <svg class="ic ic-danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></svg>
+            <div class="body">
+              <strong>Not saved — the file changed on disk since you opened it.</strong>
+              <p>The agent rewrote <code>src/server/capabilities.ts</code> while you were typing.
+                 Your text is still here and has not been touched. Reloading discards it.</p>
+            </div>
+            <div class="acts">
+              <button class="btn btn-sm btn-outline">Copy my version</button>
+              <button class="btn btn-sm btn-contrast">Reload</button>
+            </div>
+          </div>
+
+          <div class="editor">
+            <div class="editor-gutter">42<br />43<br />44<br />45<br />46<br />47<br />48<br />49<br />50</div>
+<pre class="editor-pre" aria-hidden="true"><span class="k">export</span> <span class="k">function</span> <span class="f">resolveCapabilities</span><span class="p">(</span><span class="v">env</span><span class="p">:</span> <span class="f">NodeJS</span><span class="p">.</span><span class="f">ProcessEnv</span><span class="p">,</span> <span class="v">bindHost</span><span class="p">?:</span> <span class="k">string</span><span class="p">):</span> <span class="f">Capabilities</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="p">{</span>
+    <span class="k">localHandoff</span><span class="p">:</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_REMOTE</span> <span class="p">!==</span> <span class="s">'1'</span> <span class="p">&amp;&amp;</span> <span class="f">isLoopbackHost</span><span class="p">(</span><span class="v">bindHost</span><span class="p">),</span>
+    <span class="k">fileEdit</span><span class="p">:</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_REMOTE</span> <span class="p">!==</span> <span class="s">'1'</span> <span class="p">&amp;&amp;</span> <span class="f">isLoopbackHost</span><span class="p">(</span><span class="v">bindHost</span><span class="p">)</span> <span class="p">&amp;&amp;</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_NO_FILE_EDIT</span> <span class="p">!==</span> <span class="s">'1'</span><span class="p">,</span>
+    <span class="k">followups</span><span class="p">:</span> <span class="f">followupsEnabled</span><span class="p">(</span><span class="v">env</span><span class="p">),</span>
+  <span class="p">};</span>
+<span class="p">}</span>
+
+<span class="c">/** Loopback only — a bind on 0.0.0.0 is reachable from the network. */</span></pre>
+<textarea class="editor-ta" spellcheck="false">export function resolveCapabilities(env: NodeJS.ProcessEnv, bindHost?: string): Capabilities {
+  return {
+    localHandoff: env.CEZ_REMOTE !== '1' &amp;&amp; isLoopbackHost(bindHost),
+    fileEdit: env.CEZ_REMOTE !== '1' &amp;&amp; isLoopbackHost(bindHost) &amp;&amp; env.CEZ_NO_FILE_EDIT !== '1',
+    followups: followupsEnabled(env),
+  };
+}
+
+/** Loopback only — a bind on 0.0.0.0 is reachable from the network. */</textarea>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+    <p class="caption">
+      <b>Save refused — <code>409</code>, <code>baseHash</code> mismatch.</b> Nothing is
+      auto-resolved and nothing typed is lost: the editor keeps the user's text, <b>Save</b> is
+      disabled until they choose, and the two exits are explicit — <b>Copy my version</b>
+      (clipboard, then reload safely) and <b>Reload</b> (discard mine, refetch the agent's
+      content and its new <code>hash</code>). The tree dot turns red for the same file. This is
+      the "changed <i>before</i> your save" wording; the "changed <i>after</i> your save"
+      overwrite banner is Phase 2 and reads differently on purpose (§Concurrency race 2).
+    </p>
+
+  </div>
+</div>
+</body>
+</html>

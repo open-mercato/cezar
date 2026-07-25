@@ -7,6 +7,8 @@ import { RunStore } from '../runs/store.js';
 import type { RunManager, StartRunInput } from '../workflows/run.js';
 import type { WorkflowDef } from '../workflows/types.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 
 /**
  * Tightened request validation (#429): the mutating routes now bound their
@@ -15,6 +17,7 @@ import { createApp } from './server.js';
  * still passes — and the ui-state passthrough policy.
  */
 describe('request validation bounds (#429)', () => {
+  const savedRemote = process.env.CEZ_REMOTE;
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
@@ -22,6 +25,7 @@ describe('request validation bounds (#429)', () => {
   let continueText: string | undefined;
 
   beforeEach(() => {
+    delete process.env.CEZ_REMOTE;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-reqval-'));
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     captured = undefined;
@@ -31,21 +35,31 @@ describe('request validation bounds (#429)', () => {
         captured = input;
         return store.createRun({ title: 't', workflow: '(planned)', task: input.task, steps: [] });
       },
-      continueRun: (_id: string, text?: string) => {
-        continueText = text;
+      // Options object since #401 (runner/model override rides alongside the resume text);
+      // these bounds tests still only care about `text`.
+      continueRun: (_id: string, opts: { text?: string } = {}) => {
+        continueText = opts.text;
         return { ok: true };
       },
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
+    else process.env.CEZ_REMOTE = savedRemote;
   });
 
   const postJson = (path: string, body: unknown) =>
-    app.request(path, {
+    apiRequest(app, path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -91,7 +105,7 @@ describe('request validation bounds (#429)', () => {
 
   it('an empty continue body still resumes (text optional)', async () => {
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
-    const res = await app.request(`/api/runs/${run.id}/continue`, { method: 'POST' });
+    const res = await apiRequest(app, `/api/runs/${run.id}/continue`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(continueText).toBeUndefined();
   });
@@ -119,7 +133,7 @@ describe('request validation bounds (#429)', () => {
   // ---- archive schema ------------------------------------------------------
   it('archives with no body', async () => {
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
-    const res = await app.request(`/api/runs/${run.id}/archive`, { method: 'POST' });
+    const res = await apiRequest(app, `/api/runs/${run.id}/archive`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(store.getRun(run.id)?.archived).toBe(true);
   });
@@ -133,7 +147,7 @@ describe('request validation bounds (#429)', () => {
   // ---- open-in schema ------------------------------------------------------
   it('rejects an open-in with no target (400)', async () => {
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
-    const res = await app.request(`/api/runs/${run.id}/open-in`, {
+    const res = await apiRequest(app, `/api/runs/${run.id}/open-in`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({}),
@@ -143,7 +157,7 @@ describe('request validation bounds (#429)', () => {
 
   // ---- ui-state passthrough policy -----------------------------------------
   const putJson = (path: string, body: unknown) =>
-    app.request(path, {
+    apiRequest(app, path, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

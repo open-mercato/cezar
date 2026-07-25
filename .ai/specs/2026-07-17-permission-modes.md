@@ -1,6 +1,6 @@
 # Permission modes: non-skip-all and non-auto agent permissions (#475)
 
-> Status: **draft — awaiting approval via spec PR**
+> Status: **approved — spec PR #477 merged**
 > Issue: https://github.com/open-mercato/cezar/issues/475
 > Mockups: [settings block](assets/permission-modes/settings-permissions.html) ·
 > [composer guard](assets/permission-modes/composer-autonomous-guard.html) ·
@@ -8,10 +8,9 @@
 
 ## TLDR
 
-Today every backend runs effectively permission-free: claude gets a hardcoded
-`--permission-mode acceptEdits` + a default-deny tool allowlist, codex gets
-`sandbox: workspace-write` + `approvalPolicy: never`, and opencode auto-approves
-everything. This spec adds a user-selectable **permission mode** (four presets,
+Today the backends have uneven permission defaults: claude gets a hardcoded
+mode plus a tool allowlist, codex has its own sandbox/policy pair, and opencode
+auto-approves everything. This spec adds a user-selectable **permission mode** (four presets,
 plus optional advanced per-tool rules with globs) as a global default in
 Settings → Agents with a per-task override in the composer, wires it through
 the `AgentRunSpec` seam into each backend's native permission mechanism, and
@@ -19,11 +18,13 @@ adds cockpit UI to surface and answer live permission prompts — activating the
 `permission.requested` / `permission.resolved` events that were reserved for
 exactly this. The autonomous toggle gains a guard: an autonomous run with a
 non-auto mode warns the user that the run will park for their attention. The
-default stays exactly today's behavior — zero-config rule.
+default `auto` mode is explicitly unrestricted across every backend.
 
 Gate decisions (2026-07-17, issue author): one spec with phased delivery;
 setting lives global + per-task override; granularity is presets **plus**
-advanced rules; unanswered prompts park at `waiting` indefinitely.
+advanced rules; unanswered prompts park at `waiting` indefinitely. Clarification
+(2026-07-21, issue author): the default `auto` preset means **full permissions
+for every coding-agent backend**; restrictive behavior is opt-in.
 
 ## Problem Statement
 
@@ -95,7 +96,7 @@ action in Settings), and codex sandbox escalation flows.
 | Surface | Today | File |
 | --- | --- | --- |
 | claude args | `--permission-mode acceptEdits`, `--allowedTools` default-deny, `Bash(prefix:*)` globs | `src/core/claude-cli-runner.ts:301-360` |
-| codex args | `sandbox: workspace-write`, `approvalPolicy: never`, network on | `src/core/codex-app-server-runner.ts:289` |
+| codex args | `sandbox: danger-full-access`, `approvalPolicy: never` (#563; `CEZ_CODEX_NETWORK=0` opts into network-blocked `workspace-write`) | `src/core/codex-app-server-runner.ts:295` |
 | opencode | auto-approved permissions, `allowedTools` ignored | `src/core/opencode-server-runner.ts:39` |
 | Protocol | `permission.requested` / `permission.resolved` RESERVED; `PermissionOption` kinds `allow_once` / `allow_always` / `reject_once` / `reject_always` | `src/core/ui-events.ts:122-135, 296-312` |
 | Attention | `permission` already tops the priority ladder | `web/app/src/lib/attention.ts:16` |
@@ -111,7 +112,7 @@ presets plus optional advanced rules:
 
 | Preset | Meaning (UI copy) | claude | codex | opencode |
 | --- | --- | --- | --- | --- |
-| `auto` *(default)* | Run without asking — today's behavior | `acceptEdits` + default `--allowedTools` (unchanged args) | `workspace-write` + `never` (unchanged) | permissions allowed (unchanged) |
+| `auto` *(default)* | Full permissions; run without asking | `bypassPermissions` / dangerously-skip permissions | `danger-full-access` + `never` | all permissions allowed |
 | `guarded` | Edits run; shell & network ask | `acceptEdits`, `Bash` moved from allowlist to `ask` | `workspace-write` + `on-request` | `edit: allow`, `bash: ask`, `webfetch: ask` |
 | `read-only` | Reads run; any change asks | `manual` + allowlist `Read,Grep,Glob`; writes/exec ask | `read-only` sandbox + `on-request` | `edit: ask`, `bash: ask` |
 | `manual` | Everything asks | `--permission-mode manual`, empty allowlist | `untrusted` | all tools `ask` |
@@ -317,9 +318,10 @@ conventions. Copy stays agent-agnostic (capability names, never vendor flags).
 
 - **Blast radius**: the three runners' arg/config builders (each currently
   hardcoded — pure-function changes with unit tests), the runs API, one
-  settings section, the composer, the task thread. Default path (`auto`)
-  produces byte-identical CLI args to today — regression risk concentrates in
-  the non-default modes.
+  settings section, the composer, the task thread. `auto` deliberately maps
+  every backend to its unrestricted native settings; #563 lands the Codex
+  mapping first, while #475 owns the remaining normalization and restrictive
+  modes.
 - **Backward compatibility** (per `BACKWARD_COMPATIBILITY.md`): config key
   additive; `RunRecord` field optional; API changes additive (new optional
   body key, new route). The reserved `UiPermissionResolvedEvent` gets a
@@ -331,9 +333,11 @@ conventions. Copy stays agent-agnostic (capability names, never vendor flags).
   change under us. Mappings live in one translation function per runner with
   table-driven unit tests, so drift is a one-file fix; unknown values degrade
   stricter, never looser.
-- **Security posture**: this feature only ever *tightens* defaults. The
-  `deny` list is enforced by the backend, not by cezar string-matching. No
-  new secrets, no new network surface, server stays loopback-only.
+- **Security posture**: `auto` is deliberately unrestricted across all three
+  backends per the issue author's 2026-07-21 clarification; guarded,
+  read-only, manual, and advanced deny rules opt into tighter policies. The
+  `deny` list is enforced by the backend, not by cezar string-matching. No new
+  secrets or server network surface; the server stays loopback-only.
 - **Rollback**: revert the code; the `permissions` config key is ignored by
   older builds (unknown-key tolerant), runs.json stays parseable. No
   migration in either direction.
@@ -349,8 +353,8 @@ conventions. Copy stays agent-agnostic (capability names, never vendor flags).
   run would silently auto-deny (the CLI only routes approvals through
   `can_use_tool` when the host declares control-protocol support at the
   stream-json handshake) and a codex `on-request` approval would hang
-  invisibly. No answer UI yet — independently shippable because `auto` is
-  byte-identical to today and restrictive modes are usable-with-caveat:
+  invisibly. No answer UI yet — independently shippable because `auto` never
+  parks for approval and restrictive modes are usable-with-caveat:
   a parked run is escaped by interrupt (all backends) or terminal takeover
   (`claude --resume <sessionId>`, claude only) — both caveats documented.
 - **Phase 2 — answering**: `AgentSession.respondPermission` per backend, the
@@ -368,7 +372,8 @@ step group is `npm run typecheck && npm test && npm run test:unit`.
   config unit tests.
 - 1.2 `src/core/agent-runner.ts`: `PermissionSpec` type on `AgentRunSpec`;
   `src/core/permission-map.ts`: pure preset+rules → per-backend translation
-  tables + exhaustive unit tests (including "auto === today's exact args").
+  tables + exhaustive unit tests (including unrestricted `auto` mappings for
+  every backend).
 - 1.3 `src/core/claude-cli-runner.ts`: consume the translation in
   `buildClaudeArgs` (modes, allow/ask/deny channels) + tests.
 - 1.4 `src/core/codex-app-server-runner.ts`: sandbox/approvalPolicy from mode;

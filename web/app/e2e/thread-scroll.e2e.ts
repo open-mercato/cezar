@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 import { expectedRowCount, largeThreadEvents } from './fixtures/make-large-thread'
 import record from './fixtures/thread-run.record.json'
 
@@ -74,11 +74,18 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 const MAIN = `document.querySelector('[data-slot="main"]')`
 const nearBottom = `(() => { const m = ${MAIN}; return m.scrollHeight - m.scrollTop - m.clientHeight < 80 })()`
 const rowCount = () => browser.count('[data-slot="thread-row"]')
 const domSize = () => Number(browser.evaluate(`document.querySelectorAll('*').length`))
+const assistantWidth = () =>
+  Number(browser.evaluate(`document.querySelector('[data-slot="assistant-message"]')?.getBoundingClientRect().width ?? 0`))
 
 /**
  * Scroll away from the tail like a reader would — and INSIST, like a reader would.
@@ -104,7 +111,7 @@ function parkAt(target: string) {
 /** Load the thread and wait until the SSE replay has finished growing it (the last turn's
  *  note is rendered) — every measurement below is over the complete transcript. */
 function openThread(query = '') {
-  browser.goto(`${baseUrl}/tasks/${RUN_ID}${query}`)
+  browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}${query}`)
   browser.waitForFunction(
     `document.querySelector('[data-slot="thread-rows"]') !== null && document.body.textContent.includes('goal achieved — session closed')`,
   )
@@ -127,9 +134,10 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(1440, 900)
@@ -138,19 +146,29 @@ beforeAll(async () => {
 afterAll(() => {
   browser?.close()
   server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  // The killed server may still be flushing its NDJSON into dataRoot, which races rmSync and
+  // throws ENOTEMPTY — a suite-level failure on a run whose every test passed. A temp dir that
+  // outlives the run is litter, not a failure; the OS reaps it.
+  try {
+    if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  } catch {
+    /* the OS reaps it */
+  }
 })
 
 describe('thread virtualization on a 1,000-row transcript', () => {
   let flatRows = 0
   let flatDom = 0
+  let flatAssistantWidth = 0
 
   it('force-flat renders every row (the before measurement)', () => {
     openThread('?thread=flat')
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('false')
     flatRows = rowCount()
     flatDom = domSize()
+    flatAssistantWidth = assistantWidth()
     expect(flatRows).toBe(ROWS) // the generator's own arithmetic, end to end
+    expect(flatAssistantWidth).toBeGreaterThan(200)
   }, 90_000)
 
   it('auto mode virtualizes past the threshold and keeps the DOM bounded', () => {
@@ -165,6 +183,9 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     expect(virtualRows).toBeGreaterThan(0)
     expect(virtualRows).toBeLessThan(flatRows / 10)
     expect(virtualDom).toBeLessThan(flatDom / 2)
+    const virtualAssistantWidth = assistantWidth()
+    expect(virtualAssistantWidth).toBeGreaterThan(200)
+    expect(Math.abs(virtualAssistantWidth - flatAssistantWidth)).toBeLessThan(2)
     // The numbers themselves are checkpoint material — persisted next to the screenshots.
     mkdirSync(artifactsDir, { recursive: true })
     writeFileSync(
@@ -207,11 +228,11 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     expect(maxTop - parked).toBeGreaterThan(1000) // genuinely mid-thread, not a near-tail park
 
     // …leave through the sidebar (a client-side <Link> — a reload would drop the caches)…
-    browser.click('[data-slot="sidebar"] a[href="/"]')
+    browser.click(`[data-slot="sidebar"] a[href="${scoped('/')}"]`)
     browser.waitForFunction(`document.querySelector('[data-route="task-thread"]') === null`)
 
     // …and come back through the quick list.
-    browser.click(`a[href="/tasks/${RUN_ID}"]`)
+    browser.click(`a[href="${scoped(`/tasks/${RUN_ID}`)}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="thread-rows"]') !== null`)
     // The replay re-grows the thread; the cached offset is re-applied until reachable.
     browser.waitForFunction(`Math.abs(${MAIN}.scrollTop - ${parked}) < 200`)

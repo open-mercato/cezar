@@ -9,11 +9,15 @@ import { NotificationsSection } from './notifications-section'
  * Settings → Notifications (R6 Step 1.7): the toggle's persistence round-trip against a stubbed
  * ui-state API, enable-only permission requests, and the denied/unsupported degradations.
  * The trigger itself (what actually fires) is pinned in components/run-notifications.test.tsx.
+ * Since step 3.5 this is a GLOBAL section: every read and write below is asserted against
+ * `/api/workspace/ui-state`, and a write to the per-repo `/api/ui-state` would fail the stub's
+ * URL match outright.
  */
 
 let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
-/** GET/PUT /api/ui-state answer; everything else stays honestly pending. */
+/** GET/PUT the GLOBAL ui-state (`/api/workspace/ui-state`) — the store this section has
+ *  written since the step-3.5 settings split; everything else stays honestly pending. */
 function serve(uiState: Record<string, unknown> = {}) {
   requests = []
   const json = (payload: unknown) =>
@@ -25,8 +29,8 @@ function serve(uiState: Record<string, unknown> = {}) {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/ui-state' && method === 'GET') return json(uiState)
-      if (url === '/api/ui-state' && method === 'PUT')
+      if (url === '/api/workspace/ui-state' && method === 'GET') return json(uiState)
+      if (url === '/api/workspace/ui-state' && method === 'PUT')
         return json({ ...uiState, ...(body as Record<string, unknown>) })
       return new Promise<never>(() => {})
     }),
@@ -55,7 +59,7 @@ function renderSection() {
 }
 
 const toggle = () => screen.getByRole('switch', { name: 'Notify when an agent needs you' })
-const putBody = () => requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body
+const putBody = () => requests.find((r) => r.method === 'PUT' && r.url === '/api/workspace/ui-state')?.body
 
 afterEach(() => {
   cleanup()

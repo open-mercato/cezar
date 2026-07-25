@@ -1,0 +1,20 @@
+
+> @open-mercato/cezar@0.8.0 test:package
+> node --import tsx --test test/e2e/*.test.ts
+
+✔ the release tarball installs and runs the dry-run CLI workflow (5519.523108ms)
+✔ dry-run publish stamps both manifests, pins the alias exact, and emits the result JSON (1575.908873ms)
+✔ a missing NPM token forces a dry run instead of failing the job (783.905518ms)
+✔ a non-publishable event exits 0 without touching the manifests (59.433825ms)
+✔ a patch bump stamps both manifests, keeps the alias caret range, and emits the version (1576.403833ms)
+✔ the existing bump publishes the committed version verbatim (782.061562ms)
+✔ a missing NPM token forces a dry run instead of publishing (721.927678ms)
+✔ an unknown bump exits non-zero without touching the manifests (42.986908ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5644.985871

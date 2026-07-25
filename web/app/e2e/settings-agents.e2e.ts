@@ -79,6 +79,7 @@ const gotoAgents = () => {
 describe('settings → agents against the live dry-run server', () => {
   it('renders every knob, agent-agnostically named', () => {
     gotoAgents()
+    browser.waitForFunction(`document.querySelector('[data-slot="agents-base-branch"]') !== null`)
     expect(browser.count('[data-slot="agents-runner"] [role="radio"]')).toBe(3)
     expect(browser.count('[data-slot="agents-model"]')).toBe(3)
     expect(browser.count('[data-slot="agents-system-prompt"]')).toBe(1)

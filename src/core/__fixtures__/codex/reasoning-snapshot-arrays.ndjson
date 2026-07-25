@@ -1,0 +1,8 @@
+{"id":1,"result":{"userAgent":"codex/0.144.6"}}
+{"method":"thread/started","params":{"thread":{"id":"th_snapshot"}}}
+{"method":"turn/started","params":{"turn":{"id":"turn_snapshot","status":"inProgress","items":[]}}}
+{"method":"item/started","params":{"threadId":"th_snapshot","turnId":"turn_snapshot","item":{"type":"reasoning","id":"item_snapshot","summary":[],"content":[]}}}
+{"method":"item/completed","params":{"threadId":"th_snapshot","turnId":"turn_snapshot","item":{"type":"reasoning","id":"item_snapshot","summary":["Inspecting the merge conflict.","Choosing the compatible resolution."],"content":[]}}}
+{"method":"item/started","params":{"threadId":"th_snapshot","turnId":"turn_snapshot","item":{"type":"agentMessage","id":"item_message","text":"","phase":"final_answer"}}}
+{"method":"item/completed","params":{"threadId":"th_snapshot","turnId":"turn_snapshot","item":{"type":"agentMessage","id":"item_message","text":"The conflict is resolved.","phase":"final_answer"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn_snapshot","status":"completed"}}}

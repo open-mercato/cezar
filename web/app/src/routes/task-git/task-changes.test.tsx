@@ -44,7 +44,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, followups: false },
+  capabilities: { localHandoff: true, followups: false, singleProject: false },
 }
 
 const CHANGES: ChangesPayload = {
@@ -173,6 +173,23 @@ describe('the Changes tab route', () => {
     // Commit has nothing to do — disabled, and it says why.
     expect(toolbarAction('commit')?.disabled).toBe(true)
     expect(toolbarAction('commit')?.title).toContain('no changes to commit')
+  })
+
+  it('explains when a repointed review worktree shows only uncommitted changes', async () => {
+    stubFetch({
+      'GET /api/runs/r1/changes': () =>
+        jsonResponse({
+          files: [],
+          stat: { adds: 0, dels: 0, files: 0 },
+          repointedHead: { headBranch: 'review/pr-42', taskBranch: 'cez/abc12345' },
+        }),
+    })
+    renderChangesRoute()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="repointed-head-note"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="repointed-head-note"]')?.textContent).toContain(
+      "HEAD is on review/pr-42, not this task's branch cez/abc12345 — showing uncommitted changes only.",
+    )
   })
 
   it('a 409 ("no worktree") renders the server reason and disables the git actions', async () => {

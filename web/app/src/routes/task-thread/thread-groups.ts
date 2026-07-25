@@ -97,7 +97,15 @@ export function groupThreadItems(allEntries: ThreadEntry[]): ThreadBlock[] {
   // Pass 0 — plan-kind tools (TodoWrite / todoList / todowrite) never render in the thread:
   // the plan dock is their surface (#382); a card here would only duplicate the checklist as
   // raw input JSON. Filtering the flat list drops them from children lists too.
-  const entries = allEntries.filter((entry) => !(entry.kind === 'tool' && entry.toolKind === 'plan'))
+  // Blank reasoning items go with them (#528): an interrupted or delta-only item can carry no
+  // text, and dropping it here — rather than at the leaf — keeps it out of row counts, children
+  // lists, and the always-rendered `thread-row` wrapper, which would otherwise reserve a blank
+  // ~3rem gap. A live item that is still empty simply appears once its first delta lands.
+  const entries = allEntries.filter(
+    (entry) =>
+      !(entry.kind === 'tool' && entry.toolKind === 'plan') &&
+      !(entry.kind === 'reasoning' && entry.text.trim() === ''),
+  )
 
   // Pass 1 — nesting. Children keep stream order; only tool items can be parents.
   const toolIds = new Set(entries.filter(isTool).map((item) => item.id))

@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, readTestEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 
 /**
  * The GitHub tab (R6 Step 1.1) end-to-end against the shared dry-run environment.
@@ -43,10 +43,16 @@ interface GithubPayload {
 }
 
 let forgeAvailable = false
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   forgeAvailable = (await api<HealthPayload>('/api/health')).forge?.available === true
+  bootProject = await bootProjectId(baseUrl)
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 })
@@ -57,15 +63,15 @@ afterAll(() => {
 
 describe('the GitHub tab against the live dry-run server', () => {
   it('the nav gates on the live forge payload — item present iff the driver is available', () => {
-    browser.goto(`${baseUrl}/`)
+    browser.goto(`${baseUrl}${scoped('/')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav') !== null`)
     if (forgeAvailable) {
       // The item waits on the health answer — poll rather than sample.
-      browser.waitForFunction(`document.querySelector('nav a[href="/github"]') !== null`)
+      browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
     } else {
       // Health has answered (other chips render from it) and still no GitHub item.
       browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
-      expect(browser.count('nav a[href="/github"]')).toBe(0)
+      expect(browser.count(`nav a[href="${scoped('/github')}"]`)).toBe(0)
     }
   })
 
@@ -74,8 +80,11 @@ describe('the GitHub tab against the live dry-run server', () => {
     const gh = await api<GithubPayload>('/api/github')
     expect(gh.available).toBe(true)
 
-    browser.goto(`${baseUrl}/github`)
+    browser.goto(`${baseUrl}${scoped('/github')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="gh-header"]') !== null`)
+    // The bare `/github` restores the LAST-selected tab (#417), which a previous suite run may
+    // have left on PRs — so ask for Issues explicitly rather than assuming the stored default.
+    browser.click(`[data-slot="gh-tabs"] a[href="${scoped('/github')}"]`)
     browser.waitForFunction(
       `document.querySelectorAll('[data-slot="gh-row"]').length === ${gh.issues.length}`,
     )
@@ -85,15 +94,15 @@ describe('the GitHub tab against the live dry-run server', () => {
     if (gh.repo) expect(browser.text('[data-slot="gh-repo"]')).toBe(gh.repo)
 
     // The PR tab is a URL of its own.
-    browser.click('[data-slot="gh-tabs"] a[href="/github/prs"]')
+    browser.click(`[data-slot="gh-tabs"] a[href="${scoped('/github/prs')}"]`)
     browser.waitForFunction(
       `document.querySelectorAll('[data-slot="gh-row"]').length === ${gh.prs.length}`,
     )
-    expect(browser.url()).toBe(`${baseUrl}/github/prs`)
+    expect(browser.url()).toBe(`${baseUrl}${scoped('/github/prs')}`)
 
     // Health answers after the github payload on this box — settle the forge-gated nav item
     // (an assertion of the gate on the tab's own page, and an honest screenshot).
-    browser.waitForFunction(`document.querySelector('nav a[href="/github"]') !== null`)
+    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
     browser.screenshot(`${artifactsDir}/github-desktop.png`)
   })
 
@@ -104,15 +113,24 @@ describe('the GitHub tab against the live dry-run server', () => {
     expect(first).toBeDefined()
     if (!first) return
 
-    browser.goto(`${baseUrl}/github`)
+    browser.goto(`${baseUrl}${scoped('/github')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="gh-row"]') !== null`)
+    // Bare `/github` restores the last-selected tab (#417) — pin it to Issues before picking one.
+    browser.click(`[data-slot="gh-tabs"] a[href="${scoped('/github')}"]`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="gh-row"][data-number="${first.number}"]') !== null`,
+    )
     browser.click(`[data-slot="gh-row"][data-number="${first.number}"]`)
 
     browser.waitForFunction(`document.querySelector('[data-slot="gh-detail-inner"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}/github/issues/${first.number}`)
+    expect(browser.url()).toBe(`${baseUrl}${scoped(`/github/issues/${first.number}`)}`)
     expect(browser.text('[data-slot="gh-meta"]')).toContain(`#${first.number}`)
     expect(browser.text('[data-slot="gh-detail-inner"] h2')).toBe(first.title)
-    expect(browser.count('[data-slot="gh-label"]')).toBe(first.labels.length)
+    // Scoped to the DETAIL pane: the list rows carry their own label chips, so a page-wide
+    // count would be every issue's labels summed rather than this issue's.
+    expect(browser.count('[data-slot="gh-detail-inner"] [data-slot="gh-label"]')).toBe(
+      first.labels.length,
+    )
     // The body rendered through the markdown pipeline — non-empty prose, not raw JSON.
     browser.waitForFunction(
       `(document.querySelector('[data-slot="gh-body"]')?.textContent ?? '').length > 0`,
@@ -130,9 +148,100 @@ describe('the GitHub tab against the live dry-run server', () => {
     )
 
     // Same settle rule as above: the screenshot must show the whole truth, nav item included.
-    browser.waitForFunction(`document.querySelector('nav a[href="/github"]') !== null`)
+    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
     browser.screenshot(`${artifactsDir}/github-detail.png`)
     browser.press('Escape')
+  })
+
+  it('renders the activity thread: comments, a commit row with a CI glyph, and events', async () => {
+    // The sibling spec (#499) called for thread e2e coverage and it never landed, so before #525
+    // this file had NO thread assertions at all. Under CEZ_DRY_RUN=1 the mock thread serves both
+    // comments and timeline events, so the whole interleave is honestly reachable here.
+    if (!forgeAvailable) return
+    const gh = await api<GithubPayload>('/api/github')
+    const pr = gh.prs[0]
+    if (!pr) return
+
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-thread"]') !== null`)
+
+    // The section is "Activity", not "Comments" — a twenty-row list headed `Comments · 2` would
+    // be incoherent once events render.
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="gh-thread-header"]').textContent`),
+    ).toContain('Activity')
+
+    // Conversation comments still render, through the markdown pipeline.
+    browser.waitForFunction(
+      `document.querySelectorAll('[data-slot="gh-thread-entry"]').length > 0`,
+    )
+
+    // Consecutive same-author commits collapse; expanding reveals the individual rows.
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-commit-group"]') !== null`)
+    expect(
+      browser.evaluate(
+        `document.querySelector('[data-slot="gh-commit-group"] button').getAttribute('aria-expanded')`,
+      ),
+    ).toBe('false')
+    browser.click('[data-slot="gh-commit-group"] button')
+
+    // Expanded: commit rows, each keeping its own message and CI glyph.
+    browser.waitForFunction(
+      `document.querySelectorAll('[data-slot="gh-event-row"][data-kind="committed"]').length > 1`,
+    )
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-commit-checks"]') !== null`)
+    // Mixed states in the fixtures, so more than one distinct glyph tone is on screen.
+    expect(
+      browser.evaluate(
+        `new Set([...document.querySelectorAll('[data-slot="gh-commit-checks"]')].map((el) => el.dataset.checks)).size > 1`,
+      ),
+    ).toBe(true)
+
+    // Non-commit events render too.
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="gh-event-row"][data-kind="labeled"]') !== null`,
+    )
+
+    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
+    browser.screenshot(`${artifactsDir}/github-thread-timeline.png`)
+  })
+
+  it('shows the guarded merge box and confirms before merging', async () => {
+    if (!forgeAvailable) return
+    const gh = await api<GithubPayload>('/api/github')
+    const pr = gh.prs[0]
+    if (!pr) return
+
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-box"]') !== null`)
+    expect(browser.text('[data-slot="gh-merge-box"]')).toContain('Ready to merge')
+    expect(browser.text('[data-slot="gh-merge-box"]')).toContain('→ main')
+    browser.screenshot(`${artifactsDir}/github-merge-ready.png`)
+
+    browser.click('[data-slot="gh-merge-box"] select + button')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-confirm"]') !== null`)
+    expect(browser.text('[data-slot="gh-merge-confirm"]')).toContain(`pull request #${pr.number}`)
+    expect(browser.text('[data-slot="gh-merge-confirm"]')).toContain('into main')
+    browser.screenshot(`${artifactsDir}/github-merge-confirm.png`)
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-confirm"]') === null`)
+  })
+
+  it('reviews a pull request file-by-file in the Changes view', async () => {
+    if (!forgeAvailable) return
+    const gh = await api<GithubPayload>('/api/github')
+    const pr = gh.prs[0]
+    if (!pr) return
+
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}/changes`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-pr-changes"]') !== null`)
+    expect(browser.evaluate(`document.querySelector('[data-slot="gh-pr-changes"]').textContent`)).toContain('changed files')
+    expect(browser.count('[aria-label="Select changed file"]')).toBe(1)
+    expect(browser.count('[aria-label="Next file"]')).toBe(1)
+    browser.click('[aria-label="Next file"]')
+    browser.fill('[aria-label="Filter changed files"]', 'logo')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-pr-changes"]').textContent.includes('Patch unavailable: binary')`)
+    browser.screenshot(`${artifactsDir}/github-pr-changes.png`)
   })
 
   it('below md the list is the page, and a detail URL swaps to the detail with a way back', async () => {
@@ -143,7 +252,7 @@ describe('the GitHub tab against the live dry-run server', () => {
 
     browser.setViewport(IPHONE.width, IPHONE.height)
     try {
-      browser.goto(`${baseUrl}/github`)
+      browser.goto(`${baseUrl}${scoped('/github')}`)
       browser.waitForFunction(`document.querySelector('[data-slot="gh-row"]') !== null`)
       // List visible, detail pane hidden below md.
       browser.waitForFunction(
@@ -151,7 +260,7 @@ describe('the GitHub tab against the live dry-run server', () => {
       )
       expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
-      browser.goto(`${baseUrl}/github/issues/${first.number}`)
+      browser.goto(`${baseUrl}${scoped(`/github/issues/${first.number}`)}`)
       browser.waitForFunction(`document.querySelector('[data-slot="gh-detail-inner"]') !== null`)
       // Now the detail is the page and the list yields; the back affordance is a link.
       browser.waitForFunction(
@@ -159,7 +268,7 @@ describe('the GitHub tab against the live dry-run server', () => {
       )
       expect(
         browser.evaluate(`document.querySelector('[data-slot="gh-back"]').getAttribute('href')`),
-      ).toBe('/github')
+      ).toBe(scoped('/github'))
 
       browser.screenshot(`${artifactsDir}/github-iphone.png`)
     } finally {

@@ -237,3 +237,50 @@ describe('splitToolTitle', () => {
     expect(splitToolTitle(title)).toEqual({ verb: title })
   })
 })
+
+/** #528 — a reasoning item with no text renders as a dead row. It is dropped
+ *  during grouping (like plan tools) so it never reaches the always-rendered
+ *  `thread-row` wrapper, which would otherwise leave a blank gap. */
+describe('groupThreadItems — blank reasoning items (#528)', () => {
+  const reasoning = (id: string, text: string): ThreadEntry => ({ kind: 'reasoning', id, text })
+
+  it.each([['', 'empty'], ['   ', 'spaces'], ['\n\t ', 'whitespace']])(
+    'drops a %s reasoning entry (%s)',
+    (text) => {
+      expect(groupThreadItems([reasoning('r1', text)])).toEqual([])
+    },
+  )
+
+  it('keeps reasoning that has text, and drops only the blank sibling', () => {
+    const blocks = groupThreadItems([reasoning('r1', ''), reasoning('r2', 'Real thinking.')])
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ kind: 'entry', entry: { id: 'r2', text: 'Real thinking.' } })
+  })
+})
+
+describe('groupThreadItems — provider authorization recovery', () => {
+  it('keeps the recovery callout as an ordinary top-level entry at the failure location', () => {
+    const { turns } = reduceThread([
+      { seq: 1, ts: '2026-07-22T12:00:00.000Z', type: 'note', message: 'starting work' } as RunEvent,
+      {
+        seq: 2,
+        ts: '2026-07-22T12:00:00.000Z',
+        type: 'provider-auth-required',
+        provider: 'opencode',
+        authFailureId: 'incident-3',
+      } as RunEvent,
+      { seq: 3, ts: '2026-07-22T12:00:00.000Z', type: 'note', message: 'run stopped' } as RunEvent,
+    ])
+
+    expect(groupThreadItems(turns[0]?.items ?? [])).toEqual([
+      expect.objectContaining({ kind: 'entry', id: 'v1:1' }),
+      expect.objectContaining({ kind: 'entry', id: 'v1:2', entry: {
+        kind: 'provider-auth-required',
+        id: 'v1:2',
+        provider: 'opencode',
+        authFailureId: 'incident-3',
+      } }),
+      expect.objectContaining({ kind: 'entry', id: 'v1:3' }),
+    ])
+  })
+})

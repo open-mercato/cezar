@@ -1,12 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon, ZapIcon } from 'lucide-react'
+import { ArrowLeftIcon, DownloadIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon, ZapIcon } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
+
+import { Link } from '@/lib/project-router'
 
 import { refreshSkills } from '@/api/client'
-import { queryKeys, useSkills, useWorkflows } from '@/api/queries'
+import { queryKeys, useImportableSkills, useProjects, useSkills, useWorkflows } from '@/api/queries'
+import { useProjectScope } from '@/api/project-scope-context'
 import type { Skill } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { ImportSkillsPanel } from '@/components/skills-import-panel'
 import { SkillDetailBody, SkillSourceTag } from '@/components/skill-detail'
 import { SkillEmptyHint } from '@/components/skill-empty-hint'
 import { Input } from '@/components/ui/input'
@@ -35,6 +39,7 @@ import { BookmarkletPanel } from './settings/bookmarklets-section'
  */
 
 const BOOKMARKLETS = '__bm'
+const IMPORT = '__import'
 
 export function SkillsRoute() {
   return (
@@ -52,9 +57,13 @@ export function SkillsRoute() {
 function SkillsCatalog() {
   const skillsQuery = useSkills()
   const workflowsQuery = useWorkflows()
+  const importableQuery = useImportableSkills()
   const [searchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const queryClient = useQueryClient()
+  const projects = useProjects()
+  const scope = useProjectScope()
+  const updateProjectId = scope.projectId ?? projects.data?.bootProject ?? ''
 
   const refresh = useMutation({
     mutationFn: () => refreshSkills(),
@@ -79,15 +88,19 @@ function SkillsCatalog() {
   }
 
   const skills = orderSkills(skillsQuery.data ?? [])
+  // Only offer the import surface when a default (vendor) repo actually has skills to import —
+  // a repo with its own configured `skillsRepos` gates nothing, so the endpoint answers empty.
+  const canImport = (importableQuery.data?.length ?? 0) > 0
   const param = searchParams.get('skill')
   // Explicit choice if it still exists, else the first skill, else the bookmarklet panel —
-  // the legacy fallback rule. A vanished selection degrades, it never crashes.
+  // the legacy fallback rule. A vanished selection degrades, it never crashes. The two pinned
+  // panels (import, bookmarklets) are sentinels, not catalog names.
   const selection =
-    param === BOOKMARKLETS
-      ? BOOKMARKLETS
+    param === BOOKMARKLETS || param === IMPORT
+      ? param
       : param !== null && skills.some((skill) => skill.name === param)
         ? param
-        : (skills[0]?.name ?? BOOKMARKLETS)
+        : (skills[0]?.name ?? (canImport ? IMPORT : BOOKMARKLETS))
   const selected = skills.find((skill) => skill.name === selection) ?? null
   const shown = filterSkills(skills, query)
 
@@ -142,8 +155,30 @@ function SkillsCatalog() {
           )}
         </ul>
 
-        {/* Always visible below the scrollable rows — spec 011's pinned entry. */}
+        {/* Always visible below the scrollable rows — the pinned panels. */}
         <div className="shrink-0 border-t border-border p-2">
+          {canImport ? (
+            <Link
+              to={`/skills?skill=${IMPORT}`}
+              data-slot="import-skills-row"
+              aria-current={selection === IMPORT ? 'page' : undefined}
+              className={cn(
+                'mb-1 flex flex-col gap-0.5 rounded-md px-2.5 py-2 transition-colors hover:bg-muted',
+                selection === IMPORT && 'bg-muted',
+              )}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <DownloadIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
+                <span className="min-w-0 truncate text-[13px] font-medium">Manage skills</span>
+                <span className="ml-auto shrink-0 rounded-full border border-border px-2 py-px font-mono text-[10.5px] text-soft-foreground">
+                  open-mercato
+                </span>
+              </span>
+              <span className="pl-[22px] text-xs text-soft-foreground">
+                Choose which open-mercato skills appear in your catalog.
+              </span>
+            </Link>
+          ) : null}
           <Link
             to={`/skills?skill=${BOOKMARKLETS}`}
             data-slot="bookmarklets-row"
@@ -182,7 +217,9 @@ function SkillsCatalog() {
             Back to the list
           </Link>
 
-          {selection === BOOKMARKLETS ? (
+          {selection === IMPORT ? (
+            <ImportSkillsPanel projectId={updateProjectId} />
+          ) : selection === BOOKMARKLETS ? (
             <BookmarkletPanel skills={skills} />
           ) : selected ? (
             <SkillDetailBody

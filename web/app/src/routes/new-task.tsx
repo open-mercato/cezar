@@ -3,18 +3,41 @@ import {
   CheckIcon,
   ChevronDownIcon,
   EyeIcon,
+  FolderOpenIcon,
   SparklesIcon,
   SquareIcon,
   WorkflowIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { useParams, useSearchParams } from 'react-router'
+
+import { Link, useNavigate } from '@/lib/project-router'
 
 import { createRun, getLaunchKey, postPlan, putConfig, putUiState } from '@/api/client'
-import { queryKeys, useConfig, useHealth, useRepo, useSkills, useUiState, useWorkflows } from '@/api/queries'
-import type { ImageInput, RepoResponse, Runner, Skill, WorkflowDef } from '@/api/types'
+import { useProjectScope } from '@/api/project-scope-context'
+import {
+  queryKeys,
+  useConfig,
+  useHealth,
+  useProviderStatus,
+  useProjects,
+  useRepo,
+  useRunnerModels,
+  useSkills,
+  useUiState,
+  useWorkflows,
+} from '@/api/queries'
+import type {
+  ImageInput,
+  ProjectListEntry,
+  RepoResponse,
+  Runner,
+  Skill,
+  WorkflowDef,
+} from '@/api/types'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
+import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
@@ -25,13 +48,6 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import {
@@ -50,6 +66,7 @@ import {
 } from '@/lib/skills'
 import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
+import { usableRunners } from '@/lib/provider-status'
 
 import {
   bookmarkletRunBody,
@@ -59,15 +76,14 @@ import {
 } from './new-task-autostart'
 import { clearDraftText, readDraft, writeDraft, type NewTaskDraft } from './new-task-draft'
 import {
-  availableRunners,
   buildCreateRunBody,
   modelsForRunner,
+  modelCatalogStatus,
   pushRecentSource,
   resolveModel,
   resolveRunner,
   resolveSource,
   startedRunPath,
-  RUNNERS,
   type TaskSource,
 } from './new-task-form'
 import { parseNewTaskParams } from './new-task-params'
@@ -91,6 +107,18 @@ export function NewTaskRoute() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
+  // The composer's project (multi-project spec, step 3.4). TWO ids, deliberately:
+  //  - `urlProjectId` is what the URL names — always a real project, boot included. It is the
+  //    pill's selected value and what a swap navigates away from.
+  //  - `scope.projectId` is the API/cache scope, which is NULL for the boot project (the
+  //    step-3.1 invariant). It keys the draft, so the boot project keeps the bare legacy
+  //    storage key and a draft typed before this upgrade survives it.
+  // Both are absent when this route renders outside a `/p/:projectId` prefix (a component
+  // test), and everything below degrades to exactly the single-project behavior.
+  const { projectId: urlProjectId } = useParams()
+  const draftProjectId = useProjectScope().projectId
+  const projects = useProjects()
+
   // The deep-link params, captured ONCE: the mount effect below strips them from the URL
   // (legacy's `history.replaceState` — the launch key must not survive in history or survive
   // a reload to re-trigger), so live search params would vanish under us.
@@ -107,7 +135,7 @@ export function NewTaskRoute() {
   // The draft survives navigation (module store); explicit deep-link params beat it — a
   // pasted `/new?skill=&ref=` link states intent, a leftover draft only remembers it.
   const [draft, setDraft] = useState<NewTaskDraft>(() => {
-    const stored = readDraft()
+    const stored = readDraft(draftProjectId)
     return {
       ...stored,
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
@@ -117,8 +145,8 @@ export function NewTaskRoute() {
     }
   })
   useEffect(() => {
-    writeDraft(draft)
-  }, [draft])
+    writeDraft(draft, draftProjectId)
+  }, [draft, draftProjectId])
   const update = (patch: Partial<NewTaskDraft>) =>
     setDraft((current) => ({ ...current, ...patch }))
 
@@ -134,6 +162,9 @@ export function NewTaskRoute() {
     [skillsData, skillUsage],
   )
   const workflowList = workflows.data?.workflows ?? []
+  // The registry the project pill offers. Empty while it loads or when it errors — the pill
+  // simply does not render, which is the honest state: there is no second project to offer.
+  const projectList = projects.data?.projects ?? []
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, workflowList)
@@ -162,10 +193,34 @@ export function NewTaskRoute() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoText, sourcesReady])
 
-  const runners = availableRunners(health.data?.checks ?? [])
-  const runner = resolveRunner(draft.runner, runners, health.data?.defaultRunner ?? 'claude')
-  const models = modelsForRunner(runner)
-  const model = resolveModel(draft.model, runner, config.data?.defaultModels)
+  const providers = useProviderStatus()
+  const runners = usableRunners(providers.data)
+  const defaultRunner = health.data?.defaultRunner
+  const preferredRunner = defaultRunner ?? 'claude'
+  const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
+  const displayRunner = runner ?? preferredRunner
+  const providersReady = providers.isSuccess && runners.length > 0
+  const catalog = useRunnerModels()
+  const models = runner === null
+    ? []
+    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
+  const model = runner === null
+    ? ''
+    : resolveModel(draft.model, runner, config.data?.defaultModels, catalog.data)
+
+  // A cold /new load mounts the textarea disabled while provider status is checked. Restore
+  // the route's autofocus contract once that check enables the form, but never steal focus if
+  // the user already moved elsewhere while it was pending.
+  const providersWereReady = useRef(false)
+  useEffect(() => {
+    const becameReady = providersReady && !providersWereReady.current
+    providersWereReady.current = providersReady
+    if (becameReady && document.activeElement === document.body) {
+      document
+        .querySelector<HTMLTextAreaElement>('textarea[aria-label="Describe a task for the agent"]')
+        ?.focus()
+    }
+  }, [providersReady])
 
   // Parallel variants need a worktree per variant, hence git (the server 409s without it).
   const hasGit = health.data === undefined || health.data.repo !== null
@@ -209,16 +264,40 @@ export function NewTaskRoute() {
   const [notice, setNotice] = useState<DeepLinkNotice | null>(() =>
     !deepLink.auto && deepLink.ref !== '' ? { kind: 'prefill' } : null,
   )
+  const deepLinkUrlCleaned = useRef(false)
   const deepLinkHandled = useRef(false)
   useEffect(() => {
-    if (deepLinkHandled.current) return
-    deepLinkHandled.current = true
+    if (deepLinkUrlCleaned.current) return
+    deepLinkUrlCleaned.current = true
     // Legacy cleans the URL FIRST (`history.replaceState({}, '', '/')` — before anything
     // async): the launch key never lingers in the address bar or history, and a reload can
     // never re-trigger the start. Same move here, staying on this route. (The router's own
     // search, not window.location — MemoryRouter under test never touches the window.)
     if (search.toString() !== '') void navigate('/new', { replace: true })
+    // mount-only: search is intentionally the initial URL, captured before the replace
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (deepLinkHandled.current) return
     if (!deepLink.auto || deepLink.ref === '') return
+    if (providers.isPending) return
+    if (!providersReady || runner === null) {
+      deepLinkHandled.current = true
+      // Authentication could not be established: keep the deep-link intent in the disabled
+      // composer and let the provider gate explain whether this is an error or missing setup.
+      setNotice({ kind: 'prefill' })
+      setAutoStarting(false)
+      return
+    }
+    // Provider status often resolves before health on a cold load. The protected bookmarklet
+    // body may omit runner only against the server's authoritative default, never our display
+    // fallback; a failed health check degrades to the prefilled composer instead of guessing.
+    if (health.isPending) return
+    deepLinkHandled.current = true
+    if (defaultRunner === undefined) {
+      setNotice({ kind: 'prefill' })
+      setAutoStarting(false)
+      return
+    }
     void (async () => {
       let launchKey = ''
       try {
@@ -228,8 +307,8 @@ export function NewTaskRoute() {
       }
       if (launchKey !== '' && deepLink.key === launchKey) {
         try {
-          const created = await createRun(bookmarkletRunBody(deepLink))
-          clearDraftText()
+          const created = await createRun(bookmarkletRunBody(deepLink, runner, defaultRunner))
+          clearDraftText(draftProjectId)
           void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
           void navigate(startedRunPath(created))
           return
@@ -245,8 +324,7 @@ export function NewTaskRoute() {
       }
       setAutoStarting(false)
     })()
-    // mount-only by design: deepLink is captured state and this must run exactly once
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [defaultRunner, health.isPending, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
   // The prefill toast waits for the pickers' data: whether the skill exists decides the
   // wording, and the unknown-skill case rewrites the draft the way legacy did (intent into
   // the text, quick-task as the source — its planner resolves skills from prose).
@@ -276,6 +354,15 @@ export function NewTaskRoute() {
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (text: string, images: ImageInput[]) => {
+    if (!providersReady || runner === null) {
+      throw new Error(
+        providers.isPending
+          ? 'Checking agent providers…'
+          : providers.isError
+            ? 'Provider authentication could not be verified.'
+            : 'Connect an agent provider before starting a task.',
+      )
+    }
     if (!sourcesReady) {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
       throw new Error('Still loading workflows and skills — try again in a second.')
@@ -300,7 +387,7 @@ export function NewTaskRoute() {
         source,
         model,
         runner,
-        runnerCount: runners.length,
+        defaultRunner,
         variants,
         images,
         worktree: worktreeOn,
@@ -334,7 +421,7 @@ export function NewTaskRoute() {
     })
       .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
       .catch(() => {})
-    clearDraftText()
+    clearDraftText(draftProjectId)
     void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     navigate(startedRunPath(created))
   }
@@ -342,7 +429,7 @@ export function NewTaskRoute() {
   /** ▶ Start on the reviewed plan: the (possibly edited) steps go INLINE, with the composer's
    *  current picker choices — legacy `startPlannedRun` semantics on the new surface. */
   const startPlanned = async () => {
-    if (plan === null || plan.steps.length === 0 || starting) return
+    if (plan === null || plan.steps.length === 0 || starting || !providersReady || runner === null) return
     setStarting(true)
     try {
       const created = await createRun(
@@ -351,7 +438,7 @@ export function NewTaskRoute() {
           steps: plan.steps,
           model,
           runner,
-          runnerCount: runners.length,
+          defaultRunner,
           variants,
           images: plan.images,
           generateFollowups: generateFollowupsOn,
@@ -366,7 +453,7 @@ export function NewTaskRoute() {
           .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
           .catch(() => {})
       }
-      clearDraftText()
+      clearDraftText(draftProjectId)
       setPlan(null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       navigate(startedRunPath(created))
@@ -423,9 +510,32 @@ export function NewTaskRoute() {
           placeholder="Describe a task for the agent — / for skills…"
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={draft.planFirst ? 'Plan task' : 'Start task'}
+          disabled={!providersReady || starting}
+          disabledReason={
+            providers.isPending
+              ? 'Checking agent providers…'
+              : providers.isError
+                ? 'Provider authentication could not be verified.'
+                : 'Connect an agent provider before starting a task.'
+          }
           autocompleteSkills
           footerStart={
             <>
+              {/* The project pill LEADS the row (mockup new-task-project.html): everything to
+                  its right is resolved against it, so it reads left-to-right as "in this
+                  project, run this skill, with this model". Rendered only once the workspace
+                  actually holds more than one project — with a single one the control offers
+                  nothing and the composer keeps the shape it has always had, the same rule the
+                  sidebar's project groups follow. */}
+              {projectList.length > 1 && urlProjectId !== undefined ? (
+                <ProjectPill
+                  projects={projectList}
+                  projectId={urlProjectId}
+                  // An explicit `/p/<id>` target: the scoped navigate wrapper passes already
+                  // scoped paths through untouched, so this is a genuine cross-project jump.
+                  onPick={(next) => navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })}
+                />
+              ) : null}
               <SourcePill
                 source={source}
                 ready={sourcesReady}
@@ -442,15 +552,22 @@ export function NewTaskRoute() {
                 onInsert={(text) => composerRef.current?.insertAtCaret(text)}
               />
               {runners.length > 1 ? (
-                <RunnerPill runners={runners} value={runner} onPick={(next) => update({ runner: next, model: null })} />
+                <RunnerPill
+                  runners={runners}
+                  value={displayRunner}
+                  disabled={!providersReady}
+                  onPick={(next) => update({ runner: next, model: null })}
+                />
               ) : null}
               <PickerPill
                 slot="model-pill"
                 ariaLabel="Model"
                 label={models.find((m) => m.id === model)?.label ?? 'auto'}
                 value={model}
+                disabled={!providersReady}
                 onPick={(next) => update({ model: next })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
+                status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
               />
               <PickerPill
                 slot="variants-pill"
@@ -486,6 +603,14 @@ export function NewTaskRoute() {
           }
           footerEnd={
             <>
+              {!providersReady && !providers.isPending ? (
+                <Link
+                  to="/settings/agents#providers"
+                  className="text-xs font-medium text-foreground underline underline-offset-4"
+                >
+                  Configure providers
+                </Link>
+              ) : null}
               <ModeSegment
                 planFirst={draft.planFirst}
                 planning={planning}
@@ -508,6 +633,19 @@ export function NewTaskRoute() {
         <PlanReview
           plan={plan}
           starting={starting}
+          startAvailable={providersReady}
+          startUnavailableReason={
+            providers.isPending
+              ? 'Checking agent providers…'
+              : providers.isError
+                ? 'Provider authentication could not be verified.'
+                : 'Connect an agent provider before starting a task.'
+          }
+          startUnavailableAction={
+            !providers.isPending ? (
+              <Link to="/settings/agents#providers">Configure providers</Link>
+            ) : undefined
+          }
           onStepsChange={(steps) => setPlan((current) => (current ? { ...current, steps } : current))}
           onStart={() => void startPlanned()}
           onDiscard={() => setPlan(null)}
@@ -615,11 +753,138 @@ function GenerateFollowupsToggle({
   )
 }
 
-/** The mockup's `.chip`: a quiet bordered pill that darkens on hover. */
-const chipClass =
-  'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-55'
+/**
+ * Rank the registry against the pill's search box.
+ *
+ * Ranked in JS with cmdk's own filtering off (#484 — cmdk's score-sort does not re-order these
+ * pickers reliably). Registry order is `lastOpenedAt`, so an empty search shows the same
+ * recency the sidebar does; a typed query floats name/id PREFIX matches above mid-string ones,
+ * each group still in recency order.
+ */
+function matchProjects(
+  projects: readonly ProjectListEntry[],
+  search: string,
+): ProjectListEntry[] {
+  const query = search.trim().toLowerCase()
+  if (query === '') return [...projects]
+  const rank = (project: ProjectListEntry): number => {
+    const name = project.name.toLowerCase()
+    const id = project.id.toLowerCase()
+    if (name.startsWith(query) || id.startsWith(query)) return 0
+    if (name.includes(query) || id.includes(query)) return 1
+    return 2
+  }
+  return projects
+    .map((project, index) => ({ project, rank: rank(project), index }))
+    .filter((entry) => entry.rank < 2)
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.project)
+}
 
-const chevron = <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
+/**
+ * The project pill (multi-project spec §"New task"; mockup new-task-project.html) — the
+ * composer's scope selector, preselected from the URL.
+ *
+ * Picking a project NAVIGATES to that project's composer rather than swapping local state:
+ * `/p/<id>/new` is the single place the scope is decided (the step-3.2 route gate), and every
+ * part of this screen that must re-resolve already keys off it — the skill/workflow picker and
+ * `/`-autocomplete (`/api/p/<id>/skills`), the runner and model probes, the base-branch pill,
+ * the per-project draft, and the `POST /api/p/<id>/runs` submit target. Doing it any other way
+ * would mean a second, parallel notion of "the active project" living in this component.
+ *
+ * `replace`: a scope swap corrects where you are, it is not a place to go Back to — Back stays
+ * whatever brought you to the composer.
+ */
+function ProjectPill({
+  projects,
+  projectId,
+  onPick,
+}: {
+  projects: readonly ProjectListEntry[]
+  projectId: string
+  onPick: (projectId: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const selected = projects.find((project) => project.id === projectId)
+  const matched = matchProjects(projects, search)
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setSearch('')
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-slot="project-pill"
+          aria-label="Project"
+          title="Which project this task runs in — its skills, workflows, settings and draft"
+          className={cn(chipClass, 'border-foreground/60 font-semibold text-foreground')}
+        >
+          <FolderOpenIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
+          {/* The registry is authoritative for the display name; the raw id is the fallback
+              while it is still loading, so the pill never renders an empty label. */}
+          <span className="max-w-40 truncate">{selected?.name ?? projectId}</span>
+          {chevron}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={8}
+        className="w-[300px] max-w-[calc(100vw-2rem)] p-0"
+      >
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="search projects…" value={search} onValueChange={setSearch} />
+          {/* Same 3rem headroom rule as the source picker: the list must not eat the search box. */}
+          <CommandList
+            data-slot="project-menu"
+            className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-3rem))]"
+          >
+            {matched.length === 0 ? <CommandEmpty>Nothing matches.</CommandEmpty> : null}
+            {matched.map((project) => (
+              <CommandItem
+                key={project.id}
+                value={project.id}
+                keywords={[project.name]}
+                data-slot="project-option"
+                data-project-id={project.id}
+                // A `missing` folder has nothing to run a task in. The entry stays listed (the
+                // sidebar owns removing it) but cannot be picked — better than navigating into
+                // a project whose every request 4xxs.
+                disabled={project.status === 'missing'}
+                onSelect={() => {
+                  onPick(project.id)
+                  setOpen(false)
+                }}
+              >
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">{project.name}</span>
+                {project.status === 'missing' ? (
+                  <span className="shrink-0 text-[11px] text-soft-foreground">folder not found</span>
+                ) : project.branch !== undefined ? (
+                  <span className="shrink-0 font-mono text-[11px] text-soft-foreground">
+                    {project.branch}
+                  </span>
+                ) : null}
+                {project.id === projectId ? (
+                  <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
+                ) : null}
+              </CommandItem>
+            ))}
+          </CommandList>
+          {/* The mockup's `dd-note`. Worth the two lines: picking here does far more than
+              relabel a pill, and nothing else on screen says so. */}
+          <p className="border-t border-border px-3 py-2 text-[11px] leading-snug text-soft-foreground">
+            Skills, workflows, settings and the draft re-resolve against the selected project.
+          </p>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 /**
  * The workflow/skill picker (#385's searchable cmdk dropdown, #519's tier ordering): ONE pill
@@ -794,98 +1059,6 @@ function SourcePill({
         </PopoverContent>
       </Popover>
     </>
-  )
-}
-
-/** Runner choice — rendered only when the host offers more than one backend, so a claude-only
- *  machine keeps the simple form (legacy rule). */
-function RunnerPill({
-  runners,
-  value,
-  onPick,
-}: {
-  runners: readonly Runner[]
-  value: Runner
-  onPick: (runner: Runner) => void
-}) {
-  const options = RUNNERS.filter((r) => runners.includes(r.id))
-  return (
-    <PickerPill
-      slot="runner-pill"
-      ariaLabel="Runner"
-      label={value}
-      value={value}
-      onPick={(next) => onPick(next as Runner)}
-      options={options.map((r) => ({ value: r.id, label: r.label, desc: r.desc }))}
-    />
-  )
-}
-
-/** A generic single-choice pill (runner / model / variants): DropdownMenu radio semantics,
- *  two-line items (label + quiet description), disabled state carries its reason as `title`. */
-function PickerPill({
-  slot,
-  ariaLabel,
-  label,
-  value,
-  options,
-  onPick,
-  disabled = false,
-  hint,
-  disabledHint,
-}: {
-  slot: string
-  ariaLabel: string
-  label: ReactNode
-  value: string
-  options: ReadonlyArray<{ value: string; label: string; desc?: string }>
-  onPick: (value: string) => void
-  disabled?: boolean
-  /** Hover explanation for the enabled pill — what the setting does (e.g. the ×1 variants pill). */
-  hint?: string
-  disabledHint?: string
-}) {
-  const trigger = (
-    <button
-      type="button"
-      data-slot={slot}
-      aria-label={ariaLabel}
-      disabled={disabled}
-      title={disabled ? disabledHint : hint}
-      className={chipClass}
-    >
-      {label}
-      {chevron}
-    </button>
-  )
-  // Radix never opens a disabled trigger, but `disabled:pointer-events-none` would also kill
-  // the explanatory title tooltip — so the disabled pill renders bare, in a plain span wrapper
-  // that still receives hover.
-  if (disabled) {
-    return (
-      <span title={disabledHint} className="inline-flex">
-        {trigger}
-      </span>
-    )
-  }
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent align="start" data-testid={`${slot}-menu`}>
-        <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
-              <span className="flex min-w-0 flex-col">
-                <span className="text-[12.5px] font-medium">{option.label}</span>
-                {option.desc ? (
-                  <span className="text-[11.5px] text-muted-foreground">{option.desc}</span>
-                ) : null}
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   )
 }
 

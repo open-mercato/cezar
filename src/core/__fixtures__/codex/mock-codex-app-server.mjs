@@ -16,14 +16,52 @@ rl.on('line', (line) => {
   } catch {
     return;
   }
-  if (msg.method === 'initialize') {
+  if (msg.id === 'ask-1' && msg.result) {
+    const answer = msg.result.answers?.library?.answers;
+    const freeText = msg.result.answers?.first?.answers;
+    emit((Array.isArray(answer) && answer[0] === 'Vitest') || (Array.isArray(freeText) && freeText[0] === 'Use sensible defaults')
+      ? { method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } }
+      : { method: 'turn/failed', params: { turn: { id: 'turn_mock_1', status: 'failed' }, error: { message: 'bad answer' } } });
+  } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
-  } else if (msg.method === 'thread/start') {
-    emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
-    emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+  } else if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
+    const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
+    if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
+      emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
+      return;
+    }
+    if (process.argv.includes('sandbox_workspace_write.network_access=true')) {
+      emit({ id: msg.id, error: { code: -32602, message: 'workspace-write override is obsolete in full-access mode' } });
+      return;
+    }
+    if (msg.method === 'thread/start') {
+      emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
+      emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+    } else if (process.env.MOCK_CODEX_REJECT_RESUME === '1') {
+      emit({ id: msg.id, error: { code: -32603, message: `no rollout found for thread id ${msg.params?.threadId ?? ''}` } });
+      rl.close();
+    } else {
+      emit({ id: msg.id, result: { thread: { id: msg.params?.threadId } } });
+    }
   } else if (msg.method === 'turn/start') {
     emit({ id: msg.id, result: { turn: { id: 'turn_mock_1' } } });
     emit({ method: 'turn/started', params: { turn: { id: 'turn_mock_1', status: 'inProgress', items: [] } } });
+    const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
+    if (process.env.MOCK_CODEX_ASK === '1' || turnText.includes('mock:native-codex-ask')) {
+      const questions = turnText.includes('multi free text')
+        ? [{ id: 'first', header: 'First', question: 'First choice?', isOther: true, isSecret: false,
+            options: [{ label: 'A', description: 'Option A.' }, { label: 'B', description: 'Option B.' }] },
+          { id: 'second', header: 'Second', question: 'Second choice?', isOther: true, isSecret: false,
+            options: [{ label: 'C', description: 'Option C.' }, { label: 'D', description: 'Option D.' }] }]
+        : [{ id: 'library', header: 'Library', question: 'Which test library?', isOther: true,
+            isSecret: false, options: [{ label: 'Vitest', description: 'Use the existing test runner.' },
+              { label: 'Node test', description: 'Use node:test.' }] }];
+      emit({ id: 'ask-1', method: 'item/tool/requestUserInput', params: {
+        threadId: 'th_mock_1', turnId: 'turn_mock_1', itemId: 'item_ask_1', autoResolutionMs: null,
+        questions,
+      } });
+      return;
+    }
     emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_m1', text: '' } } });
     emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', itemId: 'item_m1', delta: 'Checking the working tree.' } });
     emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_m1', text: 'Checking the working tree.' } } });

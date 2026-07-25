@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
 
 /**
  * `PATCH /api/runs/:id` (#389) through the real Hono app. The route touches
@@ -36,7 +37,7 @@ describe('PATCH /api/runs/:id', () => {
   });
 
   const patch = (id: string, body: unknown) =>
-    app.request(`/api/runs/${id}`, {
+    apiRequest(app, `/api/runs/${id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -82,7 +83,7 @@ describe('PATCH /api/runs/:id', () => {
   });
 
   it('400s a non-JSON body', async () => {
-    const res = await app.request(`/api/runs/${run.id}`, { method: 'PATCH', body: 'not json' });
+    const res = await apiRequest(app, `/api/runs/${run.id}`, { method: 'PATCH', body: 'not json' });
     expect(res.status).toBe(400);
   });
 

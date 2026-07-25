@@ -82,6 +82,34 @@ export function taskPrUrl(run: RunRecord): string | undefined {
   return run.pullRequestUrl ?? run.referencedPullRequestUrl
 }
 
+/** Display-only issue association. Action gates must continue to use their created-resource
+ * fields directly; this accessor exists only for links painted by the cockpit. */
+export function taskIssueUrl(run: RunRecord): string | undefined {
+  return run.referencedIssueUrl
+}
+
+export interface TaskReference {
+  kind: 'PR' | 'Issue'
+  number: number
+  url?: string
+}
+
+/** The strongest known tracker reference for a task. PRs win once one exists;
+ * issue-driven queued runs still expose their already-known issue immediately. */
+export function taskReference(run: RunRecord): TaskReference | undefined {
+  const pullRequestUrl = taskPrUrl(run)
+  const pullRequestNumber = pullRequestUrl ? Number(prNumber(pullRequestUrl)) : run.prNumber
+  if (pullRequestNumber && Number.isInteger(pullRequestNumber)) {
+    return { kind: 'PR', number: pullRequestNumber, ...(pullRequestUrl ? { url: pullRequestUrl } : {}) }
+  }
+  const issueUrl = taskIssueUrl(run)
+  const issueNumber = run.issueNumber ?? (issueUrl ? Number(prNumber(issueUrl)) : undefined)
+  if (issueNumber && Number.isInteger(issueNumber)) {
+    return { kind: 'Issue', number: issueNumber, ...(issueUrl ? { url: issueUrl } : {}) }
+  }
+  return undefined
+}
+
 /** The PR chip's `#402`. Null when the URL's last segment is not a number — a forge we don't
  *  recognize still gets a working chip, just without a number we'd be inventing. */
 export function prNumber(url: string): string | null {

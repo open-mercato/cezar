@@ -1,0 +1,52 @@
+
+> @open-mercato/cezar@0.8.0 test
+> vitest run
+
+
+ RUN  v4.1.10 /home/pkarw/Projects/cezar/.ai/cezar/worktrees/d89e350f-8a3f-49a3-aa6d-a485293f1d8e
+
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+Switched to a new branch 'side'
+Switched to a new branch 'existing'
+Switched to branch 'main'
+Switched to a new branch 'other'
+Switched to branch 'main'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'task'
+Switched to a new branch 'feature'
+Switched to branch 'main'
+HEAD is now at 37355c9 base
+
+ Test Files  191 passed (191)
+      Tests  3131 passed (3131)
+   Start at  09:18:35
+   Duration  33.20s (transform 10.91s, setup 0ms, import 38.09s, tests 145.25s, environment 56.41s)
+

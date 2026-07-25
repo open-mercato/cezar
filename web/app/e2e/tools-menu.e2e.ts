@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, readTestEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 
 /**
  * The Tools dropdown (Step 4.2) against the shared dev env — a real `/api/health` probing this
@@ -21,6 +21,11 @@ type Health = {
 let browser: AgentBrowser
 let baseUrl: string
 let health: Health
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 const TRIGGER = '[data-slot="tools-menu-trigger"]'
 const MENU = '[data-slot="tools-menu-content"]'
@@ -28,6 +33,7 @@ const MENU = '[data-slot="tools-menu-content"]'
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   health = (await fetch(`${baseUrl}/api/health`).then((r) => r.json())) as Health
+  bootProject = await bootProjectId(baseUrl)
   browser = AgentBrowser.open(runId)
   browser.setViewport(1440, 900)
 })
@@ -38,7 +44,7 @@ afterAll(() => {
 
 describe('tools menu', () => {
   beforeAll(() => {
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
     // The trigger is data-driven: it exists only once the health query has answered.
     browser.waitForFunction(`document.querySelector('${TRIGGER}') !== null`)
   })
@@ -92,7 +98,7 @@ describe('tools menu', () => {
       } else {
         expect(row?.version).toBe('not found')
         if (check.hint) expect(row?.hint).toBe(check.hint)
-        expect(row?.setupHref).toBe('/settings/agents')
+        expect(row?.setupHref).toBe(scoped('/settings/agents'))
       }
     }
 
@@ -103,10 +109,10 @@ describe('tools menu', () => {
     // Still open from the previous test — the cog row is its footer.
     expect(
       browser.evaluate(`document.querySelector('${MENU} [data-slot="tools-settings"]').getAttribute('href')`)
-    ).toBe('/settings/agents')
+    ).toBe(scoped('/settings/agents'))
 
     browser.click(`${MENU} [data-slot="tools-settings"]`)
-    browser.waitForFunction(`location.pathname === '/settings/agents'`)
+    browser.waitForFunction(`location.pathname === '${scoped('/settings/agents')}'`)
     browser.waitForFunction(`document.querySelector('${MENU}') === null`)
     expect(browser.count(MENU)).toBe(0)
     expect(browser.url()).toContain('/settings/agents')

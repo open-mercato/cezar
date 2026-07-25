@@ -4,6 +4,10 @@
 # history:
 #   2026-07-14 generated (cold ~40s, warm ~2s) — cezar has no backing services, so
 #             the service-provisioning step of the contract is deliberately absent.
+#   2026-07-21 detach the app with nohup so non-interactive bootstrap shells do not
+#             terminate the healthy server immediately after the script exits.
+#   2026-07-21 start a new session when setsid is available; some task runners reap
+#             every process left in the bootstrap shell's process group despite nohup.
 set -eu
 
 # ---- project-specific parameters -------------------------------------------
@@ -37,6 +41,12 @@ BUILD_INPUT_PATHS="src web/app/src web/app/index.html web/app/vite.config.ts pac
 # CEZ_DRY_RUN=1 swaps the agent CLIs for the bundled mock, so booting needs no
 # `claude` login and reaches no network — the whole point for CI/e2e.
 export CEZ_DRY_RUN=1
+
+# The real CLI writes workspace state at boot (~/.cezar migrations + project
+# registration) — pin CEZ_HOME under .ai/qa so a test boot never touches the
+# developer's real ~/.cezar. Kept stable (not per-boot) so the reuse path
+# attaches to the same workspace the running instance was booted with.
+export CEZ_HOME="$QA_DIR/cez-home"
 
 FORCE=0
 FORCE_REBUILD=0
@@ -143,6 +153,9 @@ try_reuse() {
   pid=$(json_get "$ENV_DESCRIPTOR" app.pid)
   url=$(json_get "$ENV_DESCRIPTOR" baseUrl)
   started=$(json_get "$ENV_DESCRIPTOR" startedAt)
+  requested_single_project=false
+  [ "${CEZ_SINGLE_PROJECT:-}" = 1 ] && requested_single_project=true
+  [ "$(json_get "$ENV_DESCRIPTOR" environment.singleProject)" = "$requested_single_project" ] || return 1
   [ -n "$pid" ] && [ -n "$url" ] || return 1
   # A state file is a claim, not proof: the PID must still be alive…
   kill -0 "$pid" 2>/dev/null || return 1
@@ -299,8 +312,13 @@ start_app() {
 
   log "starting cezar on $BASE_URL (CEZ_DRY_RUN=1)"
   # --no-open: a test boot must never hijack the operator's browser.
-  (cd "$REPO_ROOT" && exec node dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
-    >"$APP_LOG" 2>&1) &
+  if command -v setsid >/dev/null 2>&1; then
+    (cd "$REPO_ROOT" && exec setsid nohup node dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
+      >"$APP_LOG" 2>&1 </dev/null) &
+  else
+    (cd "$REPO_ROOT" && exec nohup node dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
+      >"$APP_LOG" 2>&1 </dev/null) &
+  fi
   APP_PID=$!
 
   waited=0
@@ -324,9 +342,11 @@ start_app() {
 
 # ---- 7. descriptor write ----------------------------------------------------
 write_descriptor() {
+  SINGLE_PROJECT=false
+  [ "${CEZ_SINGLE_PROJECT:-}" = 1 ] && SINGLE_PROJECT=true
   node -e '
     const fs = require("fs");
-    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc] = process.argv.slice(1);
+    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc, singleProject] = process.argv.slice(1);
     fs.writeFileSync(out, JSON.stringify({
       version: 1,
       runId: "cezar-" + new Date().toISOString().slice(0, 10) + "-" + pid,
@@ -339,6 +359,7 @@ write_descriptor() {
       app: { startCommand: cmd, port: Number(port), healthPath: "/api/health", pid: Number(pid) },
       services: [],
       credentials: [],
+      environment: { singleProject: singleProject === "true" },
       browser: {
         provider: "agent-browser",
         installed: bInstalled === "1",
@@ -353,8 +374,9 @@ write_descriptor() {
       notes: "Booted from a production build with CEZ_DRY_RUN=1, so the agent CLIs are mocked and no login/network is needed. No backing services. Stop with .ai/scripts/test-env-down.sh. App log: .ai/qa/test-env-app.log.",
     }, null, 2) + "\n");
   ' "$ENV_DESCRIPTOR" "$BASE_URL" "$PORT" "$APP_PID" \
-    "CEZ_DRY_RUN=1 node dist/index.js --port $PORT --no-open" \
-    "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR"
+    "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node dist/index.js --port $PORT --no-open" \
+    "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR" \
+    "$SINGLE_PROJECT"
 }
 
 # ---- main -------------------------------------------------------------------

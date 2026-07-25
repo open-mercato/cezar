@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { queryKeys } from '@/api/queries'
 import type { ChangesPayload, GithubData, HealthResponse, RepoCommitPayload, RepoResponse } from '@/api/types'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
@@ -35,7 +36,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, followups: false },
+  capabilities: { localHandoff: true, followups: false, singleProject: false },
 }
 
 const CHANGES: ChangesPayload = {
@@ -124,8 +125,9 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
 
 /** Cold-load the repo view at a URL, with the same route map routes.tsx registers. */
 function renderAt(entry: string) {
+  const client = createQueryClient()
   render(
-    <QueryClientProvider client={createQueryClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/git" element={<RepoGitRoute tab="changes" />} />
@@ -137,6 +139,7 @@ function renderAt(entry: string) {
       </MemoryRouter>
     </QueryClientProvider>,
   )
+  return client
 }
 
 // ---- changes ----------------------------------------------------------------------------------
@@ -308,7 +311,7 @@ describe('the repo view Branches segment', () => {
     const sent = stubFetch({
       'POST /api/repo/branch': () => jsonResponse({ branch: 'feature', created: false }),
     })
-    renderAt('/git/branches')
+    const client = renderAt('/git/branches')
     await waitFor(() => expect(document.querySelector('[data-action="switch-branch"]')).not.toBeNull())
 
     fireEvent.click(document.querySelector('[data-action="switch-branch"]')!)
@@ -317,6 +320,25 @@ describe('the repo view Branches segment', () => {
       expect(post?.body).toEqual({ name: 'feature' })
     })
     await waitFor(() => expect(document.body.textContent).toContain('Switched to feature'))
+    await waitFor(() => expect(document.querySelector('[data-slot="branch-chip"]')?.textContent).toBe('feature'))
+    await waitFor(() => expect(client.getQueryData<HealthResponse>(queryKeys.health)?.repo?.branch).toBe('feature'))
+  })
+
+  it('filters branch rows without narrowing the base-branch picker', async () => {
+    stubFetch()
+    renderAt('/git/branches')
+    const filter = await screen.findByLabelText('Filter branches')
+    const picker = (await screen.findByLabelText('Agents’ base branch')) as HTMLSelectElement
+
+    fireEvent.change(filter, { target: { value: 'FEAT' } })
+    expect(document.querySelector('[data-slot="branch-row"][data-branch="feature"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="branch-row"][data-branch="main"]')).toBeNull()
+    expect([...picker.options].map((option) => option.value)).toEqual(['', 'feature', 'main'])
+
+    fireEvent.change(filter, { target: { value: 'missing' } })
+    expect(document.querySelector('[data-slot="branch-empty"]')?.textContent).toContain(
+      'No branches match “missing”.',
+    )
   })
 
   it('a switch 409 surfaces git’s own reason as a danger toast', async () => {

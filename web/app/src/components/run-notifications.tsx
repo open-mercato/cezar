@@ -1,7 +1,7 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 
-import { queryKeys, useUiState } from '@/api/queries'
+import { queryKeys, useWorkspaceUiState } from '@/api/queries'
 import type { ApiRun, RunStatus } from '@/api/types'
 import {
   diffRunTransitions,
@@ -31,10 +31,11 @@ import {
  */
 export function RunNotifications() {
   const queryClient = useQueryClient()
-  // The toggle, straight from ui-state (the Settings section writes it). Read through the same
-  // query AppearanceProvider keeps warm — no extra fetch, and a PUT from Settings updates this
-  // cache entry, so the gate flips without any coupling between the two components.
-  const uiState = useUiState()
+  // The toggle, straight from the GLOBAL ui-state (step 3.5 moved the section there — the
+  // notifying browser is one browser whichever project is open). Read through the same query
+  // AppearanceProvider keeps warm — no extra fetch, and a PUT from Settings updates this cache
+  // entry, so the gate flips without any coupling between the two components.
+  const uiState = useWorkspaceUiState()
   const enabled = normalizeNotifications(uiState.data?.notifications).enabled
 
   // A ref, not an effect dependency: re-running the effect on toggle flips would rebuild the

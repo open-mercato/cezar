@@ -84,12 +84,46 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     store.updateRun(run.id, { status: 'running', activity: 'monitoring' });
     store.flush();
 
-    const reopened = RunStore.open(dataDir);
+    const reopened = RunStore.open(dataDir, { keepLive: true });
     expect(reopened.getRun(run.id)?.activity).toBe('monitoring');
     // Resume/terminal transitions clear it back to a plain running/other state.
     reopened.updateRun(run.id, { status: 'running', activity: undefined });
     reopened.flush();
-    expect(RunStore.open(dataDir).getRun(run.id)?.activity).toBeUndefined();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(run.id)?.activity).toBeUndefined();
+  });
+
+  it('round-trips the monitoring deadline and clears monitoring state on terminal writes', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    const deadline = '2026-07-25T10:15:00.000Z';
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeAt: deadline });
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBe(deadline);
+    store.updateRun(run.id, { status: 'done' });
+    expect(store.getRun(run.id)).toMatchObject({ status: 'done' });
+    expect(store.getRun(run.id)?.activity).toBeUndefined();
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBeUndefined();
+  });
+
+  it('clears process-local wake-cap display state when records reopen', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeCapReached: true });
+    store.flush();
+    const reopened = RunStore.open(dataDir, { keepLive: true }).getRun(run.id);
+    expect(reopened?.activity).toBe('monitoring');
+    expect(reopened?.monitoringWakeCapReached).toBeUndefined();
+  });
+
+  it('salvages a malformed wake deadline and stale terminal monitoring activity', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([{
+      ...LEGACY_RUN,
+      activity: 'monitoring',
+      monitoringWakeAt: 'not-a-date',
+    }]), 'utf8');
+    const loaded = RunStore.open(dataDir).getRun(LEGACY_RUN.id);
+    expect(loaded?.status).toBe('done');
+    expect(loaded?.activity).toBeUndefined();
+    expect(loaded?.monitoringWakeAt).toBeUndefined();
   });
 
   it('still loads an old runs.json that predates activity (#490)', () => {
@@ -392,10 +426,11 @@ describe('RunStore — secret redaction before persistence (#427)', () => {
       task: 'task',
       steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
     });
-    store.updateStep(run.id, 'task', { status: 'done', sessionId: 'sess-123', tokensUsed: 42 });
+    store.updateStep(run.id, 'task', { status: 'done', sessionId: 'sess-123', backend: 'codex', tokensUsed: 42 });
     const step = store.getRun(run.id)?.steps[0];
     expect(step?.status).toBe('done');
     expect(step?.sessionId).toBe('sess-123');
+    expect(step?.backend).toBe('codex');
     expect(step?.tokensUsed).toBe(42);
   });
 
@@ -716,6 +751,149 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
   });
 });
 
+describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-discovery)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const freshRun = (task = 'task') => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task, steps: [] });
+    return { store, run };
+  };
+
+  it('adopts a single issue link and seeds issueNumber', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Fixing https://github.com/open-mercato/cezar/issues/433 now.',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBe('https://github.com/open-mercato/cezar/issues/433');
+    expect(loaded?.issueNumber).toBe(433);
+  });
+
+  it('keeps issue links from tool output display-only until the agent names them', () => {
+    const { store, run } = freshRun();
+    const issueUrl = 'https://github.com/open-mercato/cezar/issues/99';
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't1',
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran gh pr view',
+        status: 'completed',
+        input: { command: 'gh pr view 1' },
+        output: `PR body: Fixes ${issueUrl}`,
+      },
+    });
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBe(issueUrl);
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
+
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: `This run is about ${issueUrl}.`,
+    });
+    expect(store.getRun(run.id)?.issueNumber).toBe(99);
+  });
+
+  it('seeds an issue link while the run is still queued', () => {
+    const { store, run } = freshRun('Fix https://github.com/open-mercato/cezar/issues/554');
+    const loaded = store.getRun(run.id);
+    expect(loaded?.status).toBe('queued');
+    expect(loaded?.referencedIssueUrl).toBe('https://github.com/open-mercato/cezar/issues/554');
+    expect(loaded?.issueNumber).toBe(554);
+  });
+
+  it('tracks issues independently of a created PR', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'Opened a draft pull request: https://github.com/open-mercato/cezar/pull/42 closing https://github.com/open-mercato/cezar/issues/7',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.pullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/42');
+    expect(loaded?.referencedIssueUrl).toBe('https://github.com/open-mercato/cezar/issues/7');
+    expect(loaded?.issueNumber).toBe(7);
+  });
+
+  it('ambiguity clears the chip and takes back the number the janitor seeded', () => {
+    const { store: firstStore, run } = freshRun();
+    firstStore.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/cezar/issues/1',
+    });
+    expect(firstStore.getRun(run.id)?.issueNumber).toBe(1);
+    firstStore.flush();
+    const store = RunStore.open(dataDir, { keepLive: true });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Also https://github.com/open-mercato/cezar/issues/2',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBeUndefined();
+    expect(loaded?.issueNumber).toBeUndefined();
+  });
+
+  it('ambiguity preserves a prompt-derived issueNumber equal to the previous resolution', () => {
+    const { store, run } = freshRun('port the fix from issue 12 into issue 433');
+    store.updateRun(run.id, { issueNumber: 12 });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/cezar/issues/12',
+    });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Also https://github.com/open-mercato/cezar/issues/433',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBeUndefined();
+    expect(loaded?.issueNumber).toBe(12);
+  });
+
+  it('disambiguates several issue links by the number named in the task prompt', () => {
+    const { store, run } = freshRun('om-auto-fix-issue 433');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'Working https://github.com/open-mercato/cezar/issues/433, related to https://github.com/open-mercato/cezar/issues/12.',
+    });
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBe(
+      'https://github.com/open-mercato/cezar/issues/433',
+    );
+  });
+
+  it('a declared CEZ:ISSUE filters the candidates and owns issueNumber', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'See https://github.com/open-mercato/cezar/issues/1 and https://github.com/open-mercato/cezar/issues/2',
+    });
+    store.applyMarkerRefs(run.id, { issue: 2 });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBe('https://github.com/open-mercato/cezar/issues/2');
+    expect(loaded?.issueNumber).toBe(2);
+  });
+
+  it('never overwrites a marker-owned issueNumber from a stray link', () => {
+    const { store, run } = freshRun();
+    store.applyMarkerRefs(run.id, { issue: 500 });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Mentioned in https://github.com/open-mercato/cezar/issues/9',
+    });
+    expect(store.getRun(run.id)?.issueNumber).toBe(500);
+  });
+});
+
 describe('RunStore — seq survives a restart (#424 symptom class)', () => {
   let dataDir: string;
 
@@ -747,5 +925,107 @@ describe('RunStore — seq survives a restart (#424 symptom class)', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
     expect(store.appendEvent(run.id, { type: 'note', message: 'first' }).seq).toBe(1);
+  });
+});
+
+describe('RunStore — provider authorization callouts', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-provider-auth-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('persists the structured provider-auth-required event without vendor error text', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+
+    store.appendEvent(run.id, {
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    });
+
+    expect(store.readEvents(run.id)).toEqual([expect.objectContaining({
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    })]);
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('OAuth');
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('token');
+  });
+});
+
+/** #472 — the queued prompt stack. Additive optional field, and (like `task`)
+ *  deliberately outside `redactPatch`'s field list. */
+describe('RunStore — queuedMessages (#472)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.CEZ_REDACT_SECRETS;
+  });
+
+  it('parses a runs.json written before the field existed', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]));
+    const store = RunStore.open(dataDir);
+    const run = store.getRun('legacy-1');
+    expect(run).toBeDefined();
+    // `undefined` reads as an empty stack — no migration, no default to write back.
+    expect(run?.queuedMessages).toBeUndefined();
+  });
+
+  it('round-trips a record carrying the stack', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'ship it', steps: [] });
+    store.updateRun(run.id, {
+      queuedMessages: [
+        { id: 'm1', text: 'and update the changelog', createdAt: '2026-07-21T10:00:00.000Z' },
+        {
+          id: 'm2',
+          text: 'see this mock',
+          images: [`/api/runs/${run.id}/images/pasted-1.png`],
+          createdAt: '2026-07-21T10:01:00.000Z',
+        },
+      ],
+    });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir);
+    const stack = reopened.getRun(run.id)?.queuedMessages;
+    expect(stack).toHaveLength(2);
+    expect(stack?.[0]).toEqual({
+      id: 'm1',
+      text: 'and update the changelog',
+      createdAt: '2026-07-21T10:00:00.000Z',
+    });
+    expect(stack?.[1]?.images).toEqual([`/api/runs/${run.id}/images/pasted-1.png`]);
+  });
+
+  /** The `task` rule (above) extended to the stack: these strings are replayed
+   *  into `{{task}}` verbatim at dequeue, so redacting one would corrupt the run. */
+  it('leaves a secret in a stacked message verbatim, exactly as it leaves `task`', () => {
+    process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
+    delete process.env.CEZ_REDACT_SECRETS;
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'deploy', steps: [] });
+    store.updateRun(run.id, {
+      queuedMessages: [
+        { id: 'm1', text: 'use gho_thisisarealsecrettoken123456', createdAt: '2026-07-21T10:00:00.000Z' },
+      ],
+    });
+    expect(store.getRun(run.id)?.queuedMessages?.[0]?.text).toBe(
+      'use gho_thisisarealsecrettoken123456',
+    );
   });
 });

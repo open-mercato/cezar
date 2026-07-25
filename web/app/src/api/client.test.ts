@@ -5,6 +5,7 @@ import {
   archiveFinished,
   archiveRun,
   cancelRun,
+  connectProvider,
   continueRun,
   createRun,
   deleteRun,
@@ -12,12 +13,15 @@ import {
   getGithub,
   getGroup,
   getHealth,
+  getProviderStatus,
   getRepo,
+  getRunnerModels,
   getRun,
   getRunDiff,
   getRunHandoff,
   getRuns,
   getSkills,
+  getSkillsWhenReady,
   getTodos,
   getUiState,
   getWorkflows,
@@ -27,9 +31,13 @@ import {
   putUiState,
   refreshSkills,
   removeTodo,
+  runFileRawUrl,
   sendMessage,
+  setProviderEnabled,
   startTodo,
+  retryProviderAuth,
 } from './client'
+import { setApiScope } from './project-scope'
 
 /** The one seam under test: every call must go through `fetch` and nothing else. */
 const fetchMock = vi.fn<typeof fetch>()
@@ -51,6 +59,14 @@ function reply(body: unknown, init: ResponseInit = {}): void {
       ...init,
     }),
   )
+}
+
+const VALID_PROVIDER_STATUS = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
 }
 
 /** The (path, init) the client actually asked for. */
@@ -75,6 +91,40 @@ describe('request shapes', () => {
     body?: unknown
   }> = [
     { name: 'getHealth', call: () => getHealth(), path: '/api/health', method: 'GET' },
+    {
+      name: 'getProviderStatus',
+      call: () => getProviderStatus(),
+      path: '/api/providers/status',
+      method: 'GET',
+    },
+    {
+      name: 'getProviderStatus (refresh)',
+      call: () => getProviderStatus(true),
+      path: '/api/providers/status?refresh=1',
+      method: 'GET',
+    },
+    {
+      name: 'connectProvider',
+      call: () => connectProvider('codex'),
+      path: '/api/providers/connect',
+      method: 'POST',
+      body: { provider: 'codex' },
+    },
+    {
+      name: 'setProviderEnabled',
+      call: () => setProviderEnabled('codex', false),
+      path: '/api/providers/codex/enabled',
+      method: 'PUT',
+      body: { enabled: false },
+    },
+    {
+      name: 'retryProviderAuth',
+      call: () => retryProviderAuth('claude', 'incident-1'),
+      path: '/api/providers/claude/retry',
+      method: 'POST',
+      body: { authFailureId: 'incident-1' },
+    },
+    { name: 'getRunnerModels', call: () => getRunnerModels(), path: '/api/models?runner=codex', method: 'GET' },
     { name: 'getRuns', call: () => getRuns(), path: '/api/runs', method: 'GET' },
     { name: 'getRun', call: () => getRun('run-1'), path: '/api/runs/run-1', method: 'GET' },
     { name: 'getRunDiff', call: () => getRunDiff('run-1'), path: '/api/runs/run-1/diff', method: 'GET' },
@@ -82,6 +132,12 @@ describe('request shapes', () => {
     { name: 'getUiState', call: () => getUiState(), path: '/api/ui-state', method: 'GET' },
     { name: 'getWorkflows', call: () => getWorkflows(), path: '/api/workflows', method: 'GET' },
     { name: 'getSkills', call: () => getSkills(), path: '/api/skills', method: 'GET' },
+    {
+      name: 'getSkillsWhenReady',
+      call: () => getSkillsWhenReady(),
+      path: '/api/skills?wait=1',
+      method: 'GET',
+    },
     { name: 'refreshSkills', call: () => refreshSkills(), path: '/api/skills/refresh', method: 'POST' },
     { name: 'getTodos', call: () => getTodos(), path: '/api/todos', method: 'GET' },
     { name: 'getRepo', call: () => getRepo(), path: '/api/repo', method: 'GET' },
@@ -148,10 +204,17 @@ describe('request shapes', () => {
     },
     {
       name: 'continueRun (with text)',
-      call: () => continueRun('run-1', 'keep going'),
+      call: () => continueRun('run-1', { text: 'keep going' }),
       path: '/api/runs/run-1/continue',
       method: 'POST',
       body: { text: 'keep going' },
+    },
+    {
+      name: 'continueRun (runner + model override, #401)',
+      call: () => continueRun('run-1', { runner: 'codex', model: 'gpt-5.1-codex' }),
+      path: '/api/runs/run-1/continue',
+      method: 'POST',
+      body: { runner: 'codex', model: 'gpt-5.1-codex' },
     },
     { name: 'deleteRun', call: () => deleteRun('run-1'), path: '/api/runs/run-1', method: 'DELETE' },
     // Inbox actions (R6 1.2): the exact legacy endpoints, ids URL-encoded like every other path.
@@ -161,10 +224,27 @@ describe('request shapes', () => {
     // omitted (the case above) sends none at all — the pre-#413 call shape.
     {
       name: 'startTodo (with prompt)',
-      call: () => startTodo('todo/1', 'Also add tests.'),
+      call: () => startTodo('todo/1', { prompt: 'Also add tests.' }),
       path: '/api/todos/todo%2F1/start',
       method: 'POST',
       body: { prompt: 'Also add tests.' },
+    },
+    {
+      // #401: an Inbox card that picked a backend. No pick → the bodyless POST above, unchanged.
+      name: 'startTodo (runner + model override, #401)',
+      call: () => startTodo('todo/1', { runner: 'codex', model: 'gpt-5.1-codex' }),
+      path: '/api/todos/todo%2F1/start',
+      method: 'POST',
+      body: { runner: 'codex', model: 'gpt-5.1-codex' },
+    },
+    {
+      // Auto ('') and a single-backend host are filtered out by the caller, so a body that
+      // reaches the wire never carries an empty model or a redundant runner.
+      name: 'startTodo (model only, #401)',
+      call: () => startTodo('todo/1', { model: 'opus' }),
+      path: '/api/todos/todo%2F1/start',
+      method: 'POST',
+      body: { model: 'opus' },
     },
     {
       name: 'openRunInCli',
@@ -198,7 +278,7 @@ describe('request shapes', () => {
   ]
 
   it.each(cases)('$name hits $method $path', async ({ call, path, method, body }) => {
-    reply({ ok: true })
+    reply(path.startsWith('/api/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
     await call()
 
     const sent = lastCall()
@@ -214,6 +294,12 @@ describe('request shapes', () => {
     expect(lastCall().path).toBe('/api/runs/a%20b%2F..%2Fc/cancel')
   })
 
+  it('hands out the byte-identical legacy raw-image URL when unscoped', () => {
+    // The one URL this module builds without fetching it (an <img> loads it) — same invariant
+    // as every case above: unscoped means exactly the pre-multi-project path.
+    expect(runFileRawUrl('run-1', 'shots/final.png')).toBe('/api/runs/run-1/files?path=shots%2Ffinal.png&raw=1')
+  })
+
   it('forwards an abort signal to fetch', async () => {
     reply([])
     const controller = new AbortController()
@@ -222,7 +308,101 @@ describe('request shapes', () => {
   })
 })
 
+describe('project scope (multi-project spec, step 3.1)', () => {
+  // NB the WHOLE unscoped table above is this feature's other half: the critical assertion is
+  // that with no scope set, every path stays byte-identical — those cases prove it by never
+  // touching the scope at all.
+  afterEach(() => {
+    setApiScope(null)
+  })
+
+  it('prefixes every request path with /api/p/<id> once a scope is active', async () => {
+    setApiScope('proj-a')
+
+    reply({ ok: true })
+    await getRuns()
+    expect(lastCall().path).toBe('/api/p/proj-a/runs')
+
+    reply({ ok: true })
+    await cancelRun('run-1')
+    expect(lastCall().path).toBe('/api/p/proj-a/runs/run-1/cancel')
+
+    reply({ ok: true })
+    await getGithub({ limit: 5 })
+    expect(lastCall().path).toBe('/api/p/proj-a/github?limit=5')
+
+    // The non-send() site scopes the same way — the <img> URL it hands out must hit the
+    // scoped route or another project's cockpit would render this project's bytes as a 404.
+    expect(runFileRawUrl('run-1', 'x.png')).toBe('/api/p/proj-a/runs/run-1/files?path=x.png&raw=1')
+  })
+
+  it('keeps workspace-level routes unprefixed under a scope — health is single-mount', async () => {
+    setApiScope('proj-a')
+    reply({ version: '0.0.0' })
+    await getHealth()
+    expect(lastCall().path).toBe('/api/health')
+  })
+})
+
 describe('response parsing', () => {
+  it('normalizes provider status into canonical order without unexpected fields', async () => {
+    reply({
+      ignored: 'top-level raw value',
+      providers: [
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true, raw: 'private' },
+        { provider: 'claude', status: 'connected', enabled: false, account: 'private@example.test' },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1', raw: 'private' },
+      ],
+    })
+
+    await expect(getProviderStatus()).resolves.toEqual({
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: false },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true },
+      ],
+    })
+  })
+
+  it.each([
+    ['an empty object', {}],
+    ['null providers', { providers: null }],
+    ['a null row', { providers: [null] }],
+    [
+      'an unknown state',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'future-state' },
+          { provider: 'opencode', status: 'connected' },
+        ],
+      },
+    ],
+    [
+      'a duplicate provider',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'claude', status: 'disconnected' },
+          { provider: 'opencode', status: 'connected' },
+        ],
+      },
+    ],
+    [
+      'a missing provider',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'connected' },
+        ],
+      },
+    ],
+  ])('rejects a successful provider response containing %s', async (_case, body) => {
+    reply(body)
+
+    await expect(getProviderStatus()).rejects.toThrow('Invalid provider status response')
+  })
+
   it('returns the health payload as-is', async () => {
     const health = {
       version: '0.1.3',

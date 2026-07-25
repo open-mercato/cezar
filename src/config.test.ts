@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadConfig } from './config.js';
+import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.js';
 
 /**
  * `config.json` schema roundtrips (R2 2.3: `systemPrompt?`). The invariants
@@ -133,5 +133,148 @@ describe('loadConfig systemPrompt', () => {
       write({ worktreeRetention: 'lots' });
       expect((await loadConfig(repoRoot)).worktreeRetention).toBe(10);
     });
+  });
+});
+
+/**
+ * `resolveWorktreeRetention` — what every enforcement site (boot sweeps,
+ * terminal transitions, the reclaim route) asks instead of reading the parsed
+ * `worktreeRetention`. The workspace's `resources.worktreeRetentionDefault`
+ * only *seeds* repos that set none, which is exactly what Settings → Worktrees
+ * tells the user, so the precedence is the contract under test here.
+ */
+describe('resolveWorktreeRetention', () => {
+  let repoRoot: string;
+  let cezHome: string;
+  const savedHome = process.env.CEZ_HOME;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-retention-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    // Pinned so the suite never reads (or writes) the developer's real ~/.cezar.
+    cezHome = mkdtempSync(join(tmpdir(), 'cez-home-'));
+    process.env.CEZ_HOME = cezHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedHome;
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(cezHome, { recursive: true, force: true });
+  });
+
+  const writeRepo = (value: unknown) =>
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+  const writeWorkspace = (value: unknown) =>
+    writeFileSync(join(cezHome, 'config.json'), JSON.stringify(value), 'utf8');
+
+  it('inherits the workspace default when the repo sets nothing', async () => {
+    writeWorkspace({ resources: { worktreeRetentionDefault: 4 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(4);
+  });
+
+  it('inherits it when the repo has no config file at all', async () => {
+    rmSync(join(repoRoot, '.ai/cezar'), { recursive: true, force: true });
+    writeWorkspace({ resources: { worktreeRetentionDefault: 7 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(7);
+  });
+
+  it('inherits 0 (unlimited) — the workspace default is a value, not a truthiness test', async () => {
+    writeWorkspace({ resources: { worktreeRetentionDefault: 0 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(0);
+  });
+
+  it("keeps the repo's own value, workspace default ignored", async () => {
+    writeRepo({ worktreeRetention: 3 });
+    writeWorkspace({ resources: { worktreeRetentionDefault: 99 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(3);
+  });
+
+  it('keeps a repo value that happens to equal the historical default (10 is not a sentinel)', async () => {
+    writeRepo({ worktreeRetention: 10 });
+    writeWorkspace({ resources: { worktreeRetentionDefault: 2 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(10);
+  });
+
+  it("keeps the repo's explicit 0 over the workspace default", async () => {
+    writeRepo({ worktreeRetention: 0 });
+    writeWorkspace({ resources: { worktreeRetentionDefault: 5 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(0);
+  });
+
+  it('falls back to 10 when the workspace config is absent', async () => {
+    writeRepo({ maxParallel: 5 });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(10);
+  });
+
+  it('falls back to 10 when the workspace config is corrupt (unreadable)', async () => {
+    writeFileSync(join(cezHome, 'config.json'), '{ not json', 'utf8');
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(10);
+  });
+
+  it('falls back to 10 when the workspace default itself is out of bounds', async () => {
+    writeWorkspace({ resources: { worktreeRetentionDefault: -1 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(10);
+  });
+
+  it('treats a repo value the schema would refuse as unset, so the workspace seeds it', async () => {
+    writeRepo({ worktreeRetention: 'lots' });
+    writeWorkspace({ resources: { worktreeRetentionDefault: 6 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(6);
+  });
+
+  it('treats a malformed repo config as unset', async () => {
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), '{ nope', 'utf8');
+    writeWorkspace({ resources: { worktreeRetentionDefault: 8 } });
+    expect(await resolveWorktreeRetention(repoRoot)).toBe(8);
+  });
+});
+
+/**
+ * `gatedSkillsRepos` decides which repos are opt-in per skill (the "Import skills" flow). The
+ * invariant: the vendor default (`open-mercato/skills`) is gated for the zero-config majority,
+ * and a repo that sets its OWN `skillsRepos` gates nothing (it took control — everything it lists
+ * auto-loads). Detection must probe the raw file because the schema's `.default()` erases the
+ * "did the user set this?" distinction — the same reason `resolveWorktreeRetention` probes it.
+ */
+describe('gatedSkillsRepos', () => {
+  let repoRoot: string;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-gate-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const write = (value: unknown) =>
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+
+  const defaults = DEFAULT_SKILLS_REPOS.map((r) => r.repo);
+
+  it('gates the vendor defaults when there is no config file (zero-config)', async () => {
+    expect([...(await gatedSkillsRepos(repoRoot))]).toEqual(defaults);
+  });
+
+  it('gates the vendor defaults when the config omits skillsRepos (additive)', async () => {
+    write({ maxParallel: 4 });
+    expect([...(await gatedSkillsRepos(repoRoot))]).toEqual(defaults);
+  });
+
+  it('gates nothing once the repo sets its own skillsRepos', async () => {
+    write({ skillsRepos: [{ repo: 'acme/team-skills', ref: 'main' }] });
+    expect((await gatedSkillsRepos(repoRoot)).size).toBe(0);
+  });
+
+  it('gates nothing even when skillsRepos is set to empty (an explicit opt-out)', async () => {
+    write({ skillsRepos: [] });
+    expect((await gatedSkillsRepos(repoRoot)).size).toBe(0);
+  });
+
+  it('degrades a malformed config to the vendor defaults (like loadConfig)', async () => {
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), '{ nope', 'utf8');
+    expect([...(await gatedSkillsRepos(repoRoot))]).toEqual(defaults);
   });
 });

@@ -160,6 +160,18 @@ export function onUsage(listener: UsageListener): () => void {
   return () => listeners.delete(listener);
 }
 
+/** Test hook: fan one snapshot out to every subscriber without shelling `ps` —
+ *  lets unit tests prove a dispose()d subscriber stops receiving ticks. */
+export function emitUsageForTest(snapshot: Record<string, ProcessUsage>): void {
+  for (const listener of listeners) {
+    try {
+      listener(snapshot);
+    } catch {
+      // mirror sample(): one broken listener never kills the fan-out
+    }
+  }
+}
+
 async function sample(): Promise<void> {
   if (sampling || entries.size === 0) return;
   sampling = true;

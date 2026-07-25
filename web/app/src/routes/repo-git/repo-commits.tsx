@@ -1,6 +1,8 @@
 import { ArrowLeftIcon, GitCommitHorizontalIcon, SearchXIcon, TriangleAlertIcon } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { useParams } from 'react-router'
+
+import { Link } from '@/lib/project-router'
 
 import { ApiError } from '@/api/client'
 import { useRepoCommit } from '@/api/queries'
@@ -11,6 +13,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { Button } from '@/components/ui/button'
 import { useIsDesktop } from '@/lib/use-desktop'
 
+import { CommitList } from '../task-git/commit-list'
 import { DiffViewToggles } from '../task-git/diff-controls'
 
 /**
@@ -35,24 +38,17 @@ export function RepoCommitsSection({ log }: { log: LogEntry[] }) {
     )
   }
   return (
-    <ul data-slot="repo-commits" className="flex flex-col divide-y divide-border px-2 py-1 md:px-4">
-      {log.map((commit) => (
-        <li key={commit.hash}>
-          <Link
-            data-slot="commit-row"
-            data-sha={commit.hash}
-            to={`/git/commits/${commit.hash}`}
-            className="flex min-w-0 items-baseline gap-3 rounded-sm px-2 py-2.5 hover:bg-muted"
-          >
-            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{commit.hash}</span>
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{commit.subject}</span>
-            <span className="hidden shrink-0 text-[11px] text-soft-foreground sm:inline">
-              {commit.author} · {commit.when}
-            </span>
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <CommitList
+      slot="repo-commits"
+      commits={log.map((commit) => ({
+        sha: commit.hash,
+        shaLabel: commit.hash,
+        subject: commit.subject,
+        author: commit.author,
+        when: commit.when,
+        href: `/git/commits/${commit.hash}`,
+      }))}
+    />
   )
 }
 

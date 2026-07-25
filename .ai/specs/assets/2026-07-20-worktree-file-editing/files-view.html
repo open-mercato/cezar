@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>cezar — Files tab, view mode (editable) · #530 mockup</title>
+<link rel="stylesheet" href="tokens.css" />
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="side-head">
+      <span class="brand-tile">c</span>
+      <span class="name">cezar</span>
+    </div>
+    <div class="side-section">
+      <div class="nav-item active">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h12"/></svg>
+        Tasks
+      </div>
+      <div class="nav-item">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/></svg>
+        Git
+      </div>
+      <div class="nav-item">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 7v10l9 5 9-5V7z"/></svg>
+        Skills
+      </div>
+    </div>
+    <div class="side-label">Recent</div>
+    <div class="side-section">
+      <div class="task-row active"><span class="dot dot-pending"></span><span class="t">worktree file editing</span></div>
+      <div class="task-row"><span class="dot dot-success"></span><span class="t">multi-project workspace</span></div>
+      <div class="task-row"><span class="dot dot-success"></span><span class="t">worktree retention</span></div>
+    </div>
+  </aside>
+
+  <div class="main">
+
+    <header class="run-head">
+      <div class="inner">
+        <div class="run-title">
+          <h1>worktree file editing</h1>
+          <span class="pill"><span class="dot dot-pending"></span>running</span>
+        </div>
+        <div class="run-meta">
+          <span>om-auto-create-pr</span>
+          <span class="sep">·</span>
+          <span class="chip-branch">spec/worktree-file-editing</span>
+          <span class="sep">·</span>
+          <span style="color: var(--success); font-weight: 600;">+412</span>
+          <span style="color: var(--danger); font-weight: 600;">−37</span>
+        </div>
+        <div class="run-tabs">
+          <span class="tab">Session</span>
+          <span class="tab">Changes</span>
+          <span class="tab">Commits</span>
+          <span class="tab active">Files</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="files-split">
+
+      <aside class="files-aside">
+        <nav class="tree" aria-label="Worktree files">
+          <ul>
+            <li>
+              <button class="dir">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(90deg)"><path d="m9 18 6-6-6-6"/></svg>
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                <span class="nm">src</span>
+              </button>
+              <ul>
+                <li>
+                  <button class="dir" style="padding-left: 20px">
+                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(90deg)"><path d="m9 18 6-6-6-6"/></svg>
+                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                    <span class="nm">server</span>
+                  </button>
+                  <ul>
+                    <li><button style="padding-left: 52px" class="active" aria-current="true">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">capabilities.ts</span><span class="sz">2.4 kB</span>
+                    </button></li>
+                    <li><button style="padding-left: 52px">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">git-changes.ts</span><span class="sz">21.8 kB</span>
+                    </button></li>
+                    <li><button style="padding-left: 52px">
+                      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+                      <span class="nm">server.ts</span><span class="sz">64.2 kB</span>
+                    </button></li>
+                  </ul>
+                </li>
+                <li><button class="dir" style="padding-left: 20px">
+                  <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+                  <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                  <span class="nm">runs</span>
+                </button></li>
+              </ul>
+            </li>
+            <li><button class="dir">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+              <span class="nm">web</span>
+            </button></li>
+            <li><button style="padding-left: 24px">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+              <span class="nm">package.json</span><span class="sz">3.1 kB</span>
+            </button></li>
+          </ul>
+        </nav>
+      </aside>
+
+      <section class="files-main">
+        <div class="pane">
+
+          <header class="pane-head">
+            <span class="path">src/server/capabilities.ts</span>
+            <span class="spacer"></span>
+            <span class="size">2.4 kB</span>
+            <button class="btn btn-sm btn-outline">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>
+              Edit
+            </button>
+          </header>
+
+          <div class="code" data-lang="typescript">
+            <div class="ln"><span class="gutter">42</span><span class="src"><span class="k">export</span> <span class="k">function</span> <span class="f">resolveCapabilities</span><span class="p">(</span><span class="v">env</span><span class="p">:</span> <span class="f">NodeJS</span><span class="p">.</span><span class="f">ProcessEnv</span><span class="p">,</span> <span class="v">bindHost</span><span class="p">?:</span> <span class="k">string</span><span class="p">):</span> <span class="f">Capabilities</span> <span class="p">{</span></span></div>
+            <div class="ln"><span class="gutter">43</span><span class="src">  <span class="k">return</span> <span class="p">{</span></span></div>
+            <div class="ln"><span class="gutter">44</span><span class="src">    <span class="k">localHandoff</span><span class="p">:</span> <span class="v">env</span><span class="p">.</span><span class="v">CEZ_REMOTE</span> <span class="p">!==</span> <span class="s">'1'</span> <span class="p">&amp;&amp;</span> <span class="f">isLoopbackHost</span><span class="p">(</span><span class="v">bindHost</span><span class="p">),</span></span></div>
+            <div class="ln"><span class="gutter">45</span><span class="src">    <span class="c">// Deliberately not re-derived here: RunManager enforces the same predicate,</span></span></div>
+            <div class="ln"><span class="gutter">46</span><span class="src">    <span class="c">// and two spellings of "is the inbox on" would eventually disagree.</span></span></div>
+            <div class="ln"><span class="gutter">47</span><span class="src">    <span class="k">followups</span><span class="p">:</span> <span class="f">followupsEnabled</span><span class="p">(</span><span class="v">env</span><span class="p">),</span></span></div>
+            <div class="ln"><span class="gutter">48</span><span class="src">  <span class="p">};</span></span></div>
+            <div class="ln"><span class="gutter">49</span><span class="src"><span class="p">}</span></span></div>
+            <div class="ln"><span class="gutter">50</span><span class="src"></span></div>
+            <div class="ln"><span class="gutter">51</span><span class="src"><span class="c">/** Loopback only — a bind on 0.0.0.0 is reachable from the network. */</span></span></div>
+            <div class="ln"><span class="gutter">52</span><span class="src"><span class="k">function</span> <span class="f">isLoopbackHost</span><span class="p">(</span><span class="v">host</span><span class="p">?:</span> <span class="k">string</span><span class="p">):</span> <span class="k">boolean</span> <span class="p">{</span></span></div>
+            <div class="ln"><span class="gutter">53</span><span class="src">  <span class="k">if</span> <span class="p">(</span><span class="p">!</span><span class="v">host</span><span class="p">)</span> <span class="k">return</span> <span class="k">true</span><span class="p">;</span></span></div>
+            <div class="ln"><span class="gutter">54</span><span class="src">  <span class="k">return</span> <span class="v">host</span> <span class="p">===</span> <span class="s">'127.0.0.1'</span> <span class="p">||</span> <span class="v">host</span> <span class="p">===</span> <span class="s">'::1'</span> <span class="p">||</span> <span class="v">host</span> <span class="p">===</span> <span class="s">'localhost'</span><span class="p">;</span></span></div>
+            <div class="ln"><span class="gutter">55</span><span class="src"><span class="p">}</span></span></div>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+    <p class="caption">
+      <b>View mode, <code>editable: true</code>.</b> The only new pixel on this screen is the
+      <b>Edit</b> button in the preview header — rendered from the <code>GET</code>'s new
+      <code>editable</code> field, never re-derived client-side, and absent entirely when
+      <code>capabilities.fileEdit</code> is false. Everything else is today's Files tab
+      (<code>task-files.tsx</code>, <code>files-tree.tsx</code>, <code>file-preview.tsx</code>)
+      unchanged. Highlighting is the shared <code>langForPath()</code> → Shiki
+      <code>cezar-syn</code> pipeline; the tokens carry <code>var(--syn-*)</code>, not hex.
+    </p>
+
+  </div>
+</div>
+</body>
+</html>

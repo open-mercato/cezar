@@ -133,6 +133,20 @@ describe('AppShell', () => {
     })
   })
 
+  describe('Add project menu', () => {
+    it('is shown by default', () => {
+      renderShell()
+      expect(within(sidebar()).getByRole('button', { name: 'Add project' })).toBeTruthy()
+    })
+
+    it('is omitted in single-project mode while normal navigation remains', () => {
+      renderShell('/', { singleProject: true })
+      expect(within(sidebar()).queryByRole('button', { name: 'Add project' })).toBeNull()
+      expect(within(nav()).getByRole('link', { name: 'Tasks' })).toBeTruthy()
+      expect(within(sidebar()).getByRole('link', { name: /New task/ })).toBeTruthy()
+    })
+  })
+
   it('puts the theme toggle in the sidebar footer', () => {
     renderShell()
     expect(within(footer()).getByRole('button', { name: /^Theme:/ })).toBeTruthy()
@@ -189,6 +203,25 @@ describe('AppShell', () => {
       cleanup()
       renderShell('/', { inboxCount: 0 })
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
+    })
+
+    it('renders a quiet accessible Skills update marker in desktop and mobile navigation', () => {
+      renderShell('/', { skillsUpdateAvailable: true })
+      expect(document.querySelectorAll('[data-slot="nav-update-marker"]')).toHaveLength(1)
+      fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+      const markers = document.querySelectorAll('[data-slot="nav-update-marker"]')
+      expect(markers).toHaveLength(2)
+      for (const marker of markers) {
+        expect(marker.textContent).toBe('Skills update available')
+        expect(marker.innerHTML).not.toContain('animate-')
+      }
+      // Radix hides the desktop app from the accessibility tree while the mobile drawer is modal.
+      expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
+    })
+
+    it('renders no Skills marker without an actionable update', () => {
+      renderShell()
+      expect(document.querySelector('[data-slot="nav-update-marker"]')).toBeNull()
     })
 
     it('reserves the quick-list, tools and composer slots for later Steps', () => {

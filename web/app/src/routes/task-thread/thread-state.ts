@@ -65,7 +65,15 @@ export interface ThreadAsk {
   answer?: string
 }
 
-export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk
+/** A persisted, cezar-owned recovery marker for a provider's runtime authentication failure. */
+export interface ThreadProviderAuthRequired {
+  kind: 'provider-auth-required'
+  id: string
+  provider: 'claude' | 'codex' | 'opencode'
+  authFailureId: string
+}
+
+export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk | ThreadProviderAuthRequired
 
 export interface ThreadTurn {
   /** Stable render key, assigned in arrival order (`turn-1`, `turn-2`, …). Not the protocol
@@ -177,6 +185,10 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
+  return value === 'claude' || value === 'codex' || value === 'opencode' ? value : undefined
+}
+
 /** The engine's turn-end markers (`CEZ:DONE`, `CEZ:MONITORING` from #490) plus the in-band
  *  task-reference marker lines (`CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`, spec
  *  2026-07-18-task-ref-markers). v1 `text` lines arrive pre-stripped by the server; v2 message
@@ -199,6 +211,58 @@ function stripDoneMarker(text: string, stripAsk: boolean): string {
     .split('\n')
     .filter((line) => !/^CEZ:(?:PR=\d+|ISSUE=\d+|TITLE=.+)\s*$/.test(line))
     .join('\n')
+}
+
+/**
+ * Repair for legacy per-delta transcripts: codex/opencode runs recorded before the runners
+ * coalesced v1 `text` per item persisted one `text` line PER STREAMING TOKEN, so the fold
+ * synthesized one message per token ("github" / ".com" / "merc" / "ato" …, each its own
+ * paragraph) and the exact-match dedup never fired — no single token equals the v2 message.
+ * The tokens ARE the v2 message, just cut up: a run of consecutive v1 messages whose
+ * concatenation reassembles a v2 message of the turn (or all of them in order, when v1 tool
+ * suppression made several messages adjacent) is dropped as a whole; the v2 twin renders.
+ * The comparison ignores whitespace — the server dropped whitespace-only deltas at persist
+ * time — and strips markers on the CONCATENATION, catching `CEZ:DONE` split across tokens,
+ * which per-event stripping let through. A run that reassembles nothing is kept untouched.
+ */
+function dropLegacyDeltaRuns(draft: DraftTurn): void {
+  // Marker-insensitive comparison (stripAsk: true): the v1 side may or may not carry the
+  // marker depending on server-side validation, so equality must ignore it either way.
+  const norm = (text: string) => stripDoneMarker(text, true).replace(/\s+/g, '')
+  const v2Norms = new Set<string>()
+  const inOrder: string[] = []
+  for (const { origin, entry } of draft.entries) {
+    if (origin === 'v2' && entry.kind === 'message') {
+      const n = norm(entry.text)
+      v2Norms.add(n)
+      inOrder.push(n)
+    }
+  }
+  if (inOrder.length === 0) return
+  v2Norms.add(inOrder.join(''))
+  const kept: DraftEntry[] = []
+  let run: { entries: DraftEntry[]; texts: string[] } = { entries: [], texts: [] }
+  const flushRun = () => {
+    // Single entries already had their chance in the exact-match filter above — only a
+    // genuine run (≥2 fragments) is a delta artifact worth reassembling.
+    if (run.entries.length >= 2 && v2Norms.has(norm(run.texts.join('')))) {
+      run = { entries: [], texts: [] }
+      return
+    }
+    kept.push(...run.entries)
+    run = { entries: [], texts: [] }
+  }
+  for (const e of draft.entries) {
+    if (e.origin === 'v1' && e.entry.kind === 'message') {
+      run.entries.push(e)
+      run.texts.push(e.entry.text)
+    } else {
+      flushRun()
+      kept.push(e)
+    }
+  }
+  flushRun()
+  draft.entries = kept
 }
 
 /** v1 tool results are strings today; anything else is rendered as JSON rather than dropped. */
@@ -242,8 +306,9 @@ function planFromTodos(input: unknown): PlanEntry[] | undefined {
 
 export function reduceThread(events: RunEvent[]): ThreadState {
   const turns: DraftTurn[] = []
-  /** itemId → live item. Rebound on every `item.started`, so per-session id reuse (each step
-   *  restarts `item_1`) always resolves to the newest incarnation. */
+  /** stepId:itemId → live item. Runner sessions restart ids at `item_1`, while every current
+   *  persisted event is stamped with its workflow step. Old recordings without a step id keep
+   *  the historical bare-id lookup semantics. */
   const itemsById = new Map<string, { turn: DraftTurn; entry: DraftEntry }>()
   let sessionEnded: ThreadState['sessionEnded']
   let turnSeq = 0
@@ -260,27 +325,40 @@ export function reduceThread(events: RunEvent[]): ThreadState {
   }
   const currentTurn = (): DraftTurn => turns.at(-1) ?? newTurn()
 
-  const upsertV2 = (turn: DraftTurn, raw: UiItem) => {
+  const itemKey = (event: RunEvent, itemId: string) => {
+    const stepId = str(event.stepId)
+    return stepId === undefined ? itemId : `${stepId}:${itemId}`
+  }
+
+  const upsertV2 = (turn: DraftTurn, raw: UiItem, key: string) => {
     // Clone: deltas append in place, and the event object off the wire must stay untouched.
     const item = { ...raw }
     if (!turn.v2Items) {
-      // The dedup latch flips: this turn is v2-covered, so every v1-synthesized item in it is
-      // a duplicate of something v2 already describes (or is about to).
+      // The dedup latch flips: this turn is v2-covered, so every v1-synthesized TOOL in it is
+      // a duplicate of something v2 already describes (or is about to). Tools can be dropped
+      // sight-unseen because v2 tool coverage is total across backends and ids are shared —
+      // `tool-call`'s own `turn.v2Items` guard already suppresses the rest.
+      //
+      // v1 MESSAGES are deliberately NOT dropped here (#agent-log-vanishing-text): a turn being
+      // v2-covered for tools does NOT prove its prose has a v2 twin. Claude's result fallback
+      // (claude-cli-runner.ts emits a v1 `text` from `msg.result`) had no v2 counterpart, so
+      // this blanket drop deleted the agent's only message a moment after it rendered. The
+      // twinned ones are removed by text at the end of the fold, where the evidence exists.
       turn.v2Items = true
       for (const dropped of turn.entries) {
-        if (dropped.origin === 'v1' && isUiItem(dropped.entry)) itemsById.delete(dropped.entry.id)
+        if (dropped.origin === 'v1' && dropped.entry.kind === 'tool') itemsById.delete(dropped.entry.id)
       }
-      turn.entries = turn.entries.filter((e) => !(e.origin === 'v1' && isUiItem(e.entry)))
+      turn.entries = turn.entries.filter((e) => !(e.origin === 'v1' && e.entry.kind === 'tool'))
     }
-    const existing = itemsById.get(item.id)
+    const existing = itemsById.get(key)
     if (existing && existing.turn === turn) {
       existing.entry.entry = item
-      itemsById.set(item.id, existing)
+      itemsById.set(key, existing)
       return
     }
     const draft: DraftEntry = { origin: 'v2', entry: item }
     turn.entries.push(draft)
-    itemsById.set(item.id, { turn, entry: draft })
+    itemsById.set(key, { turn, entry: draft })
   }
 
   for (const event of events) {
@@ -352,12 +430,14 @@ export function reduceThread(events: RunEvent[]): ThreadState {
           break
         }
         const item = event.item as unknown as UiItem
-        const located = itemsById.get(item.id)
-        upsertV2(located?.turn ?? currentTurn(), item)
+        const key = itemKey(event, item.id)
+        const located = itemsById.get(key)
+        upsertV2(located?.turn ?? currentTurn(), item, key)
         break
       }
       case 'item.delta': {
-        const located = itemsById.get(str(event.itemId) ?? '')
+        const itemId = str(event.itemId) ?? ''
+        const located = itemsById.get(itemKey(event, itemId))
         const delta = str(event.delta) ?? ''
         if (!located || delta === '' || !isUiItem(located.entry.entry)) break
         const item = located.entry.entry
@@ -371,8 +451,10 @@ export function reduceThread(events: RunEvent[]): ThreadState {
 
       // ---- v1 fallback items (skipped once the turn is v2-covered) -----------------------
       case 'text': {
+        // No `v2Items` guard, unlike `tool-call` below: whether this line has a v2 twin is
+        // decided by TEXT at the end of the fold, not by the latch. Suppressing it here would
+        // lose any prose v2 never described (claude's `msg.result` fallback).
         const turn = currentTurn()
-        if (turn.v2Items) break
         const text = str(event.text) ?? ''
         if (text === '') break
         turn.entries.push({
@@ -475,6 +557,18 @@ export function reduceThread(events: RunEvent[]): ThreadState {
         currentTurn().entries.push({ origin: 'meta', entry: item })
         break
       }
+      case 'provider-auth-required': {
+        // Cezar-owned persisted metadata: accept only the closed provider set and an opaque,
+        // bounded incident id. A malformed historical/future line costs itself, never a turn.
+        const provider = providerId(event.provider)
+        const authFailureId = str(event.authFailureId)
+        if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
+        currentTurn().entries.push({
+          origin: 'meta',
+          entry: { kind: 'provider-auth-required', id: `v1:${event.seq}`, provider, authFailureId },
+        })
+        break
+      }
       case 'image': {
         // Only the v1 line carries a served URL; the v2 twin is raw base64 and is dropped by
         // the sink before persistence anyway. No URL → nothing honest to render.
@@ -543,6 +637,28 @@ export function reduceThread(events: RunEvent[]): ThreadState {
       default:
         break
     }
+  }
+
+  // The message half of the mixed-file dedup, resolved once the whole turn is known: a v1
+  // `text` line is a duplicate exactly when some v2 message item in the same turn carries the
+  // same prose — which is the normal claude/codex/opencode path, where the v2 item lands first
+  // and its v1 twin one line later. Comparison is on marker-stripped, trimmed text because the
+  // two arrive differently normalized: the server strips `CEZ:` markers from v1 `text` before
+  // persisting, while v2 items carry the raw text and are stripped below at render time.
+  // Anything left unmatched is prose that exists ONLY in v1 — it renders rather than vanishing.
+  for (const draft of turns) {
+    if (!draft.v2Items) continue
+    const v2Texts = new Set<string>()
+    for (const { origin, entry } of draft.entries) {
+      // stripAsk: true — dedup equality must ignore the marker on both sides (see norm()).
+      if (origin === 'v2' && entry.kind === 'message') v2Texts.add(stripDoneMarker(entry.text, true).trim())
+    }
+    if (v2Texts.size === 0) continue
+    draft.entries = draft.entries.filter(
+      (e) =>
+        !(e.origin === 'v1' && e.entry.kind === 'message' && v2Texts.has(stripDoneMarker(e.entry.text, true).trim())),
+    )
+    dropLegacyDeltaRuns(draft)
   }
 
   return {

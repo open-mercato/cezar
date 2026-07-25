@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { UiEvent, UiItem, UiToolItem } from '../core/ui-events.js';
+import { createCodexUiState, mapCodexNotification } from '../core/codex-ui-mapper.js';
 import { RunStore } from './store.js';
 import { DELTA_FLUSH_MS, UiEventSink, isV2WireEventType } from './ui-event-sink.js';
 
@@ -325,5 +326,59 @@ describe('isV2WireEventType (the SSE event-name router)', () => {
     for (const t of ['text', 'tool-call', 'tool-result', 'image', 'token-usage', 'cost', 'session', 'turn-end', 'note', 'done', 'error', 'lifecycle', 'step-start', 'step-end', 'check-output', 'user-message']) {
       expect(isV2WireEventType(t), t).toBe(false);
     }
+  });
+});
+
+/**
+ * #528 — the regression guard for the whole persistence path: reasoning text
+ * that arrives ONLY as `item/reasoning/textDelta` must still be readable after
+ * a reload, which replays the NDJSON from scratch with no ephemeral deltas.
+ */
+describe('reasoning text survives persist → replay (#528)', () => {
+  const THREAD = 'th_1';
+  const TURN = 'turn_1';
+
+  /** Codex closes the reasoning item with the summary only — the streamed
+   *  prose lives nowhere but the deltas, which are never written to disk. */
+  const FRAMES: unknown[] = [
+    { method: 'thread/started', params: { thread: { id: THREAD } } },
+    { method: 'turn/started', params: { turn: { id: TURN, status: 'inProgress', items: [] } } },
+    {
+      method: 'item/started',
+      params: { threadId: THREAD, turnId: TURN, item: { type: 'reasoning', id: 'item_rsn_1', summary: 'Tracing it' } },
+    },
+    { method: 'item/reasoning/textDelta', params: { threadId: THREAD, turnId: TURN, itemId: 'item_rsn_1', delta: 'The session cookie ' } },
+    { method: 'item/reasoning/textDelta', params: { threadId: THREAD, turnId: TURN, itemId: 'item_rsn_1', delta: 'is dropped on refresh.' } },
+    {
+      method: 'item/completed',
+      params: { threadId: THREAD, turnId: TURN, item: { type: 'reasoning', id: 'item_rsn_1', summary: 'Tracing it' } },
+    },
+  ];
+
+  it('a reload-style replay of the persisted snapshots shows the full reasoning text', () => {
+    const { sink, persisted, live } = recorder();
+    let state = createCodexUiState();
+    for (const frame of FRAMES) {
+      const mapped = mapCodexNotification(frame, state);
+      state = mapped.state;
+      for (const event of mapped.events) sink.handle(event);
+    }
+    sink.flushAll();
+
+    // Deltas stay live-only — the policy this fix must not change.
+    expect(persisted.some((e) => e.type === 'item.delta')).toBe(false);
+    expect(live.some((e) => e.type === 'item.delta')).toBe(true);
+
+    // What a page reload reconstructs: snapshots only, last one wins.
+    const replayed = new Map<string, UiItem>();
+    for (const e of persisted) {
+      if (e.type === 'item.started' || e.type === 'item.updated' || e.type === 'item.completed') {
+        const item = e.item as UiItem;
+        replayed.set(item.id, item);
+      }
+    }
+    const reasoning = replayed.get('item_rsn_1');
+    expect(reasoning?.kind).toBe('reasoning');
+    expect(reasoning?.kind !== 'tool' && reasoning?.text).toBe('The session cookie is dropped on refresh.');
   });
 });

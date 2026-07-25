@@ -1,0 +1,44 @@
+
+> @open-mercato/cezar@0.8.0 test:unit
+> node --import tsx --test test/unit/*.test.ts
+
+✔ proposeWorkflowName slugs a title to the file-name form (0.731098ms)
+✔ proposeWorkflowName degrades a blank / slug-less title to undefined (0.1409ms)
+✔ parseStructured reads the optional planner title alongside the steps (1.483926ms)
+✔ the project skill dirs the hint promises are the ones discovery actually scans (1.139177ms)
+[cez] ignoring skills repo "ext::sh -c 'touch /tmp/pwn'" — not an accepted source shape (owner/name, an https/http/ssh/git URL, git@host:path, or a local/file:// path). Check "skillsRepos" in .ai/cezar/config.json.
+✔ safeRemoteFor rejects the git remote-helper RCE surface (1.014427ms)
+✔ safeRemoteFor accepts the documented safe source shapes (0.20096ms)
+✔ safeRemoteFor keeps Windows local paths working (BC §5: local path) (0.093801ms)
+✔ safeRemoteFor expands ~/ so git (no shell) can actually find it (0.07891ms)
+✔ isSafeRef rejects argument-injection and range refs (0.327839ms)
+✔ isSafeRef accepts real branches, tags and SHAs (0.09684ms)
+✔ isPinnedSha recognises full sha-1 and sha-256 commit ids (0.136969ms)
+✔ ensureBareClone throws on an unsafe remote instead of shelling out (0.871218ms)
+✔ listRemoteSkills clones a local repo, pins the SHA, and refuses a bad ref (97.260556ms)
+✔ team-skills cache is keyed by repoRoot — projects never see each other's skills (135.742476ms)
+✔ the shared fixture is the whole contract, not a token case (0.728049ms)
+✔ todoTaskText: summary only (0.203569ms)
+✔ todoTaskText: the suggested prompt wins over the summary (0.091949ms)
+✔ todoTaskText: a blank suggested prompt falls back to the summary (0.08405ms)
+✔ todoTaskText: the suggested prompt is trimmed (0.06238ms)
+✔ todoTaskText: suggested args become a trailing Arguments line (0.045889ms)
+✔ todoTaskText: args attach to the summary fallback too (0.05809ms)
+✔ todoTaskText: an empty summary with no prompt stays empty (0.065231ms)
+✔ portable skill stacks normalize into unique agent steps (2.073815ms)
+✔ workflow files require exactly one step representation (0.511679ms)
+✔ retry targets must refer to an earlier unique step (0.20751ms)
+✔ only plain agent skill steps compact back to a portable stack (0.128629ms)
+✔ chainStepNote is absent for a single-step run (the common case, unchanged) (0.12911ms)
+✔ chainStepNote counts AGENT steps only — a lone agent step plus checks is not a chain (0.08221ms)
+✔ chainStepNote numbers agent steps, skipping the checks between them (0.1337ms)
+✔ chainStepNote names the step position, total, and skill for every step of a chain (0.102649ms)
+✔ chainStepNote labels a step by its name first, then its skill, then generically (0.13363ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 383.309521

@@ -5,8 +5,14 @@ import type {
   ChangedFile as WebChangedFile,
   ChangesPayload as WebChangesPayload,
   ForgeInfo as WebForgeInfo,
+  GithubComment as WebGithubComment,
+  GithubCommentsData as WebGithubCommentsData,
   GithubData as WebGithubData,
   GithubItem as WebGithubItem,
+  GithubMergeMethod as WebGithubMergeMethod,
+  GithubPrMergeState as WebGithubPrMergeState,
+  GithubTimelineEvent as WebGithubTimelineEvent,
+  GithubTimelineEventKind as WebGithubTimelineEventKind,
   GroupResponse as WebGroupResponse,
   GroupVariant as WebGroupVariant,
   PickVariantResponse as WebPickVariantResponse,
@@ -14,8 +20,11 @@ import type {
   RepoCommitPayload as WebRepoCommitPayload,
   LogEntry as WebLogEntry,
   ProcessUsage as WebProcessUsage,
+  ProviderStatus as WebProviderStatus,
+  ProviderStatusResponse as WebProviderStatusResponse,
   RepoInfo as WebRepoInfo,
   RunEvent as WebRunEvent,
+  QueuedMessage as WebQueuedMessage,
   RunRecord as WebRunRecord,
   RunStatus as WebRunStatus,
   Skill as WebSkill,
@@ -48,6 +57,7 @@ import type {
 } from '../../web/app/src/protocol/ui-events.js';
 import type { BackendCheck } from '../core/backend-detect.js';
 import type { ProcessUsage } from '../core/process-usage.js';
+import type { ProviderStatus, ProviderStatusResponse } from '../core/provider-auth.js';
 import type { ToolDisplay } from '../core/tool-display.js';
 import type {
   FileDiff,
@@ -65,15 +75,23 @@ import type {
   UiEventType,
   UiItem,
 } from '../core/ui-events.js';
-import type { RunEvent, RunRecord, RunStatus, StepState, StepStatus } from '../runs/store.js';
+import type { QueuedMessage, RunEvent, RunRecord, RunStatus, StepState, StepStatus } from '../runs/store.js';
 import type { Skill } from '../skills.js';
 import type { TodoItem } from '../todos.js';
 import type { WorkflowLoadIssue, loadWorkflows } from '../workflows/load.js';
 import type { WorkflowDef, WorkflowStepDef } from '../workflows/types.js';
 import type { Capabilities } from './capabilities.js';
 import type { ForgeAvailability, ForgeKind } from './forge/index.js';
+import type { ForgeMergeMethod, ForgePrMergeState } from './forge/types.js';
 import type { BranchResult, ChangedFile, ChangesPayload, CommitPayload, DirEntry } from './git-changes.js';
-import type { GithubData, GithubItem } from './github.js';
+import type {
+  ForgeComment,
+  ForgeCommentsData,
+  ForgeTimelineEvent,
+  ForgeTimelineEventKind,
+  GithubData,
+  GithubItem,
+} from './github.js';
 import type { LogEntry, RepoInfo, StatusEntry } from './git.js';
 import type { GroupResponse, GroupVariant, PickVariantResponse } from './server.js';
 
@@ -95,6 +113,20 @@ import type { GroupResponse, GroupVariant, PickVariantResponse } from './server.
 /** Mutual assignability. `[…]` wrappers stop a naked union from distributing. */
 type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
+/**
+ * Key-set equality — and it is NOT redundant with `Exact` (#472).
+ *
+ * `Exact` is blind to a missing OPTIONAL property: a type carrying an extra `foo?: T`
+ * stays mutually assignable with one that lacks `foo` entirely, so both directions pass
+ * and the guard reads `true`. Since most of `RunRecord` is optional, `Exact` alone would
+ * have let a whole un-mirrored field through — verified by deleting the mirrored field
+ * and watching the build stay green. `keyof` sees optional keys, so this catches it.
+ *
+ * Use BOTH for every hand-mirrored record: `Exact` for shapes and value types,
+ * `ExactKeys` for presence.
+ */
+type ExactKeys<A, B> = Exact<keyof A, keyof B>;
+
 /** Each `true` is one assertion the compiler makes. A drift turns it into `false`, which is
  *  not assignable to `true` — and the file stops compiling. */
 const guards = {
@@ -102,9 +134,25 @@ const guards = {
   stepStatus: true satisfies Exact<StepStatus, WebStepStatus>,
   stepState: true satisfies Exact<StepState, WebStepState>,
   runRecord: true satisfies Exact<RunRecord, WebRunRecord>,
+  /** #472 — the queued prompt stack. `runRecord` above already fails if the field itself
+   *  drifts; this pins the element type on its own so a change inside it is named. */
+  queuedMessage: true satisfies Exact<QueuedMessage, WebQueuedMessage>,
+  /** Presence guards — the ones that actually catch an un-mirrored optional field. */
+  runRecordKeys: true satisfies ExactKeys<RunRecord, WebRunRecord>,
+  queuedMessageKeys: true satisfies ExactKeys<QueuedMessage, WebQueuedMessage>,
+  stepStateKeys: true satisfies ExactKeys<StepState, WebStepState>,
   runEvent: true satisfies Exact<RunEvent, WebRunEvent>,
   processUsage: true satisfies Exact<ProcessUsage, WebProcessUsage>,
   backendCheck: true satisfies Exact<BackendCheck, WebBackendCheck>,
+  // The core row remains additive for workspace events, while every complete HTTP response is
+  // enriched with the required preference by applyProviderEnablement().
+  providerStatus: true satisfies Exact<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusKeys: true satisfies ExactKeys<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusResponse: true satisfies Exact<
+    { providers: Array<ProviderStatus & { enabled: boolean }> },
+    WebProviderStatusResponse
+  >,
+  providerStatusResponseKeys: true satisfies ExactKeys<ProviderStatusResponse, WebProviderStatusResponse>,
   repoInfo: true satisfies Exact<RepoInfo, WebRepoInfo>,
   statusEntry: true satisfies Exact<StatusEntry, WebStatusEntry>,
   logEntry: true satisfies Exact<LogEntry, WebLogEntry>,
@@ -120,6 +168,24 @@ const guards = {
   todoItem: true satisfies Exact<TodoItem, WebTodoItem>,
   githubItem: true satisfies Exact<GithubItem, WebGithubItem>,
   githubData: true satisfies Exact<GithubData, WebGithubData>,
+  githubMergeMethod: true satisfies Exact<ForgeMergeMethod, WebGithubMergeMethod>,
+  githubPrMergeState: true satisfies Exact<ForgePrMergeState, WebGithubPrMergeState>,
+  githubPrMergeStateKeys: true satisfies ExactKeys<ForgePrMergeState, WebGithubPrMergeState>,
+  // The comment-thread payload (#499) and its timeline events (#525). ForgeComment was left
+  // unpinned when #499 landed, which is exactly the drift this closes: `GET
+  // /api/github/comments/:kind/:number` is a second consumer contract on the protected /api/github
+  // family, and nothing was checking that its two type declarations stayed in step.
+  //
+  // Known limit of the `Exact<>` mechanism, verified rather than assumed and true of EVERY pin
+  // here, not just these four: it catches a REQUIRED field added to one side, but NOT an optional
+  // one — `{a: string}` and `{a: string; b?: number}` are mutually assignable, so both `extends`
+  // arms hold. Adding `events?` to only one of the two declarations would therefore slip through.
+  // Worth knowing before trusting these as total coverage; tightening it would mean a key-set
+  // comparison rather than assignability, which is out of scope here.
+  githubComment: true satisfies Exact<ForgeComment, WebGithubComment>,
+  githubCommentsData: true satisfies Exact<ForgeCommentsData, WebGithubCommentsData>,
+  githubTimelineEvent: true satisfies Exact<ForgeTimelineEvent, WebGithubTimelineEvent>,
+  githubTimelineEventKind: true satisfies Exact<ForgeTimelineEventKind, WebGithubTimelineEventKind>,
   // Variant compare (spec 010): the compare view's columns and the pick answer.
   groupVariant: true satisfies Exact<GroupVariant, WebGroupVariant>,
   groupResponse: true satisfies Exact<GroupResponse, WebGroupResponse>,
@@ -167,5 +233,40 @@ describe('web api types mirror the server', () => {
   it('holds every guard', () => {
     expect(Object.values(guards).every((v) => v === true)).toBe(true);
     expect(Object.keys(guards).length).toBeGreaterThan(15);
+  });
+
+  /**
+   * The guards are only worth their compile time if `Exact` actually bites. A
+   * mirror test that cannot fail is worse than none — it reads as coverage.
+   * These pin the failure modes that matter for a hand-mirrored type: a field
+   * added on one side only, and a field whose optionality diverges.
+   */
+  it('detects a REQUIRED field added server-side but not mirrored', () => {
+    type Server = { a: string; b: number };
+    type Web = { a: string };
+    const missing: Exact<Server, Web> = false;
+    expect(missing).toBe(false);
+  });
+
+  /**
+   * The gap `ExactKeys` exists to close, pinned so nobody "simplifies" it away:
+   * `Exact` alone passes an un-mirrored OPTIONAL field, which is most of RunRecord.
+   */
+  it('needs ExactKeys to detect an un-mirrored OPTIONAL field', () => {
+    type Server = { a: string; b?: number };
+    type Web = { a: string };
+    // Exact says these match — they are mutually assignable. This is the blind spot.
+    const exactIsFooled: Exact<Server, Web> = true;
+    // ExactKeys is not fooled: 'a' | 'b' is not 'a'.
+    const keysCatchIt: ExactKeys<Server, Web> = false;
+    expect(exactIsFooled).toBe(true);
+    expect(keysCatchIt).toBe(false);
+  });
+
+  it('detects an optionality mismatch', () => {
+    type Server = { a?: string };
+    type Web = { a: string };
+    const diverged: Exact<Server, Web> = false;
+    expect(diverged).toBe(false);
   });
 });

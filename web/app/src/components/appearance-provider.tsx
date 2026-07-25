@@ -1,8 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query'
 import * as React from 'react'
 
-import { putUiState } from '@/api/client'
-import { queryKeys, useUiState } from '@/api/queries'
+import { putWorkspaceUiState } from '@/api/client'
+import { useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
 import {
   applyAppearance,
@@ -29,17 +29,23 @@ const AppearanceContext = React.createContext<AppearanceContextValue | null>(nul
  *   1. the pre-paint script in index.html stamped `data-accent`/`data-density` from the
  *      localStorage mirror before the bundle loaded;
  *   2. this provider seeds from the same mirror, so mounting never repaints;
- *   3. when `GET /api/ui-state` answers, the server value is authoritative — it is applied
- *      and mirrored, so the next cold load pre-paints the truth.
+ *   3. when `GET /api/workspace/ui-state` answers, the server value is authoritative — it is
+ *      applied and mirrored, so the next cold load pre-paints the truth.
  *
- *  Writes go through `PUT /api/ui-state` with the FULL `appearance` object every time: the
- *  server merges ui-state shallowly (top-level keys), so a partial `{ accent }` would drop
- *  the stored density. On a failed write the server truth is re-fetched and re-applied —
- *  the control must not claim a persistence the file never got.
+ *  The store is the GLOBAL one (`~/.cezar/ui-state.json`) since the multi-project split
+ *  (step 3.5, spec §"Settings split"): accent and density describe the person at the keyboard,
+ *  not a repo, and this provider sits ABOVE the router — it has no project scope to write to
+ *  in the first place. Migration 001 copied the pre-existing per-repo value up, so upgrading
+ *  keeps whatever the boot project had; the per-repo key is left alone and simply ignored.
+ *
+ *  Writes go through `PUT /api/workspace/ui-state` with the FULL `appearance` object every
+ *  time: the server merges ui-state shallowly (top-level keys), so a partial `{ accent }`
+ *  would drop the stored density. On a failed write the server truth is re-fetched and
+ *  re-applied — the control must not claim a persistence the file never got.
  */
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient()
-  const uiState = useUiState()
+  const uiState = useWorkspaceUiState()
   const [appearance, setAppearanceState] = React.useState<Appearance>(readStoredAppearance)
 
   // The server's word wins over the mirror — including "no appearance key" meaning defaults,
@@ -61,12 +67,12 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     (next: Appearance) => {
       setAppearanceState(next)
       writeStoredAppearance(next)
-      putUiState({ appearance: next })
-        .then((merged) => queryClient.setQueryData(queryKeys.uiState, merged))
+      putWorkspaceUiState({ appearance: next })
+        .then((merged) => queryClient.setQueryData(workspaceQueryKeys.uiState, merged))
         .catch((error: unknown) => {
           toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
           // Fall back to the server's truth rather than keep painting an unsaved choice.
-          void queryClient.invalidateQueries({ queryKey: queryKeys.uiState })
+          void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.uiState })
         })
     },
     [queryClient],

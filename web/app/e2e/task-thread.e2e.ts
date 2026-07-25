@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 import record from './fixtures/thread-run.record.json'
 
 /**
@@ -59,6 +59,11 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-'))
@@ -80,13 +85,14 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
-    { env: { ...process.env, CEZ_DRY_RUN: '1' }, stdio: 'ignore' },
+    { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(1440, 900)
-  browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+  browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
   // The thread is async twice over (lazy route chunk, then the SSE replay) — wait for content.
   browser.waitForFunction(`document.querySelectorAll('[data-slot="user-bubble"]').length >= 2`)
 }, 120_000)
@@ -147,19 +153,19 @@ describe('task thread', () => {
         chip: block.querySelector('[data-streamdown="code-block-header"]').textContent,
         copy: block.querySelector('[data-streamdown="code-block-copy-button"]') !== null,
         keywordText: keyword.textContent,
-        // Resolved through the real cascade: the token's painted color IS the --syn-key value.
-        keywordColor: getComputedStyle(keyword).color,
+        keywordToken: keyword.style.getPropertyValue('--sdm-c'),
         synKey: getComputedStyle(document.documentElement).getPropertyValue('--syn-key').trim(),
       }
-    })()`) as { language: string; chip: string; copy: boolean; keywordText: string; keywordColor: string; synKey: string }
+    })()`) as { language: string; chip: string; copy: boolean; keywordText: string; keywordToken: string; synKey: string }
 
     expect(block.language).toBe('ts')
     expect(block.chip).toBe('ts')
     expect(block.copy).toBe(true)
     expect(block.keywordText).toBe('const')
-    const hexToRgb = (hex: string) =>
-      `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`
-    expect(block.keywordColor).toBe(hexToRgb(block.synKey))
+    // Streamdown owns how its custom token variable is painted; our contract is that Shiki
+    // maps the keyword to cezar's theme token and that the active palette defines that token.
+    expect(block.keywordToken).toBe('var(--syn-key)')
+    expect(block.synKey).toMatch(/^#[0-9a-f]{6}$/i)
   })
 
   it('keeps Shiki out of the main bundle — its chunks load lazily, after the thread route', () => {
@@ -344,15 +350,16 @@ describe('task thread', () => {
       current: a.getAttribute('aria-current'),
     }))`) as Array<{ text: string; href: string; current: string | null }>
     expect(tabs).toEqual([
-      { text: 'Session', href: `/tasks/${RUN_ID}`, current: 'page' },
-      { text: 'Changes', href: `/tasks/${RUN_ID}/changes`, current: null },
-      { text: 'Files', href: `/tasks/${RUN_ID}/files`, current: null },
+      { text: 'Session', href: scoped(`/tasks/${RUN_ID}`), current: 'page' },
+      { text: 'Changes', href: scoped(`/tasks/${RUN_ID}/changes`), current: null },
+      { text: 'Commits', href: scoped(`/tasks/${RUN_ID}/commits`), current: null },
+      { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
     ])
 
     const actions = browser.evaluate(
       `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim())`,
     ) as string[]
-    expect(actions).toEqual(['Continue', 'Terminal', 'Notes', 'Archive', 'Delete'])
+    expect(actions).toEqual(['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'])
 
     // The take-over hint, per-backend (the fixture's last agent session, in its worktree).
     const hint = browser.evaluate(
@@ -402,16 +409,16 @@ describe('task thread', () => {
   })
 
   it('an unknown run id lands on the 404-style state with a way home', () => {
-    browser.goto(`${baseUrl}/tasks/no-such-run`)
+    browser.goto(`${baseUrl}${scoped('/tasks/no-such-run')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="centered-state"] h1')?.textContent === 'Task not found'`)
-    expect(browser.evaluate(`document.querySelector('[data-slot="centered-state"] a[href="/"]').textContent`)).toBe(
+    expect(browser.evaluate(`document.querySelector('[data-slot="centered-state"] a[href="${scoped('/')}"]').textContent`)).toBe(
       'Back to tasks',
     )
   })
 
   it('reflows at iPhone width with no horizontal overflow', () => {
     browser.setViewport(390, 844)
-    browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
     browser.waitForFunction(`document.querySelectorAll('[data-slot="user-bubble"]').length >= 2`)
     browser.waitForFunction(`document.querySelector('[data-streamdown="code-block"]') !== null`)
 
@@ -434,7 +441,7 @@ describe('task thread', () => {
 
   it('mobile header: the action bar folds into the kebab next to the pill', () => {
     browser.setViewport(390, 844)
-    browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
     browser.waitForFunction(`document.querySelector('[data-slot="run-header"]') !== null`)
 
     // The desktop action bar is gone (`md:flex`), the kebab is the mobile surface.

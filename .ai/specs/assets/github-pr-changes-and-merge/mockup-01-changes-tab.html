@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Illustrative mockup — PR Changes</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b0d10;color:#e6edf3;font:14px Inter,ui-sans-serif,system-ui}.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}.side{border-right:1px solid #262b33;padding:22px 16px;background:#0e1116}.brand{font-weight:750;font-size:18px;margin-bottom:28px}.nav{padding:9px 10px;border-radius:7px;color:#939dab;margin:4px 0}.nav.on{background:#202631;color:white}.main{padding:24px 30px}.eyebrow{color:#7d8796;font:12px ui-monospace,monospace}.title{font-size:23px;font-weight:700;margin:8px 0 16px}.labels span{border:1px solid #39414e;border-radius:99px;padding:3px 8px;font-size:11px;margin-right:5px}.tabs{display:flex;border-bottom:1px solid #2a3039;margin-top:22px;gap:24px}.tab{padding:12px 2px;color:#8e98a7}.tab.on{color:white;border-bottom:2px solid #f78166}.grid{display:grid;grid-template-columns:260px 1fr;gap:16px;margin-top:18px}.files,.diff{border:1px solid #2d333b;border-radius:9px;background:#11151b}.files h3,.diff h3{margin:0;padding:12px;border-bottom:1px solid #2d333b;font-size:12px}.search{margin:10px;width:calc(100% - 20px);background:#0b0f14;border:1px solid #343b45;border-radius:6px;padding:8px;color:white}.file{padding:9px 12px;font:12px ui-monospace,monospace;color:#aeb7c3;border-left:2px solid transparent}.file.on{background:#1a2028;border-left-color:#f78166;color:white}.plus{color:#3fb950}.minus{color:#f85149}.summary{display:flex;justify-content:space-between;padding:12px;border-bottom:1px solid #2d333b;color:#aab3bf}.code{font:12px/1.7 ui-monospace,SFMono-Regular,monospace}.line{display:grid;grid-template-columns:42px 42px 1fr;padding:0 10px}.ln{color:#596474;text-align:right;padding-right:12px}.add{background:#12261b}.del{background:#2b171a}.note{position:fixed;right:18px;bottom:14px;color:#697586;font-size:11px}
+@media(max-width:800px){.app{grid-template-columns:1fr}.side{display:none}.main{padding:18px}.grid{grid-template-columns:1fr}.files{max-height:150px;overflow:auto}}
+</style>
+<div class="app"><aside class="side"><div class="brand">cezar</div><div class="nav">Runs</div><div class="nav on">GitHub</div><div class="nav">Repository</div><div class="nav">Skills</div><div class="nav">Settings</div></aside><main class="main">
+<div class="eyebrow">#128 · pull request · opened by maya · 18m ago · <span class="plus">+214</span> <span class="minus">−38</span></div>
+<div class="title">Add workspace health subscriptions</div><div class="labels"><span>review</span><span>feature</span><span>checks passing</span></div>
+<div class="tabs"><div class="tab">Conversation</div><div class="tab on">Changes 7</div></div>
+<div class="grid"><section class="files"><h3>Changed files · 7</h3><input class="search" value="Filter files" aria-label="Filter files"><div class="file on">M web/app/src/api/ws.ts</div><div class="file">M src/server/ws.ts</div><div class="file">A src/server/ws.test.ts</div><div class="file">M web/app/src/api/queries.ts</div><div class="file">M package.json</div></section>
+<section class="diff"><div class="summary"><b>web/app/src/api/ws.ts</b><span><span class="plus">+31</span> <span class="minus">−6</span></span></div><h3>@@ -42,8 +42,15 @@ export function subscribeTopic</h3><div class="code">
+<div class="line"><span class="ln">42</span><span class="ln">42</span><span>const listeners = topics.get(topic)</span></div>
+<div class="line del"><span class="ln">43</span><span class="ln"></span><span>− socket.send(JSON.stringify({ type: 'subscribe', topic }))</span></div>
+<div class="line add"><span class="ln"></span><span class="ln">43</span><span>+ if (listeners.size === 1) {</span></div>
+<div class="line add"><span class="ln"></span><span class="ln">44</span><span>+ &nbsp;ensureSocket().send(JSON.stringify({ type: 'subscribe', topic }))</span></div>
+<div class="line add"><span class="ln"></span><span class="ln">45</span><span>+ }</span></div>
+<div class="line"><span class="ln">44</span><span class="ln">46</span><span>return () =&gt; unsubscribe(topic, listener)</span></div>
+</div></section></div></main></div><div class="note">Illustrative proposed UI</div>
+</html>

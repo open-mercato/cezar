@@ -31,6 +31,18 @@ export interface DiffFileChange {
 
 export type DiffMode = 'unified' | 'split'
 
+/**
+ * The imperative seam for "reveal this file" (the Changes tab's file tree). It exists because
+ * virtualization takes the DOM away: past the threshold in `diff-scroll.ts` an off-screen
+ * file has no element to `scrollIntoView`, so the scroll must go through the virtualizer's
+ * index instead. The handle hides which of the two is in play.
+ */
+export interface DiffHandle {
+  /** Scroll the file at `path` to the top of the scroll container. A no-op if it isn't in
+   *  `files` — a tree selection can race a refetch that dropped the file. */
+  scrollToPath: (path: string) => void
+}
+
 export interface DiffProps {
   files: DiffFileChange[]
   /** Layout: one interleaved column, or old|new side by side. Default `unified`. */
@@ -57,5 +69,12 @@ export interface DiffProps {
    * other local-machine affordance in the cockpit follows (`git-actions.ts`).
    */
   onOpenInApp?: (path: string) => void
+  /**
+   * Receives the {@link DiffHandle}. A plain ref-shaped prop rather than the component's own
+   * `ref`, because `<Diff>` lazy-loads its renderer: the handle only exists once that chunk
+   * lands, and the fallback renderer has none at all (it never virtualizes, so consumers keep
+   * their DOM-based scroll there).
+   */
+  viewRef?: { current: DiffHandle | null }
   className?: string
 }

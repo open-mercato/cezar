@@ -68,6 +68,7 @@ const GOLDEN_FIXTURES = [
   'todowrite-plan',
   'patch-and-step-finish',
   'subtask-nested',
+  'subtask-overlapping',
   'session-error',
 ] as const;
 
@@ -502,6 +503,38 @@ describe('mapOpencodeEvent edge cases', () => {
       mapOpencodeEvent(part({ id: 'prt_f2', messageID: 'msg_child', sessionID: 'ses_child', type: 'text', text: 'late' }), childIdle.state)
         .events,
     ).toEqual([]);
+  });
+
+  it('main-session idle settles and clears child sessions that never went idle', () => {
+    let state = startedState();
+    state = mapOpencodeEvent(
+      part({ id: 'prt_st', type: 'subtask', prompt: 'dig in', description: 'Investigate', agent: 'general' }),
+      state,
+    ).state;
+    state = mapOpencodeEvent(
+      { type: 'message.updated', properties: { info: { id: 'msg_child', sessionID: 'ses_child', role: 'assistant' } } },
+      state,
+    ).state;
+    state = mapOpencodeEvent(
+      part({ id: 'prt_child', messageID: 'msg_child', sessionID: 'ses_child', type: 'text', text: 'working' }),
+      state,
+    ).state;
+
+    const mainIdle = mapOpencodeEvent({ type: 'session.idle', properties: { sessionID: SESSION_ID } }, state);
+    expect(mainIdle.events).toContainEqual({
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 'prt_st',
+        name: 'subtask',
+        toolKind: 'task',
+        title: 'Task: Investigate',
+        status: 'completed',
+        input: { prompt: 'dig in', description: 'Investigate', agent: 'general' },
+      },
+    });
+    expect(mainIdle.events.at(-1)).toEqual({ type: 'turn.completed', turnId: 'turn_1', stopReason: 'end_turn' });
+    expect(mapOpencodeEvent({ type: 'session.idle', properties: { sessionID: 'ses_child' } }, mainIdle.state).events).toEqual([]);
   });
 
   it('session.started is emitted once and requires an id', () => {

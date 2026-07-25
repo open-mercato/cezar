@@ -57,6 +57,58 @@ export function parseGlobalEvent(name: string, data: string): GlobalEvent | null
   }
 }
 
+/**
+ * One message from `GET /api/workspace/events` (multi-project spec, step 2.8): the same events
+ * as the legacy stream, each stamped with the owning project — additively where the legacy
+ * payload is an object (`run` grows a `project` key, `run-deleted` is `{id, project}`), wrapped
+ * where it is not (`todos` → `{project, items}`, `usage` → `{project, usage}`). This parser
+ * unwraps the envelope back to today's `GlobalEvent` so the reducers below never learn the wire
+ * changed; the caller dispatches or drops on `project` (null only for the unstamped `ping`).
+ *
+ * A stamped event with no usable `project` is dropped whole: without the stamp there is no way
+ * to know whose caches it belongs in, and guessing is exactly the cross-project bleed the
+ * envelope exists to prevent. Workspace-only event names (`project-added`, `checkout-progress`)
+ * are not parsed here — no listener subscribes to them yet.
+ */
+export function parseWorkspaceEvent(
+  name: string,
+  data: string,
+): { project: string | null; event: GlobalEvent } | null {
+  if (name === 'ping') return { project: null, event: { type: 'ping' } }
+
+  let payload: unknown
+  try {
+    payload = JSON.parse(data)
+  } catch {
+    return null
+  }
+  if (!isRecord(payload)) return null
+  const project = payload.project
+  if (typeof project !== 'string' || project === '') return null
+
+  switch (name) {
+    case 'run': {
+      // Strip the stamp: the reducers (and the cache) must see today's bare RunRecord.
+      const { project: _stamp, ...run } = payload
+      return isRunRecord(run) ? { project, event: { type: 'run', run } } : null
+    }
+    case 'run-deleted': {
+      const id = payload.id
+      return typeof id === 'string' && id ? { project, event: { type: 'run-deleted', id } } : null
+    }
+    case 'todos':
+      return Array.isArray(payload.items)
+        ? { project, event: { type: 'todos', items: payload.items as TodoItem[] } }
+        : null
+    case 'usage':
+      return isRecord(payload.usage)
+        ? { project, event: { type: 'usage', usage: payload.usage as Record<string, ProcessUsage> } }
+        : null
+    default:
+      return null
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

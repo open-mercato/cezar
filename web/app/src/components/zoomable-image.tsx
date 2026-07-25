@@ -1,6 +1,7 @@
 import { useEffect, useState, type ImgHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 
+import { scopeApiPath } from '@/api/project-scope'
 import { cn } from '@/lib/utils'
 
 /**
@@ -8,9 +9,15 @@ import { cn } from '@/lib/utils'
  * images — the agent's own screenshots and the user's attachments — so a thumbnail can be read
  * without leaving the thread. Dismiss by clicking the backdrop or pressing Escape. The overlay is
  * portalled to <body> so it escapes the thread's overflow/scroll containers.
+ *
+ * `src` is always a cockpit-served `/api/...` URL (the server persists them into the transcript
+ * — `/api/runs/:id/images/…` — and `taskImages`/`runFileRawUrl` are the same origin), so the
+ * project scope is applied HERE, at render time (multi-project spec, step 3.1): transcripts
+ * store the unscoped legacy URL forever, and re-scoping on use keeps them valid under
+ * `/api/p/<id>`. `scopeApiPath` is the identity unscoped and skips already-scoped paths.
  */
 export function ZoomableImage({
-  src,
+  src: rawSrc,
   alt = '',
   className,
   ...rest
@@ -20,6 +27,7 @@ export function ZoomableImage({
   className?: string
 } & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'alt' | 'className' | 'onClick'>) {
   const [open, setOpen] = useState(false)
+  const src = scopeApiPath(rawSrc)
 
   useEffect(() => {
     if (!open) return

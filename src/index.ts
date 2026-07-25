@@ -6,16 +6,31 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.js';
+import { ProviderAuthService } from './core/provider-auth.js';
+import { applyProviderEnablement } from './core/provider-availability.js';
 import { pruneOrphans } from './git-worktree.js';
 import { getRepoInfo } from './server/git.js';
-import { loadConfig } from './config.js';
+import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.js';
 import { reclaimWorktrees } from './runs/retention.js';
 import { RunStore } from './runs/store.js';
 import { RunManager } from './workflows/run.js';
 import { loadWorkflows } from './workflows/load.js';
-import { startServer } from './server/server.js';
+import { startServer, WorkspaceEventBus } from './server/server.js';
+import {
+  ProviderRuntimeAuthObserver,
+  recoverWithProviderRuntimeAuthObservation,
+} from './server/provider-auth-runtime.js';
+import {
+  providersRequiredByWorkflow,
+  unavailableProviderMessage,
+} from './server/provider-action-gate.js';
 import { checkForUpdate } from './update-check.js';
 import { printSkillsBanner } from './skills-banner.js';
+import { loadWorkspaceConfig } from './workspace/config.js';
+import { runMigrations } from './workspace/migrations.js';
+import { registerProject, shouldRegisterProject } from './workspace/projects.js';
+import { runProjectsCommand } from './workspace/projects-cli.js';
+import { WorkspaceSemaphore } from './workspace/semaphore.js';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -23,6 +38,8 @@ Usage:
   cezar                     start the cockpit (server + GUI) for the current repo
   cezar run "<task>"        run a task headless in the terminal
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
+  cezar projects            list the projects this cockpit serves
+                            (also: projects add [<dir>] · projects remove <id>)
   cezar server-install      interactive wizard to host cezar on a server
   cezar server-deploy       redeploy a new version (reload the service) + verify
   cezar server-uninstall    reverse a server-install
@@ -38,6 +55,14 @@ Options:
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
                               cockpit for this domain (own nginx site + service + port).
                               A new domain never resumes/clobbers the first install.
+      --external-proxy        server-install (ubuntu-vps): the box ALREADY has a
+                              reverse proxy owning :80/:443 (Dokploy/Traefik, Coolify,
+                              Caddy, your own nginx). Installs the service only — no
+                              nginx, no certbot. That proxy must provide TLS + auth.
+      --bind-host <host>      host the cockpit binds (default 127.0.0.1). Use with
+                              --external-proxy when the proxy runs in a container and
+                              cannot reach loopback (e.g. docker bridge 172.17.0.1).
+                              cezar has NO built-in auth — never expose this publicly.
       --yes                   server-install: accept safe defaults (never auto-sudo)
       --reconfigure <ids>     server-install: force re-run of step id(s), comma-separated
       --reinstall             server-install: force re-run of every step (full reinstall)
@@ -58,6 +83,8 @@ async function main(): Promise<void> {
       'no-open': { type: 'boolean', default: false },
       platform: { type: 'string' },
       domain: { type: 'string' },
+      'bind-host': { type: 'string' },
+      'external-proxy': { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       reconfigure: { type: 'string' },
       reinstall: { type: 'boolean', default: false },
@@ -86,13 +113,25 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'serve':
-      await serveCommand(repoRoot, Number(values.port), !values['no-open']);
+      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host']);
       return;
     case 'run':
       await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model);
       return;
     case 'init':
       initCommand(repoRoot);
+      return;
+    case 'projects':
+      // Registry-only (no server, no HTTP) — see workspace/projects-cli.ts.
+      // In single-project mode a listing is a launch-context read: register
+      // the boot repo through the normal self-healing path and pin the output
+      // to that explicit identity. Mutations are left to their own guards.
+      const projectArgs = positionals.slice(1);
+      const isList = projectArgs.length === 0 || projectArgs[0] === 'list';
+      const bootProjectId = process.env.CEZ_SINGLE_PROJECT === '1' && isList
+        ? await initWorkspace(repoRoot)
+        : undefined;
+      process.exitCode = await runProjectsCommand(projectArgs, { defaultRoot: repoRoot, bootProjectId });
       return;
     case 'server-install':
       await serverCommand('install', repoRoot, values.platform, {
@@ -101,6 +140,8 @@ async function main(): Promise<void> {
         reinstall: Boolean(values.reinstall),
         domain: values.domain,
         port: portExplicit ? Number(values.port) : undefined,
+        externalProxy: Boolean(values['external-proxy']),
+        bindHost: values['bind-host'],
       });
       return;
     case 'server-deploy':
@@ -122,13 +163,58 @@ async function main(): Promise<void> {
   }
 }
 
+// ---- workspace boot ----------------------------------------------------------
+
+/**
+ * Boot-time workspace bookkeeping (spec 2026-07-20-multi-project-workspace,
+ * "Boot flow"): run pending `~/.cezar` migrations first, then register the
+ * boot repo in the per-user project registry. Registration is suppressed for
+ * task worktrees and `$HOME` itself (`shouldRegisterProject`) — the process
+ * still serves those folders normally. Strictly non-fatal: the zero-config
+ * law says a broken or read-only home degrades to a smaller cockpit, never a
+ * failed boot, so any workspace error logs one warning and boot continues.
+ *
+ * Returns the boot project's registry id when registration happened —
+ * `serveCommand` plumbs it into the server (`ServerDeps.bootProjectId`) so
+ * `/api/projects` and `/api/health` can name the boot project without a
+ * lookup. Undefined when registration was suppressed or the workspace is
+ * unavailable; the server then derives a fallback on its own.
+ */
+async function initWorkspace(repoRoot: string): Promise<string | undefined> {
+  try {
+    await runMigrations({ bootRepoRoot: repoRoot });
+    if (await shouldRegisterProject(repoRoot)) return (await registerProject(repoRoot)).id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[cez] workspace registry unavailable (${message}) — continuing without it`);
+  }
+  return undefined;
+}
+
 // ---- serve -----------------------------------------------------------------
 
-async function serveCommand(repoRoot: string, preferredPort: number, openBrowser: boolean): Promise<void> {
+async function serveCommand(
+  repoRoot: string,
+  preferredPort: number,
+  openBrowser: boolean,
+  bindHost?: string,
+): Promise<void> {
+  const bootProjectId = await initWorkspace(repoRoot);
+  // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
+  // the boot manager and every lazily-built project context count their runs
+  // against the same `resources.maxParallel`. The boot refresh() below is the
+  // cache hook's first call; PUT /api/workspace/config (step 2.7) re-fires it.
+  const semaphore = new WorkspaceSemaphore();
+  await semaphore.refresh();
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot);
+  const manager = new RunManager(store, repoRoot, { semaphore });
+  const providerAuth = new ProviderAuthService();
+  const workspaceEvents = new WorkspaceEventBus();
+  const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
+    workspaceEvents.emit('provider-status', status);
+  });
   const version = readOwnVersion();
 
   const checks = await detectEnvironment();
@@ -145,7 +231,7 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
     // Count-based worktree retention (#483): reclaim finished worktrees beyond
     // the keep-limit (directory only — `cez/<id8>` branch kept, so recoverable).
     // Best-effort; never blocks boot.
-    const keep = (await loadConfig(repoRoot).catch(() => null))?.worktreeRetention ?? 10;
+    const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
     const reclaimed = await reclaimWorktrees(repoRoot, store, keep).catch(() => [] as string[]);
     if (reclaimed.length > 0) {
       console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
@@ -155,7 +241,11 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
-  await manager.recover();
+  await recoverWithProviderRuntimeAuthObservation(
+    store,
+    () => manager.recover(),
+    providerRuntimeAuth,
+  );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
 
   // Update discovery (#368) — fire-and-forget; the banner prints whenever the
@@ -169,7 +259,30 @@ async function serveCommand(repoRoot: string, preferredPort: number, openBrowser
   });
 
   const port = await pickPort(preferredPort);
-  startServer({ repoRoot, store, manager, version, update }, port);
+  // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
+  // whatever can reach the interface, and cezar itself has NO auth — it is only
+  // for a deliberate hosted setup where a reverse proxy in front provides TLS +
+  // auth (see `server-install --external-proxy`). Say so, loudly, every start.
+  if (bindHost && !['127.0.0.1', 'localhost', '::1'].includes(bindHost)) {
+    console.log(
+      `\n  ⚠ binding ${bindHost}:${port} — cezar has no built-in auth.\n` +
+        `    Only do this behind a reverse proxy that enforces authentication,\n` +
+        `    and make sure this interface is not reachable from the internet.\n`,
+    );
+  }
+  startServer({
+    repoRoot,
+    store,
+    manager,
+    version,
+    update,
+    bootProjectId,
+    semaphore,
+    bindHost,
+    providerAuth,
+    providerRuntimeAuth,
+    workspaceEvents,
+  }, port);
   const url = `http://localhost:${port}`;
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
@@ -243,6 +356,7 @@ async function runCommand(
     process.exitCode = 1;
     return;
   }
+  await initWorkspace(repoRoot);
   const { workflows, issues } = await loadWorkflows(repoRoot);
   for (const issue of issues) console.error(`! skipped ${issue.path}: ${issue.message}`);
   const name = workflowName ?? 'quick-task';
@@ -253,8 +367,37 @@ async function runCommand(
     return;
   }
 
+  const providerAuth = new ProviderAuthService();
+  const requiredProviders = providersRequiredByWorkflow(
+    workflow,
+    (await loadConfig(repoRoot)).defaultRunner,
+  );
+  if (requiredProviders.length > 0) {
+    const [discovered, workspace] = await Promise.all([
+      providerAuth.status(),
+      loadWorkspaceConfig(),
+    ]);
+    const blocked = unavailableProviderMessage(
+      requiredProviders,
+      applyProviderEnablement(discovered, workspace.disabledProviders),
+    );
+    if (blocked) {
+      console.error(blocked);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   const store = openStore(repoRoot);
-  const manager = new RunManager(store, repoRoot);
+  // Headless tasks still appear in the cockpit later, so persist the same
+  // task-local recovery event when a credential expires after the preflight.
+  const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, () => {});
+  providerRuntimeAuth.watch(store);
+  // Headless runs enforce the same workspace-level cap/memory limit (step
+  // 2.5) — one refreshed semaphore, even with just one manager in play.
+  const semaphore = new WorkspaceSemaphore();
+  await semaphore.refresh();
+  const manager = new RunManager(store, repoRoot, { semaphore });
 
   store.on('event', ({ event }) => {
     switch (event.type) {
@@ -329,7 +472,15 @@ async function serverCommand(
   mode: 'install' | 'uninstall' | 'deploy',
   repoRoot: string,
   platform: string | undefined,
-  flags: { yes: boolean; reconfigure?: string; reinstall?: boolean; domain?: string; port?: number },
+  flags: {
+    yes: boolean;
+    reconfigure?: string;
+    reinstall?: boolean;
+    domain?: string;
+    port?: number;
+    externalProxy?: boolean;
+    bindHost?: string;
+  },
 ): Promise<void> {
   // Detection (claude/gh/codex) and tool installs resolve executables off the
   // process PATH. When the installer is launched from a non-login shell (an
@@ -409,6 +560,13 @@ async function serverCommand(
     instance,
     domain,
     port,
+    // Only an install decides proxy mode; deploy/uninstall read it back from
+    // the recorded state. Preserve an omitted flag as `undefined`: a flag-less
+    // resume must keep an external-proxy install external instead of flipping
+    // it back to cezar-managed nginx/SSL.
+    ...(mode === 'install'
+      ? { externalProxy: flags.externalProxy || undefined, bindHost: flags.bindHost }
+      : {}),
   };
 
   // e.g. "ubuntu-vps" or "ubuntu-vps, shop.example.com" for a named instance.

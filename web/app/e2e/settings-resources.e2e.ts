@@ -5,8 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { AgentBrowser, readTestEnv } from './agent-browser'
 
 /**
- * Settings → Resources: worktree retention (#483) end-to-end against the shared dry-run
- * environment. Drives the "Keep last N worktrees" field through the real form and reads the
+ * Project settings → Worktrees: retention (#483) end-to-end against the shared dry-run
+ * environment. The field moved out of Resources into its own project section in step 3.5
+ * (retention sizes one repo's worktree pool; the host-wide knobs went global). Drives the "Keep last N worktrees" field through the real form and reads the
  * write back from `GET /api/config` (the server's truth, not the query cache), proves a cold
  * load renders the persisted value, and checks the worktrees management panel renders (rows or
  * the empty state) with the keep-limit footer.
@@ -53,11 +54,11 @@ async function waitForConfig(check: (config: ConfigAnswer) => boolean): Promise<
 }
 
 const gotoResources = () => {
-  browser.goto(`${baseUrl}/settings/resources`)
-  browser.waitForFunction(`document.querySelector('[data-slot="resources-section"]') !== null`)
+  browser.goto(`${baseUrl}/settings/worktrees`)
+  browser.waitForFunction(`document.querySelector('[data-slot="worktrees-section"]') !== null`)
 }
 
-describe('settings → resources: worktree retention against the live dry-run server', () => {
+describe('project settings → worktrees: retention against the live dry-run server', () => {
   it('renders the keep-last-N field and the worktrees panel', () => {
     gotoResources()
     expect(browser.count('[data-slot="resources-worktree-retention"]')).toBe(1)

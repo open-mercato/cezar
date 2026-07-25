@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, readTestEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 
 /**
  * Settings → Skills (R6 Step 1.4) end-to-end against the shared dry-run environment.
@@ -27,9 +27,15 @@ const BETA = 'e2e-beta-skill'
 let browser: AgentBrowser
 let baseUrl: string
 let createdSkillsDir = false
+let bootProject: string
 
-beforeAll(() => {
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
+
+beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
+  bootProject = await bootProjectId(baseUrl)
   createdSkillsDir = !existsSync(skillsDir)
   mkdirSync(skillsDir, { recursive: true })
   writeFileSync(
@@ -58,7 +64,7 @@ const row = (name: string) => `[data-slot="skill-row"][data-skill="${name}"]`
 
 describe('settings → skills against the live dry-run server', () => {
   it('the catalog renders the seeded project skills bold-first, and a click opens the markdown detail', () => {
-    browser.goto(`${baseUrl}/settings/skills`)
+    browser.goto(`${baseUrl}${scoped('/settings/skills')}`)
     browser.waitForFunction(`document.querySelector('${row(ALPHA)}') !== null`)
 
     // Seeded repo skills are project skills — tagged, emphasized, and ahead of every
@@ -118,6 +124,11 @@ describe('settings → skills against the live dry-run server', () => {
   })
 
   it('the pinned bookmarklet panel generates javascript: launchers against /new', () => {
+    // The pinned row sits at the bottom of the (viewport-tall) list column, which a long
+    // skill detail can push past the fold — scroll it in before the click, as a user would.
+    browser.evaluate(
+      `document.querySelector('[data-slot="bookmarklets-row"]').scrollIntoView({ block: 'center' })`,
+    )
     browser.click('[data-slot="bookmarklets-row"]')
     browser.waitForFunction(`document.querySelector('[data-slot="bookmarklet-panel"]') !== null`)
     // The imperative href lands after mount — wait for the real javascript: URL.
@@ -128,8 +139,9 @@ describe('settings → skills against the live dry-run server', () => {
     const generic = String(
       browser.evaluate(`document.querySelector('[data-slot="bm-generic"] [data-slot="bm-link"]').getAttribute('href')`),
     )
-    // The protected /new deep-link grammar, baked with the server's real launch key.
-    expect(decodeURIComponent(generic)).toContain(`'/new?'+q`)
+    // The protected /new deep-link grammar, baked with the server's real launch key — now
+    // under this project's own URL prefix (multi-project spec, step 3.6).
+    expect(decodeURIComponent(generic)).toContain(`${scoped('/new')}?'+q`)
     expect(decodeURIComponent(generic)).toMatch(/auto=0&key=[^&]+&ref=/)
 
     // One launcher per catalog skill, the seeded ones included.

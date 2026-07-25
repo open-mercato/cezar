@@ -72,6 +72,10 @@ export interface ChangedFile {
 export interface ChangesPayload {
   files: ChangedFile[];
   stat: { adds: number; dels: number; files: number };
+  /** Present when a run worktree was repointed away from the task branch (#591). In that case the
+   *  payload is intentionally limited to uncommitted changes instead of attributing the
+   *  checked-out branch's history to this task. */
+  repointedHead?: { headBranch: string; taskBranch: string };
 }
 
 export type ChangesResult = { ok: true; changes: ChangesPayload } | { ok: false; error: string };
@@ -246,7 +250,7 @@ function statusWord(letter: string): ChangedFile['status'] {
 export async function collectChanges(
   dir: string,
   baseBranch: string,
-  opts: { patchCap?: number; intentToAdd?: boolean } = {},
+  opts: { patchCap?: number; intentToAdd?: boolean; taskBranch?: string } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
   const patchCap = opts.patchCap ?? PATCH_CAP;
@@ -267,7 +271,18 @@ export async function collectChanges(
       await git(dir, ['add', '-N', '.']);
     }
     const mergeBase = await git(dir, ['merge-base', baseBranch, 'HEAD']);
-    const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+    const headBranchResult = opts.taskBranch
+      ? await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])
+      : undefined;
+    const headBranch = headBranchResult?.ok ? headBranchResult.stdout.trim() : '';
+    const repointedHead = opts.taskBranch && headBranch && headBranch !== opts.taskBranch
+      ? { headBranch, taskBranch: opts.taskBranch }
+      : undefined;
+    const base = repointedHead
+      ? 'HEAD'
+      : mergeBase.ok && mergeBase.stdout.trim()
+        ? mergeBase.stdout.trim()
+        : baseBranch;
 
     const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
     if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };
@@ -276,7 +291,13 @@ export async function collectChanges(
     const patchOut = await git(dir, ['diff', '--patch', '-M', '--no-color', base], env);
     if (!patchOut.ok) return { ok: false, error: gitReason(patchOut, 'git diff failed') };
 
-    return { ok: true, changes: assemblePayload(nameStatus.stdout, numstat.stdout, patchOut.stdout, patchCap) };
+    return {
+      ok: true,
+      changes: {
+        ...assemblePayload(nameStatus.stdout, numstat.stdout, patchOut.stdout, patchCap),
+        ...(repointedHead ? { repointedHead } : {}),
+      },
+    };
   } finally {
     if (scratchIndex) rmSync(scratchIndex, { force: true });
   }
@@ -345,9 +366,10 @@ export interface RunCommit {
 export type RunCommitsResult = { ok: true; commits: RunCommit[] } | { ok: false; error: string };
 
 /**
- * The commits a run made on its worktree branch: `<merge-base>..HEAD`, newest first — the same
- * range `collectChanges` diffs, so the commit list and the aggregate Changes tab always agree on
- * what "this task's work" means. Empty (not an error) when the branch has no commits past base.
+ * The commits reachable from the worktree's current HEAD after its base, newest first. A review
+ * task may deliberately repoint HEAD to the reviewed branch, so this list retains that useful
+ * history even though `collectChanges` narrows its payload to uncommitted work in that case.
+ * Empty (not an error) when the branch has no commits past base.
  */
 export async function collectRunCommits(dir: string, baseBranch: string): Promise<RunCommitsResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };

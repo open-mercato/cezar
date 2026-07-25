@@ -38,6 +38,45 @@ export type StepStatus =
  *  choice and are Claude by definition (see `resumeCommand` in the server). */
 export type Runner = 'claude' | 'codex' | 'opencode'
 
+/** Coarse host authentication state from `/api/providers/status`. Credentials, account
+ *  identity, and raw CLI output never cross this boundary. */
+export type ProviderId = Runner
+export type ProviderConnectionState =
+  | 'connected'
+  | 'disconnected'
+  | 'not-installed'
+  | 'unknown'
+
+export interface ProviderStatus {
+  provider: ProviderId
+  status: ProviderConnectionState
+  enabled: boolean
+  hint?: string
+  authFailureId?: string
+}
+
+export interface ProviderStatusResponse {
+  providers: ProviderStatus[]
+}
+
+export type ProviderConnectResponse =
+  | { opened: true; command: string }
+  | { opened: false; connected: true; command: string }
+
+export interface RunnerModelOption {
+  id: string
+  label: string
+  description: string
+}
+
+export interface RunnerModelCatalogResponse {
+  runner: Runner
+  models: RunnerModelOption[]
+  source: 'live' | 'cache' | 'unavailable'
+  stale: boolean
+  reason?: string
+}
+
 export interface StepState {
   id: string
   name: string
@@ -50,6 +89,8 @@ export interface StepState {
   error?: string
   /** Latest agent session id — `claude --resume <id>` and friends. */
   sessionId?: string
+  /** Backend that owns `sessionId`; absent on records written before backend affinity. */
+  backend?: Runner
   costUsd?: number
 }
 
@@ -72,7 +113,13 @@ export interface RunRecord {
   task: string
   /** URLs of images attached to the initial task prompt (#image-display). */
   taskImages?: string[]
+  /** Prompt messages stacked onto the run while it waits for a free agent slot (#472).
+   *  Folded into the prompt at dequeue — never delivered as their own turns. Editable and
+   *  removable only while `status === 'queued'`. Absent on every pre-#472 run. */
+  queuedMessages?: QueuedMessage[]
   model?: string
+  /** Normalized provider/model identity used for attribution and reproducible replay. */
+  modelIdentity?: string
   runner?: Runner
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt?: string
@@ -82,6 +129,10 @@ export interface RunRecord {
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work
    *  (spec 2026-07-18-subagent-monitoring-status, #490). Absent on old runs; cleared on resume/end. */
   activity?: RunActivity
+  /** Exact ISO-8601 deadline for the next automatic monitoring check. */
+  monitoringWakeAt?: string
+  /** The current live monitoring epoch exhausted its 40 automatic checks. */
+  monitoringWakeCapReached?: boolean
   createdAt: string
   startedAt?: string
   finishedAt?: string
@@ -95,6 +146,8 @@ export interface RunRecord {
   /** The PR/issue number this task is ABOUT (task auto-naming spec) — display tier only. */
   prNumber?: number
   issueNumber?: number
+  /** Server-side provenance: referenced-issue discovery currently owns `issueNumber`. */
+  referencedIssueNumberSeeded?: boolean
   /** 'user' = renamed via PATCH, never auto-overwritten; 'marker' = agent-declared
    *  via CEZ:TITLE (spec 2026-07-18-task-ref-markers); 'auto' = namer-owned. */
   titleOrigin?: 'user' | 'auto' | 'marker'
@@ -103,8 +156,20 @@ export interface RunRecord {
   markerRefs?: { pr?: number; issue?: number }
   /** The referenced tier's working set (distinct PR URLs spotted, capped server-side). */
   referencedPrCandidates?: string[]
+  /** The issue this task is ABOUT (spec 2026-07-21-report-ref-discovery): auto-discovered from
+   *  `github.com/…/issues/N` links in the conversation. Display-only; never gates actions. */
+  referencedIssueUrl?: string
+  /** The referenced-issue working set, persisted like `referencedPrCandidates`. Capped. */
+  referencedIssueCandidates?: string[]
+  /** Autonomous mode (#autonomous): the run never parks at `waiting` or the terminal `review`
+   *  gate. Absent = falsy = not autonomous. */
+  autonomous?: boolean
   /** Absent when the run executed in the repo working tree rather than its own worktree. */
   worktreePath?: string
+  /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is
+   *  kept): the dir is gone but recoverable, and the run is out of the retention budget until
+   *  it is re-materialized. */
+  worktreeReclaimedAt?: string
   branch?: string
   baseBranch?: string
   /** Parallel variants (spec 010): runs sharing a groupId are one group. */
@@ -211,10 +276,13 @@ export interface ForgeInfo {
  *  (Terminal, editor, `cd …` hints) must disappear, not disable.
  *  `followups: false` (the default — the inbox is opt-in via `CEZ_FOLLOWUPS=1`, #471) means
  *  this server has no follow-up inbox: the Inbox nav item and the composer's follow-up
- *  toggle disappear the same way. The per-task handoff journal is unrelated and always on. */
+ *  toggle disappear the same way. The per-task handoff journal is unrelated and always on.
+ *  `singleProject: true` means `CEZ_SINGLE_PROJECT=1` constrained the workspace to its
+ *  launch project and all multi-project affordances must be omitted. */
 export interface Capabilities {
   localHandoff: boolean
   followups: boolean
+  singleProject: boolean
 }
 
 export interface HealthResponse {
@@ -229,6 +297,177 @@ export interface HealthResponse {
   /** R5 additive fields (BACKWARD_COMPATIBILITY.md §2 keeps the pre-forge shape intact). */
   forge: ForgeInfo | null
   capabilities: Capabilities
+  /** Multi-project additive fields (step 1.6): the registered projects — id + name ONLY, never
+   *  roots (health is the one CORS-open route) — and the id of the project cezar booted in.
+   *  `bootProject` is what the workspace-events filter compares stamps against when unscoped. */
+  projects?: { id: string; name: string }[]
+  bootProject?: string
+}
+
+/** One `GET /api/projects` registry entry (multi-project spec, step 1.6). Unlike health's
+ *  id+name pairs this carries absolute `root`s — same-origin only, never the CORS-open route. */
+export interface ProjectListEntry {
+  id: string
+  name: string
+  root: string
+  addedAt: string
+  lastOpenedAt: string
+  source: 'local' | 'checkout'
+  /** `not-git` is fully usable (degraded single-queue mode); only `missing` blocks. */
+  status: 'ok' | 'missing' | 'not-git'
+  /** Current branch when cheaply available (omitted e.g. on an unborn HEAD). */
+  branch?: string
+  /** Per-project cap on concurrently running tasks (spec 2026-07-22). Omitted =
+   *  inherit the workspace `resources.maxParallel`; a number pins this project. */
+  maxParallel?: number
+}
+
+/** `GET /api/projects` — the workspace registry. Workspace-level: never 404s, never scoped. */
+export interface ProjectsResponse {
+  projects: ProjectListEntry[]
+  bootProject: string
+  projectsDir: string
+}
+
+/** `POST /api/projects` (multi-project spec, step 4.2) — what the folder-browser dialog gets
+ *  back. `error` is present ONLY on the 409 (already registered), where `project` is the
+ *  EXISTING entry: the dialog navigates to it rather than dead-ending on a duplicate. */
+export interface RegisterProjectResponse {
+  project: ProjectListEntry
+  error?: string
+}
+
+/** `DELETE /api/projects/:projectId` (multi-project spec, step 4.4) — Settings → Projects'
+ *  per-row Remove. Deregistration ONLY: the server never touches anything under the project
+ *  root, so this is a registry edit and nothing else. The interesting failures are 409s (the
+ *  project has running tasks, or it is the project this server booted in), whose `{ error }`
+ *  the pane shows verbatim. */
+export interface RemoveProjectResponse {
+  removed: true
+  id: string
+}
+
+/** `PATCH /api/projects/:projectId` (spec 2026-07-22-per-project-concurrency) — set or clear a
+ *  project's per-project concurrency ceiling. `null` clears the override back to "inherit the
+ *  workspace cap"; an integer `1..16` pins it. */
+export interface UpdateProjectInput {
+  maxParallel: number | null
+}
+
+/** `PATCH /api/projects/:projectId` — the updated entry, same shape `GET /api/projects` attaches. */
+export interface UpdateProjectResponse {
+  project: ProjectListEntry
+}
+
+/** `POST /api/projects/checkout` (multi-project spec, step 4.3) — the clone-from-GitHub body.
+ *  `name` defaults server-side to the repo name; `checkoutId` is the cockpit's own correlation
+ *  token, echoed on every `checkout-progress` event so two tabs cloning at once never render
+ *  each other's progress. */
+export interface CheckoutProjectInput {
+  url: string
+  name?: string
+  checkoutId?: string
+}
+
+/** One `checkout-progress` workspace SSE payload (step 4.3). `cloning` carries one line of
+ *  `git clone` output; `done`/`error` are terminal. The dialog shows `error` VERBATIM — a
+ *  clone fails for reasons (auth, network, a typo'd repo) only the server can name. */
+export interface CheckoutProgressEvent {
+  checkoutId?: string
+  name: string
+  phase: 'cloning' | 'done' | 'error'
+  line?: string
+  error?: string
+}
+
+/** One directory in a `GET /api/fs/browse` listing (multi-project spec, step 4.1). `path` is
+ *  absolute — same-origin route, like `ProjectListEntry.root`. */
+export interface FsBrowseDir {
+  name: string
+  path: string
+  /** Has a `.git` entry — drives the "git" badge. A non-repo folder is still selectable
+   *  (cezar degrades in a non-git folder exactly as `cezar serve` does today). */
+  isRepo: boolean
+}
+
+/** `GET /api/fs/browse?path=` — the folder picker's listing. Rooted at the independently
+ *  configured browse root, directories only. */
+export interface FsBrowseResponse {
+  /** The realpath'd directory actually listed — never the spelling asked for, so the
+   *  breadcrumb shows where the picker really is. */
+  path: string
+  /** `null` AT the browse root: there is no "up" out of it, and the dialog must render no
+   *  parent row rather than one that 400s. */
+  parent: string | null
+  dirs: FsBrowseDir[]
+  /** True when the listing was capped server-side — surfaced honestly instead of showing a
+   *  silently short list. */
+  truncated: boolean
+}
+
+/** `GET/PUT /api/workspace/ui-state` — cross-project GUI prefs in `~/.cezar/ui-state.json`
+ *  (multi-project spec, step 2.7). Passthrough like its per-repo twin (`UiState` below):
+ *  unknown keys round-trip untouched. `sidebar.collapsed` is the sidebar's per-project
+ *  collapse map (step 3.3) — `true` collapses a group, `false` pins it open, absent means
+ *  the default (the active project expands, the rest collapse). The PUT merges SHALLOWLY at
+ *  the top level server-side, so a writer must send the whole `sidebar` object, not a leaf. */
+export interface WorkspaceUiState {
+  sidebar?: { collapsed?: Record<string, boolean> } & Record<string, unknown>
+  /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until
+   *  the provider reports a different incident, so this stays workspace-global with the
+   *  browser rather than one project checkout. */
+  dismissedProviderAuthFailures?: Partial<Record<ProviderId, string>>
+  /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at
+   *  the keyboard, not a repo, so they live in `~/.cezar/ui-state.json` and follow the user
+   *  across every project. Same shape as the per-repo `UiState.appearance` it superseded
+   *  (Migration 001 copied the old per-repo value up). */
+  appearance?: { accent?: 'lime' | 'violet'; density?: 'comfortable' | 'compact' | 'ultra' }
+  /** Settings → Notifications, GLOBAL since step 3.5 — one answer for the whole workspace,
+   *  since the delivering browser is one browser whichever project you are looking at. */
+  notifications?: { enabled?: boolean }
+  /** The user's curated selection of default (vendor) skills — `open-mercato/skills`. GLOBAL, not
+   *  per-repo: "which skills I want" describes the person, not a checkout, and must not depend on
+   *  the launch directory. Tri-state: ABSENT means "not curated", so every default skill shows
+   *  (opt-out default; existing installs are never silently emptied on upgrade); a PRESENT array
+   *  (even `[]`) means only those names show from that repo. The gate lives server-side in
+   *  `discoverSkills`; the Skills page's Manage panel writes the whole array (shallow top-level merge). */
+  importedSkills?: string[]
+  [key: string]: unknown
+}
+
+/** `GET/PUT /api/workspace/config` — the settings slice of `~/.cezar/config.json` (step 2.7).
+ *  Global knobs only: the registry itself is `GET /api/projects`, and `schemaVersion` (a
+ *  migration cursor, not a setting) is deliberately absent. `resources` is the workspace's
+ *  host-protection budget — the ONLY effective `maxParallel`/`memoryLimitMb` since Phase 2
+ *  (spec §"Resource governance"); `worktreeRetentionDefault` seeds projects that set none. */
+export interface WorkspaceConfigResponse {
+  browseRoot: string
+  projectsDir: string
+  skillsAutoUpdate: boolean | null
+  effectiveSkillsAutoUpdate: boolean
+  resources: {
+    maxParallel: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
+    memoryLimitMb: number | null
+    worktreeRetentionDefault: number
+  }
+}
+
+/** `PUT /api/workspace/config` body — partial: absent keys stay untouched. A rejected
+ *  workspace root (not writable) 400s with the reason and persists NOTHING, resources
+ *  included, so callers may send both in one request only if they want that atomicity. */
+export interface SetWorkspaceConfigInput {
+  browseRoot?: string
+  projectsDir?: string
+  skillsAutoUpdate?: boolean | null
+  resources?: {
+    maxParallel?: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
+    memoryLimitMb?: number | null
+    worktreeRetentionDefault?: number
+  }
 }
 
 /** `GET /api/launch-key` — the bookmarklet auto-start secret (spec 011). Fetched to COMPARE
@@ -264,6 +503,8 @@ export interface ChangedFile {
 export interface ChangesPayload {
   files: ChangedFile[]
   stat: { adds: number; dels: number; files: number }
+  /** Additive context for review tasks whose worktree HEAD no longer matches their own branch. */
+  repointedHead?: { headBranch: string; taskBranch: string }
 }
 
 /** `GET /api/runs/:id/files?path=` — a directory listing or one file (size-capped, binary
@@ -510,6 +751,44 @@ export interface GithubData {
   labelColors?: Record<string, string>
 }
 
+export type GithubMergeMethod = 'merge' | 'squash' | 'rebase'
+
+export interface GithubPrMergeState {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | 'merged'
+  isDraft: boolean
+  headRef: string
+  baseRef: string
+  headSha: string
+  mergeable: 'mergeable' | 'conflicting' | 'unknown'
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown'
+  checks: Array<{
+    name: string
+    state: 'passing' | 'failing' | 'pending' | 'unknown'
+    required: boolean | null
+    url?: string
+  }>
+  methods: GithubMergeMethod[]
+  defaultMethod: GithubMergeMethod | null
+  eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown'
+  blockers: Array<{ code: string; message: string }>
+  canMerge: boolean
+}
+
+export type GithubPrMergeStateResponse =
+  | { available: true; mergeState: GithubPrMergeState }
+  | { available: false; reason: string }
+
+export interface GithubMergeResponse {
+  merged: true
+  number: number
+  url: string
+  method: GithubMergeMethod
+  mergeCommitSha?: string
+}
+
 /** One comment or PR review summary in an issue/PR thread (`GET /api/github/comments/…`, #499). */
 export interface GithubComment {
   id: number
@@ -522,14 +801,76 @@ export interface GithubComment {
   url: string
 }
 
+/** The timeline event kinds the thread renders (#525) — an allowlist, so an unknown GitHub event
+ *  type is dropped server-side rather than reaching the client. Mirrors
+ *  `ForgeTimelineEventKind`. */
+export type GithubTimelineEventKind =
+  | 'committed'
+  | 'labeled'
+  | 'unlabeled'
+  | 'assigned'
+  | 'unassigned'
+  | 'merged'
+  | 'closed'
+  | 'reopened'
+  | 'head_ref_force_pushed'
+  | 'cross-referenced'
+  | 'renamed'
+
+/** One non-comment timeline row (#525) — commit, label change, assignment, merge, force-push,
+ *  cross-reference or rename. Mirrors `ForgeTimelineEvent`. Deliberately a separate type from
+ *  `GithubComment` rather than a widened `kind`, which would break narrowing below. */
+export interface GithubTimelineEvent {
+  id: string
+  kind: GithubTimelineEventKind
+  /** Login — or the git author name for `committed`, which carries no GitHub actor. */
+  actor: string
+  /** Absent for `committed`. */
+  avatarUrl?: string
+  createdAt: string
+  url?: string
+  /** `committed` — full 40-char SHA. */
+  sha?: string
+  /** `committed` — first line, capped at 120 chars. */
+  message?: string
+  /** `committed` — **absent** (lookup failed/skipped) and **`null`** (no CI configured) both
+   *  render no glyph, but stay distinct values. */
+  checks?: 'passing' | 'failing' | 'pending' | null
+  label?: { name: string; color?: string }
+  /** `assigned`/`unassigned` login, or the new title for `renamed`. */
+  subject?: string
+  refNumber?: number
+  refTitle?: string
+  refIsPr?: boolean
+}
+
 /** `GET /api/github/comments/:kind/:number` — degrades to `{ available: false, reason }` like the
  *  list fetch, never an error. */
 export interface GithubCommentsData {
   available: boolean
   reason?: string
   comments: GithubComment[]
+  /** True when either stream hit its cap, or the timeline fetch stopped short. */
+  truncated?: boolean
+  /** Timeline events (#525) — additive and optional; absent when the server degraded to the
+   *  legacy comments-only fetch. Capped independently of `comments`. */
+  events?: GithubTimelineEvent[]
+}
+
+export interface GithubPrChange {
+  path: string
+  previousPath?: string
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed'
+  additions: number
+  deletions: number
+  patch?: string
+  patchUnavailableReason?: 'binary' | 'too-large' | 'not-provided'
   truncated?: boolean
 }
+
+export type GithubPrChangesData =
+  | { available: true; number: number; headSha: string; files: GithubPrChange[]; additions: number; deletions: number; truncated: boolean; reason?: string }
+  | { available: false; reason: string }
 
 // ---- GUI prefs (`PUT /api/ui-state`) -----------------------------------------------------------
 
@@ -565,10 +906,18 @@ export interface UiState {
    *  present (even `[]`) is the user's own edited list from Settings → Prompt templates.
    *  `skills` (optional) are the skill names the template auto-applies for. */
   promptTemplates?: { id: string; label: string; text: string; skills?: string[] }[]
-  /** The open-mercato/skills promo banner (#391), dismissed for good. Set once true, never
-   *  unset — server-persisted rather than a cookie so "shown once" holds across browsers. */
+  /** The open-mercato/skills promo banner (#391), dismissed for good. Legacy — the banner is
+   *  gone, replaced by the workspace-level `importedSkills` curation (see `WorkspaceUiState`);
+   *  retained so old ui-state.json round-trips. */
   dismissedSkillsBanner?: boolean
   [key: string]: unknown
+}
+
+/** One row in the "Manage skills" panel — a skill a default (vendor) repo offers,
+ *  from `GET /api/skills/importable`, independent of whether it is currently kept. */
+export interface ImportableSkill {
+  name: string
+  description?: string
 }
 
 // ---- request bodies ------------------------------------------------------------------------------
@@ -613,9 +962,13 @@ export interface MessageInput {
 }
 
 /** `PATCH /api/runs/:id` (#389). `title`: trimmed server-side, 1–300 chars. The edit sets both
- *  `title` and `titleSummary`, so it wins over any auto-summary. Answers the updated record. */
+ *  `title` and `titleSummary`, so it wins over any auto-summary. Answers the updated record.
+ *  `task` (#472): the initial prompt, editable only while the run is still queued — any other
+ *  status answers `409 run already started`. 1–100 000 chars, and bounded again by the folded
+ *  total across the task and its stack. */
 export interface PatchRunInput {
   title?: string
+  task?: string
 }
 
 /** Per-runner default model preset (Settings → Agents, R6 1.5): the composer preselects this
@@ -667,6 +1020,59 @@ export interface SetConfigInput {
 /** The PUT answer: the same shape GET serves (the pre-R6 fields stayed, the rest is additive). */
 export type SetConfigResponse = ConfigResponse
 
+// ---- Agent config files (spec #404) --------------------------------------------------------
+
+export type AgentConfigFormat = 'json' | 'jsonc' | 'toml' | 'markdown'
+export type AgentConfigScope = 'user' | 'project' | 'local'
+export type AgentConfigKind = 'settings' | 'memory' | 'mcp'
+export type AgentConfigTracked = 'tracked' | 'gitignored' | 'outside-repo'
+
+export interface AgentConfigFile {
+  id: string
+  runners: Runner[]
+  kind: AgentConfigKind
+  scope: AgentConfigScope
+  label: string
+  path: string
+  format: AgentConfigFormat
+  tracked: AgentConfigTracked
+  seeded: boolean
+  holdsMcp: boolean
+  precedence: string
+  hotReload?: string
+  docsUrl: string
+  exists: boolean
+  size: number
+  version: string | null
+  writable: boolean
+  readOnlyReason?: string
+}
+
+export interface UserMcpListing {
+  path: string
+  servers: string[]
+  readable: boolean
+}
+
+export interface AgentConfigListing {
+  editable: boolean
+  files: AgentConfigFile[]
+  userMcp: UserMcpListing | null
+}
+
+export interface AgentConfigFileContent {
+  id: string
+  path: string
+  exists: boolean
+  content: string
+  version: string | null
+}
+
+export interface SetAgentConfigInput {
+  content: string
+  version: string | null
+}
+
 /** One materialized task worktree in the management panel (#483). `sizeBytes` is
  *  null when `du` is unavailable (Windows / missing). `reclaimable` = finished,
  *  has a directory, not yet reclaimed (retention's rule). */
@@ -712,6 +1118,27 @@ export interface OpenTargetsResponse {
   targets: OpenTarget[]
 }
 
+export type SkillsUpdateStatus = 'idle' | 'checking' | 'available' | 'updating' | 'current' | 'unavailable' | 'error'
+export interface SkillsUpdateScopeState {
+  scope: 'project' | 'global'
+  status: SkillsUpdateStatus
+  available: boolean
+  skills: string[]
+  checkedAt: string | null
+  updatedAt: string | null
+  reason?: string
+}
+export interface SkillsUpdateState {
+  status: SkillsUpdateStatus
+  available: boolean
+  autoUpdateEnabled: boolean
+  inherited: boolean
+  checkedAt: string | null
+  updatedAt: string | null
+  scopes: SkillsUpdateScopeState[]
+  needsUpgradeNotes: boolean
+}
+
 // ---- mutation responses ---------------------------------------------------------------------------
 
 /** `POST /api/runs` — one record for ×1, a group for ×2/×3. */
@@ -746,8 +1173,36 @@ export interface CreatePrResponse {
   dryRun?: boolean
 }
 
+/** `POST /api/runs/:id/messages` answers one of three shapes (#472), by how far the run has got:
+ *  `delivered` — a live session took it; `queued` — still waiting for a slot, so it was stacked
+ *  onto the prompt (the stored entry rides along); `deferred` — the run is mid-spawn, so it was
+ *  buffered and will arrive as an ordinary follow-up turn the moment the session opens. Anything
+ *  else is still a `409`. Pre-#472 clients only ever saw `delivered` and keep working. */
 export interface MessageResponse {
-  delivered: boolean
+  delivered?: boolean
+  queued?: boolean
+  deferred?: boolean
+  message?: QueuedMessage
+}
+
+/** One prompt message stacked onto a queued run (#472). */
+export interface QueuedMessage {
+  id: string
+  text: string
+  /** `/api/runs/:id/images/…` URLs — attachments are persisted, never inlined. */
+  images?: string[]
+  createdAt: string
+}
+
+/** `PATCH /api/runs/:id/queued-messages/:msgId` (#472) — replaces the entry's text and images.
+ *  `404` unknown run or message id; `409 run already started`. */
+export interface EditQueuedMessageResponse {
+  message: QueuedMessage
+}
+
+/** `DELETE /api/runs/:id/queued-messages/:msgId` (#472). */
+export interface RemoveQueuedMessageResponse {
+  removed: boolean
 }
 
 /** `POST /api/runs/:id/open-in-cli` — a terminal was spawned with `command` running in it.

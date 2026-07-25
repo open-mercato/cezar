@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, readTestEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 
 /**
  * The repo view (R5 Step 1.7) end-to-end against the shared dry-run environment — which
@@ -21,6 +21,11 @@ const IPHONE = { width: 390, height: 844 }
 
 let browser: AgentBrowser
 let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 async function api<T>(path: string): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`)
@@ -34,8 +39,9 @@ interface RepoPayload {
   branches: string[]
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
+  bootProject = await bootProjectId(baseUrl)
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 })
@@ -49,7 +55,7 @@ describe('the repo view against the live dry-run server', () => {
     const repo = await api<RepoPayload>('/api/repo')
     expect(repo.info).not.toBeNull()
 
-    browser.goto(`${baseUrl}/git`)
+    browser.goto(`${baseUrl}${scoped('/git')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="repo-header"]') !== null`)
 
     // The branch chip carries the REAL current branch, not a fixture.
@@ -62,7 +68,7 @@ describe('the repo view against the live dry-run server', () => {
       browser.evaluate(
         `document.querySelector('[data-slot="repo-tabs"] a[aria-current="page"]').getAttribute('href')`,
       ),
-    ).toBe('/git')
+    ).toBe(scoped('/git'))
 
     // The working tree may be clean or dirty — assert the view tells the same story the API does.
     const changes = await api<{ files: unknown[] }>('/api/repo/changes')
@@ -84,7 +90,7 @@ describe('the repo view against the live dry-run server', () => {
     const repo = await api<RepoPayload>('/api/repo')
     expect(repo.log.length).toBeGreaterThan(0)
 
-    browser.goto(`${baseUrl}/git/commits`)
+    browser.goto(`${baseUrl}${scoped('/git/commits')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="repo-commits"]') !== null`)
 
     expect(browser.count('[data-slot="commit-row"]')).toBe(repo.log.length)
@@ -110,12 +116,12 @@ describe('the repo view against the live dry-run server', () => {
     expect(picked).not.toBeNull()
     if (!picked) return
 
-    browser.goto(`${baseUrl}/git/commits`)
+    browser.goto(`${baseUrl}${scoped('/git/commits')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="commit-row"]') !== null`)
     browser.click(`[data-slot="commit-row"][data-sha="${picked.hash}"]`)
 
     browser.waitForFunction(`document.querySelector('[data-slot="commit-meta"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}/git/commits/${picked.hash}`)
+    expect(browser.url()).toBe(`${baseUrl}${scoped(`/git/commits/${picked.hash}`)}`)
     expect(browser.text('[data-slot="commit-meta"]')).toContain(picked.subject)
     // The same <Diff> facade, one card per changed file.
     browser.waitForFunction(
@@ -124,7 +130,7 @@ describe('the repo view against the live dry-run server', () => {
     // The way back is a link.
     expect(
       browser.evaluate(`document.querySelector('[data-slot="commit-back"]').getAttribute('href')`),
-    ).toBe('/git/commits')
+    ).toBe(scoped('/git/commits'))
 
     browser.screenshot(`${artifactsDir}/repo-git-commit.png`)
   })
@@ -133,17 +139,21 @@ describe('the repo view against the live dry-run server', () => {
     const repo = await api<RepoPayload>('/api/repo')
     expect(repo.branches.length).toBeGreaterThan(0)
 
-    browser.goto(`${baseUrl}/git/branches`)
+    browser.goto(`${baseUrl}${scoped('/git/branches')}`)
     browser.waitForFunction(`document.querySelector('[data-slot="repo-branch-list"]') !== null`)
 
     expect(browser.count('[data-slot="branch-row"]')).toBe(repo.branches.length)
-    // Exactly the current branch wears the marker (READ-ONLY: nothing is clicked here).
-    expect(browser.count('[data-slot="branch-current"]')).toBe(1)
-    expect(
-      browser.evaluate(
-        `document.querySelector('[data-slot="branch-current"]').closest('[data-slot="branch-row"]').dataset.branch`,
-      ),
-    ).toBe(repo.info?.branch)
+    // An attached checkout marks exactly its current branch. CI may run this suite from a
+    // detached task worktree; then git honestly reports no branch and no row may be marked.
+    const expectedCurrent = repo.info?.branch && repo.branches.includes(repo.info.branch) ? 1 : 0
+    expect(browser.count('[data-slot="branch-current"]')).toBe(expectedCurrent)
+    if (expectedCurrent === 1 && repo.info) {
+      expect(
+        browser.evaluate(
+          `document.querySelector('[data-slot="branch-current"]').closest('[data-slot="branch-row"]').dataset.branch`,
+        ),
+      ).toBe(repo.info.branch)
+    }
     // The base-branch picker exists — /api/repo carries baseBranch, so the control is honest.
     expect(browser.count('[data-slot="base-branch-picker"]')).toBe(1)
   })
@@ -152,7 +162,7 @@ describe('the repo view against the live dry-run server', () => {
     browser.setViewport(IPHONE.width, IPHONE.height)
     try {
       const changes = await api<{ files: unknown[] }>('/api/repo/changes')
-      browser.goto(`${baseUrl}/git`)
+      browser.goto(`${baseUrl}${scoped('/git')}`)
       browser.waitForFunction(`document.querySelector('[data-slot="repo-changes"]') !== null`)
 
       if (changes.files.length > 0) {

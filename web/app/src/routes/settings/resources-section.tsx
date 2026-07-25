@@ -1,32 +1,43 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { GaugeIcon } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
+import { Link } from 'react-router'
 
-import { putConfig } from '@/api/client'
-import { queryKeys, useConfig } from '@/api/queries'
-import type { ConfigResponse, SetConfigInput } from '@/api/types'
+import { putWorkspaceConfig } from '@/api/client'
+import { useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
+import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
-import { WorktreesPanel } from './worktrees-panel'
+import { SettingsField } from './settings-field'
 
 /**
- * Settings → Resources: how hard the machine works. `maxParallel` caps concurrent tasks (the run
- * queue holds the rest); `memoryLimitMb` is the per-task ceiling the engine enforces by pausing a
- * task that crosses it and letting the queue advance (#memory-guard). Both persist through
- * `PUT /api/config` like the Agents knobs — the merged answer lands straight in the config query.
+ * Global settings → Resources: how hard the MACHINE works. `maxParallel` caps concurrent tasks
+ * across every project (the workspace semaphore holds the rest); `memoryLimitMb` is the
+ * per-task ceiling the engine enforces by pausing a task that crosses it and letting the queue
+ * advance (#memory-guard).
+ *
+ * Both are workspace-level since the multi-project split (spec §"Resource governance"): they
+ * protect the host, not a repo, so they live in `~/.cezar/config.json` and persist through
+ * `PUT /api/workspace/config` — the merged answer lands straight in the workspace config query,
+ * and the server refreshes the shared semaphore so a change takes effect without a restart.
+ * Leftover per-repo `maxParallel`/`memoryLimitMb` keys were imported once by Migration 001 and
+ * are ignored afterwards; this section deliberately no longer writes them.
+ *
+ * Worktree retention stayed behind in the PROJECT settings (worktrees-section.tsx) — it sizes
+ * one repo's own worktree pool, which is a property of the repo.
  */
 
 const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
+const MAX_MONITORING_MAX = 16
+const WAKE_INTERVAL_MIN = 1
+const WAKE_INTERVAL_MAX = 60
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
 const MEMORY_MIN_MB = 256
-/** Worktree retention count bounds (#483) — 0 = unlimited, matching the config schema. */
-const WORKTREE_RETENTION_MIN = 0
-const WORKTREE_RETENTION_MAX = 1000
 
 export function ResourcesSection() {
-  const config = useConfig()
+  const config = useWorkspaceConfig()
 
   if (config.isPending) {
     return (
@@ -49,54 +60,44 @@ export function ResourcesSection() {
   return <ResourcesForm config={config.data} />
 }
 
-function ResourcesForm({ config }: { config: ConfigResponse }) {
+function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const queryClient = useQueryClient()
 
   const save = useMutation({
-    mutationFn: (patch: SetConfigInput) => putConfig(patch),
-    onSuccess: (result) => queryClient.setQueryData(queryKeys.config, result),
+    mutationFn: (patch: SetWorkspaceConfigInput) => putWorkspaceConfig(patch),
+    onSuccess: (result) => queryClient.setQueryData(workspaceQueryKeys.config, result),
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
 
   // Memory edits locally and saves explicitly — an empty field means "no limit".
-  const [memory, setMemory] = useState(config.memoryLimitMb ? String(config.memoryLimitMb) : '')
+  const [memory, setMemory] = useState(
+    config.resources.memoryLimitMb ? String(config.resources.memoryLimitMb) : '',
+  )
+  const configuredWake = config.resources.monitoringWakeIntervalMinutes ?? null
+  const [wakeMode, setWakeMode] = useState<'park' | 'interval'>(configuredWake === null ? 'park' : 'interval')
+  const [wakeInterval, setWakeInterval] = useState(String(configuredWake ?? 5))
+  const wakeNum = Number(wakeInterval)
+  const wakeInvalid = !Number.isInteger(wakeNum) || wakeNum < WAKE_INTERVAL_MIN || wakeNum > WAKE_INTERVAL_MAX
+  const wakeSaved = wakeMode === 'park'
+    ? configuredWake === null
+    : !wakeInvalid && configuredWake === wakeNum
+  const saveWake = () => save.mutate(
+    { resources: { monitoringWakeIntervalMinutes: wakeMode === 'park' ? null : wakeNum } },
+    { onSuccess: () => toast(wakeMode === 'park' ? 'Monitoring will stay parked' : `Monitoring will re-check every ${wakeNum} minutes`) },
+  )
   const memoryNum = memory.trim() === '' ? 0 : Number(memory)
   const memoryInvalid =
     memory.trim() !== '' && (!Number.isInteger(memoryNum) || memoryNum < MEMORY_MIN_MB)
-  const memorySaved = (config.memoryLimitMb ?? 0) === (memoryInvalid ? -1 : memoryNum)
+  const memorySaved = (config.resources.memoryLimitMb ?? 0) === (memoryInvalid ? -1 : memoryNum)
   const saveMemory = () =>
     save.mutate(
-      { memoryLimitMb: memoryNum === 0 ? null : memoryNum },
+      // 0, not null: the workspace schema's "no limit" IS 0 (`memoryLimitMb: null` is also
+      // accepted, but the route's nullable field means "clear", and clearing to the default
+      // would be a different value than the user asked for).
+      { resources: { memoryLimitMb: memoryNum === 0 ? null : memoryNum } },
       {
         onSuccess: () =>
           toast(memoryNum === 0 ? 'Memory limit cleared' : `Memory limit set to ${memoryNum} MiB`),
-      },
-    )
-
-  // Worktree retention edits locally and saves explicitly (#483). 0 = unlimited
-  // (a meaningful value, always sent as a number so it is never mistaken for
-  // "clear back to the default").
-  const [retention, setRetention] = useState(String(config.worktreeRetention))
-  const retentionNum = Number(retention)
-  const retentionInvalid =
-    retention.trim() === '' ||
-    !Number.isInteger(retentionNum) ||
-    retentionNum < WORKTREE_RETENTION_MIN ||
-    retentionNum > WORKTREE_RETENTION_MAX
-  const retentionSaved = config.worktreeRetention === (retentionInvalid ? -1 : retentionNum)
-  const saveRetention = () =>
-    save.mutate(
-      { worktreeRetention: retentionNum },
-      {
-        onSuccess: () => {
-          // Keep the worktrees panel's keep-limit footer in step with the new value.
-          void queryClient.invalidateQueries({ queryKey: queryKeys.worktrees })
-          toast(
-            retentionNum === 0
-              ? 'Keeping all worktrees (unlimited)'
-              : `Keeping the last ${retentionNum} finished worktree${retentionNum === 1 ? '' : 's'}`,
-          )
-        },
       },
     )
 
@@ -105,16 +106,16 @@ function ResourcesForm({ config }: { config: ConfigResponse }) {
       data-slot="resources-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
-      <Field
+      <SettingsField
         title="Max parallel tasks"
-        hint="How many tasks run at once. The rest wait in the queue. A non-git directory always runs one at a time."
+        hint="How many tasks run at once across every project. The rest wait in the queue. A non-git directory always runs one at a time."
       >
         <select
           aria-label="Max parallel tasks"
           data-slot="resources-max-parallel"
-          value={config.maxParallel}
+          value={config.resources.maxParallel}
           disabled={save.isPending}
-          onChange={(event) => save.mutate({ maxParallel: Number(event.target.value) })}
+          onChange={(event) => save.mutate({ resources: { maxParallel: Number(event.target.value) } })}
           className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
         >
           {Array.from({ length: MAX_PARALLEL_MAX - MAX_PARALLEL_MIN + 1 }, (_, i) => i + MAX_PARALLEL_MIN).map(
@@ -125,9 +126,82 @@ function ResourcesForm({ config }: { config: ConfigResponse }) {
             ),
           )}
         </select>
-      </Field>
+        <p className="text-[11px] text-soft-foreground">
+          Need a different limit for one project?{' '}
+          <Link
+            to="/settings/global/projects"
+            data-slot="resources-project-limits-link"
+            className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+          >
+            Configure per-project limits
+          </Link>
+          .
+        </p>
+      </SettingsField>
 
-      <Field
+      <SettingsField
+        title="Extra monitoring sessions"
+        hint="How many agent sessions may wait on CI, sub-agents, or monitored commands without using an active task slot. Extra sessions stay alive but pause the queue."
+      >
+        <select
+          aria-label="Extra monitoring sessions"
+          data-slot="resources-max-monitoring"
+          value={config.resources.maxMonitoringSessions ?? 2}
+          disabled={save.isPending}
+          onChange={(event) => save.mutate({ resources: { maxMonitoringSessions: Number(event.target.value) } })}
+          className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+        >
+          {Array.from({ length: MAX_MONITORING_MAX + 1 }, (_, n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <p className="text-[11px] text-soft-foreground">
+          Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
+        </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Monitoring wake-up"
+        hint="Park uses no model turns. Re-check sends the same agent a follow-up on this cadence until work completes or the 40-wakeup safety cap is reached."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Monitoring wake-up"
+            data-slot="resources-monitoring-wake-mode"
+            value={wakeMode}
+            disabled={save.isPending}
+            onChange={(event) => setWakeMode(event.target.value as 'park' | 'interval')}
+            className="rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            <option value="park">Park until resumed</option>
+            <option value="interval">Re-check on an interval</option>
+          </select>
+          {wakeMode === 'interval' ? (
+            <>
+              <input
+                type="number"
+                min={WAKE_INTERVAL_MIN}
+                max={WAKE_INTERVAL_MAX}
+                aria-label="Wake interval in minutes"
+                data-slot="resources-monitoring-wake-interval"
+                value={wakeInterval}
+                disabled={save.isPending}
+                onChange={(event) => setWakeInterval(event.target.value)}
+                className="block w-24 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+              />
+              <span className="text-xs text-soft-foreground">minutes</span>
+            </>
+          ) : null}
+          <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
+        </div>
+        {wakeMode === 'interval' && wakeInvalid ? (
+          <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
+        ) : (
+          <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
+        )}
+      </SettingsField>
+
+      <SettingsField
         title="Per-task memory limit"
         hint="When a task's whole process tree crosses this, the engine pauses it with a warning and starts the next queued task. Leave empty for no limit."
       >
@@ -164,68 +238,7 @@ function ResourcesForm({ config }: { config: ConfigResponse }) {
         ) : (
           <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
         )}
-      </Field>
-
-      <Field
-        title="Keep last N worktrees"
-        hint="Older finished worktrees are reclaimed to free disk; their branch is kept so the work stays recoverable. 0 = unlimited. In-review and running tasks are never reclaimed, so the count on disk can exceed this."
-      >
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            inputMode="numeric"
-            min={WORKTREE_RETENTION_MIN}
-            max={WORKTREE_RETENTION_MAX}
-            step={1}
-            aria-label="Keep last N finished worktrees"
-            data-slot="resources-worktree-retention"
-            value={retention}
-            disabled={save.isPending}
-            onChange={(event) => setRetention(event.target.value)}
-            className="block w-32 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-          />
-          <span className="text-xs text-soft-foreground">worktrees</span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-action="resources-save-retention"
-            disabled={retentionSaved || retentionInvalid || save.isPending}
-            onClick={saveRetention}
-          >
-            Save
-          </Button>
-        </div>
-        {retentionInvalid ? (
-          <p data-slot="resources-retention-invalid" className="text-[11px] text-danger">
-            Enter a whole number from {WORKTREE_RETENTION_MIN} to {WORKTREE_RETENTION_MAX} (0 = unlimited).
-          </p>
-        ) : (
-          <p className="text-[11px] text-soft-foreground">
-            {retentionNum === 0 ? 'Keeping every finished worktree.' : `Keeping the last ${retentionNum} finished worktree${retentionNum === 1 ? '' : 's'} on disk.`}
-          </p>
-        )}
-      </Field>
-
-      <Field
-        title="Worktrees"
-        hint="Task worktrees currently on disk. Delete one to reclaim its space now, or reclaim everything past the keep-limit at once. Branches are always kept, so the work stays recoverable."
-      >
-        <WorktreesPanel />
-      </Field>
+      </SettingsField>
     </div>
-  )
-}
-
-/** The Agents section's field chassis — same rhythm, so Settings reads as one surface. */
-function Field({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
-      </div>
-      {children}
-    </section>
   )
 }

@@ -1,16 +1,23 @@
-import { ArrowUpRightIcon, ChevronDownIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { Link, useMatch } from 'react-router'
-
 import { useRuns } from '@/api/queries'
+import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
+import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import { compactTokens, shortAge } from '@/lib/format'
-import { groupRuns, listCounts, runTitle, type ListView, type QuickListRow } from '@/lib/task-groups'
-import { taskPrUrl } from '@/lib/tasks-table'
+import {
+  groupRuns,
+  listCounts,
+  runTitle,
+  type ListView,
+  type QuickListBucket,
+  type QuickListRow,
+} from '@/lib/task-groups'
+import { prNumber, taskPrUrl } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
 import { cn, isHttpUrl } from '@/lib/utils'
 
@@ -37,15 +44,6 @@ export function TaskQuickList({
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
 }) {
-  // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
-  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
-  const toggleGroup = (groupId: string) =>
-    setExpanded((current) => {
-      const next = new Set(current)
-      if (!next.delete(groupId)) next.add(groupId)
-      return next
-    })
-
   const counts = listCounts(runs)
   const buckets = groupRuns(runs, view)
 
@@ -73,25 +71,60 @@ export function TaskQuickList({
           {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
         </p>
       ) : (
-        buckets.map((bucket) => (
-          <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-            <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
-              {bucket.label}
-            </h2>
-            {bucket.rows.map((row) => (
-              <Row
-                key={row.kind === 'group' ? row.groupId : row.run.id}
-                row={row}
-                currentRunId={currentRunId}
-                now={now}
-                expanded={row.kind === 'group' && expanded.has(row.groupId)}
-                onToggle={toggleGroup}
-              />
-            ))}
-          </div>
-        ))
+        <QuickListBuckets buckets={buckets} currentRunId={currentRunId} now={now} />
       )}
     </div>
+  )
+}
+
+/**
+ * The bucketed rows alone — the piece the multi-project sidebar reuses per project group
+ * (step 3.3), without the Active/Archived tabs that belong to the boot list's framing.
+ *
+ * `scope` prefixes every row target with an EXPLICIT `/p/<id>` (a non-active project's rows
+ * must land in that project); `null` keeps the wrapper-Link default — the active scope.
+ */
+export function QuickListBuckets({
+  buckets,
+  currentRunId = null,
+  now = Date.now(),
+  scope = null,
+}: {
+  buckets: QuickListBucket[]
+  currentRunId?: string | null
+  now?: number
+  scope?: string | null
+}) {
+  // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
+  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
+  const toggleGroup = (groupId: string) =>
+    setExpanded((current) => {
+      const next = new Set(current)
+      if (!next.delete(groupId)) next.add(groupId)
+      return next
+    })
+
+  return (
+    <>
+      {buckets.map((bucket) => (
+        <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
+          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+            {bucket.label}
+          </h2>
+          {bucket.rows.map((row) => (
+            <Row
+              key={row.kind === 'group' ? row.groupId : row.run.id}
+              row={row}
+              currentRunId={currentRunId}
+              now={now}
+              scope={scope}
+              expanded={row.kind === 'group' && expanded.has(row.groupId)}
+              onToggle={toggleGroup}
+            />
+          ))}
+        </div>
+      ))}
+    </>
   )
 }
 
@@ -134,17 +167,27 @@ function Row({
   row,
   currentRunId,
   now,
+  scope,
   expanded,
   onToggle,
 }: {
   row: QuickListRow
   currentRunId: string | null
   now: number
+  scope: string | null
   expanded: boolean
   onToggle: (groupId: string) => void
 }) {
   if (row.kind === 'run') {
-    return <RunRow run={row.run} queuePosition={row.queuePosition} currentRunId={currentRunId} now={now} />
+    return (
+      <RunRow
+        run={row.run}
+        queuePosition={row.queuePosition}
+        currentRunId={currentRunId}
+        now={now}
+        scope={scope}
+      />
+    )
   }
   return (
     <>
@@ -169,7 +212,7 @@ function Row({
           </span>
         </button>
         <Link
-          to={`/compare/${row.groupId}`}
+          to={scopeTo(scope, `/compare/${row.groupId}`)}
           data-slot="group-compare"
           title="Compare the variants"
           aria-label={`Compare the variants of ${row.title}`}
@@ -180,7 +223,15 @@ function Row({
       </div>
       {expanded
         ? row.members.map((member) => (
-            <RunRow key={member.id} run={member} queuePosition={null} currentRunId={currentRunId} now={now} variant />
+            <RunRow
+              key={member.id}
+              run={member}
+              queuePosition={null}
+              currentRunId={currentRunId}
+              now={now}
+              scope={scope}
+              variant
+            />
           ))
         : null}
     </>
@@ -198,12 +249,15 @@ function RunRow({
   queuePosition,
   currentRunId,
   now,
+  scope,
   variant = false,
 }: {
   run: RunRecord
   queuePosition: number | null
   currentRunId: string | null
   now: number
+  /** Explicit `/p/<id>` link scope for a non-active project's row; null = the active scope. */
+  scope: string | null
   /** A member row under an expanded group tile: indented, letter-chipped, and labelled with what
    *  actually distinguishes the variants (runner and spend) rather than the shared title. */
   variant?: boolean
@@ -233,7 +287,7 @@ function RunRow({
       )}
     >
       <Link
-        to={`/tasks/${run.id}`}
+        to={scopeTo(scope, `/tasks/${run.id}`)}
         // The row's accessible name is the title; `title` gives the full text back when the CSS
         // truncates it, which for a one-line 264px column is most of the time.
         title={runTitle(run)}
@@ -259,18 +313,16 @@ function RunRow({
       </Link>
       {/* href protocol guard (#431): link only for http(s) URLs. */}
       {prUrl && isHttpUrl(prUrl) ? (
-        <a
-          data-slot="pr-chip"
-          href={prUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={prUrl}
-          aria-label={`Open the pull request for ${runTitle(run)}`}
-          className="mr-2.5 inline-flex shrink-0 items-center gap-[3px] rounded-full border border-violet/35 px-1.5 py-px font-mono text-[10.5px] font-semibold text-violet hover:bg-violet/10"
-        >
-          PR
-          <ArrowUpRightIcon className="size-[9px]" aria-hidden="true" />
-        </a>
+        <ReferenceChip
+          reference={{
+            kind: 'PR',
+            ...(prNumber(prUrl) ? { number: Number(prNumber(prUrl)) } : {}),
+            url: prUrl,
+          }}
+          taskTitle={runTitle(run)}
+          compact
+          className="mr-2.5 h-auto shrink-0 gap-[3px] px-1.5 py-px text-[10.5px]"
+        />
       ) : null}
     </div>
   )
@@ -292,8 +344,9 @@ function variantLabel(run: RunRecord): string {
 export function TaskQuickListContainer() {
   const runs = useRuns()
   const [view, setView] = useListView()
-  const match = useMatch('/tasks/:id/*')
-  const exact = useMatch('/tasks/:id')
+  // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
+  const match = useProjectMatch('/tasks/:id/*')
+  const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
 
   // Nothing at all until the list has answered: a skeleton here would be inventing rows, and an

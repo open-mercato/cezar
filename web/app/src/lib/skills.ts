@@ -6,10 +6,15 @@ import type { Skill, WorkflowDef } from '@/api/types'
  * and how a typed query narrows the list — so the rules live here, not in any one surface.
  */
 
-/** Project skills first, global/team after — the #377 ordering rule, matching the server's
- *  `Skill.source` values (`src/skills.ts`): `ai`/`cezar`/`agents` live in the repo, `global`
- *  and `team` come from outside it. */
-const PROJECT_SKILL_SOURCES: ReadonlySet<Skill['source']> = new Set(['ai', 'cezar', 'agents'])
+/** Project-oriented skills first, user-global after — the #377/#555 ordering rule. Team skills
+ *  are configured and cached per project even though their files live in a shared remote repo,
+ *  so they belong with project skills. Only `global` comes from the user's home catalog. */
+const PROJECT_SKILL_SOURCES: ReadonlySet<Skill['source']> = new Set([
+  'ai',
+  'cezar',
+  'agents',
+  'team',
+])
 
 /** Project skills render emphasized (bold) wherever skills are listed. Accepts anything
  *  carrying a `source` so tag components need not conjure a whole Skill. */
@@ -32,7 +37,7 @@ export interface SkillTiers {
   mostUsed: Skill[]
   /** Remaining project skills (#377 locality), in the incoming (server-alphabetical) order. */
   project: Skill[]
-  /** Remaining global/team skills, in the incoming order. */
+  /** Remaining user-global skills, in the incoming order. */
   global: Skill[]
 }
 

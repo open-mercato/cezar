@@ -451,15 +451,27 @@ describe('disabled state', () => {
   it('disables everything and explains itself in the placeholder', () => {
     renderComposer({
       disabled: true,
-      disabledReason: 'Session closed — Continue to reopen.',
-      disabledAction: <button type="button">Continue</button>,
+      disabledReason: 'Session closed — no session to resume.',
     })
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(true)
-    expect(textarea.placeholder).toBe('Session closed — Continue to reopen.')
+    expect(textarea.placeholder).toBe('Session closed — no session to resume.')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText('Attach images') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText('Continue')).toBeTruthy()
+  })
+
+  /** `allowEmptySubmit` is the thread's Continue: an empty draft is a meaningful action there
+   *  (reopen the session on the engine's own "Continue."), so the send button stays live. */
+  it('allowEmptySubmit lets an empty draft submit — and disabled still wins over it', () => {
+    const { onSubmit } = renderComposer({ allowEmptySubmit: true })
+    const send = screen.getByLabelText('Send') as HTMLButtonElement
+    expect(send.disabled).toBe(false)
+    fireEvent.click(send)
+    expect(onSubmit).toHaveBeenCalledWith('', [])
+    cleanup()
+
+    renderComposer({ allowEmptySubmit: true, disabled: true })
+    expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('the mic is hidden entirely when the Web Speech API is absent — no fake button', () => {

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.js';
 import { RunStore } from '../runs/store.js';
+import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import type { WorkflowDef } from './types.js';
 import {
   RunManager,
@@ -146,11 +147,14 @@ describe('systemPrompt end-to-end (dry run)', () => {
     );
     writeFileSync(
       join(repoRoot, '.ai/cezar', 'config.json'),
-      JSON.stringify({ systemPrompt: CONFIG_PROMPT, maxParallel: 1 }),
+      JSON.stringify({ systemPrompt: CONFIG_PROMPT }),
       'utf8',
     );
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    manager = new RunManager(store, repoRoot);
+    // Cap 1 (workspace-level since step 2.5) serializes the suite's runs.
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1 } }),
+    });
   });
 
   afterAll(() => {
@@ -374,6 +378,11 @@ describe('systemPrompt end-to-end (dry run)', () => {
       name: 'om-auto-review-pr',
       description: SKILL_DESCRIPTION,
       body: SKILL_BODY,
+      // The runner passes the full discovered skill, so the prompt carries the
+      // absolute path of the installed copy (read from the MAIN repo even in a
+      // worktree). Mirror that here so the expected prompt matches.
+      path: join(repoRoot, '.ai/skills/om-auto-review-pr/SKILL.md'),
+      source: 'ai',
     });
     expect(capturedSystemPrompt()).toBe(
       composeSystemPrompt(skillPrompt, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS),
@@ -417,7 +426,9 @@ describe('systemPrompt end-to-end (dry run)', () => {
       'mock: implemented the change',
     );
 
-    expect(manager.continueRun(id, 'continue without generating follow-ups')).toEqual({ ok: true });
+    expect(manager.continueRun(id, { text: 'continue without generating follow-ups' })).toEqual({
+      ok: true,
+    });
     const deadline = Date.now() + 20_000;
     while (readFileSync(argsFile, 'utf8').trim().split('\n').length < 2) {
       if (Date.now() > deadline) throw new Error('continuation did not start in time');
@@ -469,11 +480,14 @@ describe('the global follow-up gate (dry run)', () => {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     writeFileSync(
       join(repoRoot, '.ai/cezar', 'config.json'),
-      JSON.stringify({ systemPrompt: CONFIG_PROMPT, maxParallel: 1 }),
+      JSON.stringify({ systemPrompt: CONFIG_PROMPT }),
       'utf8',
     );
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    manager = new RunManager(store, repoRoot);
+    // Cap 1 (workspace-level since step 2.5) serializes the suite's runs.
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1 } }),
+    });
   });
 
   afterAll(() => {

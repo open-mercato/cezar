@@ -4,10 +4,21 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { GithubComment, GithubCommentsData, GithubData, GithubItem, Skill, WorkflowsResponse } from '@/api/types'
+import type {
+  GithubComment,
+  GithubCommentsData,
+  GithubData,
+  GithubItem,
+  HealthResponse,
+  ProviderStatusResponse,
+  Runner,
+  Skill,
+  WorkflowsResponse,
+} from '@/api/types'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { githubTaskRef } from '@/lib/github-task'
 
-import { GithubIndexRoute, GithubRoute } from './github'
+import { GithubIndexRoute, GithubRoute, groupCommitRuns, type ThreadRow } from './github'
 import { readFollowupPrompt, readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
 
 beforeAll(() => {
@@ -132,6 +143,30 @@ const SKILLS: Skill[] = [
   { name: 'team-x', description: 'team skill', body: '', path: '/t/team-x.md', source: 'team' },
 ]
 
+const PROVIDERS_CONNECTED: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'not-installed', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
+const PROVIDERS_MULTI: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
+  ],
+}
+
+const PROVIDERS_NONE: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'unknown', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
 interface SentRequest {
   path: string
   method: string
@@ -143,7 +178,9 @@ const jsonResponse = (body: unknown, status = 200) =>
 
 /** Fetch stub in the house style (repo-git.test.tsx): records requests, serves the fixtures,
  *  and lets a test override specific `METHOD path` keys. */
-function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[] {
+function stubFetch(
+  overrides: Record<string, () => Response | Promise<Response>> = {},
+): SentRequest[] {
   const sent: SentRequest[] = []
   vi.stubGlobal(
     'fetch',
@@ -156,10 +193,22 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       // Any comment-thread request defaults to the two-comment THREAD fixture; a test overrides a
       // specific `GET /api/github/comments/<kind>/<n>` key to serve a different thread.
       if (method === 'GET' && path.startsWith('/api/github/comments/')) return jsonResponse(THREAD)
+      if (method === 'GET' && path.startsWith('/api/github/prs/') && path.includes('/changes')) return jsonResponse({
+        available: true, number: 137, headSha: '0123456789abcdef0123456789abcdef01234567',
+        additions: 3, deletions: 1, truncated: true, reason: 'One patch was omitted.',
+        files: [
+          { path: 'src/new.ts', previousPath: 'src/old.ts', status: 'renamed', additions: 3, deletions: 1, patch: '@@ -1 +1 @@\n-old\n+new' },
+          { path: 'logo.png', status: 'modified', additions: 0, deletions: 0, patchUnavailableReason: 'binary' },
+        ],
+      })
       if (method === 'GET' && path === '/api/github') return jsonResponse(GITHUB)
       if (method === 'GET' && path === '/api/github?limit=1000') return jsonResponse(GITHUB)
       if (method === 'GET' && path === '/api/workflows') return jsonResponse(WORKFLOWS)
       if (method === 'GET' && path === '/api/skills') return jsonResponse(SKILLS)
+      if (method === 'GET' && path === '/api/providers/status') {
+        return jsonResponse(PROVIDERS_CONNECTED)
+      }
+      if (method === 'GET' && path === '/api/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/runs') {
         return jsonResponse({
           id: 'run-1',
@@ -191,6 +240,12 @@ function renderAt(entry: string) {
           <Route path="/github/prs" element={<GithubRoute view="prs" />} />
           <Route path="/github/issues/:n" element={<GithubRoute view="issues" />} />
           <Route path="/github/prs/:n" element={<GithubRoute view="prs" />} />
+          <Route path="/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
+          <Route path="/p/:projectId/github" element={<GithubIndexRoute />} />
+          <Route path="/p/:projectId/github/prs" element={<GithubRoute view="prs" />} />
+          <Route path="/p/:projectId/github/issues/:n" element={<GithubRoute view="issues" />} />
+          <Route path="/p/:projectId/github/prs/:n" element={<GithubRoute view="prs" />} />
+          <Route path="/p/:projectId/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
         </Routes>
         <Toaster />
       </MemoryRouter>
@@ -203,6 +258,22 @@ const detail = () => document.querySelector('[data-slot="gh-detail-inner"]')
 const promptField = () =>
   document.querySelector<HTMLTextAreaElement>('[data-slot="gh-custom-prompt"]')!
 const promptValue = () => promptField().value
+
+it('/github/prs/:n/changes renders PR-only file review navigation and completeness', async () => {
+  stubFetch()
+  renderAt('/github/prs/137/changes')
+  expect(await screen.findByText('2 changed files')).not.toBeNull()
+  expect(screen.getByRole('navigation', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
+  expect(screen.getByRole('status').textContent).toContain('One patch was omitted.')
+  expect(screen.getByLabelText('Next file').hasAttribute('disabled')).toBe(false)
+})
+
+/** What the composer PRE-FILLS the box with for issue 142 (#524): the item's reference, and
+ *  nothing else — no quoted body. `githubTaskRef`'s own byte-for-byte shape is pinned in
+ *  `lib/github-task.test.ts`; here it is the baseline every box assertion measures against. */
+const BASE = githubTaskRef(ISSUE_142)
+/** The box with `extra` stacked below the pre-filled reference, `insertTemplate`'s separator. */
+const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 
 // ---- lists + detail ---------------------------------------------------------------------------
 
@@ -430,6 +501,72 @@ describe('the GitHub detail pane', () => {
       ),
     )
   })
+
+  it('shows authoritative merge state and requires confirmation before mutation', async () => {
+    const sent = stubFetch({
+      'GET /api/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [{ name: 'test', state: 'passing', required: true, url: 'https://example.com/check' }],
+          methods: ['squash', 'rebase'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+        },
+      }),
+      'GET /api/github/prs/137/merge-state?refresh=1': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [],
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+        },
+      }),
+      'POST /api/github/prs/137/merge': () => jsonResponse({
+        merged: true,
+        number: 137,
+        url: PR_137.url,
+        method: 'squash',
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-merge-box"]')?.textContent).toContain('Ready to merge'))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(sent.some((request) => request.path.endsWith('merge-state?refresh=1'))).toBe(true))
+    fireEvent.click(screen.getByRole('button', { name: 'Squash and merge' }))
+    expect(sent.some((request) => request.method === 'POST')).toBe(false)
+    expect(await screen.findByText(/This will merge/)).toBeTruthy()
+    fireEvent.click(within(document.querySelector('[data-slot="gh-merge-confirm"]')!).getByRole('button', { name: 'Squash and merge' }))
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.body).toEqual({
+      method: 'squash',
+      expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
+    }))
+  })
 })
 
 // ---- comment thread (#499) --------------------------------------------------------------------
@@ -441,12 +578,16 @@ describe('the comment thread', () => {
   const threadSection = () => document.querySelector('[data-slot="gh-thread"]')
   const entries = () => [...document.querySelectorAll<HTMLElement>('[data-slot="gh-thread-entry"]')]
 
-  it('renders a "Comments · N" section with each body through the markdown pipeline', async () => {
+  it('renders an "Activity · N comments" section with each body through the markdown pipeline', async () => {
     stubFetch(thread('issue', 142, { available: true, comments: [COMMENT_TEXT, COMMENT_IMAGE] }))
     renderAt('/github/issues/142')
 
     await waitFor(() => expect(threadSection()).not.toBeNull())
-    expect(document.querySelector('[data-slot="gh-thread-header"]')?.textContent).toBe('Comments · 2')
+    // Retitled by #525: heading a twenty-row list `Comments · 2` would be incoherent once events
+    // render, so the section is "Activity" and the comment count becomes a secondary.
+    expect(document.querySelector('[data-slot="gh-thread-header"]')?.textContent).toBe(
+      'Activity · 2 comments',
+    )
     expect(entries()).toHaveLength(2)
     expect(entries()[0]?.textContent).toContain('maya')
     expect(entries()[0]?.querySelector('[data-slot="gh-thread-body"]')?.textContent).toContain(
@@ -463,8 +604,8 @@ describe('the comment thread', () => {
     expect(img?.getAttribute('src')).toBe('https://example.com/shot.png')
   })
 
-  it('renders nothing for an empty thread — the count badge already said there were none', async () => {
-    stubFetch(thread('issue', 139, { available: true, comments: [] }))
+  it('renders nothing when BOTH streams are empty — the count badge already said so', async () => {
+    stubFetch(thread('issue', 139, { available: true, comments: [], events: [] }))
     renderAt('/github/issues/139')
 
     await waitFor(() => expect(detail()?.textContent).toContain('Add --json flag'))
@@ -506,6 +647,299 @@ describe('the comment thread', () => {
     const fallback = entries()[1]?.querySelector('[data-slot="gh-avatar-fallback"]')
     expect(fallback).not.toBeNull()
     expect(fallback?.textContent).toBe('n') // first letter of "noAvatar"
+  })
+
+  // ---- timeline events (#525) ----------------------------------------------
+
+  const events = () => [...document.querySelectorAll<HTMLElement>('[data-slot="gh-event-row"]')]
+  const SHA = 'abc1234' + 'f'.repeat(33)
+  const EVT = {
+    committed: {
+      id: `evt-${SHA}`, kind: 'committed' as const, actor: 'Ada Lovelace',
+      createdAt: '2026-01-02T00:00:00Z', sha: SHA, message: 'bound the timeline page loop',
+    },
+    labeled: {
+      id: 'evt-1', kind: 'labeled' as const, actor: 'octocat',
+      createdAt: '2026-01-03T00:00:00Z', label: { name: 'bug', color: 'd73a4a' },
+    },
+    merged: { id: 'evt-2', kind: 'merged' as const, actor: 'octocat', createdAt: '2026-01-04T00:00:00Z' },
+    crossRef: {
+      id: 'evt-3', kind: 'cross-referenced' as const, actor: 'octocat',
+      createdAt: '2026-01-05T00:00:00Z', refNumber: 520, refTitle: 'Sibling work',
+      refIsPr: true, url: 'https://github.com/o/r/pull/520',
+    },
+  }
+
+  it('renders a row per event kind, each carrying data-kind for keying', async () => {
+    stubFetch(thread('pr', 137, {
+      available: true, comments: [],
+      events: [
+        EVT.committed, EVT.labeled, EVT.merged, EVT.crossRef,
+        { id: 'evt-4', kind: 'assigned', actor: 'octocat', createdAt: '2026-01-06T00:00:00Z', subject: 'maya' },
+        { id: 'evt-5', kind: 'renamed', actor: 'octocat', createdAt: '2026-01-07T00:00:00Z', subject: 'A better title' },
+        { id: 'evt-6', kind: 'head_ref_force_pushed', actor: 'octocat', createdAt: '2026-01-08T00:00:00Z' },
+        { id: 'evt-7', kind: 'closed', actor: 'octocat', createdAt: '2026-01-09T00:00:00Z' },
+      ],
+    }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(8))
+    expect(events().map((e) => e.dataset.kind)).toEqual([
+      'committed', 'labeled', 'merged', 'cross-referenced',
+      'assigned', 'renamed', 'head_ref_force_pushed', 'closed',
+    ])
+    expect(events()[0]?.textContent).toContain('Ada Lovelace')
+    expect(events()[0]?.textContent).toContain('abc1234') // short sha
+    expect(events()[0]?.textContent).toContain('bound the timeline page loop')
+    expect(events()[2]?.textContent).toContain('merged this')
+    expect(events()[3]?.textContent).toContain('#520')
+    expect(events()[4]?.textContent).toContain('assigned maya')
+    expect(events()[5]?.textContent).toContain('renamed this to A better title')
+    expect(events()[6]?.textContent).toContain('force-pushed')
+  })
+
+  it('renders a PR with events but ZERO comments — the motivating case', async () => {
+    // The empty guard used to key on comments alone, which would hide the whole feature on a
+    // merged PR carrying commits, labels and a merge event but no conversation.
+    stubFetch(thread('pr', 137, { available: true, comments: [], events: [EVT.committed, EVT.merged] }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(threadSection()).not.toBeNull())
+    expect(events()).toHaveLength(2)
+    expect(entries()).toHaveLength(0)
+    expect(document.querySelector('[data-slot="gh-thread-header"]')?.textContent).toBe(
+      'Activity · 0 comments',
+    )
+  })
+
+  it('interleaves comments and events chronologically', async () => {
+    // The server returns two independently-capped arrays and deliberately does NOT merge them;
+    // ordering is presentation. This is the merge.
+    stubFetch(thread('pr', 137, {
+      available: true,
+      comments: [{ ...COMMENT_TEXT, createdAt: '2026-01-03T12:00:00Z' }],
+      events: [
+        { ...EVT.committed, createdAt: '2026-01-02T00:00:00Z' },
+        { ...EVT.merged, createdAt: '2026-01-04T00:00:00Z' },
+      ],
+    }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(2))
+    const rows = [...document.querySelectorAll('[data-slot="gh-thread-entry"], [data-slot="gh-event-row"]')]
+    expect(rows.map((r) => (r as HTMLElement).dataset.slot ?? r.getAttribute('data-slot'))).toEqual([
+      'gh-event-row', 'gh-thread-entry', 'gh-event-row',
+    ])
+  })
+
+  it('sends refresh=1 on the BARE /github route too, where no :n is in the URL', async () => {
+    // The regression the first fix batch shipped: keying the open thread off the `:n` route param
+    // left the DEFAULT landing pages refreshing nothing, because with no `:n` the tab still shows
+    // a thread — `selected` falls back to items[0]. The refresh must follow what is rendered.
+    const threadRequests: string[] = []
+    stubFetch({ 'GET /api/github?refresh=1': () => jsonResponse(GITHUB) })
+    const origFetch = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.startsWith('/api/github/comments/')) threadRequests.push(path)
+      return (origFetch as typeof fetch)(input, init as RequestInit)
+    })
+
+    renderAt('/github') // no :n at all
+    await waitFor(() => expect(threadRequests.length).toBe(1))
+
+    fireEvent.click(document.querySelector<HTMLElement>('[data-slot="gh-refresh"]')!)
+
+    await waitFor(() => expect(threadRequests.some((p) => p.includes('refresh=1'))).toBe(true))
+  })
+
+  it('does not blank the open thread while refreshing it', async () => {
+    // The other half of that regression: the removeQueries predicate wiped the MOUNTED thread,
+    // resetting it to pending so the loading skeleton flashed under the user on every refresh.
+    stubFetch({ 'GET /api/github?refresh=1': () => jsonResponse(GITHUB) })
+    renderAt('/github/issues/142')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-thread"]')).not.toBeNull())
+
+    fireEvent.click(document.querySelector<HTMLElement>('[data-slot="gh-refresh"]')!)
+
+    // The thread stays rendered throughout — never replaced by the loading skeleton.
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-thread"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="gh-thread-loading"]')).toBeNull()
+  })
+
+  it('orders a comment and an event made in the SAME second by their true order', async () => {
+    // The two streams carry different precisions: events go through toISOString() (`…00.000Z`),
+    // comments keep GitHub's `…00Z`. A raw string compare puts '.' (46) before 'Z' (90), so the
+    // event would always win a same-second tie regardless of what actually happened first.
+    stubFetch(thread('pr', 137, {
+      available: true,
+      comments: [{ ...COMMENT_TEXT, createdAt: '2026-01-03T10:00:00Z' }],
+      events: [{ ...EVT.merged, createdAt: '2026-01-03T10:00:00.000Z' }],
+    }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(1))
+    const rows = [...document.querySelectorAll('[data-slot="gh-thread-entry"], [data-slot="gh-event-row"]')]
+    // Same instant → stable sort keeps insertion order, and comments are inserted first.
+    expect(rows[0]?.getAttribute('data-slot')).toBe('gh-thread-entry')
+  })
+
+  it('does not let an unparseable timestamp scramble the order', async () => {
+    // normalizeReviews emits createdAt: '' for a PENDING review that has a body, and
+    // Date.parse('') is NaN. An NaN comparator result coerces to +0, which makes the sort
+    // INCONSISTENT rather than crashing — the row lands wherever the engine leaves it. Pinned
+    // to the top explicitly instead.
+    stubFetch(thread('pr', 137, {
+      available: true,
+      comments: [
+        { ...COMMENT_TEXT, id: 91, createdAt: '' },
+        { ...COMMENT_TEXT, id: 92, createdAt: '2026-01-03T00:00:00Z' },
+      ],
+      events: [{ ...EVT.merged, createdAt: '2026-01-02T00:00:00Z' }],
+    }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(entries()).toHaveLength(2))
+    const rows = [...document.querySelectorAll('[data-slot="gh-thread-entry"], [data-slot="gh-event-row"]')]
+    // The timestamp-less row first, then the ordered ones — deterministic, whatever else changes.
+    expect(rows.map((r) => r.getAttribute('data-slot'))).toEqual([
+      'gh-thread-entry', 'gh-event-row', 'gh-thread-entry',
+    ])
+  })
+
+  it('tints a label chip from the event colour', async () => {
+    stubFetch(thread('pr', 137, { available: true, comments: [], events: [EVT.labeled] }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(1))
+    const chip = document.querySelector<HTMLElement>('[data-slot="gh-event-label"]')
+    expect(chip?.textContent).toBe('bug')
+    expect(chip?.style.borderColor).not.toBe('') // tinted, not the muted fallback
+  })
+
+  it('links a cross-reference out to the referenced thread', async () => {
+    stubFetch(thread('pr', 137, { available: true, comments: [], events: [EVT.crossRef] }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(1))
+    expect(events()[0]?.querySelector('a')?.getAttribute('href')).toBe('https://github.com/o/r/pull/520')
+  })
+
+  it('renders comments unchanged when the server sent no events at all', async () => {
+    // The degraded path: the server fell back to the legacy comments-only fetch, so `events` is
+    // absent. The thread must render exactly as it did pre-#525.
+    stubFetch(thread('issue', 142, { available: true, comments: [COMMENT_TEXT] }))
+    renderAt('/github/issues/142')
+
+    await waitFor(() => expect(entries()).toHaveLength(1))
+    expect(events()).toHaveLength(0)
+    expect(threadSection()).not.toBeNull()
+  })
+
+  it.each([
+    ['passing', '✓', 'text-success'],
+    ['failing', '✗', 'text-danger'],
+    ['pending', '○', 'text-muted-foreground'],
+  ])('renders the %s CI glyph on a commit row', async (state, glyph, tone) => {
+    stubFetch(thread('pr', 137, {
+      available: true, comments: [],
+      events: [{ ...EVT.committed, checks: state as 'passing' | 'failing' | 'pending' }],
+    }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(1))
+    const badge = document.querySelector<HTMLElement>('[data-slot="gh-commit-checks"]')
+    expect(badge?.getAttribute('data-checks')).toBe(state)
+    expect(badge?.textContent).toBe(glyph)
+    expect(badge?.className).toContain(tone)
+  })
+
+  it('renders no glyph when checks is null AND when it is absent', async () => {
+    // null = the commit has no CI configured; absent = the rollup query failed or was skipped.
+    // They look identical here on purpose, but stay distinct on the wire.
+    stubFetch(thread('pr', 137, {
+      available: true, comments: [],
+      events: [
+        // Distinct authors so the Phase-2 commit-run grouping does not collapse them — this case
+        // is about glyph rendering, not grouping.
+        { ...EVT.committed, id: 'evt-null', actor: 'Ada Lovelace', checks: null },
+        { ...EVT.committed, id: 'evt-absent', actor: 'Grace Hopper' }, // no `checks` key at all
+      ],
+    }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(2))
+    expect(document.querySelectorAll('[data-slot="gh-commit-checks"]')).toHaveLength(0)
+  })
+
+  it('collapses a run of consecutive commits by one author, and expands on click', async () => {
+    const commit = (n: number, actor = 'Ada Lovelace') => ({
+      id: `evt-c${n}`, kind: 'committed' as const, actor,
+      createdAt: `2026-01-0${n}T00:00:00Z`, sha: String(n).repeat(40).slice(0, 40),
+      message: `commit number ${n}`, checks: 'passing' as const,
+    })
+    stubFetch(thread('pr', 137, {
+      available: true, comments: [],
+      events: [commit(1), commit(2), commit(3)],
+    }))
+    renderAt('/github/prs/137')
+
+    const group = () => document.querySelector<HTMLElement>('[data-slot="gh-commit-group"]')
+    await waitFor(() => expect(group()).not.toBeNull())
+
+    // Collapsed: one summary row, no individual commit rows.
+    expect(group()?.dataset.open).toBe('false')
+    expect(group()?.textContent).toContain('added 3 commits')
+    expect(group()?.querySelector('button')?.getAttribute('aria-expanded')).toBe('false')
+    expect(events()).toHaveLength(0)
+
+    fireEvent.click(group()!.querySelector('button')!)
+
+    // Expanded: each commit keeps its own message AND its own glyph — nothing is lost to the
+    // collapse, which is why grouping is client-side and the wire stays flat.
+    await waitFor(() => expect(events()).toHaveLength(3))
+    expect(group()?.querySelector('button')?.getAttribute('aria-expanded')).toBe('true')
+    expect(events()[0]?.textContent).toContain('commit number 1')
+    expect(events()[2]?.textContent).toContain('commit number 3')
+    expect(document.querySelectorAll('[data-slot="gh-commit-checks"]')).toHaveLength(3)
+  })
+
+  it('does not group a lone commit into a "1 commit" expander', async () => {
+    stubFetch(thread('pr', 137, { available: true, comments: [], events: [EVT.committed] }))
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(events()).toHaveLength(1))
+    expect(document.querySelector('[data-slot="gh-commit-group"]')).toBeNull()
+  })
+
+  it('sends refresh=1 for the OPEN THREAD when the tab is manually refreshed', async () => {
+    // Asserts the PROPERTY (fresh data is actually requested), not the mechanism (a request went
+    // out). The first attempt at this fix only invalidated the query key, which made the client
+    // re-request WITHOUT `refresh=1` — and the route only busts its 60 s commentsCache when that
+    // param is present, so the user got the same stale object back and the test still passed.
+    const threadRequests: string[] = []
+    const sent = stubFetch({
+      'GET /api/github?refresh=1': () => jsonResponse(GITHUB),
+    })
+    const origFetch = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.startsWith('/api/github/comments/')) threadRequests.push(path)
+      return (origFetch as typeof fetch)(input, init as RequestInit)
+    })
+
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(threadRequests.length).toBe(1))
+    expect(threadRequests[0]).toBe('/api/github/comments/issue/142') // initial load: no refresh
+
+    fireEvent.click(document.querySelector<HTMLElement>('[data-slot="gh-refresh"]')!)
+
+    // The re-request MUST carry refresh=1, or the server hands back its cached thread.
+    await waitFor(() =>
+      expect(threadRequests.some((p) => p === '/api/github/comments/issue/142?refresh=1')).toBe(true),
+    )
+    expect(sent.length).toBeGreaterThan(0)
   })
 
   it('shows a truncation row linking to GitHub when the thread was trimmed', async () => {
@@ -550,6 +984,236 @@ async function openDetail(entry = '/github/issues/142') {
   renderAt(entry)
   await waitFor(() => expect(document.querySelector('[data-slot="gh-hand"]')).not.toBeNull())
 }
+
+/** A typed health fixture — `HealthResponse`, so tsc catches the drift an `unknown` body hides
+ *  (the pre-#471 shape silently rotted here until the merge fixed the inbox's copy). */
+const health = (backends: readonly Runner[]): HealthResponse => ({
+  version: '0.0.0-test',
+  repoRoot: '/repo',
+  repo: { root: '/repo', branch: 'main' },
+  checks: backends.map((name) => ({ name, available: true })),
+  defaultRunner: backends[0] ?? 'claude',
+  forge: null,
+  capabilities: { localHandoff: true, followups: true, singleProject: false },
+})
+
+/** More than one installed backend — the only state that shows the runner pill. */
+const MULTI_BACKEND = () => jsonResponse(health(['claude', 'codex']))
+/** Exactly one installed backend — a real single-backend host, not merely absent health. */
+const SINGLE_BACKEND = () => jsonResponse(health(['claude']))
+
+/** Open a pill's dropdown and choose an option by label (Radix opens on pointerDown). */
+async function pickPill(slot: string, label: string) {
+  fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`)!)
+  const options = await screen.findAllByRole('menuitemradio')
+  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+}
+
+const postedRun = (sent: readonly SentRequest[]) =>
+  sent.find((request) => request.method === 'POST' && request.path === '/api/runs')?.body
+
+const waitForAgentRunEnabled = () =>
+  waitFor(() =>
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this/ }).disabled,
+    ).toBe(false),
+  )
+
+describe('the hand-to-agent backend pills (#401)', () => {
+  it('a single-backend host hides the runner pill but still offers the model', async () => {
+    // A real one-check health response — the default stub 404s /api/health, which exercises
+    // the no-data fallback instead and would pass for the wrong reason.
+    stubFetch({ 'GET /api/health': SINGLE_BACKEND })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+  })
+
+  it('an untouched cold-load panel posts the connected runner and no model', async () => {
+    const sent = stubFetch()
+    await openDetail()
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ workflow: 'quick-task' })
+    expect((postedRun(sent) as { runner?: string }).runner).toBe('claude')
+    expect((postedRun(sent) as { model?: string }).model).toBeUndefined()
+  })
+
+  it('sends the connected runner explicitly when provider status resolves before health', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => new Promise<Response>(() => {}),
+    })
+    await openDetail()
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'claude' })
+  })
+
+  it('a runner + model pick rides the POST alongside the workflow routing', async () => {
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    await pickPill('runner-pill', 'codex')
+    await pickPill('model-pill', 'gpt-future')
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({
+      workflow: 'quick-task',
+      runner: 'codex',
+      model: 'gpt-future',
+    })
+  })
+
+  it('switching backend resets the model pick — the presets are per runner', async () => {
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    // Pin a claude model, then move to codex: the claude id must not survive onto codex.
+    await pickPill('model-pill', 'opus')
+    await pickPill('runner-pill', 'codex')
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
+    // Back to auto for the new runner, so no model at all.
+    expect((postedRun(sent) as { model?: string }).model).toBeUndefined()
+  })
+
+  it('the pick survives switching to another issue (it is a way of working, not a property of one item)', async () => {
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    await pickPill('runner-pill', 'codex')
+
+    // Hop to the other issue — HandToAgent remounts (key={item.url}), the pick must not.
+    fireEvent.click(rows().find((row) => row.dataset.number === '139')!)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="gh-hand"]')).not.toBeNull(),
+    )
+    expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex')
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
+  })
+
+  it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
+    const sent = stubFetch({
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_NONE),
+    })
+    await openDetail('/p/acme/github/issues/142')
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(true))
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-slot="model-pill"]')?.disabled,
+    ).toBe(true)
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/p/acme/settings/agents#providers',
+    )
+
+    fireEvent.change(promptField(), { target: { value: 'Keep this editable.' } })
+    expect(promptValue()).toBe('Keep this editable.')
+    fireEvent.click(rows().find((row) => row.dataset.number === '139')!)
+    await waitFor(() => expect(promptField().value).toContain('#139'))
+
+    // Force both entry points past their visual disabled state; neither may reach createRun.
+    const currentRun = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    currentRun.removeAttribute('disabled')
+    fireEvent.click(currentRun)
+    fireEvent.keyDown(promptField(), { key: 'Enter', ctrlKey: true })
+    await act(() => Promise.resolve())
+    expect(postedRun(sent)).toBeUndefined()
+  })
+
+  it('describes provider route failure as failed verification and keeps setup available', async () => {
+    stubFetch({
+      'GET /api/providers/status': () =>
+        jsonResponse({ error: 'provider probe failed' }, 404),
+    })
+    await openDetail()
+
+    expect(await screen.findByText('Provider authentication could not be verified.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('No agent provider is connected')
+    expect(screen.getByRole('link', { name: 'Configure providers' })).toBeTruthy()
+  })
+
+  it('explicitly sends a connected fallback that differs from the server default', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => jsonResponse(health(['claude'])),
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        } satisfies ProviderStatusResponse),
+    })
+    await openDetail()
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.click(run)
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
+  })
+
+  it('excludes a connected disabled default runner and sends the enabled fallback', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => jsonResponse(health(['claude', 'codex'])),
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'connected', enabled: false },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        } satisfies ProviderStatusResponse),
+    })
+    await openDetail()
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.click(run)
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
+  })
+})
 
 /**
  * Toggle a skill ON through its picker, robustly. cmdk re-renders the option list while the
@@ -614,9 +1278,10 @@ describe('the hand-to-agent pickers (#385)', () => {
 
     // Server order was global-first; the menu reorders project skills first, emphasized.
     const options = [...document.querySelectorAll<HTMLElement>('[data-slot="gh-skill-option"]')]
-    expect(options.map((option) => option.dataset.skill)).toEqual(['om-fix', 'g-review', 'team-x'])
+    expect(options.map((option) => option.dataset.skill)).toEqual(['om-fix', 'team-x', 'g-review'])
     expect(options[0]?.querySelector('.font-semibold')).not.toBeNull()
-    expect(options[1]?.querySelector('.font-semibold')).toBeNull()
+    expect(options[1]?.querySelector('.font-semibold')).not.toBeNull()
+    expect(options[2]?.querySelector('.font-semibold')).toBeNull()
 
     // Multi-select: toggling keeps the menu open; the chip row mirrors the selection.
     fireEvent.click(options[0]!)
@@ -696,6 +1361,7 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
   it('nothing selected → quick-task, and the queued affordance links the new run', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -708,6 +1374,35 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
     expect(document.querySelector('[data-slot="gh-view-run"]')?.getAttribute('href')).toBe('/tasks/run-1')
     // The list row grows the queued flag.
     expect(document.querySelector('[data-slot="gh-queued-flag"]')).not.toBeNull()
+  })
+
+  it('confirms the hand-off with a toast — the inline affordance is off-screen on a phone', async () => {
+    stubFetch()
+    await openDetail()
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(screen.getByText('Added to the queue — issue #142')).toBeTruthy())
+    expect(document.querySelector('[data-slot="toast"]')?.getAttribute('data-tone')).toBe('default')
+  })
+
+  it('a custom prompt is handed over WITH the item reference, not instead of it (#524)', async () => {
+    const sent = stubFetch()
+    await openDetail()
+
+    // The exact prompt from the bug report: it names no number and no URL of its own.
+    fireEvent.change(promptField(), {
+      target: { value: 'Port this one to develop and close original PR' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-queued"]')).not.toBeNull())
+    const posted = sent.find((request) => request.method === 'POST' && request.path === '/api/runs')
+    const { task } = posted?.body as { task: string }
+    expect(task).toContain('Port this one to develop and close original PR')
+    expect(task).toContain('#142')
+    expect(task).toContain(ISSUE_142.url)
   })
 
   it('a selected workflow rides the POST, with toggled skills as a prompt hint', async () => {
@@ -756,6 +1451,7 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
       'POST /api/runs': () => jsonResponse({ error: 'a task is already running' }, 409),
     })
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -792,7 +1488,7 @@ describe('the skills dropdown frequency sort (#408 item 1, re-tiered by #519)', 
       expect(document.querySelectorAll('[data-slot="gh-skill-option"]')).toHaveLength(3),
     )
     const options = [...document.querySelectorAll<HTMLElement>('[data-slot="gh-skill-option"]')]
-    expect(options.map((option) => option.dataset.skill)).toEqual(['om-fix', 'g-review', 'team-x'])
+    expect(options.map((option) => option.dataset.skill)).toEqual(['om-fix', 'team-x', 'g-review'])
   })
 
   it('a successful hand-off run bumps skillUsage for every selected skill', async () => {
@@ -978,11 +1674,20 @@ describe('the follow-up prompt draft (#408 item 4)', () => {
         'Add --json flag',
       ),
     )
-    expect(promptValue()).toBe('')
+    // Untouched means its OWN pre-filled reference (#524), never issue 142's text.
+    expect(promptValue()).toBe(githubTaskRef(ISSUE_139))
 
     // Switch back — the first item's draft is restored.
     fireEvent.click(document.querySelector('[data-slot="gh-row"][data-number="142"]')!)
     await waitFor(() => expect(promptValue()).toBe('Also add a test.'))
+  })
+
+  it('an untouched box stores no draft — the pre-fill leaves no trace (#524)', async () => {
+    stubFetch()
+    await openDetail()
+
+    await waitFor(() => expect(promptValue()).toBe(BASE))
+    expect(readFollowupPrompt(ISSUE_142.url)).toBe('')
   })
 
   it('a page reload restores the draft too (localStorage, not just component state)', async () => {
@@ -1009,7 +1714,8 @@ describe('the follow-up prompt draft (#408 item 4)', () => {
     cleanup()
     stubFetch()
     await openDetail()
-    expect(promptValue()).toBe('')
+    // Spent → back to the untouched pre-fill, not to an empty box.
+    expect(promptValue()).toBe(BASE)
   })
 
   it('spending the draft clears the textarea THERE AND THEN, not only on the next mount', async () => {
@@ -1023,7 +1729,7 @@ describe('the follow-up prompt draft (#408 item 4)', () => {
 
     // Storage and UI must agree without a remount: leaving the text on screen while the entry is
     // gone from storage means it silently vanishes the next time you come back.
-    await waitFor(() => expect(promptValue()).toBe(''))
+    await waitFor(() => expect(promptValue()).toBe(BASE))
     expect(readFollowupPrompt(ISSUE_142.url)).toBe('')
   })
 })
@@ -1034,6 +1740,7 @@ describe('⌘/Ctrl+Enter submits the follow-up composer (#408 item 5)', () => {
   it('Ctrl+Enter runs the agent', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     const textarea = screen.getByLabelText('Custom prompt')
     fireEvent.change(textarea, { target: { value: 'go' } })
@@ -1049,6 +1756,7 @@ describe('⌘/Ctrl+Enter submits the follow-up composer (#408 item 5)', () => {
   it('⌘+Enter (metaKey) also runs the agent', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     const textarea = screen.getByLabelText('Custom prompt')
     fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
@@ -1103,25 +1811,36 @@ describe('the follow-up prompt template menu (#413)', () => {
     document.querySelector<HTMLElement>(`[data-slot="prompt-template-option"][data-template="${id}"]`)
 
   /**
-   * Open the menu and pick a specific template. A single click on a *just-mounted*
-   * cmdk item can land before cmdk has wired its `onSelect`, so it silently no-ops —
-   * the race that made this suite flake in CI (#413). Rather than capture a node that
-   * may go stale, re-query and click on each poll until the insertion actually lands
-   * (the custom prompt's value grows). This can't double-insert: `fireEvent.click`
-   * flushes React synchronously, so the very next poll sees the changed value and stops
-   * before a second click can fire.
+   * Click a mounted template option until the select provably lands. A re-render (the
+   * ui-state query resolving, a queries invalidation) can replace the option node between
+   * querying it and clicking it — a click on the detached node is a silent no-op, the race
+   * that made this suite flake (#413). Selecting closes the menu (`onSelect` →
+   * `setOpen(false)`), so re-query a FRESH node each retry and stop only once the options
+   * unmount: the insert has provably happened.
+   */
+  async function selectOption(id: string): Promise<void> {
+    await waitFor(() => {
+      const node = option(id)
+      if (!node) return // menu closed — the select landed
+      fireEvent.click(node)
+      throw new Error(`template option "${id}" still mounted — select has not landed yet`)
+    })
+  }
+
+  /**
+   * Open the menu and click a specific template. Waits for *that* option to
+   * mount before clicking it, so a stale option from the previous (closing)
+   * popover can never satisfy the wait while the wanted one is still absent —
+   * the race that made this suite flake in CI (#413).
    */
   async function chooseTemplate(id: string): Promise<void> {
     const textarea = () => screen.getByLabelText('Custom prompt') as HTMLTextAreaElement
     const before = textarea().value
     fireEvent.click(document.querySelector('[data-slot="prompt-template-trigger"]')!)
     await waitFor(() => {
-      if (textarea().value !== before) return // the click already landed
-      const node = option(id)
-      if (!node) throw new Error(`template option "${id}" not mounted yet`)
-      fireEvent.click(node)
-      throw new Error(`template "${id}" not inserted yet`)
+      if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
     })
+    await selectOption(id)
   }
 
   it('an untouched ui-state shows the built-in templates, and inserting one fills the custom prompt', async () => {
@@ -1132,11 +1851,11 @@ describe('the follow-up prompt template menu (#413)', () => {
     expect(document.querySelectorAll('[data-slot="prompt-template-option"]').length).toBeGreaterThan(1)
     expect(option('add-tests')).not.toBeNull()
 
-    fireEvent.click(option('add-tests')!)
+    await selectOption('add-tests')
     await waitFor(() =>
       expect(screen.getByLabelText('Custom prompt')).toHaveProperty(
         'value',
-        'Also add or update tests covering this change.',
+        baseWith('Also add or update tests covering this change.'),
       ),
     )
   })
@@ -1152,9 +1871,12 @@ describe('the follow-up prompt template menu (#413)', () => {
     expect(document.querySelectorAll('[data-slot="prompt-template-option"]')).toHaveLength(1)
     expect(option('custom-1')?.textContent).toContain('My snippet')
 
-    fireEvent.click(option('custom-1')!)
+    await selectOption('custom-1')
     await waitFor(() =>
-      expect(screen.getByLabelText('Custom prompt')).toHaveProperty('value', 'Custom instructions.'),
+      expect(screen.getByLabelText('Custom prompt')).toHaveProperty(
+        'value',
+        baseWith('Custom instructions.'),
+      ),
     )
   })
 
@@ -1166,7 +1888,7 @@ describe('the follow-up prompt template menu (#413)', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('Custom prompt')).toHaveProperty(
         'value',
-        'Also add or update tests covering this change.',
+        baseWith('Also add or update tests covering this change.'),
       ),
     )
 
@@ -1175,7 +1897,28 @@ describe('the follow-up prompt template menu (#413)', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('Custom prompt')).toHaveProperty(
         'value',
-        'Also add or update tests covering this change.\n\nAlso update any relevant documentation or comments.',
+        baseWith(
+          'Also add or update tests covering this change.\n\nAlso update any relevant documentation or comments.',
+        ),
+      ),
+    )
+  })
+
+  it('an EDITED box honours the caret — a template lands mid-text, not appended (#524)', async () => {
+    // The pre-fill (#524) means an untouched box must append rather than splice above the
+    // reference, but that must not cost `insertTemplate`'s documented mid-text case: the user
+    // clicked back into the box to fix a typo, then picked a template.
+    stubFetch()
+    await openDetail()
+
+    fireEvent.change(promptField(), { target: { value: 'ALPHA OMEGA' } })
+    await waitFor(() => expect(promptValue()).toBe('ALPHA OMEGA'))
+    promptField().setSelectionRange(5, 5)
+
+    await chooseTemplate('add-tests')
+    await waitFor(() =>
+      expect(promptValue()).toBe(
+        'ALPHA\n\nAlso add or update tests covering this change.\n\nOMEGA',
       ),
     )
   })
@@ -1240,22 +1983,31 @@ describe('templates assigned to a skill auto-apply when a skill is picked', () =
     await openDetail()
 
     await pickSkill('om-fix')
+    // Stacked BELOW the pre-filled reference (#524) — auto-apply adds to the item context, it
+    // never replaces it, the same rule the composed task text follows.
     await waitFor(() =>
-      expect(screen.getByLabelText('Custom prompt')).toHaveProperty('value', 'Follow the fix rules.'),
+      expect(screen.getByLabelText('Custom prompt')).toHaveProperty(
+        'value',
+        baseWith('Follow the fix rules.'),
+      ),
     )
   })
 
-  it('deselecting the skill takes the auto-applied text back out again', async () => {
+  it('deselecting the skill takes the auto-applied text back out again, leaving the reference', async () => {
     stubFetch(ASSIGNED)
     await openDetail()
 
     await pickSkill('om-fix')
     await waitFor(() =>
-      expect(screen.getByLabelText('Custom prompt')).toHaveProperty('value', 'Follow the fix rules.'),
+      expect(screen.getByLabelText('Custom prompt')).toHaveProperty(
+        'value',
+        baseWith('Follow the fix rules.'),
+      ),
     )
 
     await pickSkill('om-fix')
-    await waitFor(() => expect(screen.getByLabelText('Custom prompt')).toHaveProperty('value', ''))
+    // Back to the pre-fill, NOT to empty: deselecting a skill must not strip the item context.
+    await waitFor(() => expect(screen.getByLabelText('Custom prompt')).toHaveProperty('value', BASE))
   })
 
   it('NEVER overwrites a prompt the user already typed in', async () => {
@@ -1280,6 +2032,57 @@ describe('templates assigned to a skill auto-apply when a skill is picked', () =
     await waitFor(() =>
       expect(document.querySelector('[data-slot="gh-skill-chip"][data-skill="g-review"]')).not.toBeNull(),
     )
-    expect(screen.getByLabelText('Custom prompt')).toHaveProperty('value', '')
+    expect(screen.getByLabelText('Custom prompt')).toHaveProperty('value', BASE)
+  })
+})
+
+/** The commit-run grouping helper (#525 Phase 2) — pure, so it is tested directly rather than
+ *  only through the rendered thread. Grouping is deliberately client-side: the wire stays a flat
+ *  list where each commit keeps its own message and CI glyph, so nothing is lost to a collapse
+ *  and the heuristic can change without a backward-compatibility conversation. */
+describe('groupCommitRuns', () => {
+  const commit = (id: string, actor: string): ThreadRow => ({
+    row: 'event',
+    event: { id, kind: 'committed', actor, createdAt: '2026-01-01T00:00:00Z', sha: 'a'.repeat(40) },
+  })
+  const label = (id: string): ThreadRow => ({
+    row: 'event',
+    event: { id, kind: 'labeled', actor: 'octocat', createdAt: '2026-01-01T00:00:00Z' },
+  })
+  const comment = (id: number): ThreadRow => ({
+    row: 'comment',
+    comment: { id, author: 'maya', createdAt: '2026-01-01T00:00:00Z', body: 'hi', kind: 'comment', url: 'u' },
+  })
+
+  it('groups consecutive commits by the same author', () => {
+    const out = groupCommitRuns([commit('a', 'Ada'), commit('b', 'Ada'), commit('c', 'Ada')])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ group: 'commits' })
+    expect((out[0] as { commits: unknown[] }).commits).toHaveLength(3)
+  })
+
+  it('ends a run at an author change', () => {
+    const out = groupCommitRuns([commit('a', 'Ada'), commit('b', 'Ada'), commit('c', 'Grace'), commit('d', 'Grace')])
+    expect(out).toHaveLength(2)
+    expect(out.every((g) => g.group === 'commits')).toBe(true)
+  })
+
+  it('ends a run at any non-commit row', () => {
+    const out = groupCommitRuns([commit('a', 'Ada'), commit('b', 'Ada'), label('l'), commit('c', 'Ada'), commit('d', 'Ada')])
+    expect(out.map((g) => g.group)).toEqual(['commits', 'single', 'commits'])
+  })
+
+  it('does not group a single commit', () => {
+    const out = groupCommitRuns([commit('a', 'Ada')])
+    expect(out).toEqual([{ group: 'single', entry: commit('a', 'Ada') }])
+  })
+
+  it('leaves a comment-only thread completely untouched', () => {
+    const entries = [comment(1), comment(2)]
+    expect(groupCommitRuns(entries)).toEqual(entries.map((entry) => ({ group: 'single', entry })))
+  })
+
+  it('handles an empty list', () => {
+    expect(groupCommitRuns([])).toEqual([])
   })
 })

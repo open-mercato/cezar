@@ -80,6 +80,19 @@ export const serverStateSchema = z
     /** Public domain this instance answers on (drives nginx `server_name` +
      * the SSL cert). Absent for a plain HTTP / default install. */
     domain: z.string().optional().catch(undefined),
+    /**
+     * External-reverse-proxy mode (`--external-proxy`): the box already has a
+     * front (Dokploy/Traefik, Coolify, Caddy, an existing nginx) that owns
+     * :80/:443 and provides TLS + auth. cezar then installs NO nginx and NO
+     * cert of its own — just the service — and that proxy routes to `bindHost`.
+     */
+    externalProxy: z.boolean().optional().catch(undefined),
+    /**
+     * Interface the cockpit binds. Loopback by default; an external-proxy
+     * install may need a host the proxy can actually reach (e.g. the docker
+     * bridge `172.17.0.1` when the proxy runs in a container).
+     */
+    bindHost: z.string().optional().catch(undefined),
     /** Flips true only when every required step is `done`. */
     installed: z.boolean().default(false).catch(false),
     /** True when this record was written by a CEZ_DRY_RUN preview — a real

@@ -1,5 +1,5 @@
 import { ChevronDownIcon, SettingsIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { Link } from '@/lib/project-router'
 
 import type { BackendCheck, HealthResponse } from '@/api/types'
 import { StatusDot } from '@/components/status-dot'

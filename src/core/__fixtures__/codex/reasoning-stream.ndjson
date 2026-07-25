@@ -1,0 +1,11 @@
+{"id":1,"result":{"userAgent":"codex/0.46.0"}}
+{"method":"thread/started","params":{"thread":{"id":"th_01J9RSN0001"}}}
+{"method":"turn/started","params":{"turn":{"id":"turn_01J9RSN01","status":"inProgress","items":[]}}}
+{"method":"item/started","params":{"threadId":"th_01J9RSN0001","turnId":"turn_01J9RSN01","item":{"type":"reasoning","id":"item_rsn_1","summary":"Checking the sink"}}}
+{"method":"item/reasoning/textDelta","params":{"threadId":"th_01J9RSN0001","turnId":"turn_01J9RSN01","itemId":"item_rsn_1","delta":"The deltas never reach disk, "}}
+{"method":"item/reasoning/textDelta","params":{"threadId":"th_01J9RSN0001","turnId":"turn_01J9RSN01","itemId":"item_rsn_1","delta":"so the completed snapshot has to carry the text."}}
+{"method":"item/completed","params":{"threadId":"th_01J9RSN0001","turnId":"turn_01J9RSN01","item":{"type":"reasoning","id":"item_rsn_1","summary":"Checking the sink"}}}
+{"method":"item/started","params":{"threadId":"th_01J9RSN0001","turnId":"turn_01J9RSN01","item":{"type":"agentMessage","id":"item_msg_1","text":"","phase":"final_answer"}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"th_01J9RSN0001","turnId":"turn_01J9RSN01","itemId":"item_msg_1","delta":"Reasoning now survives a reload."}}
+{"method":"item/completed","params":{"threadId":"th_01J9RSN0001","turnId":"turn_01J9RSN01","item":{"type":"agentMessage","id":"item_msg_1","text":"Reasoning now survives a reload.","phase":"final_answer"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn_01J9RSN01","status":"completed"}}}

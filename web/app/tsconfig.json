@@ -15,7 +15,8 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
-    "baseUrl": ".",
+    // No `baseUrl` — it was removed in TypeScript 7. `paths` now resolves relative to this
+    // file's directory, which is what the mapping below already assumed.
     "paths": {
       "@/*": ["./src/*"]
     }

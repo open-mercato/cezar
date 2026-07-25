@@ -17,6 +17,14 @@
  * The `/new?skill=&auto=&key=&ref=` deep-link grammar is a PROTECTED contract
  * (BACKWARD_COMPATIBILITY.md §1) and is unchanged — only the client-side discovery is.
  *
+ * Multi-project (spec, step 3.6): a generated launcher now names the project it was generated
+ * from — `<origin>/p/<projectId>/new?…` — carrying that project's own launch key (each repo
+ * keeps its own `.ai/cezar/launch-key`; the scoped API client already fetches the right one).
+ * Only the PATH gained a prefix: the query grammar after `?` is byte-identical, and already
+ * saved flat `/new?…` bookmarklets keep landing because the cockpit permanently redirects
+ * legacy paths onto the boot project's scoped twin (routes.tsx `LegacyPathRedirect`). Passing
+ * no project id yields exactly the legacy path, so an unscoped caller is unchanged.
+ *
  * `alert()` in the generated code is deliberate: the program runs on github.com, where the
  * cockpit's toaster does not exist (the design guardian carries the matching file allowance).
  */
@@ -29,6 +37,7 @@ export function bookmarkletUrl(
   auto: boolean,
   key: string,
   origin: string = DEFAULT_COCKPIT_ORIGIN,
+  projectId: string | null = null,
 ): string {
   // `'` survives encodeURIComponent — it would break the single-quoted JS strings below.
   const enc = (s: string) => encodeURIComponent(s).replaceAll("'", '%27')
@@ -36,10 +45,13 @@ export function bookmarkletUrl(
   // Keep the origin's `://` intact (do NOT URI-encode it — it goes straight into `open()`); only
   // neutralize a stray apostrophe so it can't break the embedded string.
   const base = origin.replaceAll("'", '%27')
+  // The composer's path for the named project. Null (no scope) keeps the legacy flat `/new`,
+  // which the cockpit redirects to the boot project anyway — so both spellings still land.
+  const path = projectId === null || projectId === '' ? '/new' : `/p/${enc(projectId)}/new`
   const code =
     `(()=>{const m=location.href.match(/^https:\\/\\/github\\.com\\/([^\\/]+)\\/([^\\/]+)\\/(pull|issues)\\/\\d+/);` +
     `if(!m){alert('Open a GitHub PR or issue first');return;}` +
     `const q='${query}'+encodeURIComponent(location.href);` +
-    `open('${base}/new?'+q,'_blank');})();`
+    `open('${base}${path}?'+q,'_blank');})();`
   return `javascript:${encodeURIComponent(code)}`
 }

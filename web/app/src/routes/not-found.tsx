@@ -1,7 +1,6 @@
 import { CompassIcon } from 'lucide-react'
-import { Link } from 'react-router'
-
 import { CenteredState } from '@/components/centered-state'
+import { Link } from '@/lib/project-router'
 import { Button } from '@/components/ui/button'
 
 /** The 404. Neutral, not danger — a mistyped URL is a dead end, not a failure of ours —

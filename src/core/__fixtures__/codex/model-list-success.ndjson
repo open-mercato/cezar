@@ -1,0 +1,2 @@
+{"id":1,"result":{"serverInfo":{"name":"codex-app-server"}}}
+{"id":2,"result":{"data":[{"model":"gpt-5.6-sol","displayName":"GPT-5.6 Sol","description":"Frontier coding model","hidden":false,"supportedReasoningEfforts":["medium"]},{"model":"hidden-model","displayName":"Hidden","description":"Not listed","hidden":true},{"model":"  ","displayName":"Blank","description":"Invalid"},{"model":"gpt-5.6-sol","displayName":"Duplicate","description":"Must not replace first"},{"model":"gpt-5.4-mini","description":"Fast model"}],"nextCursor":null}}

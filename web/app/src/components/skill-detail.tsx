@@ -1,5 +1,5 @@
 import { ArrowRightIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { Link } from '@/lib/project-router'
 
 import type { Skill } from '@/api/types'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'

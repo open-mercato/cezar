@@ -153,7 +153,7 @@ The protocol behind the VS Code extension, desktop app, and partner integrations
 ```json
 {"type":"userMessage","id":"…","content":[{"type":"text","text":"…"}]}
 {"type":"agentMessage","id":"…","text":"…","phase":"commentary | final_answer"}
-{"type":"reasoning","id":"…","summary":"…","content":"…"}
+{"type":"reasoning","id":"…","summary":["…"],"content":["…"]}
 {"type":"commandExecution","id":"…","command":[…],"cwd":"…",
  "status":"inProgress | completed | failed | declined","exitCode":0}
 {"type":"fileChange","id":"…","changes":[{"path":"…","kind":"…","diff":"…"}],

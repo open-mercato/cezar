@@ -52,6 +52,29 @@ describe('bookmarkletUrl (spec 011, protected /new deep-link contract)', () => {
     expect(code).toContain(`q='skill=bob%27s-skill&auto=0&key=k%27ey&ref='`)
   })
 
+  it('names the project in the path when one is given (multi-project spec, step 3.6)', () => {
+    const code = program(bookmarkletUrl('om-fix', true, 'acme-key', 'http://localhost:4321', 'acme'))
+    expect(code).toContain(`open('http://localhost:4321/p/acme/new?'+q,'_blank')`)
+    // Only the PATH gained a prefix — the protected query grammar is character-for-character
+    // what it was, and the key is the one that project's cockpit scope will accept.
+    expect(code).toContain(`q='skill=om-fix&auto=1&key=acme-key&ref='`)
+  })
+
+  it('omits the prefix without a project — byte-identical to the legacy launcher', () => {
+    // The single-project spelling must survive verbatim: it is what every already-saved
+    // bookmarklet contains, and the cockpit redirects it onto the boot project.
+    const scoped = bookmarkletUrl('om-fix', true, 'sekret', 'http://localhost:4327')
+    expect(scoped).toBe(bookmarkletUrl('om-fix', true, 'sekret', 'http://localhost:4327', null))
+    expect(scoped).toBe(bookmarkletUrl('om-fix', true, 'sekret', 'http://localhost:4327', ''))
+    expect(program(scoped)).toContain(`open('http://localhost:4327/new?'+q,'_blank')`)
+  })
+
+  it("escapes a project id — a slug with an apostrophe would break the embedded '…' string", () => {
+    const code = program(bookmarkletUrl('', false, 'k', 'http://localhost:4321', "o'brien/repo"))
+    expect(code).toContain(`open('http://localhost:4321/p/o%27brien%2Frepo/new?'+q,'_blank')`)
+    expect(bookmarkletUrl('', false, 'k', 'http://localhost:4321', "o'brien")).not.toMatch(/[\s"]/)
+  })
+
   it('only fires on GitHub PR/issue pages', () => {
     const code = program(bookmarkletUrl('', false, ''))
     expect(code).toContain('github\\.com')

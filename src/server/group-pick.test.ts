@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
 
 /**
  * Group-pick winner-park under the optional review gate (#489). The
@@ -74,7 +75,7 @@ describe('POST /api/groups/:groupId/pick — review gate', () => {
   }
 
   const pick = (id: string) =>
-    app.request('/api/groups/g1/pick', {
+    apiRequest(app, '/api/groups/g1/pick', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ runId: id }),

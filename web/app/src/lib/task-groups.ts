@@ -74,16 +74,19 @@ export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
 /**
  * What every surface calls a run — the R1-marked plug-in point, now wired (R2 Step 2.4).
  *
- * `titleSummary ?? title`, per the server's contract (`api/types.ts`): `titleSummary` is the
- * auto-derived summary of the first agent turn, and a user's inline rename (`PATCH
- * /api/runs/:id`) writes BOTH fields, so an edit always wins over any past or future
- * auto-summary. Old records have no `titleSummary` and honestly show the raw title.
+ * `titleSummary ?? title`, per the server's contract (`api/types.ts`), except (#623) for malformed
+ * auto/legacy summaries whose sentence punctuation was persisted without following whitespace.
+ * Those fall back to the honest raw title at display time; persisted state is never rewritten.
+ * User and marker titles remain byte-for-byte authoritative.
  *
  * `??`, not `||`: the server never stores an empty summary (trimmed, 1–300 chars), so only
  * absence falls back — a falsy-but-present value would be a server bug worth seeing.
  */
 export function runTitle(run: RunRecord): string {
-  return run.titleSummary ?? run.title
+  const summary = run.titleSummary
+  if (summary === undefined) return run.title
+  const protectedTitle = run.titleOrigin === 'user' || run.titleOrigin === 'marker'
+  return !protectedTitle && /[.!?][A-Z]/.test(summary) ? run.title : summary
 }
 
 /**
@@ -166,6 +169,24 @@ export function groupRuns(runs: readonly RunRecord[], view: ListView): QuickList
     label,
     rows: byBucket.get(label) as QuickListRow[],
   }))
+}
+
+/**
+ * Cap a bucketed list at `limit` rows ACROSS buckets, preserving bucket order (multi-project
+ * spec, step 3.3: each sidebar project group shows its "10 most recent tasks" and a More… row).
+ * A collapsed variant-group tile counts as one row — it occupies one row of sidebar. Buckets
+ * emptied by the cap are dropped, like `groupRuns` drops empty ones.
+ */
+export function capBuckets(buckets: readonly QuickListBucket[], limit: number): QuickListBucket[] {
+  const capped: QuickListBucket[] = []
+  let remaining = limit
+  for (const bucket of buckets) {
+    if (remaining <= 0) break
+    const rows = bucket.rows.slice(0, remaining)
+    remaining -= rows.length
+    capped.push({ label: bucket.label, rows })
+  }
+  return capped
 }
 
 /** The tab counts. `waiting` drives the Active tab's attention dot — the one thing that makes an

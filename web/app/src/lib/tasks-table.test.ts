@@ -8,7 +8,9 @@ import {
   formatCost,
   formatMem,
   prNumber,
+  taskReference,
   taskPrUrl,
+  taskIssueUrl,
   usageCells,
   workflowLabel,
 } from '@/lib/tasks-table'
@@ -113,6 +115,18 @@ describe('filterRuns', () => {
     expect(filterRuns(summarized, 'plz')).toEqual([])
   })
 
+  it('searches the same fallback title shown for a malformed legacy summary', () => {
+    const malformed = [
+      run({
+        id: 'legacy',
+        title: '476: verifying pr ui',
+        titleSummary: 'Reading the handoff file for context.The task is UI QA verification of PR #476',
+      }),
+    ]
+    expect(filterRuns(malformed, 'verifying pr ui').map((r) => r.id)).toEqual(['legacy'])
+    expect(filterRuns(malformed, 'handoff')).toEqual([])
+  })
+
   it('matches the branch', () => {
     expect(ids('e5f6')).toEqual(['b'])
   })
@@ -167,6 +181,39 @@ describe('taskPrUrl', () => {
 
   it('is undefined when the task has no PR association at all', () => {
     expect(taskPrUrl(run())).toBeUndefined()
+  })
+})
+
+describe('taskIssueUrl', () => {
+  it('returns the discovered issue URL for display', () => {
+    expect(taskIssueUrl(run({ referencedIssueUrl: 'https://github.com/o/r/issues/544' }))).toBe(
+      'https://github.com/o/r/issues/544',
+    )
+  })
+
+  it('is undefined when the task has no issue URL association', () => {
+    expect(taskIssueUrl(run({ issueNumber: 544 }))).toBeUndefined()
+  })
+})
+
+describe('taskReference', () => {
+  it('shows the known issue while an issue-driven task is queued', () => {
+    expect(taskReference(run({ status: 'queued', issueNumber: 554 }))).toEqual({
+      kind: 'Issue',
+      number: 554,
+    })
+  })
+
+  it('prefers a pull request once the task has one', () => {
+    expect(
+      taskReference(
+        run({
+          issueNumber: 554,
+          referencedIssueUrl: 'https://github.com/o/r/issues/554',
+          pullRequestUrl: 'https://github.com/o/r/pull/600',
+        })
+      )
+    ).toEqual({ kind: 'PR', number: 600, url: 'https://github.com/o/r/pull/600' })
   })
 })
 

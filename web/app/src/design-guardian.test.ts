@@ -93,6 +93,14 @@ const RULES: Rule[] = [
     applies: styleSources,
   },
   {
+    name: 'fixture-serve-must-pin-cez-home',
+    why: "a spec-owned `cezar serve` takes its env from fixtureServeEnv(dataRoot) — a hand-rolled { CEZ_DRY_RUN } leaves CEZ_HOME at the developer's real ~/.cezar, so every run appends a dead /tmp fixture to their project registry",
+    // Line-level: a CEZ_DRY_RUN that is not accompanied by a CEZ_HOME on the same line. Both
+    // fixtureServeEnv() and the specs that spell the pair inline satisfy it.
+    pattern: /^(?![^\n]*CEZ_HOME)[^\n]*\bCEZ_DRY_RUN\b/g,
+    applies: (f) => f.isE2e,
+  },
+  {
     name: 'no-100vh',
     why: 'viewport height is 100dvh/h-dvh — 100vh ignores mobile browser chrome (iOS rule)',
     pattern: /\b(?:(?:h|min-h|max-h)-screen|100vh)\b/g,

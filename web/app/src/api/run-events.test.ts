@@ -1,6 +1,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setApiScope } from './project-scope'
 import { parseRunEvent, useRunEvents } from './run-events'
 
 /**
@@ -95,6 +96,16 @@ describe('useRunEvents — subscription', () => {
     cleanup()
     renderHook(() => useRunEvents(undefined))
     expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('opens the scoped endpoint when a project scope is active (multi-project, step 3.1)', () => {
+    setApiScope('proj-a')
+    try {
+      renderHook(() => useRunEvents('run-1'))
+      expect(FakeEventSource.last.url).toBe('/api/p/proj-a/runs/run-1/events')
+    } finally {
+      setApiScope(null)
+    }
   })
 
   it('collects BOTH wire vocabularies into one ordered list — v1 `run-event` and v2 `ui-event`', () => {

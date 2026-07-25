@@ -23,6 +23,7 @@ describe('highlighter singleton', () => {
     expect(canonicalLang('bash')).toBe('shellscript')
     expect(canonicalLang('sh')).toBe('shellscript')
     expect(canonicalLang('python')).toBe('python')
+    expect(canonicalLang('toml')).toBe('toml') // agent config files (Codex config.toml)
     expect(canonicalLang('wat-is-this')).toBeNull()
     expect(isPlainLang('')).toBe(true)
     expect(isPlainLang('plaintext')).toBe(true)

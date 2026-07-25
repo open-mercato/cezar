@@ -1,5 +1,5 @@
 import { LoaderCircleIcon, SearchXIcon, TriangleAlertIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { Link } from '@/lib/project-router'
 
 import { ApiError } from '@/api/client'
 import { CenteredState } from '@/components/centered-state'

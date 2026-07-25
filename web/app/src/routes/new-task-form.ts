@@ -4,6 +4,7 @@ import type {
   CreateRunResponse,
   ImageInput,
   Runner,
+  RunnerModelCatalogResponse,
   Skill,
   UiState,
   WorkflowDef,
@@ -37,8 +38,8 @@ export interface RunnerOption {
   desc: string
 }
 
-/** The selectable agent backends (legacy `RUNNERS`). Only those detected on the host via
- *  /api/health checks are offered. */
+/** The agent-backend catalog (legacy `RUNNERS`). Installation-only compatibility surfaces use
+ *  `availableRunners`; the new-task composer filters this catalog by connected provider status. */
 export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
@@ -51,9 +52,9 @@ export interface ModelPreset {
   desc: string
 }
 
-/** Model presets per runner (legacy `MODELS_BY_RUNNER`, verbatim). `id: ''` is always "auto" —
+/** Static model presets per runner. `id: ''` is always "auto" —
  *  no model flag, the runner decides. Claude takes tier aliases + pinned versions; Codex takes
- *  gpt-*-codex ids; OpenCode takes `provider/model` ids. */
+ *  Codex entries are supplied by host discovery; OpenCode takes `provider/model` ids. */
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
     { id: '', label: 'auto', desc: 'Pick the best model per step' },
@@ -67,9 +68,6 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   ],
   codex: [
     { id: '', label: 'auto', desc: 'Use your Codex default model' },
-    { id: 'gpt-5.1-codex', label: 'gpt-5.1-codex', desc: 'Codex-tuned, latest' },
-    { id: 'gpt-5.1-codex-mini', label: 'gpt-5.1-codex-mini', desc: 'Faster, cheaper' },
-    { id: 'gpt-5-codex', label: 'gpt-5-codex', desc: 'Previous generation' },
   ],
   opencode: [
     { id: '', label: 'auto', desc: 'Use your OpenCode default model' },
@@ -80,8 +78,47 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   ],
 }
 
-export function modelsForRunner(runner: Runner): readonly ModelPreset[] {
-  return MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude
+/** Keep recognized presets from another backend out of a runner's custom-model escape hatch
+ * (#480).
+ * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
+export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
+  if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
+  return Object.entries(MODELS_BY_RUNNER).some(
+    ([other, presets]) =>
+      other !== runner && presets.some((preset) => preset.id !== '' && preset.id === model),
+  )
+}
+
+export function modelsForRunner(
+  runner: Runner,
+  catalog?: RunnerModelCatalogResponse,
+  customIds: readonly (string | null | undefined)[] = [],
+): readonly ModelPreset[] {
+  const base = [...(MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude)]
+  if (runner !== 'codex') return base
+  const seen = new Set(base.map((model) => model.id))
+  for (const model of catalog?.models ?? []) {
+    if (!model.id || seen.has(model.id)) continue
+    seen.add(model.id)
+    base.push({ id: model.id, label: model.label || model.id, desc: model.description })
+  }
+  for (const id of customIds) {
+    if (!id || seen.has(id) || modelConflictsWithRunner(id, runner)) continue
+    seen.add(id)
+    base.push({ id, label: id, desc: 'Custom or legacy model' })
+  }
+  return base
+}
+
+export function modelCatalogStatus(
+  runner: Runner,
+  catalog: RunnerModelCatalogResponse | undefined,
+  failed = false,
+): string | undefined {
+  if (runner !== 'codex') return undefined
+  if (catalog?.stale) return 'Using cached Codex model list'
+  if (failed || catalog?.source === 'unavailable') return 'Latest Codex models unavailable'
+  return undefined
 }
 
 /** Which runners the pill offers, from the health checks (legacy `renderChrome`). The `claude`
@@ -116,8 +153,9 @@ export function resolveModel(
   picked: string | null,
   runner: Runner,
   defaults?: Partial<Record<Runner, string>>,
+  catalog?: RunnerModelCatalogResponse,
 ): string {
-  const models = modelsForRunner(runner)
+  const models = modelsForRunner(runner, catalog, [picked, defaults?.[runner]])
   if (picked !== null && models.some((m) => m.id === picked)) return picked
   const preset = defaults?.[runner]
   if (preset !== undefined && models.some((m) => m.id === preset)) return preset
@@ -157,7 +195,8 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
- *  - `runner` only when the host actually offers a choice (single-backend hosts stay implicit);
+ *  - `runner` omitted only when it equals a known server default (unknown defaults and connected
+ *    fallbacks stay explicit);
  *  - `model`/`variants`/`images` only when they say something (`''`/1/empty mean "default").
  */
 export function buildCreateRunBody(opts: {
@@ -165,7 +204,7 @@ export function buildCreateRunBody(opts: {
   source: TaskSource
   model: string
   runner: Runner
-  runnerCount: number
+  defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
@@ -186,7 +225,7 @@ export function buildCreateRunBody(opts: {
     source,
     model,
     runner,
-    runnerCount,
+    defaultRunner,
     variants,
     images,
     worktree,
@@ -200,7 +239,7 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source.ref }),
     model: model || undefined,
-    runner: runnerCount > 1 ? runner : undefined,
+    runner: runner === defaultRunner ? undefined : runner,
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
     // Off only matters for a single run — variants always isolate.

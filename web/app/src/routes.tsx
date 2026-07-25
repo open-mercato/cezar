@@ -1,6 +1,17 @@
 import { Suspense, lazy } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router'
+import {
+  matchPath,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from 'react-router'
 
+import { useHealth, useProjects } from './api/queries'
+import { ProjectScopeProvider } from './api/project-scope-context'
+import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { InboxRoute } from './routes/inbox'
@@ -8,11 +19,16 @@ import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
 import { SkillsLoading } from './routes/skills-loading'
+import { UnknownProjectRoute } from './routes/unknown-project'
 import { WorkflowsLoading } from './routes/workflows/workflows-loading'
 import { GitTabLoading } from './routes/task-git/git-tab-loading'
 import { ThreadLoading } from './routes/task-thread/thread-loading'
-import { visibleSettingsSections } from './routes/settings/registry'
-import { SettingsIndexRoute, SettingsSectionRoute } from './routes/settings/settings-shell'
+import { visibleSettingsSections, type SettingsSectionId } from './routes/settings/registry'
+import {
+  SettingsIndexRoute,
+  SettingsSectionRoute,
+  settingsSectionPath,
+} from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
@@ -70,196 +86,418 @@ const WorkflowsRoute = lazy(() =>
 const SkillsRoute = lazy(() => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
 
 /** `/settings/skills` moved to the top-level `/skills` (out of the Settings shell). Redirect —
- *  preserving the `?skill=` selection — so pasted links and saved bookmarklets still land. */
+ *  preserving the `?skill=` selection and any hash — so pasted links and saved bookmarklets
+ *  still land. The scoped Navigate keeps the redirect inside the active project. */
 function SettingsSkillsRedirect() {
   const location = useLocation()
-  return <Navigate to={{ pathname: '/skills', search: location.search }} replace />
+  return (
+    <ScopedNavigate
+      to={{ pathname: '/skills', search: location.search, hash: location.hash }}
+      replace
+    />
+  )
+}
+
+/** A settings section that MOVED from the project area to the global one. Its own hop, not an
+ *  inline `<Navigate>`, because `settingsSectionPath` returns a bare pathname: only a component
+ *  can read `useLocation` and carry the query and hash across. Legacy flat URLs reach here on a
+ *  SECOND hop (`LegacyPathRedirect` first), and dropping either half there would silently undo
+ *  what that hop just preserved. Plain Navigate — the target is outside every project. */
+function MovedSettingsSectionRedirect({ sectionId }: { sectionId: SettingsSectionId }) {
+  const location = useLocation()
+  return (
+    <Navigate
+      to={{
+        pathname: settingsSectionPath('global', sectionId),
+        search: location.search,
+        hash: location.hash,
+      }}
+      replace
+    />
+  )
+}
+
+/** What renders while a redirect target is still being resolved (the boot id from `/api/health`,
+ *  the registry from `/api/projects`). Deliberately quiet: the answer arrives in one local round
+ *  trip, and any real screen here would flash the WRONG screen (spec, "URL scheme"). */
+function ScopeResolving() {
+  return (
+    <div data-route="scope-resolving" className="flex min-h-full flex-col">
+      <p className="px-4 py-6 text-center text-xs text-soft-foreground">Loading…</p>
+    </div>
+  )
+}
+
+/**
+ * The `/p/:projectId` layout gate (multi-project spec, step 3.2) — the ONE place the URL's
+ * project id becomes the app's project scope:
+ *
+ *  - `/p/default/…` is the reserved alias for the boot project (never an allocated slug):
+ *    normalized to the real slug with a `replace` navigation, so the address bar always names
+ *    the project. Params, query and hash survive byte-for-byte.
+ *  - an id the registry doesn't know renders the "not registered here" screen — the cockpit
+ *    twin of the API's 404;
+ *  - a known id mounts `ProjectScopeProvider`, which scopes the API client and the query
+ *    cache for the whole routed subtree (`<Outlet />`).
+ *
+ * When `/api/projects` itself errors (server unreachable), the gate mounts the scope anyway:
+ * known-ness cannot be verified, and the routed views' own error states are the honest surface
+ * for an unreachable server — a permanent "Loading…" here would not be.
+ */
+function ProjectScopeRoute() {
+  const { projectId = '' } = useParams()
+  const location = useLocation()
+  const projects = useProjects()
+  const health = useHealth()
+
+  if (projectId === 'default') {
+    // The registry names the boot slug; health's additive `bootProject` (the same slug) is the
+    // fallback when the registry query ERRORED. With neither and the registry still fetching,
+    // stay quiet; with the registry errored and no fallback either, fall through — the
+    // server-side `default` alias answers every `/api/p/default/*` route as the boot project,
+    // so mounting the scope (whose routed views own the honest error states) beats a permanent
+    // "Loading…" (the same doctrine as the projects-error path below).
+    const boot =
+      projects.data?.bootProject ?? (projects.isError ? health.data?.bootProject : undefined)
+    if (boot !== undefined) {
+      const rest = location.pathname.replace(/^\/p\/default(?=\/|$)/, '')
+      return (
+        <Navigate
+          to={`/p/${encodeURIComponent(boot)}${rest || '/'}${location.search}${location.hash}`}
+          replace
+        />
+      )
+    }
+    if (!projects.isError) return <ScopeResolving />
+  }
+
+  if (projects.data) {
+    const known =
+      projects.data.bootProject === projectId ||
+      projects.data.projects.some((project) => project.id === projectId)
+    if (!known) return <UnknownProjectRoute projectId={projectId} registry={projects.data} />
+  } else if (!projects.isError) {
+    return <ScopeResolving />
+  }
+
+  // The BOOT project mounts UNSCOPED (projectId null): the step-3.1 invariant keeps its API
+  // requests byte-identical to the single-project cockpit — the protected legacy `/api/*`
+  // surface — and its cache under the same `'default'`-led keys the shell chrome (which
+  // renders outside this provider) already uses. Only non-boot projects pay the `/api/p/<id>`
+  // prefix. Links carry the URL prefix either way (project-router falls back to the URL).
+  const scopeId = projects.data?.bootProject === projectId ? null : projectId
+
+  return (
+    <ProjectScopeProvider projectId={scopeId}>
+      {/* React Router keeps the matched child mounted when only this parent param changes.
+          Project-local queries and mount-time state must instead start from the project the URL
+          now names. Key the child boundary (not the provider, whose unmount resets API scope). */}
+      <Outlet key={projectId} />
+    </ProjectScopeProvider>
+  )
+}
+
+/**
+ * The composer, remounted per project (multi-project spec, step 3.4).
+ *
+ * A `/p/:projectId` param change alone re-renders the SAME `NewTaskRoute` instance — React
+ * Router matches the same route element either way. That is fine for the queries (their keys
+ * carry the scope) but wrong for the composer's mount-time state: the draft is read once from
+ * the departing project's storage key, and the write-back effect would then persist it under
+ * the arriving project's key — exactly the draft leak the per-project keys exist to prevent.
+ * Keying on the project makes the swap a real unmount/mount, so the draft, the pickers and the
+ * deep-link capture all start from the project the URL now names.
+ */
+function NewTaskProjectRoute() {
+  const { projectId = '' } = useParams()
+  return <NewTaskRoute key={projectId} />
+}
+
+/**
+ * Legacy flat URLs — every pre-multi-project path, `/tasks/:id` bookmarks and the `/new?...`
+ * bookmarklet grammar included — redirect to the boot project's scoped twin, preserving path,
+ * query and hash byte-for-byte (BACKWARD_COMPATIBILITY.md protects the bookmarklet contract).
+ * The boot id comes from `/api/health` (`bootProject`); until it answers, the quiet resolving
+ * state — never a flashed wrong screen. `replace` keeps Back from bouncing off the redirect.
+ */
+function LegacyPathRedirect() {
+  const location = useLocation()
+  const health = useHealth()
+  if (health.data === undefined) return <ScopeResolving />
+  // Health always names the boot project; the alias is a just-in-case fallback that still
+  // lands (the gate above normalizes `default` from the registry, which always answers one).
+  const boot = health.data.bootProject ?? 'default'
+  // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
+  // minting a nonsense `/p/<boot>/p` path.
+  const path = location.pathname === '/p' || location.pathname === '/p/' ? '/' : location.pathname
+  return (
+    <Navigate
+      to={`/p/${encodeURIComponent(boot)}${path}${location.search}${location.hash}`}
+      replace
+    />
+  )
+}
+
+export interface PageTitleContext {
+  pageLabel: string | null
+  taskId: string | null
+}
+
+const PAGE_TITLE_ROUTES = [
+  { pattern: '/', pageLabel: 'Tasks' },
+  { pattern: '/new', pageLabel: 'New task' },
+  { pattern: '/compare/:groupId', pageLabel: 'Compare' },
+  { pattern: '/git/*', pageLabel: 'Git' },
+  { pattern: '/github/*', pageLabel: 'GitHub' },
+  { pattern: '/skills', pageLabel: 'Skills' },
+  { pattern: '/inbox', pageLabel: 'Inbox' },
+  { pattern: '/workflows/*', pageLabel: 'Workflows' },
+  { pattern: '/settings/*', pageLabel: 'Settings' },
+] as const
+
+/** Browser-title context from the project-relative route map; raw ids are lookup keys only. */
+export function pageTitleContext(pathname: string): PageTitleContext {
+  const projectPath = stripProjectPrefix(pathname)
+  const task = matchPath({ path: '/tasks/:id/*', end: true }, projectPath)
+  if (task) return { pageLabel: null, taskId: task.params.id ?? null }
+
+  const route = PAGE_TITLE_ROUTES.find(({ pattern }) =>
+    matchPath({ path: pattern, end: true }, projectPath),
+  )
+  return { pageLabel: route?.pageLabel ?? null, taskId: null }
 }
 
 /** The route map from the spec's "Routing — every surface is a URL" section.
  *
  *  Real URLs, not hash routes: the Hono server serves the built index.html for
  *  every non-/api GET (src/server/static-ui.ts `resolveGetRequest`), so each of
- *  these cold-loads and survives a refresh.
+ *  these cold-loads and survives a refresh — `/p/…` paths included.
  *
- *  Every element is a real view now (R3–R6). Keep the paths stable: they are
- *  what teammates paste.
+ *  Every path lives under `/p/:projectId/` (multi-project spec, step 3.2) via the one
+ *  `ProjectScopeRoute` layout above; the flat spellings below are relative to that prefix and
+ *  stay stable — they are what teammates paste, and the legacy flat URLs redirect onto them.
  */
 export function AppRoutes() {
+  const capabilities = useHealth().data?.capabilities
   return (
     <Routes>
-      <Route path="/" element={<TasksOverviewRoute />} />
-      <Route path="/new" element={<NewTaskRoute />} />
+      <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
+        <Route index element={<TasksOverviewRoute />} />
+        <Route path="new" element={<NewTaskProjectRoute />} />
 
-      <Route
-        path="/tasks/:id"
-        element={
-          <Suspense fallback={<ThreadLoading />}>
-            <TaskThreadRoute />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/tasks/:id/changes"
-        element={
-          <Suspense fallback={<GitTabLoading tab="changes" />}>
-            <TaskChangesRoute />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/tasks/:id/files"
-        element={
-          <Suspense fallback={<GitTabLoading tab="files" />}>
-            <TaskFilesRoute />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/tasks/:id/commits"
-        element={
-          <Suspense fallback={<GitTabLoading tab="changes" />}>
-            <TaskCommitsRoute />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/tasks/:id/commits/:sha"
-        element={
-          <Suspense fallback={<GitTabLoading tab="changes" />}>
-            <TaskCommitsRoute />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/compare/:groupId"
-        element={
-          <Suspense fallback={<CompareLoading />}>
-            <CompareVariantsRoute />
-          </Suspense>
-        }
-      />
+        <Route
+          path="tasks/:id"
+          element={
+            <Suspense fallback={<ThreadLoading />}>
+              <TaskThreadRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/changes"
+          element={
+            <Suspense fallback={<GitTabLoading tab="changes" />}>
+              <TaskChangesRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/files"
+          element={
+            <Suspense fallback={<GitTabLoading tab="files" />}>
+              <TaskFilesRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/commits"
+          element={
+            <Suspense fallback={<GitTabLoading tab="changes" />}>
+              <TaskCommitsRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/commits/:sha"
+          element={
+            <Suspense fallback={<GitTabLoading tab="changes" />}>
+              <TaskCommitsRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="compare/:groupId"
+          element={
+            <Suspense fallback={<CompareLoading />}>
+              <CompareVariantsRoute />
+            </Suspense>
+          }
+        />
 
-      {/* The repo view (R5 Step 1.7): each segment is a URL — /git (working-tree changes),
-          /git/commits (+ /:sha for one commit's diff), /git/branches. */}
-      <Route
-        path="/git"
-        element={
-          <Suspense fallback={<RepoGitLoading />}>
-            <RepoGitRoute tab="changes" />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/git/commits"
-        element={
-          <Suspense fallback={<RepoGitLoading />}>
-            <RepoGitRoute tab="commits" />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/git/commits/:sha"
-        element={
-          <Suspense fallback={<RepoGitLoading />}>
-            <RepoGitRoute tab="commits" />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/git/branches"
-        element={
-          <Suspense fallback={<RepoGitLoading />}>
-            <RepoGitRoute tab="branches" />
-          </Suspense>
-        }
-      />
-      {/* The GitHub tab (R6 Step 1.1): issues and PRs are separate list URLs, each item a
-          deep link. The nav item is forge-gated in the shell; the routes stay reachable so a
-          pasted link renders the honest unavailable explainer instead of a 404. The bare
-          `/github` is the one URL that restores the last-selected tab (#417) — `/github/prs`
-          and the `:n` deep links are always exactly what they say. */}
-      <Route
-        path="/github"
-        element={
-          <Suspense fallback={<GithubLoading />}>
-            <GithubIndexRoute />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/github/prs"
-        element={
-          <Suspense fallback={<GithubLoading />}>
-            <GithubRoute view="prs" />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/github/issues/:n"
-        element={
-          <Suspense fallback={<GithubLoading />}>
-            <GithubRoute view="issues" />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/github/prs/:n"
-        element={
-          <Suspense fallback={<GithubLoading />}>
-            <GithubRoute view="prs" />
-          </Suspense>
-        }
-      />
+        {/* The repo view (R5 Step 1.7): each segment is a URL — /git (working-tree changes),
+            /git/commits (+ /:sha for one commit's diff), /git/branches. */}
+        <Route
+          path="git"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="changes" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="git/commits"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="commits" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="git/commits/:sha"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="commits" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="git/branches"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="branches" />
+            </Suspense>
+          }
+        />
+        {/* The GitHub tab (R6 Step 1.1): issues and PRs are separate list URLs, each item a
+            deep link. The nav item is forge-gated in the shell; the routes stay reachable so a
+            pasted link renders the honest unavailable explainer instead of a 404. The bare
+            `/github` is the one URL that restores the last-selected tab (#417) — `/github/prs`
+            and the `:n` deep links are always exactly what they say. */}
+        <Route
+          path="github"
+          element={
+            <Suspense fallback={<GithubLoading />}>
+              <GithubIndexRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="github/prs"
+          element={
+            <Suspense fallback={<GithubLoading />}>
+              <GithubRoute view="prs" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="github/issues/:n"
+          element={
+            <Suspense fallback={<GithubLoading />}>
+              <GithubRoute view="issues" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="github/prs/:n"
+          element={
+            <Suspense fallback={<GithubLoading />}>
+              <GithubRoute view="prs" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="github/prs/:n/changes"
+          element={
+            <Suspense fallback={<GithubLoading />}>
+              <GithubRoute view="prs" changes />
+            </Suspense>
+          }
+        />
 
-      {/* The skills catalog (R6 Step 1.4) — its own top-level surface, no settings sub-nav.
-          `/settings/skills` redirects here (below) so pasted links keep working. */}
-      <Route
-        path="/skills"
-        element={
-          <Suspense fallback={<SkillsLoading />}>
-            <SkillsRoute />
-          </Suspense>
-        }
-      />
+        {/* The skills catalog (R6 Step 1.4) — its own top-level surface, no settings sub-nav.
+            `/settings/skills` redirects here (below) so pasted links keep working. */}
+        <Route
+          path="skills"
+          element={
+            <Suspense fallback={<SkillsLoading />}>
+              <SkillsRoute />
+            </Suspense>
+          }
+        />
 
-      {/* The follow-up inbox (R6 Step 1.2): light — no markdown stack — so it rides the main
-          bundle like the overview does. */}
-      <Route path="/inbox" element={<InboxRoute />} />
+        {/* The follow-up inbox (R6 Step 1.2): light — no markdown stack — so it rides the main
+            bundle like the overview does. */}
+        <Route path="inbox" element={<InboxRoute />} />
 
-      {/* The workflow builder (R6 Step 1.6): /workflows opens the canvas on the repo's first
-          saved chain, /workflows/:name deep-links a specific one. */}
-      <Route
-        path="/workflows"
-        element={
-          <Suspense fallback={<WorkflowsLoading />}>
-            <WorkflowsRoute />
-          </Suspense>
-        }
-      />
-      <Route
-        path="/workflows/:name"
-        element={
-          <Suspense fallback={<WorkflowsLoading />}>
-            <WorkflowsRoute />
-          </Suspense>
-        }
-      />
+        {/* The workflow builder (R6 Step 1.6): /workflows opens the canvas on the repo's first
+            saved chain, /workflows/:name deep-links a specific one. */}
+        <Route
+          path="workflows"
+          element={
+            <Suspense fallback={<WorkflowsLoading />}>
+              <WorkflowsRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="workflows/:name"
+          element={
+            <Suspense fallback={<WorkflowsLoading />}>
+              <WorkflowsRoute />
+            </Suspense>
+          }
+        />
 
-      {/* Settings (R6 Step 1.3): registry-driven — the section list, nav and routes all come
-          from routes/settings/registry.tsx. Hidden sections are NOT routed, so their URLs are
-          honest 404s until the section ships (notifications unhides in Step 1.7). */}
-      <Route path="/settings" element={<SettingsIndexRoute />} />
-      <Route path="/settings/skills" element={<SettingsSkillsRedirect />} />
-      {visibleSettingsSections().map((section) => (
+        {/* Settings (R6 Step 1.3): registry-driven — the section list, nav and routes all come
+            from routes/settings/registry.tsx. Hidden sections are NOT routed, so their URLs are
+            honest 404s until the section ships (notifications unhides in Step 1.7).
+
+            Only the PROJECT-scoped sections live here (multi-project spec, step 3.5); the
+            global ones are the top-level `/settings/global/*` block below. */}
+        <Route path="settings" element={<SettingsIndexRoute scope="project" capabilities={capabilities} />} />
+        <Route path="settings/skills" element={<SettingsSkillsRedirect />} />
+        {visibleSettingsSections('project', capabilities).map((section) => (
+          <Route
+            key={section.id}
+            path={`settings/${section.id}`}
+            element={<SettingsSectionRoute section={section} scope="project" capabilities={capabilities} />}
+          />
+        ))}
+        {/* A section that MOVED out of the project area keeps its old URL working: every
+            pre-3.5 bookmark and every legacy flat `/settings/appearance` (which the redirect
+            below turns into `/p/<boot>/settings/appearance`) lands on the global twin instead
+            of a 404 — query and hash intact across both hops. */}
+        {visibleSettingsSections('global', capabilities).map((section) => (
+          <Route
+            key={section.id}
+            path={`settings/${section.id}`}
+            element={<MovedSettingsSectionRedirect sectionId={section.id} />}
+          />
+        ))}
+
+        <Route path="*" element={<NotFoundRoute />} />
+      </Route>
+
+      {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
+          under `/p/:projectId`, because nothing here belongs to a project: appearance and
+          notifications are the user's, resources are the machine's, and the Projects pane IS
+          the registry. No `ProjectScopeProvider` above it, so its sections must read/write the
+          workspace routes (`/api/workspace/*`), which are never scope-prefixed.
+
+          Static segments outrank the `*` legacy redirect below in React Router's ranking, so
+          these win regardless of order — listed here for readability. */}
+      <Route path="/settings/global" element={<SettingsIndexRoute scope="global" capabilities={capabilities} />} />
+      {visibleSettingsSections('global', capabilities).map((section) => (
         <Route
           key={section.id}
-          path={`/settings/${section.id}`}
-          element={<SettingsSectionRoute section={section} />}
+          path={settingsSectionPath('global', section.id)}
+          element={<SettingsSectionRoute section={section} scope="global" capabilities={capabilities} />}
         />
       ))}
 
-      <Route path="*" element={<NotFoundRoute />} />
+      {/* Everything else IS a legacy flat URL — the boot-project redirect owns it. The 404 for
+          truly unknown paths still renders, scoped, after the redirect. */}
+      <Route path="*" element={<LegacyPathRedirect />} />
     </Routes>
   )
 }

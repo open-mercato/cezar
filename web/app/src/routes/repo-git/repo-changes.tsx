@@ -1,10 +1,10 @@
 import { FileDiffIcon, TriangleAlertIcon } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
 import { useRepoChanges } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
-import { Diff, type DiffMode } from '@/components/diff'
+import { Diff, type DiffHandle, type DiffMode } from '@/components/diff'
 import { useIsDesktop } from '@/lib/use-desktop'
 
 import { ChangesTree } from '../task-git/changes-tree'
@@ -29,6 +29,7 @@ export function RepoChangesSection() {
   const [mode, setMode] = useState<DiffMode>('unified')
   const [wrap, setWrap] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
+  const diffRef = useRef<DiffHandle | null>(null)
 
   // A 409 is the server's answer ("not a git repository"), not an outage.
   const refused = changes.isError && changes.error instanceof ApiError && changes.error.status === 409
@@ -39,11 +40,10 @@ export function RepoChangesSection() {
   const effectiveMode: DiffMode = desktop ? mode : 'unified'
   const effectiveWrap = desktop ? wrap : true
 
+  // Through the facade's handle, not the DOM — see the task Changes tab's note.
   const selectFile = (path: string) => {
     setSelected(path)
-    document
-      .querySelector(`[data-slot="diff-file"][data-path="${CSS.escape(path)}"]`)
-      ?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+    diffRef.current?.scrollToPath(path)
   }
 
   return (
@@ -85,7 +85,7 @@ export function RepoChangesSection() {
           <aside className="sticky top-28 hidden w-60 shrink-0 md:block lg:w-72">
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
           </aside>
-          <Diff files={files} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0 flex-1" />
+          <Diff files={files} viewRef={diffRef} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0 flex-1" />
         </div>
       )}
     </section>

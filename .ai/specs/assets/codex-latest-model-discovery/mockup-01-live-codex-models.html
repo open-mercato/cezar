@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Illustrative Codex live model picker</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#090b0d;color:#f4f4f5;font:16px Inter,ui-sans-serif,system-ui,sans-serif;min-height:900px}.app{padding:56px 80px}.eyebrow{color:#8b949e;font-size:13px;letter-spacing:.12em;text-transform:uppercase}.title{font-size:38px;font-weight:650;margin:10px 0 34px}.composer{height:290px;border:1px solid #272a2f;border-radius:18px;background:#101215;padding:24px;position:relative}.prompt{color:#b6bac2;font-size:19px}.toolbar{position:absolute;left:24px;right:24px;bottom:24px;display:flex;gap:12px}.pill{border:1px solid #343840;border-radius:999px;padding:11px 17px;background:#15181c;color:#e7e7e8}.pill.active{border-color:#65a30d}.menu{position:absolute;left:220px;top:225px;width:560px;border:1px solid #343840;border-radius:18px;background:#15171a;box-shadow:0 24px 80px #000b;padding:10px;z-index:3}.row{display:grid;grid-template-columns:24px 1fr;gap:12px;padding:13px 14px;border-radius:12px}.row.selected{background:#20242a}.dot{width:10px;height:10px;border:2px solid #7b818b;border-radius:50%;margin-top:7px}.selected .dot{border-color:#a3e635;background:#a3e635;box-shadow:inset 0 0 0 2px #20242a}.name{font-weight:620;font-size:18px}.desc{margin-top:3px;color:#9da3ad;font-size:14px}.badge{display:inline-block;color:#bef264;background:#36531455;border:1px solid #4d7c0f;border-radius:999px;font-size:11px;padding:2px 7px;margin-left:8px;vertical-align:2px}.note{border-top:1px solid #2b2e34;color:#838993;font-size:13px;padding:12px 14px 8px}.legend{margin-top:235px;color:#858b95;font-size:14px}.legend strong{color:#d8dadd}
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="eyebrow">Illustrative proposed state</div>
+    <h1 class="title">Start a task</h1>
+    <section class="composer">
+      <div class="prompt">Describe what you want the coding agent to do…</div>
+      <div class="toolbar"><span class="pill">quick-task</span><span class="pill">codex</span><span class="pill active">gpt-5.6-sol⌄</span><span class="pill">×1</span></div>
+    </section>
+    <section class="menu" aria-label="Codex model options">
+      <div class="row"><span class="dot"></span><div><div class="name">auto</div><div class="desc">Use your Codex default model</div></div></div>
+      <div class="row selected"><span class="dot"></span><div><div class="name">gpt-5.6-sol <span class="badge">current</span></div><div class="desc">Latest frontier agentic coding model.</div></div></div>
+      <div class="row"><span class="dot"></span><div><div class="name">gpt-5.6-terra</div><div class="desc">Balanced agentic coding model for everyday work.</div></div></div>
+      <div class="row"><span class="dot"></span><div><div class="name">gpt-5.6-luna</div><div class="desc">Fast and affordable agentic coding model.</div></div></div>
+      <div class="row"><span class="dot"></span><div><div class="name">gpt-5.5</div><div class="desc">Frontier model for complex coding and research.</div></div></div>
+      <div class="row"><span class="dot"></span><div><div class="name">gpt-5.4-mini</div><div class="desc">Small, fast, and cost-efficient for simpler tasks.</div></div></div>
+      <div class="note">Live from Codex on this host · refreshed automatically</div>
+    </section>
+    <p class="legend"><strong>Intent:</strong> keep cezar's existing picker grammar; replace stale fixed options with the visible catalog and descriptions returned by the local Codex CLI.</p>
+  </main>
+</body>
+</html>

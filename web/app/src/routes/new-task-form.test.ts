@@ -7,6 +7,7 @@ import {
   buildCreateRunBody,
   MODELS_BY_RUNNER,
   modelsForRunner,
+  modelCatalogStatus,
   pushRecentSource,
   resolveModel,
   resolveRunner,
@@ -53,7 +54,7 @@ describe('resolveRunner (legacy preselection order)', () => {
   })
 })
 
-describe('model presets (legacy MODELS_BY_RUNNER, mirrored faithfully)', () => {
+describe('model option resolution', () => {
   it('every runner leads with auto (empty id — no model flag sent)', () => {
     for (const models of Object.values(MODELS_BY_RUNNER)) {
       expect(models[0]).toMatchObject({ id: '', label: 'auto' })
@@ -66,10 +67,16 @@ describe('model presets (legacy MODELS_BY_RUNNER, mirrored faithfully)', () => {
     ])
   })
 
-  it('codex: gpt-*-codex ids', () => {
-    expect(modelsForRunner('codex').map((m) => m.id)).toEqual([
-      '', 'gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex',
-    ])
+  it('codex: auto plus host-discovered and custom ids', () => {
+    const catalog = { runner: 'codex' as const, models: [{ id: 'gpt-future', label: 'Future', description: 'New' }], source: 'live' as const, stale: false }
+    expect(modelsForRunner('codex', catalog, ['legacy-id']).map((m) => m.id)).toEqual(['', 'gpt-future', 'legacy-id'])
+    expect(modelsForRunner('codex', catalog, ['legacy-id']).at(-1)?.desc).toBe('Custom or legacy model')
+  })
+
+  it('reports stale and unavailable Codex catalogs without exposing reasons', () => {
+    expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'cache', stale: true, reason: 'raw' })).toBe('Using cached Codex model list')
+    expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe('Latest Codex models unavailable')
+    expect(modelCatalogStatus('claude', undefined, true)).toBeUndefined()
   })
 
   it('opencode: provider/model ids, newest Anthropic + OpenAI', () => {
@@ -78,10 +85,9 @@ describe('model presets (legacy MODELS_BY_RUNNER, mirrored faithfully)', () => {
     ])
   })
 
-  it('resolveModel keeps a pick that exists for the runner and resets to auto otherwise', () => {
+  it('resolveModel keeps known picks and arbitrary Codex pins', () => {
     expect(resolveModel('opus', 'claude')).toBe('opus')
-    // Switching runner invalidates a foreign model id — what is shown is what is sent.
-    expect(resolveModel('opus', 'codex')).toBe('')
+    expect(resolveModel('custom-codex-id', 'codex')).toBe('custom-codex-id')
     expect(resolveModel(null, 'claude')).toBe('')
   })
 
@@ -92,8 +98,8 @@ describe('model presets (legacy MODELS_BY_RUNNER, mirrored faithfully)', () => {
     // An explicit pick — including explicitly picking auto ('') — beats the preset.
     expect(resolveModel('sonnet', 'claude', defaults)).toBe('sonnet')
     expect(resolveModel('', 'claude', defaults)).toBe('')
-    // A configured id the runner does not offer is ignored, not sent blind.
-    expect(resolveModel(null, 'codex', defaults)).toBe('')
+    // Configured Codex ids remain representable even when discovery is unavailable.
+    expect(resolveModel(null, 'codex', defaults)).toBe('not-a-preset')
     // No preset for the runner → auto, exactly as before.
     expect(resolveModel(null, 'opencode', defaults)).toBe('')
   })
@@ -133,7 +139,7 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
       source: { source: 'workflow', ref: 'quick-task' },
       model: '',
       runner: 'claude',
-      runnerCount: 1,
+      defaultRunner: 'claude',
       variants: 1,
       images: [],
     })
@@ -155,7 +161,7 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
       source: { source: 'skill', ref: 'om-fix' },
       model: 'sonnet',
       runner: 'claude',
-      runnerCount: 2,
+      defaultRunner: 'codex',
       variants: 1,
       images: [],
     })
@@ -167,30 +173,38 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
     })
   })
 
-  it('runner is sent ONLY when the host offers a choice (legacy: runnersAvailable.length > 1)', () => {
-    const single = buildCreateRunBody({
+  it('omits runner when the chosen connected runner equals the server default', () => {
+    const body = buildCreateRunBody({
       task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
-      runner: 'codex', runnerCount: 1, variants: 1, images: [],
+      runner: 'codex', defaultRunner: 'codex', variants: 1, images: [],
     })
-    expect(single.runner).toBeUndefined()
+    expect(body.runner).toBeUndefined()
+  })
+
+  it('sends a connected fallback that differs from the server default, even when it is the only choice', () => {
+    const body = buildCreateRunBody({
+      task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
+      runner: 'codex', defaultRunner: 'claude', variants: 1, images: [],
+    })
+    expect(body.runner).toBe('codex')
   })
 
   it('worktree=false is sent only for a single run; on/variants keep it implicit', () => {
     const off = buildCreateRunBody({
       task: 't', source: { source: 'skill', ref: 'om-review' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 1, images: [], worktree: false,
+      runner: 'claude', defaultRunner: 'claude', variants: 1, images: [], worktree: false,
     })
     expect(off.worktree).toBe(false)
     // Default (on) never sends the flag.
     const on = buildCreateRunBody({
       task: 't', source: { source: 'skill', ref: 'om-review' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 1, images: [], worktree: true,
+      runner: 'claude', defaultRunner: 'claude', variants: 1, images: [], worktree: true,
     })
     expect(on.worktree).toBeUndefined()
     // Variants always isolate — worktree=false is ignored.
     const variant = buildCreateRunBody({
       task: 't', source: { source: 'skill', ref: 'om-review' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 2, images: [], worktree: false,
+      runner: 'claude', defaultRunner: 'claude', variants: 2, images: [], worktree: false,
     })
     expect(variant.worktree).toBeUndefined()
   })
@@ -198,7 +212,7 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
   it('generateFollowups=false is sent only when follow-up generation is disabled', () => {
     const base = {
       task: 't', source: { source: 'skill' as const, ref: 'om-review' }, model: '',
-      runner: 'claude' as const, runnerCount: 1, variants: 1, images: [],
+      runner: 'claude' as const, defaultRunner: 'claude' as const, variants: 1, images: [],
     }
     expect(buildCreateRunBody({ ...base, generateFollowups: false }).generateFollowups).toBe(false)
     expect(buildCreateRunBody({ ...base, generateFollowups: true }).generateFollowups).toBeUndefined()
@@ -208,7 +222,7 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
   it('variants > 1 and images ride along; ×1 and no images are omitted', () => {
     const body = buildCreateRunBody({
       task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 3,
+      runner: 'claude', defaultRunner: 'claude', variants: 3,
       images: [{ mediaType: 'image/png', data: 'aGk=' }],
     })
     expect(body.variants).toBe(3)

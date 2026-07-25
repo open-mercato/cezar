@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { createApp, type ServerDeps } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
 
 /**
  * The global follow-up inbox is opt-in (#471): `CEZ_FOLLOWUPS=1` turns it on,
@@ -56,29 +57,29 @@ describe('inbox gate (#471)', () => {
 
   describe('off (the default)', () => {
     it('GET /api/todos serves an empty inbox instead of 404ing', async () => {
-      const res = await app().request('/api/todos');
+      const res = await apiRequest(app(), '/api/todos');
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual([]);
     });
 
     it('DELETE /api/todos/:id 409s with a reason naming the flag', async () => {
-      const res = await app().request(`/api/todos/${TODO.id}`, { method: 'DELETE' });
+      const res = await apiRequest(app(), `/api/todos/${TODO.id}`, { method: 'DELETE' });
       expect(res.status).toBe(409);
       expect(((await res.json()) as { error: string }).error).toContain('CEZ_FOLLOWUPS');
     });
 
     it('POST /api/todos/:id/start 409s rather than spawning a run', async () => {
-      const res = await app().request(`/api/todos/${TODO.id}/start`, { method: 'POST' });
+      const res = await apiRequest(app(), `/api/todos/${TODO.id}/start`, { method: 'POST' });
       expect(res.status).toBe(409);
       expect(((await res.json()) as { error: string }).error).toContain('CEZ_FOLLOWUPS');
     });
 
     it('hides entries without destroying them — the file is untouched', async () => {
-      await app().request('/api/todos');
-      await app().request(`/api/todos/${TODO.id}`, { method: 'DELETE' });
+      await apiRequest(app(), '/api/todos');
+      await apiRequest(app(), `/api/todos/${TODO.id}`, { method: 'DELETE' });
       // Flipping the flag back on brings the same entry back.
       process.env.CEZ_FOLLOWUPS = '1';
-      const res = await app().request('/api/todos');
+      const res = await apiRequest(app(), '/api/todos');
       expect(await res.json()).toEqual([TODO]);
     });
   });
@@ -89,20 +90,20 @@ describe('inbox gate (#471)', () => {
     });
 
     it('GET /api/todos serves the real entries', async () => {
-      const res = await app().request('/api/todos');
+      const res = await apiRequest(app(), '/api/todos');
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual([TODO]);
     });
 
     it('DELETE /api/todos/:id checks the entry off', async () => {
-      const res = await app().request(`/api/todos/${TODO.id}`, { method: 'DELETE' });
+      const res = await apiRequest(app(), `/api/todos/${TODO.id}`, { method: 'DELETE' });
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ removed: true });
-      expect(await (await app().request('/api/todos')).json()).toEqual([]);
+      expect(await (await apiRequest(app(), '/api/todos')).json()).toEqual([]);
     });
 
     it('DELETE of an unknown id still 404s — the gate is not swallowing it', async () => {
-      const res = await app().request('/api/todos/nope', { method: 'DELETE' });
+      const res = await apiRequest(app(), '/api/todos/nope', { method: 'DELETE' });
       expect(res.status).toBe(404);
     });
   });

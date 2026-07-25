@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -94,6 +94,8 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ maxParallel: 1 }));
     store = RunStore.open(dataDir);
     manager = new RunManager(store, repoRoot);
   });
@@ -142,18 +144,37 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
     };
-    const record = manager.startRun(workflow, { task: 'save the pasted screenshot to disk', images: [image] });
+    const holder: WorkflowDef = {
+      name: 'hold-slot',
+      source: 'built-in',
+      steps: [{ id: 'hold', command: `${process.execPath} -e "setTimeout(() => {}, 500)"` }],
+    };
+    manager.startRun(holder, { task: 'occupy the only slot', worktree: false });
+    const record = manager.startRun(workflow, {
+      task: 'save the pasted screenshot to disk',
+      images: [image],
+      worktree: false,
+    });
+
+    // The task image is durable and renderable before `execute()` gets a slot.
+    const queued = store.getRun(record.id);
+    expect(queued?.status).toBe('queued');
+    expect(queued?.taskImages).toEqual([`/api/runs/${record.id}/images/pasted-1.png`]);
+    expect(existsSync(join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png'))).toBe(true);
 
     await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
 
     const after = store.getRun(record.id);
-    expect(after?.status).toMatch(/^(done|review)$/);
+    expect(after?.status, after?.error).toMatch(/^(done|review)$/);
     expect(after?.taskImages?.length).toBe(1);
     expect(after?.taskImages?.[0]).toMatch(/\/images\/pasted-1\.png$/);
 
     const filePath = join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png');
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath).equals(Buffer.from(TINY_PNG_B64, 'base64'))).toBe(true);
+    expect(readdirSync(join(dataDir, 'runs', `${record.id}-images`)).filter((name) => name.startsWith('pasted-'))).toEqual([
+      'pasted-1.png',
+    ]);
 
     const lines = readStdinLines();
     expect(lines.length).toBeGreaterThan(0);
@@ -205,4 +226,55 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
 
     manager.finish(record.id);
   }, 30_000);
+
+  /** Continue takes a prompt of its own, and the composer that writes it is a full composer —
+   *  so a screenshot pasted into a CLOSED run's composer has to travel the same road as one
+   *  pasted mid-session: onto disk, into the thread's bubble, and into the reopened session's
+   *  opening message as both an inline image and an absolute path. */
+  it('a Continue pasted image is saved, rendered on the bubble, and reaches the reopened session', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'pasted-continue-test',
+      source: 'built-in',
+      steps: [{ id: 'work', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(workflow, { task: 'do a thing' });
+    await waitForStatus(record.id, ['waiting']);
+    manager.finish(record.id);
+    await waitForStatus(record.id, ['done', 'review']);
+
+    writeFileSync(stdinFile, '', 'utf8');
+    const image: ContentBlock = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
+    };
+    expect(manager.continueRun(record.id, { text: 'fix what this shows', images: [image] })).toEqual({
+      ok: true,
+    });
+    await waitForStatus(record.id, ['waiting']);
+
+    const reopened = readStdinLines().find((line) => line.userText.includes('fix what this shows'));
+    expect(reopened).toBeDefined();
+    // Inline, so the model can view it…
+    expect(reopened?.imageCount).toBe(1);
+    // …and on disk, so it can operate on it.
+    const pathMatch = reopened?.userText.match(/- (.*pasted-\d+\.png)/);
+    expect(pathMatch).toBeTruthy();
+    const filePath = pathMatch?.[1] as string;
+    expect(existsSync(filePath)).toBe(true);
+    expect(readFileSync(filePath).equals(Buffer.from(TINY_PNG_B64, 'base64'))).toBe(true);
+
+    // The thread renders the bubble's image, not a bare count — and the base64 stays out of
+    // the event log, exactly as on the task-start and follow-up paths.
+    const ndjson = readFileSync(join(dataDir, 'runs', `${record.id}.ndjson`), 'utf8');
+    const userMessage = ndjson
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; text?: string; images?: string[] })
+      .find((event) => event.type === 'user-message' && event.text === 'fix what this shows');
+    expect(userMessage?.images?.[0]).toBe(`/api/runs/${record.id}/images/${filePath.split('/').pop()}`);
+    expect(ndjson).not.toContain(TINY_PNG_B64);
+
+    manager.finish(record.id);
+  }, 40_000);
 });

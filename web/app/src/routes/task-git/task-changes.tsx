@@ -1,13 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FileDiffIcon, GitCommitHorizontalIcon } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { ApiError, createRunPr, getRunFile, openRunFileInApp, openRunInCli, pushRun, runFileRawUrl } from '@/api/client'
 import { queryKeys, useHealth, useRun, useRunChanges } from '@/api/queries'
 import type { ApiRun } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
-import { Diff, type DiffMode } from '@/components/diff'
+import { Diff, type DiffHandle, type DiffMode } from '@/components/diff'
 import { toast } from '@/components/ui/toaster'
 import { gitActionPolicy, type GitActionId } from '@/lib/git-actions'
 import { useIsDesktop } from '@/lib/use-desktop'
@@ -49,6 +49,7 @@ function ChangesView({ run }: { run: ApiRun }) {
   const [wrap, setWrap] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [commitOpen, setCommitOpen] = useState(false)
+  const diffRef = useRef<DiffHandle | null>(null)
 
   const queryClient = useQueryClient()
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
@@ -135,11 +136,11 @@ function ChangesView({ run }: { run: ApiRun }) {
   const effectiveMode: DiffMode = desktop ? mode : 'unified'
   const effectiveWrap = desktop ? wrap : true
 
+  // Through the facade's handle, not the DOM: past `diff-scroll.ts`'s threshold the diff is
+  // virtualized and the picked file may not be mounted to scroll to.
   const selectFile = (path: string) => {
     setSelected(path)
-    document
-      .querySelector(`[data-slot="diff-file"][data-path="${CSS.escape(path)}"]`)
-      ?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+    diffRef.current?.scrollToPath(path)
   }
 
   return (
@@ -156,6 +157,13 @@ function ChangesView({ run }: { run: ApiRun }) {
         onWrapChange={setWrap}
         onAction={onAction}
       />
+
+      {changes.data?.repointedHead ? (
+        <p data-slot="repointed-head-note" className="border-b px-4 py-2 text-xs text-soft-foreground md:px-6">
+          HEAD is on <code>{changes.data.repointedHead.headBranch}</code>, not this task&apos;s branch{' '}
+          <code>{changes.data.repointedHead.taskBranch}</code> — showing uncommitted changes only.
+        </p>
+      ) : null}
 
       {changes.isPending ? (
         <p data-slot="changes-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
@@ -185,6 +193,7 @@ function ChangesView({ run }: { run: ApiRun }) {
           </aside>
           <Diff
             files={files}
+            viewRef={diffRef}
             mode={effectiveMode}
             wrap={effectiveWrap}
             loadFileText={(path) => loadWorktreeText(run.id, path)}

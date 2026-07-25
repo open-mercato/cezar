@@ -9,6 +9,7 @@ import { createWorktree } from '../git-worktree.js';
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { createApp } from './server.js';
+import { apiRequest } from './loopback-request.testkit.js';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -21,10 +22,16 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  */
 describe('the worktrees API', () => {
   let repoRoot: string;
+  let cezHome: string;
   let store: RunStore;
   let app: Hono;
+  const savedHome = process.env.CEZ_HOME;
 
   beforeEach(async () => {
+    // `keep` now falls back to the workspace default, so pin CEZ_HOME at an
+    // empty temp dir — the suite must never read the developer's real ~/.cezar.
+    cezHome = mkdtempSync(join(tmpdir(), 'cez-wtapi-home-'));
+    process.env.CEZ_HOME = cezHome;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-wtapi-'));
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'base.txt'), 'base\n');
@@ -37,7 +44,10 @@ describe('the worktrees API', () => {
 
   afterEach(() => {
     store.flush();
+    if (savedHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedHome;
     rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(cezHome, { recursive: true, force: true });
   });
 
   async function seed(
@@ -53,7 +63,7 @@ describe('the worktrees API', () => {
 
   const getWorktrees = async () =>
     (await (
-      await app.request('/api/worktrees')
+      await apiRequest(app, '/api/worktrees')
     ).json()) as {
       worktrees: Array<{
         runId: string;
@@ -94,12 +104,24 @@ describe('the worktrees API', () => {
     expect((await getWorktrees()).keep).toBe(2);
   });
 
+  it('inherits the workspace default when the repo sets no retention of its own', async () => {
+    writeFileSync(
+      join(cezHome, 'config.json'),
+      JSON.stringify({ resources: { worktreeRetentionDefault: 4 } }),
+      'utf8',
+    );
+    expect((await getWorktrees()).keep).toBe(4);
+    // A repo that sets its own still wins — the workspace value only seeds.
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ worktreeRetention: 2 }), 'utf8');
+    expect((await getWorktrees()).keep).toBe(2);
+  });
+
   it('POST /reclaim reclaims down to the limit and returns the reclaimed ids', async () => {
     writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ worktreeRetention: 1 }), 'utf8');
     const oldId = await seed('44444444-4444-4444-8444-444444444444', 'done', '2026-07-01T00:00:00Z');
     await seed('55555555-5555-4555-8555-555555555555', 'done', '2026-07-09T00:00:00Z');
 
-    const res = await app.request('/api/worktrees/reclaim', {
+    const res = await apiRequest(app, '/api/worktrees/reclaim', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -114,7 +136,7 @@ describe('the worktrees API', () => {
   });
 
   it('POST /reclaim is a 200 no-op on empty state', async () => {
-    const res = await app.request('/api/worktrees/reclaim', { method: 'POST' });
+    const res = await apiRequest(app, '/api/worktrees/reclaim', { method: 'POST' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ reclaimed: [] });
   });

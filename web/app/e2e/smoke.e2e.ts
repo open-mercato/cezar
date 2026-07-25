@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, readTestEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 
 /**
  * R1 smoke test — the real app, a real Chrome, through the agent-browser provider.
@@ -26,6 +26,11 @@ let baseUrl: string
 
 let forgeAvailable = false
 let followupsAvailable = false
+let bootProject: string
+
+/** A flat route target under the shared env's project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
@@ -36,6 +41,7 @@ beforeAll(async () => {
   }
   forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
+  bootProject = await bootProjectId(baseUrl)
 })
 
 /** The nav the shell renders — GitHub and Inbox both gate on live health capabilities, so the
@@ -61,7 +67,7 @@ afterAll(() => {
  *  toggle currently sits in the chrome. The toggle itself is covered by the unit tests. */
 function setTheme(theme: 'light' | 'dark'): void {
   browser.evaluate(`localStorage.setItem('cez-theme', ${JSON.stringify(theme)})`)
-  browser.goto(baseUrl + '/')
+  browser.goto(baseUrl + scoped('/'))
 }
 
 describe('cockpit app shell', () => {
@@ -70,7 +76,7 @@ describe('cockpit app shell', () => {
   })
 
   it('serves the React cockpit at /', () => {
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
 
     // React actually mounted — an empty #root would mean the bundle failed to execute,
     // which is the failure a "200 OK" curl check would happily miss.
@@ -96,7 +102,7 @@ describe('cockpit app shell', () => {
   })
 
   it('renders the sidebar brand and the whole nav', () => {
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
 
     expect(browser.isVisible('[data-slot="sidebar"]')).toBe(true)
     expect(browser.isVisible('[data-slot="brand-tile"]')).toBe(true)
@@ -104,7 +110,7 @@ describe('cockpit app shell', () => {
 
     // The GitHub item waits on the health answer — settle it before sampling the nav.
     if (forgeAvailable) {
-      browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav a[href="/github"]') !== null`)
+      browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav a[href="${scoped('/github')}"]') !== null`)
     }
     // Read the label without the inbox badge — a populated shared env legitimately has todos,
     // and the badge digit must not leak into the nav-label assertion.
@@ -119,8 +125,8 @@ describe('cockpit app shell', () => {
 
     // The "New task" CTA and its browser-usable accelerator hint. The desktop shell also
     // registers ⌘N, but browsers reserve that chord for opening a window.
-    expect(browser.text('[data-slot="sidebar"] a[href="/new"]')).toContain('New task')
-    expect(browser.text('[data-slot="sidebar"] a[href="/new"] kbd')).toBe('C')
+    expect(browser.text(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)).toContain('New task')
+    expect(browser.text(`[data-slot="sidebar"] a[href="${scoped('/new')}"] kbd`)).toBe('C')
 
     // The theme toggle lives in the footer.
     expect(browser.isVisible('[data-slot="sidebar-footer"] [data-slot="theme-toggle"]')).toBe(true)
@@ -138,7 +144,7 @@ describe('cockpit app shell', () => {
     }
     expect(health.repo).not.toBeNull()
 
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
     // The chips are async — they appear only once the health query answers.
     browser.waitForFunction(`document.querySelector('[data-slot="repo-chip"]') !== null`)
 
@@ -162,19 +168,29 @@ describe('cockpit app shell', () => {
         `Array.from(document.querySelectorAll('[data-slot="sidebar"] nav a[aria-current="page"]')).map(a => a.textContent.trim())`
       )
 
+    // Every URL below is a LEGACY flat one, so each load settles in two hops: the boot-project
+    // redirect, then whatever the route itself redirects to. Sampling the nav before the last
+    // hop reads the wrong screen's answer, so wait for the settled pathname each time.
+    const settleAt = (pathname: string) =>
+      browser.waitForFunction(`location.pathname === '${pathname}'`)
+
     browser.goto(baseUrl + '/')
+    settleAt(scoped('/'))
     expect(activeLabel()).toEqual(['Tasks'])
 
     browser.goto(baseUrl + '/git')
+    settleAt(scoped('/git'))
     expect(activeLabel()).toEqual(['Git'])
 
-    // The nested Settings area: the more specific item wins, and only it.
+    // The nested Settings area: the more specific item wins, and only it. `/settings/skills`
+    // is itself a redirect onto the top-level catalog, so this asserts both hops.
     browser.goto(baseUrl + '/settings/skills')
+    settleAt(scoped('/skills'))
     expect(activeLabel()).toEqual(['Skills'])
   })
 
   it('makes main the only scroller — the document never scrolls', () => {
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
 
     const layout = browser.evaluate(`(() => {
       const shell = document.querySelector('[data-slot="app-shell"]')
@@ -224,7 +240,7 @@ describe('mobile shell', () => {
   })
 
   it('hides the sidebar and shows the top bar at an iPhone viewport', () => {
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
 
     expect(browser.isVisible('[data-slot="sidebar"]')).toBe(false)
     expect(browser.isVisible('[data-slot="mobile-top-bar"]')).toBe(true)
@@ -245,7 +261,7 @@ describe('mobile shell', () => {
   })
 
   it('never overflows the viewport horizontally', () => {
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
 
     // A 264px sidebar that failed to hide, or a nav row wider than the phone, shows up here
     // first — as a page that scrolls sideways. `<=`, not `===`: the document may legitimately
@@ -275,7 +291,7 @@ describe('mobile shell', () => {
     }
 
     it('opens over a backdrop, and covers the viewport top to bottom', () => {
-      browser.goto(baseUrl + '/')
+      browser.goto(baseUrl + scoped('/'))
       // Closed means unmounted, not merely hidden — hence count rather than isVisible.
       expect(browser.count(DRAWER)).toBe(0)
 
@@ -286,7 +302,7 @@ describe('mobile shell', () => {
       // The drawer nav mirrors the desktop one, including the forge-gated GitHub item — settle
       // the health answer before sampling the labels.
       if (forgeAvailable) {
-        browser.waitForFunction(`document.querySelector('${DRAWER} nav a[href="/github"]') !== null`)
+        browser.waitForFunction(`document.querySelector('${DRAWER} nav a[href="${scoped('/github')}"]') !== null`)
       }
 
       const box = browser.evaluate(`(() => {
@@ -329,20 +345,20 @@ describe('mobile shell', () => {
     })
 
     it('navigates and closes when a nav item is tapped', () => {
-      browser.goto(baseUrl + '/')
+      browser.goto(baseUrl + scoped('/'))
       openDrawer()
 
-      browser.click(`${DRAWER} nav a[href="/git"]`)
+      browser.click(`${DRAWER} nav a[href="${scoped('/git')}"]`)
       browser.waitForFunction(GONE)
 
       // Both halves: it routed, *and* the drawer is not still sitting on top of the new view.
-      expect(browser.url()).toMatch(/\/git$/)
+      expect(browser.url()).toBe(baseUrl + scoped('/git'))
       expect(browser.count(DRAWER)).toBe(0)
       expect(browser.text('[data-slot="mobile-top-bar"]')).toContain('Git')
     })
 
     it('closes when the backdrop is tapped, without navigating', () => {
-      browser.goto(baseUrl + '/')
+      browser.goto(baseUrl + scoped('/'))
       openDrawer()
 
       // Beside the 264px drawer, in the dimmed strip on the right. By coordinate because the
@@ -351,11 +367,11 @@ describe('mobile shell', () => {
       browser.waitForFunction(GONE)
 
       expect(browser.count(DRAWER)).toBe(0)
-      expect(browser.url()).toMatch(/\/$/)
+      expect(browser.url()).toBe(baseUrl + scoped('/'))
     })
 
     it('closes on Escape', () => {
-      browser.goto(baseUrl + '/')
+      browser.goto(baseUrl + scoped('/'))
       openDrawer()
 
       browser.press('Escape')
@@ -366,7 +382,7 @@ describe('mobile shell', () => {
     it('is unreachable on a desktop viewport', () => {
       browser.setViewport(DESKTOP.width, DESKTOP.height)
       try {
-        browser.goto(baseUrl + '/')
+        browser.goto(baseUrl + scoped('/'))
         // The trigger is `md:hidden`, so there is no way in — and the real sidebar is the nav.
         expect(browser.isVisible('[data-slot="mobile-top-bar"]')).toBe(false)
         expect(browser.count(DRAWER)).toBe(0)
@@ -377,7 +393,7 @@ describe('mobile shell', () => {
     })
 
     it('does not overflow the viewport while open', () => {
-      browser.goto(baseUrl + '/')
+      browser.goto(baseUrl + scoped('/'))
       openDrawer()
 
       // The drawer is `fixed` and 264px of a 390px viewport, but a stray `w-3/4`/`sm:max-w-sm`
@@ -428,7 +444,7 @@ describe('global SSE stream', () => {
   }
 
   it('holds an open stream the server accepts', () => {
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
 
     // A second stream, opened from the page, against the same endpoint the app uses: it proves
     // `/api/events` really speaks SSE to this origin (readyState 1 = OPEN) and keeps the socket up
@@ -447,7 +463,7 @@ describe('global SSE stream', () => {
       'the shared environment has the opt-in inbox disabled; run CEZ_FOLLOWUPS=1 npm run test:e2e -- --force',
     )
     writeTodos([])
-    browser.goto(baseUrl + '/')
+    browser.goto(baseUrl + scoped('/'))
     // The shell is up and its queries have answered — so the app's stream effect has run too.
     browser.waitForFunction(`document.querySelector('[data-slot="repo-chip"]') !== null`)
     expect(browser.count(BADGE)).toBe(0)
@@ -479,12 +495,12 @@ describe('global SSE stream', () => {
 
 describe('legacy cockpit retirement (R7)', () => {
   it('the React shell New task CTA stays in the SPA — the React composer, not legacy (R4 1.1)', () => {
-    browser.goto(baseUrl + '/')
-    browser.click('[data-slot="sidebar"] a[href="/new"]')
+    browser.goto(baseUrl + scoped('/'))
+    browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     // Client-side navigation: the React /new hero renders and no legacy markup ever loads.
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
 
-    expect(browser.url()).toBe(baseUrl + '/new')
+    expect(browser.url()).toBe(baseUrl + scoped('/new'))
     expect(browser.evaluate('document.getElementById("brand") === null')).toBe(true)
     expect(browser.evaluate('document.getElementById("root") !== null')).toBe(true)
   })
@@ -511,7 +527,8 @@ describe('legacy cockpit retirement (R7)', () => {
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
     // The sensitive params are stripped from the address bar (legacy replaceState parity).
     browser.waitForFunction(`location.search === ''`)
-    expect(browser.url()).toBe(baseUrl + '/new')
+    // The legacy flat `/new?…` bookmarklet grammar still lands, now on its scoped twin.
+    expect(browser.url()).toBe(baseUrl + scoped('/new'))
   })
 
   it('/new?legacy=1 serves the React shell too — no route treats the query specially', () => {

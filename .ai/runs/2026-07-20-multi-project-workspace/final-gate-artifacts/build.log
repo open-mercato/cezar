@@ -1,0 +1,89 @@
+
+> @open-mercato/cezar@0.8.0 build
+> tsc && npm run build:web && npm run check:pack
+
+
+> @open-mercato/cezar@0.8.0 build:web
+> vite build --config web/app/vite.config.ts
+
+vite v8.1.4 building client environment for production...
+[2Ktransforming...✓ 2446 modules transformed.
+rendering chunks...
+computing gzip size...
+web/dist/assets/open-mercato-toBr6SOa.svg                              2.30 kB │ gzip:   1.13 kB
+web/dist/index.html                                                    3.66 kB │ gzip:   1.36 kB
+web/dist/assets/jetbrains-mono-latin-ext-wght-normal-DBQx-q_a.woff2   15.19 kB
+web/dist/assets/jetbrains-mono-latin-wght-normal-B9CIFXIH.woff2       40.40 kB
+web/dist/assets/inter-latin-wght-normal-Dx4kXJAl.woff2                48.25 kB
+web/dist/assets/inter-latin-ext-wght-normal-DO1Apj_S.woff2            85.06 kB
+web/dist/assets/index-rSJOoiD3.css                                    90.19 kB │ gzip:  16.49 kB
+web/dist/assets/mermaid-GHXKKRXX-DghlHZS5.js                           0.07 kB │ gzip:   0.08 kB
+web/dist/assets/x-BHbA8dSC.js                                          0.14 kB │ gzip:   0.14 kB
+web/dist/assets/arrow-left-BE6AlA02.js                                 0.15 kB │ gzip:   0.15 kB
+web/dist/assets/loader-circle-CA41y0bd.js                              0.20 kB │ gzip:   0.18 kB
+web/dist/assets/upload-CZfSePOo.js                                     0.21 kB │ gzip:   0.18 kB
+web/dist/assets/ellipsis-vertical-DmiVT6jz.js                          0.22 kB │ gzip:   0.16 kB
+web/dist/assets/square-terminal-CdaHyrcY.js                            0.23 kB │ gzip:   0.19 kB
+web/dist/assets/search-x-BCetArhL.js                                   0.24 kB │ gzip:   0.19 kB
+web/dist/assets/triangle-alert-Bn4BqGwV.js                             0.25 kB │ gzip:   0.20 kB
+web/dist/assets/file-Dg6CpR8r.js                                       0.25 kB │ gzip:   0.20 kB
+web/dist/assets/git-pull-request-DxVoT2WK.js                           0.27 kB │ gzip:   0.21 kB
+web/dist/assets/refresh-cw-db6LG_yO.js                                 0.31 kB │ gzip:   0.21 kB
+web/dist/assets/trash-2-D7eO-ZOZ.js                                    0.50 kB │ gzip:   0.30 kB
+web/dist/assets/highlighted-body-OFNGDK62-CJIHtxqW.js                  0.52 kB │ gzip:   0.35 kB
+web/dist/assets/tab-link-CZaVG_5g.js                                   0.71 kB │ gzip:   0.45 kB
+web/dist/assets/image-preview-1x2O5b6w.js                              0.93 kB │ gzip:   0.53 kB
+web/dist/assets/zoomable-image-Bpe-Zsgp.js                             0.94 kB │ gzip:   0.59 kB
+web/dist/assets/skill-empty-hint-Cl3ESoPu.js                           0.95 kB │ gzip:   0.44 kB
+web/dist/assets/project-router-DpmySZvx.js                             1.59 kB │ gzip:   0.75 kB
+web/dist/assets/utils-DJvLyjTG.js                                      1.89 kB │ gzip:   1.04 kB
+web/dist/assets/diff-woXpYk--.js                                       2.56 kB │ gzip:   0.68 kB
+web/dist/assets/dialog-BsXps6b4.js                                     2.59 kB │ gzip:   0.97 kB
+web/dist/assets/json-qhed-kSA.js                                       2.81 kB │ gzip:   0.77 kB
+web/dist/assets/jsonc-CYpm1nAK.js                                      3.10 kB │ gzip:   0.78 kB
+web/dist/assets/dist-Bi5WUXmk.js                                       4.21 kB │ gzip:   1.55 kB
+web/dist/assets/task-commits-CdGkX2fj.js                               4.29 kB │ gzip:   1.65 kB
+web/dist/assets/tasks-table-RGbuJJp9.js                                4.67 kB │ gzip:   1.92 kB
+web/dist/assets/skills-CuEuuP8P.js                                     5.54 kB │ gzip:   2.08 kB
+web/dist/assets/use-desktop-BkvlWArb.js                                5.61 kB │ gzip:   2.23 kB
+web/dist/assets/compare-variants-B9vqliBY.js                           6.34 kB │ gzip:   2.48 kB
+web/dist/assets/git-toolbar-CUY4d4Bk.js                                6.81 kB │ gzip:   2.54 kB
+web/dist/assets/task-changes-BAQS5VwL.js                               6.98 kB │ gzip:   2.88 kB
+web/dist/assets/run-diff-whklvBe8.js                                   8.01 kB │ gzip:   2.97 kB
+web/dist/assets/prompt-templates-CFCpRW5B.js                           9.15 kB │ gzip:   3.49 kB
+web/dist/assets/task-files-CNumgoSV.js                                 9.48 kB │ gzip:   3.29 kB
+web/dist/assets/yaml-rwi0_p6S.js                                      10.49 kB │ gzip:   2.26 kB
+web/dist/assets/diff-view-Bxk20t-h.js                                 11.85 kB │ gzip:   4.06 kB
+web/dist/assets/repo-git-CLMUWHNj.js                                  12.05 kB │ gzip:   3.72 kB
+web/dist/assets/command-wCK8Es6V.js                                   14.46 kB │ gzip:   5.42 kB
+web/dist/assets/rust-Cfkwpbl8.js                                      15.06 kB │ gzip:   2.71 kB
+web/dist/assets/lib-uHpeUPzK.js                                       19.06 kB │ gzip:   6.56 kB
+web/dist/assets/run-header-CgY5QIEF.js                                20.29 kB │ gzip:   6.90 kB
+web/dist/assets/sql-BsFa4tDR.js                                       23.42 kB │ gzip:   7.45 kB
+web/dist/assets/dist-DEUX2-fN.js                                      26.71 kB │ gzip:  10.32 kB
+web/dist/assets/github-ClNClJ_Y.js                                    27.24 kB │ gzip:   8.29 kB
+web/dist/assets/bundle-mjs-BegPhL5c.js                                41.46 kB │ gzip:  13.67 kB
+web/dist/assets/shellscript-CLZ0U2zV.js                               41.47 kB │ gzip:   6.07 kB
+web/dist/assets/go-rLFTqkRN.js                                        46.81 kB │ gzip:   5.14 kB
+web/dist/assets/task-thread-BNsCbq3z.js                               48.05 kB │ gzip:  16.75 kB
+web/dist/assets/css-BsVw1vtW.js                                       49.03 kB │ gzip:  11.90 kB
+web/dist/assets/html-BY76lXLH.js                                      57.24 kB │ gzip:  11.74 kB
+web/dist/assets/engine-javascript-FQvzRocB.js                         57.63 kB │ gzip:  20.18 kB
+web/dist/assets/markdown-BYOwaDjH.js                                  59.32 kB │ gzip:   5.66 kB
+web/dist/assets/python-gzcpVVnB.js                                    69.94 kB │ gzip:   9.09 kB
+web/dist/assets/workflows-DUyZMJfz.js                                 70.91 kB │ gzip:  22.55 kB
+web/dist/assets/core-DePtBHcl.js                                      93.03 kB │ gzip:  29.18 kB
+web/dist/assets/centered-state-zHo0b60k.js                           115.57 kB │ gzip:  37.66 kB
+web/dist/assets/javascript-BgS3c2Ky.js                               174.82 kB │ gzip:  16.62 kB
+web/dist/assets/tsx-udAQXfEw.js                                      175.52 kB │ gzip:  16.62 kB
+web/dist/assets/jsx-Bz0zcwM4.js                                      177.78 kB │ gzip:  16.71 kB
+web/dist/assets/typescript-bsJCZSQ-.js                               181.07 kB │ gzip:  16.23 kB
+web/dist/assets/index-vjHqgbII.js                                    405.94 kB │ gzip: 118.56 kB
+web/dist/assets/chunk-BO2N2NFS-BN7h-q1E.js                           429.69 kB │ gzip: 130.09 kB
+
+✓ built in 518ms
+
+> @open-mercato/cezar@0.8.0 check:pack
+> node scripts/check-pack.mjs
+
+check:pack ok — 302 files, 70 under web/dist (shell + assets present)

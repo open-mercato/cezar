@@ -96,8 +96,21 @@ describe('periodic autosave gate (#471)', () => {
   it('the flush path (autosaveCommit) still commits with the env off', async () => {
     delete process.env.CEZ_AUTOSAVE;
     writeFileSync(join(worktreePath, 'work.txt'), 'progress\n');
-    expect(await autosaveCommit(worktreePath)).toBe(true);
+    expect(await autosaveCommit(worktreePath, 'turn end')).toBe('committed');
     const { stdout } = await run('git', ['log', '-1', '--format=%s'], { cwd: worktreePath });
-    expect(stdout.trim()).toBe('cezar autosave');
+    // Keeps the `cezar autosave` prefix so existing log greps still match, and
+    // names the reason so an opted-out user can tell this flush apart from the
+    // periodic timer they disabled (#471 follow-up).
+    expect(stdout.trim()).toBe('cezar autosave (turn end)');
+  });
+
+  it('records the reason, so the gated timer is distinguishable in the log', async () => {
+    delete process.env.CEZ_AUTOSAVE;
+    for (const reason of ['periodic', 'turn end', 'run finalize', 'pre-PR'] as const) {
+      writeFileSync(join(worktreePath, 'work.txt'), `progress ${reason}\n`);
+      expect(await autosaveCommit(worktreePath, reason)).toBe('committed');
+      const { stdout } = await run('git', ['log', '-1', '--format=%s'], { cwd: worktreePath });
+      expect(stdout.trim()).toBe(`cezar autosave (${reason})`);
+    }
   });
 });

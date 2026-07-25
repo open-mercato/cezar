@@ -3,8 +3,8 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import { queryKeys } from '@/api/queries'
-import type { RunRecord, RunStatus, UiState } from '@/api/types'
+import { queryKeys, workspaceQueryKeys } from '@/api/queries'
+import type { RunRecord, RunStatus, WorkspaceUiState } from '@/api/types'
 import { RunNotifications } from './run-notifications'
 
 /**
@@ -18,9 +18,11 @@ import { RunNotifications } from './run-notifications'
 
 let clients: QueryClient[] = []
 
-function makeClient(uiState: UiState): QueryClient {
+/** The toggle lives in the GLOBAL ui-state since step 3.5 — seed the workspace key, which is
+ *  the only one `RunNotifications` reads. */
+function makeClient(uiState: WorkspaceUiState): QueryClient {
   const client = createQueryClient()
-  client.setQueryData(queryKeys.uiState, uiState)
+  client.setQueryData(workspaceQueryKeys.uiState, uiState)
   clients.push(client)
   return client
 }
@@ -60,7 +62,7 @@ function hideTab(hidden = true) {
 }
 
 /** Mount the trigger, seed the run list, then apply the same patch the SSE layer would. */
-function mount(uiState: UiState, seed: RunRecord[]) {
+function mount(uiState: WorkspaceUiState, seed: RunRecord[]) {
   // Queries would otherwise fire real fetches for ui-state/runs — keep them honestly pending.
   vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
   const client = makeClient(uiState)
@@ -126,7 +128,7 @@ describe('RunNotifications', () => {
   it('the toggle gates: disabled (and the default OFF) stays silent', () => {
     const constructed = stubNotification('granted')
     hideTab()
-    for (const uiState of [{}, { notifications: { enabled: false } }] as UiState[]) {
+    for (const uiState of [{}, { notifications: { enabled: false } }] as WorkspaceUiState[]) {
       const { patch } = mount(uiState, [run({ status: 'running' })])
       patch([run({ status: 'waiting' })])
     }
@@ -181,7 +183,7 @@ describe('RunNotifications', () => {
 
     // …then the user enables (Settings PUT lands in the same cache). The macrotask flush lets
     // the query observer's deferred notification re-render the component with the new flag.
-    act(() => client.setQueryData(queryKeys.uiState, { notifications: { enabled: true } }))
+    act(() => client.setQueryData(workspaceQueryKeys.uiState, { notifications: { enabled: true } }))
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
 
     // A token tick re-announces the unchanged waiting state — still no notification, because

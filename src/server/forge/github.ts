@@ -10,8 +10,17 @@ import type {
   ForgeCommentsData,
   ForgeDriver,
   ForgeItem,
+  ForgeMergeInput,
+  ForgeMergeMethod,
+  ForgeMergeResult,
+  ForgePrCheck,
+  ForgePrMergeState,
+  ForgePrMergeStateResult,
   ForgePrStatus,
+  ForgePrDiffResult,
   ForgeRefKind,
+  ForgeTimelineEvent,
+  ForgeTimelineEventKind,
 } from './types.js';
 
 /**
@@ -23,6 +32,139 @@ import type {
  */
 
 const exec = promisify(execFile);
+
+export const GH_PR_DIFF_FILE_CAP = 300;
+export const GH_PR_PATCH_CAP = 512 * 1024;
+export const GH_PR_DIFF_JSON_CAP = 4 * 1024 * 1024;
+
+const ghPrFileSchema = z.object({
+  filename: z.string().min(1),
+  previous_filename: z.string().optional(),
+  status: z.enum(['added', 'modified', 'removed', 'renamed', 'copied', 'changed']),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  patch: z.string().optional(),
+});
+const ghPrHeadSchema = z.object({ headRefOid: z.string().regex(/^[0-9a-f]{40}$/i) });
+
+export class GithubPrNotFoundError extends Error {}
+
+const prDiffCache = new Map<string, { at: number; data: ForgePrDiffResult }>();
+
+export type PrFilesPageRunner = (page: number) => Promise<string>;
+
+/** Fetch no more than the three GitHub pages represented by the public 300-file response cap. */
+export async function fetchPrFilePages(runPage: PrFilesPageRunner): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let page = 1; page <= GH_PR_DIFF_FILE_CAP / 100; page++) {
+    const next = z.array(z.unknown()).parse(JSON.parse(await runPage(page)));
+    rows.push(...next);
+    if (next.length < 100) break;
+  }
+  return rows;
+}
+
+export async function fetchGithubPrDiff(
+  repoRoot: string,
+  number: number,
+  refresh = false,
+): Promise<ForgePrDiffResult> {
+  if (process.env.CEZ_DRY_RUN === '1') return mockGithubPrDiff(number);
+  try {
+    const head = ghPrHeadSchema.parse(
+      JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid'])),
+    ).headRefOid;
+    const key = `${repoRoot}\0${number}\0${head}`;
+    const hit = prDiffCache.get(key);
+    if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
+    const rows = z.array(ghPrFileSchema).parse(
+      await fetchPrFilePages((page) =>
+        gh(repoRoot, ['api', `repos/{owner}/{repo}/pulls/${number}/files?per_page=100&page=${page}`], 30_000),
+      ),
+    );
+    const limited = rows.slice(0, GH_PR_DIFF_FILE_CAP);
+    // A full third page may have a successor. Without fetching a 301st file, conservatively call
+    // the response partial rather than claiming completeness we cannot prove.
+    let responseTruncated = rows.length >= GH_PR_DIFF_FILE_CAP;
+    const reasons: string[] = responseTruncated ? [`Only the first ${GH_PR_DIFF_FILE_CAP} files are shown.`] : [];
+    const files = limited.map((row) => {
+      let patch = row.patch;
+      let truncated = false;
+      let patchUnavailableReason: 'binary' | 'too-large' | 'not-provided' | undefined;
+      if (patch !== undefined && Buffer.byteLength(patch, 'utf8') > GH_PR_PATCH_CAP) {
+        patch = undefined;
+        truncated = true;
+        patchUnavailableReason = 'too-large';
+        responseTruncated = true;
+      } else if (patch === undefined) {
+        patchUnavailableReason = row.additions === 0 && row.deletions === 0 ? 'binary' : 'not-provided';
+      }
+      return {
+        path: row.filename,
+        ...(row.previous_filename ? { previousPath: row.previous_filename } : {}),
+        status: row.status,
+        additions: row.additions,
+        deletions: row.deletions,
+        ...(patch !== undefined ? { patch } : {}),
+        ...(patchUnavailableReason ? { patchUnavailableReason } : {}),
+        ...(truncated ? { truncated: true } : {}),
+      };
+    });
+    let kept = files;
+    while (
+      kept.length > 0 &&
+      Buffer.byteLength(JSON.stringify({ available: true, number, headSha: head, files: kept }), 'utf8') >
+        GH_PR_DIFF_JSON_CAP
+    ) {
+      kept = kept.slice(0, -1);
+      responseTruncated = true;
+    }
+    if (kept.length < files.length) reasons.push('The response size limit omitted some files.');
+    if (files.some((file) => file.truncated)) reasons.push('One or more patches exceeded the per-file limit.');
+    const data: ForgePrDiffResult = {
+      available: true,
+      number,
+      headSha: head,
+      files: kept,
+      additions: rows.reduce((sum, row) => sum + row.additions, 0),
+      deletions: rows.reduce((sum, row) => sum + row.deletions, 0),
+      truncated: responseTruncated,
+      ...(reasons.length ? { reason: reasons.join(' ') } : {}),
+    };
+    prDiffCache.set(key, { at: Date.now(), data });
+    while (prDiffCache.size > 50) prDiffCache.delete(prDiffCache.keys().next().value!);
+    return data;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/HTTP 404|Could not resolve to a PullRequest|no pull requests found/i.test(message)) {
+      throw new GithubPrNotFoundError(`Pull request #${number} was not found`);
+    }
+    return {
+      available: false,
+      reason: /ENOENT/.test(message)
+        ? 'gh CLI not found — install it and run `gh auth login`'
+        : firstLine(message),
+    };
+  }
+}
+
+function mockGithubPrDiff(number: number): ForgePrDiffResult {
+  return {
+    available: true,
+    number,
+    headSha: '0123456789abcdef0123456789abcdef01234567',
+    additions: 15,
+    deletions: 4,
+    truncated: true,
+    reason: 'One or more patches were not provided by GitHub.',
+    files: [
+      { path: 'src/session.ts', status: 'modified', additions: 8, deletions: 3, patch: '@@ -1,3 +1,4 @@\n-old\n+new\n context' },
+      { path: 'src/new-name.ts', previousPath: 'src/old-name.ts', status: 'renamed', additions: 7, deletions: 1, patch: '@@ -1 +1 @@\n-old name\n+new name' },
+      { path: 'assets/logo.png', status: 'modified', additions: 0, deletions: 0, patchUnavailableReason: 'binary' },
+      { path: 'generated/output.txt', status: 'modified', additions: 0, deletions: 0, patchUnavailableReason: 'too-large', truncated: true },
+    ],
+  };
+}
 
 /** One GitHub issue or pull request, flattened for the cockpit's GitHub tab. */
 export type GithubItem = ForgeItem;
@@ -75,6 +217,40 @@ const ghPrViewSchema = z.object({
   state: z.string().default('OPEN'),
   isDraft: z.boolean().default(false),
   statusCheckRollup: ghStatusCheckRollup,
+});
+
+const mergeCheckSchema = z.object({
+  name: z.string().default('Check'),
+  state: z.string().nullish(),
+  status: z.string().nullish(),
+  conclusion: z.string().nullish(),
+  detailsUrl: z.string().nullish(),
+});
+const mergePrSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  url: z.string(),
+  state: z.string(),
+  isDraft: z.boolean().default(false),
+  headRefName: z.string(),
+  baseRefName: z.string(),
+  headRefOid: z.string().regex(/^[0-9a-f]{40}$/),
+  mergeable: z.string().nullish(),
+  mergeStateStatus: z.string().nullish(),
+  reviewDecision: z.string().nullish(),
+  statusCheckRollup: z.array(mergeCheckSchema).nullish(),
+});
+const repoMergePolicySchema = z.object({
+  allow_merge_commit: z.boolean().default(false),
+  allow_squash_merge: z.boolean().default(false),
+  allow_rebase_merge: z.boolean().default(false),
+  merge_commit_title: z.string().nullish(),
+  squash_merge_commit_title: z.string().nullish(),
+});
+const ghMergeResultSchema = z.object({
+  merged: z.boolean(),
+  message: z.string().nullish(),
+  sha: z.string().nullish(),
 });
 
 /** Exported for unit tests (#400) — collapses a zod-validated `statusCheckRollup` array down to
@@ -190,16 +366,21 @@ export function parseOwnerName(nameWithOwner: string): { owner: string; name: st
 /* Reads degrade to `available: false` with a hint — never an error (plan rule
    7): no `gh`, no remote, offline all land on the same quiet path. A short
    cache keeps tab switches from hammering the GitHub API; a cached fetch with
-   a bigger limit than asked serves fine (it's a superset). */
-let cache: { at: number; limit: number; data: GithubData } | null = null;
+   a bigger limit than asked serves fine (it's a superset). Keyed by `repoRoot`
+   (multi-project workspace, step 2.6): one project's — possibly private —
+   issues/PRs must never be served under another project's scope. Bounded like
+   `commentsCache` so an unbounded workspace can't grow it without limit. */
+const listCache = new Map<string, { at: number; limit: number; data: GithubData }>();
+const LIST_CACHE_MAX = 50;
 const CACHE_MS = 60_000;
 export const GH_MAX_LIMIT = 1000;
 
 export async function fetchGithub(repoRoot: string, refresh = false, limit = 30): Promise<GithubData> {
   if (process.env.CEZ_DRY_RUN === '1') return mockGithub();
   const capped = Math.min(Math.max(limit, 1), GH_MAX_LIMIT);
-  if (!refresh && cache && Date.now() - cache.at < CACHE_MS && cache.limit >= capped) {
-    return cache.data;
+  const hit = listCache.get(repoRoot);
+  if (!refresh && hit && Date.now() - hit.at < CACHE_MS && hit.limit >= capped) {
+    return hit.data;
   }
   try {
     // No `comments` field — `gh … --json comments` ships full comment bodies.
@@ -279,7 +460,13 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
       prs,
       labelColors,
     };
-    cache = { at: Date.now(), limit: capped, data };
+    listCache.delete(repoRoot); // re-insert so this key becomes the newest
+    listCache.set(repoRoot, { at: Date.now(), limit: capped, data });
+    while (listCache.size > LIST_CACHE_MAX) {
+      const oldest = listCache.keys().next().value;
+      if (oldest === undefined) break;
+      listCache.delete(oldest);
+    }
     return data;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -355,6 +542,86 @@ const ghReviewSchema = z.object({
   html_url: z.string(),
 });
 
+// ---- timeline events (#525) -------------------------------------------------
+// The thread's non-comment history — commits, label changes, assignments, merges, force-pushes,
+// cross-references. Sourced from `/issues/{n}/timeline`, which returns comments AND events in one
+// chronological stream, so the `commented` rows keep flowing through `normalizeComments` unchanged
+// and `comments[]` stays exactly what BACKWARD_COMPATIBILITY.md §2 promises.
+
+/** The event kinds rendered in v1 — an allowlist, so a new GitHub event type is dropped rather
+ *  than rendered and can never crash or clutter the thread. Real timelines carry plenty that
+ *  github.com itself doesn't surface (`subscribed`, `mentioned`, `review_requested`).
+ *
+ *  `reviewed` is deliberately absent: timeline `reviewed` rows DO carry a body and would work,
+ *  but `/pulls/{n}/reviews` is already normalized, chipped and empty-body-filtered, so sourcing
+ *  both would render every review twice. */
+export const TIMELINE_EVENT_KINDS = new Set<ForgeTimelineEventKind>([
+  'committed',
+  'labeled',
+  'unlabeled',
+  'assigned',
+  'unassigned',
+  'merged',
+  'closed',
+  'reopened',
+  'head_ref_force_pushed',
+  'cross-referenced',
+  'renamed',
+]);
+
+/** Events get their OWN cap, independent of `THREAD_ENTRY_CAP`. A combined cap would mean a
+ *  thread with 150 comments and 100 events returns ~120 comments — silently removing contents
+ *  from a §2-protected response. */
+export const TIMELINE_EVENT_CAP = 200;
+/** `gh api --paginate` has no page limit, so the timeline fetch hand-rolls a bounded loop. */
+export const TIMELINE_MAX_PAGES = 10;
+/** ONE budget shared by every page. `gh()`'s timeout is per invocation, so ten pages at the 15 s
+ *  default would put the ceiling at 150 s — an order of magnitude worse than the single
+ *  `--paginate` spawn this replaces. The loop tracks a deadline and passes what's left. */
+export const TIMELINE_BUDGET_MS = 15_000;
+/** Never spawn a page that cannot finish. A bare `remaining <= 0` guard catches only the exact
+ *  boundary; the realistic case is 300 ms left, which spawns `gh` with a 300 ms timeout, throws,
+ *  and is indistinguishable from a real endpoint failure. */
+export const TIMELINE_MIN_PAGE_MS = 2_000;
+/** `committed` messages are trimmed to their first line, then this. */
+const COMMIT_MESSAGE_CAP = 120;
+
+/** One timeline row. `event` stays a loose `z.string()` so unknown kinds parse and are dropped by
+ *  the allowlist rather than throwing the whole page. Extras are stripped by default — notably
+ *  `author.email`, which is read for nothing and must not reach the wire type. */
+export const ghTimelineEventSchema = z.object({
+  event: z.string(),
+  id: z.number().nullish(),
+  node_id: z.string().nullish(),
+  created_at: z.string().nullish(),
+  actor: z.object({ login: z.string(), avatar_url: z.string().nullish() }).nullish(),
+  url: z.string().nullish(),
+  html_url: z.string().nullish(),
+  // `committed`
+  sha: z.string().nullish(),
+  message: z.string().nullish(),
+  author: z.object({ name: z.string().nullish(), date: z.string().nullish() }).nullish(),
+  // `labeled` / `unlabeled`
+  label: z.object({ name: z.string(), color: z.string().nullish() }).nullish(),
+  // `assigned` / `unassigned`
+  assignee: z.object({ login: z.string() }).nullish(),
+  // `renamed`
+  rename: z.object({ from: z.string().nullish(), to: z.string().nullish() }).nullish(),
+  // `cross-referenced`
+  source: z
+    .object({
+      issue: z
+        .object({
+          number: z.number().nullish(),
+          title: z.string().nullish(),
+          html_url: z.string().nullish(),
+          pull_request: z.unknown().nullish(),
+        })
+        .nullish(),
+    })
+    .nullish(),
+});
+
 const REVIEW_STATE: Record<string, ForgeComment['reviewState']> = {
   APPROVED: 'approved',
   CHANGES_REQUESTED: 'changes_requested',
@@ -404,6 +671,112 @@ export function normalizeReviews(raw: unknown): ForgeComment[] {
     }));
 }
 
+/**
+ * `gh api …/issues/{n}/timeline` JSON → `ForgeTimelineEvent[]`, plus whether the cap fired.
+ *
+ * Returns `truncated` rather than just the array because the caller has no other way to learn it:
+ * `events.length === TIMELINE_EVENT_CAP` is ambiguous on a thread with exactly that many.
+ *
+ * Three details here are load-bearing and were verified against a real timeline, not assumed:
+ *
+ * 1. **`committed` rows return `created_at: null`** — the real timestamp is at `author.date`.
+ *    Mapping `created_at` naively yields `createdAt: null` on every commit, which string-sorts to
+ *    the top and silently reorders the entire thread.
+ * 2. **`committed` carries a git author, not a GitHub actor** — a name, no login, no avatar.
+ * 3. **The cap keeps the NEWEST events — `slice(-cap)`**, the opposite of the neighbouring
+ *    `mergeThread`, which head-slices. The timeline arrives oldest-first, so `slice(0, cap)` would
+ *    retain 200 stale day-one `labeled` rows and discard the merge and the recent commits — the
+ *    exact rows #525 asks for.
+ *
+ * Exported for unit tests.
+ */
+export function normalizeEvents(
+  raw: unknown,
+  cap = TIMELINE_EVENT_CAP,
+): { events: ForgeTimelineEvent[]; truncated: boolean } {
+  const rows = z.array(ghTimelineEventSchema).parse(raw);
+  const mapped: ForgeTimelineEvent[] = [];
+
+  rows.forEach((row, index) => {
+    const kind = row.event as ForgeTimelineEventKind;
+    if (!TIMELINE_EVENT_KINDS.has(kind)) return; // unknown//noise → dropped, never rendered
+
+    // Per-kind timestamp resolution — see (1) above.
+    const rawAt = kind === 'committed' ? row.author?.date : row.created_at;
+    if (!rawAt) return; // no resolvable timestamp → drop, rather than merge at an arbitrary spot
+    // `author.date` arrives with a numeric offset (`+02:00`); normalize so the string compare the
+    // thread sorts by stays correct across zones.
+    const parsedAt = new Date(rawAt);
+    if (Number.isNaN(parsedAt.getTime())) return;
+    const createdAt = parsedAt.toISOString();
+
+    // Per-kind actor resolution — see (2) above.
+    const actor = (kind === 'committed' ? row.author?.name : row.actor?.login) ?? '?';
+
+    // Identity: `sha` sits ahead of `node_id` deliberately. `committed` rows carry both, and a
+    // node_id-first order would key commits by an opaque `C_kwDO…` blob instead of the SHA, which
+    // is the natural, debuggable identifier and is already the rollup key. The bare-index fallback
+    // reaches only `cross-referenced`, the one kind with no identity at all — as a general scheme
+    // it would be wrong, since the id becomes the React key and an index over the post-sort array
+    // shifts for every row below an insertion, remounting them on each 60 s refetch.
+    const identity = row.id ?? row.sha ?? row.node_id ?? index;
+
+    const event: ForgeTimelineEvent = {
+      id: `evt-${identity}`,
+      kind,
+      actor,
+      createdAt,
+    };
+    // A git author has no avatar, so `committed` deliberately carries none.
+    if (kind !== 'committed' && row.actor?.avatar_url) event.avatarUrl = row.actor.avatar_url;
+
+    switch (kind) {
+      case 'committed': {
+        // Enforce the full-40-hex invariant the rollup query depends on rather than assuming it:
+        // `oid` rejects anything else, and a malformed value embedded in the batched query would
+        // cost the whole chunk its glyphs instead of just this commit.
+        if (row.sha && /^[0-9a-f]{40}$/i.test(row.sha)) event.sha = row.sha;
+        if (row.message) event.message = (row.message.split('\n')[0] ?? '').slice(0, COMMIT_MESSAGE_CAP);
+        if (row.html_url) event.url = row.html_url;
+        break;
+      }
+      case 'labeled':
+      case 'unlabeled': {
+        if (row.label) {
+          event.label = { name: row.label.name };
+          if (row.label.color) event.label.color = row.label.color;
+        }
+        break;
+      }
+      case 'assigned':
+      case 'unassigned': {
+        if (row.assignee?.login) event.subject = row.assignee.login;
+        break;
+      }
+      case 'renamed': {
+        if (row.rename?.to) event.subject = row.rename.to;
+        break;
+      }
+      case 'cross-referenced': {
+        const issue = row.source?.issue;
+        if (issue?.number != null) event.refNumber = issue.number;
+        if (issue?.title) event.refTitle = issue.title;
+        if (issue) event.refIsPr = Boolean(issue.pull_request);
+        if (issue?.html_url) event.url = issue.html_url;
+        break;
+      }
+      default:
+        break;
+    }
+
+    mapped.push(event);
+  });
+
+  const truncated = mapped.length > cap;
+  // slice(-cap), NOT slice(0, cap) — see (3) above.
+  return { events: truncated ? mapped.slice(-cap) : mapped, truncated };
+}
+
 /** Merge comment/review lists chronologically (oldest first) and apply the entry cap. Exported
  *  for unit tests. */
 export function mergeThread(
@@ -415,8 +788,10 @@ export function mergeThread(
   return { comments: truncated ? all.slice(0, cap) : all, truncated };
 }
 
-// Per-thread cache: keyed `kind#number`, same 60 s TTL as the list cache but BOUNDED — a long
-// browsing session can't grow it without limit (Map preserves insertion order → oldest first).
+// Per-thread cache: keyed `repoRoot␀kind#number` (the root scopes the key — two projects each
+// having a PR #42 must not collide; step 2.6), same 60 s TTL as the list cache but BOUNDED — a
+// long browsing session can't grow it without limit (Map preserves insertion order → oldest
+// first).
 const commentsCache = new Map<string, { at: number; data: ForgeCommentsData }>();
 const COMMENTS_CACHE_MAX = 50;
 
@@ -435,10 +810,176 @@ export function __clearCommentsCacheForTests(): void {
   commentsCache.clear();
 }
 
+const TIMELINE_PER_PAGE = 100;
+
+// The repo handle for the per-commit checks query (#525 Phase 2). Memoized per repoRoot — stable
+// in practice, and keyed per root rather than globally for multi-project forward-compatibility.
+// `null` is a cached PERMANENT negative (the slug isn't a clean two-part name, so retrying cannot
+// help). A *thrown* gh failure is transient and deliberately NOT cached: caching it would disable
+// glyphs until process restart on one network blip.
+const repoHandleCache = new Map<string, { owner: string; name: string } | null>();
+
+/** Test-only: drop the memoized repo handles. */
+export function __clearRepoHandleCacheForTests(): void {
+  repoHandleCache.clear();
+}
+
+/** The `owner/name` for `repoRoot`, memoized. Returns null when the handle isn't a clean two-part
+ *  slug or `gh` failed — the caller then skips checks entirely and commits render unglyphed. */
+export async function resolveRepoHandle(
+  repoRoot: string,
+): Promise<{ owner: string; name: string } | null> {
+  const memo = repoHandleCache.get(repoRoot);
+  if (memo !== undefined) return memo;
+  let handle: { owner: string; name: string } | null;
+  try {
+    handle = parseOwnerName(
+      await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']),
+    );
+  } catch {
+    // Transient — do NOT memoize, so the next thread retries.
+    return null;
+  }
+  repoHandleCache.set(repoRoot, handle); // includes the permanent negative
+  return handle;
+}
+
+/** What the bounded timeline page loop returns. `stoppedShort` means "the timeline may have more
+ *  rows than we fetched" and has exactly three causes — the page cap, the budget floor, and a
+ *  failure on page ≥ 2. All three shorten the `commented` stream the same way, so all three feed
+ *  `truncated` and arm the comments top-up; the cause does not change the remedy. A short page is
+ *  the one exit that does NOT set it: that is the timeline genuinely ending. */
+type TimelinePages = { rows: unknown[]; stoppedShort: boolean };
+
+/**
+ * Walk `/issues/{n}/timeline` under ONE shared time budget.
+ *
+ * `gh api --paginate` is not used here: it pages *"until there are no more pages of results"* and
+ * exposes no page-limit flag, so the only way to bound the walk is to hand-roll it. The cap that
+ * `paginateCounts` gets comes from being a JS cursor loop, not from a `gh` flag.
+ *
+ * The budget is a **total**, not a per-page allowance. `gh()` takes its timeout per invocation, so
+ * ten sequential spawns at the 15 s default would put the ceiling at 150 s — an order of magnitude
+ * worse than the single `--paginate` spawn this replaces. The loop tracks a deadline and passes
+ * each page whatever remains.
+ *
+ * Exported for unit tests; `run` is injected so the loop is testable without shelling out.
+ */
+export async function fetchTimelinePages(
+  run: (page: number, timeoutMs: number) => Promise<string>,
+  opts: { maxPages?: number; budgetMs?: number; minPageMs?: number; now?: () => number } = {},
+): Promise<TimelinePages> {
+  const maxPages = opts.maxPages ?? TIMELINE_MAX_PAGES;
+  const budgetMs = opts.budgetMs ?? TIMELINE_BUDGET_MS;
+  const minPageMs = opts.minPageMs ?? TIMELINE_MIN_PAGE_MS;
+  const now = opts.now ?? Date.now;
+
+  const deadline = now() + budgetMs;
+  const rows: unknown[] = [];
+  let stoppedShort = false;
+  let page = 1;
+
+  for (; page <= maxPages; page++) {
+    const remaining = deadline - now();
+    // Never spawn a page that cannot finish. A bare `remaining <= 0` guard catches only the exact
+    // boundary; the realistic case is 300 ms left, which spawns gh with a 300 ms timeout, throws,
+    // and looks indistinguishable from a real endpoint failure.
+    if (remaining < minPageMs) {
+      stoppedShort = true;
+      break;
+    }
+    let parsed: unknown[];
+    try {
+      parsed = z.array(z.unknown()).parse(JSON.parse(await run(page, remaining)));
+    } catch (err) {
+      // Page 1 rethrows so the caller's inner catch can decide whether substitution helps —
+      // nothing was fetched, so there is nothing to lose. A failure on any later page keeps the
+      // pages already in hand: discarding nine good pages to re-fetch comments-only is strictly
+      // worse than what the loop already holds.
+      if (page === 1) throw err;
+      stoppedShort = true;
+      break;
+    }
+    rows.push(...parsed);
+    if (parsed.length < TIMELINE_PER_PAGE) break; // short page — the real end of the timeline
+  }
+  if (page > maxPages) stoppedShort = true; // fell out on the page cap
+
+  return { rows, stoppedShort };
+}
+
+/** SHAs per rollup query. Aliases resolve independently, so a chunk that fails costs only its own
+ *  glyphs — but an unbounded alias list would eventually blow the query size limit. */
+export const COMMIT_CHECKS_CHUNK = 50;
+
+/** One aliased `object(oid:)` per SHA. `oid` requires a FULL 40-char SHA in both literal and
+ *  variable form (`Could not coerce value "babda63" to GitObjectID`), which constrains fixtures
+ *  rather than production data — the timeline always supplies full SHAs. */
+function commitChecksQuery(shas: string[]): string {
+  const aliases = shas
+    .map((sha, i) => `    c${i}: object(oid: "${sha}") { ... on Commit { statusCheckRollup { state } } }`)
+    .join('\n');
+  return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
+}
+
+const ghCommitChecksSchema = z.record(
+  z.string(),
+  z.object({ statusCheckRollup: z.object({ state: z.string().nullish() }).nullish() }).nullish(),
+);
+
+/**
+ * Rolled-up CI state per commit SHA, as a `sha → checks` map.
+ *
+ * Batched and aliased so a 40-commit PR costs one subprocess, not forty. Verified against the live
+ * API: each alias resolves independently and an unknown SHA comes back `null` rather than erroring
+ * the batch, so partial results degrade cleanly.
+ *
+ * Degrades to an empty map on any failure — exactly as `fetchCommentCounts` does for counts. The
+ * caller then leaves `checks` **absent**, which the UI renders as no glyph. Exported for tests;
+ * `runGraphql` is injected so this is testable without shelling out.
+ */
+export async function fetchCommitChecks(
+  runGraphql: GraphqlRunner,
+  owner: string,
+  name: string,
+  shas: string[],
+  chunkSize = COMMIT_CHECKS_CHUNK,
+): Promise<Record<string, ForgeTimelineEvent['checks']>> {
+  const out: Record<string, ForgeTimelineEvent['checks']> = {};
+  if (shas.length === 0) return out;
+
+  for (let i = 0; i < shas.length; i += chunkSize) {
+    const chunk = shas.slice(i, i + chunkSize);
+    try {
+      const raw = JSON.parse(await runGraphql(commitChecksQuery(chunk), { owner, name })) as {
+        data?: { repository?: unknown };
+      };
+      const repository = ghCommitChecksSchema.parse(raw?.data?.repository ?? {});
+      chunk.forEach((sha, index) => {
+        const node = repository[`c${index}`];
+        if (!node) return; // unknown SHA → alias resolved null; leave `checks` absent
+        // Adapt the single rollup state into the array shape `rollupToChecks` expects, so the
+        // existing FAILURE/PENDING/SUCCESS vocabulary is reused rather than duplicated.
+        out[sha] = node.statusCheckRollup
+          ? rollupToChecks([{ state: node.statusCheckRollup.state, status: null, conclusion: null }])
+          : null; // no CI configured — distinct from absent
+      });
+    } catch {
+      // A failed chunk costs only its own glyphs; the rest still resolve.
+    }
+  }
+  return out;
+}
+
 /**
  * The conversation thread for one issue/PR, lazily. `{owner}`/`{repo}` in the gh api paths are
  * filled from the worktree's remote by gh itself, so no extra handle lookup. Everything degrades:
  * gh missing/offline → `{ available: false, reason }`, a 404 → a "not found" hint — never a throw.
+ *
+ * Since #525 the thread is sourced from `/issues/{n}/timeline`, which returns comments AND events
+ * in one stream: `commented` rows go through the unchanged `normalizeComments`, the rest through
+ * `normalizeEvents`. `comments[]` therefore keeps its exact pre-#525 shape, contents and cap
+ * (BACKWARD_COMPATIBILITY.md §2) — see the top-up below for the one case that needed defending.
  */
 export async function fetchGithubComments(
   repoRoot: string,
@@ -447,19 +988,114 @@ export async function fetchGithubComments(
   refresh = false,
 ): Promise<ForgeCommentsData> {
   if (process.env.CEZ_DRY_RUN === '1') return mockGithubComments(kind);
-  const key = `${kind}#${number}`;
+  // NUL separator: cannot appear in a filesystem path, so roots can never alias.
+  const key = `${repoRoot}\0${kind}#${number}`;
   const hit = commentsCache.get(key);
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
+  // PR conversation comments live on the issues endpoint too — always use it for the body thread.
+  const legacyComments = () =>
+    gh(repoRoot, ['api', `repos/{owner}/{repo}/issues/${number}/comments`, '--paginate']);
   try {
-    // PR conversation comments live on the issues endpoint too — always use it for the body thread.
-    const commentsOut = await gh(repoRoot, ['api', `repos/{owner}/{repo}/issues/${number}/comments`, '--paginate']);
-    const parts: ForgeComment[][] = [normalizeComments(JSON.parse(commentsOut))];
+    let commentRows: unknown[] = [];
+    let events: ForgeTimelineEvent[] | undefined;
+    let eventsTruncated = false;
+    let stoppedShort = false;
+
+    try {
+      const pages = await fetchTimelinePages((page, timeoutMs) =>
+        gh(
+          repoRoot,
+          [
+            'api',
+            '-H',
+            'Accept: application/vnd.github+json',
+            `repos/{owner}/{repo}/issues/${number}/timeline?per_page=${TIMELINE_PER_PAGE}&page=${page}`,
+          ],
+          timeoutMs,
+        ),
+      );
+      stoppedShort = pages.stoppedShort;
+      commentRows = pages.rows.filter(
+        (r) => (r as { event?: unknown } | null)?.event === 'commented',
+      );
+      const normalized = normalizeEvents(pages.rows);
+      events = normalized.events;
+      eventsTruncated = normalized.truncated;
+
+      // Comments top-up. The two ENTRY caps are independent, but the FETCH budget is not: today's
+      // call is an unbounded --paginate over a comments-only endpoint, so every comment is fetched
+      // and mergeThread picks the oldest 200 from the complete set. Under the timeline those same
+      // 200 slots are filled from at most 1000 rows in which events compete with comments — so on
+      // a 1500-row thread with 250 interleaved comments, comments[] would return ~167 where today
+      // it returns 200. Same §2 defect class as a combined entry cap, arriving via the source set.
+      //
+      // The trigger deliberately over-fires: it cannot distinguish "comments were cut off" from
+      // "this thread just has few comments", because the second is only knowable by fetching them.
+      // So on an event-heavy thread with 30 comments it re-fetches 30 complete comments. Accepted
+      // — it fires only past ~1000 timeline rows, behind the 60 s LRU, and the alternative is a §2
+      // regression. In the other direction the threshold is provably sound: with ≥200 commented
+      // rows already in the oldest-first prefix, mergeThread's oldest-200 cut lies inside it.
+      if (stoppedShort && commentRows.length < THREAD_ENTRY_CAP) {
+        // Its OWN nested catch. The inner handler's remedy is the fallback — which is this very
+        // call — and the outer handler returns { available: false, comments: [] }, emptying a
+        // thread that was about to render. So a thrown top-up is swallowed: keep the commented
+        // rows the timeline already returned and carry on. That is at worst the short list the
+        // safeguard existed to avoid, never worse than not having attempted it.
+        try {
+          commentRows = z.array(z.unknown()).parse(JSON.parse(await legacyComments()));
+        } catch {
+          // keep the timeline's own commented rows
+        }
+      }
+    } catch (timelineErr) {
+      // Scoped INSIDE the existing outer catch on purpose: the outer handler's /404|not found/i
+      // branch would otherwise turn a timeline 404 into an empty thread. ENOENT is the one failure
+      // the fallback cannot rescue — nothing will work, and a second spawn fails identically.
+      const message = timelineErr instanceof Error ? timelineErr.message : String(timelineErr);
+      if (/ENOENT/.test(message)) throw timelineErr;
+      // Every other endpoint-level failure substitutes the legacy comments call. It is a
+      // substitution, not a retry — a different endpoint, which typically still answers. (A 403
+      // attaches to the token rather than the endpoint, so it cannot succeed either; not
+      // special-cased, since rate-limit replies are immediate and it costs one fast spawn.)
+      commentRows = z.array(z.unknown()).parse(JSON.parse(await legacyComments()));
+      events = undefined;
+    }
+
+    // Per-commit CI (#525 Phase 2). One extra subprocess per opened thread that contains commits,
+    // behind the same 60 s LRU — a per-thread-open cost, not per-render. Every failure path here
+    // leaves `checks` ABSENT rather than null, so commits simply render unglyphed: the fetch
+    // degrades to "no data" and the render decides what absence looks like.
+    const commitShas = (events ?? []).flatMap((e) => (e.kind === 'committed' && e.sha ? [e.sha] : []));
+    if (commitShas.length > 0) {
+      const handle = await resolveRepoHandle(repoRoot);
+      if (handle) {
+        const runGraphql: GraphqlRunner = (query, variables) => {
+          const args = ['api', 'graphql', '-f', `query=${query}`];
+          for (const [k, v] of Object.entries(variables)) args.push('-f', `${k}=${v}`);
+          return gh(repoRoot, args);
+        };
+        const checks = await fetchCommitChecks(runGraphql, handle.owner, handle.name, commitShas);
+        for (const event of events ?? []) {
+          if (event.kind !== 'committed' || !event.sha) continue;
+          if (event.sha in checks) event.checks = checks[event.sha];
+        }
+      }
+    }
+
+    const parts: ForgeComment[][] = [normalizeComments(commentRows)];
     if (kind === 'pr') {
       const reviewsOut = await gh(repoRoot, ['api', `repos/{owner}/{repo}/pulls/${number}/reviews`, '--paginate']);
       parts.push(normalizeReviews(JSON.parse(reviewsOut)));
     }
     const { comments, truncated } = mergeThread(parts);
-    const data: ForgeCommentsData = { available: true, comments, truncated: truncated || undefined };
+    const data: ForgeCommentsData = {
+      available: true,
+      comments,
+      // OR-folded exactly as before, so the pre-existing >200-comments trigger is preserved
+      // rather than replaced.
+      truncated: truncated || eventsTruncated || stoppedShort || undefined,
+    };
+    if (events) data.events = events;
     cacheComments(key, data);
     return data;
   } catch (err) {
@@ -509,7 +1145,82 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
       url: 'https://github.com/mock/repo/pull/1#pullrequestreview-3',
     });
   }
-  return { available: true, comments };
+
+  // Timeline events (#525) so the whole feature is demoable and e2e-testable offline. Deliberately
+  // covers the cases that are easy to get wrong rather than one of each: a multi-commit run by ONE
+  // author (exercises the client-side grouping) with MIXED check states (passing/failing/pending
+  // plus one `null` = no CI configured), a label change, a cross-reference, and — for PRs — a
+  // merge. SHAs are full 40-char because the rollup query's `oid` rejects abbreviated ones, and a
+  // fixture that cheated there would not survive being pasted into a real query.
+  const sha = (seed: string) => seed.repeat(40).slice(0, 40);
+  const events: ForgeTimelineEvent[] = [
+    {
+      id: 'evt-100',
+      kind: 'labeled',
+      actor: 'ada',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/1?v=4',
+      createdAt: at(300_000),
+      label: { name: 'bug', color: 'd73a4a' },
+    },
+    {
+      id: `evt-${sha('a')}`,
+      kind: 'committed',
+      actor: 'Lin Zhao',
+      createdAt: at(900_000),
+      sha: sha('a'),
+      message: 'fix(session): keep the refresh token on reload',
+      checks: 'passing',
+    },
+    {
+      id: `evt-${sha('b')}`,
+      kind: 'committed',
+      actor: 'Lin Zhao',
+      createdAt: at(960_000),
+      sha: sha('b'),
+      message: 'test(session): cover the reload path',
+      checks: 'failing',
+    },
+    {
+      id: `evt-${sha('c')}`,
+      kind: 'committed',
+      actor: 'Lin Zhao',
+      createdAt: at(1_020_000),
+      sha: sha('c'),
+      message: 'chore: appease the linter',
+      checks: 'pending',
+    },
+    {
+      id: `evt-${sha('d')}`,
+      kind: 'committed',
+      actor: 'Lin Zhao',
+      createdAt: at(1_080_000),
+      sha: sha('d'),
+      message: 'docs: note the new behavior',
+      checks: null, // no CI configured — renders no glyph, distinct from absent
+    },
+    {
+      id: 'evt-101',
+      kind: 'cross-referenced',
+      actor: 'grace',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/3?v=4',
+      createdAt: at(1_500_000),
+      refNumber: 42,
+      refTitle: 'Session handling rewrite',
+      refIsPr: true,
+      url: 'https://github.com/mock/repo/pull/42',
+    },
+  ];
+  if (kind === 'pr') {
+    events.push({
+      id: 'evt-102',
+      kind: 'merged',
+      actor: 'grace',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/3?v=4',
+      createdAt: at(1_800_000),
+    });
+  }
+
+  return { available: true, comments, events };
 }
 
 // ---- draft-PR creation (review gate, spec 009) ------------------------------
@@ -531,7 +1242,20 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   }
 
   // Final autosave: the branch must hold everything before it leaves the box.
-  await autosaveCommit(worktree);
+  // This is the LAST flush — unlike the turn-end and run-finalize ones there is
+  // no later autosave to pick the work up, so a refusal (conflicted tree) or a
+  // failed commit has to stop the publish instead of silently opening a PR from
+  // a branch that is missing the run's final state.
+  const saved = await autosaveCommit(worktree, 'pre-PR');
+  if (saved === 'refused') {
+    return {
+      ok: false,
+      error: 'worktree has unresolved merge conflicts — resolve them, then publish again',
+    };
+  }
+  if (saved === 'failed') {
+    return { ok: false, error: 'could not commit the final changes — check git status in the worktree' };
+  }
 
   // DRY-RUN (CEZ_DRY_RUN=1): no push, no gh — simulate success with a fake PR
   // URL so the whole review → PR flow is testable without GitHub.
@@ -686,6 +1410,231 @@ export function detectGithubCached(repoRoot: string): ForgeAvailability | null {
   return cached; // last-known value while revalidating; null only until the first probe warms
 }
 
+const mergeStateCache = new Map<string, { at: number; value: ForgePrMergeStateResult }>();
+const mergeInflight = new Set<string>();
+const MERGE_CACHE_MS = 15_000;
+
+function mergeCheckState(check: z.infer<typeof mergeCheckSchema>): ForgePrCheck['state'] {
+  const value = (check.conclusion || check.state || check.status || '').toUpperCase();
+  if (['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(value)) return 'passing';
+  if (['FAILURE', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED', 'CANCELLED'].includes(value)) return 'failing';
+  if (['PENDING', 'IN_PROGRESS', 'QUEUED', 'EXPECTED', 'WAITING', 'REQUESTED'].includes(value)) return 'pending';
+  return 'unknown';
+}
+
+export function normalizeMergeState(
+  raw: unknown,
+  policyRaw: unknown,
+  requirements: { readable: boolean; requiredChecks: string[] } = {
+    readable: false,
+    requiredChecks: [],
+  },
+): ForgePrMergeState {
+  const pr = mergePrSchema.parse(raw);
+  const policy = repoMergePolicySchema.parse(policyRaw);
+  const state: ForgePrMergeState['state'] =
+    pr.state.toUpperCase() === 'MERGED' ? 'merged' : pr.state.toUpperCase() === 'CLOSED' ? 'closed' : 'open';
+  const mergeable: ForgePrMergeState['mergeable'] =
+    pr.mergeable?.toUpperCase() === 'MERGEABLE'
+      ? 'mergeable'
+      : pr.mergeable?.toUpperCase() === 'CONFLICTING'
+        ? 'conflicting'
+        : 'unknown';
+  const reviewDecision: ForgePrMergeState['reviewDecision'] =
+    pr.reviewDecision?.toUpperCase() === 'APPROVED'
+      ? 'approved'
+      : pr.reviewDecision?.toUpperCase() === 'CHANGES_REQUESTED'
+        ? 'changes-requested'
+        : pr.reviewDecision?.toUpperCase() === 'REVIEW_REQUIRED'
+          ? 'review-required'
+          : 'unknown';
+  const checks: ForgePrCheck[] = (pr.statusCheckRollup ?? []).map((check) => ({
+    name: check.name,
+    state: mergeCheckState(check),
+    required: requirements.readable ? requirements.requiredChecks.includes(check.name) : null,
+    ...(check.detailsUrl?.startsWith('https://') || check.detailsUrl?.startsWith('http://')
+      ? { url: check.detailsUrl }
+      : {}),
+  }));
+  const methods: ForgeMergeMethod[] = [];
+  if (policy.allow_squash_merge) methods.push('squash');
+  if (policy.allow_merge_commit) methods.push('merge');
+  if (policy.allow_rebase_merge) methods.push('rebase');
+  const defaultMethod =
+    policy.squash_merge_commit_title && methods.includes('squash')
+      ? 'squash'
+      : policy.merge_commit_title && methods.includes('merge')
+        ? 'merge'
+        : methods[0] ?? null;
+  const blockers: ForgePrMergeState['blockers'] = [];
+  let eligibility: ForgePrMergeState['eligibility'] = 'ready';
+  if (state !== 'open') {
+    eligibility = 'terminal';
+    blockers.push({ code: 'terminal', message: state === 'merged' ? 'This pull request is merged.' : 'This pull request is closed.' });
+  } else if (pr.isDraft) {
+    eligibility = 'blocked';
+    blockers.push({ code: 'draft', message: 'Mark the pull request ready for review before merging.' });
+  } else if (mergeable === 'conflicting') {
+    eligibility = 'blocked';
+    blockers.push({ code: 'conflicts', message: 'Conflicts must be resolved before merging.' });
+  } else if (checks.some((check) => check.state === 'failing')) {
+    eligibility = 'blocked';
+    blockers.push({ code: 'checks-failing', message: 'One or more checks are failing.' });
+  } else if (reviewDecision === 'changes-requested' || reviewDecision === 'review-required') {
+    eligibility = 'blocked';
+    blockers.push({ code: 'reviews', message: reviewDecision === 'changes-requested' ? 'Changes were requested.' : 'A required review is missing.' });
+  } else if (reviewDecision === 'unknown' || !requirements.readable) {
+    eligibility = 'unknown';
+    blockers.push({
+      code: 'rules-unknown',
+      message: 'GitHub could not confirm review and branch-protection requirements.',
+    });
+  } else if (checks.some((check) => check.state === 'pending') || pr.mergeStateStatus?.toUpperCase() === 'UNSTABLE') {
+    eligibility = 'pending';
+    blockers.push({ code: 'pending', message: 'Checks or GitHub mergeability are still pending.' });
+  } else if (
+    mergeable !== 'mergeable' ||
+    !['CLEAN', 'HAS_HOOKS'].includes(pr.mergeStateStatus?.toUpperCase() ?? '') ||
+    methods.length === 0
+  ) {
+    eligibility = 'unknown';
+    blockers.push({ code: 'unknown', message: 'GitHub could not confirm every merge requirement.' });
+  }
+  return {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    state,
+    isDraft: pr.isDraft,
+    headRef: pr.headRefName,
+    baseRef: pr.baseRefName,
+    headSha: pr.headRefOid,
+    mergeable,
+    reviewDecision,
+    checks,
+    methods,
+    defaultMethod,
+    eligibility,
+    blockers,
+    canMerge: eligibility === 'ready',
+  };
+}
+
+async function fetchPrMergeState(
+  repoRoot: string,
+  repoRef: GithubRepoRef | null,
+  number: number,
+  refresh = false,
+): Promise<ForgePrMergeStateResult> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return {
+      available: true,
+      mergeState: normalizeMergeState(
+        {
+          number,
+          title: 'Dry-run pull request',
+          url: `https://github.com/mock/repo/pull/${number}`,
+          state: 'OPEN',
+          isDraft: false,
+          headRefName: 'feat/dry-run',
+          baseRefName: 'main',
+          headRefOid: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          reviewDecision: 'APPROVED',
+          statusCheckRollup: [{ name: 'test', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/mock/repo/actions' }],
+        },
+        { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true },
+        { readable: true, requiredChecks: ['test'] },
+      ),
+    };
+  }
+  if (!repoRef) return { available: false, reason: 'GitHub remote could not be resolved' };
+  const key = `${repoRoot}:${number}`;
+  const hit = mergeStateCache.get(key);
+  if (!refresh && hit && Date.now() - hit.at < MERGE_CACHE_MS) return hit.value;
+  try {
+    const prOut = await gh(repoRoot, [
+      'pr', 'view', String(number), '--json',
+      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup',
+    ]);
+    const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
+    const [policyOut, requiredChecks] = await Promise.all([
+      gh(repoRoot, ['api', `repos/${repoRef.owner}/${repoRef.repo}`]),
+      gh(repoRoot, [
+        'api',
+        `repos/${repoRef.owner}/${repoRef.repo}/branches/${encodeURIComponent(parsedPr.baseRefName)}/protection/required_status_checks`,
+        '--jq',
+        '[.contexts[]?, .checks[]?.context] | unique',
+      ])
+        .then((output) => ({ readable: true, requiredChecks: z.array(z.string()).parse(JSON.parse(output)) }))
+        .catch(() => ({ readable: false, requiredChecks: [] as string[] })),
+    ]);
+    const value: ForgePrMergeStateResult = {
+      available: true,
+      mergeState: normalizeMergeState(parsedPr, JSON.parse(policyOut), requiredChecks),
+    };
+    mergeStateCache.set(key, { at: Date.now(), value });
+    return value;
+  } catch (error) {
+    return { available: false, reason: firstLine(error instanceof Error ? error.message : String(error)) };
+  }
+}
+
+export function evictGithubProjectCaches(repoRoot: string): void {
+  listCache.delete(repoRoot);
+  mergeStateCache.forEach((_value, key) => {
+    if (key.startsWith(`${repoRoot}:`)) mergeStateCache.delete(key);
+  });
+  commentsCache.forEach((_value, key) => {
+    if (key.startsWith(`${repoRoot}:`)) commentsCache.delete(key);
+  });
+}
+
+async function mergePullRequest(
+  repoRoot: string,
+  repoRef: GithubRepoRef | null,
+  number: number,
+  input: ForgeMergeInput,
+): Promise<ForgeMergeResult> {
+  const key = `${repoRoot}:${number}`;
+  if (mergeInflight.has(key)) return { merged: false, status: 409, error: 'A merge is already in progress.', code: 'concurrent' };
+  mergeInflight.add(key);
+  try {
+    const fresh = await fetchPrMergeState(repoRoot, repoRef, number, true);
+    if (!fresh.available) return { merged: false, status: 502, error: fresh.reason };
+    const current = fresh.mergeState;
+    if (current.headSha !== input.expectedHeadSha) {
+      return { merged: false, status: 409, error: 'The pull request head changed. Review the new commits before merging.', code: 'stale-head', current };
+    }
+    if (!current.methods.includes(input.method)) {
+      return { merged: false, status: 409, error: 'That merge method is no longer enabled.', code: 'disabled-method', current };
+    }
+    if (!current.canMerge) {
+      return { merged: false, status: 409, error: current.blockers[0]?.message ?? 'The pull request is not eligible to merge.', code: current.eligibility, current };
+    }
+    if (process.env.CEZ_DRY_RUN === '1') {
+      evictGithubProjectCaches(repoRoot);
+      return { merged: true, number, url: current.url, method: input.method, mergeCommitSha: 'abcdef0123456789abcdef0123456789abcdef01' };
+    }
+    if (!repoRef) return { merged: false, status: 404, error: 'GitHub repository not found.' };
+    const out = await gh(repoRoot, [
+      'api', '--method', 'PUT', `repos/${repoRef.owner}/${repoRef.repo}/pulls/${number}/merge`,
+      '-f', `merge_method=${input.method}`, '-f', `sha=${input.expectedHeadSha}`,
+    ]);
+    const result = ghMergeResultSchema.parse(JSON.parse(out));
+    if (!result.merged) return { merged: false, status: 409, error: result.message ?? 'GitHub refused the merge.', code: 'github-blocked', current };
+    evictGithubProjectCaches(repoRoot);
+    return { merged: true, number, url: current.url, method: input.method, ...(result.sha ? { mergeCommitSha: result.sha } : {}) };
+  } catch (error) {
+    const message = firstLine(error instanceof Error ? error.message : String(error));
+    const status = /403|permission|forbidden/i.test(message) ? 403 : /404|not found/i.test(message) ? 404 : 502;
+    return { merged: false, status, error: status === 403 ? 'GitHub permission denied.' : status === 404 ? 'Pull request or repository not found.' : 'GitHub could not complete the merge.' };
+  } finally {
+    mergeInflight.delete(key);
+  }
+}
+
 /** owner/repo parsed out of the origin remote — feeds `viewUrl`. */
 export interface GithubRepoRef {
   owner: string;
@@ -707,6 +1656,7 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
     listIssues: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).issues,
 
     listPRs: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).prs,
+    prDiff: (number, opts) => fetchGithubPrDiff(repoRoot, number, opts?.refresh),
 
     createPR: (input) => createDraftPr(input),
 
@@ -728,6 +1678,10 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
         return null;
       }
     },
+
+    prMergeState: (number, opts) => fetchPrMergeState(repoRoot, repoRef, number, opts?.refresh),
+
+    mergePR: (number, input) => mergePullRequest(repoRoot, repoRef, number, input),
 
     viewUrl: (kind: ForgeRefKind, ref: string | number): string | null => {
       if (!repoRef) return null;
