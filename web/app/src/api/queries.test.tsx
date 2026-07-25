@@ -402,6 +402,14 @@ describe('queryKeys', () => {
     expect(queryKeys.github({ limit: 5 })).not.toEqual(queryKeys.github({ limit: 50 }))
   })
 
+  it('keys github checks by the sorted PR set so the same window is one cache (#664)', () => {
+    // Order must not matter — a re-sorted visible window would otherwise refetch needlessly.
+    expect(queryKeys.githubChecks([12, 7])).toEqual(queryKeys.githubChecks([7, 12]))
+    expect(queryKeys.githubChecks([7, 12])).toEqual(['default', 'github', 'checks', '7,12'])
+    // Different windows are different caches.
+    expect(queryKeys.githubChecks([7])).not.toEqual(queryKeys.githubChecks([7, 12]))
+  })
+
   it('is stable across calls — an unstable key refetches forever', () => {
     expect(queryKeys.runs.detail('a')).toEqual(queryKeys.runs.detail('a'))
   })

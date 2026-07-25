@@ -751,6 +751,14 @@ export interface GithubData {
   labelColors?: Record<string, string>
 }
 
+/** `GET /api/github/checks?prs=…` (#664) — lazy PR checks glyphs, `number → glyph`. The list call
+ *  no longer ships `statusCheckRollup`, so a row's glyph is hydrated through this endpoint for the
+ *  on-screen rows only. Degrades to `{ available: false, reason }`; an absent number means "no
+ *  checks / not found". */
+export type GithubChecksData =
+  | { available: true; checks: Record<number, 'passing' | 'failing' | 'pending' | null> }
+  | { available: false; reason: string }
+
 export type GithubMergeMethod = 'merge' | 'squash' | 'rebase'
 
 export interface GithubPrMergeState {

@@ -90,7 +90,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.js';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.js';
 import { resolveForge } from './forge/index.js';
-import { fetchGithub, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError } from './github.js';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.js';
 import { ensureLaunchKey } from './launch-key.js';
 import { openInTerminal } from './open-in-terminal.js';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.js';
@@ -3294,6 +3294,25 @@ export function createApp(deps: ServerDeps): Hono {
     return c.json(
       await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.query('refresh') === '1'),
     );
+  });
+
+  // Lazy checks glyphs for on-screen PR rows (#664). Additive sibling of /api/github — the list
+  // call dropped `statusCheckRollup` (the dominant cost), so the glyph is hydrated here per
+  // visible row. `prs` is a comma-separated list of positive integers, capped at GH_CHECKS_MAX;
+  // anything malformed is a 400. Same in-payload availability degrade as the list (never a 5xx).
+  api.get('/github/checks', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const raw = c.req.query('prs');
+    if (!raw) return c.json({ error: 'missing prs query' }, 400);
+    const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0 || parts.length > GH_CHECKS_MAX) return c.json({ error: 'invalid prs query' }, 400);
+    const numbers: number[] = [];
+    for (const part of parts) {
+      const n = Number(part);
+      if (!Number.isInteger(n) || n <= 0 || String(n) !== part) return c.json({ error: 'invalid prs query' }, 400);
+      numbers.push(n);
+    }
+    return c.json(await fetchGithubChecks(repoRoot, numbers));
   });
 
   const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });

@@ -10,6 +10,7 @@ import {
   getAgentConfigFile,
   getConfig,
   getGithub,
+  getGithubChecks,
   getGithubComments,
   getGithubPrChanges,
   getGroup,
@@ -151,6 +152,10 @@ export const queryKeys = {
     return [queryScope(), 'worktrees'] as const
   },
   github: (params: { limit?: number } = {}) => [queryScope(), 'github', params.limit ?? null] as const,
+  /** Lazy PR checks glyphs (`GET /api/github/checks`, #664), keyed by the sorted PR numbers so the
+   *  same visible window de-dupes to one cache entry. */
+  githubChecks: (prNumbers: readonly number[]) =>
+    [queryScope(), 'github', 'checks', [...prNumbers].sort((a, b) => a - b).join(',')] as const,
   githubComments: (kind: 'issue' | 'pr', number: number) =>
     [queryScope(), 'github', 'comments', kind, number] as const,
   githubMergeState: (number: number) => [queryScope(), 'github', 'merge-state', number] as const,
@@ -801,6 +806,20 @@ export function useGithub(params: { limit?: number } = {}, enabled = true) {
     queryKey: queryKeys.github(params),
     queryFn: ({ signal }) => getGithub({ limit: params.limit }, { signal }),
     enabled,
+  })
+}
+
+/** Lazy PR checks glyphs (`/api/github/checks`, #664). The list call no longer ships
+ *  `statusCheckRollup`, so the PR row's checks glyph is hydrated here for the on-screen rows only.
+ *  `enabled` gates it to the PR view with a non-empty window; `staleTime` matches the 60 s server
+ *  cache so re-visiting the same window doesn't re-hit gh. Degrade is silent — an unavailable
+ *  payload just leaves rows without a glyph. */
+export function useGithubChecks(prNumbers: number[], enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.githubChecks(prNumbers),
+    queryFn: ({ signal }) => getGithubChecks(prNumbers, { signal }),
+    enabled: enabled && prNumbers.length > 0,
+    staleTime: 60_000,
   })
 }
 
