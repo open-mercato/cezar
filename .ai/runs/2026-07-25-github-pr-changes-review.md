@@ -61,7 +61,7 @@ The source document is read from `origin/pr-658` for this run and intentionally 
 
 - [x] 2.1 Add client/query support, PR-only navigation, and deep-link routing — c63dc07
 - [x] 2.2 Build the responsive Changes view and unit coverage — c63dc07
-- [ ] 2.3 Extend real-browser coverage
+- [x] 2.3 Extend real-browser coverage — da309ae
 
 ### Phase 3: Verification and review
 
