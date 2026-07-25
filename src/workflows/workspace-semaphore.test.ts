@@ -90,6 +90,23 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     process.env.CEZ_DRY_RUN = '1';
   });
 
+  it('exempts only the configured number of durable monitoring sessions', () => {
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2, maxMonitoringSessions: 2 } });
+    const projectA = project('cez-monitor-cap-', semaphore);
+    const internals = projectA.manager as unknown as {
+      active: Map<string, object>;
+      waiting: Set<string>;
+      monitoring: Set<string>;
+      busySlots(): number;
+    };
+    for (const id of ['ordinary', 'm1', 'm2', 'm3']) internals.active.set(id, {});
+    for (const id of ['ordinary', 'm1', 'm2', 'm3']) internals.waiting.add(id);
+    for (const id of ['m1', 'm2', 'm3']) internals.monitoring.add(id);
+    // ordinary wait is exempt; two monitors are exempt; monitor #3 back-pressures the active pool.
+    expect(internals.busySlots()).toBe(1);
+    expect(semaphore.busy()).toBe(1);
+  });
+
   afterEach(async () => {
     // Settle everything before tearing the fixtures down: cancel whatever is
     // still live and wait for terminal statuses, so no check-step child or

@@ -22,6 +22,9 @@ import type {
   GitPushResponse,
   GithubCommentsData,
   GithubData,
+  GithubMergeMethod,
+  GithubMergeResponse,
+  GithubPrMergeStateResponse,
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
@@ -380,6 +383,24 @@ export function getGithubComments(
   // "actually go and ask gh", exactly as `getGithub` can.
   const search = params.refresh ? '?refresh=1' : ''
   return get<GithubCommentsData>(`/api/github/comments/${kind}/${number}${search}`, opts)
+}
+
+export function getGithubPrMergeState(
+  number: number,
+  params: { refresh?: boolean } = {},
+  opts?: ReadOptions,
+): Promise<GithubPrMergeStateResponse> {
+  return get<GithubPrMergeStateResponse>(
+    `/api/github/prs/${number}/merge-state${params.refresh ? '?refresh=1' : ''}`,
+    opts,
+  )
+}
+
+export function mergeGithubPr(
+  number: number,
+  input: { method: GithubMergeMethod; expectedHeadSha: string },
+): Promise<GithubMergeResponse> {
+  return mutate<GithubMergeResponse>('POST', `/api/github/prs/${number}/merge`, input)
 }
 
 export function getGithubPrChanges(

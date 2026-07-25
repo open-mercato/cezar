@@ -57,6 +57,10 @@ const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
     maxParallel: z.number().int().min(1).max(16).default(2).catch(2),
+    /** Extra durable `CEZ:MONITORING` sessions exempt from the active-task cap. */
+    maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
+    /** Optional cadence for re-checking monitored work; null parks at zero model cost. */
+    monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().default(null).catch(null),
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),

@@ -143,6 +143,59 @@ export interface ForgePrStatus {
   checks: 'passing' | 'failing' | 'pending' | null;
 }
 
+export type ForgeMergeMethod = 'merge' | 'squash' | 'rebase';
+
+export interface ForgePrCheck {
+  name: string;
+  state: 'passing' | 'failing' | 'pending' | 'unknown';
+  required: boolean | null;
+  url?: string;
+}
+
+export interface ForgePrMergeState {
+  number: number;
+  title: string;
+  url: string;
+  state: 'open' | 'closed' | 'merged';
+  isDraft: boolean;
+  headRef: string;
+  baseRef: string;
+  headSha: string;
+  mergeable: 'mergeable' | 'conflicting' | 'unknown';
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown';
+  checks: ForgePrCheck[];
+  methods: ForgeMergeMethod[];
+  defaultMethod: ForgeMergeMethod | null;
+  eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown';
+  blockers: Array<{ code: string; message: string }>;
+  canMerge: boolean;
+}
+
+export type ForgePrMergeStateResult =
+  | { available: true; mergeState: ForgePrMergeState }
+  | { available: false; reason: string };
+
+export interface ForgeMergeInput {
+  method: ForgeMergeMethod;
+  expectedHeadSha: string;
+}
+
+export type ForgeMergeResult =
+  | {
+      merged: true;
+      number: number;
+      url: string;
+      method: ForgeMergeMethod;
+      mergeCommitSha?: string;
+    }
+  | {
+      merged: false;
+      status: 403 | 404 | 409 | 502;
+      error: string;
+      code?: string;
+      current?: ForgePrMergeState;
+    };
+
 export interface ForgePrChange {
   path: string;
   previousPath?: string;
@@ -166,7 +219,6 @@ export type ForgePrDiffResult =
       reason?: string;
     }
   | { available: false; reason: string };
-
 export type ForgeRefKind = 'repo' | 'issue' | 'pr' | 'branch' | 'commit';
 
 export type DraftPrOutcome =
@@ -193,6 +245,8 @@ export interface ForgeDriver {
   createPR(input: DraftPrInput): Promise<DraftPrOutcome>;
   /** The branch's open/merged PR, or null when none (or the forge is down). */
   prStatus(branch: string): Promise<ForgePrStatus | null>;
+  prMergeState?(number: number, opts?: { refresh?: boolean }): Promise<ForgePrMergeStateResult>;
+  mergePR?(number: number, input: ForgeMergeInput): Promise<ForgeMergeResult>;
   /** Bounded, read-only file changes for a pull request. */
   prDiff?(number: number, opts?: { refresh?: boolean }): Promise<ForgePrDiffResult>;
   /** Web URL for a ref on the forge, or null when the remote isn't parseable. */

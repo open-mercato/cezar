@@ -153,6 +153,7 @@ export const queryKeys = {
   github: (params: { limit?: number } = {}) => [queryScope(), 'github', params.limit ?? null] as const,
   githubComments: (kind: 'issue' | 'pr', number: number) =>
     [queryScope(), 'github', 'comments', kind, number] as const,
+  githubMergeState: (number: number) => [queryScope(), 'github', 'merge-state', number] as const,
   get openTargets() {
     return [queryScope(), 'open-targets'] as const
   },

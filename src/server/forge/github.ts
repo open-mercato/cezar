@@ -10,6 +10,12 @@ import type {
   ForgeCommentsData,
   ForgeDriver,
   ForgeItem,
+  ForgeMergeInput,
+  ForgeMergeMethod,
+  ForgeMergeResult,
+  ForgePrCheck,
+  ForgePrMergeState,
+  ForgePrMergeStateResult,
   ForgePrStatus,
   ForgePrDiffResult,
   ForgeRefKind,
@@ -211,6 +217,40 @@ const ghPrViewSchema = z.object({
   state: z.string().default('OPEN'),
   isDraft: z.boolean().default(false),
   statusCheckRollup: ghStatusCheckRollup,
+});
+
+const mergeCheckSchema = z.object({
+  name: z.string().default('Check'),
+  state: z.string().nullish(),
+  status: z.string().nullish(),
+  conclusion: z.string().nullish(),
+  detailsUrl: z.string().nullish(),
+});
+const mergePrSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  url: z.string(),
+  state: z.string(),
+  isDraft: z.boolean().default(false),
+  headRefName: z.string(),
+  baseRefName: z.string(),
+  headRefOid: z.string().regex(/^[0-9a-f]{40}$/),
+  mergeable: z.string().nullish(),
+  mergeStateStatus: z.string().nullish(),
+  reviewDecision: z.string().nullish(),
+  statusCheckRollup: z.array(mergeCheckSchema).nullish(),
+});
+const repoMergePolicySchema = z.object({
+  allow_merge_commit: z.boolean().default(false),
+  allow_squash_merge: z.boolean().default(false),
+  allow_rebase_merge: z.boolean().default(false),
+  merge_commit_title: z.string().nullish(),
+  squash_merge_commit_title: z.string().nullish(),
+});
+const ghMergeResultSchema = z.object({
+  merged: z.boolean(),
+  message: z.string().nullish(),
+  sha: z.string().nullish(),
 });
 
 /** Exported for unit tests (#400) — collapses a zod-validated `statusCheckRollup` array down to
@@ -1370,6 +1410,231 @@ export function detectGithubCached(repoRoot: string): ForgeAvailability | null {
   return cached; // last-known value while revalidating; null only until the first probe warms
 }
 
+const mergeStateCache = new Map<string, { at: number; value: ForgePrMergeStateResult }>();
+const mergeInflight = new Set<string>();
+const MERGE_CACHE_MS = 15_000;
+
+function mergeCheckState(check: z.infer<typeof mergeCheckSchema>): ForgePrCheck['state'] {
+  const value = (check.conclusion || check.state || check.status || '').toUpperCase();
+  if (['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(value)) return 'passing';
+  if (['FAILURE', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED', 'CANCELLED'].includes(value)) return 'failing';
+  if (['PENDING', 'IN_PROGRESS', 'QUEUED', 'EXPECTED', 'WAITING', 'REQUESTED'].includes(value)) return 'pending';
+  return 'unknown';
+}
+
+export function normalizeMergeState(
+  raw: unknown,
+  policyRaw: unknown,
+  requirements: { readable: boolean; requiredChecks: string[] } = {
+    readable: false,
+    requiredChecks: [],
+  },
+): ForgePrMergeState {
+  const pr = mergePrSchema.parse(raw);
+  const policy = repoMergePolicySchema.parse(policyRaw);
+  const state: ForgePrMergeState['state'] =
+    pr.state.toUpperCase() === 'MERGED' ? 'merged' : pr.state.toUpperCase() === 'CLOSED' ? 'closed' : 'open';
+  const mergeable: ForgePrMergeState['mergeable'] =
+    pr.mergeable?.toUpperCase() === 'MERGEABLE'
+      ? 'mergeable'
+      : pr.mergeable?.toUpperCase() === 'CONFLICTING'
+        ? 'conflicting'
+        : 'unknown';
+  const reviewDecision: ForgePrMergeState['reviewDecision'] =
+    pr.reviewDecision?.toUpperCase() === 'APPROVED'
+      ? 'approved'
+      : pr.reviewDecision?.toUpperCase() === 'CHANGES_REQUESTED'
+        ? 'changes-requested'
+        : pr.reviewDecision?.toUpperCase() === 'REVIEW_REQUIRED'
+          ? 'review-required'
+          : 'unknown';
+  const checks: ForgePrCheck[] = (pr.statusCheckRollup ?? []).map((check) => ({
+    name: check.name,
+    state: mergeCheckState(check),
+    required: requirements.readable ? requirements.requiredChecks.includes(check.name) : null,
+    ...(check.detailsUrl?.startsWith('https://') || check.detailsUrl?.startsWith('http://')
+      ? { url: check.detailsUrl }
+      : {}),
+  }));
+  const methods: ForgeMergeMethod[] = [];
+  if (policy.allow_squash_merge) methods.push('squash');
+  if (policy.allow_merge_commit) methods.push('merge');
+  if (policy.allow_rebase_merge) methods.push('rebase');
+  const defaultMethod =
+    policy.squash_merge_commit_title && methods.includes('squash')
+      ? 'squash'
+      : policy.merge_commit_title && methods.includes('merge')
+        ? 'merge'
+        : methods[0] ?? null;
+  const blockers: ForgePrMergeState['blockers'] = [];
+  let eligibility: ForgePrMergeState['eligibility'] = 'ready';
+  if (state !== 'open') {
+    eligibility = 'terminal';
+    blockers.push({ code: 'terminal', message: state === 'merged' ? 'This pull request is merged.' : 'This pull request is closed.' });
+  } else if (pr.isDraft) {
+    eligibility = 'blocked';
+    blockers.push({ code: 'draft', message: 'Mark the pull request ready for review before merging.' });
+  } else if (mergeable === 'conflicting') {
+    eligibility = 'blocked';
+    blockers.push({ code: 'conflicts', message: 'Conflicts must be resolved before merging.' });
+  } else if (checks.some((check) => check.state === 'failing')) {
+    eligibility = 'blocked';
+    blockers.push({ code: 'checks-failing', message: 'One or more checks are failing.' });
+  } else if (reviewDecision === 'changes-requested' || reviewDecision === 'review-required') {
+    eligibility = 'blocked';
+    blockers.push({ code: 'reviews', message: reviewDecision === 'changes-requested' ? 'Changes were requested.' : 'A required review is missing.' });
+  } else if (reviewDecision === 'unknown' || !requirements.readable) {
+    eligibility = 'unknown';
+    blockers.push({
+      code: 'rules-unknown',
+      message: 'GitHub could not confirm review and branch-protection requirements.',
+    });
+  } else if (checks.some((check) => check.state === 'pending') || pr.mergeStateStatus?.toUpperCase() === 'UNSTABLE') {
+    eligibility = 'pending';
+    blockers.push({ code: 'pending', message: 'Checks or GitHub mergeability are still pending.' });
+  } else if (
+    mergeable !== 'mergeable' ||
+    !['CLEAN', 'HAS_HOOKS'].includes(pr.mergeStateStatus?.toUpperCase() ?? '') ||
+    methods.length === 0
+  ) {
+    eligibility = 'unknown';
+    blockers.push({ code: 'unknown', message: 'GitHub could not confirm every merge requirement.' });
+  }
+  return {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    state,
+    isDraft: pr.isDraft,
+    headRef: pr.headRefName,
+    baseRef: pr.baseRefName,
+    headSha: pr.headRefOid,
+    mergeable,
+    reviewDecision,
+    checks,
+    methods,
+    defaultMethod,
+    eligibility,
+    blockers,
+    canMerge: eligibility === 'ready',
+  };
+}
+
+async function fetchPrMergeState(
+  repoRoot: string,
+  repoRef: GithubRepoRef | null,
+  number: number,
+  refresh = false,
+): Promise<ForgePrMergeStateResult> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return {
+      available: true,
+      mergeState: normalizeMergeState(
+        {
+          number,
+          title: 'Dry-run pull request',
+          url: `https://github.com/mock/repo/pull/${number}`,
+          state: 'OPEN',
+          isDraft: false,
+          headRefName: 'feat/dry-run',
+          baseRefName: 'main',
+          headRefOid: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          reviewDecision: 'APPROVED',
+          statusCheckRollup: [{ name: 'test', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/mock/repo/actions' }],
+        },
+        { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true },
+        { readable: true, requiredChecks: ['test'] },
+      ),
+    };
+  }
+  if (!repoRef) return { available: false, reason: 'GitHub remote could not be resolved' };
+  const key = `${repoRoot}:${number}`;
+  const hit = mergeStateCache.get(key);
+  if (!refresh && hit && Date.now() - hit.at < MERGE_CACHE_MS) return hit.value;
+  try {
+    const prOut = await gh(repoRoot, [
+      'pr', 'view', String(number), '--json',
+      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup',
+    ]);
+    const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
+    const [policyOut, requiredChecks] = await Promise.all([
+      gh(repoRoot, ['api', `repos/${repoRef.owner}/${repoRef.repo}`]),
+      gh(repoRoot, [
+        'api',
+        `repos/${repoRef.owner}/${repoRef.repo}/branches/${encodeURIComponent(parsedPr.baseRefName)}/protection/required_status_checks`,
+        '--jq',
+        '[.contexts[]?, .checks[]?.context] | unique',
+      ])
+        .then((output) => ({ readable: true, requiredChecks: z.array(z.string()).parse(JSON.parse(output)) }))
+        .catch(() => ({ readable: false, requiredChecks: [] as string[] })),
+    ]);
+    const value: ForgePrMergeStateResult = {
+      available: true,
+      mergeState: normalizeMergeState(parsedPr, JSON.parse(policyOut), requiredChecks),
+    };
+    mergeStateCache.set(key, { at: Date.now(), value });
+    return value;
+  } catch (error) {
+    return { available: false, reason: firstLine(error instanceof Error ? error.message : String(error)) };
+  }
+}
+
+export function evictGithubProjectCaches(repoRoot: string): void {
+  listCache.delete(repoRoot);
+  mergeStateCache.forEach((_value, key) => {
+    if (key.startsWith(`${repoRoot}:`)) mergeStateCache.delete(key);
+  });
+  commentsCache.forEach((_value, key) => {
+    if (key.startsWith(`${repoRoot}:`)) commentsCache.delete(key);
+  });
+}
+
+async function mergePullRequest(
+  repoRoot: string,
+  repoRef: GithubRepoRef | null,
+  number: number,
+  input: ForgeMergeInput,
+): Promise<ForgeMergeResult> {
+  const key = `${repoRoot}:${number}`;
+  if (mergeInflight.has(key)) return { merged: false, status: 409, error: 'A merge is already in progress.', code: 'concurrent' };
+  mergeInflight.add(key);
+  try {
+    const fresh = await fetchPrMergeState(repoRoot, repoRef, number, true);
+    if (!fresh.available) return { merged: false, status: 502, error: fresh.reason };
+    const current = fresh.mergeState;
+    if (current.headSha !== input.expectedHeadSha) {
+      return { merged: false, status: 409, error: 'The pull request head changed. Review the new commits before merging.', code: 'stale-head', current };
+    }
+    if (!current.methods.includes(input.method)) {
+      return { merged: false, status: 409, error: 'That merge method is no longer enabled.', code: 'disabled-method', current };
+    }
+    if (!current.canMerge) {
+      return { merged: false, status: 409, error: current.blockers[0]?.message ?? 'The pull request is not eligible to merge.', code: current.eligibility, current };
+    }
+    if (process.env.CEZ_DRY_RUN === '1') {
+      evictGithubProjectCaches(repoRoot);
+      return { merged: true, number, url: current.url, method: input.method, mergeCommitSha: 'abcdef0123456789abcdef0123456789abcdef01' };
+    }
+    if (!repoRef) return { merged: false, status: 404, error: 'GitHub repository not found.' };
+    const out = await gh(repoRoot, [
+      'api', '--method', 'PUT', `repos/${repoRef.owner}/${repoRef.repo}/pulls/${number}/merge`,
+      '-f', `merge_method=${input.method}`, '-f', `sha=${input.expectedHeadSha}`,
+    ]);
+    const result = ghMergeResultSchema.parse(JSON.parse(out));
+    if (!result.merged) return { merged: false, status: 409, error: result.message ?? 'GitHub refused the merge.', code: 'github-blocked', current };
+    evictGithubProjectCaches(repoRoot);
+    return { merged: true, number, url: current.url, method: input.method, ...(result.sha ? { mergeCommitSha: result.sha } : {}) };
+  } catch (error) {
+    const message = firstLine(error instanceof Error ? error.message : String(error));
+    const status = /403|permission|forbidden/i.test(message) ? 403 : /404|not found/i.test(message) ? 404 : 502;
+    return { merged: false, status, error: status === 403 ? 'GitHub permission denied.' : status === 404 ? 'Pull request or repository not found.' : 'GitHub could not complete the merge.' };
+  } finally {
+    mergeInflight.delete(key);
+  }
+}
+
 /** owner/repo parsed out of the origin remote — feeds `viewUrl`. */
 export interface GithubRepoRef {
   owner: string;
@@ -1413,6 +1678,10 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
         return null;
       }
     },
+
+    prMergeState: (number, opts) => fetchPrMergeState(repoRoot, repoRef, number, opts?.refresh),
+
+    mergePR: (number, input) => mergePullRequest(repoRoot, repoRef, number, input),
 
     viewUrl: (kind: ForgeRefKind, ref: string | number): string | null => {
       if (!repoRef) return null;

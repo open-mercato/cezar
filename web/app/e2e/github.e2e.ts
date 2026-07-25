@@ -206,6 +206,27 @@ describe('the GitHub tab against the live dry-run server', () => {
     browser.screenshot(`${artifactsDir}/github-thread-timeline.png`)
   })
 
+  it('shows the guarded merge box and confirms before merging', async () => {
+    if (!forgeAvailable) return
+    const gh = await api<GithubPayload>('/api/github')
+    const pr = gh.prs[0]
+    if (!pr) return
+
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-box"]') !== null`)
+    expect(browser.text('[data-slot="gh-merge-box"]')).toContain('Ready to merge')
+    expect(browser.text('[data-slot="gh-merge-box"]')).toContain('→ main')
+    browser.screenshot(`${artifactsDir}/github-merge-ready.png`)
+
+    browser.click('[data-slot="gh-merge-box"] select + button')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-confirm"]') !== null`)
+    expect(browser.text('[data-slot="gh-merge-confirm"]')).toContain(`pull request #${pr.number}`)
+    expect(browser.text('[data-slot="gh-merge-confirm"]')).toContain('into main')
+    browser.screenshot(`${artifactsDir}/github-merge-confirm.png`)
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-confirm"]') === null`)
+  })
+
   it('reviews a pull request file-by-file in the Changes view', async () => {
     if (!forgeAvailable) return
     const gh = await api<GithubPayload>('/api/github')

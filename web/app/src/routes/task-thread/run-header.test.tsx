@@ -96,6 +96,30 @@ function renderHeader(record: ApiRun) {
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
 
+describe('monitoring schedule', () => {
+  it('shows the exact persisted deadline in a time element', () => {
+    stubFetch()
+    renderHeader(run('running', { activity: 'monitoring', monitoringWakeAt: '2026-07-25T10:15:00.000Z' }))
+    const time = screen.getByText(/2026/).closest('time')
+    expect(time?.getAttribute('datetime')).toBe('2026-07-25T10:15:00.000Z')
+    expect(screen.getByText(/Next automatic check/)).not.toBeNull()
+  })
+
+  it('shows parked copy for absent or malformed deadlines', () => {
+    stubFetch()
+    renderHeader(run('running', { activity: 'monitoring', monitoringWakeAt: 'not-a-date' }))
+    expect(screen.getByText('Parked — no automatic check scheduled')).not.toBeNull()
+    expect(screen.queryByText(/Invalid Date/)).toBeNull()
+  })
+
+  it('distinguishes a capped monitoring epoch from an ordinary parked session', () => {
+    stubFetch()
+    renderHeader(run('running', { activity: 'monitoring', monitoringWakeCapReached: true }))
+    expect(screen.getByText('Automatic checks paused — 40/40 reached')).not.toBeNull()
+    expect(screen.queryByText('Parked — no automatic check scheduled')).toBeNull()
+  })
+})
+
 describe('editable title (#389)', () => {
   it('pencil flips the h1 into an input; Enter PATCHes the trimmed title exactly once', async () => {
     const sent = stubFetch()

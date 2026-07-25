@@ -36,6 +36,10 @@ import { loadWorkspaceConfig } from './config.js';
 export interface WorkspaceResourceLimits {
   /** Workspace-wide cap on concurrently *running* agent runs. */
   maxParallel: number;
+  /** Durable monitoring sessions that do not consume active-task capacity. */
+  maxMonitoringSessions?: number;
+  /** Optional automatic monitoring re-check cadence; null means stay parked. */
+  monitoringWakeIntervalMinutes?: number | null;
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
   memoryLimitMb: number | null;
   /**
@@ -76,7 +80,12 @@ export interface SemaphoreParticipant {
   oldestQueuedAt(): number | null;
 }
 
-const DEFAULT_LIMITS: WorkspaceResourceLimits = { maxParallel: 2, memoryLimitMb: null };
+const DEFAULT_LIMITS: WorkspaceResourceLimits = {
+  maxParallel: 2,
+  maxMonitoringSessions: 2,
+  monitoringWakeIntervalMinutes: null,
+  memoryLimitMb: null,
+};
 
 /** Production loader: the `resources` slice of `~/.cezar/config.json`
  *  (schema-defaulted, so a missing/corrupt file yields the zero-config 2/null),
@@ -91,6 +100,8 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
   }
   return {
     maxParallel: resources.maxParallel,
+    maxMonitoringSessions: resources.maxMonitoringSessions,
+    monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
     memoryLimitMb: resources.memoryLimitMb,
     projectLimits,
   };
@@ -139,6 +150,14 @@ export class WorkspaceSemaphore {
   /** Cached workspace-wide parallel cap. */
   maxParallel(): number {
     return this.limits.maxParallel;
+  }
+
+  maxMonitoringSessions(): number {
+    return this.limits.maxMonitoringSessions ?? 2;
+  }
+
+  monitoringWakeIntervalMinutes(): number | null {
+    return this.limits.monitoringWakeIntervalMinutes ?? null;
   }
 
   /** Cached per-task memory ceiling (MiB), or null for no limit. */

@@ -129,6 +129,10 @@ export interface RunRecord {
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work
    *  (spec 2026-07-18-subagent-monitoring-status, #490). Absent on old runs; cleared on resume/end. */
   activity?: RunActivity
+  /** Exact ISO-8601 deadline for the next automatic monitoring check. */
+  monitoringWakeAt?: string
+  /** The current live monitoring epoch exhausted its 40 automatic checks. */
+  monitoringWakeCapReached?: boolean
   createdAt: string
   startedAt?: string
   finishedAt?: string
@@ -449,6 +453,8 @@ export interface WorkspaceConfigResponse {
   }
   resources: {
     maxParallel: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
     memoryLimitMb: number | null
     worktreeRetentionDefault: number
   }
@@ -467,6 +473,8 @@ export interface SetWorkspaceConfigInput {
   }
   resources?: {
     maxParallel?: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
     memoryLimitMb?: number | null
     worktreeRetentionDefault?: number
   }
@@ -751,6 +759,44 @@ export interface GithubData {
   prs: GithubItem[]
   /** Repo-wide label name → 6-hex color (no `#`); lets chips tint like GitHub. Additive. */
   labelColors?: Record<string, string>
+}
+
+export type GithubMergeMethod = 'merge' | 'squash' | 'rebase'
+
+export interface GithubPrMergeState {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | 'merged'
+  isDraft: boolean
+  headRef: string
+  baseRef: string
+  headSha: string
+  mergeable: 'mergeable' | 'conflicting' | 'unknown'
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown'
+  checks: Array<{
+    name: string
+    state: 'passing' | 'failing' | 'pending' | 'unknown'
+    required: boolean | null
+    url?: string
+  }>
+  methods: GithubMergeMethod[]
+  defaultMethod: GithubMergeMethod | null
+  eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown'
+  blockers: Array<{ code: string; message: string }>
+  canMerge: boolean
+}
+
+export type GithubPrMergeStateResponse =
+  | { available: true; mergeState: GithubPrMergeState }
+  | { available: false; reason: string }
+
+export interface GithubMergeResponse {
+  merged: true
+  number: number
+  url: string
+  method: GithubMergeMethod
+  mergeCommitSha?: string
 }
 
 /** One comment or PR review summary in an issue/PR thread (`GET /api/github/comments/…`, #499). */

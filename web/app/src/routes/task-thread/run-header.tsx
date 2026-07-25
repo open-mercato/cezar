@@ -141,6 +141,7 @@ export function RunHeader({
         </div>
 
         <MetaRow run={run} />
+        <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -558,6 +559,38 @@ function MetaRow({ run }: { run: ApiRun }) {
         <AgentBadge run={run} />
       </span>
     </div>
+  )
+}
+
+function MonitoringSchedule({ run }: { run: ApiRun }) {
+  if (run.status !== 'running' || run.activity !== 'monitoring') return null
+  if (run.monitoringWakeCapReached) {
+    return (
+      <p data-slot="monitoring-schedule" role="status" className="mt-1 text-xs text-muted-foreground">
+        Automatic checks paused — 40/40 reached
+      </p>
+    )
+  }
+  const wakeAt = run.monitoringWakeAt ? new Date(run.monitoringWakeAt) : null
+  const validWakeAt = wakeAt && Number.isFinite(wakeAt.getTime()) ? wakeAt : null
+  if (!validWakeAt) {
+    return (
+      <p data-slot="monitoring-schedule" role="status" className="mt-1 text-xs text-muted-foreground">
+        Parked — no automatic check scheduled
+      </p>
+    )
+  }
+  const label = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+  }).format(validWakeAt)
+  return (
+    <p data-slot="monitoring-schedule" role="status" className="mt-1 text-xs text-muted-foreground">
+      Next automatic check{' '}
+      <time dateTime={run.monitoringWakeAt} className="font-medium text-foreground">
+        {label}
+      </time>
+    </p>
   )
 }
 

@@ -29,6 +29,7 @@ import {
   normalizeComments,
   normalizeEvents,
   normalizeReviews,
+  normalizeMergeState,
   parseCountsPage,
   parseOwnerName,
   rollupToChecks,
@@ -124,6 +125,54 @@ describe('rollupToChecks', () => {
   it('falls back through conclusion → state → status, then treats a blank as pending', () => {
     expect(rollupToChecks([{ conclusion: null, status: null, state: 'FAILURE' }])).toBe('failing');
     expect(rollupToChecks([{ conclusion: null, status: null, state: null }])).toBe('pending');
+  });
+});
+
+describe('normalizeMergeState', () => {
+  const ready = {
+    number: 128,
+    title: 'Ready PR',
+    url: 'https://github.com/acme/demo/pull/128',
+    state: 'OPEN',
+    isDraft: false,
+    headRefName: 'feat/ready',
+    baseRefName: 'main',
+    headRefOid: '0123456789abcdef0123456789abcdef01234567',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+    statusCheckRollup: [{ name: 'test', conclusion: 'SUCCESS', detailsUrl: 'https://example.com/check' }],
+  };
+
+  it('offers only repository-enabled methods and marks clean authoritative state ready', () => {
+    const state = normalizeMergeState(ready, {
+      allow_merge_commit: false,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+      squash_merge_commit_title: 'PR_TITLE',
+    }, { readable: true, requiredChecks: ['test'] });
+    expect(state.methods).toEqual(['squash', 'rebase']);
+    expect(state.defaultMethod).toBe('squash');
+    expect(state.canMerge).toBe(true);
+    expect(state.checks[0]).toMatchObject({ name: 'test', state: 'passing', required: true });
+  });
+
+  it('never presents unknown rules or a changed review decision as ready', () => {
+    expect(normalizeMergeState({ ...ready, mergeStateStatus: 'UNKNOWN' }, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }, { readable: true, requiredChecks: [] }).eligibility).toBe('unknown');
+    expect(normalizeMergeState({ ...ready, reviewDecision: 'CHANGES_REQUESTED' }, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }, { readable: true, requiredChecks: [] }).eligibility).toBe('blocked');
+    expect(normalizeMergeState(ready, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }).eligibility).toBe('unknown');
   });
 });
 

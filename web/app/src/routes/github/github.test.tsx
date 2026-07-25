@@ -501,6 +501,72 @@ describe('the GitHub detail pane', () => {
       ),
     )
   })
+
+  it('shows authoritative merge state and requires confirmation before mutation', async () => {
+    const sent = stubFetch({
+      'GET /api/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [{ name: 'test', state: 'passing', required: true, url: 'https://example.com/check' }],
+          methods: ['squash', 'rebase'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+        },
+      }),
+      'GET /api/github/prs/137/merge-state?refresh=1': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [],
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+        },
+      }),
+      'POST /api/github/prs/137/merge': () => jsonResponse({
+        merged: true,
+        number: 137,
+        url: PR_137.url,
+        method: 'squash',
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-merge-box"]')?.textContent).toContain('Ready to merge'))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(sent.some((request) => request.path.endsWith('merge-state?refresh=1'))).toBe(true))
+    fireEvent.click(screen.getByRole('button', { name: 'Squash and merge' }))
+    expect(sent.some((request) => request.method === 'POST')).toBe(false)
+    expect(await screen.findByText(/This will merge/)).toBeTruthy()
+    fireEvent.click(within(document.querySelector('[data-slot="gh-merge-confirm"]')!).getByRole('button', { name: 'Squash and merge' }))
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.body).toEqual({
+      method: 'squash',
+      expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
+    }))
+  })
 })
 
 // ---- comment thread (#499) --------------------------------------------------------------------

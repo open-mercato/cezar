@@ -318,6 +318,8 @@ export interface WorkspaceConfigResponse {
   };
   resources: {
     maxParallel: number;
+    maxMonitoringSessions: number;
+    monitoringWakeIntervalMinutes: number | null;
     memoryLimitMb: number | null;
     worktreeRetentionDefault: number;
   };
@@ -1828,6 +1830,8 @@ export function createApp(deps: ServerDeps): Hono {
     },
     resources: {
       maxParallel: config.resources.maxParallel,
+      maxMonitoringSessions: config.resources.maxMonitoringSessions,
+      monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
@@ -1850,6 +1854,8 @@ export function createApp(deps: ServerDeps): Hono {
     resources: z
       .object({
         maxParallel: z.number().int().min(1).max(16).optional(),
+        maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
+        monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       })
@@ -1905,6 +1911,12 @@ export function createApp(deps: ServerDeps): Hono {
           config.composerDefaults.worktree = composerDefaults.worktree;
         }
         if (resources?.maxParallel !== undefined) config.resources.maxParallel = resources.maxParallel;
+        if (resources?.maxMonitoringSessions !== undefined) {
+          config.resources.maxMonitoringSessions = resources.maxMonitoringSessions;
+        }
+        if (resources?.monitoringWakeIntervalMinutes !== undefined) {
+          config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
+        }
         if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
         if (resources?.worktreeRetentionDefault !== undefined) {
           config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
@@ -3317,6 +3329,41 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) return c.json({ error: 'invalid kind or number' }, 400);
     return c.json(
       await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.query('refresh') === '1'),
+    );
+  });
+
+  const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });
+  const mergeBodySchema = z.object({
+    method: z.enum(['merge', 'squash', 'rebase']),
+    expectedHeadSha: z.string().regex(/^[0-9a-f]{40}$/),
+  }).strict();
+
+  api.get('/github/prs/:number/merge-state', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsed = mergeNumberParams.safeParse({ number: c.req.param('number') });
+    if (!parsed.success) return c.json({ error: 'invalid pull request number' }, 400);
+    const forge = resolveForge(await getRepoInfo(repoRoot));
+    if (!forge?.prMergeState) return c.json({ available: false, reason: 'GitHub merge state is unavailable' });
+    return c.json(await forge.prMergeState(parsed.data.number, { refresh: c.req.query('refresh') === '1' }));
+  });
+
+  api.post('/github/prs/:number/merge', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsedNumber = mergeNumberParams.safeParse({ number: c.req.param('number') });
+    if (!parsedNumber.success) return c.json({ error: 'invalid pull request number' }, 400);
+    const body = mergeBodySchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'invalid merge request' }, 400);
+    const forge = resolveForge(await getRepoInfo(repoRoot));
+    if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
+    const result = await forge.mergePR(parsedNumber.data.number, body.data);
+    if (result.merged) return c.json(result);
+    return c.json(
+      {
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.current ? { current: result.current } : {}),
+      },
+      result.status,
     );
   });
 
