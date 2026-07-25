@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 
 import {
+  ApiError,
   browseFs,
   checkoutProject,
   getAgentConfig,
@@ -760,12 +761,20 @@ export function usePatchRun(id: string) {
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself
  *  grows over SSE (`user-message`, then the agent's turn); the invalidation refreshes the
  *  record (status flips waiting → running). Errors are the CALLER's to surface — the composer
- *  restores the draft and toasts, so no toast fires here. */
+ *  restores the draft and toasts, so no toast fires here. A 409 ("session closed") still
+ *  invalidates: it means the cached record claimed a live session the server no longer has, so
+ *  the refetch flips the composer to its closed/Continue form instead of leaving it aimed at a
+ *  session that will keep refusing. */
 export function useSendMessage(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (message: MessageInput) => sendMessage(id, message),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+      }
+    },
   })
 }
 
