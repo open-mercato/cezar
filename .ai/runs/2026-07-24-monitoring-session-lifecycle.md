@@ -74,6 +74,7 @@ Keep `CEZ:MONITORING` sessions alive safely, bound their extra workspace capacit
 - [x] 3.2 Add component and browser coverage — 413495d
 - [x] 3.3 Document lifecycle and cost semantics — 413495d
 - [x] 3.4 Sync persisted wake deadline and exact session UI with the reviewed spec — 7d0ea3f
+- [x] 3.5 Display and de-duplicate the 40/40 automatic-check cap — 9075d1f
 
 ### Phase 4: Verification and delivery
 
