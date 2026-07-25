@@ -849,6 +849,21 @@ export interface GithubCommentsData {
   events?: GithubTimelineEvent[]
 }
 
+export interface GithubPrChange {
+  path: string
+  previousPath?: string
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed'
+  additions: number
+  deletions: number
+  patch?: string
+  patchUnavailableReason?: 'binary' | 'too-large' | 'not-provided'
+  truncated?: boolean
+}
+
+export type GithubPrChangesData =
+  | { available: true; number: number; headSha: string; files: GithubPrChange[]; additions: number; deletions: number; truncated: boolean; reason?: string }
+  | { available: false; reason: string }
+
 // ---- GUI prefs (`PUT /api/ui-state`) -----------------------------------------------------------
 
 /** The keys the server's schema names. It is a passthrough schema, so unknown keys round-trip

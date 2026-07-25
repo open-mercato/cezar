@@ -90,7 +90,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.js';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.js';
 import { resolveForge } from './forge/index.js';
-import { fetchGithub, fetchGithubComments } from './github.js';
+import { fetchGithub, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError } from './github.js';
 import { ensureLaunchKey } from './launch-key.js';
 import { openInTerminal } from './open-in-terminal.js';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.js';
@@ -3317,6 +3317,25 @@ export function createApp(deps: ServerDeps): Hono {
       },
       result.status,
     );
+  });
+
+  const prChangesParams = z.object({
+    number: z.coerce.number().int().positive().safe(),
+    refresh: z.enum(['1']).optional(),
+  });
+  api.get('/github/prs/:number/changes', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsed = prChangesParams.safeParse({
+      number: c.req.param('number'),
+      refresh: c.req.query('refresh'),
+    });
+    if (!parsed.success) return c.json({ error: 'invalid pull request number or refresh flag' }, 400);
+    try {
+      return c.json(await fetchGithubPrDiff(repoRoot, parsed.data.number, parsed.data.refresh === '1'));
+    } catch (err) {
+      if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
+      throw err;
+    }
   });
 
   // ---- repo view -----------------------------------------------------------

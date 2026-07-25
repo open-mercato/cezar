@@ -25,6 +25,7 @@ import type {
   GithubMergeMethod,
   GithubMergeResponse,
   GithubPrMergeStateResponse,
+  GithubPrChangesData,
   GroupResponse,
   HealthResponse,
   ImageInput,
@@ -400,6 +401,14 @@ export function mergeGithubPr(
   input: { method: GithubMergeMethod; expectedHeadSha: string },
 ): Promise<GithubMergeResponse> {
   return mutate<GithubMergeResponse>('POST', `/api/github/prs/${number}/merge`, input)
+}
+
+export function getGithubPrChanges(
+  number: number,
+  params: { refresh?: boolean } = {},
+  opts?: ReadOptions,
+): Promise<GithubPrChangesData> {
+  return get<GithubPrChangesData>(`/api/github/prs/${number}/changes${params.refresh ? '?refresh=1' : ''}`, opts)
 }
 
 /** The run's worktree diff against its base, as unified-diff text. Also the plain-text

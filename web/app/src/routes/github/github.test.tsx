@@ -193,6 +193,14 @@ function stubFetch(
       // Any comment-thread request defaults to the two-comment THREAD fixture; a test overrides a
       // specific `GET /api/github/comments/<kind>/<n>` key to serve a different thread.
       if (method === 'GET' && path.startsWith('/api/github/comments/')) return jsonResponse(THREAD)
+      if (method === 'GET' && path.startsWith('/api/github/prs/') && path.includes('/changes')) return jsonResponse({
+        available: true, number: 137, headSha: '0123456789abcdef0123456789abcdef01234567',
+        additions: 3, deletions: 1, truncated: true, reason: 'One patch was omitted.',
+        files: [
+          { path: 'src/new.ts', previousPath: 'src/old.ts', status: 'renamed', additions: 3, deletions: 1, patch: '@@ -1 +1 @@\n-old\n+new' },
+          { path: 'logo.png', status: 'modified', additions: 0, deletions: 0, patchUnavailableReason: 'binary' },
+        ],
+      })
       if (method === 'GET' && path === '/api/github') return jsonResponse(GITHUB)
       if (method === 'GET' && path === '/api/github?limit=1000') return jsonResponse(GITHUB)
       if (method === 'GET' && path === '/api/workflows') return jsonResponse(WORKFLOWS)
@@ -232,10 +240,12 @@ function renderAt(entry: string) {
           <Route path="/github/prs" element={<GithubRoute view="prs" />} />
           <Route path="/github/issues/:n" element={<GithubRoute view="issues" />} />
           <Route path="/github/prs/:n" element={<GithubRoute view="prs" />} />
+          <Route path="/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
           <Route path="/p/:projectId/github" element={<GithubIndexRoute />} />
           <Route path="/p/:projectId/github/prs" element={<GithubRoute view="prs" />} />
           <Route path="/p/:projectId/github/issues/:n" element={<GithubRoute view="issues" />} />
           <Route path="/p/:projectId/github/prs/:n" element={<GithubRoute view="prs" />} />
+          <Route path="/p/:projectId/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
         </Routes>
         <Toaster />
       </MemoryRouter>
@@ -248,6 +258,15 @@ const detail = () => document.querySelector('[data-slot="gh-detail-inner"]')
 const promptField = () =>
   document.querySelector<HTMLTextAreaElement>('[data-slot="gh-custom-prompt"]')!
 const promptValue = () => promptField().value
+
+it('/github/prs/:n/changes renders PR-only file review navigation and completeness', async () => {
+  stubFetch()
+  renderAt('/github/prs/137/changes')
+  expect(await screen.findByText('2 changed files')).not.toBeNull()
+  expect(screen.getByRole('navigation', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
+  expect(screen.getByRole('status').textContent).toContain('One patch was omitted.')
+  expect(screen.getByLabelText('Next file').hasAttribute('disabled')).toBe(false)
+})
 
 /** What the composer PRE-FILLS the box with for issue 142 (#524): the item's reference, and
  *  nothing else — no quoted body. `githubTaskRef`'s own byte-for-byte shape is pinned in

@@ -196,6 +196,29 @@ export type ForgeMergeResult =
       current?: ForgePrMergeState;
     };
 
+export interface ForgePrChange {
+  path: string;
+  previousPath?: string;
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed';
+  additions: number;
+  deletions: number;
+  patch?: string;
+  patchUnavailableReason?: 'binary' | 'too-large' | 'not-provided';
+  truncated?: boolean;
+}
+
+export type ForgePrDiffResult =
+  | {
+      available: true;
+      number: number;
+      headSha: string;
+      files: ForgePrChange[];
+      additions: number;
+      deletions: number;
+      truncated: boolean;
+      reason?: string;
+    }
+  | { available: false; reason: string };
 export type ForgeRefKind = 'repo' | 'issue' | 'pr' | 'branch' | 'commit';
 
 export type DraftPrOutcome =
@@ -224,6 +247,8 @@ export interface ForgeDriver {
   prStatus(branch: string): Promise<ForgePrStatus | null>;
   prMergeState?(number: number, opts?: { refresh?: boolean }): Promise<ForgePrMergeStateResult>;
   mergePR?(number: number, input: ForgeMergeInput): Promise<ForgeMergeResult>;
+  /** Bounded, read-only file changes for a pull request. */
+  prDiff?(number: number, opts?: { refresh?: boolean }): Promise<ForgePrDiffResult>;
   /** Web URL for a ref on the forge, or null when the remote isn't parseable. */
   viewUrl(kind: ForgeRefKind, ref: string | number): string | null;
 }
