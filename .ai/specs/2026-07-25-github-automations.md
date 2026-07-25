@@ -106,7 +106,9 @@ The log is a tab within the Automations page and a per-automation detail route. 
 - The exact automation revision and filter summary used.
 - Poll-level summaries aggregate candidate counts and omit per-record `no-match` rows after the first ten, preventing log growth proportional to repository size.
 - Filters for automation, result, event, and relative date; a detail drawer exposes the sanitized query/cursor, response status, and concise error.
-- `Retry task` is available only for an error before a run receipt was committed. It never bypasses deduplication.
+- `Retry task` is available only when a reserved receipt reached a pre-launch error before a
+  `runId` was finalized. Retry transitions that same receipt under the project lease; it never
+  creates a second receipt or bypasses deduplication.
 
 Proposed log:
 
@@ -149,7 +151,11 @@ GitHub search syntax supports author, assignee, label, and date qualifiers and b
 - **New pull request:** query PRs sorted by creation/update descending with `created:>=lookbackStart`; match `createdAt > baseline/cursor`.
 - **New issue:** query issues, excluding pull requests, with `created:>=lookbackStart`; match `createdAt > baseline/cursor`.
 - **Issue label added/removed:** issue search alone cannot reconstruct transitions. Fetch issue timeline events for bounded recently updated candidates and select `labeled`/`unlabeled` events after the cursor. GitHub uses those action names for label transitions ([GitHub webhook event vocabulary](https://docs.github.com/en/webhooks/webhook-events-and-payloads)).
-- Each event identity is `${repoNodeId}:${subjectNodeId}:${eventKind}:${eventNodeId || eventTimestamp + normalizedLabel}`. Receipts persist identity before task launch.
+- Each provider event identity is
+  `${repoNodeId}:${subjectNodeId}:${eventKind}:${eventNodeId || eventTimestamp + normalizedLabel}`.
+  Receipt uniqueness is scoped to `${automationId}:${eventId}` so two automations may
+  independently launch from the same GitHub event while an overlap or retry cannot launch the
+  same automation twice. Receipts persist this composite key before task launch.
 - Use a two-minute overlap before the last successful cursor to tolerate timestamp ties and GitHub indexing delay. Receipts eliminate duplicates within the overlap.
 - At poll start, freeze a high-watermark `(eventTimestamp, stableNodeId)` from the newest visible candidate. Drain candidates in ascending stable `(eventTimestamp, stableNodeId)` order from the prior success watermark through that frozen boundary. Newer arrivals belong to the next poll.
 - Stop when the configured record cap is reached; never fetch past ten pages or 100 candidates, whichever comes first. Persist a backlog continuation tuple and keep the prior success watermark unchanged until every candidate through the frozen boundary is drained. Restart resumes the same frozen boundary. If the relative lookback would overtake an undrained boundary, continue that bounded backlog from the durable tuple and log the age rather than skipping it.
@@ -211,10 +217,12 @@ The file is `{version: 1, automations: []}` with whole-file zod validation plus 
 
 ### `automation-state.json`
 
-Runtime-only state keyed by automation id and revision:
+Runtime-only state keyed by automation id, with the revision that last wrote it recorded alongside
+the state:
 
 ```ts
 type AutomationRuntimeState = {
+  revision?: number
   baselineAt?: string
   cursor?: { timestamp: string; tieBreaker?: string }
   frozenHighWatermark?: { timestamp: string; tieBreaker: string }
@@ -227,11 +235,17 @@ type AutomationRuntimeState = {
 }
 ```
 
-Editing increments `revision` but preserves receipts; cursors continue unless event selection or repository identity changes, in which case enabling establishes a new baseline. Pausing preserves cursor. Deleting a definition tombstones its id for 90 days so delayed writes cannot resurrect it.
+Editing increments `revision` but preserves receipts and atomically carries the current runtime
+state forward to the new revision. Cursors continue unless event selection or repository identity
+changes, in which case enabling establishes a new baseline. Pausing preserves cursor. Deleting a
+definition tombstones its id for 90 days so delayed writes cannot resurrect it.
 
 ### `automation-receipts.ndjson` and `automation-log.ndjson`
 
-- Receipts are append-only `{receiptId, eventId, automationId, revision, status, runId?, observedAt, updatedAt}` records compacted under the lease when over 20,000 lines, retaining the latest row per identity for at least 90 days.
+- Receipts are append-only
+  `{receiptId, receiptKey, eventId, automationId, revision, status, runId?, observedAt, updatedAt}`
+  records, where `receiptKey` is `${automationId}:${eventId}`. They are compacted under the lease
+  when over 20,000 lines, retaining the latest row per receipt key for at least 90 days.
 - Logs are append-only, monotonically sequenced, sanitized, and capped by compaction to 10,000 detail rows plus daily summaries. Never store issue/PR bodies, tokens, response headers other than rate-limit metadata, or raw API payloads.
 - Missing receipt/log files mean empty state. A malformed line is skipped with one warning; later lines remain readable.
 
@@ -249,7 +263,9 @@ All routes are project-scoped, mounted under `/api/p/:projectId`, with required 
 - `POST /api/automations/:id/check` with `{mode: 'preview' | 'execute'}` → `202 {checkId}`. Preview never writes receipts or launches runs.
 - `GET /api/automation-checks/:checkId` → bounded status/result for manual previews.
 - `GET /api/automation-log?automationId=&result=&event=&since=&cursor=&limit=` → cursor-paginated records; max 100.
-- `POST /api/automation-log/:receiptId/retry` → `202`, only for pre-launch error receipts.
+- `POST /api/automation-log/:receiptId/retry` → `202`, only for a reserved receipt in a
+  pre-launch error state with no finalized `runId`; it retries by transitioning the same receipt
+  under the project lease.
 
 The Automation editor consumes the existing workflow, skill, config, model, and runner endpoints; it does not duplicate catalogs in automation APIs.
 
@@ -272,7 +288,8 @@ automation?: {
 ```
 
 This field is optional in `RunRecord`, redacted/sanitized on writes, exposed additively through run APIs, and rendered as an Automation badge linking back to the log. Old `runs.json` remains parseable.
-- Variants call `startGroup`; one event produces one group receipt, not one receipt per variant.
+- Variants call the existing `RunManager.startVariants`; one event produces one group receipt, not
+  one receipt per variant.
 - Worktree, autonomy, follow-up, backend/model, system prompt, and review behavior are passed unchanged to existing run machinery. The automation scheduler never bypasses workspace semaphore limits.
 
 ## Security and Privacy
