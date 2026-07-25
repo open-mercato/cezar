@@ -104,6 +104,16 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(store.getRun(run.id)?.monitoringWakeAt).toBeUndefined();
   });
 
+  it('clears process-local wake-cap display state when records reopen', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeCapReached: true });
+    store.flush();
+    const reopened = RunStore.open(dataDir, { keepLive: true }).getRun(run.id);
+    expect(reopened?.activity).toBe('monitoring');
+    expect(reopened?.monitoringWakeCapReached).toBeUndefined();
+  });
+
   it('salvages a malformed wake deadline and stale terminal monitoring activity', () => {
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([{
       ...LEGACY_RUN,

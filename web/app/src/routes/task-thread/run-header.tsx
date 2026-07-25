@@ -564,6 +564,13 @@ function MetaRow({ run }: { run: ApiRun }) {
 
 function MonitoringSchedule({ run }: { run: ApiRun }) {
   if (run.status !== 'running' || run.activity !== 'monitoring') return null
+  if (run.monitoringWakeCapReached) {
+    return (
+      <p data-slot="monitoring-schedule" role="status" className="mt-1 text-xs text-muted-foreground">
+        Automatic checks paused — 40/40 reached
+      </p>
+    )
+  }
   const wakeAt = run.monitoringWakeAt ? new Date(run.monitoringWakeAt) : null
   const validWakeAt = wakeAt && Number.isFinite(wakeAt.getTime()) ? wakeAt : null
   if (!validWakeAt) {

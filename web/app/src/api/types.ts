@@ -131,6 +131,8 @@ export interface RunRecord {
   activity?: RunActivity
   /** Exact ISO-8601 deadline for the next automatic monitoring check. */
   monitoringWakeAt?: string
+  /** The current live monitoring epoch exhausted its 40 automatic checks. */
+  monitoringWakeCapReached?: boolean
   createdAt: string
   startedAt?: string
   finishedAt?: string

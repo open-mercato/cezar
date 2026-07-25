@@ -111,6 +111,13 @@ describe('monitoring schedule', () => {
     expect(screen.getByText('Parked — no automatic check scheduled')).not.toBeNull()
     expect(screen.queryByText(/Invalid Date/)).toBeNull()
   })
+
+  it('distinguishes a capped monitoring epoch from an ordinary parked session', () => {
+    stubFetch()
+    renderHeader(run('running', { activity: 'monitoring', monitoringWakeCapReached: true }))
+    expect(screen.getByText('Automatic checks paused — 40/40 reached')).not.toBeNull()
+    expect(screen.queryByText('Parked — no automatic check scheduled')).toBeNull()
+  })
 })
 
 describe('editable title (#389)', () => {

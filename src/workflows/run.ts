@@ -1111,6 +1111,7 @@ export class RunManager {
     if (delivered) {
       const state = this.active.get(runId);
       if (state) state.monitoringWakeups = 0;
+      this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
     }
     return delivered;
   }
@@ -2355,15 +2356,19 @@ export class RunManager {
     }
     if ((state.monitoringWakeups ?? 0) >= MAX_AUTO_CONTINUES) {
       this.clearMonitoringWakeTimer(state, runId);
-      this.store.appendEvent(runId, {
-        type: 'note',
-        message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
-      });
+      if (!this.store.getRun(runId)?.monitoringWakeCapReached) {
+        this.store.updateRun(runId, { monitoringWakeCapReached: true });
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
+        });
+      }
       return;
     }
     if (state.monitoringWakeTimer && state.monitoringWakeIntervalMinutes === minutes) return;
     this.clearMonitoringWakeTimer(state, runId);
     state.monitoringWakeIntervalMinutes = minutes;
+    this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
     const deadline = Date.now() + minutes * 60_000;
     this.store.updateRun(runId, { monitoringWakeAt: new Date(deadline).toISOString() });
     state.monitoringWakeTimer = setTimeout(() => {
@@ -2372,6 +2377,7 @@ export class RunManager {
       if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
       const wakeups = state.monitoringWakeups ?? 0;
       if (wakeups >= MAX_AUTO_CONTINUES) {
+        this.store.updateRun(runId, { monitoringWakeCapReached: true });
         this.store.appendEvent(runId, {
           type: 'note',
           message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
