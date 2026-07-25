@@ -201,8 +201,16 @@ function stubFetch(
           { path: 'logo.png', status: 'modified', additions: 0, deletions: 0, patchUnavailableReason: 'binary' },
         ],
       })
-      if (method === 'GET' && path === '/api/github') return jsonResponse(GITHUB)
-      if (method === 'GET' && path === '/api/github?limit=1000') return jsonResponse(GITHUB)
+      // Lazy PR checks (#664) default to an empty map — a test overrides to hydrate specific glyphs.
+      if (method === 'GET' && path.startsWith('/api/github/checks')) {
+        return jsonResponse({ available: true, checks: {} })
+      }
+      // The GitHub list is one fast fetch now (#664): `/api/github` with an optional `?limit=…`
+      // and/or `?refresh=1`. Sub-resources (`/api/github/comments`, `/prs`, `/checks`) never match
+      // `=== '/api/github'` or `startsWith('/api/github?')`, so this stays scoped to the list.
+      if (method === 'GET' && (path === '/api/github' || path.startsWith('/api/github?'))) {
+        return jsonResponse(GITHUB)
+      }
       if (method === 'GET' && path === '/api/workflows') return jsonResponse(WORKFLOWS)
       if (method === 'GET' && path === '/api/skills') return jsonResponse(SKILLS)
       if (method === 'GET' && path === '/api/providers/status') {
@@ -314,12 +322,17 @@ describe('the GitHub tab lists', () => {
     expect(rows()[0]?.getAttribute('href')).toBe('/github/prs/137')
   })
 
-  it('a PR row shows a checks glyph tinted by outcome (#400); an issue row shows none', async () => {
-    const passing: GithubItem = { ...PR_137, number: 201, url: 'u201', checks: 'passing' }
-    const pending: GithubItem = { ...PR_137, number: 202, url: 'u202', checks: 'pending' }
-    const none: GithubItem = { ...PR_137, number: 203, url: 'u203', checks: null }
+  it('a PR row hydrates its checks glyph lazily by outcome (#664); an issue row shows none', async () => {
+    // The list tier no longer ships `statusCheckRollup` — rows come back `checks: null` and the
+    // glyph is filled in from GET /api/github/checks for the on-screen window (#664).
+    const p201: GithubItem = { ...PR_137, number: 201, url: 'u201', checks: null }
+    const p202: GithubItem = { ...PR_137, number: 202, url: 'u202', checks: null }
+    const p203: GithubItem = { ...PR_137, number: 203, url: 'u203', checks: null }
+    const pr137: GithubItem = { ...PR_137, checks: null }
     stubFetch({
-      'GET /api/github': () => jsonResponse({ ...GITHUB, prs: [PR_137, passing, pending, none] }),
+      'GET /api/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
+      'GET /api/github/checks?prs=137%2C201%2C202%2C203': () =>
+        jsonResponse({ available: true, checks: { 137: 'failing', 201: 'passing', 202: 'pending', 203: null } }),
     })
     renderAt('/github/prs')
 
@@ -327,20 +340,43 @@ describe('the GitHub tab lists', () => {
     const glyph = (number: string) =>
       document.querySelector(`[data-slot="gh-row"][data-number="${number}"] [data-slot="gh-row-checks"]`)
 
-    expect(glyph('137')?.getAttribute('data-checks')).toBe('failing')
+    // The glyph appears a beat later, once the lazy checks query resolves.
+    await waitFor(() => expect(glyph('137')?.getAttribute('data-checks')).toBe('failing'))
     expect(glyph('137')?.textContent).toBe('✗')
     expect(glyph('201')?.getAttribute('data-checks')).toBe('passing')
     expect(glyph('201')?.textContent).toBe('✓')
     expect(glyph('202')?.getAttribute('data-checks')).toBe('pending')
     expect(glyph('202')?.textContent).toBe('○')
-    expect(glyph('203')).toBeNull()
+    expect(glyph('203')).toBeNull() // null from the checks map → no CI → no glyph
 
-    // Issues never carry `checks` — no glyph on their rows either.
+    // Issues never carry `checks`, and the checks query is skipped on the Issues view.
     cleanup()
     stubFetch()
     renderAt('/github')
     await waitFor(() => expect(rows().length).toBeGreaterThan(0))
     expect(document.querySelector('[data-slot="gh-row-checks"]')).toBeNull()
+  })
+
+  it('warms the thread on row hover so opening it is instant (#664)', async () => {
+    const threadRequests: string[] = []
+    stubFetch()
+    const origFetch = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.startsWith('/api/github/comments/')) threadRequests.push(path)
+      return (origFetch as typeof fetch)(input, init as RequestInit)
+    })
+
+    renderAt('/github') // issues view; the first issue's thread loads for the detail pane
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0))
+    await waitFor(() => expect(threadRequests.length).toBeGreaterThan(0))
+    expect(threadRequests.some((p) => p === '/api/github/comments/issue/139')).toBe(false)
+
+    // Hovering a different row prefetches ITS thread before any click.
+    fireEvent.mouseEnter(document.querySelector<HTMLElement>('[data-slot="gh-row"][data-number="139"]')!)
+    await waitFor(() =>
+      expect(threadRequests.some((p) => p === '/api/github/comments/issue/139')).toBe(true),
+    )
   })
 
   it('shows a comment-count badge only on rows with comments (#499)', async () => {
@@ -358,20 +394,22 @@ describe('the GitHub tab lists', () => {
     expect(badge('139')).toBeNull()
   })
 
-  it('counts at the fast-batch cap render as 30+ until the full fetch lands', async () => {
+  it('shows the exact open count from the single fast load — no 30+ guesswork (#664)', async () => {
+    // The two-shot is gone: one fast fetch (limit 1000, no rollup) returns the whole open set, so
+    // the tab reports the real count instead of the old fast-batch "30+" placeholder.
     const many: GithubData = {
       ...GITHUB,
-      issues: Array.from({ length: 30 }, (_, i) => ({ ...ISSUE_142, number: i + 1, url: `u${i}` })),
+      issues: Array.from({ length: 45 }, (_, i) => ({ ...ISSUE_142, number: i + 1, url: `u${i}` })),
     }
     stubFetch({
-      'GET /api/github': () => jsonResponse(many),
-      // The background full fetch never answers — the fast batch must stand, with its "+".
-      'GET /api/github?limit=1000': () => new Response(null, { status: 500 }),
+      'GET /api/github?limit=1000': () => jsonResponse(many),
     })
     renderAt('/github')
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-tabs"]')).not.toBeNull())
-    expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues · 30+')
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues · 45'),
+    )
   })
 
   it('a row deep link selects that item and renders its detail', async () => {
@@ -959,8 +997,8 @@ describe('the unavailable forge state', () => {
   it('renders the server reason and the gh hint, and Try again refetches with refresh=1', async () => {
     const unavailable: GithubData = { available: false, reason: 'gh not installed', issues: [], prs: [] }
     const sent = stubFetch({
-      'GET /api/github': () => jsonResponse(unavailable),
-      'GET /api/github?refresh=1': () => jsonResponse(unavailable),
+      'GET /api/github?limit=1000': () => jsonResponse(unavailable),
+      'GET /api/github?limit=1000&refresh=1': () => jsonResponse(unavailable),
     })
     renderAt('/github')
 
@@ -968,12 +1006,12 @@ describe('the unavailable forge state', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'GitHub is unavailable here' })).toBeTruthy(),
     )
     expect(screen.getByText('gh not installed')).toBeTruthy()
-    // The full fetch must NOT fire against an unreachable forge (two-shot rule).
-    expect(sent.some((request) => request.path === '/api/github?limit=1000')).toBe(false)
+    // One fast fetch now (#664): the single limit=1000 load is what proved the forge unreachable.
+    expect(sent.some((request) => request.path === '/api/github?limit=1000')).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() =>
-      expect(sent.some((request) => request.path === '/api/github?refresh=1')).toBe(true),
+      expect(sent.some((request) => request.path === '/api/github?limit=1000&refresh=1')).toBe(true),
     )
   })
 })
