@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { RunEvent } from '@/api/types'
@@ -10,10 +11,46 @@ import subagentTask from '../../../../../src/core/__fixtures__/claude/subagent-t
 import thinkingEditWriteTodo from '../../../../../src/core/__fixtures__/claude/thinking-edit-write-todo.expected.json'
 import opencodeToolLifecycle from '../../../../../src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
-import { ContextGroup, isNearBottom, OUTPUT_CLAMP_LINES, ReasoningItem, ToolCard, ToolStreak } from './thread-items'
+import {
+  ContextGroup,
+  isNearBottom,
+  OUTPUT_CLAMP_LINES,
+  ProviderAuthRequiredCard,
+  ReasoningItem,
+  ToolCard,
+  ToolStreak,
+} from './thread-items'
 import { reduceThread } from './thread-state'
 
 afterEach(cleanup)
+
+describe('ProviderAuthRequiredCard', () => {
+  it.each([
+    ['claude', 'Claude Code'],
+    ['codex', 'Codex'],
+    ['opencode', 'OpenCode'],
+  ] as const)('renders accessible fixed recovery guidance for %s', (provider, label) => {
+    render(
+      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
+        <ProviderAuthRequiredCard incident={{
+          kind: 'provider-auth-required',
+          id: 'v1:2',
+          provider,
+          authFailureId: 'incident-1',
+        }} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('alert').textContent).toContain(`This run needed ${label} authorization`)
+    expect(screen.getByRole('alert').textContent).toContain(
+      `Review ${label} settings before retrying.`,
+    )
+    expect(screen.getByRole('alert').textContent).not.toContain(`${label} needs authorization`)
+    const link = screen.getByRole('link', { name: 'Open provider settings' })
+    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
+    expect(link.getAttribute('tabindex')).not.toBe('-1')
+  })
+})
 
 /**
  * The tool cards, driven by REAL items: every fixture item below is pulled verbatim out of the

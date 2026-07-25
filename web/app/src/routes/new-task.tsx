@@ -11,7 +11,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
-import { useNavigate } from '@/lib/project-router'
+import { Link, useNavigate } from '@/lib/project-router'
 
 import { createRun, getLaunchKey, postPlan, putConfig, putUiState } from '@/api/client'
 import { useProjectScope } from '@/api/project-scope-context'
@@ -19,6 +19,7 @@ import {
   queryKeys,
   useConfig,
   useHealth,
+  useProviderStatus,
   useProjects,
   useRepo,
   useRunnerModels,
@@ -65,6 +66,7 @@ import {
 } from '@/lib/skills'
 import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
+import { usableRunners } from '@/lib/provider-status'
 
 import {
   bookmarkletRunBody,
@@ -74,7 +76,6 @@ import {
 } from './new-task-autostart'
 import { clearDraftText, readDraft, writeDraft, type NewTaskDraft } from './new-task-draft'
 import {
-  availableRunners,
   buildCreateRunBody,
   modelsForRunner,
   modelCatalogStatus,
@@ -192,11 +193,34 @@ export function NewTaskRoute() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoText, sourcesReady])
 
-  const runners = availableRunners(health.data?.checks ?? [])
-  const runner = resolveRunner(draft.runner, runners, health.data?.defaultRunner ?? 'claude')
+  const providers = useProviderStatus()
+  const runners = usableRunners(providers.data)
+  const defaultRunner = health.data?.defaultRunner
+  const preferredRunner = defaultRunner ?? 'claude'
+  const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
+  const displayRunner = runner ?? preferredRunner
+  const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels()
-  const models = modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
-  const model = resolveModel(draft.model, runner, config.data?.defaultModels, catalog.data)
+  const models = runner === null
+    ? []
+    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
+  const model = runner === null
+    ? ''
+    : resolveModel(draft.model, runner, config.data?.defaultModels, catalog.data)
+
+  // A cold /new load mounts the textarea disabled while provider status is checked. Restore
+  // the route's autofocus contract once that check enables the form, but never steal focus if
+  // the user already moved elsewhere while it was pending.
+  const providersWereReady = useRef(false)
+  useEffect(() => {
+    const becameReady = providersReady && !providersWereReady.current
+    providersWereReady.current = providersReady
+    if (becameReady && document.activeElement === document.body) {
+      document
+        .querySelector<HTMLTextAreaElement>('textarea[aria-label="Describe a task for the agent"]')
+        ?.focus()
+    }
+  }, [providersReady])
 
   // Parallel variants need a worktree per variant, hence git (the server 409s without it).
   const hasGit = health.data === undefined || health.data.repo !== null
@@ -240,16 +264,40 @@ export function NewTaskRoute() {
   const [notice, setNotice] = useState<DeepLinkNotice | null>(() =>
     !deepLink.auto && deepLink.ref !== '' ? { kind: 'prefill' } : null,
   )
+  const deepLinkUrlCleaned = useRef(false)
   const deepLinkHandled = useRef(false)
   useEffect(() => {
-    if (deepLinkHandled.current) return
-    deepLinkHandled.current = true
+    if (deepLinkUrlCleaned.current) return
+    deepLinkUrlCleaned.current = true
     // Legacy cleans the URL FIRST (`history.replaceState({}, '', '/')` — before anything
     // async): the launch key never lingers in the address bar or history, and a reload can
     // never re-trigger the start. Same move here, staying on this route. (The router's own
     // search, not window.location — MemoryRouter under test never touches the window.)
     if (search.toString() !== '') void navigate('/new', { replace: true })
+    // mount-only: search is intentionally the initial URL, captured before the replace
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (deepLinkHandled.current) return
     if (!deepLink.auto || deepLink.ref === '') return
+    if (providers.isPending) return
+    if (!providersReady || runner === null) {
+      deepLinkHandled.current = true
+      // Authentication could not be established: keep the deep-link intent in the disabled
+      // composer and let the provider gate explain whether this is an error or missing setup.
+      setNotice({ kind: 'prefill' })
+      setAutoStarting(false)
+      return
+    }
+    // Provider status often resolves before health on a cold load. The protected bookmarklet
+    // body may omit runner only against the server's authoritative default, never our display
+    // fallback; a failed health check degrades to the prefilled composer instead of guessing.
+    if (health.isPending) return
+    deepLinkHandled.current = true
+    if (defaultRunner === undefined) {
+      setNotice({ kind: 'prefill' })
+      setAutoStarting(false)
+      return
+    }
     void (async () => {
       let launchKey = ''
       try {
@@ -259,7 +307,7 @@ export function NewTaskRoute() {
       }
       if (launchKey !== '' && deepLink.key === launchKey) {
         try {
-          const created = await createRun(bookmarkletRunBody(deepLink))
+          const created = await createRun(bookmarkletRunBody(deepLink, runner, defaultRunner))
           clearDraftText(draftProjectId)
           void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
           void navigate(startedRunPath(created))
@@ -276,8 +324,7 @@ export function NewTaskRoute() {
       }
       setAutoStarting(false)
     })()
-    // mount-only by design: deepLink is captured state and this must run exactly once
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [defaultRunner, health.isPending, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
   // The prefill toast waits for the pickers' data: whether the skill exists decides the
   // wording, and the unknown-skill case rewrites the draft the way legacy did (intent into
   // the text, quick-task as the source — its planner resolves skills from prose).
@@ -307,6 +354,15 @@ export function NewTaskRoute() {
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (text: string, images: ImageInput[]) => {
+    if (!providersReady || runner === null) {
+      throw new Error(
+        providers.isPending
+          ? 'Checking agent providers…'
+          : providers.isError
+            ? 'Provider authentication could not be verified.'
+            : 'Connect an agent provider before starting a task.',
+      )
+    }
     if (!sourcesReady) {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
       throw new Error('Still loading workflows and skills — try again in a second.')
@@ -331,8 +387,7 @@ export function NewTaskRoute() {
         source,
         model,
         runner,
-        runnerCount: runners.length,
-        defaultRunner: health.data?.defaultRunner ?? 'claude',
+        defaultRunner,
         variants,
         images,
         worktree: worktreeOn,
@@ -374,7 +429,7 @@ export function NewTaskRoute() {
   /** ▶ Start on the reviewed plan: the (possibly edited) steps go INLINE, with the composer's
    *  current picker choices — legacy `startPlannedRun` semantics on the new surface. */
   const startPlanned = async () => {
-    if (plan === null || plan.steps.length === 0 || starting) return
+    if (plan === null || plan.steps.length === 0 || starting || !providersReady || runner === null) return
     setStarting(true)
     try {
       const created = await createRun(
@@ -383,8 +438,7 @@ export function NewTaskRoute() {
           steps: plan.steps,
           model,
           runner,
-          runnerCount: runners.length,
-          defaultRunner: health.data?.defaultRunner ?? 'claude',
+          defaultRunner,
           variants,
           images: plan.images,
           generateFollowups: generateFollowupsOn,
@@ -456,6 +510,14 @@ export function NewTaskRoute() {
           placeholder="Describe a task for the agent — / for skills…"
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={draft.planFirst ? 'Plan task' : 'Start task'}
+          disabled={!providersReady || starting}
+          disabledReason={
+            providers.isPending
+              ? 'Checking agent providers…'
+              : providers.isError
+                ? 'Provider authentication could not be verified.'
+                : 'Connect an agent provider before starting a task.'
+          }
           autocompleteSkills
           footerStart={
             <>
@@ -490,16 +552,22 @@ export function NewTaskRoute() {
                 onInsert={(text) => composerRef.current?.insertAtCaret(text)}
               />
               {runners.length > 1 ? (
-                <RunnerPill runners={runners} value={runner} onPick={(next) => update({ runner: next, model: null })} />
+                <RunnerPill
+                  runners={runners}
+                  value={displayRunner}
+                  disabled={!providersReady}
+                  onPick={(next) => update({ runner: next, model: null })}
+                />
               ) : null}
               <PickerPill
                 slot="model-pill"
                 ariaLabel="Model"
                 label={models.find((m) => m.id === model)?.label ?? 'auto'}
                 value={model}
+                disabled={!providersReady}
                 onPick={(next) => update({ model: next })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
-                status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+                status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
               />
               <PickerPill
                 slot="variants-pill"
@@ -535,6 +603,14 @@ export function NewTaskRoute() {
           }
           footerEnd={
             <>
+              {!providersReady && !providers.isPending ? (
+                <Link
+                  to="/settings/agents#providers"
+                  className="text-xs font-medium text-foreground underline underline-offset-4"
+                >
+                  Configure providers
+                </Link>
+              ) : null}
               <ModeSegment
                 planFirst={draft.planFirst}
                 planning={planning}
@@ -557,6 +633,19 @@ export function NewTaskRoute() {
         <PlanReview
           plan={plan}
           starting={starting}
+          startAvailable={providersReady}
+          startUnavailableReason={
+            providers.isPending
+              ? 'Checking agent providers…'
+              : providers.isError
+                ? 'Provider authentication could not be verified.'
+                : 'Connect an agent provider before starting a task.'
+          }
+          startUnavailableAction={
+            !providers.isPending ? (
+              <Link to="/settings/agents#providers">Configure providers</Link>
+            ) : undefined
+          }
           onStepsChange={(steps) => setPlan((current) => (current ? { ...current, steps } : current))}
           onStart={() => void startPlanned()}
           onDiscard={() => setPlan(null)}

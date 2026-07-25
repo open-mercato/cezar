@@ -95,12 +95,82 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     // headless run migrated ~/.cezar and registered the boot repo.
     const workspace = JSON.parse(await readFile(join(cezHome, 'config.json'), 'utf8')) as {
       schemaVersion: number;
+      disabledProviders?: string[];
       projects: Array<{ name: string; root: string }>;
     };
     assert.ok(workspace.schemaVersion >= 1, 'boot runs the workspace migrations');
     assert.ok(
       workspace.projects.some((p) => p.name === 'fixture-repo'),
       'a headless run registers the boot repo in the workspace registry',
+    );
+
+    workspace.disabledProviders = ['claude'];
+    await writeFile(join(cezHome, 'config.json'), `${JSON.stringify(workspace, null, 2)}\n`, 'utf8');
+    await assert.rejects(
+      execFile(process.execPath, [cliPath, 'run', 'mock:done must stay blocked', '--repo', fixtureRepo], {
+        cwd: consumerDir,
+        env: { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: cezHome },
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      }),
+      (error: unknown) => {
+        const result = error as { stderr?: string };
+        assert.match(result.stderr ?? '', /Claude Code is disabled/);
+        return true;
+      },
+      'headless run must honor the global provider preference',
+    );
+    const runsAfterDisabledAttempt = JSON.parse(
+      await readFile(join(fixtureRepo, '.ai', 'cezar', 'runs.json'), 'utf8'),
+    ) as Array<{ status: string }>;
+    assert.equal(runsAfterDisabledAttempt.length, 1, 'a disabled provider must not create a run');
+    workspace.disabledProviders = [];
+    await writeFile(join(cezHome, 'config.json'), `${JSON.stringify(workspace, null, 2)}\n`, 'utf8');
+
+    const claudeShim = join(root, 'claude-shim.mjs');
+    await writeFile(
+      claudeShim,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.join(' ') === 'auth status --json') {
+  process.stdout.write('{"loggedIn":true}\\n');
+} else {
+  process.stdout.write('{"type":"system","subtype":"init","session_id":"auth-failure-session"}\\n');
+  process.stdout.write('{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate. API Error: 401 OAuth access token has been revoked.","usage":{"input_tokens":0,"output_tokens":0},"total_cost_usd":0}\\n');
+}
+`,
+      { mode: 0o755 },
+    );
+    await execFile(
+      process.execPath,
+      [cliPath, 'run', 'exercise runtime auth rejection', '--repo', fixtureRepo],
+      {
+        cwd: consumerDir,
+        env: {
+          ...process.env,
+          CEZ_CLAUDE_BIN: claudeShim,
+          CEZ_HOME: cezHome,
+        },
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    ).catch(() => undefined);
+    const runsAfterAuthFailure = JSON.parse(
+      await readFile(join(fixtureRepo, '.ai', 'cezar', 'runs.json'), 'utf8'),
+    ) as Array<{ id: string }>;
+    assert.equal(runsAfterAuthFailure.length, 2, 'the runtime-auth fixture creates exactly one run');
+    const authFailureRun = runsAfterAuthFailure.at(0);
+    assert.ok(authFailureRun, 'the auth-failure fixture creates a run');
+    const authFailureEvents = (await readFile(
+      join(fixtureRepo, '.ai', 'cezar', 'runs', `${authFailureRun.id}.ndjson`),
+      'utf8',
+    )).trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.ok(
+      authFailureEvents.some((event) =>
+        event.type === 'provider-auth-required'
+        && event.provider === 'claude'
+        && typeof event.authFailureId === 'string'),
+      'headless runtime rejection must persist provider recovery guidance',
     );
 
     // `cezar projects` (step 5.2) reads the same registry with no server

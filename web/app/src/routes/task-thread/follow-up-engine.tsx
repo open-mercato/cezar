@@ -2,16 +2,15 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
 
 import { continueRun } from '@/api/client'
-import { queryKeys, useConfig, useHealth, useRunnerModels } from '@/api/queries'
+import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import type { ApiRun, ContinueResponse, ImageInput, Runner } from '@/api/types'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import {
-  availableRunners,
   modelsForRunner,
   modelCatalogStatus,
   resolveModel,
-  resolveRunner,
 } from '@/routes/new-task-form'
+import { useContinuationProvider } from './continuation-provider'
 import { runActionFlags } from './run-actions'
 
 /** What the thread needs to offer Continue from its composer. */
@@ -19,6 +18,12 @@ export interface ContinueAction {
   /** Is there a session to reopen at all? (`runActionFlags.continueRun` — the same gate the
    *  header's Continue button uses.) Everything else is inert when this is false. */
   available: boolean
+  /** Whether provider discovery currently permits reopening the session. */
+  canContinue: boolean
+  /** Fixed recovery copy when no provider can continue the run. */
+  reason?: string
+  /** True while provider status is still loading. */
+  providerPending: boolean
   /** The runner + model pills — which backend and model the reopened session runs on. */
   pills: ReactNode
   /**
@@ -43,7 +48,6 @@ export interface ContinueAction {
 export function useContinueAction(run: ApiRun): ContinueAction {
   const queryClient = useQueryClient()
   const available = runActionFlags(run).continueRun
-  const health = useHealth()
   const config = useConfig()
   // Only a run that can actually be continued needs the model catalog — every other thread
   // (running, queued, or closed with no session) would be fetching it to render nothing.
@@ -53,12 +57,8 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
   const [pickedModel, setPickedModel] = useState<string | null>(null)
 
-  const runners = availableRunners(health.data?.checks ?? [])
-  // Mirrors the server's continue-path resolution (`record?.runner ?? 'claude'`): a run
-  // without a persisted runner predates the choice and continues on claude — NOT on the
-  // host's defaultRunner, which only applies to brand-new tasks.
-  const currentRunner = (run.runner ?? 'claude') as Runner
-  const runner = resolveRunner(pickedRunner, runners, currentRunner)
+  const continuation = useContinuationProvider(run, pickedRunner)
+  const { runners, canContinue, currentRunner, runner } = continuation
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the
   // runner invalidates that pin and falls back to the new backend's configured default / auto.
   const runnerChanged = runner !== currentRunner
@@ -70,22 +70,30 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const model = resolveModel(pickedModel, runner, modelDefaults, catalog.data)
 
   const mutation = useMutation({
-    mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) =>
-      continueRun(run.id, {
+    mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) => {
+      if (!canContinue) {
+        return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
+      }
+      return continueRun(run.id, {
         // An empty draft posts no `text` at all, so the server's default opening prompt
         // ("Continue.") still applies — one-click Continue, unchanged.
         text: text.trim() ? text : undefined,
         images: images.length ? images : undefined,
         // Send an override only for a pill the user actually touched; otherwise omit it so the
-        // server keeps the run's current backend/model.
-        runner: pickedRunner !== null ? runner : undefined,
+        // server keeps the run's current backend/model. If that backend disconnected, the
+        // connected fallback must be explicit even when the pills were untouched.
+        runner: continuation.runnerOverride,
         model: pickedModel !== null ? model : undefined,
-      }),
+      })
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 
   return {
     available,
+    canContinue,
+    reason: continuation.reason,
+    providerPending: continuation.providerPending,
     pills: (
       <div data-slot="follow-up-engine" className="flex flex-wrap items-center gap-1.5">
         {runners.length > 1 ? (

@@ -646,7 +646,7 @@ function SplitCell({
     <div
       data-slot="diff-cell"
       data-line={line.kind}
-      className={cn('flex min-w-0', LINE_BG[line.kind], side === 'new' && 'border-l border-border/40')}
+      className={cn('flex min-w-0 overflow-x-auto', LINE_BG[line.kind], side === 'new' && 'border-l border-border/40')}
     >
       <Gutter value={side === 'old' ? line.oldLine : line.newLine} />
       <span className="w-4 shrink-0 text-soft-foreground select-none">{MARKER[line.kind]}</span>

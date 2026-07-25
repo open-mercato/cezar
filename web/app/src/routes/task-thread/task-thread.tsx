@@ -28,6 +28,7 @@ import {
   ContextGroup,
   ImageItem,
   NoteLine,
+  ProviderAuthRequiredCard,
   ReasoningItem,
   ToolCard,
   ToolStreak,
@@ -43,6 +44,7 @@ import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
+import { useActiveProviderAvailability } from './active-provider'
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import { ThreadLoading } from './thread-loading'
 import { ThreadCardCache } from './thread-open-cards'
@@ -168,7 +170,7 @@ export function buildThreadRows(
     for (const block of groupThreadItems(turn.items)) {
       rows.push({
         key: `${turn.id}:${block.id}`,
-        node: <ThreadBlockView block={block} scope={turn.id} runId={run.id} />,
+        node: <ThreadBlockView block={block} scope={turn.id} run={run} />,
       })
     }
   }
@@ -200,7 +202,8 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   // stays authorable here instead: the draft is the prompt the reopened session starts on, and
   // submitting an empty one is still the plain one-click Continue.
   const continueAction = useContinueAction(run)
-  const continuable = !sessionOpen && !queued && continueAction.available
+  const hasContinuation = !sessionOpen && !queued && continueAction.available
+  const continuable = hasContinuation && continueAction.canContinue
   // A closed session can never settle its in-flight items — nothing in the reducer rewrites a
   // `running` item on `session.ended`, so an interrupted fan-out stays `running` in the
   // persisted stream forever. Without this, reopening it pulses `Agents · 0/1` above a dead
@@ -232,6 +235,11 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
     [thread.turns, openAgentId],
   )
   const sendMessage = useSendMessage(run.id)
+  const activeProvider = useActiveProviderAvailability(run)
+  const activeProviderBlocked = (sessionOpen || queued) && !activeProvider.usable
+  const continuationProviderBlocked = hasContinuation && !continueAction.canContinue
+  const providerBlocked = activeProviderBlocked || continuationProviderBlocked
+  const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason
 
   // The queued-run affordances (#472), passed only while the run is queued — so the bubbles
   // go read-only on the next `run` SSE frame once it starts. The bubbles await these promises
@@ -387,14 +395,23 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
                 ? (text, images) => continueAction.continueWith(text, images)
                 : (text, images) => sendMessage.mutateAsync({ text, images })
             }
-            disabled={!sessionOpen && !queued && !continuable}
+            disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
             // Only reachable now by a closed run with NO session to resume — which is exactly
             // the one case where Continue is not on offer either. Left honest rather than
             // rewritten: "closed" is all such a run can be told.
-            disabledReason="Session closed — no session to resume."
+            disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
             // The engine pills ride the enabled footer, so the picked runner/model and the
             // typed prompt reach `POST /continue` in one request.
-            footerEnd={continuable ? continueAction.pills : undefined}
+            footerEnd={
+              providerBlocked && !continueAction.providerPending ? (
+                <Link
+                  to="/settings/agents#providers"
+                  className="text-xs font-medium text-foreground underline underline-offset-4"
+                >
+                  Configure providers
+                </Link>
+              ) : continuable ? continueAction.pills : undefined
+            }
             // Continuing with nothing typed is the legacy one-click Continue.
             allowEmptySubmit={continuable}
             sendAriaLabel={continuable ? 'Continue' : 'Send'}
@@ -436,10 +453,10 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
 /** One grouped block → its surface. Grouping (context groups, streaks, sub-agent nesting) is
  *  `groupThreadItems`'s — this only maps block kinds to components. `scope` (the turn's render
  *  key) namespaces the open-card cache keys, because item ids repeat across sessions. */
-function ThreadBlockView({ block, scope, runId }: { block: ThreadBlock; scope: string; runId: string }) {
+function ThreadBlockView({ block, scope, run }: { block: ThreadBlock; scope: string; run: ApiRun }) {
   switch (block.kind) {
     case 'entry':
-      return <ThreadEntryView entry={block.entry} scope={scope} runId={runId} />
+      return <ThreadEntryView entry={block.entry} scope={scope} run={run} />
     case 'tool-card':
       return <ToolCard item={block.item} nested={block.children} cacheKey={`${scope}:${block.id}`} />
     case 'context-group':
@@ -448,7 +465,7 @@ function ThreadBlockView({ block, scope, runId }: { block: ThreadBlock; scope: s
       return (
         <ToolStreak count={block.count}>
           {block.blocks.map((inner) => (
-            <ThreadBlockView key={inner.id} block={inner} scope={scope} runId={runId} />
+            <ThreadBlockView key={inner.id} block={inner} scope={scope} run={run} />
           ))}
         </ToolStreak>
       )
@@ -456,7 +473,7 @@ function ThreadBlockView({ block, scope, runId }: { block: ThreadBlock; scope: s
 }
 
 /** One reducer entry → its block (non-tool entries; tools always arrive as tool-card blocks). */
-function ThreadEntryView({ entry, scope, runId }: { entry: ThreadEntry; scope: string; runId: string }) {
+function ThreadEntryView({ entry, scope, run }: { entry: ThreadEntry; scope: string; run: ApiRun }) {
   switch (entry.kind) {
     case 'message':
       // Agent-side user echoes (some backends emit them) read as user bubbles too.
@@ -474,6 +491,8 @@ function ThreadEntryView({ entry, scope, runId }: { entry: ThreadEntry; scope: s
     case 'image':
       return <ImageItem image={entry} />
     case 'ask':
-      return <AskCard ask={entry} runId={runId} />
+      return <AskCard ask={entry} run={run} />
+    case 'provider-auth-required':
+      return <ProviderAuthRequiredCard incident={entry} />
   }
 }

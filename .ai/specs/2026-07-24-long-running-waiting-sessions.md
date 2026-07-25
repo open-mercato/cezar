@@ -22,10 +22,25 @@ Issue #654 records stabilization workflows that wait for CI and then end due to 
 
 That creates two failures:
 
-1. a correctly marked autonomous wait is destroyed solely because an external CI job took longer than 15 minutes; and
-2. simply removing the timeout would make every parked monitor exempt from `maxParallel`, allowing an unbounded number of live agent processes to accumulate.
+1. a correctly marked autonomous wait is destroyed solely because an external CI job took longer than 15 minutes;
+2. the idle-close path reports the unfinished agent step and run as successfully `done`, preserving stale `activity: 'monitoring'` on a terminal record and making the Tasks UI claim the task finished even though its workflow never reached `CEZ:DONE`;
+3. workflow-owned cleanup after the wait—such as releasing an `in-progress` PR lock, submitting the final review, or moving a PR after CI—never runs; and
+4. simply removing the timeout would make every parked monitor exempt from `maxParallel`, allowing an unbounded number of live agent processes to accumulate.
 
 The product needs separate accounting for active execution and bounded background monitoring: Y tasks actively work while up to X additional sessions wait on their own downstream work.
+
+### Production evidence from `mercato-development`
+
+The persisted local Cezar project demonstrates the complete causal chain; this is not an inferred race:
+
+| Run | Declared state | Cezar terminal sequence | Unfinished downstream state |
+|---|---|---|---|
+| `1433ac74…` / PR #4452 | Final assistant message ended in `CEZ:MONITORING` while a CI rerun was running. | At `10:20:02Z`, exactly 15 minutes after turn-end, Cezar appended `session closed after 15m of inactivity`, `done`, `session.ended`, `step-end: done`, and `run finished`. The persisted record is `status: done, activity: monitoring`. | The agent had said final approval and label cleanup would follow the rerun. PR #4452 retained `in-progress`, proving that completion cleanup did not run. |
+| `2f4e0fe4…` / replacement PR #4457 | Final assistant message ended in `CEZ:MONITORING` while replacement CI was running. | The same idle-close → `done` sequence occurred exactly 15 minutes later, leaving `status: done, activity: monitoring`. | The replacement remained open and still required review/QA work. |
+| `7c542c7c…` / replacement PR #4461 | Final assistant message ended in `CEZ:MONITORING`; a long `gh run watch` completed after turn-end. | The timer still closed the session at the original turn-end +15 minutes and marked the run done. | The replacement remained in `review`; the agent never got a turn to interpret the successful checks. |
+| `4e88f320…` / replacement PR #4465 | Final assistant message explicitly said CI was queued and ended in `CEZ:MONITORING`. | The same false-success sequence occurred at +15 minutes. | The replacement remained in `review` with required QA outstanding. |
+
+The acceptance criterion is therefore stronger than “show monitoring for 15 minutes”: once the assembled terminal assistant message selects monitoring, no ordinary idle timer may convert that epoch into a successful terminal run. Only an agent `CEZ:DONE`, an explicit user finish/cancel, or a real backend/session failure may terminate it.
 
 ## Proposed Solution
 
@@ -86,6 +101,10 @@ At both turn-end sites in `src/workflows/run.ts`:
 - plain waiting / structured ask: update waiting state, remove from `monitoring`, add to `waiting`, and arm the existing idle timer;
 - done, resume, cancel, failure, finish, explicit close, and backend end: clear both parked sets and any timer through one idempotent helper.
 
+Marker selection is made from the assembled terminal assistant text, after applying the existing precedence `CEZ:DONE` > `CEZ:ASK` > `CEZ:MONITORING`. Stripping the marker from display text must not alter the already-computed lifecycle decision. A monitoring turn must never fall through to the generic session-end success path merely because there is no active model turn.
+
+The ordinary idle timer is a session-liveness policy, not evidence that the agent achieved its goal. In particular, its callback must not synthesize `done`, `step-end: done`, or `run finished` for a monitoring epoch. A genuine backend disconnect follows the existing failed/interrupted path and clears `activity`; every terminal write must clear `activity` so `status: done, activity: monitoring` is unrepresentable after this change.
+
 No synthetic keepalive is sent to the agent CLI. Cezar owns the child/session lifecycle already; keeping its own idle-close timer disarmed is sufficient. If a backend independently disconnects or rejects a later resume, the existing failure path remains authoritative and visible.
 
 ### API Contracts
@@ -135,6 +154,8 @@ The Tasks UI does not change: durable sessions already display the violet “mon
 - **Cezar restarts.** Persisted monitoring activity is retained according to current run recovery, but this feature does not promise resurrection of a backend process that no longer exists. Recovery must never manufacture a live session.
 - **Backend disconnects while monitoring.** Use the existing session-end/failure path, clear accounting, and surface the terminal state; do not loop reconnects indefinitely.
 - **Agent forgets `CEZ:MONITORING`.** It becomes ordinary waiting and expires after 15 minutes, preserving backward compatibility.
+- **A monitored command or sub-agent finishes after the assistant turn ends.** Its late event does not reset or terminate the epoch. The session remains monitoring until an explicit follow-up/wake lets the agent interpret the result and finish its workflow.
+- **Idle callback races marker handling.** Parking cancels any previous idle timer before publishing `running`/`monitoring`; the callback re-checks the current epoch/activity and cannot emit terminal success for a monitor.
 - **Agent emits `CEZ:ASK` and `CEZ:MONITORING`.** Existing precedence keeps ASK as genuine attention with the ordinary timeout.
 - **Memory guard trips.** Existing per-task memory enforcement remains authoritative. Durable does not mean immune to explicit resource safety controls.
 - **Non-git directory.** Its active cap stays 1; it may still use the workspace monitoring exemption because that pool protects the host, not git semantics.
@@ -160,16 +181,17 @@ The Tasks UI does not change: durable sessions already display the violet “mon
 
 1. **Centralize parked-session bookkeeping.** Add private helpers in `src/workflows/run.ts` that park a run as ordinary waiting or monitoring and idempotently clear parked state/timers on resume and termination. Keep the public run/step statuses unchanged. *Tests:* existing waiting and monitoring turn-end tests still pass; both backend execution paths update the correct private sets.
 2. **Disarm inactivity closure for monitors.** Call `armIdleTimer()` only for plain waiting and ASK turns. *Tests:* fake timers prove an ordinary waiting session closes at 15 minutes while a monitoring session remains open past the same boundary and can later resume/complete.
-3. **Cover every exit.** Clear monitoring bookkeeping and any pending wake timer on sendMessage, continuation start, done, explicit finish, cancel, failure, backend end, and recovery cleanup. *Tests:* parameterized lifecycle assertions prove no stale monitor count/timer survives a terminal/resumed transition.
+3. **Prevent false terminal success.** Guard the idle callback and generic session-end path so a monitoring epoch cannot emit `done`, `step-end: done`, or `run finished`; clear `activity` on every real terminal transition. *Tests:* reproduce the production event sequence with a trailing marker and late tool result, advance beyond 15 minutes, and assert the run remains `running`/`monitoring`, no terminal events exist, and a later follow-up can complete normally. Add a store invariant/regression assertion that terminal records never retain `activity: monitoring`.
+4. **Cover every exit.** Clear monitoring bookkeeping and any pending wake timer on sendMessage, continuation start, done, explicit finish, cancel, failure, backend end, and recovery cleanup. *Tests:* parameterized lifecycle assertions prove no stale monitor count/timer survives a terminal/resumed transition.
 
 ### Phase 2 — Bounded monitoring capacity
 
-4. **Add the workspace resource contract.** Extend workspace config/schema, `WorkspaceResourceLimits`, production loader, API response/input schemas, and web API types with `maxMonitoringSessions` default 2 and range 0–16. *Tests:* missing/valid/invalid/corrupt values, passthrough preservation, read-modify-write, GET/PUT validation, and read-only degradation.
-5. **Apply capped exemptions.** Update `busySlots()` to subtract every time-bounded ordinary wait but only `min(monitoring, maxMonitoringSessions)` durable monitors. Ensure resource refresh pumps managers after a changed limit. *Tests:* with Y=2/X=1, two active + one monitor may coexist; monitor #2 occupies an active slot and blocks a queued task; completion/lower/raise transitions restore capacity; aggregate behavior holds across two project managers and per-project active caps.
-6. **Protect recovery and non-git behavior.** Rebuild private monitoring bookkeeping only for genuinely recoverable live state and preserve the non-git active cap. *Tests:* stale persisted activity cannot grant a phantom exemption; non-git remains one active task plus allowed monitors.
+5. **Add the workspace resource contract.** Extend workspace config/schema, `WorkspaceResourceLimits`, production loader, API response/input schemas, and web API types with `maxMonitoringSessions` default 2 and range 0–16. *Tests:* missing/valid/invalid/corrupt values, passthrough preservation, read-modify-write, GET/PUT validation, and read-only degradation.
+6. **Apply capped exemptions.** Update `busySlots()` to subtract every time-bounded ordinary wait but only `min(monitoring, maxMonitoringSessions)` durable monitors. Ensure resource refresh pumps managers after a changed limit. *Tests:* with Y=2/X=1, two active + one monitor may coexist; monitor #2 occupies an active slot and blocks a queued task; completion/lower/raise transitions restore capacity; aggregate behavior holds across two project managers and per-project active caps.
+7. **Protect recovery and non-git behavior.** Rebuild private monitoring bookkeeping only for genuinely recoverable live state and preserve the non-git active cap. *Tests:* stale persisted activity cannot grant a phantom exemption; non-git remains one active task plus allowed monitors.
 
 ### Phase 3 — Settings UI, documentation, and validation
 
-7. **Add Resources control.** Render the 0–16 capacity select and dynamic “Y active + X monitoring” helper; save through the existing workspace config mutation. *Tests:* initial value, change payload, cache refresh, disabled state, 0 semantics, error toast, and accessible label.
-8. **Add regression-level UI coverage.** Extend the browser smoke suite to change the setting, reload Resources, and verify persistence plus the capacity helper. Capture before/after screenshots for the PR; keep `needs-qa` until human sign-off.
-9. **Document the lifecycle contract.** Update the #490 spec’s superseding note and user-facing resource documentation to state that monitoring is durable but bounded, ordinary waiting still expires, and overflow back-pressures the queue. Run the complete validation gate and package test because workspace config is a shipped compatibility surface.
+8. **Add Resources control.** Render the 0–16 capacity select and dynamic “Y active + X monitoring” helper; save through the existing workspace config mutation. *Tests:* initial value, change payload, cache refresh, disabled state, 0 semantics, error toast, and accessible label.
+9. **Add regression-level UI coverage.** Extend the browser smoke suite to change the setting, reload Resources, and verify persistence plus the capacity helper. Capture before/after screenshots for the PR; keep `needs-qa` until human sign-off.
+10. **Document the lifecycle contract.** Update the #490 spec’s superseding note and user-facing resource documentation to state that monitoring is durable but bounded, ordinary waiting still expires, and overflow back-pressures the queue. Run the complete validation gate and package test because workspace config is a shipped compatibility surface.

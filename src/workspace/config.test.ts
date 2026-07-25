@@ -70,6 +70,23 @@ describe('workspace config', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('salvages disabled provider preferences and preserves unknown top-level keys on merge', async () => {
+    expect(defaultWorkspaceConfig().disabledProviders).toEqual([]);
+
+    write({
+      disabledProviders: ['codex', 'future', 'codex', 4, 'opencode'],
+      futureTopLevelKey: { keep: true },
+    });
+    expect((await loadWorkspaceConfig()).disabledProviders).toEqual(['codex', 'opencode']);
+
+    const written = await mergeWriteWorkspaceConfig((config) => {
+      config.disabledProviders = ['claude'];
+    });
+    expect(written.disabledProviders).toEqual(['claude']);
+    const raw = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as Record<string, unknown>;
+    expect(raw.futureTopLevelKey).toEqual({ keep: true });
+  });
+
   it('takes zero-config roots from the environment while explicit stored values win', async () => {
     process.env.CEZ_BROWSE_ROOT = '~/source';
     process.env.CEZ_PROJECTS_DIR = '~/checkouts';

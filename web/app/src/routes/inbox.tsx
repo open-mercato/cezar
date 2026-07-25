@@ -183,9 +183,16 @@ function TodoCard({
     // body rules live in engineBody so this surface and the GitHub tab cannot disagree, and the
     // trimmed note joins them as `prompt`. Both are optional — an untouched card on a
     // single-backend host with no note sends the bodyless POST this endpoint always has.
-    mutationFn: () =>
-      startTodo(todo.id, { ...engineBody(resolved), prompt: notes.trim() || undefined }),
-    onSuccess: ({ run }) => {
+    mutationFn: async () => {
+      if (!resolved.canRun) return null
+      return startTodo(todo.id, {
+        ...engineBody(resolved),
+        prompt: notes.trim() || undefined,
+      })
+    },
+    onSuccess: (result) => {
+      if (result === null) return
+      const { run } = result
       // The server rewrote todos.json (SSE will confirm); the invalidations just refuse to
       // wait for the file watcher's debounce.
       void queryClient.invalidateQueries({ queryKey: queryKeys.todos })
@@ -275,7 +282,7 @@ function TodoCard({
                 size="sm"
                 data-action="todo-run"
                 title="Start a task from this follow-up"
-                disabled={busy}
+                disabled={busy || !resolved.canRun}
                 onClick={() => start.mutate()}
               >
                 <PlayIcon aria-hidden="true" className="size-3" />
@@ -315,7 +322,23 @@ function TodoCard({
           Run knobs (engine + prompt) read as one group. */}
       {runnable ? (
         <div data-slot="todo-engine" className="flex flex-wrap items-center gap-2 pl-5">
-          <EnginePills pick={engine} onChange={setEngine} disabled={busy} />
+          <EnginePills pick={engine} onChange={setEngine} disabled={busy || !resolved.canRun} />
+          {!resolved.providerPending && !resolved.canRun ? (
+            <span
+              data-slot="todo-provider-gate"
+              className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+            >
+              {resolved.providerError
+                ? 'Provider authentication could not be verified.'
+                : 'Connect an agent provider to run this follow-up.'}
+              <Link
+                to="/settings/agents#providers"
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                Configure providers
+              </Link>
+            </span>
+          ) : null}
         </div>
       ) : null}
 

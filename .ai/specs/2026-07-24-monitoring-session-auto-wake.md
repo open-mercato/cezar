@@ -53,20 +53,21 @@ The key is additive, live-refreshable, `.passthrough()` safe, and requires no mi
 
 ### Wake coordinator
 
-Add one unref'd timer and `monitoringWakeups` counter to each relevant `ActiveRun`:
+Add one unref'd timer and `monitoringWakeups` counter to each relevant `ActiveRun`, plus an optional persisted `RunRecord.monitoringWakeAt` ISO-8601 timestamp:
 
 1. Schedule only after a completed turn parks as monitoring and the interval is non-null.
-2. At expiry, synchronously verify the run is still monitoring and the session is open.
-3. Deliver the fixed prompt through a private internal follow-up helper built on `AgentSession.sendMessage`; reuse state/slot cleanup but do not persist a fake user-authored message.
-4. Increment and append an observable `automatic monitoring wake-up (N/40)` note.
-5. Schedule the next timer only if that turn ends in monitoring again.
-6. Cancel on user follow-up, non-monitoring turn, done, cancel, finish, failure, backend end, recovery cleanup, or config switching to null.
+2. Compute the deadline once from the scheduling instant, store the same `new Date(deadline).toISOString()` in `monitoringWakeAt`, and arm the timer from that deadline. The persisted field is display/observability state, not a second scheduler.
+3. At expiry, synchronously verify the run is still monitoring and the session is open, then clear `monitoringWakeAt` before delivery so the UI never shows an already-fired deadline.
+4. Deliver the fixed prompt through a private internal follow-up helper built on `AgentSession.sendMessage`; reuse state/slot cleanup but do not persist a fake user-authored message.
+5. Increment and append an observable `automatic monitoring wake-up (N/40)` note.
+6. Schedule the next timer only if that turn ends in monitoring again.
+7. Cancel the timer and clear `monitoringWakeAt` on user follow-up, non-monitoring turn, done, cancel, finish, failure, backend end, recovery cleanup, config switching to null, or reaching the cap.
 
 No concurrent turn or catch-up queue exists: a timer is only present between turns, and missed intervals collapse into the next possible single wake. A rejected send follows the existing backend-end path and never retry-spins.
 
 ### Compatibility
 
-The backend seam already supports live follow-ups for Claude stream-json stdin, Codex app-server turns, and OpenCode HTTP sessions. No runner-specific API, marker, status, persisted run field, or UI event is added. The in-memory counter intentionally resets after process restart; existing session recovery governs whether a timer can be rebuilt for a genuinely live/recoverable monitor.
+The backend seam already supports live follow-ups for Claude stream-json stdin, Codex app-server turns, and OpenCode HTTP sessions. No runner-specific API, marker, status, or new event kind is added. `monitoringWakeAt?: string` is an additive `RunRecord`/API field carried by the existing run update event; old records and clients continue to parse. The in-memory counter intentionally resets after process restart; existing session recovery governs whether a timer can be rebuilt for a genuinely live/recoverable monitor. A stale persisted deadline is cleared unless recovery proves the session is live and deliberately schedules a fresh future deadline.
 
 ## UI/UX
 
@@ -80,11 +81,26 @@ Add a Settings → Resources field below Extra monitoring sessions:
 
 The control uses the existing resource mutation, cache update, toast, keyboard, mobile, and validation patterns. Proposed mockup: `assets/long-running-waiting-sessions/mockup-01-resources-monitoring-capacity.png`.
 
+### Session view
+
+When a run has `status: running`, `activity: monitoring`, and `monitoringWakeAt`, the session/thread view shows the exact local wake deadline beside the monitoring state:
+
+- label: **Next automatic check**;
+- value: locale date and time including seconds and short time-zone name, rendered with `<time dateTime={monitoringWakeAt}>` (for example, **Jul 25, 2026, 10:15:00 UTC**);
+- supporting relative text may update client-side (for example, **in 4m 12s**) but the absolute timestamp remains visible and is the accessible name/source of truth;
+- no refetch interval is added—the existing global run event updates the field when a timer is scheduled, replaced, fired, or cancelled.
+
+Monitoring without a scheduled wake shows **Parked — no automatic check scheduled** rather than inventing a time. After the 40-wakeup cap it shows **Automatic checks paused — 40/40 reached**. During an automatic turn, `activity` and `monitoringWakeAt` are cleared, so a stale deadline is never displayed while the agent is active. Invalid timestamps degrade to the parked copy and never render `Invalid Date`.
+
+The same deadline should appear in the compact run status/header when space permits; on mobile it wraps beneath the monitoring pill. It must not exist only as a tooltip, and screen readers should announce a changed deadline through the existing status region without a continuously ticking live announcement.
+
 ## Edge Cases & Failure Scenarios
 
 - Enabling interval mode for parked sessions schedules from the config-change time; no retroactive burst.
 - Changing N cancels/replaces pending timers using the full new interval.
 - Switching to Park cancels timers but leaves sessions alive.
+- Client/server clock skew affects only optional relative copy; the exact server-computed ISO deadline remains authoritative.
+- Refreshing or opening the session on another browser reconstructs the same exact deadline from `RunRecord.monitoringWakeAt`.
 - A slow agent turn cannot overlap the cadence; no timer exists during the turn.
 - A timer racing with terminal state re-checks synchronously and becomes a no-op.
 - Wake #40 runs normally; if it monitors again, cezar parks it without timer and emits the cap note.
@@ -107,10 +123,11 @@ The control uses the existing resource mutation, cache update, toast, keyboard, 
 
 ## Implementation Plan
 
-1. **Add the resource key.** Extend workspace schema/load/response/input/web types with nullable range 1–60/default null. *Tests:* absent, null, valid boundaries, invalid fallback, merge-write/passthrough, API validation, live refresh.
+1. **Add the resource and run-record keys.** Extend workspace schema/load/response/input/web types with nullable range 1–60/default null. Add optional `monitoringWakeAt` to the run schema and web API type. *Tests:* absent/null/valid/invalid config, merge-write/passthrough, API validation/live refresh, old run records without the field, valid ISO round-trip, and clearing through `updateRun`.
 2. **Extract internal follow-up delivery.** Refactor `RunManager.sendMessage` so user-authored persistence stays at the public boundary while a private system follow-up reuses delivery/state/slot logic. *Tests:* user events remain byte-compatible; synthetic wake text never appears as a user message.
-3. **Implement timer lifecycle.** Schedule only for parked monitoring, cancel on every exit/config change, and use unref. *Tests:* fake timers cover fire, cancel, replace, race, no overlap, no catch-up, and closed session.
+3. **Implement timer lifecycle and deadline publication.** Schedule only for parked monitoring, persist the exact deadline, cancel/clear on every exit or config change, and use unref. *Tests:* fake timers cover timestamp calculation, fire/clear, cancel, replace, race, no overlap, no catch-up, closed session, and stale recovery data.
 4. **Enforce the safety epoch.** Count automatic wakes, stop after 40, append lifecycle notes, and reset only on real user input. *Tests:* 40th/41st boundary and config-refresh non-reset.
 5. **Prove backend parity.** Run the same manager-level wake contract against Claude, Codex, and OpenCode fake sessions; no vendor scheduler/command is invoked.
 6. **Add Resources UI.** Implement mode select, conditional interval editor, validation, Save, helper text, and accessibility. *Tests:* null/interval payloads, cache, pending/error states, boundaries, accessible names.
-7. **Add browser evidence and docs.** Persist both modes through reload, capture the control, and document cost/cap semantics. Run the full validation and package gates.
+7. **Display the exact next wake.** Add the session/header presentation for scheduled, parked, active-turn, capped, and malformed-timestamp states using the existing run cache/event stream. *Tests:* exact localized date/time with time-zone and `<time dateTime>`, deadline replacement/removal, accessible status behavior, mobile wrapping, and no polling subscription.
+8. **Add browser evidence and docs.** Persist both modes through reload; open a monitoring session and capture the exact next-check time in the session view; verify it changes after a wake and disappears on completion. Capture the Resources control and document cost/cap semantics. Run the full validation and package gates.

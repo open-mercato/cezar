@@ -143,6 +143,13 @@ Every v1 event stays **derivable** from the v2 stream, so a consumer can migrate
 one panel at a time. New work should read v2; v1 exists for the console renderer
 and old recordings.
 
+### Cezar-owned run metadata events
+
+`provider-auth-required` is not emitted by a backend runner. The server derives it
+from an authoritative v1/v2 authentication error, persists a provider id, opaque
+incident id, and optional `stepId`, and the cockpit renders recovery guidance. It
+does not change backend parity or expose the raw error.
+
 ---
 
 ## 3. v2 `UiEvent` — the normalized protocol (`src/core/ui-events.ts`)
@@ -335,7 +342,10 @@ these events get persisted as NDJSON), and asserts `toStrictEqual` against the
 - **NDJSON** — one append-only `runs/<id>.ndjson` per run, one JSON object per
   line (`seq`, `ts`, `type`, free extra keys). Never rewrite, reorder or
   re-number; readers skip bad lines. Both v1 and v2 events live here; a mixed
-  file is valid.
+  file is valid. Cezar-owned task events are additive too: for example,
+  `provider-auth-required` records only `{ provider, authFailureId, stepId? }`
+  when a runtime rejection needs user authorization; it never carries vendor
+  error text or credentials.
 - **SSE** — the server replays from NDJSON then streams live, deduped by `seq`.
   Event names: `run-event` (v1) and `ui-event` (v2 dotted types). These names are
   a protected contract (see `BACKWARD_COMPATIBILITY.md` §2).

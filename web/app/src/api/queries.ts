@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
+import { mergeProviderStatusResponse } from '@/lib/provider-status'
+
 import {
   browseFs,
   checkoutProject,
@@ -13,6 +15,7 @@ import {
   getHealth,
   getLaunchKey,
   getOpenTargets,
+  getProviderStatus,
   getProjectRuns,
   getProjects,
   getRunnerModels,
@@ -48,6 +51,7 @@ import {
   updateProject,
   sendMessage,
   putAgentConfigFile,
+  retryProviderAuth,
 } from './client'
 import { queryScope } from './project-scope'
 import type {
@@ -55,6 +59,8 @@ import type {
   HealthResponse,
   MessageInput,
   PatchRunInput,
+  ProviderId,
+  ProviderStatusResponse,
   SetAgentConfigInput,
   UpdateProjectInput,
 } from './types'
@@ -159,6 +165,7 @@ export const queryKeys = {
  */
 export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
+  providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
@@ -183,6 +190,56 @@ export function useRunnerModels(enabled = true) {
     queryFn: ({ signal }) => getRunnerModels({ signal }),
     staleTime: 5 * 60 * 1_000,
     enabled,
+  })
+}
+
+export function useProviderStatus() {
+  const queryClient = useQueryClient()
+  return useQuery({
+    queryKey: workspaceQueryKeys.providerStatus,
+    queryFn: async ({ signal }) => {
+      const requestStart = queryClient.getQueryData<ProviderStatusResponse>(
+        workspaceQueryKeys.providerStatus,
+      )
+      const response = await getProviderStatus(false, { signal })
+      return mergeProviderStatusResponse(
+        requestStart,
+        queryClient.getQueryData(workspaceQueryKeys.providerStatus),
+        response,
+      )
+    },
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  })
+}
+
+export function useRefreshProviderStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => getProviderStatus(true),
+    onMutate: () => queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus),
+    onSuccess: (result, _variables, requestStart) => queryClient.setQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+      (cached) => mergeProviderStatusResponse(requestStart, cached, result),
+    ),
+  })
+}
+
+export function useRetryProviderAuth() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      provider,
+      authFailureId,
+    }: {
+      provider: ProviderId
+      authFailureId: string
+    }) => retryProviderAuth(provider, authFailureId),
+    onMutate: () => queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus),
+    onSuccess: (result, variables, requestStart) => {
+      queryClient.setQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus, (cached) =>
+        mergeProviderStatusResponse(requestStart, cached, result, variables.authFailureId))
+    },
   })
 }
 

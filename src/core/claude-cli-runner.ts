@@ -446,8 +446,10 @@ function handleClaudeMessage(
     }
     if (msg.is_error) {
       ctx.onEvent?.({
-        type: 'note',
-        message: `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
+        type: 'error',
+        message: typeof msg.result === 'string' && msg.result.trim() !== ''
+          ? msg.result
+          : `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
       });
     }
     return costWeightedTokens(msg.usage);

@@ -17,6 +17,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ZoomableImage } from '@/components/zoomable-image'
+import { Link } from '@/lib/project-router'
 import type { FileDiff, ToolKind, UiToolItem } from '@/protocol/ui-events'
 import { cn } from '@/lib/utils'
 
@@ -24,7 +25,7 @@ import { Markdown } from './markdown'
 import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-groups'
 import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
-import type { ThreadEntry, ThreadImage, ThreadNote } from './thread-state'
+import type { ThreadEntry, ThreadImage, ThreadNote, ThreadProviderAuthRequired } from './thread-state'
 
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
@@ -233,6 +234,41 @@ export function NoteLine({ note }: { note: ThreadNote }) {
     >
       {note.tone === 'danger' ? '✗ ' : '· '}
       {note.text}
+    </div>
+  )
+}
+
+const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+}
+
+/** Persisted recovery guidance for an authoritative runtime authentication rejection. */
+export function ProviderAuthRequiredCard({
+  incident,
+}: {
+  incident: ThreadProviderAuthRequired
+}) {
+  const label = PROVIDER_LABEL[incident.provider]
+  return (
+    <div
+      role="alert"
+      data-slot="provider-auth-required"
+      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
+    >
+      <p className="text-[13px] font-semibold text-foreground">
+        This run needed {label} authorization
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Review {label} settings before retrying.
+      </p>
+      <Link
+        to="/settings/agents#providers"
+        className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
+      >
+        Open provider settings
+      </Link>
     </div>
   )
 }

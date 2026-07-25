@@ -894,6 +894,39 @@ describe('RunStore — seq survives a restart (#424 symptom class)', () => {
   });
 });
 
+describe('RunStore — provider authorization callouts', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-provider-auth-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('persists the structured provider-auth-required event without vendor error text', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+
+    store.appendEvent(run.id, {
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    });
+
+    expect(store.readEvents(run.id)).toEqual([expect.objectContaining({
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    })]);
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('OAuth');
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('token');
+  });
+});
+
 /** #472 — the queued prompt stack. Additive optional field, and (like `task`)
  *  deliberately outside `redactPatch`'s field list. */
 describe('RunStore — queuedMessages (#472)', () => {
