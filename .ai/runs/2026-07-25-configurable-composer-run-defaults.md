@@ -44,4 +44,4 @@ Make quick-task the cold composer source, expose truthful Worktree controls for 
 ### Phase 3: Contract and verification
 
 - [x] 3.1 Document environment variables and update drift coverage — 3e2002ce
-- [ ] 3.2 Run the full validation gate and browser smoke flows
+- [x] 3.2 Run the full validation gate and browser smoke flows — validation passed; browser evidence follows on the PR
