@@ -49,6 +49,8 @@ Give the PR Conversation view an authoritative GitHub-shaped merge box and an ex
 
 ## Progress
 
+PR: #662
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Authoritative read model
