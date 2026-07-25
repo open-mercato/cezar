@@ -80,4 +80,4 @@ Keep `CEZ:MONITORING` sessions alive safely, bound their extra workspace capacit
 ### Phase 4: Verification and delivery
 
 - [x] 4.1 Pass the full validation gate — 7d0ea3f
-- [ ] 4.2 Complete review autofix and UI QA
+- [x] 4.2 Complete review autofix and UI QA — 3405922
