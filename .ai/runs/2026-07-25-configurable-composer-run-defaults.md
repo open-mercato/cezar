@@ -30,18 +30,18 @@ Make quick-task the cold composer source, expose truthful Worktree controls for 
 
 ### Phase 1: Workspace policy
 
-- [ ] 1.1 Add tolerant composer defaults and effective helpers
-- [ ] 1.2 Extend workspace GET and PUT contracts
-- [ ] 1.3 Extend web types and shared resolver
-- [ ] 1.4 Add Global Resources controls
+- [x] 1.1 Add tolerant composer defaults and effective helpers — 3e2002ce
+- [x] 1.2 Extend workspace GET and PUT contracts — 3e2002ce
+- [x] 1.3 Extend web types and shared resolver — 3e2002ce
+- [x] 1.4 Add Global Resources controls — 3e2002ce
 
 ### Phase 2: Composer behavior
 
-- [ ] 2.1 Stop reading and writing legacy last-choice keys
-- [ ] 2.2 Make quick-task the cold default
-- [ ] 2.3 Support single-step workflow Worktree eligibility
+- [x] 2.1 Stop reading and writing legacy last-choice keys — 3e2002ce
+- [x] 2.2 Make quick-task the cold default — 3e2002ce
+- [x] 2.3 Support single-step workflow Worktree eligibility — 3e2002ce
 
 ### Phase 3: Contract and verification
 
-- [ ] 3.1 Document environment variables and update drift coverage
+- [x] 3.1 Document environment variables and update drift coverage — 3e2002ce
 - [ ] 3.2 Run the full validation gate and browser smoke flows
