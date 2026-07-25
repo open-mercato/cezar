@@ -83,7 +83,7 @@ The editor has three clearly separated sections:
    - Multi-select events: `New pull request`, `New issue`, `Issue label added`, `Issue label removed`.
    - Poll interval presets (`1 min`, `5 min`, `15 min`, `1 hour`, `6 hours`, `24 hours`) plus validated duration input. Default `5 min`; minimum `1 min`; maximum `24 hours`.
    - Filters: authors, assignees, include-all labels, include-any labels, exclude labels, relative lookback (`last 24 hours`, `last week`, `last 30 days`, custom 1–90 days), and maximum records per poll (`1–100`, default `25`).
-   - Label-name filters are required when either label-change event is selected; the event matches only transitions for those labels.
+   - Label-name filters are required when either label-change event is selected; the event matches only transitions for those labels. Author/assignee filters use subject state at observation. `allLabels`/`anyLabels`/`excludeLabels` evaluate the post-event label set for `labeled`, and the reconstructed pre-event label set for `unlabeled`, so removing the watched label can still match deterministically.
    - A read-only generated-query preview and `Test filter` button show up to the configured limit without launching tasks.
 2. **What task to run**
    - Render the shared New task controls: free prompt; saved or planned workflow; skill stack; backend/runner; model; variants; worktree; follow-up; autonomous.
@@ -121,7 +121,7 @@ Accessibility follows existing cockpit patterns: semantic labels/fieldsets, keyb
 - `src/automations/types.ts` — zod schemas and inferred types for definitions, cursors, receipts, and log records. Every persisted field is optional/defaulted where an older reader can tolerate absence; objects use `.passthrough()`.
 - `src/automations/store.ts` — project-local atomic definition/state store and append-only execution log. It owns salvage, caps, file locking, and change notifications.
 - `src/automations/github-poller.ts` — GitHub-only candidate discovery behind a narrow `AutomationSource` interface. It builds validated argument arrays for `gh api`; it never accepts shell fragments.
-- `src/automations/scheduler.ts` — one project scheduler started only after the HTTP server listens and disposed with `ProjectContext`. It calculates due work, holds the cross-process lease, serializes GitHub requests, applies backoff, evaluates events, commits receipts, and invokes a supplied run-launch adapter.
+- `src/automations/scheduler.ts` — one lightweight workspace coordinator started only after the HTTP server listens. It discovers registered projects with enabled definitions without materializing unrelated full project contexts, calculates due work, owns the shared GitHub request arbiter/backoff, and hands bounded checks to project schedulers. Project schedulers hold the project cross-process lease, evaluate events, commit receipts, and invoke a supplied run-launch adapter.
 - `src/automations/task-template.ts` — validates the same `CreateRunInput` contract used by `POST /api/runs`, expands the fixed placeholder vocabulary, and returns a `StartRunInput`/planned workflow.
 - `src/server/automations.ts` — project-scoped API route module registered once and mounted through the existing route-parity mechanism.
 - `web/app/src/routes/automations/` — list, editor, log, loading/error states, and focused components.
@@ -132,11 +132,11 @@ The poller depends on the forge/GitHub seam for identity and availability but is
 ### Lifecycle
 
 1. Server listens.
-2. Each lazily materialized `ProjectContext` constructs an `AutomationStore` and scheduler.
-3. Scheduler reads definitions. If none are enabled, it owns no timer and performs no GitHub call.
+2. A workspace automation coordinator scans registered project roots for the optional automation definitions file only. Missing/gone/read-only roots degrade per registry rules; it never constructs a full `ProjectContext` merely to discover due work. Registry add/remove events refresh this bounded index.
+3. Lazily materialized `ProjectContext`s reuse the coordinator-owned store/scheduler handle; removing or disposing a context does not stop enabled background checks. If no enabled definition exists anywhere, the coordinator owns no timer and performs no GitHub call.
 4. The first enabled definition schedules the earliest due time; edits recompute one timer for the project.
 5. At due time, acquire `.ai/cezar/automation-poll.lock` using create-exclusive semantics with PID/start-time metadata and stale recovery.
-6. Re-read definitions under the lease, group due automations by compatible event family/query, and execute GitHub calls serially.
+6. Re-read definitions under the lease, group due automations by compatible event family/query, and acquire the workspace GitHub request arbiter. The arbiter permits one active GitHub polling request chain per cezar process and applies token/user-scoped backoff shared by every project. A user-home cross-process quota lease serializes polling across cezar processes using the same `CEZ_HOME`/`gh` identity; when unavailable, conservative backoff prevents concurrent retries.
 7. Apply event reconstruction, filters, cursors, receipt deduplication, and caps.
 8. For each accepted event, durably reserve the receipt, launch the ordinary run, then finalize the receipt with `runId`. A startup repair reconciles `reserved` receipts: if their run exists, finalize; otherwise mark launch error and permit explicit retry.
 9. Persist cursor/ETag/backoff/log, publish one change event, release the lease, and schedule the next due time.
@@ -151,7 +151,8 @@ GitHub search syntax supports author, assignee, label, and date qualifiers and b
 - **Issue label added/removed:** issue search alone cannot reconstruct transitions. Fetch issue timeline events for bounded recently updated candidates and select `labeled`/`unlabeled` events after the cursor. GitHub uses those action names for label transitions ([GitHub webhook event vocabulary](https://docs.github.com/en/webhooks/webhook-events-and-payloads)).
 - Each event identity is `${repoNodeId}:${subjectNodeId}:${eventKind}:${eventNodeId || eventTimestamp + normalizedLabel}`. Receipts persist identity before task launch.
 - Use a two-minute overlap before the last successful cursor to tolerate timestamp ties and GitHub indexing delay. Receipts eliminate duplicates within the overlap.
-- Stop when the configured record cap is reached; never paginate past ten pages or 100 candidates, whichever comes first. Log `truncated` and continue from the last processed stable ordering key next poll.
+- At poll start, freeze a high-watermark `(eventTimestamp, stableNodeId)` from the newest visible candidate. Drain candidates in ascending stable `(eventTimestamp, stableNodeId)` order from the prior success watermark through that frozen boundary. Newer arrivals belong to the next poll.
+- Stop when the configured record cap is reached; never fetch past ten pages or 100 candidates, whichever comes first. Persist a backlog continuation tuple and keep the prior success watermark unchanged until every candidate through the frozen boundary is drained. Restart resumes the same frozen boundary. If the relative lookback would overtake an undrained boundary, continue that bounded backlog from the durable tuple and log the age rather than skipping it.
 - A relative lookback bounds discovery, not dedup retention. Receipts are retained at least 90 days and never less than the maximum selectable lookback.
 
 ### Rate limiting and backoff
@@ -216,6 +217,8 @@ Runtime-only state keyed by automation id and revision:
 type AutomationRuntimeState = {
   baselineAt?: string
   cursor?: { timestamp: string; tieBreaker?: string }
+  frozenHighWatermark?: { timestamp: string; tieBreaker: string }
+  backlogAfter?: { timestamp: string; tieBreaker: string }
   nextCheckAt?: string
   lastSuccessAt?: string
   etags?: Record<string, string>
@@ -228,7 +231,7 @@ Editing increments `revision` but preserves receipts; cursors continue unless ev
 
 ### `automation-receipts.ndjson` and `automation-log.ndjson`
 
-- Receipts are append-only `{eventId, automationId, revision, status, runId?, observedAt, updatedAt}` records compacted under the lease when over 20,000 lines, retaining the latest row per identity for at least 90 days.
+- Receipts are append-only `{receiptId, eventId, automationId, revision, status, runId?, observedAt, updatedAt}` records compacted under the lease when over 20,000 lines, retaining the latest row per identity for at least 90 days.
 - Logs are append-only, monotonically sequenced, sanitized, and capped by compaction to 10,000 detail rows plus daily summaries. Never store issue/PR bodies, tokens, response headers other than rate-limit metadata, or raw API payloads.
 - Missing receipt/log files mean empty state. A malformed line is skipped with one warning; later lines remain readable.
 
@@ -319,7 +322,7 @@ This field is optional in `RunRecord`, redacted/sanitized on writes, exposed add
 
 - Unit tests for schemas, per-entry salvage, unknown-field preservation, atomic writes, cursor overlap/ties, event identities, all/any/exclude filters, label transitions, caps, ETag rules, backoff, compaction, prompt placeholders, provenance, and crash reconciliation.
 - Poller contract tests use deterministic `gh` fixtures for pagination, `304`, search/core rate limits, malformed responses, foreign repository payloads, and issue-vs-PR discrimination.
-- Scheduler tests use fake clocks and two store instances to prove no timer with zero enabled automations, cadence, restart catch-up, lease exclusion/stale recovery, manual-check serialization, and cursor non-advancement on failure.
+- Scheduler tests use fake clocks and multiple stores/processes to prove no timer with zero enabled automations, restart discovery without UI access, registry changes, cadence, catch-up, shared request arbitration, lease exclusion/stale recovery, manual-check serialization, cursor non-advancement on failure, arrivals during truncation, timestamp ties, restart during backlog drain, and lookback expiry before drain.
 - Server tests cover every route’s zod failures, 404/409 shapes, origin guard inheritance, preview non-mutation, optimistic concurrency, project disposal, and route parity.
 - Run-manager integration tests prove one event → one run/group, queued capacity behavior, worktree/autonomy propagation, and receipt reconciliation.
 - React unit tests cover sidebar ordering, forge gating, empty/error/backoff states, shared New task serialization parity, generated query preview, enable-baseline confirmation, and accessible log filters.
@@ -329,15 +332,15 @@ This field is optional in `RunRecord`, redacted/sanitized on writes, exposed add
 
 ### Phase 1 — Safe persistence and read-only preview
 
-Ship schemas/store, API CRUD, sidebar page/editor, shared New task form extraction, filter/query preview, current capability status, and durable logs. All definitions remain paused and no background scheduler launches tasks.
+Ship schemas/store, API CRUD, sidebar page/editor, shared New task form extraction, filter/query preview, current capability status, and preview-result history. All definitions remain paused and no background scheduler launches tasks; the product labels this as preview, not automation execution.
 
 ### Phase 2 — Bounded polling and receipts
 
-Ship server lifecycle integration, `gh` poller, baselines/cursors, filters, caps, ETags, rate backoff, cross-process lease, label timeline reconstruction, and preview/check logs. Enable only after full scheduler and recovery tests.
+Ship workspace lifecycle/bootstrap integration, shared GitHub request arbitration, `gh` poller, frozen high-watermarks/backlog continuation, filters, caps, ETags, rate backoff, cross-process leases, label timeline reconstruction, and preview/check logs. A hard execution gate keeps every definition non-executable: preview never advances execution cursors or creates receipts.
 
 ### Phase 3 — Ordinary task launch and provenance
 
-Connect accepted receipts to the existing run/group path, add optional run provenance, crash reconciliation, Automation badges/links, and execution/retry log controls.
+Connect accepted receipts to the existing run/group path, add optional run provenance, crash reconciliation, Automation badges/links, and execution/retry log controls. Only this phase exposes enablement and initializes the execution baseline; no earlier phase can consume an event.
 
 ### Phase 4 — Full browser verification and hardening
 
@@ -347,12 +350,12 @@ Add the real-browser journey, large-repository fixtures, disk/read-only degradat
 
 1. Add `src/automations/types.ts` schemas and fixtures; pin defaults, bounds, unknown-field behavior, and compatibility tests.
 2. Add `src/automations/store.ts` for atomic definitions/state, append-only receipts/logs, salvage, compaction, and cross-process lease primitives; update `ensureDataGitignore`.
-3. Add project-context construction/disposal and read-only automation capability/status without timers; test missing/corrupt/read-only state.
+3. Add the lightweight workspace automation coordinator, registered-project discovery, registry add/remove/gone-root handling, and project-context handle reuse; test missing/corrupt/read-only state without broadly materializing contexts.
 4. Register project-scoped automation CRUD, preview, check-status, log, and retry route manifests with zod/origin/route-parity tests.
 5. Extract the pure New task configuration model/serializer and render it in the Automation editor without changing `POST /api/runs`.
 6. Add Automations routes, sidebar ordering below GitHub, GitHub setup link, list/editor/log states, API types/client/query hooks, and React/accessibility tests.
 7. Implement `github-poller.ts` using fixed `gh api` arguments, normalized candidates, server-side and local filters, result/page caps, ETags, and rate metadata; cover with fixtures.
-8. Implement `scheduler.ts` with one project timer, post-listen start, context disposal, due grouping, serialized calls, lease, baselines/cursors, overlap, and backoff; cover with fake clocks and multi-instance tests.
+8. Implement `scheduler.ts` with one workspace due timer, project scheduling handles, post-listen start, registry/context disposal behavior, process-wide and user-home GitHub request arbitration, token-scoped backoff, frozen high-watermarks/backlog continuation, lease, baselines/cursors, and overlap; cover with fake clocks and multi-instance tests.
 9. Add issue timeline reconstruction for label-added/removed events and stable event identity/receipt deduplication.
 10. Add `task-template.ts`, fixed placeholders, untrusted-context delimiter, ordinary run/group launch adapter, optional `RunRecord.automation` provenance, and crash reconciliation.
 11. Publish additive workspace SSE invalidations and Automation/run cross-links; verify one root connection and no UI polling.
