@@ -50,6 +50,8 @@ The source document is read from `origin/pr-658` for this run and intentionally 
 
 ## Progress
 
+PR: #659
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server contract
@@ -69,4 +71,5 @@ The source document is read from `origin/pr-658` for this run and intentionally 
 - [x] Browser note: the new PR Changes E2E passes in full and focused runs; the full suite also reported unrelated existing workflow-picker timeouts and a subsequent test-server socket closure
 - [x] 3.2 Run self-review and address findings — ab79c589
 - [x] Post-review fix: bound GitHub pagination before normalization and add direct boundary tests — ab79c589
-- [ ] 3.3 Complete PR review/autofix and final handoff
+- [x] 3.3 Complete PR review/autofix and final handoff — c7b85dff
+- [x] Post-review fix: merge the latest base and preserve scoped Changes-route coverage — c7b85dff
