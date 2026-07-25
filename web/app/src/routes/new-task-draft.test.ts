@@ -49,6 +49,12 @@ describe('resolveComposerRunMode', () => {
   it('keeps plan, parallel, and no-git constraints authoritative', () => {
     expect(resolveComposerRunMode({ ...base, planFirst: true, explicitAutonomous: true }).autonomous).toBe(false)
     expect(resolveComposerRunMode({ ...base, variants: 2, explicitWorktree: false }).worktree).toBe(true)
+    expect(resolveComposerRunMode({
+      ...base,
+      forceWorktree: true,
+      explicitWorktree: false,
+      interactive: true,
+    }).worktree).toBe(true)
     expect(resolveComposerRunMode({ ...base, hasGit: false, explicitWorktree: true }).worktree).toBe(false)
   })
 })

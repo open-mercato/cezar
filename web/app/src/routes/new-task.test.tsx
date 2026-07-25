@@ -14,7 +14,7 @@ import type {
 } from '@/api/types'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { resetDraft, writeDraft } from './new-task-draft'
+import { readDraft, resetDraft, writeDraft } from './new-task-draft'
 import { NewTaskRoute } from './new-task'
 
 /**
@@ -819,6 +819,37 @@ describe('submit', () => {
     fireEvent.click(worktree)
     expect(autonomous.getAttribute('aria-checked')).toBe('true')
     expect(worktree.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('forces and disables Worktree for a multi-step workflow', async () => {
+    serve({
+      workflows: {
+        workflows: [
+          WORKFLOWS.workflows[0]!,
+          {
+            name: 'fix-and-verify',
+            source: 'file',
+            steps: [
+              { id: 'fix', name: 'Fix', prompt: '{{task}}' },
+              { id: 'verify', name: 'Verify', command: 'npm test' },
+            ],
+          },
+        ],
+        issues: [],
+      },
+      uiState: { lastTask: { source: 'workflow', ref: 'fix-and-verify' } },
+    })
+    writeDraft({
+      ...readDraft(),
+      worktree: false,
+    })
+    renderNewTask()
+    await pillReady('fix-and-verify')
+
+    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+    expect(worktree.getAttribute('aria-checked')).toBe('true')
+    expect(worktree.disabled).toBe(true)
+    expect(worktree.title).toBe('Multi-step workflows require an isolated worktree')
   })
 
   // #471 — the composer must not offer a switch the server overrides anyway.
