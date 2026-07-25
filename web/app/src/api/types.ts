@@ -902,7 +902,7 @@ export interface ConfigResponse {
 }
 
 /** `PUT /api/config` (Settings → Agents; the Repo tab's base-branch picker). `baseBranch: null`
- *  clears the setting back to "current checkout"; `systemPrompt` and per-runner `defaultModels`
+ *  clears the setting back to "follow checked-out branch"; `systemPrompt` and per-runner `defaultModels`
  *  entries clear on `null` (or `''`) too. Merged into the raw config.json server-side —
  *  `defaultModels` merges per runner, so one write never clobbers another runner's preset. */
 export interface SetConfigInput {

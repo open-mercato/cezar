@@ -311,7 +311,7 @@ describe('picker data flows', () => {
     fireEvent.pointerDown(basePill())
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((o) => o.textContent)).toEqual([
-      expect.stringContaining('current checkout (main)'),
+      expect.stringContaining('follow checked-out branch (main)'),
       expect.stringContaining('main'),
       expect.stringContaining('develop'),
     ])

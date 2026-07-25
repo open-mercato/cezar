@@ -983,7 +983,7 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
       toast(
         result.baseBranch
           ? `New tasks will branch off "${result.baseBranch}" (PRs target it too).`
-          : 'Base branch cleared — tasks follow the current checkout.',
+          : 'Base branch cleared — new tasks fork from the checked-out branch.',
       )
     },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
@@ -998,7 +998,7 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
       value={repo.baseBranch ?? ''}
       onPick={(value) => mutation.mutate(value === '' ? null : value)}
       options={[
-        { value: '', label: `current checkout (${repo.info.branch})`, desc: 'Follow whatever is checked out' },
+        { value: '', label: `follow checked-out branch (${repo.info.branch})`, desc: 'New task worktrees fork from whatever branch is checked out' },
         ...repo.branches.map((branch) => ({ value: branch, label: branch })),
       ]}
     />
