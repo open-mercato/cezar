@@ -53,9 +53,9 @@ Give the PR Conversation view an authoritative GitHub-shaped merge box and an ex
 
 ### Phase 1: Authoritative read model
 
-- [ ] 1.1 Add merge-state/check/method schemas, forge types, normalization, and fixtures.
-- [ ] 1.2 Add the cached driver operation and project-scoped GET route with validation, parity, isolation, and refresh coverage.
-- [ ] 1.3 Add the read-only merge box with detailed status, checks, blockers, branches, methods, guarded links, responsive layout, and accessibility.
+- [x] 1.1 Add merge-state/check/method schemas, forge types, normalization, and fixtures. — 7b9af684
+- [x] 1.2 Add the cached driver operation and project-scoped GET route with validation, parity, isolation, and refresh coverage. — 7b9af684
+- [x] 1.3 Add the read-only merge box with detailed status, checks, blockers, branches, methods, guarded links, responsive layout, and accessibility. — 7b9af684
 
 ### Phase 2: Guarded mutation
 
