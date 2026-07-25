@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { clearDraftText, readDraft, resetDraft, resolveComposerRunMode, writeDraft } from './new-task-draft'
+import {
+  clearDraftText,
+  readDraft,
+  resetDraft,
+  resolveComposerRunMode,
+  writeDraft,
+} from './new-task-draft'
 
 afterEach(resetDraft)
 
@@ -26,6 +32,18 @@ describe('resolveComposerRunMode', () => {
       explicitAutonomous: false,
       explicitWorktree: true,
     })).toEqual({ autonomous: false, worktree: true })
+  })
+
+  it('applies an interactive recommendation only to untouched fields', () => {
+    expect(resolveComposerRunMode({ ...base, interactive: true })).toEqual({
+      autonomous: false,
+      worktree: false,
+    })
+    expect(resolveComposerRunMode({
+      ...base,
+      interactive: true,
+      explicitAutonomous: true,
+    })).toEqual({ autonomous: true, worktree: false })
   })
 
   it('keeps plan, parallel, and no-git constraints authoritative', () => {

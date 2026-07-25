@@ -75,7 +75,13 @@ import {
   unknownSkillPrefillText,
   type DeepLinkNotice,
 } from './new-task-autostart'
-import { clearDraftText, readDraft, resolveComposerRunMode, writeDraft, type NewTaskDraft } from './new-task-draft'
+import {
+  clearDraftText,
+  readDraft,
+  resolveComposerRunMode,
+  writeDraft,
+  type NewTaskDraft,
+} from './new-task-draft'
 import {
   buildCreateRunBody,
   modelsForRunner,
@@ -173,6 +179,9 @@ export function NewTaskRoute() {
   const selectedWorkflow = source.source === 'workflow'
     ? workflowList.find((workflow) => workflow.name === source.ref)
     : undefined
+  const selectedSkill = source.source === 'skill'
+    ? skillList.find((skill) => skill.name === source.ref)
+    : undefined
 
   // ---- prompt templates (#413 follow-up) ----------------------------------------------------
   // The same list the GitHub hand-over and Inbox composers read. Two ways in here: the footer's
@@ -241,9 +250,10 @@ export function NewTaskRoute() {
   const worktreeForced = !singleStepSource || variants > 1
 
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
-  // wins; otherwise skills default ON (a skill run is meant to just execute), workflows fall back
-  // to the remembered choice, else off. Plan-first forces it OFF (and disables the toggle):
-  // planning is inherently interactive, so the run must be able to hand the ball back.
+  // wins; then an interactive skill recommends handing the ball back; otherwise the configured
+  // workspace default applies ('source-dependent' → skills default ON, everything else OFF).
+  // Plan-first forces it OFF (and disables the toggle): planning is inherently interactive, so
+  // the run must be able to hand the ball back.
   const runMode = resolveComposerRunMode({
     hasGit,
     variants,
@@ -251,6 +261,7 @@ export function NewTaskRoute() {
     planFirst: draft.planFirst,
     explicitAutonomous: draft.autonomous,
     explicitWorktree: draft.worktree,
+    interactive: selectedSkill?.interactive,
     configuredAutonomous:
       workspaceConfig.data?.composerDefaults?.autonomous
       ?? workspaceConfig.data?.composerDefaults?.inheritedAutonomous
@@ -621,6 +632,11 @@ export function NewTaskRoute() {
                 disabled={draft.planFirst}
                 onChange={(on) => update({ autonomous: on })}
               />
+              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
+                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
+                  This skill recommends an interactive run in the current checkout. You can change either setting.
+                </p>
+              ) : null}
               {followupsToggleShown ? (
                 <GenerateFollowupsToggle
                   on={generateFollowupsOn}

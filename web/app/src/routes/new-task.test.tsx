@@ -797,6 +797,30 @@ describe('submit', () => {
     ).toBe('false')
   })
 
+  it('applies an interactive skill hint to untouched controls while keeping both overridable', async () => {
+    // The cold default is now quick-task, so an interactive skill only drives the recommendation
+    // once it is the selected source — here via the persisted lastTask.
+    serve({
+      skills: [{ ...SKILLS[0]!, interactive: true }, SKILLS[1]!],
+      uiState: { lastTask: { source: 'skill', ref: 'om-fix' } },
+    })
+    renderNewTask()
+    await pillReady('om-fix')
+
+    const autonomous = document.querySelector(
+      '[data-slot="autonomous-toggle"]',
+    ) as HTMLButtonElement
+    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+    expect(autonomous.getAttribute('aria-checked')).toBe('false')
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText(/recommends an interactive run in the current checkout/i)).toBeTruthy()
+
+    fireEvent.click(autonomous)
+    fireEvent.click(worktree)
+    expect(autonomous.getAttribute('aria-checked')).toBe('true')
+    expect(worktree.getAttribute('aria-checked')).toBe('true')
+  })
+
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
