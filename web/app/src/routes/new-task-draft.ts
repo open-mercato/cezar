@@ -32,6 +32,35 @@ export interface NewTaskDraft {
   generateFollowups: boolean | null
 }
 
+export interface ComposerRunModeInput {
+  hasGit: boolean
+  variants: number
+  planFirst: boolean
+  explicitAutonomous: boolean | null
+  explicitWorktree: boolean | null
+  interactive?: boolean
+  fallbackAutonomous: boolean
+  fallbackWorktree: boolean
+}
+
+/** Resolve run-mode values once, in precedence order: hard constraints, explicit draft
+ * choices, an interactive-skill recommendation, then the historical fallback. */
+export function resolveComposerRunMode(input: ComposerRunModeInput): {
+  autonomous: boolean
+  worktree: boolean
+} {
+  const recommended = input.interactive === true ? false : undefined
+  const autonomous = input.planFirst
+    ? false
+    : (input.explicitAutonomous ?? recommended ?? input.fallbackAutonomous)
+  const worktree = !input.hasGit
+    ? false
+    : input.variants > 1
+      ? true
+      : (input.explicitWorktree ?? recommended ?? input.fallbackWorktree)
+  return { autonomous, worktree }
+}
+
 const EMPTY: NewTaskDraft = {
   text: '',
   source: null,

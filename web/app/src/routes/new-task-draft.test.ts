@@ -1,8 +1,61 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { clearDraftText, readDraft, resetDraft, writeDraft } from './new-task-draft'
+import {
+  clearDraftText,
+  readDraft,
+  resetDraft,
+  resolveComposerRunMode,
+  writeDraft,
+} from './new-task-draft'
 
 afterEach(resetDraft)
+
+describe('resolveComposerRunMode', () => {
+  const base = {
+    hasGit: true,
+    variants: 1,
+    planFirst: false,
+    explicitAutonomous: null,
+    explicitWorktree: null,
+    fallbackAutonomous: true,
+    fallbackWorktree: true,
+  }
+
+  it('applies an interactive recommendation only to untouched fields', () => {
+    expect(resolveComposerRunMode({ ...base, interactive: true })).toEqual({
+      autonomous: false,
+      worktree: false,
+    })
+    expect(resolveComposerRunMode({
+      ...base,
+      interactive: true,
+      explicitAutonomous: true,
+    })).toEqual({ autonomous: true, worktree: false })
+  })
+
+  it('keeps hard run-shape constraints authoritative', () => {
+    expect(resolveComposerRunMode({
+      ...base,
+      planFirst: true,
+      explicitAutonomous: true,
+    }).autonomous).toBe(false)
+    expect(resolveComposerRunMode({
+      ...base,
+      variants: 2,
+      interactive: true,
+      explicitWorktree: false,
+    }).worktree).toBe(true)
+    expect(resolveComposerRunMode({
+      ...base,
+      hasGit: false,
+      explicitWorktree: true,
+    }).worktree).toBe(false)
+  })
+
+  it('preserves historical fallbacks when no recommendation exists', () => {
+    expect(resolveComposerRunMode(base)).toEqual({ autonomous: true, worktree: true })
+  })
+})
 
 describe('the new-task draft store', () => {
   it('starts empty with the never-chosen sentinels', () => {

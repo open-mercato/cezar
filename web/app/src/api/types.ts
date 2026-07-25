@@ -664,6 +664,8 @@ export interface DeleteWorkflowResponse {
 export interface Skill {
   name: string
   description?: string
+  /** Advisory hint for untouched composer run-mode choices. */
+  interactive?: true
   body: string
   path: string
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team'

@@ -16,6 +16,8 @@ import { readWorkspaceUiState } from './workspace/ui-state.js';
 export interface Skill {
   name: string;
   description?: string;
+  /** Advisory composer hint: untouched run-mode choices default to interactive, in-place execution. */
+  interactive?: true;
   body: string;
   path: string;
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team';
@@ -217,7 +219,8 @@ async function readMarkdownSkills(dir: string, source: Skill['source']): Promise
       typeof frontmatter.description === 'string' && frontmatter.description.trim()
         ? frontmatter.description.trim()
         : undefined;
-    skills.push({ name, description, body, path: absPath, source });
+    const interactive = frontmatter.interactive === 'true' ? true : undefined;
+    skills.push({ name, description, interactive, body, path: absPath, source });
   }
   return skills;
 }

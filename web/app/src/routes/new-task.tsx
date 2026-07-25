@@ -74,7 +74,13 @@ import {
   unknownSkillPrefillText,
   type DeepLinkNotice,
 } from './new-task-autostart'
-import { clearDraftText, readDraft, writeDraft, type NewTaskDraft } from './new-task-draft'
+import {
+  clearDraftText,
+  readDraft,
+  resolveComposerRunMode,
+  writeDraft,
+  type NewTaskDraft,
+} from './new-task-draft'
 import {
   buildCreateRunBody,
   modelsForRunner,
@@ -168,6 +174,9 @@ export function NewTaskRoute() {
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, workflowList)
+  const selectedSkill = source.source === 'skill'
+    ? skillList.find((skill) => skill.name === source.ref)
+    : undefined
 
   // ---- prompt templates (#413 follow-up) ----------------------------------------------------
   // The same list the GitHub hand-over and Inbox composers read. Two ways in here: the footer's
@@ -230,15 +239,18 @@ export function NewTaskRoute() {
   // workflows and variants always isolate, and a non-git repo already runs in place. The choice
   // is remembered (draft → last-used → default on).
   const worktreeToggleShown = hasGit && source.source === 'skill' && variants <= 1
-  const worktreeOn = worktreeToggleShown ? (draft.worktree ?? uiState.data?.lastWorktree ?? true) : true
-
-  // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
-  // wins; otherwise skills default ON (a skill run is meant to just execute), workflows fall back
-  // to the remembered choice, else off. Plan-first forces it OFF (and disables the toggle):
-  // planning is inherently interactive, so the run must be able to hand the ball back.
-  const autonomousOn = draft.planFirst
-    ? false
-    : (draft.autonomous ?? (source.source === 'skill' ? true : (uiState.data?.lastAutonomous ?? false)))
+  const runMode = resolveComposerRunMode({
+    hasGit,
+    variants,
+    planFirst: draft.planFirst,
+    explicitAutonomous: draft.autonomous,
+    explicitWorktree: draft.worktree,
+    interactive: selectedSkill?.interactive,
+    fallbackAutonomous: source.source === 'skill' ? true : (uiState.data?.lastAutonomous ?? false),
+    fallbackWorktree: uiState.data?.lastWorktree ?? true,
+  })
+  const worktreeOn = runMode.worktree
+  const autonomousOn = runMode.autonomous
 
   // Follow-up generation (#444) is offered only while the server has the global inbox on
   // (#471, `CEZ_FOLLOWUPS=1`) — there is no inbox for the follow-ups to land in otherwise, and
@@ -592,6 +604,11 @@ export function NewTaskRoute() {
                 disabled={draft.planFirst}
                 onChange={(on) => update({ autonomous: on })}
               />
+              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
+                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
+                  This skill recommends an interactive run in the current checkout. You can change either setting.
+                </p>
+              ) : null}
               {followupsToggleShown ? (
                 <GenerateFollowupsToggle
                   on={generateFollowupsOn}
