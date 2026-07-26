@@ -227,6 +227,10 @@ const automationUpdateSchema = automationEditableSchema.extend({ expectedRevisio
 const automationCheckSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
 const automationLogQuerySchema = z.object({
   automationId: z.string().optional(),
+  result: z.enum(['launched', 'no-match', 'duplicate', 'rate-limited', 'error', 'baseline']).optional(),
+  event: automationEventSchema.optional(),
+  since: z.string().datetime().optional(),
+  cursor: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(100),
 });
 
@@ -2194,11 +2198,20 @@ export function createApp(deps: ServerDeps): Hono {
       available: false,
       reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
     };
-    const automations = automationStore.list().map((automation) => ({
-      ...automation,
-      state: automationStore.state(automation.id),
-      latestLog: automationStore.logs({ automationId: automation.id, limit: 1 })[0],
-    }));
+    const automations = automationStore.list().map((automation) => {
+      const logs = automationStore.logs({ automationId: automation.id, limit: 100 });
+      return {
+        ...automation,
+        state: automationStore.state(automation.id),
+        latestLog: logs[0],
+        counts: {
+          matches: logs.filter((row) => row.result === 'launched' || row.result === 'duplicate').length,
+          launched: logs.filter((row) => row.result === 'launched').length,
+          duplicates: logs.filter((row) => row.result === 'duplicate').length,
+          errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited').length,
+        },
+      };
+    });
     return c.json({
       ...availability,
       scheduler: {
@@ -2316,13 +2329,30 @@ export function createApp(deps: ServerDeps): Hono {
     return c.json({ records: c.get('project').automationStore.logs(parsed.data) });
   });
 
-  api.post('/automation-log/:receiptId/retry', (c) => {
-    const store = c.get('project').automationStore;
+  api.post('/automation-log/:receiptId/retry', async (c) => {
+    const project = c.get('project');
+    const store = project.automationStore;
     const receipt = [...store.latestReceipts().values()].find((row) => row.receiptId === c.req.param('receiptId'));
     if (!receipt) return c.json({ error: 'not found' }, 404);
     if (receipt.status !== 'launch-error' || receipt.runId) return c.json({ error: 'receipt is not retryable' }, 409);
-    store.appendReceipt({ ...receipt, status: 'reserved', error: undefined, updatedAt: new Date().toISOString() });
-    return c.json({ receiptId: receipt.receiptId }, 202);
+    if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
+    const definition = store.get(receipt.automationId);
+    if (!definition) return c.json({ error: 'automation not found' }, 404);
+    const lease = store.acquireLease();
+    if (!lease) return c.json({ error: 'automation polling lease is held by another process' }, 409);
+    const reserved = { ...receipt, status: 'reserved' as const, error: undefined, updatedAt: new Date().toISOString() };
+    store.appendReceipt(reserved);
+    try {
+      const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId });
+      store.appendReceipt({ ...reserved, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
+      emitAutomationChange(project, definition.id, definition.revision);
+      return c.json({ receiptId: receipt.receiptId, runId: launched.runId }, 202);
+    } catch (error) {
+      store.appendReceipt({ ...reserved, status: 'launch-error', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() });
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+    } finally {
+      lease.release();
+    }
   });
 
   // ---- runs ----------------------------------------------------------------

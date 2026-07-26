@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { collectSecretValues, redactDeep } from '../core/secret-redaction.js';
 import { join } from 'node:path';
 import {
   automationDefinitionSchema,
@@ -22,6 +23,7 @@ import {
   type AutomationReceipt,
   type AutomationRuntimeState,
 } from './types.js';
+import type { GithubCandidate } from './github-poller.js';
 
 const DEFINITIONS = 'automations.json';
 const STATE = 'automation-state.json';
@@ -45,6 +47,7 @@ export class AutomationStore {
   private warned = new Set<string>();
   private logSeq = 0;
   private readonly now: () => Date;
+  private readonly secrets = collectSecretValues();
 
   static open(dataDir: string, options: AutomationStoreOptions = {}): AutomationStore {
     const store = new AutomationStore(dataDir, options);
@@ -138,13 +141,14 @@ export class AutomationStore {
   }
 
   appendReceipt(receipt: AutomationReceipt): void {
-    this.appendNdjson(RECEIPTS, automationReceiptSchema.parse(receipt));
+    this.appendNdjson(RECEIPTS, redactDeep(automationReceiptSchema.parse(receipt), this.secrets));
   }
 
   reserveReceipt(input: {
     automationId: string;
     revision: number;
     eventId: string;
+    candidate?: GithubCandidate;
   }): AutomationReceipt | undefined {
     const receiptKey = `${input.automationId}:${input.eventId}`;
     if (this.latestReceipts().has(receiptKey)) return undefined;
@@ -169,14 +173,18 @@ export class AutomationStore {
       seq: ++this.logSeq,
       ts: record.ts ?? this.now().toISOString(),
     });
-    this.appendNdjson(LOG, parsed);
+    this.appendNdjson(LOG, redactDeep(parsed, this.secrets));
     return parsed;
   }
 
-  logs(options: { automationId?: string; limit?: number } = {}): AutomationLogRecord[] {
+  logs(options: { automationId?: string; result?: AutomationLogRecord['result']; event?: AutomationLogRecord['event']; since?: string; cursor?: number; limit?: number } = {}): AutomationLogRecord[] {
     const limit = Math.min(Math.max(options.limit ?? 100, 1), 100);
     return this.readNdjson(LOG, automationLogRecordSchema)
       .filter((row) => !options.automationId || row.automationId === options.automationId)
+      .filter((row) => !options.result || row.result === options.result)
+      .filter((row) => !options.event || row.event === options.event)
+      .filter((row) => !options.since || row.ts >= options.since)
+      .filter((row) => !options.cursor || row.seq < options.cursor)
       .slice(-limit)
       .reverse();
   }
@@ -189,6 +197,12 @@ export class AutomationStore {
     this.rewriteNdjson(RECEIPTS, latest);
     const logs = this.readNdjson(LOG, automationLogRecordSchema);
     this.rewriteNdjson(LOG, logs.slice(-10_000));
+  }
+
+  maybeCompact(): void {
+    if (this.receipts().length > 20_000 || this.readNdjson(LOG, automationLogRecordSchema).length > 10_500) {
+      this.compact();
+    }
   }
 
   acquireLease(staleAfterMs = 10 * 60_000): AutomationLease | undefined {

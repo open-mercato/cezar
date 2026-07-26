@@ -84,12 +84,13 @@ export class ProjectAutomationScheduler {
       throw error;
     } finally {
       store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'no-match', reason: mode === 'preview' ? 'Bounded preview completed without launching tasks.' : 'Scheduled check completed.', durationMs: Date.now() - started });
+      try { store.maybeCompact(); } catch { /* append-only state remains readable; next check retries */ }
       lease.release();
     }
   }
 
   private async launch(definition: AutomationDefinition, candidate: GithubCandidate): Promise<void> {
-    const receipt = this.handle.store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId: candidate.eventId });
+    const receipt = this.handle.store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId: candidate.eventId, candidate });
     if (!receipt) {
       this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, event: candidate.event, result: 'duplicate', reason: 'A durable receipt already exists for this automation and event.', githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url });
       return;

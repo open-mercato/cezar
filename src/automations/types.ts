@@ -121,6 +121,16 @@ export const automationReceiptSchema = z
     observedAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
     error: z.string().max(2_000).optional(),
+    candidate: z
+      .object({
+        eventId: z.string(), event: automationEventSchema, timestamp: z.string().datetime(),
+        tieBreaker: z.string(), repo: z.string(), nodeId: z.string(), number: z.number().int().positive(),
+        title: z.string().max(500), url: z.string().url(), author: z.string().max(200),
+        assignees: z.array(z.string().max(200)).max(100), labels: z.array(z.string().max(200)).max(100),
+        changedLabel: z.string().max(200).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
