@@ -4,31 +4,33 @@ import { useEffect } from 'react'
 import {
   browseFs,
   checkoutProject,
+  editQueuedMessage,
   getAgentConfig,
   getAgentConfigFile,
   getConfig,
   getGithub,
   getGithubComments,
   getGroup,
+  getHarnessStatus,
   getHealth,
+  getImportableSkills,
+  getImportableSkillsWhenReady,
   getLaunchKey,
   getOpenTargets,
   getProjectRuns,
   getProjects,
-  getRunnerModels,
   getRepo,
-  getRunCommit,
-  getRunCommits,
   getRepoChanges,
   getRepoCommit,
   getRun,
   getRunChanges,
+  getRunCommit,
+  getRunCommits,
   getRunDiff,
   getRunFile,
   getRunHandoff,
+  getRunnerModels,
   getRuns,
-  getImportableSkills,
-  getImportableSkillsWhenReady,
   getSkills,
   getSkillsWhenReady,
   getTodos,
@@ -37,18 +39,19 @@ import {
   getWorkspaceConfig,
   getWorkspaceUiState,
   getWorktrees,
-  editQueuedMessage,
   patchRun,
-  removeQueuedMessage,
+  probeHarness,
+  putAgentConfigFile,
   registerProject,
   removeProject,
-  updateProject,
+  removeQueuedMessage,
   sendMessage,
-  putAgentConfigFile,
+  updateProject,
 } from './client'
 import { queryScope } from './project-scope'
 import type {
   CheckoutProjectInput,
+  HarnessProfile,
   MessageInput,
   PatchRunInput,
   SetAgentConfigInput,
@@ -93,6 +96,12 @@ export const queryKeys = {
   },
   get todos() {
     return [queryScope(), 'todos'] as const
+  },
+  harness: {
+    get status() {
+      return [queryScope(), 'harness', 'status'] as const
+    },
+    probe: (profile: string) => [queryScope(), 'harness', 'probe', profile] as const,
   },
   get workflows() {
     return [queryScope(), 'workflows'] as const
@@ -170,11 +179,12 @@ export const workspaceQueryKeys = {
 }
 
 /** `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue —
- *  hooks cannot be called conditionally) skip the fetch when it definitely won't. */
-export function useRunnerModels(enabled = true) {
+ *  hooks cannot be called conditionally) skip the fetch when it definitely won't. `runner`
+ *  picks which discovery-capable backend's catalog to fetch (codex; opencode 2026-07-24). */
+export function useRunnerModels(enabled = true, runner: 'codex' | 'opencode' = 'codex') {
   return useQuery({
-    queryKey: workspaceQueryKeys.models('codex'),
-    queryFn: ({ signal }) => getRunnerModels({ signal }),
+    queryKey: workspaceQueryKeys.models(runner),
+    queryFn: ({ signal }) => getRunnerModels(runner, { signal }),
     staleTime: 5 * 60 * 1_000,
     enabled,
   })
@@ -558,6 +568,27 @@ export function useConfig() {
   return useQuery({
     queryKey: queryKeys.config,
     queryFn: ({ signal }) => getConfig({ signal }),
+  })
+}
+
+// ---- cez-harness (spec 2026-07-23-harness-orchestration) -----------------------------------
+
+/** Installed/configured harness summary + model roster (Settings → Harness, composer panel). */
+export function useHarnessStatus(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.harness.status,
+    queryFn: ({ signal }) => getHarnessStatus({ signal }),
+    enabled,
+  })
+}
+
+/** Probe one profile's readiness. Keyed per profile so switching the segment shows each
+ *  profile's own cached answer instantly; a fresh probe still runs on mount. */
+export function useHarnessProbe(profile: HarnessProfile, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.harness.probe(profile),
+    queryFn: () => probeHarness(profile),
+    enabled,
   })
 }
 

@@ -1,4 +1,4 @@
-import type { Runner } from '@/api/types'
+import type { HarnessModelRef, HarnessProfile, HarnessRoles, Runner } from '@/api/types'
 import type { TaskSource } from './new-task-form'
 
 /**
@@ -30,6 +30,20 @@ export interface NewTaskDraft {
   autonomous: boolean | null
   /** Follow-up generation is default-on. null → remembered value / on. */
   generateFollowups: boolean | null
+  /** Harness profile for the built-in harness workflows (spec
+   *  2026-07-23-harness-orchestration). null → standard. Sticky like the other
+   *  pickers; inert while a non-harness source is selected. */
+  harnessProfile: HarnessProfile | null
+  /** Which composer tab is active: the ordinary Task surface or the Multi-model
+   *  one (user feedback 2026-07-23). null → derived (a harness lastTask lands
+   *  on 'multi', everything else on 'task'). */
+  composerMode: 'task' | 'multi' | null
+  /** What the Multi-model tab runs. null → fix-issue. */
+  harnessMode: 'fix-issue' | 'implement-feature' | null
+  /** The role-based model selection (2026-07-24). null → derived defaults from
+   *  the available catalog. Kept as picked even while momentarily invalid —
+   *  the panel shows the rule, the submit enforces it. */
+  harnessRoles: HarnessRoles | null
 }
 
 const EMPTY: NewTaskDraft = {
@@ -42,6 +56,10 @@ const EMPTY: NewTaskDraft = {
   worktree: null,
   autonomous: null,
   generateFollowups: null,
+  harnessProfile: null,
+  composerMode: null,
+  harnessMode: null,
+  harnessRoles: null,
 }
 
 const STORAGE_KEY = 'cez-new-task-draft'
@@ -76,7 +94,46 @@ function normalize(raw: unknown): NewTaskDraft {
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
+    harnessProfile: isHarnessProfile(obj.harnessProfile) ? obj.harnessProfile : null,
+    composerMode: obj.composerMode === 'task' || obj.composerMode === 'multi' ? obj.composerMode : null,
+    harnessMode:
+      obj.harnessMode === 'fix-issue' || obj.harnessMode === 'implement-feature' ? obj.harnessMode : null,
+    harnessRoles: isHarnessRoles(obj.harnessRoles) ? obj.harnessRoles : null,
   }
+}
+
+const RUNNERS: readonly string[] = ['claude', 'codex', 'opencode']
+
+function isModelRef(raw: unknown): raw is HarnessModelRef {
+  return (
+    !!raw &&
+    typeof raw === 'object' &&
+    RUNNERS.includes((raw as HarnessModelRef).runner) &&
+    typeof (raw as HarnessModelRef).model === 'string'
+  )
+}
+
+function isHarnessRoles(raw: unknown): raw is HarnessRoles {
+  if (!raw || typeof raw !== 'object') return false
+  const roles = raw as HarnessRoles
+  return (
+    isModelRef(roles.orchestrator) &&
+    isModelRef(roles.implementer) &&
+    Array.isArray(roles.reviewers) &&
+    roles.reviewers.every(isModelRef)
+  )
+}
+
+const HARNESS_PROFILES: readonly string[] = [
+  'standard',
+  'optimized',
+  'multi',
+  'multi-optimized',
+  'high-assurance',
+]
+
+function isHarnessProfile(raw: unknown): raw is HarnessProfile {
+  return typeof raw === 'string' && HARNESS_PROFILES.includes(raw)
 }
 
 function isSource(raw: unknown): raw is TaskSource {

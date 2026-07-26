@@ -7,15 +7,13 @@ import type {
   ChangesPayload,
   CheckoutProjectInput,
   ConfigResponse,
-  ReclaimWorktreesResponse,
-  RemoveWorktreeResponse,
-  WorktreesResponse,
   ContinueResponse,
   CreatePrResponse,
   CreateRunInput,
   CreateRunResponse,
   DeleteRunResponse,
   DeleteWorkflowResponse,
+  EditQueuedMessageResponse,
   FinishResponse,
   FsBrowseResponse,
   GitCommitResponse,
@@ -23,13 +21,16 @@ import type {
   GithubCommentsData,
   GithubData,
   GroupResponse,
+  HarnessLedgerResponse,
+  HarnessProbeResponse,
+  HarnessProfile,
+  HarnessStatusResponse,
   HealthResponse,
   ImageInput,
+  ImportableSkill,
   LaunchKeyResponse,
   MessageInput,
-  EditQueuedMessageResponse,
   MessageResponse,
-  RemoveQueuedMessageResponse,
   OpenInCliResponse,
   OpenTargetsResponse,
   ParsedWorkflow,
@@ -37,34 +38,38 @@ import type {
   PickVariantResponse,
   PlanResponse,
   ProjectsResponse,
+  ReclaimWorktreesResponse,
   RegisterProjectResponse,
   RemoveProjectResponse,
-  UpdateProjectInput,
-  UpdateProjectResponse,
+  RemoveQueuedMessageResponse,
   RemoveTodoResponse,
+  RemoveWorktreeResponse,
   RepoBranchResponse,
   RepoCommitPayload,
-  RunCommitsResponse,
   RepoResponse,
+  RunCommitsResponse,
+  RunRecord,
   Runner,
   RunnerModelCatalogResponse,
-  RunRecord,
-  WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
+  SetAgentConfigInput,
   SetConfigInput,
   SetConfigResponse,
-  SetAgentConfigInput,
   SetWorkspaceConfigInput,
-  ImportableSkill,
   Skill,
   StartTodoResponse,
   TodoItem,
   UiState,
+  UpdateProjectInput,
+  UpdateProjectResponse,
   WorkflowsResponse,
   WorkspaceConfigResponse,
   WorkspaceUiState,
+  WorktreeEntry,
+  WorktreesResponse,
 } from './types'
+
 import { scopeApiPath } from './project-scope'
 
 /**
@@ -206,9 +211,13 @@ export function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return get<HealthResponse>('/api/health', opts)
 }
 
-/** Host-local Codex catalog. Workspace-level: one CLI/account serves every project. */
-export function getRunnerModels(opts?: ReadOptions): Promise<RunnerModelCatalogResponse> {
-  return get<RunnerModelCatalogResponse>('/api/models?runner=codex', opts)
+/** Host-local model catalog for a discovery-capable runner (codex; opencode since
+ *  2026-07-24). Workspace-level: one CLI/account serves every project. */
+export function getRunnerModels(
+  runner: 'codex' | 'opencode' = 'codex',
+  opts?: ReadOptions,
+): Promise<RunnerModelCatalogResponse> {
+  return get<RunnerModelCatalogResponse>(`/api/models?runner=${runner}`, opts)
 }
 
 /** The bookmarklet auto-start secret (spec 011). Fetched to compare against `/new?key=` —
@@ -295,6 +304,23 @@ export function getRepo(opts?: ReadOptions): Promise<RepoResponse> {
 /** The Settings → Agents knobs in one read (`GET /api/config`, additive R6 route). */
 export function getConfig(opts?: ReadOptions): Promise<ConfigResponse> {
   return get<ConfigResponse>('/api/config', opts)
+}
+
+// ---- cez-harness (spec 2026-07-23-harness-orchestration) ---------------------------------
+
+/** Installed/configured harness summary + the model roster for Settings and the composer. */
+export function getHarnessStatus(opts?: ReadOptions): Promise<HarnessStatusResponse> {
+  return get<HarnessStatusResponse>('/api/harness/status', opts)
+}
+
+/** Readiness of one profile before starting a harness run. */
+export function probeHarness(profile: HarnessProfile): Promise<HarnessProbeResponse> {
+  return mutate<HarnessProbeResponse>('POST', '/api/harness/probe', { profile })
+}
+
+/** The run's harness ledger — 404s (throws) when the run has none. */
+export function getRunHarness(id: string, opts?: ReadOptions): Promise<HarnessLedgerResponse> {
+  return get<HarnessLedgerResponse>(runPath(id, '/harness'), opts)
 }
 
 /** The selected project's agent-owned config catalog and current file state. */

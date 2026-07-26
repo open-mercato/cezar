@@ -45,6 +45,29 @@ export function branchFor(runId: string): string {
   return `cez/${runId.slice(0, 8)}`;
 }
 
+/** The branch `origin/HEAD` points at (`origin/main` → `main`), or null when
+ *  the remote or its symref is absent. Used only for the stale-base warning —
+ *  resolution still honors the configured base. */
+export async function remoteDefaultBranch(repoRoot: string): Promise<string | null> {
+  const head = await git(repoRoot, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+  if (!head.ok) return null;
+  const m = /^refs\/remotes\/origin\/(.+)$/.exec(head.stdout.trim());
+  return m?.[1] ?? null;
+}
+
+/**
+ * The warning a run emits when its configured base branch is not the remote
+ * default, or null when there is nothing to warn about. A base pinned to a
+ * long-dead branch silently forks worktrees from old history — run 9788d87f
+ * checked out a base from 11 days earlier and "lost" tracked files that were
+ * simply newer than the branch. Pure so the wording stays pinned by tests.
+ */
+export function staleBaseNote(configured: string, remoteDefault: string | null): string | null {
+  if (!remoteDefault) return null;
+  if (configured === remoteDefault || configured === `origin/${remoteDefault}`) return null;
+  return `configured base branch "${configured}" is not the remote default "${remoteDefault}" — a stale base silently hides newer files from the run (config: .ai/cezar/config.json)`;
+}
+
 /**
  * Resolve the configured base branch to something `git worktree add` can
  * fork from: the local branch, its remote-tracking ref, or null — the caller

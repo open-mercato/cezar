@@ -154,6 +154,11 @@ export interface RunRecord {
   steps: StepState[]
   /** Persisted workflow definition; kept loose server-side, so loose here too. */
   workflowDef?: Record<string, unknown>
+  /** cez-harness run stub (spec 2026-07-23-harness-orchestration) — presence
+   *  marks a harness-driven run; the ledger endpoint carries the full state.
+   *  `roles` (2026-07-24) is the loose copy of the role-based selection that
+   *  recovery re-queues conduct. */
+  harness?: { profile: string; workflow: string; issueId?: string; roles?: Record<string, unknown> }
 }
 
 /** One aggregated sample of a run's live process tree (src/core/process-usage.ts). */
@@ -632,7 +637,9 @@ export interface Skill {
   description?: string
   body: string
   path: string
-  source: 'ai' | 'cezar' | 'agents' | 'global' | 'team'
+  source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'bundled'
+  /** Sibling skills materialized alongside this one (frontmatter `requires:`). */
+  requires?: string[]
   /** Team skills only: where the definition lives in its skills repo. */
   team?: {
     repo: string
@@ -798,6 +805,10 @@ export interface UiState {
    *  most-selected skills float to the top of their project/global locality group. */
   skillUsage?: Record<string, number>
   runsView?: 'list' | 'table'
+  /** Saved Multi-model role lineups (2026-07-24) — applied/managed from the composer's
+   *  Multi-model tab. Loose on the wire (the ui-state store is passthrough); the client
+   *  normalizes on read. */
+  harnessPresets?: HarnessPreset[]
   /** The GitHub tab's last-selected sub-tab (#417) — issues or PRs. Absent → issues. */
   githubView?: 'issues' | 'prs'
   /** Settings → Appearance (redesign R6): accent + density. Theme itself stays in
@@ -859,11 +870,112 @@ export interface CreateRunInput {
    *  Orthogonal to `generateFollowups` (#444): that governs whether THIS task may append new
    *  follow-ups, not whether the entry it was launched from gets marked started. */
   todoId?: string
+  /** cez-harness parameters (spec 2026-07-23-harness-orchestration) — valid only with the
+   *  built-in harness workflows; the server rejects it anywhere else. `roles` is the
+   *  role-based selection (2026-07-24): who orchestrates, who implements, who reviews. The
+   *  legacy `profile` remains accepted for scripted callers. */
+  harness?: { profile?: HarnessProfile; roles?: HarnessRoles; issueId?: string }
+}
+
+/** The neutral reasoning-effort tiers (2026-07-24), mapped per backend on the server's
+ *  runner seam (claude thinking budget, codex reasoning level; opencode ignores it v1). */
+export type HarnessEffort = 'low' | 'medium' | 'high' | 'max'
+
+/** One concrete model a harness role runs on: a cezar backend plus its model id ('' = the
+ *  backend's default) and an optional per-role reasoning effort. `runner: 'harness'`
+ *  (reviewers only, spec 2026-07-24-advisor-reviewers) selects a configured
+ *  `agentHarness` advisor binding instead — `model` is the advisor id and `family` its
+ *  provider family from `/harness/status` (the diversity axis). */
+export interface HarnessModelRef {
+  runner: Runner | 'harness'
+  model: string
+  effort?: HarnessEffort
+  family?: string
+}
+
+/** The role-based multi-model selection (user feedback 2026-07-24): one orchestrator, one
+ *  implementer, 2–5 unique reviewers spanning at least two model families. Reviewers may
+ *  be runner sessions or configured harness advisors; the other two roles are runner-only. */
+export interface HarnessRoles {
+  orchestrator: HarnessModelRef
+  implementer: HarnessModelRef
+  reviewers: HarnessModelRef[]
+}
+
+/** A saved role lineup (user feedback 2026-07-24: "3 combinations I switch between") —
+ *  persisted in the project's ui-state, applied with one click in the Multi-model tab. */
+export interface HarnessPreset {
+  id: string
+  name: string
+  roles: HarnessRoles
 }
 
 export interface MessageInput {
   text?: string
   images?: ImageInput[]
+}
+
+// ---- cez-harness (spec 2026-07-23-harness-orchestration) -------------------------------------
+
+/** The five operating profiles of the cez-harness pipeline. */
+export type HarnessProfile = 'standard' | 'optimized' | 'multi' | 'multi-optimized' | 'high-assurance'
+
+/** One model in the harness roster — `GET /api/harness/status` (config-derived; claude the
+ *  host always leads) and `POST /api/harness/probe` (with live `readiness`). */
+export interface HarnessModel {
+  id: string
+  family?: string
+  /** The bound model identifier (e.g. `gpt-5.6-sol`), `host app` for claude. */
+  model?: string
+  adapter?: string
+  roles: string[]
+  /** Which configured profiles reference this model (status only). */
+  profiles?: string[]
+  /** Probe outcome (probe only). */
+  readiness?: 'ready' | 'missing' | 'failed' | 'unknown'
+  /** What the probe observed — the upstream error behind a `failed`, or how the
+   *  round-trip succeeded. A red row without this just relocates the mystery. */
+  readinessDetail?: string
+  binding?: string
+}
+
+export interface HarnessStatusResponse {
+  /** Whether `.ai/agentic.config.json` carries an `agentHarness` section. `standard` needs none. */
+  configured: boolean
+  /** Profiles the repo offers (`standard` always included). */
+  profiles: string[]
+  /** Profiles this cezar's driver can conduct itself. */
+  driven: string[]
+  models: HarnessModel[]
+  /** Where the harness collection resolves from — normally `bundled` (the vendored cez-* tree
+   *  shipped inside cezar) with its pinned upstream commit. `installed: false` means even the
+   *  bundle is missing (broken install). */
+  runtime: {
+    installed: boolean
+    source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'bundled' | null
+    commit: string | null
+  }
+}
+
+export interface HarnessProbeResponse {
+  profile: string
+  ready: boolean
+  /** Why the profile cannot start, when `ready` is false. */
+  reason?: string
+  models: HarnessModel[]
+}
+
+/** The harness run ledger (`GET /api/runs/:id/harness`) — kept loose: the server's versioned
+ *  schema (`src/harness/types.ts`) is authoritative and the UI treats it as a snapshot. */
+export interface HarnessLedgerResponse {
+  version: number
+  workflow: string
+  requestedProfile: string
+  effectiveProfile: string
+  phases: Array<Record<string, unknown>>
+  models: Array<Record<string, unknown>>
+  stage: Record<string, unknown>
+  [key: string]: unknown
 }
 
 /** `PATCH /api/runs/:id` (#389). `title`: trimmed server-side, 1–300 chars. The edit sets both

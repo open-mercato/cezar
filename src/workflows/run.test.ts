@@ -507,6 +507,71 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
 });
 
 /**
+ * Bundled directory skills materialize into the run cwd (spec
+ * 2026-07-24-vendored-cez-skills): the SKILL.md body is injected into the
+ * prompt as always, but the companion files (references/, scripts/, assets/)
+ * and the `requires:` closure must land on disk where the session can read
+ * them — `<cwd>/.claude/skills/<name>/`. This is the exact gap that broke
+ * run 9788d87f: only team-repo skills used to materialize, so the vendored
+ * runtime was body-only and the setup skill stopped at "not installed".
+ */
+describe('a bundled directory skill materializes with its requires closure into the run cwd', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeAll(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-bundled-run-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterAll(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('copies the vendored cez-setup-harness tree and its requires into .claude/skills', async () => {
+    const workflow: WorkflowDef = {
+      name: '(planned)',
+      source: 'built-in',
+      steps: [{ id: 'task', name: 'cez-setup-harness', skill: 'cez-setup-harness', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(workflow, { task: 'mock:done configure the harness', worktree: false });
+
+    const terminal = new Set(['done', 'review', 'failed', 'cancelled']);
+    const deadline = Date.now() + 20_000;
+    while (!terminal.has(store.getRun(record.id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('run did not finish in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // The step skill, its declared requirement (cez-harness), and the
+    // transitive one (cez-harness → cez-code-review).
+    for (const name of ['cez-setup-harness', 'cez-harness', 'cez-code-review']) {
+      expect(existsSync(join(repoRoot, '.claude', 'skills', name, 'SKILL.md'))).toBe(true);
+    }
+    // NOT cez-setup-pipeline: adding a model in cezar must never drag in the om
+    // PR pipeline (tracker descriptor, labels, base branch). Materializing it
+    // is what invited the setup skill to route a first-run user through it.
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-setup-pipeline', 'SKILL.md'))).toBe(false);
+    // The runtime script — the driver preflight's exact probe path.
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-harness', 'scripts', 'harness.mjs'))).toBe(true);
+  }, 30_000);
+});
+
+/**
  * The other half of #410's contract: the note exists to explain a step
  * boundary, so a workflow with only ONE agent step must not get it — its
  * prompt stays exactly what the author wrote. Check steps are shell commands,

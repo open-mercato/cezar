@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { harnessWorkflowDefs } from '../harness/workflows.js';
 import {
   QUICK_TASK_WORKFLOW,
   normalizeWorkflowDoc,
@@ -63,7 +64,7 @@ export async function loadWorkflows(
   const fileNames = new Set(fromFiles.map((w) => w.name));
   const workflows = [
     ...fromFiles,
-    ...[QUICK_TASK_WORKFLOW].filter((w) => !fileNames.has(w.name)),
+    ...[QUICK_TASK_WORKFLOW, ...harnessWorkflowDefs()].filter((w) => !fileNames.has(w.name)),
   ];
   workflows.sort((a, b) => a.name.localeCompare(b.name));
   return { workflows, issues };

@@ -47,7 +47,8 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const config = useConfig()
   // Only a run that can actually be continued needs the model catalog — every other thread
   // (running, queued, or closed with no session) would be fetching it to render nothing.
-  const catalog = useRunnerModels(available)
+  const codexCatalog = useRunnerModels(available)
+  const opencodeCatalog = useRunnerModels(available, 'opencode')
   // null = "not touched": the pills fall back to the run's current backend/model, so an
   // untouched Continue behaves exactly as before this feature existed.
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
@@ -66,6 +67,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     !runnerChanged && run.model
       ? { ...config.data?.defaultModels, [runner]: run.model }
       : config.data?.defaultModels
+  const catalog = runner === 'opencode' ? opencodeCatalog : codexCatalog
   const models = modelsForRunner(runner, catalog.data, [pickedModel, modelDefaults?.[runner]])
   const model = resolveModel(pickedModel, runner, modelDefaults, catalog.data)
 

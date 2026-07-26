@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>cezar — harness run thread mockup</title>
+<link rel="stylesheet" href="tokens.css">
+<style>
+svg { flex: none; }
+
+/* sidebar extras (as thread.html) */
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 8px; }
+.newtask-btn { width: 100%; justify-content: flex-start; }
+.newtask-btn .kbd { margin-left: auto; border-color: color-mix(in srgb, var(--contrast-foreground) 25%, transparent); background: transparent; color: color-mix(in srgb, var(--contrast-foreground) 75%, transparent); }
+.task-row .dot { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+.side-foot .chip { height: 24px; padding: 0 8px; font-size: 11px; }
+.side-foot .btn-icon { margin-left: auto; }
+
+/* run header (as thread.html) */
+.run-head { flex: none; padding: 16px 28px 0; }
+.title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.run-title { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title-row .pill { margin-left: auto; flex: none; }
+.meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 6px; margin-top: 7px; font-size: 12.5px; color: var(--muted-foreground); }
+.meta-row .sep { color: var(--soft-foreground); }
+.branch-chip { font: 500 11.5px var(--mono); color: var(--muted-foreground); border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; background: var(--card); }
+.tokens { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+.gauge { width: 34px; height: 4px; border-radius: 99px; background: var(--muted); overflow: hidden; }
+.gauge > i { display: block; height: 100%; width: 46%; border-radius: 99px; background: var(--muted-foreground); }
+.cost { font-variant-numeric: tabular-nums; }
+.tabs-row { display: flex; align-items: flex-end; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--border); }
+.tab { height: 36px; padding: 0 12px; font-size: 13px; font-weight: 500; color: var(--muted-foreground); border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 6px 6px 0 0; }
+.tab:hover { color: var(--foreground); background: var(--muted); }
+.tab.active { color: var(--foreground); font-weight: 600; border-bottom-color: var(--foreground); }
+.tab .mini { font-size: 10.5px; font-weight: 600; background: var(--violet); color: #fff; border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
+.tabs-row .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-bottom: 5px; }
+
+/* profile pill */
+.profile-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: color-mix(in srgb, var(--violet) 14%, transparent); color: var(--violet); font-size: 11.5px; font-weight: 600; }
+.profile-pill .mono { font-size: 11px; }
+
+/* ---------- phase rail ---------- */
+.phase-rail { flex: none; padding: 10px 28px 0; }
+.phase-track { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 6px; }
+.phase { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); font-size: 12px; font-weight: 500; color: var(--muted-foreground); white-space: nowrap; }
+.phase.done { color: var(--muted-foreground); }
+.phase.done .ph-ic { color: var(--success); }
+.phase.now { border-color: color-mix(in srgb, var(--pending) 45%, var(--border)); color: var(--foreground); font-weight: 600; }
+.phase.todo { opacity: .62; }
+.phase .ph-meta { font-size: 10.5px; color: var(--soft-foreground); font-weight: 500; }
+.phase-link { color: var(--soft-foreground); flex: none; }
+.phase .spin { width: 11px; height: 11px; border-width: 2px; }
+.progress { height: 2px; border-radius: 99px; background: var(--muted); margin-top: 9px; overflow: hidden; }
+.progress > i { display: block; height: 100%; width: 58%; border-radius: 99px; background: var(--pending); }
+.spin { width: 13px; height: 13px; border-radius: 999px; border: 2px solid var(--muted); border-top-color: var(--muted-foreground); animation: spin .8s linear infinite; flex: none; }
+.spin-amber { border-color: color-mix(in srgb, var(--pending) 22%, transparent); border-top-color: var(--pending); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- thread (as thread.html) ---------- */
+.thread-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse;
+  mask-image: linear-gradient(to bottom, transparent 0, var(--foreground) 26px); -webkit-mask-image: linear-gradient(to bottom, transparent 0, var(--foreground) 26px); }
+.thread { width: 100%; min-width: 0; max-width: 760px; margin: 0 auto; padding: 28px 20px 36px; display: flex; flex-direction: column; gap: 16px; }
+.thread > * { min-width: 0; }
+.msg-user { align-self: flex-end; max-width: 78%; background: var(--muted); border-radius: 16px; border-bottom-right-radius: 6px; padding: 10px 15px; font-size: 13.5px; line-height: 1.55; }
+.lifecycle { font-size: 12px; color: var(--soft-foreground); padding: 0 2px; }
+.lifecycle code { font-size: 11.5px; }
+.msg-assist { font-size: 13.5px; line-height: 1.68; padding: 0 2px; }
+.msg-assist p { margin: 0 0 10px; }
+.msg-assist p:last-child { margin-bottom: 0; }
+.msg-assist strong { font-weight: 600; }
+.msg-assist code { font-size: 12px; background: var(--muted); border-radius: 5px; padding: 1.5px 5px; }
+
+/* tool cards */
+.tool-card { border-radius: var(--radius-lg); overflow: hidden; }
+.tool-head { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 42px; padding: 6px 13px; font-size: 13px; text-align: left; }
+.tool-head:hover { background: var(--muted); }
+.tool-head .chev { color: var(--soft-foreground); }
+.tool-head .t-ic { color: var(--muted-foreground); }
+.tool-head .t-verb { font-weight: 600; flex: none; }
+.tool-head code { font-size: 12px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-head .t-dur { margin-left: auto; flex: none; font-size: 11.5px; color: var(--soft-foreground); font-variant-numeric: tabular-nums; }
+.exit-pill { flex: none; font: 600 10.5px var(--mono); padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
+
+/* phase-section card: readiness table */
+.htable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.htable th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--soft-foreground); padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.htable td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+.htable tr:last-child td { border-bottom: none; }
+.htable .mono { font-size: 11.5px; color: var(--muted-foreground); }
+.role-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; border-radius: 5px; padding: 2px 6px; background: var(--muted); color: var(--muted-foreground); }
+.role-tag.host { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
+.role-tag.worker { background: color-mix(in srgb, var(--violet) 16%, transparent); color: var(--violet); }
+.status-ready { color: var(--success); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.card-head { display: flex; align-items: center; gap: 9px; padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.card-head .h-title { font-weight: 600; }
+.card-head .h-meta { color: var(--soft-foreground); font-size: 12px; }
+.card-head .pill { margin-left: auto; }
+.section-card { border-radius: var(--radius-lg); overflow: hidden; }
+.section-card .scroll-x { overflow-x: auto; }
+
+/* council inline card */
+.council-sum { display: flex; flex-direction: column; gap: 0; }
+.council-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.council-row:last-child { border-bottom: none; }
+.council-row .who { display: inline-flex; align-items: center; gap: 7px; width: 132px; flex: none; font-weight: 500; }
+.council-row .who .mono { font-size: 11px; color: var(--soft-foreground); }
+.council-row .what { flex: 1; min-width: 0; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.council-row .dur { flex: none; font-size: 11.5px; color: var(--soft-foreground); font-variant-numeric: tabular-nums; }
+.verdict-line { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; color: var(--muted-foreground); background: color-mix(in srgb, var(--success) 5%, transparent); }
+
+/* ---------- dock: models + composer ---------- */
+.dock { flex: none; padding: 10px 20px 18px; }
+.dock-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.models-dock { border-radius: var(--radius-lg); overflow: hidden; }
+.models-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px 8px; font-size: 13px; text-align: left; }
+.models-head .m-title { font-weight: 600; }
+.models-head .m-count { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.models-head .chev { margin-left: auto; color: var(--soft-foreground); }
+.models-list { padding: 0 14px 12px; display: flex; flex-direction: column; gap: 7px; }
+.model-item { display: flex; align-items: center; gap: 10px; font-size: 13px; min-height: 22px; }
+.model-item .m-id { font-weight: 600; width: 84px; flex: none; }
+.model-item .m-bind { font: 500 11px var(--mono); color: var(--soft-foreground); width: 118px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-item .m-activity { flex: 1; min-width: 0; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-item .m-dur { flex: none; font-size: 11.5px; color: var(--soft-foreground); font-variant-numeric: tabular-nums; }
+.mi-done { color: var(--success); } .mi-now { color: var(--pending); animation: pulse 1.6s ease-in-out infinite; } .mi-idle { color: var(--soft-foreground); }
+.attempt-badge { font: 600 10px var(--mono); color: var(--pending); background: color-mix(in srgb, var(--pending) 12%, transparent); border-radius: 999px; padding: 1px 6px; flex: none; }
+
+.paused-hint { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted-foreground); padding: 0 4px; }
+.composer { border-radius: var(--radius-xl); background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-xs); }
+.composer textarea { display: block; width: 100%; border: none; background: transparent; outline: none; resize: none; padding: 13px 16px 4px; font-size: 14px; line-height: 1.5; min-height: 54px; }
+.composer-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px 8px; }
+.composer-bar .spacer { flex: 1; }
+.composer-bar .btn-primary.btn-icon { width: 32px; height: 32px; border-radius: var(--radius-sm); }
+.icon-ghost { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--radius-sm); color: var(--muted-foreground); }
+.icon-ghost:hover { background: var(--muted); color: var(--foreground); }
+
+.mobile-top .m-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-top .dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.mobile-top .icon-ghost { width: 36px; height: 36px; }
+
+@media (max-width: 767px) {
+  .run-head { padding: 12px 16px 0; }
+  .title-row, .hide-m { display: none; }
+  .meta-row { margin-top: 0; }
+  .phase-rail { padding: 8px 16px 0; }
+  .tabs-row { margin-top: 10px; }
+  .tabs-row .actions { display: none; }
+  .thread { padding: 18px 14px 28px; gap: 14px; }
+  .msg-user { max-width: 88%; }
+  .tool-card, .section-card { margin: 0 -14px; border-radius: 0; border-left: none; border-right: none; }
+  .dock { padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); position: sticky; bottom: 0; background: var(--background); border-top: 1px solid var(--border); }
+  .models-list { display: none; }   /* collapsed odometer on mobile */
+  .model-item .m-bind { display: none; }
+  .composer textarea { min-height: 44px; font-size: 16px; padding-top: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot-pulse, .mi-now, .shimmer, .spin { animation: none; }
+  .shimmer { color: var(--muted-foreground); background: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ================= sidebar ================= -->
+  <aside class="sidebar">
+    <div class="side-head">
+      <span class="brand-tile">⚡</span>
+      <span class="name">cezar</span>
+      <span class="repo">mercato / main</span>
+    </div>
+
+    <div class="side-section">
+      <button class="btn btn-contrast newtask-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+        New task
+        <span class="kbd">⌘N</span>
+      </button>
+    </div>
+
+    <nav class="side-section">
+      <button class="nav-item active">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
+        Tasks
+      </button>
+      <button class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        Inbox
+        <span class="badge">1</span>
+      </button>
+      <button class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        Git
+      </button>
+      <button class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
+        GitHub
+      </button>
+      <button class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>
+        Skills
+      </button>
+      <button class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>
+        Workflows
+      </button>
+    </nav>
+
+    <div class="side-scroll">
+      <div class="side-label">Working</div>
+      <div class="side-section" style="padding-top:0">
+        <button class="task-row active">
+          <span class="dot dot-violet dot-pulse"></span>
+          <span class="t">Fix #642 — queued-message replay race</span>
+          <span class="meta">2h 41m</span>
+        </button>
+        <button class="task-row">
+          <span class="dot dot-violet dot-pulse"></span>
+          <span class="t">Implement CSV export for order lists</span>
+          <span class="meta">54m</span>
+        </button>
+      </div>
+
+      <div class="side-label">Recent</div>
+      <div class="side-section" style="padding-top:0">
+        <button class="task-row">
+          <span class="dot dot-success"></span>
+          <span class="t">Fix #611 — sidebar badge stale count</span>
+          <span class="meta">6h</span>
+        </button>
+        <button class="task-row">
+          <span class="dot dot-success"></span>
+          <span class="t">Add worktree retention setting</span>
+          <span class="meta">1d</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="side-foot">
+      <button class="chip" title="claude 2.0.44 · codex 0.48.0 · gh 2.62 · git 2.43">
+        <span class="dot dot-success" style="width:7px;height:7px;border-radius:999px"></span>Tools
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <button class="btn btn-ghost btn-icon btn-sm" aria-label="Toggle theme">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ================= main ================= -->
+  <main class="main">
+
+    <div class="mobile-top">
+      <button class="icon-ghost" aria-label="Menu">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
+      </button>
+      <span class="m-title">Fix #642 — queued-message replay race</span>
+      <span class="dot dot-violet dot-pulse"></span>
+      <button class="icon-ghost" aria-label="More">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      </button>
+    </div>
+
+    <!-- run header -->
+    <header class="run-head">
+      <div class="title-row">
+        <h1 class="run-title">Fix #642 — queued-message replay race in RunStore</h1>
+        <span class="pill"><span class="dot dot-violet dot-pulse"></span>Running</span>
+      </div>
+
+      <div class="meta-row">
+        <span>harness-fix-issue</span><span class="sep">·</span>
+        <span class="profile-pill">multi-optimized</span><span class="sep">·</span>
+        <span class="branch-chip">fix/issue-642-replay-race</span><span class="sep">·</span>
+        <span><span class="adds">+64</span> <span class="dels">−12</span></span><span class="sep">·</span>
+        <span class="tokens">118k tokens <span class="gauge"><i></i></span></span><span class="sep">·</span>
+        <span class="cost">$1.84</span><span class="sep">·</span>
+        <span>2h 41m</span>
+      </div>
+
+      <div class="tabs-row">
+        <button class="tab active">Session</button>
+        <button class="tab">Review <span class="mini">R1</span></button>
+        <button class="tab">Changes</button>
+        <button class="tab">Files</button>
+        <div class="actions">
+          <button class="btn btn-outline btn-sm">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            Stop
+          </button>
+          <button class="btn btn-ghost btn-sm hide-m">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Terminal
+          </button>
+          <button class="btn btn-ghost btn-sm hide-m">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+            Notes
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ================= phase rail ================= -->
+    <div class="phase-rail">
+      <div class="phase-track" role="list" aria-label="Harness phases">
+        <span class="phase done" role="listitem">
+          <svg class="ph-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          Preflight
+        </span>
+        <svg class="phase-link" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="phase done" role="listitem">
+          <svg class="ph-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          Qualify
+        </span>
+        <svg class="phase-link" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="phase done" role="listitem">
+          <svg class="ph-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          Diagnose
+        </span>
+        <svg class="phase-link" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="phase done" role="listitem">
+          <svg class="ph-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          Council <span class="ph-meta">diagnosis · approve</span>
+        </span>
+        <svg class="phase-link" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="phase now" role="listitem">
+          <span class="spin spin-amber" role="status" aria-label="Phase running"></span>
+          Implement <span class="ph-meta">packet 2/3 · codex</span>
+        </span>
+        <svg class="phase-link" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="phase todo" role="listitem">Validate</span>
+        <svg class="phase-link" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="phase todo" role="listitem">Council <span class="ph-meta">final</span></span>
+        <svg class="phase-link" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="phase todo" role="listitem">Stage</span>
+      </div>
+      <div class="progress"><i></i></div>
+    </div>
+
+    <!-- ================= thread ================= -->
+    <div class="thread-scroll">
+      <div class="thread">
+
+        <div class="msg-user">Fix issue #642 with the multi-optimized profile — stop before any commit, I'll publish after review.</div>
+
+        <div class="lifecycle">· worktree ready — branch <code>fix/issue-642-replay-race</code> (base <code>main</code>) · start state captured, <code>HEAD 9f21c3a</code></div>
+
+        <!-- readiness table -->
+        <div class="card section-card">
+          <div class="card-head">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--soft-foreground)"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+            <span class="h-title">Model readiness</span>
+            <span class="h-meta">probe · trusted config @ main 9f21c3a</span>
+            <span class="pill pill-success"><span class="dot dot-success"></span>6/6 ready</span>
+          </div>
+          <div class="scroll-x">
+            <table class="htable">
+              <thead><tr><th>Model</th><th>Binding</th><th>Role</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td><strong>claude</strong></td><td class="mono">sonnet · host app</td><td><span class="role-tag host">host</span> <span class="role-tag">reviewer</span></td><td><span class="status-ready">✓ ready</span></td></tr>
+                <tr><td><strong>codex</strong></td><td class="mono">gpt-5.6-sol · xhigh</td><td><span class="role-tag worker">worker</span> <span class="role-tag">reviewer</span></td><td><span class="status-ready">✓ ready</span></td></tr>
+                <tr><td><strong>deepseek</strong></td><td class="mono">deepseek-v4-pro</td><td><span class="role-tag">reviewer</span></td><td><span class="status-ready">✓ ready</span></td></tr>
+                <tr><td><strong>kimi</strong></td><td class="mono">kimi-code/k3</td><td><span class="role-tag">reviewer</span></td><td><span class="status-ready">✓ ready</span></td></tr>
+                <tr><td><strong>glm</strong></td><td class="mono">glm-5.2</td><td><span class="role-tag">reviewer</span></td><td><span class="status-ready">✓ ready</span></td></tr>
+                <tr><td><strong>mimo</strong></td><td class="mono">mimo-v2.5-free</td><td><span class="role-tag">reviewer</span></td><td><span class="status-ready">✓ ready</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="lifecycle">· <strong style="color:var(--muted-foreground)">Qualify</strong> — om-verify-in-repo (fresh session) · defect confirmed on <code>main</code>, no open claim, no covering PR</div>
+
+        <!-- root-cause summary -->
+        <div class="msg-assist">
+          <p><strong>Diagnosis</strong> — <code>flushQueued()</code> replays queued messages against a session id captured <em>before</em> the resume completes; a message arriving in that window is delivered to the dead session and dropped. Files to change: <code>src/runs/store.ts</code> (replay guard), <code>src/workflows/run.ts</code> (resume ordering), regression test in <code>test/unit/store.test.ts</code>. Proposed regression: red on <code>main</code>, asserts queued message survives a resume race.</p>
+        </div>
+
+        <!-- diagnosis council inline card -->
+        <div class="card section-card">
+          <div class="card-head">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--soft-foreground)"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span class="h-title">Council — diagnosis</span>
+            <span class="h-meta">round 1 · packet <span class="mono">sha256 1f80…c2</span></span>
+            <span class="pill pill-success"><span class="dot dot-success"></span>approve</span>
+          </div>
+          <div class="council-sum">
+            <div class="council-row">
+              <span class="who"><span class="role-tag host">host</span> claude</span>
+              <span class="what">fresh context · no findings</span>
+              <span class="dur">4m 12s</span>
+            </div>
+            <div class="council-row">
+              <span class="who">codex <span class="mono">◐</span></span>
+              <span class="what">self-check (worker family) · no findings</span>
+              <span class="dur">2m 48s</span>
+            </div>
+            <div class="council-row">
+              <span class="who">deepseek</span>
+              <span class="what">F-01 minor — also cover the cross-backend continue path · confirmed → folded into packet 3</span>
+              <span class="dur">3m 12s</span>
+            </div>
+            <div class="council-row">
+              <span class="who">kimi</span>
+              <span class="what">no findings · 2 attempts</span>
+              <span class="dur">5m 41s</span>
+            </div>
+            <div class="council-row">
+              <span class="who">glm</span>
+              <span class="what">no findings</span>
+              <span class="dur">1m 48s</span>
+            </div>
+            <div class="council-row">
+              <span class="who">mimo</span>
+              <span class="what">no findings</span>
+              <span class="dur">58s</span>
+            </div>
+            <div class="verdict-line">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              All 5 required reviewers completed · 1 minority finding preserved and confirmed · diagnosis accepted
+            </div>
+          </div>
+        </div>
+
+        <div class="lifecycle">· <strong style="color:var(--muted-foreground)">Implement</strong> — 3 file-disjoint packets planned · dispatching to <code>codex</code> (workspace-write sandbox, network off)</div>
+
+        <!-- packet 1 done -->
+        <div class="card tool-card">
+          <button class="tool-head">
+            <svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            <svg class="t-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>
+            <span class="t-verb">Worker packet 1/3</span>
+            <code>replay guard — src/runs/store.ts · acceptance ✓ refs unchanged ✓</code>
+            <span class="t-dur">11m 04s</span>
+            <span class="exit-pill">ok</span>
+          </button>
+        </div>
+
+        <!-- packet 2 running -->
+        <div class="card tool-card">
+          <button class="tool-head">
+            <svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            <svg class="t-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>
+            <span class="t-verb shimmer">Worker packet 2/3</span>
+            <code>resume ordering — src/workflows/run.ts</code>
+            <span class="t-dur"><span class="spin" role="status" aria-label="Running"></span></span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ================= dock ================= -->
+    <div class="dock">
+      <div class="dock-inner">
+
+        <!-- models dock -->
+        <div class="card models-dock">
+          <div class="grad-edge"></div>
+          <button class="models-head">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--soft-foreground)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>
+            <span class="m-title">Models</span>
+            <span class="m-count">· 1 working · 5 standing by</span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="models-list">
+            <div class="model-item">
+              <svg class="mi-now" width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/><path d="M12 3.5 A8.5 8.5 0 0 1 12 20.5 Z" fill="currentColor"/></svg>
+              <span class="m-id">codex</span>
+              <span class="m-bind">gpt-5.6-sol</span>
+              <span class="role-tag worker">worker</span>
+              <span class="m-activity">implementing packet 2/3 — src/workflows/run.ts</span>
+              <span class="m-dur">14m</span>
+            </div>
+            <div class="model-item">
+              <svg class="mi-idle" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/></svg>
+              <span class="m-id">claude</span>
+              <span class="m-bind">sonnet · host</span>
+              <span class="role-tag host">host</span>
+              <span class="m-activity">conductor phases done · fresh reviewer standing by</span>
+              <span class="m-dur">2 runs</span>
+            </div>
+            <div class="model-item">
+              <svg class="mi-done" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity=".35"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>
+              <span class="m-id">deepseek</span>
+              <span class="m-bind">deepseek-v4-pro</span>
+              <span class="role-tag">reviewer</span>
+              <span class="m-activity">council 1: completed — 1 finding (confirmed)</span>
+              <span class="m-dur">3m 12s</span>
+            </div>
+            <div class="model-item">
+              <svg class="mi-done" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity=".35"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>
+              <span class="m-id">kimi</span>
+              <span class="m-bind">kimi-code/k3</span>
+              <span class="role-tag">reviewer</span>
+              <span class="m-activity">council 1: completed</span>
+              <span class="attempt-badge">2 attempts</span>
+              <span class="m-dur">5m 41s</span>
+            </div>
+            <div class="model-item">
+              <svg class="mi-done" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity=".35"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>
+              <span class="m-id">glm</span>
+              <span class="m-bind">glm-5.2</span>
+              <span class="role-tag">reviewer</span>
+              <span class="m-activity">council 1: completed</span>
+              <span class="m-dur">1m 48s</span>
+            </div>
+            <div class="model-item">
+              <svg class="mi-done" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity=".35"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>
+              <span class="m-id">mimo</span>
+              <span class="m-bind">mimo-v2.5-free</span>
+              <span class="role-tag">reviewer</span>
+              <span class="m-activity">council 1: completed</span>
+              <span class="m-dur">58s</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="paused-hint">
+          <span class="dot dot-violet dot-pulse" style="width:7px;height:7px;border-radius:99px;flex:none"></span>
+          Autonomous harness run — cezar drives the phases; you'll be asked at decision points. Publishing stays yours.
+        </div>
+
+        <div class="composer">
+          <textarea rows="2" placeholder="Message the run — queued until the next phase boundary…" aria-label="Message the run"></textarea>
+          <div class="composer-bar">
+            <button class="icon-ghost" aria-label="Attach files">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <div class="spacer"></div>
+            <button class="btn btn-primary btn-icon" aria-label="Send">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+</div>
+
+</body>
+</html>

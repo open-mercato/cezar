@@ -33,7 +33,8 @@ const SYSTEM_PROMPT_MAX = 20_000
 
 export function AgentsSection() {
   const config = useConfig()
-  const catalog = useRunnerModels()
+  const codexCatalog = useRunnerModels()
+  const opencodeCatalog = useRunnerModels(true, 'opencode')
 
   if (config.isPending) {
     return (
@@ -53,10 +54,12 @@ export function AgentsSection() {
       />
     )
   }
-  return <AgentsForm config={config.data} catalog={catalog.data} />
+  return <AgentsForm config={config.data} catalogs={{ codex: codexCatalog.data, opencode: opencodeCatalog.data }} />
 }
 
-function AgentsForm({ config, catalog }: { config: ConfigResponse; catalog: ReturnType<typeof useRunnerModels>['data'] }) {
+type RunnerCatalogs = Partial<Record<Runner, ReturnType<typeof useRunnerModels>['data']>>
+
+function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: RunnerCatalogs }) {
   const repo = useRepo()
   const queryClient = useQueryClient()
 
@@ -151,13 +154,13 @@ function AgentsForm({ config, catalog }: { config: ConfigResponse; catalog: Retu
                 }
                 className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
               >
-                {modelsForRunner(runner.id, catalog, [config.defaultModels[runner.id]]).map((model) => (
+                {modelsForRunner(runner.id, catalogs[runner.id], [config.defaultModels[runner.id]]).map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.id === '' ? 'auto (default)' : model.label}
                   </option>
                 ))}
-                {modelCatalogStatus(runner.id, catalog) ? (
-                  <option disabled>{modelCatalogStatus(runner.id, catalog)}</option>
+                {modelCatalogStatus(runner.id, catalogs[runner.id]) ? (
+                  <option disabled>{modelCatalogStatus(runner.id, catalogs[runner.id])}</option>
                 ) : null}
               </select>
             </label>

@@ -1,3 +1,4 @@
+import { codexReasoningEffortOf } from './reasoning-effort.js';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
@@ -311,6 +312,10 @@ class CodexSession implements AgentSession {
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
       sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
       approvalPolicy: 'never',
+      // Reasoning effort (user feedback 2026-07-24): the seam's neutral tier
+      // mapped to codex's own levels (`max` → `xhigh`), camelCase like the
+      // sibling overrides. `clean()` drops it when unset.
+      modelReasoningEffort: codexReasoningEffortOf(this.spec.reasoningEffort) ?? undefined,
     };
     if (this.spec.resume && this.spec.sessionId) {
       await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });

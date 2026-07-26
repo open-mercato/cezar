@@ -22,13 +22,21 @@ describe('workspace model catalog API', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  const app = (discover: () => Promise<Array<{ id: string; label: string; description: string }>>) =>
+  const app = (
+    discover: () => Promise<Array<{ id: string; label: string; description: string }>>,
+    opencodeDiscover?: () => Promise<Array<{ id: string; label: string; description: string }>>,
+  ) =>
     createApp({
       repoRoot: root,
       store,
       manager: {} as RunManager,
       version: 'test',
-      modelCatalog: new RunnerModelCatalog({ adapters: { codex: { discover } } }),
+      modelCatalog: new RunnerModelCatalog({
+        adapters: {
+          codex: { discover },
+          ...(opencodeDiscover ? { opencode: { discover: opencodeDiscover } } : {}),
+        },
+      }),
     });
 
   it('returns the discovered catalog and reuses its cache', async () => {
@@ -59,10 +67,24 @@ describe('workspace model catalog API', () => {
     });
   });
 
+  it('serves the opencode catalog through the same route (2026-07-24)', async () => {
+    const server = app(
+      async () => [],
+      async () => [{ id: 'deepseek/deepseek-v4-pro', label: 'deepseek-v4-pro', description: 'via deepseek' }],
+    );
+    const response = await apiRequest(server, '/api/models?runner=opencode');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runner: 'opencode',
+      models: [{ id: 'deepseek/deepseek-v4-pro' }],
+      source: 'live',
+    });
+  });
+
   it.each(['/api/models', '/api/models?runner=claude'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be codex' });
+    expect(await response.json()).toEqual({ error: 'runner must be codex or opencode' });
   });
 
   it('is workspace-level rather than project-scoped', async () => {

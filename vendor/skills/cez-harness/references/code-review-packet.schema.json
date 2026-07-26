@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "contract", "subject", "criteria", "validationGate", "repositoryContext"],
+  "properties": {
+    "version": { "const": 1 },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "rubricSha256"],
+      "properties": {
+        "name": { "const": "cez-code-review" },
+        "version": { "const": 1 },
+        "rubricSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sha256", "bytes"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["spec", "diagnosis", "implementation"] },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "criteria": { "type": "string" },
+    "validationGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "checks"],
+      "properties": {
+        "status": { "type": "string", "enum": ["passed", "failed", "not_applicable"] },
+        "reason": { "type": ["string", "null"] },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "status", "exitCode", "evidence"],
+            "properties": {
+              "command": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "status": { "type": "string", "enum": ["passed", "failed"] },
+              "exitCode": { "type": ["integer", "null"] },
+              "evidence": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "repositoryContext": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "sha256", "content"],
+        "properties": {
+          "source": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "content": { "type": "string" }
+        }
+      }
+    }
+  }
+}

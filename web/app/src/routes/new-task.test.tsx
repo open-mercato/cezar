@@ -294,6 +294,10 @@ describe('picker data flows', () => {
     writeDraft({
       text: '', source: null, runner: 'codex', model: 'claude-opus-4-8', variants: 1,
       planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
     serve({ health: HEALTH_MULTI })
     renderNewTask()

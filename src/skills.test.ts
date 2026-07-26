@@ -119,6 +119,36 @@ describe('discoverSkills local entrypoints', () => {
     expect(skills.some((skill) => skill.name === 'agentic-setup')).toBe(false);
   });
 
+  it('discovers bundled skills last and loses name collisions to every other source', async () => {
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-bundled-'));
+    tempDirs.push(bundled);
+    await mkdir(join(bundled, 'cez-harness'), { recursive: true });
+    await writeFile(
+      join(bundled, 'cez-harness', 'SKILL.md'),
+      '---\nname: cez-harness\ndescription: bundled runtime\nrequires: [cez-code-review]\n---\nbody',
+    );
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+
+    const skills = await discoverSkills(repoRoot, { bundledDir: bundled });
+    const found = skills.find((s) => s.name === 'cez-harness');
+    expect(found?.source).toBe('bundled');
+    expect(found?.requires).toEqual(['cez-code-review']);
+
+    // A repo-local skill of the same name wins the collision:
+    await mkdir(join(repoRoot, '.ai/skills/cez-harness'), { recursive: true });
+    await writeFile(join(repoRoot, '.ai/skills/cez-harness/SKILL.md'), '---\nname: cez-harness\n---\nlocal');
+    const again = await discoverSkills(repoRoot, { bundledDir: bundled });
+    expect(again.find((s) => s.name === 'cez-harness')?.source).toBe('ai');
+  });
+
+  it('disables bundled scanning when bundledDir is null', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+    const skills = await discoverSkills(repoRoot, { bundledDir: null });
+    expect(skills.some((s) => s.source === 'bundled')).toBe(false);
+  });
+
   it('follows npx-skills directory mirrors and deduplicates them by skill name', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
     tempDirs.push(repoRoot);

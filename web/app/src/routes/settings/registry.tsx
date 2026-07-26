@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  NetworkIcon,
   BookmarkIcon,
   BotIcon,
   FileCogIcon,
@@ -18,6 +19,7 @@ import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
 import { BookmarkletsSection } from './bookmarklets-section'
+import { HarnessSection } from './harness-section'
 import { NotificationsSection } from './notifications-section'
 import { ProjectsSection } from './projects-section'
 import { PromptTemplatesSection } from './prompt-templates-section'
@@ -42,6 +44,7 @@ import { WorktreesSection } from './worktrees-section'
 
 export type SettingsSectionId =
   | 'bookmarklets'
+  | 'harness'
   | 'appearance'
   | 'agents'
   | 'agent-config'
@@ -91,6 +94,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Default runner, models and system prompt.',
     icon: BotIcon,
     component: AgentsSection,
+    scope: 'project',
+  },
+  {
+    id: 'harness',
+    title: 'Harness',
+    description: 'Multi-model runs: profiles, model access, staged-only pipeline.',
+    icon: NetworkIcon,
+    component: HarnessSection,
     scope: 'project',
   },
   {

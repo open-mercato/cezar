@@ -175,6 +175,21 @@ const runRecordSchema = z.object({
    *  nowhere else. Kept loose here to avoid an upward import; the run manager
    *  validates the shape before reviving it. */
   workflowDef: z.record(z.string(), z.unknown()).optional(),
+  /** cez-harness run stub (spec 2026-07-23-harness-orchestration): presence
+   *  marks a harness-driven run for the list surfaces, the publish guards and
+   *  recovery; the full state lives in the sibling `<id>.harness.json` ledger.
+   *  Kept loose (plain strings) so the store never imports harness types. */
+  harness: z
+    .object({
+      profile: z.string(),
+      workflow: z.string(),
+      issueId: z.string().optional(),
+      /** Role-based selection (2026-07-24), kept loose — the ledger and the
+       *  driver input are authoritative; this copy makes recovery re-queues
+       *  conduct the same roles. */
+      roles: z.record(z.string(), z.unknown()).optional(),
+    })
+    .optional(),
 });
 
 export type StepState = z.infer<typeof stepStateSchema>;

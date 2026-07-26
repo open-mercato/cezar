@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "reviewer", "freshContext", "implementationContextInherited", "contract", "validationGate", "status", "durationMs", "review"],
+  "properties": {
+    "version": { "const": 1 },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "family", "requestedModel", "actualModel", "provider", "provenanceStatus", "fallbackReason"],
+      "properties": {
+        "id": { "const": "claude" },
+        "family": { "const": "anthropic" },
+        "requestedModel": { "type": "string", "minLength": 1 },
+        "actualModel": { "type": ["string", "null"] },
+        "provider": { "type": "string", "minLength": 1 },
+        "provenanceStatus": { "type": "string", "enum": ["observed", "unverified"] },
+        "fallbackReason": { "type": ["string", "null"] }
+      }
+    },
+    "freshContext": { "const": true },
+    "implementationContextInherited": { "const": false },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "rubricSha256", "packetSha256", "subjectSha256", "subjectKind"],
+      "properties": {
+        "name": { "const": "cez-code-review" },
+        "version": { "const": 1 },
+        "rubricSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "packetSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "subjectSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "subjectKind": { "type": "string", "enum": ["spec", "diagnosis", "implementation"] }
+      }
+    },
+    "validationGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "checks"],
+      "properties": {
+        "status": { "type": "string", "enum": ["passed", "failed", "not_applicable"] },
+        "reason": { "type": ["string", "null"] },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "status", "exitCode", "evidence"],
+            "properties": {
+              "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+              "status": { "type": "string", "enum": ["passed", "failed"] },
+              "exitCode": { "type": ["integer", "null"] },
+              "evidence": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "status": { "const": "completed" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "review": { "$ref": "review-result.schema.json" }
+  }
+}

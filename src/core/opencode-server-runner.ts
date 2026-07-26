@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { IncomingMessage } from 'node:http';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -10,6 +11,7 @@ import type {
 import type { AgentSession, SessionOptions } from './agent-runner.js';
 import { prependSystemPrompt } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
+import { jsonRequest, streamRequest } from './json-http.js';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.js';
 import { parseModelIdentity } from './model-identity.js';
 import { V1TextCoalescer } from './v1-text-coalescer.js';
@@ -113,6 +115,8 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  /** Run deadline, reused as the HTTP deadline. 0 = no limit. */
+  private readonly limitMs: number;
 
   constructor(
     private readonly bin: string,
@@ -150,6 +154,10 @@ class OpencodeSession implements AgentSession {
     const urlReady = this.waitForServerUrl(port);
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
+    // The run deadline is also the HTTP deadline: a prompt POST may legitimately
+    // stay open for as long as the turn itself (see `http()` — anything shorter
+    // silently truncates long turns).
+    this.limitMs = limitMs;
     let deadline: NodeJS.Timeout | undefined;
     if (limitMs > 0) {
       deadline = setTimeout(() => {
@@ -335,27 +343,27 @@ class OpencodeSession implements AgentSession {
    *  event emitted after this resolves can be missed. */
   private async consumeEvents(): Promise<void> {
     if (!this.baseUrl) return;
-    let res: Response;
+    let res: IncomingMessage;
     try {
-      res = await fetch(`${this.baseUrl}/event`, {
+      // NOT global fetch: undici's 300s `bodyTimeout` counts the gaps BETWEEN
+      // SSE frames, so a quiet stretch inside a long turn killed the event
+      // stream and the cockpit went silent while the turn ran on (2026-07-25).
+      res = await streamRequest(`${this.baseUrl}/event`, {
         headers: { accept: 'text/event-stream' },
         signal: this.sse.signal,
       });
     } catch {
       return; // aborted or server gone — the turn response still carries results
     }
-    if (!res.body) return;
-    void this.readEvents(res.body.getReader());
+    void this.readEvents(res);
   }
 
-  private async readEvents(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  private async readEvents(stream: AsyncIterable<Buffer | string>): Promise<void> {
     const decoder = new TextDecoder();
     let buffer = '';
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      for await (const chunk of stream) {
+        buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
         let sep: number;
         while ((sep = buffer.indexOf('\n\n')) >= 0) {
           const frame = buffer.slice(0, sep);
@@ -469,16 +477,19 @@ class OpencodeSession implements AgentSession {
     body: unknown,
   ): Promise<Record<string, unknown>> {
     if (!this.baseUrl) throw new Error('opencode server not ready');
-    const res = await fetch(`${this.baseUrl}${path}`, {
+    // NOT global fetch: undici caps it at a 300s `headersTimeout`, and the
+    // prompt POST sends no headers until the model is done — so every turn
+    // over five minutes died as `fetch failed`, ignoring `this.timeoutMs`
+    // entirely (2026-07-25). `jsonRequest` makes our timeout the only one.
+    const res = await jsonRequest(`${this.baseUrl}${path}`, {
       method,
-      headers: body !== undefined ? { 'content-type': 'application/json' } : {},
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body,
+      timeoutMs: this.limitMs,
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`${method} ${path} → ${res.status} ${detail.slice(0, 200)}`);
+      throw new Error(`${method} ${path} → ${res.status} ${res.text.slice(0, 200)}`);
     }
-    const text = await res.text();
+    const text = res.text;
     if (!text) return {};
     try {
       return JSON.parse(text) as Record<string, unknown>;

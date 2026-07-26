@@ -14,6 +14,7 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.js';
+import { thinkingBudgetFor } from './reasoning-effort.js';
 import { buildChildEnv } from './agent-env.js';
 import { costWeightedTokens, type RawUsage } from './usage.js';
 import { readNdjson } from './ndjson.js';
@@ -90,11 +91,19 @@ export class ClaudeCliRunner implements AgentRunner {
   ): AgentSession {
     const args = buildClaudeArgs(spec);
 
+    // Reasoning effort (user feedback 2026-07-24): the CLI reads a thinking
+    // budget from MAX_THINKING_TOKENS. A caller-provided value in `spec.env`
+    // wins — the tier is a convenience, not an override.
+    const thinkingBudget = thinkingBudgetFor(spec.reasoningEffort);
+    const effortEnv =
+      thinkingBudget !== null && spec.env?.MAX_THINKING_TOKENS === undefined
+        ? { MAX_THINKING_TOKENS: String(thinkingBudget) }
+        : undefined;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = nodeSpawn(this.bin, args, {
         cwd: spec.cwd,
-        env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
+        env: buildChildEnv({ backend: this.backend, extraEnv: { ...spec.env, ...effortEnv } }),
       });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
@@ -104,6 +113,10 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    /** The EOF watchdog put down a CLI that ignored stdin EOF after `end()` —
+     *  the resulting non-zero exit is clean closure, not a failure (the
+     *  turn's result was already delivered before stdin closed). */
+    let eofKilled = false;
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -155,9 +168,15 @@ export class ClaudeCliRunner implements AgentRunner {
         // already gone
       }
       eofTermTimer = setTimeout(() => {
-        if (child.exitCode == null && !child.killed) child.kill('SIGTERM');
+        if (child.exitCode == null && !child.killed) {
+          eofKilled = true;
+          child.kill('SIGTERM');
+        }
         eofKillTimer = setTimeout(() => {
-          if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
+          if (child.exitCode == null && !child.killed) {
+            eofKilled = true;
+            child.kill('SIGKILL');
+          }
         }, EOF_KILL_GRACE_MS);
         eofKillTimer.unref?.();
       }, EOF_TERM_GRACE_MS);
@@ -271,6 +290,19 @@ export class ClaudeCliRunner implements AgentRunner {
       }
 
       if (exitCode !== 0 && exitCode !== null) {
+        if (eofKilled) {
+          // Seen live 2026-07-24: a harness spec phase finished its turn,
+          // `end()` closed stdin, claude ignored EOF (janitor-confirmed CLI
+          // bug), the watchdog SIGTERMed it — and the exit 143 failed a phase
+          // whose work had already succeeded. Our own cleanup kill is not an
+          // error.
+          onEvent?.({
+            type: 'note',
+            message: `claude CLI ignored EOF after session end and was terminated (exit ${exitCode}) — result already delivered (known CLI bug)`,
+          });
+          onEvent?.({ type: 'done' });
+          return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
+        }
         const stderr = stderrChunks.join('').trim();
         const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
         const msg = `claude CLI exited with code ${exitCode}${detail}`;

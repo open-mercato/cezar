@@ -16,6 +16,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
   })
 
@@ -30,6 +34,10 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
     const first = readDraft()
     expect(first.text).toBe('fix it')
@@ -50,6 +58,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
     clearDraftText()
     expect(readDraft()).toEqual({
@@ -62,6 +74,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
   })
 
@@ -76,6 +92,10 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
     // A fresh page has no in-memory cache but keeps localStorage: resetDraft removes storage, so
     // instead drop only the cache by round-tripping through a raw storage read.
@@ -104,6 +124,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
 
     resetDraft()
@@ -118,6 +142,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      harnessProfile: null,
+      composerMode: null,
+      harnessMode: null,
+  harnessRoles: null,
     })
   })
 })

@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { detectEnvironment } from '../core/backend-detect.js';
 import type { ContentBlock } from '../core/agent-runner.js';
 import { discoverCodexModels } from '../core/codex-model-catalog.js';
+import { discoverOpencodeModels } from '../core/opencode-model-catalog.js';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.js';
 import { currentUsage, onUsage } from '../core/process-usage.js';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.js';
@@ -34,6 +35,10 @@ import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type 
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.js';
 import { isV2WireEventType } from '../runs/ui-event-sink.js';
 import type { RunManager } from '../workflows/run.js';
+import { loadLedger } from '../harness/ledger.js';
+import { loadAgenticConfig, resolveHarnessRuntimeInfo } from '../harness/runtime.js';
+import { HARNESS_PROFILES, harnessProfileSchema } from '../harness/types.js';
+import { isHarnessWorkflow } from '../harness/workflows.js';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.js';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.js';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.js';
@@ -308,6 +313,66 @@ const streamSSENoBuffer: typeof streamSSE = (c, cb, onError) => {
 
 // A run starts from a named workflow OR an inline chain of steps (spec 008 —
 // the approved plan is posted as-is, never written to a file).
+/** One concrete model a harness role runs on ('' = the backend's default). */
+const harnessModelRefSchema = z.object({
+  runner: z.enum(['claude', 'codex', 'opencode']),
+  model: z.string().max(200),
+  /** Per-role reasoning effort (2026-07-24) — the seam's neutral tiers. */
+  effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+});
+
+/** A reviewer bound in `agentHarness.models` (spec 2026-07-24-advisor-reviewers):
+ *  executed by the vendored runtime's review council, never a runner session.
+ *  `model` is the advisor id; `family` its provider family from `/harness/status`
+ *  (a diversity hint, re-checked against the trusted config at driver preflight).
+ *  Reviewers only — orchestrator/implementer keep the runner-ref schema. */
+const harnessAdvisorRefSchema = z.object({
+  runner: z.literal('harness'),
+  model: z.string().min(1).max(200),
+  family: z.string().min(1).max(80),
+});
+
+/** The provider family a role ref belongs to — the diversity axis of the
+ *  strictly-multi-model rule (mirrors `modelFamilyOf` in the web form rules). */
+function harnessFamilyOf(ref: { runner: string; model: string; family?: string }): string {
+  if (ref.runner === 'harness') return ref.family ?? 'harness';
+  if (ref.runner === 'claude') return 'anthropic';
+  if (ref.runner === 'codex') return 'openai';
+  const slash = ref.model.indexOf('/');
+  return slash > 0 ? ref.model.slice(0, slash) : 'opencode';
+}
+
+/** Role-based harness selection (2026-07-24): one orchestrator, one
+ *  implementer, 2–5 unique reviewers spanning ≥2 model families. The same
+ *  rules the composer enforces — restated here because the wire is the
+ *  boundary, not the UI. */
+const harnessRolesSchema = z
+  .object({
+    orchestrator: harnessModelRefSchema,
+    implementer: harnessModelRefSchema,
+    reviewers: z
+      .array(z.union([harnessModelRefSchema, harnessAdvisorRefSchema]))
+      .min(2, 'pick at least 2 reviewers — multi-model means more than one voice')
+      .max(5, 'pick at most 5 reviewers'),
+  })
+  .superRefine((roles, ctx) => {
+    const seen = new Set<string>();
+    for (const reviewer of roles.reviewers) {
+      const key = `${reviewer.runner}::${reviewer.model}`;
+      if (seen.has(key)) {
+        ctx.addIssue({ code: 'custom', message: 'reviewers must be unique models' });
+        return;
+      }
+      seen.add(key);
+    }
+    if (new Set(roles.reviewers.map(harnessFamilyOf)).size < 2) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'reviewers must span at least two different model families (e.g. Anthropic + OpenAI)',
+      });
+    }
+  });
+
 const startRunSchema = z
   .object({
     workflow: z.string().min(1).optional(),
@@ -362,6 +427,17 @@ const startRunSchema = z
     // audit trail survives the composer detour. Bounded like every other
     // string here; a todo id is a short generated key.
     todoId: z.string().min(1).max(200, 'todoId must be at most 200 characters').optional(),
+    // cez-harness run parameters (spec 2026-07-23-harness-orchestration) —
+    // valid only with the built-in harness workflows (checked in the route,
+    // where the resolved workflow is known). `roles` (2026-07-24) is the
+    // role-based selection; `profile` remains for scripted callers.
+    harness: z
+      .object({
+        profile: harnessProfileSchema.optional(),
+        roles: harnessRolesSchema.optional(),
+        issueId: z.string().trim().min(1).max(200).optional(),
+      })
+      .optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -702,7 +778,10 @@ export function createApp(deps: ServerDeps): Hono {
   const bootRoot = deps.repoRoot;
   const bootDataDir = join(bootRoot, '.ai/cezar');
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
-    adapters: { codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) } },
+    adapters: {
+      codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
+      opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
+    },
   });
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
@@ -1049,11 +1128,12 @@ export function createApp(deps: ServerDeps): Hono {
     });
   });
 
-  // Host capability, not project state: one installed/authenticated Codex CLI
-  // and one in-memory cache are shared by every registered workspace.
+  // Host capability, not project state: one installed/authenticated CLI per
+  // backend and one in-memory cache are shared by every registered workspace.
+  // claude keeps its static tier presets — no discovery adapter to ask.
   app.get('/api/models', async (c) => {
-    const query = z.object({ runner: z.literal('codex') }).safeParse(c.req.query());
-    if (!query.success) return c.json({ error: 'runner must be codex' }, 400);
+    const query = z.object({ runner: z.enum(['codex', 'opencode']) }).safeParse(c.req.query());
+    if (!query.success) return c.json({ error: 'runner must be codex or opencode' }, 400);
     return c.json(await modelCatalog.get(query.data.runner));
   });
 
@@ -1816,6 +1896,17 @@ export function createApp(deps: ServerDeps): Hono {
       workflow = workflows.find((w) => w.name === parsed.data.workflow);
       if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
     }
+    // Harness parameters ride only the built-in harness workflows (spec
+    // 2026-07-23-harness-orchestration); anywhere else they are a caller bug,
+    // surfaced as a 400 rather than silently dropped.
+    if (parsed.data.harness && !isHarnessWorkflow(workflow.name)) {
+      return c.json({ error: `"harness" is only valid with the harness workflows, not "${workflow.name}"` }, 400);
+    }
+    if (isHarnessWorkflow(workflow.name) && (parsed.data.variants ?? 1) > 1) {
+      // One staged handoff per issue: the claim protocol forbids competing
+      // claimants, so competing variants make no sense for a harness run.
+      return c.json({ error: 'parallel variants are not available for harness runs — one staged handoff per task' }, 400);
+    }
     const images = parsed.data.images?.map((img): ContentBlock => ({
       type: 'image',
       source: { type: 'base64', media_type: img.mediaType, data: img.data },
@@ -1828,6 +1919,7 @@ export function createApp(deps: ServerDeps): Hono {
       systemPrompt: parsed.data.systemPrompt,
       worktree: parsed.data.worktree,
       autonomous: parsed.data.autonomous,
+      harness: parsed.data.harness,
       // Opt-in inbox (#471): the capability is the ceiling, so a client asking
       // for follow-ups on a server that has them off gets a plain `false`
       // rather than an error — the run is still perfectly valid without them.
@@ -2453,6 +2545,110 @@ export function createApp(deps: ServerDeps): Hono {
     });
   });
 
+  // ---- cez-harness (spec 2026-07-23-harness-orchestration) -------------------
+
+  /** The stage-only publish guard: a harness run's worktree must not be
+   *  pushed or PR'd before the run parks at its review gate — the cockpit
+   *  twin of the harness `block-push-and-pr` hook. */
+  const harnessPublishBlocked = (run: RunRecord): boolean =>
+    Boolean(run.harness) && !['review', 'done'].includes(run.status);
+
+  // Installed/configured summary for the start surface and Settings →
+  // Harness. `standard` is always offered — it needs no provider and no
+  // `agentHarness` section at all — and claude (the host) always leads the
+  // roster. Configured models are read from the om pipeline's own config,
+  // which cezar never writes; binding a model happens by running
+  // `cez-setup-harness` as a task.
+  api.get('/harness/status', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const agentic = await loadAgenticConfig(repoRoot);
+    const rawProfiles = (agentic.agentHarness?.profiles as Record<string, unknown> | undefined) ?? {};
+    const configuredProfiles = Object.keys(rawProfiles);
+    const profiles = [...new Set(['standard', ...configuredProfiles])].filter((p) =>
+      (HARNESS_PROFILES as readonly string[]).includes(p),
+    );
+    // Which configured profiles reference a model id, as worker or reviewer.
+    const profilesUsing = (id: string): string[] =>
+      profiles.filter((p) => {
+        const profile = rawProfiles[p] as { workers?: unknown; reviewers?: unknown } | undefined;
+        const uses = (list: unknown) => Array.isArray(list) && list.includes(id);
+        return uses(profile?.workers) || uses(profile?.reviewers);
+      });
+    const rawModels = (agentic.agentHarness?.models as Record<string, unknown> | undefined) ?? {};
+    const models = [
+      {
+        id: 'claude',
+        family: 'anthropic',
+        model: 'host app',
+        adapter: 'host',
+        roles: ['host', 'reviewer'],
+        profiles,
+      },
+      ...Object.entries(rawModels).map(([id, raw]) => {
+        const m = (raw ?? {}) as { family?: unknown; model?: unknown; adapter?: unknown; roles?: unknown };
+        return {
+          id,
+          family: typeof m.family === 'string' ? m.family : undefined,
+          model: typeof m.model === 'string' ? m.model : undefined,
+          adapter: typeof m.adapter === 'string' ? m.adapter : undefined,
+          roles: Array.isArray(m.roles) ? m.roles.filter((r): r is string => typeof r === 'string') : [],
+          profiles: profilesUsing(id),
+        };
+      }),
+    ];
+    return c.json({
+      configured: agentic.agentHarness !== undefined,
+      profiles,
+      /** Which profiles this cezar can conduct itself (spec Phases 3–5 widen this). */
+      driven: ['standard'],
+      models,
+      /** Where the harness collection would come from — normally `bundled`
+       *  (the vendored cez-* tree shipped with cezar) with its pinned
+       *  upstream commit; repo-local/team overrides report as themselves. */
+      runtime: await resolveHarnessRuntimeInfo(repoRoot),
+    });
+  });
+
+  // Readiness for the start surface. Version 1 answers `standard` locally
+  // (the host is the only model) and reports council/worker profiles as not
+  // yet driven — an honest refusal, never a silent degrade.
+  api.post('/harness/probe', async (c) => {
+    const body = z
+      .object({ profile: harnessProfileSchema })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!body.success) {
+      return c.json({ error: body.error.issues.map((i) => i.message).join('; ') }, 400);
+    }
+    if (body.data.profile !== 'standard') {
+      return c.json({
+        profile: body.data.profile,
+        ready: false,
+        reason:
+          `profile "${body.data.profile}" is not yet driven by cezar — only "standard" is. ` +
+          `The run would stop at preflight; start with the standard profile instead.`,
+        models: [],
+      });
+    }
+    return c.json({
+      profile: 'standard',
+      ready: true,
+      models: [
+        { id: 'claude', family: 'anthropic', binding: 'host app', roles: ['host', 'reviewer'], readiness: 'ready' },
+      ],
+    });
+  });
+
+  // The run's harness ledger — refetch-on-reconnect companion to the
+  // `harness.*` events on the run's SSE stream.
+  api.get('/runs/:id/harness', (c) => {
+    const { dataDir, store } = c.get('project');
+    const id = c.req.param('id');
+    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const ledger = loadLedger(dataDir, id);
+    if (!ledger) return c.json({ error: 'no harness ledger for this run' }, 404);
+    return c.json(ledger);
+  });
+
   api.post('/runs/:id/git/commit', async (c) => {
     const { store } = c.get('project');
     const run = store.getRun(c.req.param('id'));
@@ -2472,6 +2668,12 @@ export function createApp(deps: ServerDeps): Hono {
     const { store } = c.get('project');
     const run = store.getRun(c.req.param('id'));
     if (!run) return c.json({ error: 'not found' }, 404);
+    if (harnessPublishBlocked(run)) {
+      return c.json(
+        { error: 'stage-only: this harness run has not reached its review gate — publishing stays yours after review' },
+        409,
+      );
+    }
     const worktree = worktreeOf(run);
     if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
     const result = await pushCurrentBranch(worktree);
@@ -2493,6 +2695,12 @@ export function createApp(deps: ServerDeps): Hono {
     const id = c.req.param('id');
     const run = store.getRun(id);
     if (!run) return c.json({ error: 'not found' }, 404);
+    if (harnessPublishBlocked(run)) {
+      return c.json(
+        { error: 'stage-only: this harness run has not reached its review gate — publishing stays yours after review' },
+        409,
+      );
+    }
     if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
     if (!run.worktreePath || !existsSync(run.worktreePath) || !run.branch) {
       return c.json(

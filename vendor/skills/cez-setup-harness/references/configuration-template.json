@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "preset": "cross-model-jury",
+  "host": "claude",
+  "delivery": {
+    "mode": "stage-only",
+    "issueClaim": "hold"
+  },
+  "retry": {
+    "maxAttempts": 4,
+    "backoffMs": 5000,
+    "backoffMultiplier": 2,
+    "timeoutEscalation": 1.5,
+    "maxTimeoutMs": 2400000
+  },
+  "models": {
+    "codex": {
+      "adapter": "command",
+      "family": "openai",
+      "model": "gpt-5.6-sol",
+      "reasoningEffort": "xhigh",
+      "roles": [
+        "worker",
+        "reviewer"
+      ],
+      "timeoutMs": 1200000,
+      "workerSecurity": {
+        "network": "disabled",
+        "remoteWrites": "disabled",
+        "refWrites": "disabled",
+        "enforcedBy": "codex-workspace-write-sandbox"
+      },
+      "commands": {
+        "probe": [
+          "codex",
+          "--version"
+        ],
+        "review": [
+          "codex",
+          "exec",
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--ephemeral",
+          "--config",
+          "model_reasoning_effort={reasoningEffort}",
+          "--sandbox",
+          "read-only",
+          "--cd",
+          "{worktree}",
+          "--model",
+          "{model}",
+          "--output-schema",
+          "{schemaFile}",
+          "-"
+        ],
+        "worker": [
+          "codex",
+          "exec",
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--ephemeral",
+          "--config",
+          "model_reasoning_effort={reasoningEffort}",
+          "--sandbox",
+          "workspace-write",
+          "--cd",
+          "{worktree}",
+          "--model",
+          "{model}",
+          "-"
+        ]
+      }
+    },
+    "deepseek": {
+      "adapter": "preset",
+      "preset": "deepseek-api",
+      "family": "deepseek",
+      "model": "deepseek-v4-pro",
+      "roles": [
+        "reviewer"
+      ],
+      "endpoint": "https://api.deepseek.com/chat/completions",
+      "credentialEnv": "DEEPSEEK_API_KEY",
+      "authStoreProvider": "deepseek",
+      "reasoningEffort": "max",
+      "maxOutputTokens": 32768,
+      "timeoutMs": 600000
+    },
+    "kimi": {
+      "adapter": "preset",
+      "preset": "kimi-subscription",
+      "family": "moonshot",
+      "model": "kimi-code/k3",
+      "roles": [
+        "reviewer"
+      ],
+      "binaryEnv": "OM_KIMI_BIN",
+      "maxInputBytes": 180000,
+      "timeoutMs": 600000
+    },
+    "glm": {
+      "adapter": "preset",
+      "preset": "opencode-zen",
+      "family": "zhipu",
+      "model": "glm-5.2",
+      "roles": [
+        "reviewer"
+      ],
+      "endpoint": "https://opencode.ai/zen/v1/chat/completions",
+      "credentialEnv": "OM_ZEN_KEY",
+      "authStoreProvider": "opencode",
+      "reasoningEffort": "max",
+      "maxOutputTokens": 32768,
+      "timeoutMs": 600000
+    },
+    "mimo": {
+      "adapter": "preset",
+      "preset": "opencode-zen",
+      "family": "xiaomi",
+      "model": "mimo-v2.5-free",
+      "roles": [
+        "reviewer"
+      ],
+      "endpoint": "https://opencode.ai/zen/v1/chat/completions",
+      "credentialEnv": "OM_ZEN_KEY",
+      "authStoreProvider": "opencode",
+      "reasoningEffort": "max",
+      "maxOutputTokens": 32768,
+      "timeoutMs": 600000
+    }
+  },
+  "profiles": {
+    "standard": {
+      "workers": [],
+      "reviewers": [],
+      "reviewPolicy": {
+        "mode": "advisory"
+      }
+    },
+    "optimized": {
+      "workers": [
+        "codex"
+      ],
+      "reviewers": [],
+      "reviewPolicy": {
+        "mode": "advisory"
+      }
+    },
+    "multi": {
+      "workers": [],
+      "reviewers": [
+        "codex",
+        "deepseek",
+        "kimi",
+        "glm",
+        "mimo"
+      ],
+      "maxParallel": 5,
+      "maxInputBytes": 700000,
+      "reviewPolicy": {
+        "mode": "all-required",
+        "requiredReviewers": [
+          "codex",
+          "deepseek",
+          "kimi",
+          "glm",
+          "mimo"
+        ]
+      }
+    },
+    "multi-optimized": {
+      "workers": [
+        "codex"
+      ],
+      "reviewers": [
+        "codex",
+        "deepseek",
+        "kimi",
+        "glm",
+        "mimo"
+      ],
+      "maxParallel": 5,
+      "maxInputBytes": 700000,
+      "reviewPolicy": {
+        "mode": "all-required",
+        "requiredReviewers": [
+          "codex",
+          "deepseek",
+          "kimi",
+          "glm",
+          "mimo"
+        ]
+      }
+    },
+    "high-assurance": {
+      "workers": [
+        "codex"
+      ],
+      "reviewers": [
+        "codex",
+        "deepseek",
+        "kimi",
+        "glm",
+        "mimo"
+      ],
+      "maxParallel": 5,
+      "maxInputBytes": 700000,
+      "reviewPolicy": {
+        "mode": "all-required",
+        "requiredReviewers": [
+          "codex",
+          "deepseek",
+          "kimi",
+          "glm",
+          "mimo"
+        ]
+      },
+      "concurrency": {
+        "reviewers": 3
+      },
+      "packetPolicy": {
+        "mode": "adversarial",
+        "reviewersByRisk": {
+          "low": 1,
+          "medium": 1,
+          "high": 2,
+          "critical": 2
+        },
+        "minimumFamiliesByRisk": {
+          "low": 1,
+          "medium": 1,
+          "high": 2,
+          "critical": 2
+        },
+        "verificationReviewers": 1,
+        "lenses": [
+          "behavioral correctness, edge cases, and acceptance criteria",
+          "security, backward compatibility, and maintainability"
+        ],
+        "separateFixer": true,
+        "maxFixCycles": 2,
+        "blockingSeverities": [
+          "blocker",
+          "major"
+        ],
+        "budgets": {
+          "maxWorkerInvocations": 1,
+          "maxReviewerInvocations": 9,
+          "maxFixerInvocations": 2,
+          "maxReviewInputBytes": 6300000
+        }
+      }
+    }
+  }
+}

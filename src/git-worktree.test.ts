@@ -8,7 +8,9 @@ import {
   branchFor,
   createWorktree,
   parseShortstat,
+  remoteDefaultBranch,
   resolveBaseRef,
+  staleBaseNote,
   worktreeShortstat,
   worktreeSizeBytes,
 } from './git-worktree.js';
@@ -208,6 +210,34 @@ describe('worktreeShortstat (real git)', () => {
 
     // Only task.txt (1 add) — NOT the merged-in upstream lines.
     expect(await worktreeShortstat(r, 'main')).toEqual({ adds: 1, dels: 0, files: 1 });
+  });
+});
+
+describe('remoteDefaultBranch + staleBaseNote (run 9788d87f: a stale configured base hid tracked files)', () => {
+  it('reads the branch origin/HEAD points at, and null without a remote', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'cez-origin-'));
+    worktreeRoots.push(origin);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: origin });
+    writeFileSync(join(origin, 'a.txt'), '1\n');
+    await run('git', ['add', '-A'], { cwd: origin });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c1'], { cwd: origin });
+    const work = mkdtempSync(join(tmpdir(), 'cez-work-'));
+    worktreeRoots.push(work);
+    await run('git', ['clone', '-q', origin, work], { cwd: tmpdir() });
+    expect(await remoteDefaultBranch(work)).toBe('main');
+
+    const lone = mkdtempSync(join(tmpdir(), 'cez-lone-'));
+    worktreeRoots.push(lone);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: lone });
+    expect(await remoteDefaultBranch(lone)).toBeNull();
+  });
+
+  it('staleBaseNote warns only when the configured base is not the remote default', () => {
+    expect(staleBaseNote('develop', 'main')).toContain('"develop" is not the remote default "main"');
+    expect(staleBaseNote('main', 'main')).toBeNull();
+    expect(staleBaseNote('origin/main', 'main')).toBeNull();
+    // No remote → nothing to compare against; stay quiet.
+    expect(staleBaseNote('develop', null)).toBeNull();
   });
 });
 

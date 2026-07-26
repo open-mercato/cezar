@@ -62,6 +62,14 @@ describe('useRunnerModels', () => {
     expect(result.current.data?.models[0]?.id).toBe('gpt-future')
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/models?runner=codex')
   })
+
+  it('loads the OpenCode catalog under its own query key (2026-07-24)', async () => {
+    fetchMock.mockResolvedValue(json({ runner: 'opencode', models: [{ id: 'deepseek/deepseek-v4-pro', label: 'deepseek-v4-pro', description: 'via deepseek' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels(true, 'opencode'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.models[0]?.id).toBe('deepseek/deepseek-v4-pro')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/models?runner=opencode')
+  })
 })
 
 describe('queryKeys', () => {

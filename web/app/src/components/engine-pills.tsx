@@ -92,7 +92,7 @@ export function EnginePills({
 }) {
   const { runner, model, runners } = useResolvedEngine(pick)
   const config = useConfig()
-  const catalog = useRunnerModels()
+  const catalog = useRunnerModels(true, runner === 'opencode' ? 'opencode' : 'codex')
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
 
   return (
