@@ -67,4 +67,34 @@ describe('WorkspaceAutomationScheduler', () => {
     expect(scheduler.hasTimer()).toBe(true);
     scheduler.stop();
   });
+
+  it('keeps one timer when overlapping reschedules resolve out of order', async () => {
+    vi.useFakeTimers();
+    try {
+      const { store } = await setup();
+      const releases: Array<() => void> = [];
+      const coordinator = {
+        refresh: () => new Promise<void>((resolve) => releases.push(resolve)),
+        enabledProjectIds: () => ['p'],
+        store: () => store,
+      };
+      const scheduler = new WorkspaceAutomationScheduler({
+        coordinator: coordinator as never,
+        handle: () => ({ projectId: 'p', owner: 'acme', repo: 'demo', store, poller: { poll: async () => ({ candidates: [], truncated: false, pages: 1 }) } as never }),
+      });
+      const started = scheduler.start();
+      releases.shift()!();
+      await started;
+      const first = scheduler.reschedule();
+      const second = scheduler.reschedule();
+      releases.pop()!();
+      await second;
+      releases.shift()!();
+      await first;
+      expect(vi.getTimerCount()).toBe(1);
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -130,6 +130,7 @@ export interface WorkspaceAutomationSchedulerOptions {
 export class WorkspaceAutomationScheduler {
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = true;
+  private scheduleGeneration = 0;
   constructor(private readonly options: WorkspaceAutomationSchedulerOptions) {}
 
   async start(): Promise<void> {
@@ -139,14 +140,17 @@ export class WorkspaceAutomationScheduler {
 
   async reschedule(): Promise<void> {
     if (this.stopped) return;
+    const generation = ++this.scheduleGeneration;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     await this.options.coordinator.refresh();
+    if (this.stopped || generation !== this.scheduleGeneration) return;
     this.schedule();
   }
 
   stop(): void {
     this.stopped = true;
+    this.scheduleGeneration += 1;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }
