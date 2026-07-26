@@ -75,8 +75,8 @@ Implement zero-configuration, bounded GitHub polling automations that launch ord
 
 ### Phase 3: Cockpit foundations
 
-- [ ] 3.1 Extract and reuse the New task configuration model and serializer without changing the run API.
-- [ ] 3.2 Add Automations navigation, list/editor/log routes, API/query hooks, setup links, responsive states, accessibility, and React tests.
+- [x] 3.1 Extract and reuse the New task configuration model and serializer without changing the run API. — a2d80d4e
+- [x] 3.2 Add Automations navigation, list/editor/log routes, API/query hooks, setup links, responsive states, accessibility, and React tests. — 03afd2f4
 
 ### Phase 4: GitHub detection and scheduling
 
