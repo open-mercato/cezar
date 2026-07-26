@@ -43,7 +43,7 @@ Prevent authenticated remote cockpit sessions from being interrupted by recurrin
 
 ### Phase 1: Authenticated request boundary
 
-- [ ] 1.1 Make the typed HTTP client explicitly include same-origin credentials for every request and cover the boundary with client tests.
+- [x] 1.1 Make the typed HTTP client explicitly include same-origin credentials for every request and cover the boundary with client tests. — 0f44be53
 
 ### Phase 2: Session-safe check cadence
 
