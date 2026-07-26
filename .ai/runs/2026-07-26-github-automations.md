@@ -66,7 +66,7 @@ Implement zero-configuration, bounded GitHub polling automations that launch ord
 ### Phase 1: Contracts and persistence
 
 - [x] 1.1 Add schemas, compatibility fixtures, bounded defaults, and unknown-field tests. — 4d12fa99
-- [ ] 1.2 Add atomic definitions/state persistence, append-only receipts/logs, salvage, compaction, leases, and gitignore maintenance.
+- [x] 1.2 Add atomic definitions/state persistence, append-only receipts/logs, salvage, compaction, leases, and gitignore maintenance. — 365e655d
 
 ### Phase 2: Workspace and API integration
 
