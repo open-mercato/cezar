@@ -304,6 +304,19 @@ export class RunManager {
   /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
   private readonly monitoring = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
+  /** Interrupted agent turns recovered after a process restart. Unlike an
+   *  explicit user Continue, these are bulk scheduler work and must re-enter
+   *  through `pump()` so both workspace and per-project caps are honored. */
+  private readonly pendingContinuations = new Map<
+    string,
+    {
+      stepId: string;
+      sessionId: string | undefined;
+      backend: RunnerId;
+      prompt: string;
+      images: ContentBlock[];
+    }
+  >();
   /** Per-run image counter behind `pasted-<n>` / `screenshot-<n>` (#472). Lives on
    *  the manager rather than the `ActiveRun` so a *queued* run — which has no
    *  `ActiveRun` at all — can persist attachments. Seeded lazily from disk. */
@@ -384,6 +397,7 @@ export class RunManager {
     this.starting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
+    this.pendingContinuations.clear();
     this.memoryPausing.clear();
     this.lastNamerKey.clear();
   }
@@ -607,9 +621,32 @@ export class RunManager {
           const runId = this.queue.shift();
           if (!runId) break;
           const job = this.pendingJobs.get(runId);
+          const continuation = this.pendingContinuations.get(runId);
           this.pendingJobs.delete(runId);
-          if (!job) continue;
+          this.pendingContinuations.delete(runId);
+          if (!job && !continuation) continue;
           this.starting.add(runId);
+          if (continuation) {
+            void this.runContinuation(
+              runId,
+              continuation.stepId,
+              continuation.sessionId,
+              continuation.backend,
+              continuation.prompt,
+              continuation.images,
+            ).catch((err: unknown) => {
+              const message = err instanceof Error ? err.message : String(err);
+              this.store.updateRun(runId, {
+                status: 'failed',
+                error: `continue crashed: ${message}`,
+                finishedAt: new Date().toISOString(),
+              });
+              this.starting.delete(runId);
+              this.dropActive(runId);
+            });
+            continue;
+          }
+          if (!job) continue;
           // Rebuild the prompt from the store at the last instant (#472), so an edit
           // or a stacked message that landed while the run waited is honored. Entered
           // in the same synchronous tick as the `pendingJobs.delete` above, so no
@@ -726,9 +763,13 @@ export class RunManager {
         finishedAt,
         currentStepId: undefined,
       });
-      const resumed = this.continueRun(run.id, {
-        text: 'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.',
-      });
+      const resumed = this.continueRun(
+        run.id,
+        {
+          text: 'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.',
+        },
+        true,
+      );
       this.store.appendEvent(run.id, {
         type: 'lifecycle',
         message: resumed.ok
@@ -848,6 +889,7 @@ export class RunManager {
     if (queuedAt >= 0) {
       this.queue.splice(queuedAt, 1);
       this.pendingJobs.delete(runId);
+      this.pendingContinuations.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
       return true;
@@ -1200,6 +1242,9 @@ export class RunManager {
   continueRun(
     runId: string,
     opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string } = {},
+    /** Restart recovery may discover several interrupted tasks at once. Those
+     *  continuations are queued; an explicit user Continue remains immediate. */
+    deferForCapacity = false,
   ): { ok: boolean; error?: string } {
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
@@ -1254,13 +1299,32 @@ export class RunManager {
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
+    const prompt = opts.text?.trim() || 'Continue.';
+    const images = opts.images ?? [];
+    if (deferForCapacity) {
+      this.pendingContinuations.set(runId, {
+        stepId,
+        sessionId: resume ? sessionStep.sessionId : undefined,
+        backend: targetRunner,
+        prompt,
+        images,
+      });
+      this.queue.push(runId);
+      this.store.updateRun(runId, {
+        status: 'queued',
+        error: undefined,
+        finishedAt: undefined,
+        currentStepId: undefined,
+      });
+      return { ok: true };
+    }
     void this.runContinuation(
       runId,
       stepId,
       resume ? sessionStep.sessionId : undefined,
       targetRunner,
-      opts.text?.trim() || 'Continue.',
-      opts.images ?? [],
+      prompt,
+      images,
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
