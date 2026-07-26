@@ -39,8 +39,8 @@ Remove the production build's oversized-chunk warning by splitting the stable Re
 
 ### Phase 1: Configure focused runtime splitting
 
-- [ ] 1.1 Add a named React-runtime code-splitting group to the cockpit Vite configuration.
-- [ ] 1.2 Add a regression test that locks in the focused group and default warning threshold.
+- [x] 1.1 Add a named React-runtime code-splitting group to the cockpit Vite configuration. — ba7024ff
+- [x] 1.2 Add a regression test that locks in the focused group and default warning threshold. — ba7024ff
 
 ### Phase 2: Verify the shipped build
 
