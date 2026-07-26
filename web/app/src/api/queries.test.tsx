@@ -474,7 +474,7 @@ describe('useSkills', () => {
 })
 
 describe('useSkillsUpdate', () => {
-  it('polls a transient snapshot until the background server check converges', async () => {
+  it('retries a transient snapshot conservatively until the background server check converges', async () => {
     fetchMock.mockResolvedValue(json({
       status: 'idle',
       available: false,
@@ -497,9 +497,12 @@ describe('useSkillsUpdate', () => {
     const query = client.getQueryCache().find({ queryKey: key })
     const interval = query?.observers[0]?.options.refetchInterval
     expect(typeof interval).toBe('function')
-    expect((interval as (current: typeof query) => number | false)(query)).toBe(1_000)
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(10_000)
 
     client.setQueryData(key, { ...result.current.data!, status: 'current' })
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
+
+    client.setQueryData(key, { ...result.current.data!, status: 'available' })
     expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
   })
 })

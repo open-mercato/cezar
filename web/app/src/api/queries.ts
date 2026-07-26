@@ -726,12 +726,13 @@ export function useSkillsUpdate(projectId: string, enabled = true) {
     queryFn: ({ signal }) => getSkillsUpdate(projectId, { signal }),
     enabled,
     // GET deliberately answers the current snapshot and starts a stale check in the
-    // background. Poll only while that snapshot is transient so an initial `idle`
-    // response converges without turning every open cockpit into a permanent poller.
+    // background. Retry only while that snapshot is transient so an initial `idle`
+    // response converges. Checks may legitimately take tens of seconds, so a ten-second
+    // cadence avoids flooding the local API while still refreshing promptly after completion.
     refetchInterval: (query) => {
       const status = query.state.data?.status
       return status === undefined || status === 'idle' || status === 'checking' || status === 'updating'
-        ? 1_000
+        ? 10_000
         : false
     },
   })
