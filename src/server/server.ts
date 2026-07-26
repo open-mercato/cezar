@@ -1,5 +1,12 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.js';
+import {
+  automationEventSchema,
+  automationFiltersSchema,
+  automationTaskSchema,
+  type AutomationDefinition,
+} from '../automations/types.js';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -199,6 +206,37 @@ const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
 const providerRetrySchema = z.object({
   authFailureId: z.string().min(1).max(128),
 }).strict();
+
+const automationEditableSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    description: z.string().max(2_000).optional(),
+    enabled: z.boolean().optional(),
+    events: z.array(automationEventSchema).min(1).max(4),
+    intervalSeconds: z.number().int().min(60).max(86_400),
+    filters: automationFiltersSchema,
+    task: automationTaskSchema,
+  })
+  .strict();
+const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
+const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
+const automationCheckSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
+const automationLogQuerySchema = z.object({
+  automationId: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(100),
+});
+
+function editableAutomation(definition: AutomationDefinition) {
+  return {
+    name: definition.name,
+    description: definition.description,
+    enabled: definition.enabled,
+    events: definition.events,
+    intervalSeconds: definition.intervalSeconds,
+    filters: definition.filters,
+    task: definition.task,
+  };
+}
 
 /** One row of the mirrored project-route table. */
 export interface ProjectRouteInfo {
@@ -2136,6 +2174,136 @@ export function createApp(deps: ServerDeps): Hono {
     const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
     if (blocked) return c.json({ error: blocked }, 409);
     return c.json(await planChain(repoRoot, parsed.data.task));
+  });
+
+  // ---- GitHub automations --------------------------------------------------
+
+  const manualChecks = new Map<string, { id: string; automationId: string; mode: 'preview' | 'execute'; status: 'queued'; createdAt: string }>();
+
+  api.get('/automations', async (c) => {
+    const { root, automationStore } = c.get('project');
+    const forge = resolveForge(await getRepoInfo(root));
+    const availability = forge?.detectCached() ?? {
+      available: false,
+      reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
+    };
+    const automations = automationStore.list().map((automation) => ({
+      ...automation,
+      state: automationStore.state(automation.id),
+      latestLog: automationStore.logs({ automationId: automation.id, limit: 1 })[0],
+    }));
+    return c.json({
+      ...availability,
+      scheduler: {
+        state: automations.some((item) => item.enabled) ? 'scheduled' : 'idle',
+        nextDue: automations.map((item) => item.state?.nextCheckAt).filter(Boolean).sort()[0],
+      },
+      automations,
+    });
+  });
+
+  api.post('/automations', async (c) => {
+    const { automationStore } = c.get('project');
+    const parsed = automationCreateSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    const { enable, ...input } = parsed.data;
+    try {
+      const automation = automationStore.create({ ...input, enabled: enable === true });
+      if (enable) {
+        const baselineAt = new Date().toISOString();
+        automationStore.setState(automation.id, {
+          revision: automation.revision,
+          baselineAt,
+          cursor: { timestamp: baselineAt },
+          nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
+        });
+      }
+      return c.json({ automation }, 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  api.get('/automations/:id', (c) => {
+    const { automationStore } = c.get('project');
+    const automation = automationStore.get(c.req.param('id'));
+    return automation
+      ? c.json({ automation, state: automationStore.state(automation.id), latestLog: automationStore.logs({ automationId: automation.id, limit: 1 })[0] })
+      : c.json({ error: 'not found' }, 404);
+  });
+
+  api.put('/automations/:id', async (c) => {
+    const { automationStore } = c.get('project');
+    const parsed = automationUpdateSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    const { expectedRevision, ...input } = parsed.data;
+    if (!automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+    try {
+      return c.json({ automation: automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false }) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json({ error: message }, message.includes('conflict') ? 409 : 400);
+    }
+  });
+
+  api.delete('/automations/:id', (c) =>
+    c.get('project').automationStore.delete(c.req.param('id'))
+      ? c.body(null, 204)
+      : c.json({ error: 'not found' }, 404));
+
+  api.post('/automations/:id/enable', (c) => {
+    const store = c.get('project').automationStore;
+    const current = store.get(c.req.param('id'));
+    if (!current) return c.json({ error: 'not found' }, 404);
+    const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: true });
+    const baselineAt = new Date().toISOString();
+    store.setState(automation.id, {
+      ...store.state(automation.id),
+      revision: automation.revision,
+      baselineAt,
+      cursor: { timestamp: baselineAt },
+      nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
+    });
+    store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+    return c.json({ automation });
+  });
+
+  api.post('/automations/:id/pause', (c) => {
+    const store = c.get('project').automationStore;
+    const current = store.get(c.req.param('id'));
+    if (!current) return c.json({ error: 'not found' }, 404);
+    return c.json({ automation: store.update(current.id, current.revision, { ...editableAutomation(current), enabled: false }) });
+  });
+
+  api.post('/automations/:id/check', async (c) => {
+    const store = c.get('project').automationStore;
+    const automation = store.get(c.req.param('id'));
+    if (!automation) return c.json({ error: 'not found' }, 404);
+    const parsed = automationCheckSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    const id = randomUUID();
+    manualChecks.set(id, { id, automationId: automation.id, mode: parsed.data.mode, status: 'queued', createdAt: new Date().toISOString() });
+    return c.json({ checkId: id }, 202);
+  });
+
+  api.get('/automation-checks/:checkId', (c) => {
+    const check = manualChecks.get(c.req.param('checkId'));
+    return check ? c.json(check) : c.json({ error: 'not found' }, 404);
+  });
+
+  api.get('/automation-log', (c) => {
+    const parsed = automationLogQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    return c.json({ records: c.get('project').automationStore.logs(parsed.data) });
+  });
+
+  api.post('/automation-log/:receiptId/retry', (c) => {
+    const store = c.get('project').automationStore;
+    const receipt = [...store.latestReceipts().values()].find((row) => row.receiptId === c.req.param('receiptId'));
+    if (!receipt) return c.json({ error: 'not found' }, 404);
+    if (receipt.status !== 'launch-error' || receipt.runId) return c.json({ error: 'receipt is not retryable' }, 409);
+    store.appendReceipt({ ...receipt, status: 'reserved', error: undefined, updatedAt: new Date().toISOString() });
+    return c.json({ receiptId: receipt.receiptId }, 202);
   });
 
   // ---- runs ----------------------------------------------------------------
