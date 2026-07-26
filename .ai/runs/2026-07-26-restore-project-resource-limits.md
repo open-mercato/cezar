@@ -48,3 +48,4 @@ PR: #693
 
 - [x] 2.1 Add a regression test proving recovery starts only one interrupted task when the project cap is one and leaves the remainder queued. — 2641fa20
 - [x] 2.2 Run targeted workflow tests and the complete configured validation gate. — 5cace4fd
+- [x] Post-review fix: reconstruct a queued continuation after a repeated restart and cover the idempotent recovery path. — 99eb0f09
