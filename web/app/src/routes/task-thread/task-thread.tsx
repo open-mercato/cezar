@@ -44,6 +44,7 @@ import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
+import { useRunRecordReconcile } from './run-reconcile'
 import { useActiveProviderAvailability } from './active-provider'
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import { ThreadLoading } from './thread-loading'
@@ -75,6 +76,10 @@ export function TaskThreadRoute() {
   const run = useRun(id)
   const events = useRunEvents(id)
   const thread = useMemo(() => reduceThread(events), [events])
+  // The two feeds can drift: a record update lost on the workspace stream leaves the thread
+  // showing Working… over a "run finished" transcript. The transcript is live here, so it
+  // arbitrates — a session end with no session after it refetches a record still claiming one.
+  useRunRecordReconcile(run.data, events)
 
   if (run.isPending) return <ThreadLoading />
 

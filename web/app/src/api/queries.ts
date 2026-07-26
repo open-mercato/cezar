@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 
 import {
+  ApiError,
   browseFs,
   checkoutProject,
   getAgentConfig,
@@ -215,7 +216,13 @@ export function useProviderStatus() {
         response,
       )
     },
-    refetchInterval: 30_000,
+    // One bootstrap per session cache. Runtime incidents arrive over the workspace stream and
+    // user-driven Connect/Check again/Try again actions update this same key immediately; a
+    // background interval only re-probes unchanged credentials and can repeatedly challenge a
+    // reverse-proxy-authenticated mobile browser. A focus refresh is allowed once the answer is
+    // five minutes old, covering credentials changed outside cezar without permanent polling.
+    staleTime: 5 * 60_000,
+    refetchInterval: false,
     refetchOnWindowFocus: true,
   })
 }
@@ -727,12 +734,13 @@ export function useSkillsUpdate(projectId: string, enabled = true) {
     enabled,
     // GET deliberately answers the current snapshot and starts a stale check in the
     // background. Retry only while that snapshot is transient so an initial `idle`
-    // response converges. Checks may legitimately take tens of seconds, so a ten-second
-    // cadence avoids flooding the local API while still refreshing promptly after completion.
+    // response converges. Checks may legitimately take tens of seconds, so a one-minute cadence
+    // avoids repeatedly challenging authenticated remote sessions while still converging after
+    // a long-running operation. The initial mount remains the session's one automatic check.
     refetchInterval: (query) => {
       const status = query.state.data?.status
       return status === undefined || status === 'idle' || status === 'checking' || status === 'updating'
-        ? 10_000
+        ? 60_000
         : false
     },
   })
@@ -766,12 +774,20 @@ export function usePatchRun(id: string) {
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself
  *  grows over SSE (`user-message`, then the agent's turn); the invalidation refreshes the
  *  record (status flips waiting → running). Errors are the CALLER's to surface — the composer
- *  restores the draft and toasts, so no toast fires here. */
+ *  restores the draft and toasts, so no toast fires here. A 409 ("session closed") still
+ *  invalidates: it means the cached record claimed a live session the server no longer has, so
+ *  the refetch flips the composer to its closed/Continue form instead of leaving it aimed at a
+ *  session that will keep refusing. */
 export function useSendMessage(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (message: MessageInput) => sendMessage(id, message),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+      }
+    },
   })
 }
 

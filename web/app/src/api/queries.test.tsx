@@ -156,27 +156,9 @@ describe('provider status workspace query', () => {
     expect(workspaceQueryKeys.providerStatus).toEqual(['workspace', 'providers', 'status'])
   })
 
-  it('polls exactly every 30 seconds', async () => {
-    vi.useFakeTimers()
-    fetchMock.mockResolvedValue(json(PROVIDERS))
-    const { result } = renderHook(() => useProviderStatus(), { wrapper: wrapper() })
-
-    await act(() => vi.advanceTimersByTimeAsync(0))
-    expect(result.current.isSuccess).toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-
-    await act(() => vi.advanceTimersByTimeAsync(29_999))
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    await act(() => vi.advanceTimersByTimeAsync(1))
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-  })
-
-  it('refetches on window focus', async () => {
+  it('loads once without interval polling and becomes focus-refreshable after five minutes', async () => {
     fetchMock.mockResolvedValue(json(PROVIDERS))
     const client = createQueryClient()
-    client.setDefaultOptions({
-      queries: { ...client.getDefaultOptions().queries, staleTime: 0 },
-    })
     const { result } = renderHook(() => useProviderStatus(), {
       wrapper: ({ children }: { children: ReactNode }) => (
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -185,6 +167,25 @@ describe('provider status workspace query', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    const query = client.getQueryCache().find({ queryKey: workspaceQueryKeys.providerStatus })
+    expect(query?.observers[0]?.options.refetchInterval).toBe(false)
+    expect(query?.observers[0]?.options.staleTime).toBe(5 * 60_000)
+  })
+
+  it('refetches on window focus', async () => {
+    fetchMock.mockResolvedValue(json(PROVIDERS))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const query = client.getQueryCache().find({ queryKey: workspaceQueryKeys.providerStatus })
+    if (!query) throw new Error('provider status query was not created')
+    query.setState({ ...query.state, dataUpdatedAt: Date.now() - 5 * 60_000 - 1 })
     window.dispatchEvent(new Event('visibilitychange'))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
   })
@@ -497,7 +498,7 @@ describe('useSkillsUpdate', () => {
     const query = client.getQueryCache().find({ queryKey: key })
     const interval = query?.observers[0]?.options.refetchInterval
     expect(typeof interval).toBe('function')
-    expect((interval as (current: typeof query) => number | false)(query)).toBe(10_000)
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(60_000)
 
     client.setQueryData(key, { ...result.current.data!, status: 'current' })
     expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
