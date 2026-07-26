@@ -976,6 +976,47 @@ export interface CreateRunInput {
   todoId?: string
 }
 
+export type AutomationEvent =
+  | 'pull_request.opened'
+  | 'issue.opened'
+  | 'issue.labeled'
+  | 'issue.unlabeled'
+
+export interface AutomationDefinition {
+  id: string
+  revision: number
+  name: string
+  description?: string
+  enabled: boolean
+  events: AutomationEvent[]
+  intervalSeconds: number
+  filters: {
+    authors?: string[]
+    assignees?: string[]
+    allLabels?: string[]
+    anyLabels?: string[]
+    excludeLabels?: string[]
+    changedLabels?: string[]
+    lookbackDays: number
+    maxRecords: number
+  }
+  task: Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string }
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AutomationsResponse {
+  available: boolean
+  reason?: string
+  scheduler: { state: string; nextDue?: string }
+  automations: Array<AutomationDefinition & { state?: { nextCheckAt?: string; lastSuccessAt?: string } }>
+}
+
+export type CreateAutomationInput = Omit<
+  AutomationDefinition,
+  'id' | 'revision' | 'createdAt' | 'updatedAt' | 'enabled'
+> & { enable?: boolean }
+
 export interface MessageInput {
   text?: string
   images?: ImageInput[]

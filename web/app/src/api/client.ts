@@ -1,5 +1,8 @@
 import type {
   AgentConfigFileContent,
+  AutomationsResponse,
+  AutomationDefinition,
+  CreateAutomationInput,
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
@@ -740,6 +743,29 @@ export function createRepoBranch(input: { name: string; from?: string }): Promis
  *  as a one-step plan with `fallback: true`, never as an error — only transport/validation fail. */
 export function postPlan(task: string): Promise<PlanResponse> {
   return mutate<PlanResponse>('POST', '/api/plan', { task })
+}
+
+export function getAutomations(opts?: ReadOptions): Promise<AutomationsResponse> {
+  return get<AutomationsResponse>('/api/automations', opts)
+}
+
+export function createAutomation(input: CreateAutomationInput): Promise<{ automation: AutomationDefinition }> {
+  return mutate<{ automation: AutomationDefinition }>('POST', '/api/automations', input)
+}
+
+export function updateAutomation(
+  id: string,
+  input: CreateAutomationInput & { expectedRevision: number; enabled?: boolean },
+): Promise<{ automation: AutomationDefinition }> {
+  return mutate<{ automation: AutomationDefinition }>('PUT', `/api/automations/${encodeURIComponent(id)}`, input)
+}
+
+export function setAutomationEnabled(id: string, enabled: boolean): Promise<{ automation: AutomationDefinition }> {
+  return mutate<{ automation: AutomationDefinition }>('POST', `/api/automations/${encodeURIComponent(id)}/${enabled ? 'enable' : 'pause'}`, {})
+}
+
+export function checkAutomation(id: string, mode: 'preview' | 'execute'): Promise<{ checkId: string }> {
+  return mutate<{ checkId: string }>('POST', `/api/automations/${encodeURIComponent(id)}/check`, { mode })
 }
 
 /** Save an approved plan as a reusable chain. A 409 carries `exists: true` on the ApiError —

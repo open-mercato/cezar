@@ -70,6 +70,7 @@ describe('AppShell', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Automations',
       'Skills',
       'Workflows',
       'Settings',
@@ -80,6 +81,7 @@ describe('AppShell', () => {
       '/inbox',
       '/git',
       '/github',
+      '/automations',
       '/skills',
       '/workflows',
       '/settings',
@@ -92,7 +94,7 @@ describe('AppShell', () => {
     renderShell('/', { forgeAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    expect(links).toHaveLength(NAV_ITEMS.length - 1)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
   })
 
   describe('active nav state follows the current route', () => {
