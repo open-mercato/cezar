@@ -467,6 +467,10 @@ export function reduceThread(events: RunEvent[]): ThreadState {
         const turn = currentTurn()
         if (turn.v2Items) break
         const name = str(event.tool) ?? 'Tool'
+        // Codex collaboration bookkeeping has no user-facing meaning. Protocol
+        // v2 normalizes it into task rows and parented child tools; old/mixed
+        // recordings can still carry a receiver-less v1 wait in a child turn.
+        if (CODEX_COLLAB_BOOKKEEPING.has(name)) break
         const display = toolDisplay(name, event.input)
         if (display.toolKind === 'plan') {
           // v1-only fallback: the dock's data lives in the TodoWrite input on old transcripts.
@@ -681,3 +685,5 @@ export function reduceThread(events: RunEvent[]): ThreadState {
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
   }
 }
+
+const CODEX_COLLAB_BOOKKEEPING = new Set(['subAgentActivity', 'collabAgentToolCall', 'collabToolCall'])
