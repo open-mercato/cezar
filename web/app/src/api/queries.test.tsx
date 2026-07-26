@@ -66,6 +66,7 @@ const HEALTH = {
   repo: { root: '/home/me/cezar', branch: 'main' },
   checks: [],
   defaultRunner: 'claude',
+  capabilities: { localHandoff: true, followups: false, singleProject: false },
 }
 
 /** Just enough WebSocket for useHealth's topic subscription (api/ws.ts): records the frames the
@@ -595,6 +596,32 @@ describe('useHealth', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('uses authenticated HTTP only in remote mode and never starts the WebSocket reconnect loop', async () => {
+    FakeHealthSocket.instances = []
+    vi.stubGlobal('WebSocket', FakeHealthSocket)
+    fetchMock.mockResolvedValue(json({
+      ...HEALTH,
+      capabilities: { ...HEALTH.capabilities, localHandoff: false },
+    }))
+    const client = createQueryClient()
+    const scopedWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(
+      () => {
+        useHealthSubscription()
+        return useHealth()
+      },
+      { wrapper: scopedWrapper },
+    )
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(FakeHealthSocket.instances).toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({
+      credentials: 'include',
+    }))
   })
 })
 
