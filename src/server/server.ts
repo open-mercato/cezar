@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { AutomationStore } from '../automations/store.js';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -870,6 +871,7 @@ export function createApp(deps: ServerDeps): Hono {
     dataDir: bootDataDir,
     store: deps.store,
     manager: deps.manager,
+    automationStore: AutomationStore.open(bootDataDir),
     launchKey: ensureLaunchKey(bootDataDir), // bookmarklet auto-start secret (spec 011)
   };
   // Non-boot projects build lazily on first scoped request; their managers

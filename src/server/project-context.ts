@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { AutomationStore } from '../automations/store.js';
 import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.js';
 import { pruneOrphans } from '../git-worktree.js';
 import { reclaimWorktrees } from '../runs/retention.js';
@@ -33,6 +34,7 @@ export interface ProjectContext {
   dataDir: string;
   store: RunStore;
   manager: RunManager;
+  automationStore: AutomationStore;
   /** Bookmarklet auto-start secret (spec 011), ensured at context build. */
   launchKey: string;
 }
@@ -202,6 +204,7 @@ export class ProjectContexts {
     // keepLive + recover() (#367), same as serveCommand: runs that were live
     // when this project's context last existed are re-queued or resumed.
     const store = RunStore.open(dataDir, { keepLive: true });
+    const automationStore = AutomationStore.open(dataDir);
     this.notifyStoreCreated(store);
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore });
     try {
@@ -219,7 +222,7 @@ export class ProjectContexts {
         await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
       }
       await manager.recover();
-      return { id: project.id, root: project.root, dataDir, store, manager, launchKey };
+      return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.
       teardown({ store, manager });
