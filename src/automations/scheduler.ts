@@ -134,6 +134,13 @@ export class WorkspaceAutomationScheduler {
 
   async start(): Promise<void> {
     this.stopped = false;
+    await this.reschedule();
+  }
+
+  async reschedule(): Promise<void> {
+    if (this.stopped) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
     await this.options.coordinator.refresh();
     this.schedule();
   }

@@ -187,6 +187,8 @@ export interface ServerDeps {
    *  to the HTTP server it binds. Optional so legacy callers/tests change
    *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
   socketHub?: SocketHub;
+  /** Re-arm the workspace automation timer after definition mutations. */
+  automationsChanged?: () => void;
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -937,6 +939,7 @@ export function createApp(deps: ServerDeps): Hono {
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
   const emitAutomationChange = (project: ProjectContext, automationId: string, revision: number) =>
     workspaceEvents.emit('automation-change', { project: project.id, automationId, revision });
+  const automationsChanged = () => deps.automationsChanged?.();
 
   const providerRuntimeAuth = deps.providerRuntimeAuth
     ?? new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -2252,6 +2255,7 @@ export function createApp(deps: ServerDeps): Hono {
         });
       }
       emitAutomationChange(c.get('project'), automation.id, automation.revision);
+      automationsChanged();
       return c.json({ automation }, 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -2277,6 +2281,7 @@ export function createApp(deps: ServerDeps): Hono {
     try {
       const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false });
       emitAutomationChange(c.get('project'), automation.id, automation.revision);
+      automationsChanged();
       return c.json({ automation });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2288,6 +2293,7 @@ export function createApp(deps: ServerDeps): Hono {
     const id = c.req.param('id');
     if (!c.get('project').automationStore.delete(id)) return c.json({ error: 'not found' }, 404);
     emitAutomationChange(c.get('project'), id, 0);
+    automationsChanged();
     return c.body(null, 204);
   });
 
@@ -2306,6 +2312,7 @@ export function createApp(deps: ServerDeps): Hono {
     });
     store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
     emitAutomationChange(c.get('project'), automation.id, automation.revision);
+    automationsChanged();
     return c.json({ automation });
   });
 
@@ -2315,6 +2322,7 @@ export function createApp(deps: ServerDeps): Hono {
     if (!current) return c.json({ error: 'not found' }, 404);
     const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: false });
     emitAutomationChange(c.get('project'), automation.id, automation.revision);
+    automationsChanged();
     return c.json({ automation });
   });
 
@@ -2327,6 +2335,7 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
     const id = randomUUID();
     const check: ManualCheck = { id, automationId: automation.id, mode: parsed.data.mode, status: 'queued', createdAt: new Date().toISOString() };
+    if (manualChecks.size >= 200) manualChecks.delete(manualChecks.keys().next().value!);
     manualChecks.set(id, check);
     void (async () => {
       check.status = 'running';
@@ -3964,7 +3973,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
   const sharedContexts = deps.contexts ?? new ProjectContexts({ listProjects, semaphore: deps.semaphore });
-  const app = createApp({ ...deps, contexts: sharedContexts, workspaceEvents, skillsUpdate, socketHub });
+  let rescheduleAutomations = () => {};
+  const app = createApp({ ...deps, contexts: sharedContexts, workspaceEvents, skillsUpdate, socketHub, automationsChanged: () => rescheduleAutomations() });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
   // expose an agent-executing box to the network. `bindHost` exists only for a deliberate
@@ -4009,17 +4019,26 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       };
     },
   });
+  rescheduleAutomations = () => { void automationScheduler.reschedule(); };
   const unsubscribe = workspaceEvents.on((event, data) => {
     if (event === 'project-added') {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
       if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
         coordinator.add(project.id, project.root);
-        void automationCoordinator.refresh();
+        void getRepoInfo(project.root).then((info) => {
+          const parsed = parseRemote(info?.remote ?? '');
+          if (parsed?.host === 'github.com') automationProjects.set(project.id as string, { root: project.root as string, owner: parsed.owner, repo: parsed.repo });
+          return automationScheduler.reschedule();
+        });
       }
     } else if (event === 'project-removed') {
       const id = (data as { id?: unknown }).id;
       if (typeof id === 'string') coordinator.remove(id);
-      if (typeof id === 'string') { automationCoordinator.remove(id); automationProjects.delete(id); }
+      if (typeof id === 'string') {
+        automationCoordinator.remove(id);
+        automationProjects.delete(id);
+        void automationScheduler.reschedule();
+      }
     }
   });
   server.once('listening', () => {

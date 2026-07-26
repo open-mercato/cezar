@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from './store.js';
-import { ProjectAutomationScheduler } from './scheduler.js';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from './scheduler.js';
 
 const dirs: string[] = [];
 afterEach(async () => Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))));
@@ -43,5 +43,28 @@ describe('ProjectAutomationScheduler', () => {
     await expect(scheduler.check(definition)).rejects.toThrow('rate limited');
     expect(store.state(definition.id)?.cursor?.timestamp).toBe('2026-07-26T01:00:00.000Z');
     expect(store.state(definition.id)).toMatchObject({ consecutiveFailures: 1, backoffUntil: expect.any(String) });
+  });
+});
+
+describe('WorkspaceAutomationScheduler', () => {
+  it('arms its first timer when a definition is enabled after startup', async () => {
+    const { store, definition } = await setup();
+    store.update(definition.id, definition.revision, { ...definition, enabled: false });
+    const coordinator = {
+      refresh: vi.fn(async () => undefined),
+      enabledProjectIds: () => store.list().some((item) => item.enabled) ? ['p'] : [],
+      store: () => store,
+    };
+    const scheduler = new WorkspaceAutomationScheduler({
+      coordinator: coordinator as never,
+      handle: () => ({ projectId: 'p', owner: 'acme', repo: 'demo', store, poller: { poll: async () => ({ candidates: [], truncated: false, pages: 1 }) } as never }),
+    });
+    await scheduler.start();
+    expect(scheduler.hasTimer()).toBe(false);
+    const paused = store.get(definition.id)!;
+    store.update(paused.id, paused.revision, { ...paused, enabled: true });
+    await scheduler.reschedule();
+    expect(scheduler.hasTimer()).toBe(true);
+    scheduler.stop();
   });
 });
