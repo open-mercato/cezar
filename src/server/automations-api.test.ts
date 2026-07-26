@@ -62,11 +62,19 @@ describe('GitHub automation API', () => {
     expect(((await detail.json()) as any).state).toMatchObject({ revision: 2, baselineAt: expect.any(String) });
   });
 
-  it('queues preview checks without writing receipts', async () => {
-    const created = ((await (await apiRequest(app(), '/api/automations', json(input))).json()) as any).automation;
-    const queued = await apiRequest(app(), `/api/automations/${created.id}/check`, json({ mode: 'preview' }));
+  it('runs preview checks asynchronously without writing receipts', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/automations', json(input))).json()) as any).automation;
+    const queued = await apiRequest(server, `/api/automations/${created.id}/check`, json({ mode: 'preview' }));
     expect(queued.status).toBe(202);
-    const list = await apiRequest(app(), '/api/automations');
+    const { checkId } = (await queued.json()) as { checkId: string };
+    let check: { status: string } = { status: 'queued' };
+    for (let attempt = 0; attempt < 20 && check.status !== 'error'; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      check = (await (await apiRequest(server, `/api/automation-checks/${checkId}`)).json()) as { status: string };
+    }
+    expect(check.status).toBe('error');
+    const list = await apiRequest(server, '/api/automations');
     expect(((await list.json()) as any).automations).toHaveLength(1);
     expect(readFileOrEmpty(join(root, '.ai/cezar/automation-receipts.ndjson'))).toBe('');
   });

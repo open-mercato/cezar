@@ -1,7 +1,9 @@
 import type {
   AgentConfigFileContent,
   AutomationsResponse,
+  AutomationCheck,
   AutomationDefinition,
+  AutomationLogRecord,
   CreateAutomationInput,
   AgentConfigListing,
   ApiRun,
@@ -766,6 +768,14 @@ export function setAutomationEnabled(id: string, enabled: boolean): Promise<{ au
 
 export function checkAutomation(id: string, mode: 'preview' | 'execute'): Promise<{ checkId: string }> {
   return mutate<{ checkId: string }>('POST', `/api/automations/${encodeURIComponent(id)}/check`, { mode })
+}
+
+export function getAutomationCheck(id: string, opts?: ReadOptions): Promise<AutomationCheck> {
+  return get<AutomationCheck>(`/api/automation-checks/${encodeURIComponent(id)}`, opts)
+}
+
+export function getAutomationLog(id: string, opts?: ReadOptions): Promise<{ records: AutomationLogRecord[] }> {
+  return get<{ records: AutomationLogRecord[] }>(`/api/automation-log?automationId=${encodeURIComponent(id)}`, opts)
 }
 
 /** Save an approved plan as a reusable chain. A 409 carries `exists: true` on the ApiError —

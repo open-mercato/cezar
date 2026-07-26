@@ -1020,6 +1020,34 @@ export interface AutomationsResponse {
   automations: Array<AutomationDefinition & { state?: { nextCheckAt?: string; lastSuccessAt?: string } }>
 }
 
+export interface AutomationCheck {
+  id: string
+  automationId: string
+  mode: 'preview' | 'execute'
+  status: 'queued' | 'running' | 'complete' | 'error'
+  createdAt: string
+  completedAt?: string
+  matches?: number
+  truncated?: boolean
+  error?: string
+}
+
+export interface AutomationLogRecord {
+  seq: number
+  ts: string
+  automationId: string
+  revision: number
+  event?: AutomationEvent
+  result: 'launched' | 'no-match' | 'duplicate' | 'rate-limited' | 'error' | 'baseline'
+  reason?: string
+  durationMs?: number
+  receiptId?: string
+  runId?: string
+  githubNumber?: number
+  githubTitle?: string
+  githubUrl?: string
+}
+
 export type CreateAutomationInput = Omit<
   AutomationDefinition,
   'id' | 'revision' | 'createdAt' | 'updatedAt' | 'enabled'

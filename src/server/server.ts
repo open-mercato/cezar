@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.js';
 import { AutomationCoordinator } from '../automations/coordinator.js';
 import { GithubPoller } from '../automations/github-poller.js';
-import { WorkspaceAutomationScheduler } from '../automations/scheduler.js';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from '../automations/scheduler.js';
 import { launchAutomationRun, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.js';
 import {
   automationEventSchema,
@@ -2189,7 +2189,18 @@ export function createApp(deps: ServerDeps): Hono {
 
   // ---- GitHub automations --------------------------------------------------
 
-  const manualChecks = new Map<string, { id: string; automationId: string; mode: 'preview' | 'execute'; status: 'queued'; createdAt: string }>();
+  type ManualCheck = {
+    id: string;
+    automationId: string;
+    mode: 'preview' | 'execute';
+    status: 'queued' | 'running' | 'complete' | 'error';
+    createdAt: string;
+    completedAt?: string;
+    matches?: number;
+    truncated?: boolean;
+    error?: string;
+  };
+  const manualChecks = new Map<string, ManualCheck>();
 
   api.get('/automations', async (c) => {
     const { root, automationStore } = c.get('project');
@@ -2308,13 +2319,37 @@ export function createApp(deps: ServerDeps): Hono {
   });
 
   api.post('/automations/:id/check', async (c) => {
-    const store = c.get('project').automationStore;
+    const project = c.get('project');
+    const store = project.automationStore;
     const automation = store.get(c.req.param('id'));
     if (!automation) return c.json({ error: 'not found' }, 404);
     const parsed = automationCheckSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
     const id = randomUUID();
-    manualChecks.set(id, { id, automationId: automation.id, mode: parsed.data.mode, status: 'queued', createdAt: new Date().toISOString() });
+    const check: ManualCheck = { id, automationId: automation.id, mode: parsed.data.mode, status: 'queued', createdAt: new Date().toISOString() };
+    manualChecks.set(id, check);
+    void (async () => {
+      check.status = 'running';
+      try {
+        const remote = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
+        if (!remote || remote.host !== 'github.com') throw new Error('No GitHub remote is configured');
+        const scheduler = new ProjectAutomationScheduler({
+          projectId: project.id,
+          owner: remote.owner,
+          repo: remote.repo,
+          store,
+          poller: new GithubPoller(),
+          launch: parsed.data.mode === 'execute'
+            ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId })
+            : undefined,
+          onChange: (automationId, revision) => emitAutomationChange(project, automationId, revision),
+        });
+        const result = await scheduler.check(automation, parsed.data.mode);
+        Object.assign(check, { status: 'complete', completedAt: new Date().toISOString(), matches: result.candidates.length, truncated: result.truncated });
+      } catch (error) {
+        Object.assign(check, { status: 'error', completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
     return c.json({ checkId: id }, 202);
   });
 

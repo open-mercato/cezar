@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, readTestEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 
 /**
  * The ⌘K command palette (Step 4.3) against the shared dev env, driven the way a user drives
@@ -18,9 +18,11 @@ const HINT = '[data-slot="command-palette-hint"]'
 
 let browser: AgentBrowser
 let baseUrl: string
+let bootProject: string
 
-beforeAll(() => {
+beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
+  bootProject = await bootProjectId(baseUrl)
   browser = AgentBrowser.open(runId)
   browser.setViewport(1440, 900)
 })
@@ -50,7 +52,7 @@ describe('command palette', () => {
     browser.screenshot(`${artifactsDir}/command-palette-filtered.png`)
 
     browser.press('Enter')
-    browser.waitForFunction(`location.pathname === '/workflows'`)
+    browser.waitForFunction(`location.pathname === '/p/${bootProject}/workflows'`)
     browser.waitForFunction(`document.querySelector('${ROOT}') === null`)
     expect(browser.url()).toContain('/workflows')
     expect(browser.count(ROOT)).toBe(0)

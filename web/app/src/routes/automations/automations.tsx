@@ -2,8 +2,8 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 import { ClockIcon, PlayIcon, PlusIcon, WorkflowIcon } from 'lucide-react'
 
-import { checkAutomation, createAutomation, getAutomations, setAutomationEnabled, updateAutomation } from '@/api/client'
-import type { AutomationDefinition, AutomationsResponse } from '@/api/types'
+import { checkAutomation, createAutomation, getAutomationCheck, getAutomationLog, getAutomations, setAutomationEnabled, updateAutomation } from '@/api/client'
+import type { AutomationDefinition, AutomationLogRecord, AutomationsResponse } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,6 +18,7 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   const projectId = useActiveProjectId()
   const [data, setData] = useState<AutomationsResponse>()
   const [error, setError] = useState('')
+  const [checkStatus, setCheckStatus] = useState<Record<string, string>>({})
   const refresh = () => getAutomations().then(setData).catch((cause) => setError(String(cause)))
   useEffect(() => { void refresh() }, [])
   useEffect(() => onWorkspaceEvent((name, payload) => {
@@ -26,14 +27,36 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
     if (typeof changed.project === 'string' && (projectId === null || changed.project === projectId)) void refresh()
   }), [projectId])
 
-  if (mode === 'new') return <AutomationEditor onSaved={() => navigate('/automations')} />
+  if (mode === 'new') return <AutomationEditor onSaved={() => { navigate('/automations'); void refresh() }} />
   if (mode === 'edit') {
     const automation = data?.automations.find((item) => item.id === automationId)
-    return automation ? <AutomationEditor automation={automation} onSaved={() => navigate('/automations')} /> : <PageState text="Loading automation…" />
+    return automation ? <AutomationEditor automation={automation} onSaved={() => { navigate('/automations'); void refresh() }} /> : <PageState text="Loading automation…" />
   }
   if (mode === 'log') {
     const automation = data?.automations.find((item) => item.id === automationId)
-    return <PageFrame title="Execution log" subtitle={automation?.name ?? 'Automation activity'}><PageState text="Detailed evaluations and launched task links appear here after checks run." /></PageFrame>
+    return automationId
+      ? <AutomationLog automationId={automationId} automationName={automation?.name} />
+      : <PageState text="Automation not found." />
+  }
+
+  const preview = async (automation: AutomationDefinition) => {
+    setCheckStatus((current) => ({ ...current, [automation.id]: 'Checking…' }))
+    try {
+      const { checkId } = await checkAutomation(automation.id, 'preview')
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const check = await getAutomationCheck(checkId)
+        if (check.status === 'complete') {
+          setCheckStatus((current) => ({ ...current, [automation.id]: `${check.matches ?? 0} match${check.matches === 1 ? '' : 'es'} found; no tasks launched.` }))
+          void refresh()
+          return
+        }
+        if (check.status === 'error') throw new Error(check.error ?? 'Preview failed')
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      throw new Error('Preview is still running')
+    } catch (cause) {
+      setCheckStatus((current) => ({ ...current, [automation.id]: cause instanceof Error ? cause.message : String(cause) }))
+    }
   }
 
   return (
@@ -57,11 +80,12 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
                     <span className="rounded-full border px-2 py-1 text-xs">{automation.enabled ? 'Enabled' : 'Paused'}</span>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" onClick={() => void checkAutomation(automation.id, 'preview')}><PlayIcon />Test filter</Button>
+                    <Button size="sm" variant="outline" onClick={() => void preview(automation)} disabled={checkStatus[automation.id] === 'Checking…'}><PlayIcon />Test filter</Button>
                     <Button size="sm" variant="outline" onClick={() => void setAutomationEnabled(automation.id, !automation.enabled).then(refresh)}>{automation.enabled ? 'Pause' : 'Enable'}</Button>
                     <Button size="sm" variant="ghost" asChild><Link to={`/automations/${automation.id}`}>Edit</Link></Button>
                     <Button size="sm" variant="ghost" asChild><Link to={`/automations/${automation.id}/log`}>View log</Link></Button>
                   </div>
+                  {checkStatus[automation.id] && <p className="mt-3 text-sm text-muted-foreground" role="status">{checkStatus[automation.id]}</p>}
                 </article>
               ))}
             </div>
@@ -70,6 +94,33 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
       )}
     </PageFrame>
   )
+}
+
+function AutomationLog({ automationId, automationName }: { automationId: string; automationName?: string }) {
+  const [records, setRecords] = useState<AutomationLogRecord[]>()
+  const [error, setError] = useState('')
+  const refresh = () => getAutomationLog(automationId).then(({ records: next }) => setRecords(next)).catch((cause) => setError(String(cause)))
+  useEffect(() => { void refresh() }, [automationId])
+  useEffect(() => onWorkspaceEvent((name, payload) => {
+    if (name === 'automation-change' && (payload as { automationId?: unknown }).automationId === automationId) void refresh()
+  }), [automationId])
+  return <PageFrame title="Execution log" subtitle={automationName ?? 'Automation activity'} action={<Button variant="outline" asChild><Link to="/automations">Back to automations</Link></Button>}>
+    {error ? <PageState text={error} /> : !records ? <PageState text="Loading execution log…" /> : records.length === 0 ? <PageState text="No checks have run yet." /> : (
+      <ol className="grid gap-3" aria-label="Automation execution log">
+        {records.map((record) => <li key={record.seq} className="rounded-xl border bg-card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium capitalize">{record.result.replace('-', ' ')}</span>
+            <time className="text-xs text-muted-foreground" dateTime={record.ts}>{new Date(record.ts).toLocaleString()}</time>
+          </div>
+          {record.reason && <p className="mt-2 text-sm text-muted-foreground">{record.reason}</p>}
+          {(record.githubUrl || record.runId) && <div className="mt-3 flex flex-wrap gap-3 text-sm">
+            {record.githubUrl && <a className="underline underline-offset-4" href={record.githubUrl} target="_blank" rel="noreferrer">{record.githubTitle ?? `GitHub #${record.githubNumber ?? ''}`}</a>}
+            {record.runId && <Link className="underline underline-offset-4" to={`/runs/${record.runId}`}>Open task</Link>}
+          </div>}
+        </li>)}
+      </ol>
+    )}
+  </PageFrame>
 }
 
 function AutomationEditor({ automation, onSaved }: { automation?: AutomationDefinition; onSaved: () => void }) {
