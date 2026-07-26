@@ -166,7 +166,12 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
 
 async function send(path: string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(scopeApiPath(path), init)
+    // Be explicit at the shared boundary: remote installations are commonly protected by
+    // reverse-proxy Basic Auth, and every background query/mutation must reuse that authenticated
+    // browser session just like navigation does. `include` is harmless for the root-relative,
+    // same-origin paths enforced above and prevents an individual call site from silently losing
+    // credentials when the browser/proxy combination is stricter than the fetch default.
+    return await fetch(scopeApiPath(path), { ...init, credentials: 'include' })
   } catch (cause) {
     // The request never got an answer. Not an HTTP failure — hence status 0 — but callers get
     // one error type either way instead of two.

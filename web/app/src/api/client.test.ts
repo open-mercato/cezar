@@ -71,7 +71,7 @@ const VALID_PROVIDER_STATUS = {
 }
 
 /** The (path, init) the client actually asked for. */
-function lastCall(): { path: string; method: string; body: unknown; headers: Headers } {
+function lastCall(): { path: string; method: string; body: unknown; headers: Headers; credentials: RequestCredentials | undefined } {
   const call = fetchMock.mock.calls.at(-1)
   if (!call) throw new Error('fetch was never called')
   const [path, init = {}] = call as [string, RequestInit]
@@ -80,6 +80,7 @@ function lastCall(): { path: string; method: string; body: unknown; headers: Hea
     method: String(init.method),
     body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
     headers: new Headers(init.headers),
+    credentials: init.credentials,
   }
 }
 
@@ -292,6 +293,7 @@ describe('request shapes', () => {
     expect(sent.path).toBe(path)
     expect(sent.method).toBe(method)
     expect(sent.body).toEqual(body)
+    expect(sent.credentials).toBe('include')
     if (body !== undefined) expect(sent.headers.get('content-type')).toBe('application/json')
   })
 
