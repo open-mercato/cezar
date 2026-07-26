@@ -38,8 +38,8 @@ Prevent the skills update status query from flooding the local API while a bound
 
 ### Phase 1: Fix and regression coverage
 
-- [ ] 1.1 Increase the transient skills-update snapshot retry interval to a conservative cadence and document why it remains a bounded convergence poll.
-- [ ] 1.2 Extend the query-hook regression test to assert the exact cadence and that terminal states stop polling.
+- [x] 1.1 Increase the transient skills-update snapshot retry interval to a conservative cadence and document why it remains a bounded convergence poll. — da94c02a
+- [x] 1.2 Extend the query-hook regression test to assert the exact cadence and that terminal states stop polling. — da94c02a
 
 ### Phase 2: Verification and handoff
 
