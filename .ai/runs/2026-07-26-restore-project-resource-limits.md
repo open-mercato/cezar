@@ -39,10 +39,10 @@ Ensure tasks restored after a Cezar restart re-enter execution through the works
 
 ### Phase 1: Route recovery through capacity gates
 
-- [ ] 1.1 Add a queued continuation representation that the existing scheduler can admit under both workspace and per-project limits.
-- [ ] 1.2 Use the queued continuation path for interrupted `running` records restored by `recover()`, while retaining immediate interactive continuation.
+- [x] 1.1 Add a queued continuation representation that the existing scheduler can admit under both workspace and per-project limits. — e032ad0f
+- [x] 1.2 Use the queued continuation path for interrupted `running` records restored by `recover()`, while retaining immediate interactive continuation. — e032ad0f
 
 ### Phase 2: Lock in restart behavior
 
-- [ ] 2.1 Add a regression test proving recovery starts only one interrupted task when the project cap is one and leaves the remainder queued.
+- [x] 2.1 Add a regression test proving recovery starts only one interrupted task when the project cap is one and leaves the remainder queued. — 2641fa20
 - [ ] 2.2 Run targeted workflow tests and the complete configured validation gate.
