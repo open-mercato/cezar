@@ -34,8 +34,9 @@ export const STALE_RECORD_GRACE_MS = 2_000
  * The seq of the transcript's last session end, when that end is the latest session boundary —
  * 0 when the stream says a session is (or may be) live. `session.ended` is the sink's one
  * guaranteed end-of-session line (ui-event-sink.ts persists it exactly once per session, on
- * every exit path); `step-start` / `session.started` mark a session opening after it (a
- * Continue, a follow-up step), which makes an older end stale history, not news.
+ * every exit path); `session.started` or an agent `step-start` marks a session opening after it
+ * (a Continue, a follow-up agent step), which makes an older end stale history, not news. Check
+ * steps do not open agent sessions and therefore must not hide the preceding settle signal.
  */
 export function settledSessionSeq(events: RunEvent[]): number {
   let lastEnd = 0
@@ -43,7 +44,11 @@ export function settledSessionSeq(events: RunEvent[]): number {
   for (const event of events) {
     if (typeof event.seq !== 'number') continue
     if (event.type === 'session.ended' && event.seq > lastEnd) lastEnd = event.seq
-    if ((event.type === 'session.started' || event.type === 'step-start') && event.seq > lastStart)
+    if (
+      (event.type === 'session.started' ||
+        (event.type === 'step-start' && event.kind === 'agent')) &&
+      event.seq > lastStart
+    )
       lastStart = event.seq
   }
   return lastEnd > lastStart ? lastEnd : 0

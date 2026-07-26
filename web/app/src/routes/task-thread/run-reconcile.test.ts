@@ -42,8 +42,21 @@ describe('settledSessionSeq', () => {
   })
 
   it('a session opening after the end (Continue) makes the end history, not news', () => {
-    const events = [line(1, 'step-start'), line(8, 'session.ended'), line(9, 'step-start')]
+    const events = [
+      line(1, 'step-start', { kind: 'agent' }),
+      line(8, 'session.ended'),
+      line(9, 'step-start', { kind: 'agent' }),
+    ]
     expect(settledSessionSeq(events)).toBe(0)
+  })
+
+  it('a check step after the end does not hide the settled agent session', () => {
+    const events = [
+      line(1, 'step-start', { kind: 'agent' }),
+      line(8, 'session.ended'),
+      line(9, 'step-start', { kind: 'check' }),
+    ]
+    expect(settledSessionSeq(events)).toBe(8)
   })
 
   it('session.started counts as an opening too', () => {
@@ -53,9 +66,9 @@ describe('settledSessionSeq', () => {
 
   it('across several sessions the LAST boundary decides', () => {
     const events = [
-      line(1, 'step-start'),
+      line(1, 'step-start', { kind: 'agent' }),
       line(8, 'session.ended'),
-      line(9, 'step-start'),
+      line(9, 'step-start', { kind: 'agent' }),
       line(20, 'session.ended'),
     ]
     expect(settledSessionSeq(events)).toBe(20)
@@ -124,7 +137,7 @@ describe('useRunRecordReconcile', () => {
     vi.useFakeTimers()
     const events = [line(8, 'session.ended')]
     const { rerender, invalidate } = renderReconcile(run(), events)
-    rerender({ r: run(), e: [...events, line(9, 'step-start')] })
+    rerender({ r: run(), e: [...events, line(9, 'step-start', { kind: 'agent' })] })
     vi.advanceTimersByTime(STALE_RECORD_GRACE_MS * 2)
     expect(invalidate).not.toHaveBeenCalled()
   })
