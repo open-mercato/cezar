@@ -364,8 +364,10 @@ export function useCheckoutProject() {
  * not any one view. Subscribing per `useHealth` consumer instead would tie that global signal to
  * ~15 component lifecycles — the topic would flap `subscribe`/`unsubscribe` on every mount,
  * unmount and StrictMode remount, and would drop entirely for any instant no consumer happened
- * to be mounted. One root-level subscription keeps it live continuously, so the cockpit is
- * always notified when health changes; the `useHealth` readers below just read the cache it fills.
+ * to be mounted. One root-level subscription keeps local cockpits live continuously, so they are
+ * always notified when health changes; remote cockpits stay on authenticated HTTP because browser
+ * WebSocket cannot carry proxy credentials explicitly. The `useHealth` readers below just read
+ * the cache either transport fills.
  *
  * The cache key is read inside the callback (`queryKeys.health` is a scope-aware getter), so a
  * project switch routes each pushed snapshot to the active scope's cache without re-subscribing.
