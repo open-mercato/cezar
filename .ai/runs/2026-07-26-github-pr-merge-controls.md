@@ -48,13 +48,13 @@ Add scannable requirement status icons to the GitHub pull-request merge box and 
 
 ### Phase 1: Merge policy contract
 
-- [ ] 1.1 Extend merge contracts and classify overridable requirements
-- [ ] 1.2 Enforce hard merge safeguards and test override behavior
+- [x] 1.1 Extend merge contracts and classify overridable requirements — 21a27c92
+- [x] 1.2 Enforce hard merge safeguards and test override behavior — 21a27c92
 
 ### Phase 2: Visual merge controls
 
-- [ ] 2.1 Add accessible requirement status icons
-- [ ] 2.2 Add explicit override selection, confirmation, and component tests
+- [x] 2.1 Add accessible requirement status icons — f22b5472
+- [x] 2.2 Add explicit override selection, confirmation, and component tests — f22b5472
 
 ### Phase 3: Verification
 
