@@ -19,7 +19,7 @@ import { useParams } from 'react-router'
 import { Link, Navigate } from '@/lib/project-router'
 
 import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
-import { queryKeys, useGithub, useGithubComments, useGithubPrChanges, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
@@ -66,22 +66,29 @@ import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-d
  * `/github/prs`, `/github/issues/:n`, `/github/prs/:n`. PR rows also carry a compact checks
  * glyph (#400) — the same tones as the detail pane's `ChecksBadge`, just the symbol.
  *
- * Data keeps the legacy two-shot load (feedback 2026-07-11: the 30-item `gh` default hid the
- * rest): the fast default batch paints the tab, then a background everything-open fetch
- * (limit 1000) replaces it and fixes the counts — until it lands, a count at the fast-batch
- * cap renders as `30+`, because "30 of who knows" must not read as exactly 30.
+ * Data loads in ONE fast shot (#664): the list call no longer fetches `statusCheckRollup` — the
+ * CI rollup for every open PR was the dominant cost and forced the old two-shot `30 → 1000`
+ * pattern — so a single `limit`-capped fetch paints the whole open set quickly and search works
+ * across it immediately. Each PR row's checks glyph is then hydrated lazily, for the on-screen
+ * rows only, via `useGithubChecks` (`GET /api/github/checks`), the same way comment counts fill
+ * in a beat later. A cheap React-Query prefetch on row hover/focus warms the thread so an opened
+ * item is usually instant. (Cursor pagination + "Load more"/infinite scroll + row virtualization
+ * are the Phase 2 follow-up.)
  *
  * Gating: the nav item is hidden by the shell when health reports no forge — but the URL
  * stays reachable (pasted links), so an unavailable payload renders the honest explainer
  * with the server's own reason, never an error.
  */
 
-/** The server's default batch (`/api/github` limit). A count AT this cap is "cap of who
- *  knows" until the full fetch lands — the tabs say `30+`. */
-const FAST_BATCH = 30
+/** The single fast list fetch (`/api/github` limit). No longer split into a fast batch + a slow
+ *  everything-open shot — dropping `statusCheckRollup` from the list made one fetch of the whole
+ *  open set cheap. A count AT this cap still reads `N+`, since the open set may exceed it. */
+const LIST_LIMIT = 1000
 
-/** The background "everything open" fetch — same number the legacy tab used. */
-const FULL_LIMIT = 1000
+/** How many on-screen PR rows one checks request covers (matches the server's `GH_CHECKS_MAX`).
+ *  The visible window is hydrated first; without virtualization (Phase 2) rows past this stay
+ *  glyph-less, exactly as a PR with no CI would. */
+const CHECKS_WINDOW = 100
 
 export type GithubView = 'issues' | 'prs'
 
@@ -104,13 +111,29 @@ export function GithubIndexRoute() {
 
 export function GithubRoute({ view, changes = false }: { view: GithubView; changes?: boolean }) {
   const { n } = useParams()
-  const fast = useGithub()
-  // Two-shot: the full fetch waits for the fast one to prove the forge reachable.
-  const full = useGithub({ limit: FULL_LIMIT }, fast.data?.available === true)
-  // The full batch replaces the fast one only when it is a real answer (legacy rule — a
-  // failed background fetch leaves the fast batch standing, counts just keep their "+").
-  const gh = full.data?.available ? full.data : fast.data
-  const isFull = full.data?.available === true
+  // One fast shot now that the list dropped `statusCheckRollup` (#664) — no more fast/full swap.
+  const list = useGithub({ limit: LIST_LIMIT })
+  const gh = list.data
+
+  // Lazy checks glyphs for the on-screen PR window (#664). Hooks must run before the early
+  // returns below, so derive the PR numbers straight from the list payload rather than the
+  // post-filter `items`. The URL-selected PR is pinned into the window so the detail badge
+  // hydrates even when it sits past the row cap.
+  const selectedNumber = n === undefined ? null : Number.parseInt(n, 10)
+  const checkPrNumbers = useMemo(() => {
+    if (!gh?.available) return []
+    const nums = new Set<number>()
+    if (view === 'prs' && selectedNumber !== null && Number.isInteger(selectedNumber)) {
+      nums.add(selectedNumber)
+    }
+    for (const pr of gh.prs) {
+      if (nums.size >= CHECKS_WINDOW) break
+      nums.add(pr.number)
+    }
+    return [...nums]
+  }, [gh, view, selectedNumber])
+  const checksQuery = useGithubChecks(checkPrNumbers, view === 'prs')
+  const checksMap = checksQuery.data?.available ? checksQuery.data.checks : undefined
 
   const queryClient = useQueryClient()
 
@@ -141,11 +164,12 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const openThreadRef = useRef<{ kind: 'issue' | 'pr'; number: number } | null>(null)
 
   const refresh = useMutation({
-    mutationFn: () => getGithub({ refresh: true }),
+    mutationFn: () => getGithub({ refresh: true, limit: LIST_LIMIT }),
     onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.github({}), data)
-      // The refresh busted the server cache; the full batch must re-run against it.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.github({ limit: FULL_LIMIT }) })
+      // One list query now (#664) — patch it directly, then re-hydrate the visible checks window
+      // so glyphs track the fresh rows (they carry their own ≤60 s cache server-side).
+      queryClient.setQueryData(queryKeys.github({ limit: LIST_LIMIT }), data)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubChecks(checkPrNumbers) })
 
       // The open thread must be re-fetched with `refresh: true` (#525). Invalidating its key is
       // NOT enough, and was the bug in the first attempt: an invalidate re-requests
@@ -221,14 +245,14 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
 
   if (!gh) {
-    if (fast.isError) {
+    if (list.isError) {
       return (
         <div data-route="github" className="flex min-h-full flex-col">
           <CenteredState
             icon={<TriangleAlertIcon />}
             tone="danger"
             title="Could not load GitHub"
-            subtitle={fast.error.message}
+            subtitle={list.error.message}
           />
         </div>
       )
@@ -325,10 +349,10 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
           </div>
           <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
             <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
-              Issues · {countLabel(gh.issues.length, isFull)}
+              Issues · {countLabel(gh.issues.length)}
             </TabLink>
             <TabLink to="/github/prs" active={view === 'prs'} onClick={() => saveGithubView('prs')}>
-              Pull requests · {countLabel(gh.prs.length, isFull)}
+              Pull requests · {countLabel(gh.prs.length)}
             </TabLink>
           </div>
           <div className="mt-2.5 flex items-center gap-2 pb-3">
@@ -372,6 +396,7 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
                 colors={labelColors}
                 active={selected?.url === item.url}
                 queued={queued.has(item.url)}
+                checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
               />
             ))}
           </ul>
@@ -387,7 +412,13 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
         )}
       >
         {selected ? (
-          <GithubDetail item={selected} listPath={listPath} colors={labelColors} changes={changes}>
+          <GithubDetail
+            item={selected}
+            listPath={listPath}
+            colors={labelColors}
+            changes={changes}
+            checks={selected.kind === 'pr' ? checksMap?.[selected.number] ?? selected.checks : selected.checks}
+          >
             <HandToAgent
               key={selected.url}
               item={selected}
@@ -421,9 +452,10 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   )
 }
 
-/** `30+` while the fast batch might be truncated; the plain number once the full fetch landed. */
-function countLabel(count: number, isFull: boolean): string {
-  return `${count}${!isFull && count >= FAST_BATCH ? '+' : ''}`
+/** The exact open count from the single fast fetch — with a `+` only when it hit the list cap, so
+ *  a repo with more than `LIST_LIMIT` open items reads honestly as "at least this many". */
+function countLabel(count: number): string {
+  return `${count}${count >= LIST_LIMIT ? '+' : ''}`
 }
 
 function GithubRow({
@@ -432,14 +464,28 @@ function GithubRow({
   colors,
   active,
   queued,
+  checks,
 }: {
   item: GithubItem
   view: GithubView
   colors: Record<string, string>
   active: boolean
   queued: boolean
+  /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
+  checks?: GithubItem['checks']
 }) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
+  const queryClient = useQueryClient()
+
+  // Warm the thread on hover/focus (#664) so opening the row is usually instant — best-effort,
+  // deduped by React Query, and it re-uses the mounted detail's exact query key/staleTime.
+  const prefetchThread = () => {
+    void queryClient.prefetchQuery({
+      queryKey: queryKeys.githubComments(item.kind, item.number),
+      queryFn: ({ signal }) => getGithubComments(item.kind, item.number, {}, { signal }),
+      staleTime: 60_000,
+    })
+  }
 
   // Drag an issue/PR row into the composer — it prefills the same prompt "Run agent on this
   // issue" uses (legacy parity); a textarea accepts the text/plain payload natively.
@@ -458,6 +504,8 @@ function GithubRow({
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
         draggable
         onDragStart={onDragStart}
+        onMouseEnter={prefetchThread}
+        onFocus={prefetchThread}
         data-slot="gh-row"
         data-number={item.number}
         aria-current={active ? 'page' : undefined}
@@ -481,7 +529,7 @@ function GithubRow({
           <span className="min-w-0 truncate">{item.author}</span>
           <span>{shortAge(item.createdAt)}</span>
           <CommentCount count={item.comments} />
-          {item.checks ? <ChecksGlyph checks={item.checks} /> : null}
+          {checks ? <ChecksGlyph checks={checks} /> : null}
           {queued ? (
             <span data-slot="gh-queued-flag" className="font-sans font-medium text-violet">
               ↗ run queued
@@ -583,12 +631,15 @@ function GithubDetail({
   colors,
   children,
   changes,
+  checks,
 }: {
   item: GithubItem
   listPath: string
   colors: Record<string, string>
   children: ReactNode
   changes: boolean
+  /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
+  checks?: GithubItem['checks']
 }) {
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
   const hasDiffStat = item.kind === 'pr' && Boolean(item.additions || item.deletions)
@@ -649,12 +700,12 @@ function GithubDetail({
         </nav>
       ) : null}
 
-      {item.labels.length > 0 || item.checks ? (
+      {item.labels.length > 0 || checks ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {item.labels.map((label) => (
             <LabelChip key={label} label={label} color={colors[label]} />
           ))}
-          {item.checks ? <ChecksBadge checks={item.checks} url={item.url} /> : null}
+          {checks ? <ChecksBadge checks={checks} url={item.url} /> : null}
         </div>
       ) : null}
 
@@ -710,8 +761,8 @@ function GithubMergeBox({ number }: { number: number }) {
       setConfirming(false)
       toast(`Pull request #${number} merged`)
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubMergeState(number) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.github({}) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.github({ limit: FULL_LIMIT }) })
+      // The single list query (#664) — a merged PR drops out of the open set on the next fetch.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.github({ limit: LIST_LIMIT }) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubComments('pr', number) })
     },
     onError: (error) => {

@@ -11,6 +11,7 @@ import {
   deleteRun,
   finishRun,
   getGithub,
+  getGithubChecks,
   getGroup,
   getHealth,
   getProviderStatus,
@@ -159,6 +160,12 @@ describe('request shapes', () => {
     // `refresh: false` must not become `refresh=0` — the server tests `=== '1'`, but sending a
     // parameter we do not mean is how a "false" ends up read as truthy somewhere downstream.
     { name: 'getGithub (refresh false)', call: () => getGithub({ refresh: false }), path: '/api/github', method: 'GET' },
+    {
+      name: 'getGithubChecks (#664)',
+      call: () => getGithubChecks([7, 12]),
+      path: '/api/github/checks?prs=7%2C12',
+      method: 'GET',
+    },
     {
       name: 'putUiState',
       call: () => putUiState({ runsView: 'table' }),
