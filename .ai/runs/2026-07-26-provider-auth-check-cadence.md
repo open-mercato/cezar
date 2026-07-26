@@ -36,6 +36,7 @@ Prevent authenticated remote cockpit sessions from being interrupted by recurrin
 
 - Provider status may remain stale for up to five minutes after credentials change outside cezar; explicit Check again and provider SSE events remain immediate recovery paths.
 - A skills update check may take up to one minute to appear complete in the shell after a long-running background operation; explicit controls remain immediate.
+- Review blocker: the authoritative review pass found no issues, but GitHub does not permit the PR author to submit an approval review. The PR remains a draft until an independent reviewer approves it and manual Basic Auth QA is completed.
 
 ## Progress
 
