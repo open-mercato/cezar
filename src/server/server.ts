@@ -1,6 +1,9 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.js';
+import { AutomationCoordinator } from '../automations/coordinator.js';
+import { GithubPoller } from '../automations/github-poller.js';
+import { WorkspaceAutomationScheduler } from '../automations/scheduler.js';
 import {
   automationEventSchema,
   automationFiltersSchema,
@@ -98,7 +101,7 @@ import { expandTilde } from '../paths.js';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.js';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.js';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.js';
-import { resolveForge } from './forge/index.js';
+import { parseRemote, resolveForge } from './forge/index.js';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.js';
 import { ensureLaunchKey } from './launch-key.js';
 import { openInTerminal } from './open-in-terminal.js';
@@ -3892,15 +3895,26 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   });
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
+  const automationProjects = new Map<string, { root: string; owner: string; repo: string }>();
+  const automationCoordinator = new AutomationCoordinator({ listProjects });
+  const automationScheduler = new WorkspaceAutomationScheduler({
+    coordinator: automationCoordinator,
+    handle: (projectId, store) => {
+      const project = automationProjects.get(projectId);
+      return project ? { projectId, owner: project.owner, repo: project.repo, store, poller: new GithubPoller() } : undefined;
+    },
+  });
   const unsubscribe = workspaceEvents.on((event, data) => {
     if (event === 'project-added') {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
       if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
         coordinator.add(project.id, project.root);
+        void automationCoordinator.refresh();
       }
     } else if (event === 'project-removed') {
       const id = (data as { id?: unknown }).id;
       if (typeof id === 'string') coordinator.remove(id);
+      if (typeof id === 'string') { automationCoordinator.remove(id); automationProjects.delete(id); }
     }
   });
   server.once('listening', () => {
@@ -3908,9 +3922,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       const all = projects.some((project) => project.root === deps.repoRoot)
         ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
       coordinator.start(all);
+      void Promise.all(all.map(async (project) => {
+        const parsed = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
+        if (parsed?.host === 'github.com') automationProjects.set(project.id, { root: project.root, owner: parsed.owner, repo: parsed.repo });
+      })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { unsubscribe(); coordinator.stop(); });
+  server.once('close', () => { unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return server;
 }
