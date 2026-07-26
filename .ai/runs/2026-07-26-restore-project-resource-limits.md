@@ -37,6 +37,8 @@ Ensure tasks restored after a Cezar restart re-enter execution through the works
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
+PR: #693
+
 ### Phase 1: Route recovery through capacity gates
 
 - [x] 1.1 Add a queued continuation representation that the existing scheduler can admit under both workspace and per-project limits. — e032ad0f
@@ -45,4 +47,4 @@ Ensure tasks restored after a Cezar restart re-enter execution through the works
 ### Phase 2: Lock in restart behavior
 
 - [x] 2.1 Add a regression test proving recovery starts only one interrupted task when the project cap is one and leaves the remainder queued. — 2641fa20
-- [ ] 2.2 Run targeted workflow tests and the complete configured validation gate.
+- [x] 2.2 Run targeted workflow tests and the complete configured validation gate. — 5cace4fd
