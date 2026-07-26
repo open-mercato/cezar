@@ -36,6 +36,8 @@ Prevent the skills update status query from flooding the local API while a bound
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
+PR: #682
+
 ### Phase 1: Fix and regression coverage
 
 - [x] 1.1 Increase the transient skills-update snapshot retry interval to a conservative cadence and document why it remains a bounded convergence poll. — da94c02a
@@ -43,4 +45,4 @@ Prevent the skills update status query from flooding the local API while a bound
 
 ### Phase 2: Verification and handoff
 
-- [ ] 2.1 Run targeted tests, the configured validation gate, and the authoritative PR review; address any findings.
+- [x] 2.1 Run targeted tests, the configured validation gate, and the authoritative PR review; address any findings. — 4069bb67
