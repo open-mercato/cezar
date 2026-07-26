@@ -792,6 +792,21 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(parked?.activity).toBeUndefined();
     expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(false);
   }, 30_000);
+
+  // Regression (blank-question bug): valid JSON that fails the ask schema used
+  // to be STRIPPED from the v1 text while emitting no ask.requested — the
+  // question vanished from the transcript entirely, leaving the user nothing
+  // to answer. An invalid marker must survive as raw text (degraded but
+  // answerable) and still park the run `waiting`.
+  it('a schema-invalid CEZ:ASK stays visible in v1 text — no card will ever render it', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-invalid choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    const assistantText = events.filter((e) => e.type === 'text');
+    expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
+  }, 30_000);
 });
 
 /**

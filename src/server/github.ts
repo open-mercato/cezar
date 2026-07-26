@@ -6,12 +6,14 @@
  */
 export {
   fetchGithub,
+  fetchGithubChecks,
   fetchGithubComments,
   fetchGithubPrDiff,
   GithubPrNotFoundError,
   GH_MAX_LIMIT,
+  GH_CHECKS_MAX,
 } from './forge/github.js';
-export type { GithubData, GithubItem } from './forge/github.js';
+export type { GithubData, GithubItem, GithubChecksData } from './forge/github.js';
 export type {
   ForgeComment,
   ForgeCommentsData,

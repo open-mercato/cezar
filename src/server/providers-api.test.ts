@@ -57,11 +57,13 @@ describe('workspace provider API', () => {
   let root: string;
   let store: RunStore;
   const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedRemote = process.env.CEZ_REMOTE;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cez-providers-api-'));
     store = RunStore.open(join(root, '.ai/cezar'));
     delete process.env.CEZ_DRY_RUN;
+    delete process.env.CEZ_REMOTE;
   });
 
   afterEach(() => {
@@ -69,6 +71,8 @@ describe('workspace provider API', () => {
     rmSync(root, { recursive: true, force: true });
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
+    if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
+    else process.env.CEZ_REMOTE = savedRemote;
   });
 
   const service = (

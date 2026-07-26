@@ -20,6 +20,7 @@ import type {
   FsBrowseResponse,
   GitCommitResponse,
   GitPushResponse,
+  GithubChecksData,
   GithubCommentsData,
   GithubData,
   GithubMergeMethod,
@@ -368,6 +369,17 @@ export function getGithub(
   if (params.refresh) query.set('refresh', '1')
   const search = query.toString()
   return get<GithubData>(`/api/github${search ? `?${search}` : ''}`, opts)
+}
+
+/** Lazy PR checks glyphs for on-screen rows (#664). The list call no longer ships
+ *  `statusCheckRollup`; this fills the glyph in per visible PR. Degrades to
+ *  `{ available: false, reason }` server-side — a missing glyph, never an ApiError. */
+export function getGithubChecks(
+  prNumbers: number[],
+  opts?: ReadOptions,
+): Promise<GithubChecksData> {
+  const search = new URLSearchParams({ prs: prNumbers.join(',') }).toString()
+  return get<GithubChecksData>(`/api/github/checks?${search}`, opts)
 }
 
 /** The full comment thread for one issue/PR (#499). Degrades to `{ available: false, reason }`

@@ -69,6 +69,13 @@ const resourcesSchema = z
   })
   .passthrough();
 
+const composerDefaultsSchema = z
+  .object({
+    autonomous: z.boolean().optional().catch(undefined),
+    worktree: z.boolean().optional().catch(undefined),
+  })
+  .passthrough();
+
 const workspacePathSchema = (envName: 'CEZ_BROWSE_ROOT' | 'CEZ_PROJECTS_DIR', fallback: string) => {
   const defaultValue = () => process.env[envName]?.trim() || fallback;
   return z.string().min(1).max(4096).default(defaultValue).catch(defaultValue);
@@ -107,6 +114,8 @@ const workspaceConfigSchema = z
     // Function-form default/catch: mutators (step 1.3's registerProject) edit
     // these objects in place, so parses must never share one reference.
     resources: resourcesSchema.default(() => ({})).catch(() => resourcesSchema.parse({})),
+    /** Optional New Task policy. Missing keys inherit exact 0/1 environment seeds. */
+    composerDefaults: composerDefaultsSchema.default(() => ({})).catch(() => ({})),
     /** Host-wide provider preferences; absent means every provider is enabled. */
     disabledProviders: disabledProvidersSchema,
     /** Per-entry salvage: a corrupt entry is dropped, the rest of the registry
@@ -136,6 +145,17 @@ export function effectiveSkillsAutoUpdate(
   if (env.CEZ_SKILLS_AUTO_UPDATE === '0') return false;
   if (env.CEZ_SKILLS_AUTO_UPDATE === '1') return true;
   return true;
+}
+
+export function effectiveComposerDefault(
+  stored: boolean | undefined,
+  envValue: string | undefined,
+  fallback: boolean,
+): boolean {
+  if (stored !== undefined) return stored;
+  if (envValue === '0') return false;
+  if (envValue === '1') return true;
+  return fallback;
 }
 
 /** The in-memory default — what a missing/corrupt file behaves like. */

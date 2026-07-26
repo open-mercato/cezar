@@ -315,7 +315,7 @@ function AgentsForm({
             onChange={(event) => save.mutate({ baseBranch: event.target.value || null })}
             className="block w-full max-w-md rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
           >
-            <option value="">current checkout (default)</option>
+            <option value="">follow checked-out branch (default)</option>
             {repo.data.branches.map((name) => (
               <option key={name} value={name}>
                 {name}

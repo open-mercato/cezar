@@ -23,6 +23,8 @@ describe('the workspace settings API (step 2.7)', () => {
   const savedBrowseRoot = process.env.CEZ_BROWSE_ROOT;
   const savedProjectsDir = process.env.CEZ_PROJECTS_DIR;
   const savedSkillsAutoUpdate = process.env.CEZ_SKILLS_AUTO_UPDATE;
+  const savedAutonomousDefault = process.env.CEZ_AUTONOMOUS_DEFAULT;
+  const savedWorktreeDefault = process.env.CEZ_WORKTREE_DEFAULT;
   let home: string;
   let repoRoot: string;
   let store: RunStore;
@@ -35,6 +37,8 @@ describe('the workspace settings API (step 2.7)', () => {
     delete process.env.CEZ_BROWSE_ROOT;
     delete process.env.CEZ_PROJECTS_DIR;
     delete process.env.CEZ_SKILLS_AUTO_UPDATE;
+    delete process.env.CEZ_AUTONOMOUS_DEFAULT;
+    delete process.env.CEZ_WORKTREE_DEFAULT;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-workspace-api-repo-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -61,6 +65,10 @@ describe('the workspace settings API (step 2.7)', () => {
     else process.env.CEZ_PROJECTS_DIR = savedProjectsDir;
     if (savedSkillsAutoUpdate === undefined) delete process.env.CEZ_SKILLS_AUTO_UPDATE;
     else process.env.CEZ_SKILLS_AUTO_UPDATE = savedSkillsAutoUpdate;
+    if (savedAutonomousDefault === undefined) delete process.env.CEZ_AUTONOMOUS_DEFAULT;
+    else process.env.CEZ_AUTONOMOUS_DEFAULT = savedAutonomousDefault;
+    if (savedWorktreeDefault === undefined) delete process.env.CEZ_WORKTREE_DEFAULT;
+    else process.env.CEZ_WORKTREE_DEFAULT = savedWorktreeDefault;
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -85,6 +93,12 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      composerDefaults: {
+        autonomous: null,
+        worktree: null,
+        inheritedAutonomous: 'source-dependent',
+        inheritedWorktree: true,
+      },
       resources: {
         maxParallel: 2,
         maxMonitoringSessions: 2,
@@ -117,6 +131,12 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      composerDefaults: {
+        autonomous: null,
+        worktree: null,
+        inheritedAutonomous: 'source-dependent',
+        inheritedWorktree: true,
+      },
       resources: {
         maxParallel: 5,
         maxMonitoringSessions: 3,
@@ -161,6 +181,27 @@ describe('the workspace settings API (step 2.7)', () => {
     const inherited = (await (await putConfig({ skillsAutoUpdate: null })).json()) as WorkspaceConfigResponse;
     expect(inherited).toMatchObject({ skillsAutoUpdate: null, effectiveSkillsAutoUpdate: false });
     expect(rawConfig().skillsAutoUpdate).toBeUndefined();
+  });
+
+  it('PUT stores and independently clears composer defaults while exposing env inheritance', async () => {
+    process.env.CEZ_AUTONOMOUS_DEFAULT = '1';
+    process.env.CEZ_WORKTREE_DEFAULT = '0';
+    const inherited = (await (await getConfig()).json()) as WorkspaceConfigResponse;
+    expect(inherited.composerDefaults).toEqual({
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: true,
+      inheritedWorktree: false,
+    });
+
+    const explicit = (await (await putConfig({
+      composerDefaults: { autonomous: false, worktree: true },
+    })).json()) as WorkspaceConfigResponse;
+    expect(explicit.composerDefaults).toMatchObject({ autonomous: false, worktree: true });
+    expect(rawConfig().composerDefaults).toMatchObject({ autonomous: false, worktree: true });
+
+    await putConfig({ composerDefaults: { worktree: null } });
+    expect(rawConfig().composerDefaults).toEqual({ autonomous: false });
   });
 
   it('rejects invalid auto-update values without writing', async () => {

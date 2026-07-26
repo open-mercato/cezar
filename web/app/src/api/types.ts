@@ -445,6 +445,12 @@ export interface WorkspaceConfigResponse {
   projectsDir: string
   skillsAutoUpdate: boolean | null
   effectiveSkillsAutoUpdate: boolean
+  composerDefaults?: {
+    autonomous: boolean | null
+    worktree: boolean | null
+    inheritedAutonomous: boolean | 'source-dependent'
+    inheritedWorktree: boolean
+  }
   resources: {
     maxParallel: number
     maxMonitoringSessions?: number
@@ -461,6 +467,10 @@ export interface SetWorkspaceConfigInput {
   browseRoot?: string
   projectsDir?: string
   skillsAutoUpdate?: boolean | null
+  composerDefaults?: {
+    autonomous?: boolean | null
+    worktree?: boolean | null
+  }
   resources?: {
     maxParallel?: number
     maxMonitoringSessions?: number
@@ -672,6 +682,8 @@ export interface DeleteWorkflowResponse {
 export interface Skill {
   name: string
   description?: string
+  /** Advisory hint for untouched composer run-mode choices. */
+  interactive?: true
   body: string
   path: string
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team'
@@ -750,6 +762,14 @@ export interface GithubData {
   /** Repo-wide label name → 6-hex color (no `#`); lets chips tint like GitHub. Additive. */
   labelColors?: Record<string, string>
 }
+
+/** `GET /api/github/checks?prs=…` (#664) — lazy PR checks glyphs, `number → glyph`. The list call
+ *  no longer ships `statusCheckRollup`, so a row's glyph is hydrated through this endpoint for the
+ *  on-screen rows only. Degrades to `{ available: false, reason }`; an absent number means "no
+ *  checks / not found". */
+export type GithubChecksData =
+  | { available: true; checks: Record<number, 'passing' | 'failing' | 'pending' | null> }
+  | { available: false; reason: string }
 
 export type GithubMergeMethod = 'merge' | 'squash' | 'rebase'
 
@@ -997,7 +1017,7 @@ export interface ConfigResponse {
 }
 
 /** `PUT /api/config` (Settings → Agents; the Repo tab's base-branch picker). `baseBranch: null`
- *  clears the setting back to "current checkout"; `systemPrompt` and per-runner `defaultModels`
+ *  clears the setting back to "follow checked-out branch"; `systemPrompt` and per-runner `defaultModels`
  *  entries clear on `null` (or `''`) too. Merged into the raw config.json server-side —
  *  `defaultModels` merges per runner, so one write never clobbers another runner's preset. */
 export interface SetConfigInput {

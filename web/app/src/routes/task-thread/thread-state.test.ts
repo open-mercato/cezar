@@ -763,12 +763,42 @@ describe('reduceThread — AskUser cards (#473)', () => {
     ).toBe(false)
   })
 
-  it('strips a CEZ:ASK marker from a v2 assistant message on display', () => {
+  it('strips a CEZ:ASK marker from a v2 assistant message when its turn holds the ask card', () => {
+    const markerJson = JSON.stringify({ questions: ASK.questions })
     const msg = allItems([
       line(1, 'item.completed', {
-        item: { kind: 'message', id: 'm1', role: 'assistant', text: 'Pick one.\n\nCEZ:ASK {"questions":[]}' },
+        item: { kind: 'message', id: 'm1', role: 'assistant', text: `Pick one.\n\nCEZ:ASK ${markerJson}` },
       }),
+      line(2, 'ask.requested', ASK),
     ]).find((i) => i.kind === 'message') as { text: string } | undefined
     expect(msg?.text).toBe('Pick one.')
+  })
+
+  // Regression (blank-question bug): a marker whose card never materialized —
+  // invalid payload, or the session died before turn-end emitted ask.requested —
+  // must stay visible. The card is the only other place the questions exist;
+  // stripping without it deletes the agent's question from the thread entirely.
+  it('keeps a CEZ:ASK marker visible when no ask card landed in the turn', () => {
+    const raw = 'Zanim pójdziemy dalej, trzy pytania:\n\nCEZ:ASK {"questions":[]}'
+    const msg = allItems([
+      line(1, 'item.completed', {
+        item: { kind: 'message', id: 'm1', role: 'assistant', text: raw },
+      }),
+    ]).find((i) => i.kind === 'message') as { text: string } | undefined
+    expect(msg?.text).toBe(raw)
+  })
+
+  it("an ask card in ANOTHER turn does not license stripping this turn's marker", () => {
+    const raw = 'Second turn question:\n\nCEZ:ASK {"questions":[]}'
+    const { turns } = reduceThread([
+      line(1, 'text', { text: 'options' }),
+      line(2, 'ask.requested', ASK),
+      line(3, 'user-message', { text: 'Library: date-fns', imageCount: 0 }),
+      line(4, 'item.completed', {
+        item: { kind: 'message', id: 'm2', role: 'assistant', text: raw },
+      }),
+    ])
+    const msg = turns.at(-1)!.items.find((i) => i.kind === 'message') as { text: string } | undefined
+    expect(msg?.text).toBe(raw)
   })
 })

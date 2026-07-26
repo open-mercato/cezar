@@ -174,8 +174,7 @@ export function sourceExists(
 
 /**
  * The effective source: the first candidate that still exists (the draft pick, then the
- * persisted `lastTask`), else the legacy default — skills first (feedback 2026-07-11: the
- * natural default is a skill, not a chain), else the first workflow, else quick-task.
+ * persisted `lastTask`), else the zero-config cold default: built-in quick-task.
  */
 export function resolveSource(
   candidates: ReadonlyArray<TaskSource | null | undefined>,
@@ -184,6 +183,9 @@ export function resolveSource(
 ): TaskSource {
   for (const candidate of candidates) {
     if (candidate && sourceExists(candidate, skills, workflows)) return candidate
+  }
+  if (workflows.some((workflow) => workflow.name === 'quick-task')) {
+    return { source: 'workflow', ref: 'quick-task' }
   }
   const firstSkill = skills[0]
   if (firstSkill) return { source: 'skill', ref: firstSkill.name }

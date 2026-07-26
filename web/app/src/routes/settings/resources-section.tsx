@@ -100,6 +100,18 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           toast(memoryNum === 0 ? 'Memory limit cleared' : `Memory limit set to ${memoryNum} MiB`),
       },
     )
+  const composerDefaults = config.composerDefaults ?? {
+    autonomous: null,
+    worktree: null,
+    inheritedAutonomous: 'source-dependent' as const,
+    inheritedWorktree: true,
+  }
+  const saveComposerDefault = (
+    key: 'autonomous' | 'worktree',
+    value: string,
+  ) => save.mutate({
+    composerDefaults: { [key]: value === 'inherit' ? null : value === 'on' },
+  })
 
   return (
     <div
@@ -238,6 +250,53 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         ) : (
           <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
         )}
+      </SettingsField>
+
+      <SettingsField
+        title="New task defaults"
+        hint="Set stable composer defaults across projects. Explicit choices and run-shape constraints still win."
+      >
+        <div className="grid gap-4 sm:grid-cols-2" data-slot="resources-composer-defaults">
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Autonomous by default</span>
+            <select
+              aria-label="Autonomous by default"
+              value={composerDefaults.autonomous === null ? 'inherit' : composerDefaults.autonomous ? 'on' : 'off'}
+              disabled={save.isPending}
+              onChange={(event) => saveComposerDefault('autonomous', event.target.value)}
+              className="rounded-md border border-input bg-card px-3 py-1.5 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <option value="inherit">Inherit environment</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+            <span className="text-[11px] text-soft-foreground">
+              Inherited: {composerDefaults.inheritedAutonomous === 'source-dependent'
+                ? 'Source-dependent — skills on, workflows off'
+                : composerDefaults.inheritedAutonomous ? 'On' : 'Off'}
+            </span>
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Use a worktree by default</span>
+            <select
+              aria-label="Use a worktree by default"
+              value={composerDefaults.worktree === null ? 'inherit' : composerDefaults.worktree ? 'on' : 'off'}
+              disabled={save.isPending}
+              onChange={(event) => saveComposerDefault('worktree', event.target.value)}
+              className="rounded-md border border-input bg-card px-3 py-1.5 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <option value="inherit">Inherit environment</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+            <span className="text-[11px] text-soft-foreground">
+              Inherited: {composerDefaults.inheritedWorktree ? 'On' : 'Off'}
+            </span>
+          </label>
+        </div>
+        <p className="text-[11px] text-soft-foreground">
+          Interactive skills may recommend both off. Multi-step and parallel runs remain isolated.
+        </p>
       </SettingsField>
     </div>
   )

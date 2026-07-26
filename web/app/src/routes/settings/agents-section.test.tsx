@@ -377,7 +377,7 @@ describe('the agents form', () => {
     expect(puts()).toHaveLength(0)
   })
 
-  it('base branch round-trips through the same PUT — "" means back to current checkout', async () => {
+  it('base branch round-trips through the same PUT — "" means follow the checked-out branch', async () => {
     serve({ config: { baseBranch: 'develop' } })
     renderAt('/settings/agents')
     await waitFor(() => expect(form()).not.toBeNull())

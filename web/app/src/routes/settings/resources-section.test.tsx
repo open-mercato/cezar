@@ -29,6 +29,12 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    composerDefaults: {
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: 'source-dependent',
+      inheritedWorktree: true,
+    },
     resources: { maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10, ...resources },
   }
   const json = (payload: unknown, status = 200) =>
@@ -183,5 +189,23 @@ describe('Global settings → Resources', () => {
     await waitFor(() => expect(parallelSelect()).not.toBeNull())
     expect(document.querySelector('[data-slot="resources-worktree-retention"]')).toBeNull()
     expect(screen.queryByText('Keep last N worktrees')).toBeNull()
+  })
+
+  it('renders and saves New task On/Off/Inherit policy', async () => {
+    serve()
+    renderResources()
+    const autonomous = await screen.findByLabelText('Autonomous by default')
+    const worktree = screen.getByLabelText('Use a worktree by default')
+    expect((autonomous as HTMLSelectElement).value).toBe('inherit')
+    expect(screen.getByText(/Source-dependent — skills on, workflows off/)).toBeTruthy()
+
+    fireEvent.change(autonomous, { target: { value: 'off' } })
+    await waitFor(() => expect(puts().at(-1)?.body).toEqual({
+      composerDefaults: { autonomous: false },
+    }))
+    fireEvent.change(worktree, { target: { value: 'on' } })
+    await waitFor(() => expect(puts().at(-1)?.body).toEqual({
+      composerDefaults: { worktree: true },
+    }))
   })
 })

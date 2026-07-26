@@ -7,6 +7,7 @@ import {
   atomicTmpPath,
   defaultWorkspaceConfig,
   effectiveSkillsAutoUpdate,
+  effectiveComposerDefault,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
 } from './config.js';
@@ -66,6 +67,7 @@ describe('workspace config', () => {
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
     expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.composerDefaults).toEqual({});
     expect(config.projects).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
@@ -108,6 +110,20 @@ describe('workspace config', () => {
     expect(effectiveSkillsAutoUpdate({}, { CEZ_SKILLS_AUTO_UPDATE: 'invalid' })).toBe(true);
     expect(effectiveSkillsAutoUpdate({ skillsAutoUpdate: false }, { CEZ_SKILLS_AUTO_UPDATE: '1' })).toBe(false);
     expect(effectiveSkillsAutoUpdate({ skillsAutoUpdate: true }, { CEZ_SKILLS_AUTO_UPDATE: '0' })).toBe(true);
+  });
+
+  it('resolves composer defaults as stored value, exact 0/1 env, then fallback', () => {
+    expect(effectiveComposerDefault(undefined, undefined, true)).toBe(true);
+    expect(effectiveComposerDefault(undefined, '0', true)).toBe(false);
+    expect(effectiveComposerDefault(undefined, '1', false)).toBe(true);
+    expect(effectiveComposerDefault(undefined, 'yes', false)).toBe(false);
+    expect(effectiveComposerDefault(false, '1', true)).toBe(false);
+    expect(effectiveComposerDefault(true, '0', false)).toBe(true);
+  });
+
+  it('degrades invalid composer defaults per key and preserves unknown nested keys', async () => {
+    write({ composerDefaults: { autonomous: 'yes', worktree: false, future: 42 } });
+    expect((await loadWorkspaceConfig()).composerDefaults).toEqual({ worktree: false, future: 42 });
   });
 
   it('degrades a bad stored preference per-key and preserves raw absence on unrelated writes', async () => {

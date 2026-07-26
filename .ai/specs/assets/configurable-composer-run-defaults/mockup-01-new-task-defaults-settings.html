@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Illustrative New task defaults settings</title>
+<style>
+  *{box-sizing:border-box}body{margin:0;background:#0b0c0b;color:#f3f3f2;font:14px Inter,ui-sans-serif,system-ui}
+  .shell{display:grid;grid-template-columns:264px 208px 1fr;min-height:100vh}.side{background:#181918;border-right:1px solid #292a29;padding:18px 12px}.brand{font-weight:750;font-size:16px;margin:0 8px 25px}
+  .new{background:#f3f3f2;color:#151615;border-radius:11px;padding:11px 18px;font-weight:700}.side nav,.settings nav{display:grid;gap:7px;margin-top:18px}.side nav div,.settings nav div{padding:9px 12px;color:#aaa}
+  .side .active,.settings .active{background:#303130;color:#fff;border-radius:9px}.settings{border-right:1px solid #292a29;padding:62px 12px 20px}
+  .content{padding:26px 76px;max-width:900px}.header{position:absolute;top:0;left:264px;right:0;height:56px;border-bottom:1px solid #292a29;padding:18px 20px;font-weight:700}
+  h2{font-size:16px;margin:20px 0 5px}.muted{color:#999;line-height:1.5}.card{margin-top:26px;border-top:1px solid #292a29;padding-top:22px}.field{display:grid;grid-template-columns:1fr 245px;gap:45px;padding:18px 0;border-bottom:1px solid #202120}
+  .label{font-weight:700;margin-bottom:5px}select{width:100%;background:#202120;color:#eee;border:1px solid #383938;border-radius:10px;padding:10px}.effective{font-size:11px;color:#8e8e8c;margin-top:7px}.tip{margin-top:18px;padding:12px;border-radius:10px;background:#171c15;color:#b8c8ad;font-size:12px}.tag{position:fixed;right:18px;bottom:16px;color:#777;font-size:11px}
+</style>
+<body><div class="header">Resources &nbsp; <span class="muted">Host resources and defaults across every project.</span></div><div class="shell">
+  <aside class="side"><div class="brand">◒ &nbsp;cezar</div><div class="new">＋&nbsp; New task</div><nav><div>☷ &nbsp;Tasks</div><div>⑂ &nbsp;Git</div><div>✣ &nbsp;Skills</div><div>⌘ &nbsp;Workflows</div><div class="active">⚙ &nbsp;Settings</div></nav></aside>
+  <aside class="settings"><nav><div>◉ &nbsp;Appearance</div><div>♧ &nbsp;Notifications</div><div class="active">◴ &nbsp;Resources</div><div>◇ &nbsp;Skills</div><div>□ &nbsp;Projects</div></nav></aside>
+  <main class="content"><h2>New task defaults</h2><p class="muted">Choose how a new task starts. You can override either choice in the composer.</p>
+    <section class="card">
+      <div class="field"><div><div class="label">Autonomous by default</div><div class="muted">Whether agents continue without pausing for you.</div></div><div><select><option>Inherit environment</option></select><div class="effective">Effective: Source-dependent — skills on, workflows off</div></div></div>
+      <div class="field"><div><div class="label">Use a worktree by default</div><div class="muted">Keep task changes isolated from the current checkout.</div></div><div><select><option>Off</option></select><div class="effective">Workspace override</div></div></div>
+      <div class="tip">ⓘ Interactive skills may recommend both options off. Parallel and multi-step runs can still require a worktree.</div>
+    </section>
+  </main>
+</div><div class="tag">ILLUSTRATIVE SPEC MOCKUP</div></body>
+</html>

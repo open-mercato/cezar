@@ -108,7 +108,7 @@ describe('settings → agents against the live dry-run server', () => {
   })
 
   it('base branch: picking a real branch persists; clearing goes back to the checkout', async () => {
-    // Whatever branch the dry-run repo actually has, first option after "current checkout".
+    // Whatever branch the dry-run repo actually has, first option after "follow checked-out branch".
     const branch = String(
       browser.evaluate(`document.querySelector('[data-slot="agents-base-branch"]').options[1]?.value ?? ''`),
     )

@@ -205,11 +205,13 @@ export const ghCheckRunSchema = z.object({
 });
 const ghStatusCheckRollup = z.array(ghCheckRunSchema).nullish();
 
+// The list tier no longer requests `statusCheckRollup` (#664) — it is hydrated lazily per
+// on-screen PR row (`fetchGithubChecks`). `checks` is set to `null` on list rows; the schema
+// keeps no rollup field because the list call never asks for it.
 const ghPrSchema = ghIssueSchema.extend({
   isDraft: z.boolean().default(false),
   additions: z.number().default(0),
   deletions: z.number().default(0),
-  statusCheckRollup: ghStatusCheckRollup,
 });
 const ghPrViewSchema = z.object({
   number: z.number(),
@@ -384,9 +386,11 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
   }
   try {
     // No `comments` field — `gh … --json comments` ships full comment bodies.
-    // Big fetches (the GUI's follow-up "give me everything" shot) get a
-    // longer wall clock — statusCheckRollup on hundreds of PRs is slow.
-    const timeout = capped > 100 ? 60_000 : 15_000;
+    // No `statusCheckRollup` either (#664): the CI rollup for every open PR was the
+    // dominant cost — it forced the 60 s budget below — and is now hydrated lazily per
+    // on-screen PR row via `fetchGithubChecks`. A big list still gets a little more wall
+    // clock than the default 30, but nothing like the old rollup walk.
+    const timeout = capped > 100 ? 30_000 : 15_000;
     const fields = 'number,title,author,createdAt,labels,body,url';
     // The repo handle first (cheap) so the counts GraphQL query — which needs owner/name —
     // can run parallel to the two expensive list calls below.
@@ -404,7 +408,7 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
     const countsMaxPages = Math.min(GH_COUNTS_MAX_PAGES, Math.max(1, Math.ceil(capped / 100)));
     const [issuesOut, prsOut, counts] = await Promise.all([
       gh(repoRoot, ['issue', 'list', '--limit', String(capped), '--json', fields], timeout),
-      gh(repoRoot, ['pr', 'list', '--limit', String(capped), '--json', `${fields},isDraft,additions,deletions,statusCheckRollup`], timeout),
+      gh(repoRoot, ['pr', 'list', '--limit', String(capped), '--json', `${fields},isDraft,additions,deletions`], timeout),
       // Real comment counts (#499). Degrades to empty maps on its own — a failure here leaves
       // every count at 0, never fails the tab. Skipped entirely if the handle isn't parseable.
       ownerName
@@ -448,7 +452,9 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
           isDraft: p.isDraft,
           additions: p.additions,
           deletions: p.deletions,
-          checks: rollupToChecks(p.statusCheckRollup),
+          // Hydrated lazily by `fetchGithubChecks` for on-screen rows (#664) — the list no
+          // longer pays for the CI rollup of every open PR.
+          checks: null,
         };
       },
     );
@@ -969,6 +975,165 @@ export async function fetchCommitChecks(
     }
   }
   return out;
+}
+
+// ---- lazy PR checks hydration (#664) ---------------------------------------
+// The list call (`fetchGithub`) no longer fetches `statusCheckRollup` — the dominant cost on
+// repos with many open PRs — so the tab paints fast even at a high limit. Each PR row's checks
+// glyph is hydrated afterwards, on demand, for the on-screen rows only, through this batched
+// query. Mirrors `fetchCommentCounts` / `fetchCommitChecks`: aliased so N PRs cost one
+// subprocess, and any failure degrades to absent glyphs rather than failing the tab.
+
+/** The single enum a PR row's checks glyph renders (never `undefined` on the wire). */
+export type ChecksGlyph = 'passing' | 'failing' | 'pending' | null;
+
+export type GithubChecksData =
+  | { available: true; checks: Record<number, ChecksGlyph> }
+  | { available: false; reason: string };
+
+/** PR numbers per checks query. Aliases resolve independently (a failed chunk costs only its own
+ *  glyphs); bounded so an unbounded number list can't blow the query size limit. Also the route's
+ *  hard cap on how many PRs one request may ask about. */
+export const GH_CHECKS_MAX = 100;
+
+/** One aliased `pullRequest(number:)` per PR; the rolled-up CI state lives on the head commit. */
+function prChecksQuery(numbers: number[]): string {
+  const aliases = numbers
+    .map(
+      (n, i) =>
+        `    p${i}: pullRequest(number: ${n}) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }`,
+    )
+    .join('\n');
+  return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
+}
+
+const ghPrChecksSchema = z.record(
+  z.string(),
+  z
+    .object({
+      commits: z.object({
+        nodes: z.array(
+          z.object({
+            commit: z.object({
+              statusCheckRollup: z.object({ state: z.string().nullish() }).nullish(),
+            }),
+          }),
+        ),
+      }),
+    })
+    .nullish(),
+);
+
+/**
+ * Rolled-up CI state per PR number, as a `number → glyph` map.
+ *
+ * Batched and aliased so a 100-PR window costs one subprocess, not a hundred. Each alias resolves
+ * independently and an unknown number comes back `null` (alias resolved null → left absent), so
+ * partial results degrade cleanly. Degrades to an empty map on any failure — exactly as
+ * `fetchCommitChecks` does. Exported for tests; `runGraphql` is injected so this is testable
+ * without shelling out.
+ */
+export async function fetchPrChecks(
+  runGraphql: GraphqlRunner,
+  owner: string,
+  name: string,
+  numbers: number[],
+  chunkSize = GH_CHECKS_MAX,
+): Promise<Record<number, ChecksGlyph>> {
+  const out: Record<number, ChecksGlyph> = {};
+  if (numbers.length === 0) return out;
+
+  for (let i = 0; i < numbers.length; i += chunkSize) {
+    const chunk = numbers.slice(i, i + chunkSize);
+    try {
+      const raw = JSON.parse(await runGraphql(prChecksQuery(chunk), { owner, name })) as {
+        data?: { repository?: unknown };
+      };
+      const repository = ghPrChecksSchema.parse(raw?.data?.repository ?? {});
+      chunk.forEach((number, index) => {
+        const node = repository[`p${index}`];
+        if (!node) return; // unknown PR → alias resolved null; leave the glyph absent
+        const rollup = node.commits.nodes[0]?.commit.statusCheckRollup;
+        // Adapt the single rollup state into the array shape `rollupToChecks` expects, reusing the
+        // FAILURE/PENDING/SUCCESS vocabulary rather than duplicating it.
+        out[number] = rollup
+          ? rollupToChecks([{ state: rollup.state, status: null, conclusion: null }]) ?? null
+          : null; // no CI configured — distinct from absent
+      });
+    } catch {
+      // A failed chunk costs only its own glyphs; the rest still resolve.
+    }
+  }
+  return out;
+}
+
+// Per-PR checks cache: keyed `repoRoot␀number`, same 60 s TTL as the list cache but BOUNDED. Lets
+// a repeated visible-window hydration within a minute serve cached glyphs instead of re-querying.
+const checksCache = new Map<string, { at: number; glyph: ChecksGlyph }>();
+const CHECKS_CACHE_MAX = 500;
+
+/** Test hook — the per-PR checks cache would otherwise leak state across cases in one process. */
+export function __clearChecksCacheForTests(): void {
+  checksCache.clear();
+}
+
+/**
+ * Lazy checks glyphs for the given PR numbers (route-facing). Resolves the repo handle once,
+ * serves fresh cache entries, queries only the misses, and degrades to `{ available: false,
+ * reason }` when `gh` or the handle is unavailable — never a throw, never a 5xx (plan rule 7).
+ * Numbers are de-duplicated, validated, and capped at `GH_CHECKS_MAX`.
+ */
+export async function fetchGithubChecks(repoRoot: string, numbers: number[]): Promise<GithubChecksData> {
+  if (process.env.CEZ_DRY_RUN === '1') return mockGithubChecks(numbers);
+  const wanted = [...new Set(numbers)].filter((n) => Number.isInteger(n) && n > 0).slice(0, GH_CHECKS_MAX);
+  const checks: Record<number, ChecksGlyph> = {};
+  const misses: number[] = [];
+  const now = Date.now();
+  for (const n of wanted) {
+    const hit = checksCache.get(`${repoRoot}\0${n}`);
+    if (hit && now - hit.at < CACHE_MS) checks[n] = hit.glyph;
+    else misses.push(n);
+  }
+  if (misses.length === 0) return { available: true, checks };
+  try {
+    const repoOut = await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']);
+    const ownerName = parseOwnerName(repoOut);
+    if (!ownerName) return { available: false, reason: 'repository handle unavailable' };
+    const runGraphql: GraphqlRunner = (query, variables) => {
+      const args = ['api', 'graphql', '-f', `query=${query}`];
+      for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
+      return gh(repoRoot, args);
+    };
+    const fetched = await fetchPrChecks(runGraphql, ownerName.owner, ownerName.name, misses);
+    for (const n of misses) {
+      // Absent (unknown/closed PR) caches as `null` so a nonexistent number isn't re-queried.
+      const glyph: ChecksGlyph = n in fetched ? fetched[n]! : null;
+      checks[n] = glyph;
+      checksCache.set(`${repoRoot}\0${n}`, { at: now, glyph });
+    }
+    while (checksCache.size > CHECKS_CACHE_MAX) {
+      const oldest = checksCache.keys().next().value;
+      if (oldest === undefined) break;
+      checksCache.delete(oldest);
+    }
+    return { available: true, checks };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      available: false,
+      reason: /ENOENT/.test(message)
+        ? 'gh CLI not found — install it and run `gh auth login`'
+        : firstLine(message),
+    };
+  }
+}
+
+/** CEZ_DRY_RUN=1 — glyphs straight from the mock catalog so the offline demo shows checks. */
+function mockGithubChecks(numbers: number[]): GithubChecksData {
+  const byNumber = new Map(mockGithub().prs.map((p) => [p.number, (p.checks ?? null) as ChecksGlyph]));
+  const checks: Record<number, ChecksGlyph> = {};
+  for (const n of numbers) checks[n] = byNumber.get(n) ?? null;
+  return { available: true, checks };
 }
 
 /**

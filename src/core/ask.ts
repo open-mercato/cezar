@@ -96,10 +96,16 @@ export function parseAskMarker(turnText: string): AskRequest | null {
 
 /**
  * Strip a trailing `CEZ:ASK <json>` marker from one text event so transcripts
- * stay free of protocol noise. Delta backends may split the marker across events
- * — then it stays visible; detection on the assembled turn text is unaffected
- * (same best-effort caveat as the `CEZ:DONE` / `CEZ:MONITORING` strippers).
+ * stay free of protocol noise — but ONLY when the payload actually validates.
+ * An invalid payload never becomes an ask card (`parseAskMarker` → `null`), so
+ * stripping it would delete the agent's question from the transcript with
+ * nothing to replace it; it stays visible as raw text instead — degraded but
+ * answerable (the prose fallback is never made worse). Delta backends may split
+ * the marker across events — then it stays visible; detection on the assembled
+ * turn text is unaffected (same best-effort caveat as the `CEZ:DONE` /
+ * `CEZ:MONITORING` strippers).
  */
 export function stripAskMarker(text: string): string {
+  if (parseAskMarker(text) === null) return text;
   return text.replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '');
 }

@@ -127,6 +127,9 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Registry snapshot used to expand `/skill` follow-ups before a backend can
+   *  mistake them for its own slash commands (#676). */
+  skills?: Skill[];
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; every degradation/opt-out path does. */
   releaseRepoRoot?: () => void;
@@ -1148,7 +1151,8 @@ export class RunManager {
     // ride along so the model can *view* them, but a real path is what lets it *operate* on them
     // (save, `cp`, attach to a GitHub issue/PR) — and it's the only usable reference on backends
     // (codex, opencode) that drop image blocks entirely before reaching the model.
-    const deliverable = persisted.length ? [...content, pastedAttachmentsNote(persisted)] : content;
+    const expanded = userAuthored ? expandRegistrySlashSkill(content, state.skills ?? []) : content;
+    const deliverable = persisted.length ? [...expanded, pastedAttachmentsNote(persisted)] : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       this.clearIdleTimer(state);
@@ -1678,6 +1682,7 @@ export class RunManager {
     if (seeded) seedHandoffFile(this.dataDir, seeded);
 
     const skills = await discoverSkills(this.repoRoot);
+    state.skills = skills;
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
@@ -2542,4 +2547,36 @@ export function skillSystemPrompt(
   }
   lines.push('', 'Skill instructions:', skill.body.trim());
   return lines.join('\n');
+}
+
+/**
+ * Expand a registry-backed slash skill in a live chat message before it reaches
+ * a backend. Claude otherwise intercepts an unknown leading slash command, and
+ * Codex/OpenCode have no native slash-skill lookup at all (#676).
+ *
+ * Only the first text block is eligible, only at character zero, and unknown
+ * commands pass through byte-for-byte. The caller persists the original user
+ * content before applying this delivery-only rewrite.
+ */
+export function expandRegistrySlashSkill(
+  content: ContentBlock[],
+  skills: readonly Skill[],
+): ContentBlock[] {
+  const textIndex = content.findIndex((block) => block.type === 'text');
+  if (textIndex < 0) return content;
+  const block = content[textIndex];
+  if (!block || block.type !== 'text') return content;
+  const match = /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(block.text);
+  if (!match) return content;
+  const skill = skills.find((candidate) => candidate.name === match[1]);
+  if (!skill) return content;
+
+  const request = block.text.slice(match[0].length).trim();
+  const replacement: ContentBlock = {
+    type: 'text',
+    text: request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill),
+  };
+  const expanded = [...content];
+  expanded[textIndex] = replacement;
+  return expanded;
 }

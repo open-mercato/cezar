@@ -67,6 +67,7 @@ import {
   effectiveSkillsAutoUpdate,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
+  effectiveComposerDefault,
   type WorkspaceConfig,
   type WorkspaceProject,
 } from '../workspace/config.js';
@@ -90,7 +91,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.js';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.js';
 import { resolveForge } from './forge/index.js';
-import { fetchGithub, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError } from './github.js';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.js';
 import { ensureLaunchKey } from './launch-key.js';
 import { openInTerminal } from './open-in-terminal.js';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.js';
@@ -309,6 +310,12 @@ export interface WorkspaceConfigResponse {
   /** Stored override; null means inherit CEZ_SKILLS_AUTO_UPDATE, then true. */
   skillsAutoUpdate: boolean | null;
   effectiveSkillsAutoUpdate: boolean;
+  composerDefaults: {
+    autonomous: boolean | null;
+    worktree: boolean | null;
+    inheritedAutonomous: boolean | 'source-dependent';
+    inheritedWorktree: boolean;
+  };
   resources: {
     maxParallel: number;
     maxMonitoringSessions: number;
@@ -1806,6 +1813,21 @@ export function createApp(deps: ServerDeps): Hono {
     projectsDir: config.projectsDir,
     skillsAutoUpdate: config.skillsAutoUpdate ?? null,
     effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
+    composerDefaults: {
+      autonomous: config.composerDefaults.autonomous ?? null,
+      worktree: config.composerDefaults.worktree ?? null,
+      inheritedAutonomous:
+        process.env.CEZ_AUTONOMOUS_DEFAULT === '0'
+          ? false
+          : process.env.CEZ_AUTONOMOUS_DEFAULT === '1'
+            ? true
+            : 'source-dependent',
+      inheritedWorktree: effectiveComposerDefault(
+        undefined,
+        process.env.CEZ_WORKTREE_DEFAULT,
+        true,
+      ),
+    },
     resources: {
       maxParallel: config.resources.maxParallel,
       maxMonitoringSessions: config.resources.maxMonitoringSessions,
@@ -1823,6 +1845,12 @@ export function createApp(deps: ServerDeps): Hono {
     browseRoot: z.string().trim().min(1).max(4096).optional(),
     projectsDir: z.string().trim().min(1).max(4096).optional(),
     skillsAutoUpdate: z.boolean().nullable().optional(),
+    composerDefaults: z
+      .object({
+        autonomous: z.boolean().nullable().optional(),
+        worktree: z.boolean().nullable().optional(),
+      })
+      .optional(),
     resources: z
       .object({
         maxParallel: z.number().int().min(1).max(16).optional(),
@@ -1838,7 +1866,7 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
-    const { browseRoot, projectsDir, skillsAutoUpdate, resources } = parsed.data;
+    const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources } = parsed.data;
     for (const [configuredRoot, create] of [
       [browseRoot, false],
       [projectsDir, true],
@@ -1874,6 +1902,14 @@ export function createApp(deps: ServerDeps): Hono {
         if (projectsDir !== undefined) config.projectsDir = projectsDir;
         if (skillsAutoUpdate === null) delete config.skillsAutoUpdate;
         else if (skillsAutoUpdate !== undefined) config.skillsAutoUpdate = skillsAutoUpdate;
+        if (composerDefaults?.autonomous === null) delete config.composerDefaults.autonomous;
+        else if (composerDefaults?.autonomous !== undefined) {
+          config.composerDefaults.autonomous = composerDefaults.autonomous;
+        }
+        if (composerDefaults?.worktree === null) delete config.composerDefaults.worktree;
+        else if (composerDefaults?.worktree !== undefined) {
+          config.composerDefaults.worktree = composerDefaults.worktree;
+        }
         if (resources?.maxParallel !== undefined) config.resources.maxParallel = resources.maxParallel;
         if (resources?.maxMonitoringSessions !== undefined) {
           config.resources.maxMonitoringSessions = resources.maxMonitoringSessions;
@@ -3294,6 +3330,25 @@ export function createApp(deps: ServerDeps): Hono {
     return c.json(
       await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.query('refresh') === '1'),
     );
+  });
+
+  // Lazy checks glyphs for on-screen PR rows (#664). Additive sibling of /api/github — the list
+  // call dropped `statusCheckRollup` (the dominant cost), so the glyph is hydrated here per
+  // visible row. `prs` is a comma-separated list of positive integers, capped at GH_CHECKS_MAX;
+  // anything malformed is a 400. Same in-payload availability degrade as the list (never a 5xx).
+  api.get('/github/checks', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const raw = c.req.query('prs');
+    if (!raw) return c.json({ error: 'missing prs query' }, 400);
+    const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0 || parts.length > GH_CHECKS_MAX) return c.json({ error: 'invalid prs query' }, 400);
+    const numbers: number[] = [];
+    for (const part of parts) {
+      const n = Number(part);
+      if (!Number.isInteger(n) || n <= 0 || String(n) !== part) return c.json({ error: 'invalid prs query' }, 400);
+      numbers.push(n);
+    }
+    return c.json(await fetchGithubChecks(repoRoot, numbers));
   });
 
   const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });

@@ -14,7 +14,7 @@ import type {
 } from '@/api/types'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { resetDraft, writeDraft } from './new-task-draft'
+import { readDraft, resetDraft, writeDraft } from './new-task-draft'
 import { NewTaskRoute } from './new-task'
 
 /**
@@ -279,7 +279,7 @@ const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or w
 const location = () => screen.getByTestId('location').textContent
 
 /** The pickers resolve once workflows+skills+ui-state answered — wait for the real label. */
-async function pillReady(label = 'om-fix') {
+async function pillReady(label = 'quick-task') {
   await waitFor(() => {
     expect(sourcePill().textContent).toContain(label)
     expect(textarea().disabled).toBe(false)
@@ -434,7 +434,7 @@ describe('picker data flows', () => {
     fireEvent.pointerDown(basePill())
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((o) => o.textContent)).toEqual([
-      expect.stringContaining('current checkout (main)'),
+      expect.stringContaining('follow checked-out branch (main)'),
       expect.stringContaining('main'),
       expect.stringContaining('develop'),
     ])
@@ -454,10 +454,10 @@ describe('picker data flows', () => {
     await pillReady('fix-and-verify')
   })
 
-  it('falls back to the first skill when lastTask names something gone', async () => {
+  it('falls back to quick-task when lastTask names something gone', async () => {
     serve({ uiState: { lastTask: { source: 'skill', ref: 'deleted-skill' } } })
     renderNewTask()
-    await pillReady('om-fix')
+    await pillReady('quick-task')
   })
 
   it('the source menu groups: Project skills (bold), Workflows, Global last', async () => {
@@ -520,7 +520,7 @@ describe('provider authentication gate', () => {
     })
     renderNewTask()
 
-    await waitFor(() => expect(sourcePill().textContent).toContain('om-fix'))
+    await waitFor(() => expect(sourcePill().textContent).toContain('quick-task'))
     expect(textarea().disabled).toBe(true)
     expect(textarea().placeholder).toBe('Checking agent providers…')
     expect(screen.queryByRole('link', { name: 'Configure providers' })).toBeNull()
@@ -656,7 +656,10 @@ describe('provider authentication gate', () => {
 
 describe('submit', () => {
   it('a SKILL source posts the one-step inline chain and persists lastTask, then navigates', async () => {
-    serve({ createRun: { id: 'run-9' } })
+    serve({
+      createRun: { id: 'run-9' },
+      uiState: { lastTask: { source: 'skill', ref: 'om-fix' } },
+    })
     renderNewTask()
     await pillReady('om-fix')
     fireEvent.change(textarea(), { target: { value: 'Fix the flaky worktree test' } })
@@ -674,10 +677,6 @@ describe('submit', () => {
         lastTask: { source: 'skill', ref: 'om-fix' },
         // The run also lands at the head of the recency list (picker sort)...
         recentSources: [{ source: 'skill', ref: 'om-fix' }],
-        // ...and a single skill run remembers its worktree + autonomous choices
-        // (skills default autonomous on).
-        lastWorktree: true,
-        lastAutonomous: true,
         lastGenerateFollowups: true,
         // ...and bumps its usage count for the #408 frequency sort (a workflow source would
         // NOT carry a skillUsage key at all — see the WORKFLOW test below).
@@ -692,6 +691,10 @@ describe('submit', () => {
     // that would send a one-entry map and replace every stored count.
     // 404, not a 5xx: the query client never retries a 4xx (query-client.ts), so the query
     // lands in its errored state immediately and the test stays deterministic.
+    writeDraft({
+      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, model: null,
+      variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
+    })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()
     await pillReady('om-fix')
@@ -736,10 +739,9 @@ describe('submit', () => {
 
     expect(postedBody()).toEqual({
       task: 'Race two attempts',
-      steps: [{ id: 'task', name: 'om-fix', skill: 'om-fix', prompt: '{{task}}' }],
+      workflow: 'quick-task',
       model: 'sonnet',
       variants: 2,
-      autonomous: true,
     })
     await waitFor(() => expect(location()).toBe('/tasks/v-a'))
   })
@@ -793,6 +795,61 @@ describe('submit', () => {
         .querySelector('[data-slot="generate-followups-toggle"]')
         ?.getAttribute('aria-checked'),
     ).toBe('false')
+  })
+
+  it('applies an interactive skill hint to untouched controls while keeping both overridable', async () => {
+    // The cold default is now quick-task, so an interactive skill only drives the recommendation
+    // once it is the selected source — here via the persisted lastTask.
+    serve({
+      skills: [{ ...SKILLS[0]!, interactive: true }, SKILLS[1]!],
+      uiState: { lastTask: { source: 'skill', ref: 'om-fix' } },
+    })
+    renderNewTask()
+    await pillReady('om-fix')
+
+    const autonomous = document.querySelector(
+      '[data-slot="autonomous-toggle"]',
+    ) as HTMLButtonElement
+    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+    expect(autonomous.getAttribute('aria-checked')).toBe('false')
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText(/recommends an interactive run in the current checkout/i)).toBeTruthy()
+
+    fireEvent.click(autonomous)
+    fireEvent.click(worktree)
+    expect(autonomous.getAttribute('aria-checked')).toBe('true')
+    expect(worktree.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('forces and disables Worktree for a multi-step workflow', async () => {
+    serve({
+      workflows: {
+        workflows: [
+          WORKFLOWS.workflows[0]!,
+          {
+            name: 'fix-and-verify',
+            source: 'file',
+            steps: [
+              { id: 'fix', name: 'Fix', prompt: '{{task}}' },
+              { id: 'verify', name: 'Verify', command: 'npm test' },
+            ],
+          },
+        ],
+        issues: [],
+      },
+      uiState: { lastTask: { source: 'workflow', ref: 'fix-and-verify' } },
+    })
+    writeDraft({
+      ...readDraft(),
+      worktree: false,
+    })
+    renderNewTask()
+    await pillReady('fix-and-verify')
+
+    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+    expect(worktree.getAttribute('aria-checked')).toBe('true')
+    expect(worktree.disabled).toBe(true)
+    expect(worktree.title).toBe('Multi-step workflows require an isolated worktree')
   })
 
   // #471 — the composer must not offer a switch the server overrides anyway.
