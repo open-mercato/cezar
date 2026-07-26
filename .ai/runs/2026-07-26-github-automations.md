@@ -70,8 +70,8 @@ Implement zero-configuration, bounded GitHub polling automations that launch ord
 
 ### Phase 2: Workspace and API integration
 
-- [ ] 2.1 Add the workspace coordinator, registered-project discovery, context lifecycle integration, and degraded-state tests.
-- [ ] 2.2 Add project-scoped CRUD, preview, status, log, and retry routes with validation, origin protection, and route parity.
+- [x] 2.1 Add the workspace coordinator, registered-project discovery, context lifecycle integration, and degraded-state tests. — 2490d1ea
+- [x] 2.2 Add project-scoped CRUD, preview, status, log, and retry routes with validation, origin protection, and route parity. — 174fa4ea
 
 ### Phase 3: Cockpit foundations
 
