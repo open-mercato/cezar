@@ -205,6 +205,25 @@ describe('AppShell', () => {
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
     })
 
+    it('renders a quiet accessible Skills update marker in desktop and mobile navigation', () => {
+      renderShell('/', { skillsUpdateAvailable: true })
+      expect(document.querySelectorAll('[data-slot="nav-update-marker"]')).toHaveLength(1)
+      fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+      const markers = document.querySelectorAll('[data-slot="nav-update-marker"]')
+      expect(markers).toHaveLength(2)
+      for (const marker of markers) {
+        expect(marker.textContent).toBe('Skills update available')
+        expect(marker.innerHTML).not.toContain('animate-')
+      }
+      // Radix hides the desktop app from the accessibility tree while the mobile drawer is modal.
+      expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
+    })
+
+    it('renders no Skills marker without an actionable update', () => {
+      renderShell()
+      expect(document.querySelector('[data-slot="nav-update-marker"]')).toBeNull()
+    })
+
     it('reserves the quick-list, tools and composer slots for later Steps', () => {
       renderShell()
       for (const slot of ['task-quick-list', 'tools-menu', 'composer']) {

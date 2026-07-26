@@ -65,6 +65,15 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       const override = overrides[path]
       if (override) return override()
       if (method === 'GET' && path === '/api/runs') return jsonResponse([])
+      if (method === 'GET' && path === '/api/providers/status') {
+        return jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'connected', enabled: true },
+            { provider: 'codex', status: 'not-installed', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        })
+      }
       return jsonResponse({})
     }),
   )
@@ -86,6 +95,30 @@ function renderHeader(record: ApiRun) {
 }
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
+
+describe('monitoring schedule', () => {
+  it('shows the exact persisted deadline in a time element', () => {
+    stubFetch()
+    renderHeader(run('running', { activity: 'monitoring', monitoringWakeAt: '2026-07-25T10:15:00.000Z' }))
+    const time = screen.getByText(/2026/).closest('time')
+    expect(time?.getAttribute('datetime')).toBe('2026-07-25T10:15:00.000Z')
+    expect(screen.getByText(/Next automatic check/)).not.toBeNull()
+  })
+
+  it('shows parked copy for absent or malformed deadlines', () => {
+    stubFetch()
+    renderHeader(run('running', { activity: 'monitoring', monitoringWakeAt: 'not-a-date' }))
+    expect(screen.getByText('Parked — no automatic check scheduled')).not.toBeNull()
+    expect(screen.queryByText(/Invalid Date/)).toBeNull()
+  })
+
+  it('distinguishes a capped monitoring epoch from an ordinary parked session', () => {
+    stubFetch()
+    renderHeader(run('running', { activity: 'monitoring', monitoringWakeCapReached: true }))
+    expect(screen.getByText('Automatic checks paused — 40/40 reached')).not.toBeNull()
+    expect(screen.queryByText('Parked — no automatic check scheduled')).toBeNull()
+  })
+})
 
 describe('editable title (#389)', () => {
   it('pencil flips the h1 into an input; Enter PATCHes the trimmed title exactly once', async () => {
@@ -203,10 +236,80 @@ describe('actions hit their endpoints', () => {
   it('Continue → POST /continue', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Continue' }))
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/runs/r1/continue')).toBe(true)
     })
+  })
+
+  it('disables desktop Continue and its mutation guard blocks a forced click without a provider', async () => {
+    const sent = stubFetch({
+      '/api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'unknown', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        }),
+    })
+    renderHeader(run('done', { runner: 'claude' }))
+
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(true))
+    button.removeAttribute('disabled')
+    fireEvent.click(button)
+    await act(() => Promise.resolve())
+
+    expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
+  })
+
+  it('disables mobile Continue and does not post when its menu item is selected', async () => {
+    const sent = stubFetch({
+      '/api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'unknown', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        }),
+    })
+    renderHeader(run('done', { runner: 'claude' }))
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const item = await screen.findByRole('menuitem', { name: 'Continue' })
+    await waitFor(() => expect(item.getAttribute('data-disabled')).not.toBeNull())
+    fireEvent.click(item)
+    await act(() => Promise.resolve())
+
+    expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
+  })
+
+  it('sends a connected fallback runner when the run provider is disconnected', async () => {
+    const sent = stubFetch({
+      '/api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        }),
+    })
+    renderHeader(run('done', { runner: 'claude' }))
+
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
+
+    await waitFor(() =>
+      expect(sent.find((request) => request.path === '/api/runs/r1/continue')?.body).toEqual({
+        runner: 'codex',
+      }),
+    )
   })
 
   it('Archive → POST /archive with the flipped flag', async () => {
@@ -276,7 +379,9 @@ describe('actions hit their endpoints', () => {
       '/api/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
     })
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Continue' }))
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
     const item = await screen.findByRole('status')
     expect(item.textContent).toBe('no agent session to resume')
     expect(item.getAttribute('data-tone')).toBe('danger')
@@ -353,7 +458,16 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   }
 
   it('labels the CLI matching the run\'s own runner "(resume)"; a foreign CLI stays plain', async () => {
-    stubFetch({ '/api/open-targets': () => jsonResponse(openTargets(['cli:claude', 'cli:codex'])) })
+    stubFetch({
+      '/api/open-targets': () => jsonResponse(openTargets(['cli:claude', 'cli:codex'])),
+      '/api/providers/status': () => jsonResponse({
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      }),
+    })
     renderHeader(run('done', { runner: 'claude', worktreePath: '/tmp/wt' }))
     const menu = await openMenu()
     // The CLI targets load async (useOpenTargets) — findByRole waits them in, unlike the
@@ -370,7 +484,16 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   })
 
   it('picking a CLI target POSTs /open-in with that target id, resuming or not', async () => {
-    const sent = stubFetch({ '/api/open-targets': () => jsonResponse(openTargets(['cli:codex'])) })
+    const sent = stubFetch({
+      '/api/open-targets': () => jsonResponse(openTargets(['cli:codex'])),
+      '/api/providers/status': () => jsonResponse({
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      }),
+    })
     renderHeader(run('done', { runner: 'claude', worktreePath: '/tmp/wt' }))
     const menu = await openMenu()
     // Cross-runner (this run is Claude): Codex opens fresh, not "(resume)".
@@ -378,6 +501,33 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/runs/r1/open-in')?.body).toEqual({ target: 'cli:codex' })
     })
+  })
+
+  it.each([
+    ['disabled', { provider: 'codex', status: 'connected', enabled: false }],
+    ['disconnected', { provider: 'codex', status: 'disconnected', enabled: true }],
+  ] as const)('keeps non-agent targets while hiding %s Codex handoff targets', async (_case, codex) => {
+    stubFetch({
+      '/api/open-targets': () => jsonResponse({
+        targets: [
+          { id: 'cli:codex', label: 'Codex CLI' },
+          { id: 'idea', label: 'IntelliJ IDEA', icon: 'idea' },
+        ],
+      }),
+      '/api/providers/status': () => jsonResponse({
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          codex,
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      }),
+    })
+    renderHeader(run('done', { runner: 'codex', worktreePath: '/tmp/wt' }))
+    const menu = await openMenu()
+
+    expect(await within(menu).findByRole('menuitem', { name: 'IntelliJ IDEA' })).not.toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: /Terminal \(resume session\)/ })).toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: /Codex CLI/ })).toBeNull()
   })
 })
 
@@ -470,6 +620,50 @@ describe('meta line, tabs, pill and resume hint', () => {
 
     const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+  })
+
+  it.each([
+    {
+      name: 'both',
+      refs: {
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534',
+        referencedIssueUrl: 'https://github.com/open-mercato/cezar/issues/544',
+      },
+      pr: true,
+      issue: true,
+    },
+    {
+      name: 'PR only',
+      refs: { referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534' },
+      pr: true,
+      issue: false,
+    },
+    {
+      name: 'issue only',
+      refs: { referencedIssueUrl: 'https://github.com/open-mercato/cezar/issues/544' },
+      pr: false,
+      issue: true,
+    },
+    { name: 'neither', refs: {}, pr: false, issue: false },
+  ])('shows discovered tracker chips next to the branch ($name)', ({ refs, pr, issue }) => {
+    stubFetch()
+    renderHeader(run('done', { branch: 'cez/r1', ...refs }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const branch = meta.querySelector('[data-slot="branch-chip"]')
+    const prChip = meta.querySelector('[data-slot="pr-chip"]')
+    const issueChip = meta.querySelector('[data-slot="issue-chip"]')
+
+    expect(Boolean(prChip)).toBe(pr)
+    expect(Boolean(issueChip)).toBe(issue)
+    if (prChip) {
+      expect(prChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/534')
+      expect(prChip.textContent).toContain('#534')
+      expect(branch?.nextElementSibling?.nextElementSibling).toBe(prChip)
+    }
+    if (issueChip) {
+      expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
+      expect(issueChip.textContent).toContain('Issue #544')
+    }
   })
 
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {

@@ -1,8 +1,63 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { clearDraftText, readDraft, resetDraft, writeDraft } from './new-task-draft'
+import {
+  clearDraftText,
+  readDraft,
+  resetDraft,
+  resolveComposerRunMode,
+  writeDraft,
+} from './new-task-draft'
 
 afterEach(resetDraft)
+
+describe('resolveComposerRunMode', () => {
+  const base = {
+    hasGit: true,
+    variants: 1,
+    planFirst: false,
+    explicitAutonomous: null,
+    explicitWorktree: null,
+    configuredAutonomous: 'source-dependent' as const,
+    configuredWorktree: true,
+    source: 'workflow' as const,
+  }
+
+  it('combines source fallback, configured policy, and explicit values', () => {
+    expect(resolveComposerRunMode(base)).toEqual({ autonomous: false, worktree: true })
+    expect(resolveComposerRunMode({ ...base, source: 'skill' })).toEqual({ autonomous: true, worktree: true })
+    expect(resolveComposerRunMode({
+      ...base,
+      configuredAutonomous: true,
+      configuredWorktree: false,
+      explicitAutonomous: false,
+      explicitWorktree: true,
+    })).toEqual({ autonomous: false, worktree: true })
+  })
+
+  it('applies an interactive recommendation only to untouched fields', () => {
+    expect(resolveComposerRunMode({ ...base, interactive: true })).toEqual({
+      autonomous: false,
+      worktree: false,
+    })
+    expect(resolveComposerRunMode({
+      ...base,
+      interactive: true,
+      explicitAutonomous: true,
+    })).toEqual({ autonomous: true, worktree: false })
+  })
+
+  it('keeps plan, parallel, and no-git constraints authoritative', () => {
+    expect(resolveComposerRunMode({ ...base, planFirst: true, explicitAutonomous: true }).autonomous).toBe(false)
+    expect(resolveComposerRunMode({ ...base, variants: 2, explicitWorktree: false }).worktree).toBe(true)
+    expect(resolveComposerRunMode({
+      ...base,
+      forceWorktree: true,
+      explicitWorktree: false,
+      interactive: true,
+    }).worktree).toBe(true)
+    expect(resolveComposerRunMode({ ...base, hasGit: false, explicitWorktree: true }).worktree).toBe(false)
+  })
+})
 
 describe('the new-task draft store', () => {
   it('starts empty with the never-chosen sentinels', () => {

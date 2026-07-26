@@ -1,8 +1,10 @@
-import { hashKey, useMutation, useQueryClient } from '@tanstack/react-query'
+import { hashKey, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeftIcon,
   CheckIcon,
   CircleDotIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ExternalLinkIcon,
   GitPullRequestIcon,
   MessageSquareIcon,
@@ -16,20 +18,31 @@ import { useParams } from 'react-router'
 
 import { Link, Navigate } from '@/lib/project-router'
 
-import { getGithub, getGithubComments, putUiState } from '@/api/client'
-import { queryKeys, useGithub, useGithubComments, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
+import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
   GithubTimelineEvent,
   GithubTimelineEventKind,
+  GithubMergeMethod,
+  GithubPrMergeState,
   UiState,
 } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { Diff, type DiffFileChange } from '@/components/diff'
 import type { EnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
 import { TabLink } from '@/components/tab-link'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -53,22 +66,29 @@ import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-d
  * `/github/prs`, `/github/issues/:n`, `/github/prs/:n`. PR rows also carry a compact checks
  * glyph (#400) — the same tones as the detail pane's `ChecksBadge`, just the symbol.
  *
- * Data keeps the legacy two-shot load (feedback 2026-07-11: the 30-item `gh` default hid the
- * rest): the fast default batch paints the tab, then a background everything-open fetch
- * (limit 1000) replaces it and fixes the counts — until it lands, a count at the fast-batch
- * cap renders as `30+`, because "30 of who knows" must not read as exactly 30.
+ * Data loads in ONE fast shot (#664): the list call no longer fetches `statusCheckRollup` — the
+ * CI rollup for every open PR was the dominant cost and forced the old two-shot `30 → 1000`
+ * pattern — so a single `limit`-capped fetch paints the whole open set quickly and search works
+ * across it immediately. Each PR row's checks glyph is then hydrated lazily, for the on-screen
+ * rows only, via `useGithubChecks` (`GET /api/github/checks`), the same way comment counts fill
+ * in a beat later. A cheap React-Query prefetch on row hover/focus warms the thread so an opened
+ * item is usually instant. (Cursor pagination + "Load more"/infinite scroll + row virtualization
+ * are the Phase 2 follow-up.)
  *
  * Gating: the nav item is hidden by the shell when health reports no forge — but the URL
  * stays reachable (pasted links), so an unavailable payload renders the honest explainer
  * with the server's own reason, never an error.
  */
 
-/** The server's default batch (`/api/github` limit). A count AT this cap is "cap of who
- *  knows" until the full fetch lands — the tabs say `30+`. */
-const FAST_BATCH = 30
+/** The single fast list fetch (`/api/github` limit). No longer split into a fast batch + a slow
+ *  everything-open shot — dropping `statusCheckRollup` from the list made one fetch of the whole
+ *  open set cheap. A count AT this cap still reads `N+`, since the open set may exceed it. */
+const LIST_LIMIT = 1000
 
-/** The background "everything open" fetch — same number the legacy tab used. */
-const FULL_LIMIT = 1000
+/** How many on-screen PR rows one checks request covers (matches the server's `GH_CHECKS_MAX`).
+ *  The visible window is hydrated first; without virtualization (Phase 2) rows past this stay
+ *  glyph-less, exactly as a PR with no CI would. */
+const CHECKS_WINDOW = 100
 
 export type GithubView = 'issues' | 'prs'
 
@@ -89,15 +109,31 @@ export function GithubIndexRoute() {
   return <GithubRoute view="issues" />
 }
 
-export function GithubRoute({ view }: { view: GithubView }) {
+export function GithubRoute({ view, changes = false }: { view: GithubView; changes?: boolean }) {
   const { n } = useParams()
-  const fast = useGithub()
-  // Two-shot: the full fetch waits for the fast one to prove the forge reachable.
-  const full = useGithub({ limit: FULL_LIMIT }, fast.data?.available === true)
-  // The full batch replaces the fast one only when it is a real answer (legacy rule — a
-  // failed background fetch leaves the fast batch standing, counts just keep their "+").
-  const gh = full.data?.available ? full.data : fast.data
-  const isFull = full.data?.available === true
+  // One fast shot now that the list dropped `statusCheckRollup` (#664) — no more fast/full swap.
+  const list = useGithub({ limit: LIST_LIMIT })
+  const gh = list.data
+
+  // Lazy checks glyphs for the on-screen PR window (#664). Hooks must run before the early
+  // returns below, so derive the PR numbers straight from the list payload rather than the
+  // post-filter `items`. The URL-selected PR is pinned into the window so the detail badge
+  // hydrates even when it sits past the row cap.
+  const selectedNumber = n === undefined ? null : Number.parseInt(n, 10)
+  const checkPrNumbers = useMemo(() => {
+    if (!gh?.available) return []
+    const nums = new Set<number>()
+    if (view === 'prs' && selectedNumber !== null && Number.isInteger(selectedNumber)) {
+      nums.add(selectedNumber)
+    }
+    for (const pr of gh.prs) {
+      if (nums.size >= CHECKS_WINDOW) break
+      nums.add(pr.number)
+    }
+    return [...nums]
+  }, [gh, view, selectedNumber])
+  const checksQuery = useGithubChecks(checkPrNumbers, view === 'prs')
+  const checksMap = checksQuery.data?.available ? checksQuery.data.checks : undefined
 
   const queryClient = useQueryClient()
 
@@ -128,11 +164,12 @@ export function GithubRoute({ view }: { view: GithubView }) {
   const openThreadRef = useRef<{ kind: 'issue' | 'pr'; number: number } | null>(null)
 
   const refresh = useMutation({
-    mutationFn: () => getGithub({ refresh: true }),
+    mutationFn: () => getGithub({ refresh: true, limit: LIST_LIMIT }),
     onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.github({}), data)
-      // The refresh busted the server cache; the full batch must re-run against it.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.github({ limit: FULL_LIMIT }) })
+      // One list query now (#664) — patch it directly, then re-hydrate the visible checks window
+      // so glyphs track the fresh rows (they carry their own ≤60 s cache server-side).
+      queryClient.setQueryData(queryKeys.github({ limit: LIST_LIMIT }), data)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubChecks(checkPrNumbers) })
 
       // The open thread must be re-fetched with `refresh: true` (#525). Invalidating its key is
       // NOT enough, and was the bug in the first attempt: an invalidate re-requests
@@ -208,14 +245,14 @@ export function GithubRoute({ view }: { view: GithubView }) {
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
 
   if (!gh) {
-    if (fast.isError) {
+    if (list.isError) {
       return (
         <div data-route="github" className="flex min-h-full flex-col">
           <CenteredState
             icon={<TriangleAlertIcon />}
             tone="danger"
             title="Could not load GitHub"
-            subtitle={fast.error.message}
+            subtitle={list.error.message}
           />
         </div>
       )
@@ -312,10 +349,10 @@ export function GithubRoute({ view }: { view: GithubView }) {
           </div>
           <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
             <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
-              Issues · {countLabel(gh.issues.length, isFull)}
+              Issues · {countLabel(gh.issues.length)}
             </TabLink>
             <TabLink to="/github/prs" active={view === 'prs'} onClick={() => saveGithubView('prs')}>
-              Pull requests · {countLabel(gh.prs.length, isFull)}
+              Pull requests · {countLabel(gh.prs.length)}
             </TabLink>
           </div>
           <div className="mt-2.5 flex items-center gap-2 pb-3">
@@ -359,6 +396,7 @@ export function GithubRoute({ view }: { view: GithubView }) {
                 colors={labelColors}
                 active={selected?.url === item.url}
                 queued={queued.has(item.url)}
+                checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
               />
             ))}
           </ul>
@@ -374,7 +412,13 @@ export function GithubRoute({ view }: { view: GithubView }) {
         )}
       >
         {selected ? (
-          <GithubDetail item={selected} listPath={listPath} colors={labelColors}>
+          <GithubDetail
+            item={selected}
+            listPath={listPath}
+            colors={labelColors}
+            changes={changes}
+            checks={selected.kind === 'pr' ? checksMap?.[selected.number] ?? selected.checks : selected.checks}
+          >
             <HandToAgent
               key={selected.url}
               item={selected}
@@ -408,9 +452,10 @@ export function GithubRoute({ view }: { view: GithubView }) {
   )
 }
 
-/** `30+` while the fast batch might be truncated; the plain number once the full fetch landed. */
-function countLabel(count: number, isFull: boolean): string {
-  return `${count}${!isFull && count >= FAST_BATCH ? '+' : ''}`
+/** The exact open count from the single fast fetch — with a `+` only when it hit the list cap, so
+ *  a repo with more than `LIST_LIMIT` open items reads honestly as "at least this many". */
+function countLabel(count: number): string {
+  return `${count}${count >= LIST_LIMIT ? '+' : ''}`
 }
 
 function GithubRow({
@@ -419,14 +464,28 @@ function GithubRow({
   colors,
   active,
   queued,
+  checks,
 }: {
   item: GithubItem
   view: GithubView
   colors: Record<string, string>
   active: boolean
   queued: boolean
+  /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
+  checks?: GithubItem['checks']
 }) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
+  const queryClient = useQueryClient()
+
+  // Warm the thread on hover/focus (#664) so opening the row is usually instant — best-effort,
+  // deduped by React Query, and it re-uses the mounted detail's exact query key/staleTime.
+  const prefetchThread = () => {
+    void queryClient.prefetchQuery({
+      queryKey: queryKeys.githubComments(item.kind, item.number),
+      queryFn: ({ signal }) => getGithubComments(item.kind, item.number, {}, { signal }),
+      staleTime: 60_000,
+    })
+  }
 
   // Drag an issue/PR row into the composer — it prefills the same prompt "Run agent on this
   // issue" uses (legacy parity); a textarea accepts the text/plain payload natively.
@@ -445,6 +504,8 @@ function GithubRow({
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
         draggable
         onDragStart={onDragStart}
+        onMouseEnter={prefetchThread}
+        onFocus={prefetchThread}
         data-slot="gh-row"
         data-number={item.number}
         aria-current={active ? 'page' : undefined}
@@ -468,7 +529,7 @@ function GithubRow({
           <span className="min-w-0 truncate">{item.author}</span>
           <span>{shortAge(item.createdAt)}</span>
           <CommentCount count={item.comments} />
-          {item.checks ? <ChecksGlyph checks={item.checks} /> : null}
+          {checks ? <ChecksGlyph checks={checks} /> : null}
           {queued ? (
             <span data-slot="gh-queued-flag" className="font-sans font-medium text-violet">
               ↗ run queued
@@ -569,11 +630,16 @@ function GithubDetail({
   listPath,
   colors,
   children,
+  changes,
+  checks,
 }: {
   item: GithubItem
   listPath: string
   colors: Record<string, string>
   children: ReactNode
+  changes: boolean
+  /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
+  checks?: GithubItem['checks']
 }) {
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
   const hasDiffStat = item.kind === 'pr' && Boolean(item.additions || item.deletions)
@@ -627,15 +693,23 @@ function GithubDetail({
 
       <h2 className="mt-2 text-xl leading-snug font-semibold">{item.title}</h2>
 
-      {item.labels.length > 0 || item.checks ? (
+      {item.kind === 'pr' ? (
+        <nav aria-label="Pull request detail" className="mt-4 flex border-b border-border">
+          <TabLink to={`/github/prs/${item.number}`} active={!changes}>Conversation</TabLink>
+          <TabLink to={`/github/prs/${item.number}/changes`} active={changes}>Changes</TabLink>
+        </nav>
+      ) : null}
+
+      {item.labels.length > 0 || checks ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {item.labels.map((label) => (
             <LabelChip key={label} label={label} color={colors[label]} />
           ))}
-          {item.checks ? <ChecksBadge checks={item.checks} url={item.url} /> : null}
+          {checks ? <ChecksBadge checks={checks} url={item.url} /> : null}
         </div>
       ) : null}
 
+      {changes && item.kind === 'pr' ? <GithubPrChanges item={item} /> : <>
       <div data-slot="gh-body" className="mt-5 text-sm">
         {item.body ? (
           <Markdown>{item.body}</Markdown>
@@ -646,8 +720,221 @@ function GithubDetail({
 
       <GithubThread item={item} colors={colors} />
 
+      {item.kind === 'pr' ? <GithubMergeBox number={item.number} /> : null}
+
       {children}
+      </>}
     </article>
+  )
+}
+
+const mergeLabels: Record<GithubMergeMethod, string> = {
+  squash: 'Squash and merge',
+  merge: 'Create a merge commit',
+  rebase: 'Rebase and merge',
+}
+
+function GithubMergeBox({ number }: { number: number }) {
+  const queryClient = useQueryClient()
+  const mergeState = useQuery({
+    queryKey: queryKeys.githubMergeState(number),
+    queryFn: ({ signal }) => getGithubPrMergeState(number, {}, { signal }),
+    retry: false,
+  })
+  const state = mergeState.data?.available ? mergeState.data.mergeState : null
+  const [method, setMethod] = useState<GithubMergeMethod | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const refreshMergeState = useMutation({
+    mutationFn: () => getGithubPrMergeState(number, { refresh: true }),
+    onSuccess: (data) => queryClient.setQueryData(queryKeys.githubMergeState(number), data),
+    onError: (error) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
+  })
+  const selectedMethod = method && state?.methods.includes(method)
+    ? method
+    : state?.defaultMethod ?? state?.methods[0] ?? null
+  const merge = useMutation({
+    mutationFn: () => {
+      if (!state || !selectedMethod) throw new Error('No merge method is available.')
+      return mergeGithubPr(number, { method: selectedMethod, expectedHeadSha: state.headSha })
+    },
+    onSuccess: () => {
+      setConfirming(false)
+      toast(`Pull request #${number} merged`)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubMergeState(number) })
+      // The single list query (#664) — a merged PR drops out of the open set on the next fetch.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.github({ limit: LIST_LIMIT }) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubComments('pr', number) })
+    },
+    onError: (error) => {
+      toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubMergeState(number) })
+    },
+  })
+
+  if (mergeState.isPending) {
+    return <Skeleton data-slot="gh-merge-loading" className="mt-6 h-32 w-full" />
+  }
+  if (!state) {
+    return (
+      <section data-slot="gh-merge-unavailable" className="mt-6 rounded-lg border border-border bg-card p-4 text-sm">
+        <p className="font-medium">Merge status unavailable</p>
+        <p className="mt-1 text-xs text-soft-foreground">
+          {mergeState.data?.available === false ? mergeState.data.reason : 'GitHub could not load merge requirements.'}
+        </p>
+      </section>
+    )
+  }
+
+  const title =
+    state.state === 'merged' ? 'Merged'
+      : state.state === 'closed' ? 'Closed'
+        : state.isDraft ? 'Draft'
+          : state.mergeable === 'conflicting' ? 'Conflicts must be resolved'
+            : state.canMerge ? 'Ready to merge'
+              : 'Merge blocked'
+
+  return (
+    <section data-slot="gh-merge-box" aria-live="polite" className="mt-6 rounded-lg border border-border bg-card p-4">
+      <div className="flex items-start gap-3">
+        {state.canMerge ? (
+          <CheckIcon aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-success" />
+        ) : (
+          <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold">{title}</h3>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={refreshMergeState.isPending}
+              onClick={() => refreshMergeState.mutate()}
+            >
+              <RefreshCwIcon aria-hidden="true" className={cn('size-3.5', refreshMergeState.isPending && 'animate-spin')} />
+              Refresh
+            </Button>
+          </div>
+          <p className="mt-1 font-mono text-[11px] text-soft-foreground">
+            {state.headRef} ({state.headSha.slice(0, 7)}) → {state.baseRef}
+          </p>
+          <ul className="mt-3 space-y-2 text-xs">
+            <li>Reviews: {state.reviewDecision.replaceAll('-', ' ')}</li>
+            <li>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</li>
+            {state.checks.length === 0 ? <li>No checks configured</li> : state.checks.map((check) => (
+              <li key={check.name} className="flex items-center justify-between gap-3">
+                <span>{check.name} · {check.state}{check.required === true ? ' · required' : check.required === null ? ' · requiredness unknown' : ''}</span>
+                {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline">details</a> : null}
+              </li>
+            ))}
+            {state.blockers.map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
+          </ul>
+          {state.state === 'open' && state.methods.length > 0 ? (
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <select
+                aria-label="Merge method"
+                value={selectedMethod ?? ''}
+                onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
+                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
+              </select>
+              <Button disabled={!state.canMerge || !selectedMethod} onClick={() => setConfirming(true)}>
+                {selectedMethod ? mergeLabels[selectedMethod] : 'Merge'}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <Dialog open={confirming} onOpenChange={setConfirming}>
+        <DialogContent data-slot="gh-merge-confirm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>{selectedMethod ? mergeLabels[selectedMethod] : 'Merge'} pull request #{number}?</DialogTitle>
+            <DialogDescription>
+              This will merge “{state.title}” into {state.baseRef}. GitHub will re-check the exact reviewed head before changing the repository.
+            </DialogDescription>
+          </DialogHeader>
+          {merge.error ? <p className="text-sm text-danger">{merge.error.message}</p> : null}
+          <DialogFooter>
+            <Button variant="outline" disabled={merge.isPending} onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button disabled={merge.isPending} onClick={() => merge.mutate()}>
+              {merge.isPending ? 'Merging…' : selectedMethod ? mergeLabels[selectedMethod] : 'Merge'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  )
+}
+
+function GithubPrChanges({ item }: { item: GithubItem }) {
+  const queryClient = useQueryClient()
+  const query = useGithubPrChanges(item.number)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string | null>(null)
+  const data = query.data
+  const files = data?.available
+    ? data.files.filter((file) => file.path.toLowerCase().includes(filter.toLowerCase()))
+    : []
+  const current = files.findIndex((file) => file.path === selected)
+  useEffect(() => {
+    if (files.length > 0 && !files.some((file) => file.path === selected)) setSelected(files[0]!.path)
+  }, [data?.available ? data.headSha : '', filter])
+  const refresh = async () => {
+    const oldHead = data?.available ? data.headSha : null
+    const next = await getGithubPrChanges(item.number, { refresh: true })
+    queryClient.setQueryData(['github', 'pr-changes', item.number], next)
+    if (next.available && oldHead && oldHead !== next.headSha) {
+      setSelected(next.files[0]?.path ?? null)
+      toast('The reviewed revision changed.')
+    }
+  }
+  if (query.isPending) return <p aria-live="polite" className="mt-6 text-sm text-muted-foreground">Loading changed files…</p>
+  if (query.isError || !data) return <p className="mt-6 text-sm text-danger">Changed files could not be loaded.</p>
+  if (!data.available) return <p className="mt-6 text-sm text-muted-foreground">{data.reason}</p>
+  const diffFiles: DiffFileChange[] = files.map((file) => ({
+    path: file.path,
+    ...(file.previousPath ? { oldPath: file.previousPath } : {}),
+    status: file.status === 'removed' ? 'deleted' : file.status === 'changed' ? 'modified' : file.status,
+    adds: file.additions,
+    dels: file.deletions,
+    binary: file.patchUnavailableReason === 'binary',
+    patch: file.patch ?? '',
+  }))
+  const fallback = isHttpUrl(item.url) ? `${item.url}/files` : null
+  const active = files.find((file) => file.path === selected)
+  return (
+    <section data-slot="gh-pr-changes" className="mt-5 min-w-0">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <strong>{data.files.length} changed files</strong>
+        <span className="text-success">+{data.additions}</span>
+        <span className="text-danger">−{data.deletions}</span>
+        <span className="font-mono text-muted-foreground" title={data.headSha}>head {data.headSha.slice(0, 8)}</span>
+        <Button type="button" variant="outline" size="sm" className="ml-auto min-h-11" onClick={() => void refresh()}>Refresh</Button>
+      </div>
+      {data.truncated ? <p role="status" className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">{data.reason ?? 'This response is incomplete.'} {fallback ? <a href={fallback} target="_blank" rel="noopener noreferrer" className="underline">Open all files on GitHub</a> : null}</p> : null}
+      <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <aside className="min-w-0">
+          <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
+          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm lg:hidden">
+            {files.map((file) => <option key={file.path}>{file.path}</option>)}
+          </select>
+          <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
+            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left text-xs', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status} · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
+          </ul>
+        </aside>
+        <div className="min-w-0">
+          <div className="mb-2 flex justify-end gap-1">
+            <Button aria-label="Previous file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current <= 0} onClick={() => setSelected(files[current - 1]?.path ?? null)}><ChevronLeftIcon /></Button>
+            <Button aria-label="Next file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current < 0 || current >= files.length - 1} onClick={() => setSelected(files[current + 1]?.path ?? null)}><ChevronRightIcon /></Button>
+          </div>
+          {files.length === 0 ? <p className="text-sm text-muted-foreground">No changed files match this filter.</p> : <>
+            <Diff files={diffFiles.filter((file) => file.path === selected)} wrap className="min-w-0" />
+            {active && !active.patch ? <p className="rounded-b border border-border p-3 text-xs text-muted-foreground">Patch unavailable: {active.patchUnavailableReason ?? 'not-provided'}.</p> : null}
+          </>}
+        </div>
+      </div>
+    </section>
   )
 }
 

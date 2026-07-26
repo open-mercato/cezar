@@ -74,6 +74,8 @@ function serve(answers: Answers = {}) {
   const config: WorkspaceConfigResponse = {
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
+    skillsAutoUpdate: null,
+    effectiveSkillsAutoUpdate: true,
     resources: { maxParallel: 2, memoryLimitMb: null, worktreeRetentionDefault: 10 },
   }
   const json = (payload: unknown, status = 200) =>

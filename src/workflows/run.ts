@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.js';
 import { type AgentSession } from '../core/claude-cli-runner.js';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.js';
@@ -123,6 +123,9 @@ interface ActiveRun {
   liveSessions: Set<AgentSession>;
   currentStepId?: string;
   idleTimer?: NodeJS.Timeout;
+  monitoringWakeTimer?: NodeJS.Timeout;
+  monitoringWakeIntervalMinutes?: number;
+  monitoringWakeups?: number;
   autosaveTimer?: NodeJS.Timeout;
   /* The screenshot counter lives on `RunManager.queuedImageSeq` (#472), keyed by
    * run id — a queued run persists attachments with no `ActiveRun` at all. */
@@ -135,6 +138,9 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Registry snapshot used to expand `/skill` follow-ups before a backend can
+   *  mistake them for its own slash commands (#676). */
+  skills?: Skill[];
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; every degradation/opt-out path does. */
   releaseRepoRoot?: () => void;
@@ -144,6 +150,8 @@ interface ActiveRun {
 const MAX_AUTO_CONTINUES = 40;
 const AUTONOMOUS_NUDGE =
   'Continue working autonomously until the task is fully complete. Do not ask me for confirmation or clarification — make reasonable assumptions and proceed. When everything is done, end the session with your done signal.';
+const MONITORING_WAKE_NUDGE =
+  'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
 
 /** How many times a harness phase session is nudged after a turn ends
  *  without the phase result file, before the session is closed and the
@@ -332,6 +340,8 @@ export class RunManager {
   // timeout already bounds how long a session can sit open. Invariant:
   // `waiting ⊆ active` — always cleared together via dropActive().
   private readonly waiting = new Set<string>();
+  /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
+  private readonly monitoring = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
   /** Per-run image counter behind `pasted-<n>` / `screenshot-<n>` (#472). Lives on
    *  the manager rather than the `ActiveRun` so a *queued* run — which has no
@@ -401,8 +411,9 @@ export class RunManager {
   dispose(): void {
     this.offUsage();
     this.offSemaphore();
-    for (const state of this.active.values()) {
+    for (const [runId, state] of this.active) {
       this.clearIdleTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       this.clearAutosaveTimer(state);
       state.releaseRepoRoot?.();
       state.releaseRepoRoot = undefined;
@@ -578,7 +589,9 @@ export class RunManager {
    * `maxParallel`, including when other projects saturate the cap.
    */
   private busySlots(): number {
-    return this.active.size + this.starting.size - this.waiting.size;
+    const ordinaryWaiting = this.waiting.size - this.monitoring.size;
+    const exemptMonitoring = Math.min(this.monitoring.size, this.semaphore.maxMonitoringSessions());
+    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring;
   }
 
   /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
@@ -616,6 +629,7 @@ export class RunManager {
    * root (spec 006 degradation rule), which is always the tighter bound.
    */
   private async pump(): Promise<void> {
+    this.reconcileMonitoringWakeTimers();
     // A pump requested while one is in flight can't just be dropped: the
     // in-flight pass may already have read capacity (it awaits `getRepoInfo`
     // before the first check), so a slot freed in that window would be lost
@@ -827,6 +841,8 @@ export class RunManager {
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.waiting.delete(runId);
+    this.monitoring.delete(runId);
+    if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
@@ -1189,6 +1205,18 @@ export class RunManager {
    * then offers "Continue" instead.
    */
   sendMessage(runId: string, content: ContentBlock[]): boolean {
+    const delivered = this.deliverMessage(runId, content, true);
+    if (delivered) {
+      const state = this.active.get(runId);
+      if (state) state.monitoringWakeups = 0;
+      this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
+    }
+    return delivered;
+  }
+
+  /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
+   * bookkeeping without masquerading as user-authored transcript messages. */
+  private deliverMessage(runId: string, content: ContentBlock[], userAuthored: boolean): boolean {
     const state = this.active.get(runId);
     if (!state?.session?.open || state.cancelled) return false;
 
@@ -1199,28 +1227,33 @@ export class RunManager {
     // Persist the attached images so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    const persisted = content
+    const persisted = userAuthored ? content
       .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
       .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null);
+      .filter((saved): saved is PersistedAttachment => saved !== null) : [];
     const images = persisted.map((saved) => saved.url);
-    this.store.appendEvent(runId, {
-      type: 'user-message',
-      stepId: state.currentStepId,
-      text,
-      imageCount: content.filter((b) => b.type === 'image').length,
-      images,
-    });
+    if (userAuthored) {
+      this.store.appendEvent(runId, {
+        type: 'user-message',
+        stepId: state.currentStepId,
+        text,
+        imageCount: content.filter((b) => b.type === 'image').length,
+        images,
+      });
+    }
 
     // Tell the agent where the pasted files live on disk (#357): the base64 blocks below still
     // ride along so the model can *view* them, but a real path is what lets it *operate* on them
     // (save, `cp`, attach to a GitHub issue/PR) — and it's the only usable reference on backends
     // (codex, opencode) that drop image blocks entirely before reaching the model.
-    const deliverable = persisted.length ? [...content, pastedAttachmentsNote(persisted)] : content;
+    const expanded = userAuthored ? expandRegistrySlashSkill(content, state.skills ?? []) : content;
+    const deliverable = persisted.length ? [...expanded, pastedAttachmentsNote(persisted)] : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       this.clearIdleTimer(state);
+      this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
+      this.monitoring.delete(runId);
       // Clear any `monitoring` activity — the agent is actively working again
       // (spec 2026-07-18-subagent-monitoring-status, #490).
       this.store.updateRun(runId, { status: 'running', activity: undefined });
@@ -1491,12 +1524,17 @@ export class RunManager {
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
               this.store.updateStep(runId, stepId, { status: 'running' });
+              this.monitoring.add(runId);
+              this.clearIdleTimer(state);
+              this.armMonitoringWakeTimer(runId, state);
             } else {
               this.store.updateRun(runId, { status: 'waiting', activity: undefined });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
+              this.monitoring.delete(runId);
+              this.clearMonitoringWakeTimer(state, runId);
             }
             this.waiting.add(runId);
-            this.armIdleTimer(runId, state);
+            if (!monitoring) this.armIdleTimer(runId, state);
             this.releaseSlot();
           }
         }
@@ -1746,6 +1784,7 @@ export class RunManager {
     if (seeded) seedHandoffFile(this.dataDir, seeded);
 
     const skills = await discoverSkills(this.repoRoot);
+    state.skills = skills;
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
@@ -2248,12 +2287,17 @@ export class RunManager {
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
+            this.monitoring.add(runId);
+            this.clearIdleTimer(state);
+            this.armMonitoringWakeTimer(runId, state);
           } else {
             this.store.updateRun(runId, { status: 'waiting', activity: undefined });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
+            this.monitoring.delete(runId);
+            this.clearMonitoringWakeTimer(state, runId);
           }
           this.waiting.add(runId);
-          this.armIdleTimer(runId, state);
+          if (!monitoring) this.armIdleTimer(runId, state);
           this.releaseSlot(); // the freed slot can start a queued run right away — in any project
         }
         // Cez's own heartbeat — the handoff stays current even when the
@@ -2362,6 +2406,9 @@ export class RunManager {
       state.liveSessions.delete(session);
       if (!concurrentPhase) {
         this.clearIdleTimer(state);
+        this.monitoring.delete(runId);
+        this.waiting.delete(runId);
+        this.clearMonitoringWakeTimer(state, runId);
         state.session = undefined;
         state.currentStepId = undefined;
         state.interrupt = () => undefined;
@@ -2391,6 +2438,8 @@ export class RunManager {
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
+    this.monitoring.delete(runId);
+    this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
@@ -2659,6 +2708,66 @@ export class RunManager {
     }
   }
 
+  private reconcileMonitoringWakeTimers(): void {
+    for (const runId of this.monitoring) {
+      const state = this.active.get(runId);
+      if (state) this.armMonitoringWakeTimer(runId, state);
+    }
+  }
+
+  private armMonitoringWakeTimer(runId: string, state: ActiveRun): void {
+    const minutes = this.semaphore.monitoringWakeIntervalMinutes();
+    if (minutes === null) {
+      this.clearMonitoringWakeTimer(state, runId);
+      return;
+    }
+    if ((state.monitoringWakeups ?? 0) >= MAX_AUTO_CONTINUES) {
+      this.clearMonitoringWakeTimer(state, runId);
+      if (!this.store.getRun(runId)?.monitoringWakeCapReached) {
+        this.store.updateRun(runId, { monitoringWakeCapReached: true });
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
+        });
+      }
+      return;
+    }
+    if (state.monitoringWakeTimer && state.monitoringWakeIntervalMinutes === minutes) return;
+    this.clearMonitoringWakeTimer(state, runId);
+    state.monitoringWakeIntervalMinutes = minutes;
+    this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
+    const deadline = Date.now() + minutes * 60_000;
+    this.store.updateRun(runId, { monitoringWakeAt: new Date(deadline).toISOString() });
+    state.monitoringWakeTimer = setTimeout(() => {
+      state.monitoringWakeTimer = undefined;
+      this.store.updateRun(runId, { monitoringWakeAt: undefined });
+      if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
+      const wakeups = state.monitoringWakeups ?? 0;
+      if (wakeups >= MAX_AUTO_CONTINUES) {
+        this.store.updateRun(runId, { monitoringWakeCapReached: true });
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); session remains parked`,
+        });
+        return;
+      }
+      state.monitoringWakeups = wakeups + 1;
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `automatic monitoring wake-up (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES})`,
+      });
+      this.deliverMessage(runId, [{ type: 'text', text: MONITORING_WAKE_NUDGE }], false);
+    }, Math.max(0, deadline - Date.now()));
+    state.monitoringWakeTimer.unref?.();
+  }
+
+  private clearMonitoringWakeTimer(state: ActiveRun, runId?: string): void {
+    if (state.monitoringWakeTimer) clearTimeout(state.monitoringWakeTimer);
+    state.monitoringWakeTimer = undefined;
+    state.monitoringWakeIntervalMinutes = undefined;
+    if (runId) this.store.updateRun(runId, { monitoringWakeAt: undefined });
+  }
+
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).
    *  Opt-in via CEZ_AUTOSAVE=1 (#471) — see periodicAutosaveEnabled. */
   private armAutosave(state: ActiveRun): void {
@@ -2769,13 +2878,67 @@ export function makeRunTitle(task: string, workflow: WorkflowDef): string {
   return chars.length > 80 ? `${chars.slice(0, 79).join('').trimEnd()}…` : chars.join('');
 }
 
-/** Skill identity is context, while the Markdown body remains instructions. */
-export function skillSystemPrompt(skill: Pick<Skill, 'name' | 'description' | 'body'>): string {
-  return [
+/**
+ * Skill identity is context, while the Markdown body remains instructions.
+ *
+ * For an on-disk skill we also hand the agent the ABSOLUTE directory of the
+ * installed copy. A run executes in an isolated worktree that has no local
+ * `.agents/skills` (gitignored, absent in a fresh checkout), so without this
+ * the agent cannot read the skill's companion files (`references/*.md`) — or,
+ * worse, reads a stale copy materialized from the team-repo cache. The path
+ * resolves against the MAIN project root (`discoverSkills(repoRoot)`), i.e. the
+ * current `npx skills`-installed copy, so a worktree agent and the main
+ * checkout read the exact same, up-to-date files. Team skills are omitted here:
+ * they are materialized into the worktree separately (see the call site).
+ */
+export function skillSystemPrompt(
+  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source'>>,
+): string {
+  const lines = [
     `Selected skill: /${skill.name}`,
     ...(skill.description ? [`Description: ${skill.description}`] : []),
-    '',
-    'Skill instructions:',
-    skill.body.trim(),
-  ].join('\n');
+  ];
+  if (skill.source && skill.source !== 'team' && skill.path) {
+    const dir = dirname(skill.path);
+    lines.push(
+      '',
+      `Skill files are installed on disk at: ${dir}`,
+      `Read any file this skill references (for example references/*.md) from that absolute directory. ` +
+        `It is the current installed copy — use it even though your working directory is a separate worktree that does not contain the skill.`,
+    );
+  }
+  lines.push('', 'Skill instructions:', skill.body.trim());
+  return lines.join('\n');
+}
+
+/**
+ * Expand a registry-backed slash skill in a live chat message before it reaches
+ * a backend. Claude otherwise intercepts an unknown leading slash command, and
+ * Codex/OpenCode have no native slash-skill lookup at all (#676).
+ *
+ * Only the first text block is eligible, only at character zero, and unknown
+ * commands pass through byte-for-byte. The caller persists the original user
+ * content before applying this delivery-only rewrite.
+ */
+export function expandRegistrySlashSkill(
+  content: ContentBlock[],
+  skills: readonly Skill[],
+): ContentBlock[] {
+  const textIndex = content.findIndex((block) => block.type === 'text');
+  if (textIndex < 0) return content;
+  const block = content[textIndex];
+  if (!block || block.type !== 'text') return content;
+  const match = /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(block.text);
+  if (!match) return content;
+  const skill = skills.find((candidate) => candidate.name === match[1]);
+  if (!skill) return content;
+
+  const request = block.text.slice(match[0].length).trim();
+  const replacement: ContentBlock = {
+    type: 'text',
+    text: request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill),
+  };
+  const expanded = [...content];
+  expanded[textIndex] = replacement;
+  return expanded;
 }

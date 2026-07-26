@@ -3,7 +3,7 @@ import { BotIcon } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
 import { putConfig } from '@/api/client'
-import { queryKeys, useConfig, useRepo, useRunnerModels } from '@/api/queries'
+import { queryKeys, useConfig, useProviderStatus, useRepo, useRunnerModels } from '@/api/queries'
 import type { ConfigResponse, Runner, SetConfigInput } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,9 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
+import { providerStatusFor } from '@/lib/provider-status'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
+import { ProviderSettings } from './provider-settings'
 
 /**
  * Settings → Agents (R6 Step 1.5, spec §"Settings"): today's scattered `PUT /api/config` knobs
@@ -35,6 +37,7 @@ export function AgentsSection() {
   const config = useConfig()
   const codexCatalog = useRunnerModels()
   const opencodeCatalog = useRunnerModels(true, 'opencode')
+  const providerStatus = useProviderStatus()
 
   if (config.isPending) {
     return (
@@ -54,12 +57,26 @@ export function AgentsSection() {
       />
     )
   }
-  return <AgentsForm config={config.data} catalogs={{ codex: codexCatalog.data, opencode: opencodeCatalog.data }} />
+  return (
+    <AgentsForm
+      config={config.data}
+      catalogs={{ codex: codexCatalog.data, opencode: opencodeCatalog.data }}
+      providerStatus={providerStatus}
+    />
+  )
 }
 
 type RunnerCatalogs = Partial<Record<Runner, ReturnType<typeof useRunnerModels>['data']>>
 
-function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: RunnerCatalogs }) {
+function AgentsForm({
+  config,
+  catalogs,
+  providerStatus,
+}: {
+  config: ConfigResponse
+  catalogs: RunnerCatalogs
+  providerStatus: ReturnType<typeof useProviderStatus>
+}) {
   const repo = useRepo()
   const queryClient = useQueryClient()
 
@@ -97,6 +114,8 @@ function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: Ru
       data-slot="agents-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
+      <ProviderSettings />
+
       <Field
         title="Default runner"
         hint="Preselected for new tasks and used by the chain planner. Each task can still pick another runner."
@@ -109,6 +128,21 @@ function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: Ru
         >
           {RUNNERS.map((option) => {
             const checked = option.id === config.defaultRunner
+            const provider = providerStatusFor(providerStatus.data, option.id)
+            const providerConnected =
+              !providerStatus.isPending &&
+              !providerStatus.isError &&
+              provider?.enabled === true &&
+              provider.status === 'connected'
+            const providerReason = providerStatus.isPending
+              ? 'Checking provider authentication…'
+              : providerStatus.isError
+                ? 'Provider authentication could not be verified.'
+                : provider?.enabled === false
+                  ? 'This provider is disabled. Enable it above or choose another provider.'
+                : providerConnected
+                  ? undefined
+                  : 'Connect this provider before selecting it.'
             return (
               <button
                 key={option.id}
@@ -116,8 +150,8 @@ function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: Ru
                 role="radio"
                 aria-checked={checked}
                 data-value={option.id}
-                title={option.desc}
-                disabled={save.isPending}
+                title={providerReason ?? option.desc}
+                disabled={save.isPending || !providerConnected}
                 onClick={() => save.mutate({ defaultRunner: option.id })}
                 className={cn(
                   'rounded-sm px-3 py-1.5 font-mono text-[13px] font-medium transition-colors disabled:opacity-50',
@@ -129,6 +163,13 @@ function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: Ru
             )
           })}
         </div>
+        {!providerStatus.isPending &&
+        !providerStatus.isError &&
+        providerStatusFor(providerStatus.data, config.defaultRunner)?.enabled === false ? (
+          <p className="text-[13px] text-muted-foreground">
+            This provider is disabled. Enable it above or choose another provider.
+          </p>
+        ) : null}
       </Field>
 
       <Field
@@ -136,35 +177,57 @@ function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: Ru
         hint="The model preselected in the composer for each runner. Auto lets the runner decide per task."
       >
         <div className="flex max-w-md flex-col gap-2">
-          {RUNNERS.map((runner) => (
-            <label key={runner.id} className="flex items-center gap-3">
-              <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{runner.label}</span>
-              <select
-                aria-label={`Default model for ${runner.label}`}
-                data-slot="agents-model"
-                data-runner={runner.id}
-                value={config.defaultModels[runner.id] ?? ''}
-                disabled={save.isPending}
-                onChange={(event) =>
-                  save.mutate({
-                    defaultModels: { [runner.id]: event.target.value || null } as Partial<
-                      Record<Runner, string | null>
-                    >,
-                  })
-                }
-                className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-              >
-                {modelsForRunner(runner.id, catalogs[runner.id], [config.defaultModels[runner.id]]).map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.id === '' ? 'auto (default)' : model.label}
-                  </option>
-                ))}
-                {modelCatalogStatus(runner.id, catalogs[runner.id]) ? (
-                  <option disabled>{modelCatalogStatus(runner.id, catalogs[runner.id])}</option>
-                ) : null}
-              </select>
-            </label>
-          ))}
+          {RUNNERS.map((runner) => {
+            const provider = providerStatusFor(providerStatus.data, runner.id)
+            const providerConnected =
+              !providerStatus.isPending &&
+              !providerStatus.isError &&
+              provider?.enabled === true &&
+              provider.status === 'connected'
+            const providerReason = providerStatus.isPending
+              ? 'Checking provider authentication…'
+              : providerStatus.isError
+                ? 'Provider authentication could not be verified.'
+                : provider?.enabled === false
+                  ? 'This provider is disabled. Enable it above or choose another provider.'
+                : providerConnected
+                  ? undefined
+                  : 'Connect this provider before selecting it.'
+            return (
+              <label key={runner.id} className="flex items-center gap-3">
+                <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{runner.label}</span>
+                <select
+                  aria-label={`Default model for ${runner.label}`}
+                  data-slot="agents-model"
+                  data-runner={runner.id}
+                  value={config.defaultModels[runner.id] ?? ''}
+                  title={providerReason ?? runner.desc}
+                  disabled={save.isPending || !providerConnected}
+                  onChange={(event) =>
+                    save.mutate({
+                      defaultModels: { [runner.id]: event.target.value || null } as Partial<
+                        Record<Runner, string | null>
+                      >,
+                    })
+                  }
+                  className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+                >
+                  {modelsForRunner(
+                    runner.id,
+                    catalogs[runner.id],
+                    [config.defaultModels[runner.id]],
+                  ).map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.id === '' ? 'auto (default)' : model.label}
+                    </option>
+                  ))}
+                  {modelCatalogStatus(runner.id, catalogs[runner.id]) ? (
+                    <option disabled>{modelCatalogStatus(runner.id, catalogs[runner.id])}</option>
+                  ) : null}
+                </select>
+              </label>
+            )
+          })}
         </div>
       </Field>
 
@@ -265,7 +328,7 @@ function AgentsForm({ config, catalogs }: { config: ConfigResponse; catalogs: Ru
             onChange={(event) => save.mutate({ baseBranch: event.target.value || null })}
             className="block w-full max-w-md rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
           >
-            <option value="">current checkout (default)</option>
+            <option value="">follow checked-out branch (default)</option>
             {repo.data.branches.map((name) => (
               <option key={name} value={name}>
                 {name}

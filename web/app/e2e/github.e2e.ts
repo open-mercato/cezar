@@ -162,7 +162,7 @@ describe('the GitHub tab against the live dry-run server', () => {
     const pr = gh.prs[0]
     if (!pr) return
 
-    browser.goto(`${baseUrl}/github/prs/${pr.number}`)
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}`)}`)
     browser.waitForFunction(`document.querySelector('[data-slot="gh-thread"]') !== null`)
 
     // The section is "Activity", not "Comments" — a twenty-row list headed `Comments · 2` would
@@ -202,8 +202,46 @@ describe('the GitHub tab against the live dry-run server', () => {
       `document.querySelector('[data-slot="gh-event-row"][data-kind="labeled"]') !== null`,
     )
 
-    browser.waitForFunction(`document.querySelector('nav a[href="/github"]') !== null`)
+    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
     browser.screenshot(`${artifactsDir}/github-thread-timeline.png`)
+  })
+
+  it('shows the guarded merge box and confirms before merging', async () => {
+    if (!forgeAvailable) return
+    const gh = await api<GithubPayload>('/api/github')
+    const pr = gh.prs[0]
+    if (!pr) return
+
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-box"]') !== null`)
+    expect(browser.text('[data-slot="gh-merge-box"]')).toContain('Ready to merge')
+    expect(browser.text('[data-slot="gh-merge-box"]')).toContain('→ main')
+    browser.screenshot(`${artifactsDir}/github-merge-ready.png`)
+
+    browser.click('[data-slot="gh-merge-box"] select + button')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-confirm"]') !== null`)
+    expect(browser.text('[data-slot="gh-merge-confirm"]')).toContain(`pull request #${pr.number}`)
+    expect(browser.text('[data-slot="gh-merge-confirm"]')).toContain('into main')
+    browser.screenshot(`${artifactsDir}/github-merge-confirm.png`)
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-merge-confirm"]') === null`)
+  })
+
+  it('reviews a pull request file-by-file in the Changes view', async () => {
+    if (!forgeAvailable) return
+    const gh = await api<GithubPayload>('/api/github')
+    const pr = gh.prs[0]
+    if (!pr) return
+
+    browser.goto(`${baseUrl}${scoped(`/github/prs/${pr.number}/changes`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-pr-changes"]') !== null`)
+    expect(browser.evaluate(`document.querySelector('[data-slot="gh-pr-changes"]').textContent`)).toContain('changed files')
+    expect(browser.count('[aria-label="Select changed file"]')).toBe(1)
+    expect(browser.count('[aria-label="Next file"]')).toBe(1)
+    browser.click('[aria-label="Next file"]')
+    browser.fill('[aria-label="Filter changed files"]', 'logo')
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-pr-changes"]').textContent.includes('Patch unavailable: binary')`)
+    browser.screenshot(`${artifactsDir}/github-pr-changes.png`)
   })
 
   it('below md the list is the page, and a detail URL swaps to the detail with a way back', async () => {

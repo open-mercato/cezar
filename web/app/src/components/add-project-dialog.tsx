@@ -103,7 +103,7 @@ export function AddProjectDialog({
         </p>
 
         {listing.isError ? (
-          <p data-slot="fs-error" className="text-[13px] text-danger">
+          <p data-slot="fs-error" className="min-w-0 break-words text-[13px] text-danger">
             {listing.error instanceof Error ? listing.error.message : 'could not list that folder'}
           </p>
         ) : (
@@ -180,12 +180,16 @@ export function AddProjectDialog({
         ) : null}
 
         {register.isError ? (
-          <p data-slot="add-project-error" className="text-[13px] text-danger">
+          <p data-slot="add-project-error" className="min-w-0 break-words text-[13px] text-danger">
             {register.error instanceof Error ? register.error.message : 'could not add that folder'}
           </p>
         ) : null}
 
-        <DialogFooter className="sm:items-center sm:justify-between">
+        {/* min-w-0 matters: DialogContent is a grid, and a grid item with visible overflow
+            cannot shrink below its min-content — a long target path (unbreakable, mono) would
+            widen the whole column and push every row past the card edge. With the floor removed
+            the path truncates instead. */}
+        <DialogFooter className="min-w-0 sm:items-center sm:justify-between">
           <span
             data-slot="add-project-target"
             className="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground"
@@ -193,7 +197,7 @@ export function AddProjectDialog({
           >
             {target ?? ''}
           </span>
-          <span className="flex gap-2">
+          <span className="flex shrink-0 gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>

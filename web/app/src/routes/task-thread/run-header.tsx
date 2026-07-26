@@ -37,11 +37,12 @@ import { Fragment, useState, type ReactNode } from 'react'
 import { useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
-import { queryKeys, useHealth, useOpenTargets, usePatchRun, useRunHandoff, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
+import { ReferenceChip } from '@/components/reference-chip'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -66,10 +67,13 @@ import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
 import { compactTokens } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
-import { formatCost, workflowLabel } from '@/lib/tasks-table'
+import { usableRunners } from '@/lib/provider-status'
+import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
-import { cliTargetResumes, finishTitle, resumeHint, runActionFlags } from './run-actions'
+import { useContinuationProvider } from './continuation-provider'
+import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { StepRail } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 
@@ -137,6 +141,7 @@ export function RunHeader({
         </div>
 
         <MetaRow run={run} />
+        <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -160,7 +165,13 @@ export function RunHeader({
               </Button>
             ) : null}
             {flags.continueRun ? (
-              <Button variant="outline" size="sm" title="Reopen the session" onClick={() => actions.continueRun.mutate()}>
+              <Button
+                variant="outline"
+                size="sm"
+                title={actions.continuation.reason ?? 'Reopen the session'}
+                disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
+                onClick={() => actions.continueRun.mutate()}
+              >
                 <PlayIcon aria-hidden="true" />
                 Continue
               </Button>
@@ -264,12 +275,25 @@ function OpenInMenu({
   onResume: () => void
 }) {
   const targets = useOpenTargets()
+  const providers = useProviderStatus()
   const open = useMutation({
     mutationFn: (target: string) => openRunIn(run.id, target),
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
-  const worktreeTargets = run.worktreePath ? (targets.data?.targets ?? []) : []
-  if (!canResume && worktreeTargets.length === 0) return null
+  const availableRunners = usableRunners(providers.data)
+  // The action routes remain authoritative for a stale browser. Once the complete status has
+  // arrived, hide only unavailable *agent* handoffs; editors, Finder, and file tools stay
+  // available because they do not launch a provider.
+  const agentAvailable = (runner: ApiRun['runner']) =>
+    !providers.isSuccess || availableRunners.includes(runner ?? 'claude')
+  const canResumeHere = canResume && agentAvailable(run.runner)
+  const worktreeTargets = run.worktreePath
+    ? (targets.data?.targets ?? []).filter((target) => {
+        const runner = cliTargetRunner(target.id)
+        return runner === undefined || agentAvailable(runner)
+      })
+    : []
+  if (!canResumeHere && worktreeTargets.length === 0) return null
 
   const copyPath = () => {
     const path = run.worktreePath
@@ -289,13 +313,13 @@ function OpenInMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {canResume ? (
+        {canResumeHere ? (
           <DropdownMenuItem data-target="terminal-resume" onSelect={onResume}>
             <SquareTerminalIcon aria-hidden="true" />
             Terminal (resume session)
           </DropdownMenuItem>
         ) : null}
-        {canResume && worktreeTargets.length > 0 ? <DropdownMenuSeparator /> : null}
+        {canResumeHere && worktreeTargets.length > 0 ? <DropdownMenuSeparator /> : null}
         {worktreeTargets.map((target) => {
           // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
           // session when one exists — label that explicitly so it reads as different from just
@@ -343,9 +367,15 @@ function useRunActions(run: ApiRun) {
   // Shared with the review panel's ✓ Accept (use-finish-run.ts) — the review-accept semantics
   // must be ONE implementation, not two buttons that happen to agree today.
   const finish = useFinishRun(run.id)
+  const continuation = useContinuationProvider(run)
   const continueMutation = useMutation({
-    mutationFn: () => continueRun(run.id),
-    onSuccess: invalidate,
+    mutationFn: async () => {
+      if (!continuation.canContinue) return null
+      return continueRun(run.id, { runner: continuation.runnerOverride })
+    },
+    onSuccess: (result) => {
+      if (result !== null) invalidate()
+    },
     onError,
   })
   const archive = useMutation({
@@ -378,6 +408,7 @@ function useRunActions(run: ApiRun) {
 
   return {
     finish,
+    continuation,
     continueRun: continueMutation,
     archive,
     cancel,
@@ -454,6 +485,30 @@ function MetaRow({ run }: { run: ApiRun }) {
       </span>,
     )
   }
+  const prUrl = taskPrUrl(run)
+  if (prUrl && isHttpUrl(prUrl)) {
+    const number = prNumber(prUrl)
+    parts.push(
+      <ReferenceChip
+        key="pr"
+        reference={{ kind: 'PR', ...(number ? { number: Number(number) } : {}), url: prUrl }}
+        taskTitle={runTitle(run)}
+        className="h-5"
+      />,
+    )
+  }
+  const issueUrl = taskIssueUrl(run)
+  if (issueUrl && isHttpUrl(issueUrl)) {
+    const number = prNumber(issueUrl)
+    parts.push(
+      <ReferenceChip
+        key="issue"
+        reference={{ kind: 'Issue', ...(number ? { number: Number(number) } : {}), url: issueUrl }}
+        taskTitle={runTitle(run)}
+        className="h-5"
+      />,
+    )
+  }
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
 
   const usage: ReactNode[] = []
@@ -504,6 +559,38 @@ function MetaRow({ run }: { run: ApiRun }) {
         <AgentBadge run={run} />
       </span>
     </div>
+  )
+}
+
+function MonitoringSchedule({ run }: { run: ApiRun }) {
+  if (run.status !== 'running' || run.activity !== 'monitoring') return null
+  if (run.monitoringWakeCapReached) {
+    return (
+      <p data-slot="monitoring-schedule" role="status" className="mt-1 text-xs text-muted-foreground">
+        Automatic checks paused — 40/40 reached
+      </p>
+    )
+  }
+  const wakeAt = run.monitoringWakeAt ? new Date(run.monitoringWakeAt) : null
+  const validWakeAt = wakeAt && Number.isFinite(wakeAt.getTime()) ? wakeAt : null
+  if (!validWakeAt) {
+    return (
+      <p data-slot="monitoring-schedule" role="status" className="mt-1 text-xs text-muted-foreground">
+        Parked — no automatic check scheduled
+      </p>
+    )
+  }
+  const label = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+  }).format(validWakeAt)
+  return (
+    <p data-slot="monitoring-schedule" role="status" className="mt-1 text-xs text-muted-foreground">
+      Next automatic check{' '}
+      <time dateTime={run.monitoringWakeAt} className="font-medium text-foreground">
+        {label}
+      </time>
+    </p>
   )
 }
 
@@ -574,7 +661,11 @@ function ActionsKebab({
           </DropdownMenuItem>
         ) : null}
         {flags.continueRun ? (
-          <DropdownMenuItem onSelect={() => actions.continueRun.mutate()}>
+          <DropdownMenuItem
+            disabled={!actions.continuation.canContinue || actions.continueRun.isPending}
+            title={actions.continuation.reason}
+            onSelect={() => actions.continueRun.mutate()}
+          >
             <PlayIcon aria-hidden="true" /> Continue
           </DropdownMenuItem>
         ) : null}

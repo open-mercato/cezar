@@ -122,6 +122,7 @@ const TABLE: Array<{ name: string; input?: unknown; expected: ToolDisplay }> = [
   // plan
   { name: 'TodoWrite', input: { todos: [] }, expected: { toolKind: 'plan', title: 'Update plan' } },
   { name: 'todoList', expected: { toolKind: 'plan', title: 'Update plan' } },
+  { name: 'contextCompaction', expected: { toolKind: 'other', title: 'Compacted context' } },
 
   // MCP, both naming schemes
   {

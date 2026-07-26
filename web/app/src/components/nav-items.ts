@@ -17,8 +17,8 @@ export type NavItem = {
   icon: ComponentType<SVGProps<SVGSVGElement>>
   /** Path prefixes that light this item up. See `activeNavPath` for the longest-prefix rule. */
   match: string[]
-  /** Step 4.2 fills the Inbox count; the slot exists so the row's geometry is final now. */
-  badge?: boolean
+  /** Optional trailing status affordance. Rendering/data stay with the shell. */
+  badge?: 'inbox-count' | 'skills-update'
   /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports the forge
    *  driver available — see `visibleNavItems`. */
   forge?: boolean
@@ -36,10 +36,10 @@ export type NavItem = {
  */
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Tasks', icon: ListChecksIcon, match: ['/', '/tasks', '/compare'] },
-  { to: '/inbox', label: 'Inbox', icon: InboxIcon, match: ['/inbox'], badge: true, inbox: true },
+  { to: '/inbox', label: 'Inbox', icon: InboxIcon, match: ['/inbox'], badge: 'inbox-count', inbox: true },
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
-  { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'] },
+  { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
 ]

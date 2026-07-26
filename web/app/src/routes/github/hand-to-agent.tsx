@@ -103,6 +103,7 @@ export function HandToAgent({
 }) {
   const queryClient = useQueryClient()
   const uiState = useUiState()
+  const kindLabel = item.kind === 'pr' ? 'PR' : 'issue'
   // A skill deleted since it was toggled must not reach the server (legacy rule).
   const validSkills = selectedSkills.filter((name) => skills.some((skill) => skill.name === name))
   // The box is PRE-FILLED with the item's reference (#524) rather than starting empty: what you
@@ -177,12 +178,21 @@ export function HandToAgent({
   }, [autoText, base])
 
   const start = useMutation({
-    mutationFn: () =>
-      createRun(githubRunBody(item, workflow, validSkills, prompt, engineBody(resolved))),
+    mutationFn: async () => {
+      if (!resolved.canRun) return null
+      return createRun(githubRunBody(item, workflow, validSkills, prompt, engineBody(resolved)))
+    },
     onSuccess: (created) => {
+      if (created === null) return
       // The GitHub tab never starts variants, so the answer is a single record.
       const run = 'runs' in created ? created.runs[0] : created
       if (run) onQueued(item.url, run.id)
+      // The "✓ queued / View task →" affordance sits BELOW the button, which on a phone is
+      // typically off-screen or behind the keyboard right after the tap — so the hand-off also
+      // confirms itself as a toast, the way every other cockpit action does. Unconditional, not
+      // mobile-only: a second confirmation costs nothing on desktop, and a viewport-conditional
+      // toast is one more thing to get wrong.
+      toast(`Added to the queue — ${kindLabel} #${item.number}`)
       // Frequency sort (#408): every hand-off skill counts, mirroring the /new composer.
       // Only bump once the CURRENT map is actually known (`uiState.data` present). The PUT
       // merge is shallow (`uiStateSchema` passthrough, src/server/server.ts), so the client
@@ -223,7 +233,7 @@ export function HandToAgent({
       }) && (event.metaKey || event.ctrlKey) // multi-line box: bare Enter inserts a newline
     if (!shouldSubmit) return
     event.preventDefault()
-    if (!start.isPending) start.mutate()
+    if (!start.isPending && resolved.canRun) start.mutate()
   }
 
   const toggleSkill = (name: string) =>
@@ -248,7 +258,27 @@ export function HandToAgent({
           selected={validSkills}
           onToggle={toggleSkill}
         />
-        <EnginePills pick={engine} onChange={onEngineChange} disabled={start.isPending} />
+        <EnginePills
+          pick={engine}
+          onChange={onEngineChange}
+          disabled={start.isPending || !resolved.canRun}
+        />
+        {!resolved.providerPending && !resolved.canRun ? (
+          <span
+            data-slot="gh-provider-gate"
+            className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+          >
+            {resolved.providerError
+              ? 'Provider authentication could not be verified.'
+              : 'Connect an agent provider to run this item.'}
+            <Link
+              to="/settings/agents#providers"
+              className="font-medium text-foreground underline underline-offset-4"
+            >
+              Configure providers
+            </Link>
+          </span>
+        ) : null}
         <PromptTemplateMenu templates={templates} onInsert={insertPromptTemplate} />
       </div>
 
@@ -290,11 +320,11 @@ export function HandToAgent({
         <Button
           variant="contrast"
           data-action="gh-run"
-          disabled={start.isPending}
+          disabled={start.isPending || !resolved.canRun}
           onClick={() => start.mutate()}
         >
           <PlayIcon aria-hidden="true" className="size-3.5" />
-          Run agent on this {item.kind === 'pr' ? 'PR' : 'issue'}
+          Run agent on this {kindLabel}
         </Button>
         <kbd
           aria-hidden="true"

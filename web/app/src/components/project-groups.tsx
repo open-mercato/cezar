@@ -129,6 +129,7 @@ export function ProjectGroups({
   forgeAvailable = false,
   inboxAvailable = false,
   inboxCount = null,
+  skillsUpdateAvailable = false,
 }: {
   projects: ProjectListEntry[]
   /** The project a flat, unprefixed URL resolves to — so the boot project is the one that
@@ -137,6 +138,7 @@ export function ProjectGroups({
   forgeAvailable?: boolean
   inboxAvailable?: boolean
   inboxCount?: number | null
+  skillsUpdateAvailable?: boolean
 }) {
   const { pathname } = useLocation()
   // The shell renders outside the routes, so there is no `ProjectScopeProvider` above it — the
@@ -177,6 +179,7 @@ export function ProjectGroups({
           forgeAvailable={forgeAvailable}
           inboxAvailable={inboxAvailable}
           inboxCount={inboxCount}
+          skillsUpdateAvailable={skillsUpdateAvailable}
         />
       ))}
     </div>
@@ -196,6 +199,7 @@ function ProjectGroup({
   forgeAvailable,
   inboxAvailable,
   inboxCount,
+  skillsUpdateAvailable,
 }: {
   project: ProjectListEntry
   /** The boot project's runs cache lives under the `'default'` scope key (it mounts
@@ -212,6 +216,7 @@ function ProjectGroup({
   forgeAvailable: boolean
   inboxAvailable: boolean
   inboxCount: number | null
+  skillsUpdateAvailable: boolean
 }) {
   const missing = project.status === 'missing'
   // Collapsed (or missing) groups never fetch — a 40-project workspace costs one registry
@@ -333,12 +338,18 @@ function ProjectGroup({
                   {/* `/api/todos` is fetched for the active scope only, so only the active
                       group has a real count to show — a badge on the others would be the active
                       project's number wearing someone else's name. */}
-                  {item.badge && active && inboxCount ? (
+                  {item.badge === 'inbox-count' && active && inboxCount ? (
                     <span
                       data-slot="nav-badge"
                       className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
                     >
                       {inboxCount}
+                    </span>
+                  ) : null}
+                  {item.badge === 'skills-update' && active && skillsUpdateAvailable ? (
+                    <span data-slot="nav-update-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">Skills update available</span>
                     </span>
                   ) : null}
                 </Link>

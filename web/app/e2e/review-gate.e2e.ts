@@ -129,15 +129,11 @@ describe('the review gate against a live parked run', () => {
       browser.count('[data-slot="diff-file-body"] .bg-diff-add'),
     ).toBeGreaterThanOrEqual(1)
     // All three exits are offered; nothing has merged anything. The dry-run mock prints a PR
-    // URL in its reply, and the store's transcript sniffer picks it up as `pullRequestUrl` —
-    // so the third exit is the no-duplicates PR ↗ link, not the Draft PR button (that button's
-    // success/409 semantics are pinned in review-panel.test.tsx).
+    // This fixture deliberately has no PR URL, so the third exit is the deterministic Draft PR
+    // action. The post-creation PR-link state and duplicate guard are component-tested.
     expect(browser.isVisible('[data-slot="review-send-back"]')).toBe(true)
-    expect(browser.isVisible('[data-slot="review-panel"] [data-slot="pr-link"]')).toBe(true)
-    expect(
-      browser.evaluate(`document.querySelector('[data-slot="review-panel"] [data-slot="pr-link"]').href`),
-    ).toBe('https://github.com/open-mercato/demo/pull/123')
-    expect(browser.count('[data-slot="review-draft-pr"]')).toBe(0)
+    expect(browser.count('[data-slot="review-panel"] [data-slot="pr-link"]')).toBe(0)
+    expect(browser.isVisible('[data-slot="review-draft-pr"]')).toBe(true)
     expect(browser.isVisible('[data-slot="review-accept"]')).toBe(true)
     // The panel sits below the transcript in an inner scroll region — bring it into the
     // viewport so the capture shows the review surface, not the top of the thread.

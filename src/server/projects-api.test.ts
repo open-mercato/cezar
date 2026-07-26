@@ -145,6 +145,22 @@ describe('workspace projects API', () => {
       expect(body.projectsDir).toBe('~/cezar/projects');
     });
 
+    it('keeps an unregistered boot project distinct from a registered project with the same slug', async () => {
+      const registeredRoot = join(otherRoot, basename(repoRoot));
+      mkdirSync(registeredRoot);
+      const registered = await registerProject(registeredRoot);
+      const contexts = new ProjectContexts({ listProjects });
+
+      const body = await getProjects({ contexts });
+      expect(registered.id).toBe(allocateProjectSlug(repoRoot, []));
+      expect(body.bootProject).toBe(allocateProjectSlug(repoRoot, [registered.id]));
+
+      const scoped = await apiRequest(makeApp({ contexts }), `/api/p/${registered.id}/repo`);
+      expect(scoped.status).toBe(200);
+      expect(contexts.peek(registered.id)?.root).toBe(await realpath(registeredRoot));
+      contexts.disposeAll();
+    });
+
     it('pins flagged reads to the boot project without pruning stored projects', async () => {
       const boot = await registerProject(repoRoot);
       const other = await registerProject(otherRoot);

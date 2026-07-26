@@ -598,6 +598,28 @@ describe('mapClaudeMessage edge cases', () => {
 describe('ClaudeCliRunner v2 wiring (against the bundled mock CLI)', () => {
   const mockBin = join(HERE, '..', '..', 'scripts', 'mock-claude.mjs');
 
+  it('preserves an is_error result message as an authoritative v1 error signal', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cez-claude-auth-error-'));
+    try {
+      const runner = new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const v1: AgentEvent[] = [];
+      const session = runner.startSession(
+        { userPrompt: 'mock:auth-error', cwd, sessionId: 'sess-auth-error' },
+        (event) => v1.push(event),
+        { autoEndAfterFirstTurn: true },
+      );
+
+      await session.result;
+
+      expect(v1).toContainEqual({
+        type: 'error',
+        message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('emits v2 events through opts.onUiEvent while v1 events keep flowing', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'cez-ui-mapper-'));
     try {

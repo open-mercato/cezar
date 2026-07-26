@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { ContentBlock } from '../core/agent-runner.js';
 import { createWorktree } from '../git-worktree.js';
 import { RunStore, type RunRecord } from '../runs/store.js';
+import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import { parseTaskMarkers } from '../runs/task-markers.js';
 import { appendTurnText, RunManager } from './run.js';
 import type { WorkflowDef } from './types.js';
@@ -703,6 +704,26 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
     const parked = store.getRun(record.id);
     expect(parked?.status).toBe('running'); // a sub-state of running, NOT waiting
     expect(parked?.activity).toBe('monitoring');
+    const state = (manager as unknown as { active: Map<string, { idleTimer?: NodeJS.Timeout }> }).active.get(record.id);
+    expect(state?.idleTimer).toBeUndefined(); // durable monitors do not inherit the 15-minute user-wait timer
+  }, 30_000);
+
+  it('optionally wakes a parked monitor without fabricating a user message', async () => {
+    manager.dispose();
+    const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, () => {
+      const path = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
+      if (!existsSync(path)) return false;
+      const ndjson = readFileSync(path, 'utf8');
+      return ndjson.includes('automatic monitoring wake-up (1/40)');
+    });
+    const events = readFileSync(join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string; message?: string });
+    expect(events.some((event) => event.type === 'note' && event.message?.includes('(1/40)'))).toBe(true);
+    expect(events.some((event) => event.type === 'user-message')).toBe(false);
   }, 30_000);
 
   it('a markerless turn-end still parks as waiting with no activity', async () => {
@@ -835,6 +856,21 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(parked?.status).toBe('waiting'); // still parks — never worse than the prose fallback
     expect(parked?.activity).toBeUndefined();
     expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(false);
+  }, 30_000);
+
+  // Regression (blank-question bug): valid JSON that fails the ask schema used
+  // to be STRIPPED from the v1 text while emitting no ask.requested — the
+  // question vanished from the transcript entirely, leaving the user nothing
+  // to answer. An invalid marker must survive as raw text (degraded but
+  // answerable) and still park the run `waiting`.
+  it('a schema-invalid CEZ:ASK stays visible in v1 text — no card will ever render it', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-invalid choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    const assistantText = events.filter((e) => e.type === 'text');
+    expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
   }, 30_000);
 });
 

@@ -378,6 +378,11 @@ describe('systemPrompt end-to-end (dry run)', () => {
       name: 'om-auto-review-pr',
       description: SKILL_DESCRIPTION,
       body: SKILL_BODY,
+      // The runner passes the full discovered skill, so the prompt carries the
+      // absolute path of the installed copy (read from the MAIN repo even in a
+      // worktree). Mirror that here so the expected prompt matches.
+      path: join(repoRoot, '.ai/skills/om-auto-review-pr/SKILL.md'),
+      source: 'ai',
     });
     expect(capturedSystemPrompt()).toBe(
       composeSystemPrompt(skillPrompt, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS),

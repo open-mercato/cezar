@@ -180,6 +180,7 @@ describe('toolDisplay', () => {
       { name: 'todowrite', expected: { toolKind: 'plan', title: 'Update plan' } },
       { name: 'todoList', expected: { toolKind: 'plan', title: 'Update plan' } },
       { name: 'plan', expected: { toolKind: 'plan', title: 'Update plan' } },
+      { name: 'contextCompaction', expected: { toolKind: 'other', title: 'Compacted context' } },
       { name: 'TaskCreate', input: { subject: 'x' }, expected: { toolKind: 'plan', title: 'Update plan' } },
       { name: 'TaskUpdate', input: { taskId: '1' }, expected: { toolKind: 'plan', title: 'Update plan' } },
       { name: 'TaskList', expected: { toolKind: 'plan', title: 'Update plan' } },

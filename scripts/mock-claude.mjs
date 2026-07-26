@@ -87,9 +87,14 @@ async function respond(userText, imageCount) {
   // AskUser card path (park `waiting` + emit `ask.requested`) is testable dry.
   // `mock:ask-bad` → a MALFORMED marker (invalid JSON), to prove graceful
   // degradation: the run still parks `waiting`, no ask card, prose preserved.
+  // `mock:ask-invalid` → syntactically valid JSON that FAILS the ask schema
+  // (empty questions) — the shape behind the blank-question bug: no card will
+  // ever render it, so the marker must survive in the v1 text.
   const askMarker = userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
-    : userText.includes('mock:ask')
+    : userText.includes('mock:ask-invalid')
+      ? '\n\nCEZ:ASK {"questions":[]}'
+      : userText.includes('mock:ask')
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({
           questions: [
@@ -112,6 +117,21 @@ async function respond(userText, imageCount) {
 
   // `mock:slow` → hold the turn for ~25 s so queue states are observable.
   if (userText.includes('mock:slow')) await sleep(25_000);
+
+  // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
+  // the credential failure in an `is_error` result even though its subtype is
+  // `success`, rather than emitting a dedicated error frame.
+  if (userText.includes('mock:auth-error')) {
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
 
   // `mock:md` → answer with a markdown-rich reply (#346 QA: tables, nested
   // lists, emphasis, fences, quotes) instead of the scripted turn.

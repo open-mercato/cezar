@@ -10,6 +10,7 @@ import type {
   GithubData,
   GithubItem,
   HealthResponse,
+  ProviderStatusResponse,
   Runner,
   Skill,
   WorkflowsResponse,
@@ -142,6 +143,30 @@ const SKILLS: Skill[] = [
   { name: 'team-x', description: 'team skill', body: '', path: '/t/team-x.md', source: 'team' },
 ]
 
+const PROVIDERS_CONNECTED: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'not-installed', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
+const PROVIDERS_MULTI: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'disconnected', enabled: true },
+  ],
+}
+
+const PROVIDERS_NONE: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'disconnected', enabled: true },
+    { provider: 'codex', status: 'unknown', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
 interface SentRequest {
   path: string
   method: string
@@ -153,7 +178,9 @@ const jsonResponse = (body: unknown, status = 200) =>
 
 /** Fetch stub in the house style (repo-git.test.tsx): records requests, serves the fixtures,
  *  and lets a test override specific `METHOD path` keys. */
-function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[] {
+function stubFetch(
+  overrides: Record<string, () => Response | Promise<Response>> = {},
+): SentRequest[] {
   const sent: SentRequest[] = []
   vi.stubGlobal(
     'fetch',
@@ -166,10 +193,29 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       // Any comment-thread request defaults to the two-comment THREAD fixture; a test overrides a
       // specific `GET /api/github/comments/<kind>/<n>` key to serve a different thread.
       if (method === 'GET' && path.startsWith('/api/github/comments/')) return jsonResponse(THREAD)
-      if (method === 'GET' && path === '/api/github') return jsonResponse(GITHUB)
-      if (method === 'GET' && path === '/api/github?limit=1000') return jsonResponse(GITHUB)
+      if (method === 'GET' && path.startsWith('/api/github/prs/') && path.includes('/changes')) return jsonResponse({
+        available: true, number: 137, headSha: '0123456789abcdef0123456789abcdef01234567',
+        additions: 3, deletions: 1, truncated: true, reason: 'One patch was omitted.',
+        files: [
+          { path: 'src/new.ts', previousPath: 'src/old.ts', status: 'renamed', additions: 3, deletions: 1, patch: '@@ -1 +1 @@\n-old\n+new' },
+          { path: 'logo.png', status: 'modified', additions: 0, deletions: 0, patchUnavailableReason: 'binary' },
+        ],
+      })
+      // Lazy PR checks (#664) default to an empty map — a test overrides to hydrate specific glyphs.
+      if (method === 'GET' && path.startsWith('/api/github/checks')) {
+        return jsonResponse({ available: true, checks: {} })
+      }
+      // The GitHub list is one fast fetch now (#664): `/api/github` with an optional `?limit=…`
+      // and/or `?refresh=1`. Sub-resources (`/api/github/comments`, `/prs`, `/checks`) never match
+      // `=== '/api/github'` or `startsWith('/api/github?')`, so this stays scoped to the list.
+      if (method === 'GET' && (path === '/api/github' || path.startsWith('/api/github?'))) {
+        return jsonResponse(GITHUB)
+      }
       if (method === 'GET' && path === '/api/workflows') return jsonResponse(WORKFLOWS)
       if (method === 'GET' && path === '/api/skills') return jsonResponse(SKILLS)
+      if (method === 'GET' && path === '/api/providers/status') {
+        return jsonResponse(PROVIDERS_CONNECTED)
+      }
       if (method === 'GET' && path === '/api/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/runs') {
         return jsonResponse({
@@ -202,6 +248,12 @@ function renderAt(entry: string) {
           <Route path="/github/prs" element={<GithubRoute view="prs" />} />
           <Route path="/github/issues/:n" element={<GithubRoute view="issues" />} />
           <Route path="/github/prs/:n" element={<GithubRoute view="prs" />} />
+          <Route path="/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
+          <Route path="/p/:projectId/github" element={<GithubIndexRoute />} />
+          <Route path="/p/:projectId/github/prs" element={<GithubRoute view="prs" />} />
+          <Route path="/p/:projectId/github/issues/:n" element={<GithubRoute view="issues" />} />
+          <Route path="/p/:projectId/github/prs/:n" element={<GithubRoute view="prs" />} />
+          <Route path="/p/:projectId/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
         </Routes>
         <Toaster />
       </MemoryRouter>
@@ -214,6 +266,15 @@ const detail = () => document.querySelector('[data-slot="gh-detail-inner"]')
 const promptField = () =>
   document.querySelector<HTMLTextAreaElement>('[data-slot="gh-custom-prompt"]')!
 const promptValue = () => promptField().value
+
+it('/github/prs/:n/changes renders PR-only file review navigation and completeness', async () => {
+  stubFetch()
+  renderAt('/github/prs/137/changes')
+  expect(await screen.findByText('2 changed files')).not.toBeNull()
+  expect(screen.getByRole('navigation', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
+  expect(screen.getByRole('status').textContent).toContain('One patch was omitted.')
+  expect(screen.getByLabelText('Next file').hasAttribute('disabled')).toBe(false)
+})
 
 /** What the composer PRE-FILLS the box with for issue 142 (#524): the item's reference, and
  *  nothing else — no quoted body. `githubTaskRef`'s own byte-for-byte shape is pinned in
@@ -261,12 +322,17 @@ describe('the GitHub tab lists', () => {
     expect(rows()[0]?.getAttribute('href')).toBe('/github/prs/137')
   })
 
-  it('a PR row shows a checks glyph tinted by outcome (#400); an issue row shows none', async () => {
-    const passing: GithubItem = { ...PR_137, number: 201, url: 'u201', checks: 'passing' }
-    const pending: GithubItem = { ...PR_137, number: 202, url: 'u202', checks: 'pending' }
-    const none: GithubItem = { ...PR_137, number: 203, url: 'u203', checks: null }
+  it('a PR row hydrates its checks glyph lazily by outcome (#664); an issue row shows none', async () => {
+    // The list tier no longer ships `statusCheckRollup` — rows come back `checks: null` and the
+    // glyph is filled in from GET /api/github/checks for the on-screen window (#664).
+    const p201: GithubItem = { ...PR_137, number: 201, url: 'u201', checks: null }
+    const p202: GithubItem = { ...PR_137, number: 202, url: 'u202', checks: null }
+    const p203: GithubItem = { ...PR_137, number: 203, url: 'u203', checks: null }
+    const pr137: GithubItem = { ...PR_137, checks: null }
     stubFetch({
-      'GET /api/github': () => jsonResponse({ ...GITHUB, prs: [PR_137, passing, pending, none] }),
+      'GET /api/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
+      'GET /api/github/checks?prs=137%2C201%2C202%2C203': () =>
+        jsonResponse({ available: true, checks: { 137: 'failing', 201: 'passing', 202: 'pending', 203: null } }),
     })
     renderAt('/github/prs')
 
@@ -274,20 +340,43 @@ describe('the GitHub tab lists', () => {
     const glyph = (number: string) =>
       document.querySelector(`[data-slot="gh-row"][data-number="${number}"] [data-slot="gh-row-checks"]`)
 
-    expect(glyph('137')?.getAttribute('data-checks')).toBe('failing')
+    // The glyph appears a beat later, once the lazy checks query resolves.
+    await waitFor(() => expect(glyph('137')?.getAttribute('data-checks')).toBe('failing'))
     expect(glyph('137')?.textContent).toBe('✗')
     expect(glyph('201')?.getAttribute('data-checks')).toBe('passing')
     expect(glyph('201')?.textContent).toBe('✓')
     expect(glyph('202')?.getAttribute('data-checks')).toBe('pending')
     expect(glyph('202')?.textContent).toBe('○')
-    expect(glyph('203')).toBeNull()
+    expect(glyph('203')).toBeNull() // null from the checks map → no CI → no glyph
 
-    // Issues never carry `checks` — no glyph on their rows either.
+    // Issues never carry `checks`, and the checks query is skipped on the Issues view.
     cleanup()
     stubFetch()
     renderAt('/github')
     await waitFor(() => expect(rows().length).toBeGreaterThan(0))
     expect(document.querySelector('[data-slot="gh-row-checks"]')).toBeNull()
+  })
+
+  it('warms the thread on row hover so opening it is instant (#664)', async () => {
+    const threadRequests: string[] = []
+    stubFetch()
+    const origFetch = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.startsWith('/api/github/comments/')) threadRequests.push(path)
+      return (origFetch as typeof fetch)(input, init as RequestInit)
+    })
+
+    renderAt('/github') // issues view; the first issue's thread loads for the detail pane
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0))
+    await waitFor(() => expect(threadRequests.length).toBeGreaterThan(0))
+    expect(threadRequests.some((p) => p === '/api/github/comments/issue/139')).toBe(false)
+
+    // Hovering a different row prefetches ITS thread before any click.
+    fireEvent.mouseEnter(document.querySelector<HTMLElement>('[data-slot="gh-row"][data-number="139"]')!)
+    await waitFor(() =>
+      expect(threadRequests.some((p) => p === '/api/github/comments/issue/139')).toBe(true),
+    )
   })
 
   it('shows a comment-count badge only on rows with comments (#499)', async () => {
@@ -305,20 +394,22 @@ describe('the GitHub tab lists', () => {
     expect(badge('139')).toBeNull()
   })
 
-  it('counts at the fast-batch cap render as 30+ until the full fetch lands', async () => {
+  it('shows the exact open count from the single fast load — no 30+ guesswork (#664)', async () => {
+    // The two-shot is gone: one fast fetch (limit 1000, no rollup) returns the whole open set, so
+    // the tab reports the real count instead of the old fast-batch "30+" placeholder.
     const many: GithubData = {
       ...GITHUB,
-      issues: Array.from({ length: 30 }, (_, i) => ({ ...ISSUE_142, number: i + 1, url: `u${i}` })),
+      issues: Array.from({ length: 45 }, (_, i) => ({ ...ISSUE_142, number: i + 1, url: `u${i}` })),
     }
     stubFetch({
-      'GET /api/github': () => jsonResponse(many),
-      // The background full fetch never answers — the fast batch must stand, with its "+".
-      'GET /api/github?limit=1000': () => new Response(null, { status: 500 }),
+      'GET /api/github?limit=1000': () => jsonResponse(many),
     })
     renderAt('/github')
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-tabs"]')).not.toBeNull())
-    expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues · 30+')
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues · 45'),
+    )
   })
 
   it('a row deep link selects that item and renders its detail', async () => {
@@ -447,6 +538,72 @@ describe('the GitHub detail pane', () => {
         'Repro: log in, hit reload',
       ),
     )
+  })
+
+  it('shows authoritative merge state and requires confirmation before mutation', async () => {
+    const sent = stubFetch({
+      'GET /api/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [{ name: 'test', state: 'passing', required: true, url: 'https://example.com/check' }],
+          methods: ['squash', 'rebase'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+        },
+      }),
+      'GET /api/github/prs/137/merge-state?refresh=1': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [],
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+        },
+      }),
+      'POST /api/github/prs/137/merge': () => jsonResponse({
+        merged: true,
+        number: 137,
+        url: PR_137.url,
+        method: 'squash',
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-merge-box"]')?.textContent).toContain('Ready to merge'))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(sent.some((request) => request.path.endsWith('merge-state?refresh=1'))).toBe(true))
+    fireEvent.click(screen.getByRole('button', { name: 'Squash and merge' }))
+    expect(sent.some((request) => request.method === 'POST')).toBe(false)
+    expect(await screen.findByText(/This will merge/)).toBeTruthy()
+    fireEvent.click(within(document.querySelector('[data-slot="gh-merge-confirm"]')!).getByRole('button', { name: 'Squash and merge' }))
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.body).toEqual({
+      method: 'squash',
+      expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
+    }))
   })
 })
 
@@ -840,8 +997,8 @@ describe('the unavailable forge state', () => {
   it('renders the server reason and the gh hint, and Try again refetches with refresh=1', async () => {
     const unavailable: GithubData = { available: false, reason: 'gh not installed', issues: [], prs: [] }
     const sent = stubFetch({
-      'GET /api/github': () => jsonResponse(unavailable),
-      'GET /api/github?refresh=1': () => jsonResponse(unavailable),
+      'GET /api/github?limit=1000': () => jsonResponse(unavailable),
+      'GET /api/github?limit=1000&refresh=1': () => jsonResponse(unavailable),
     })
     renderAt('/github')
 
@@ -849,12 +1006,12 @@ describe('the unavailable forge state', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'GitHub is unavailable here' })).toBeTruthy(),
     )
     expect(screen.getByText('gh not installed')).toBeTruthy()
-    // The full fetch must NOT fire against an unreachable forge (two-shot rule).
-    expect(sent.some((request) => request.path === '/api/github?limit=1000')).toBe(false)
+    // One fast fetch now (#664): the single limit=1000 load is what proved the forge unreachable.
+    expect(sent.some((request) => request.path === '/api/github?limit=1000')).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() =>
-      expect(sent.some((request) => request.path === '/api/github?refresh=1')).toBe(true),
+      expect(sent.some((request) => request.path === '/api/github?limit=1000&refresh=1')).toBe(true),
     )
   })
 })
@@ -893,6 +1050,13 @@ async function pickPill(slot: string, label: string) {
 const postedRun = (sent: readonly SentRequest[]) =>
   sent.find((request) => request.method === 'POST' && request.path === '/api/runs')?.body
 
+const waitForAgentRunEnabled = () =>
+  waitFor(() =>
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this/ }).disabled,
+    ).toBe(false),
+  )
+
 describe('the hand-to-agent backend pills (#401)', () => {
   it('a single-backend host hides the runner pill but still offers the model', async () => {
     // A real one-check health response — the default stub 404s /api/health, which exercises
@@ -904,20 +1068,37 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
   })
 
-  it('an untouched panel posts no runner/model — the pre-#401 body, unchanged', async () => {
+  it('an untouched cold-load panel posts the connected runner and no model', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
     await waitFor(() => expect(postedRun(sent)).toBeDefined())
     expect(postedRun(sent)).toMatchObject({ workflow: 'quick-task' })
-    expect((postedRun(sent) as { runner?: string }).runner).toBeUndefined()
+    expect((postedRun(sent) as { runner?: string }).runner).toBe('claude')
     expect((postedRun(sent) as { model?: string }).model).toBeUndefined()
   })
 
+  it('sends the connected runner explicitly when provider status resolves before health', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => new Promise<Response>(() => {}),
+    })
+    await openDetail()
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'claude' })
+  })
+
   it('a runner + model pick rides the POST alongside the workflow routing', async () => {
-    const sent = stubFetch({ 'GET /api/health': MULTI_BACKEND })
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
     await openDetail()
 
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
@@ -935,7 +1116,10 @@ describe('the hand-to-agent backend pills (#401)', () => {
   })
 
   it('switching backend resets the model pick — the presets are per runner', async () => {
-    const sent = stubFetch({ 'GET /api/health': MULTI_BACKEND })
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
     await openDetail()
 
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
@@ -952,7 +1136,10 @@ describe('the hand-to-agent backend pills (#401)', () => {
   })
 
   it('the pick survives switching to another issue (it is a way of working, not a property of one item)', async () => {
-    const sent = stubFetch({ 'GET /api/health': MULTI_BACKEND })
+    const sent = stubFetch({
+      'GET /api/health': MULTI_BACKEND,
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
     await openDetail()
 
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
@@ -968,6 +1155,101 @@ describe('the hand-to-agent backend pills (#401)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
     await waitFor(() => expect(postedRun(sent)).toBeDefined())
     expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
+  })
+
+  it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
+    const sent = stubFetch({
+      'GET /api/providers/status': () => jsonResponse(PROVIDERS_NONE),
+    })
+    await openDetail('/p/acme/github/issues/142')
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(true))
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-slot="model-pill"]')?.disabled,
+    ).toBe(true)
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/p/acme/settings/agents#providers',
+    )
+
+    fireEvent.change(promptField(), { target: { value: 'Keep this editable.' } })
+    expect(promptValue()).toBe('Keep this editable.')
+    fireEvent.click(rows().find((row) => row.dataset.number === '139')!)
+    await waitFor(() => expect(promptField().value).toContain('#139'))
+
+    // Force both entry points past their visual disabled state; neither may reach createRun.
+    const currentRun = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    currentRun.removeAttribute('disabled')
+    fireEvent.click(currentRun)
+    fireEvent.keyDown(promptField(), { key: 'Enter', ctrlKey: true })
+    await act(() => Promise.resolve())
+    expect(postedRun(sent)).toBeUndefined()
+  })
+
+  it('describes provider route failure as failed verification and keeps setup available', async () => {
+    stubFetch({
+      'GET /api/providers/status': () =>
+        jsonResponse({ error: 'provider probe failed' }, 404),
+    })
+    await openDetail()
+
+    expect(await screen.findByText('Provider authentication could not be verified.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('No agent provider is connected')
+    expect(screen.getByRole('link', { name: 'Configure providers' })).toBeTruthy()
+  })
+
+  it('explicitly sends a connected fallback that differs from the server default', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => jsonResponse(health(['claude'])),
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        } satisfies ProviderStatusResponse),
+    })
+    await openDetail()
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.click(run)
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
+  })
+
+  it('excludes a connected disabled default runner and sends the enabled fallback', async () => {
+    const sent = stubFetch({
+      'GET /api/health': () => jsonResponse(health(['claude', 'codex'])),
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'connected', enabled: false },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        } satisfies ProviderStatusResponse),
+    })
+    await openDetail()
+
+    const run = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Run agent on this issue/,
+    })
+    await waitFor(() => expect(run.disabled).toBe(false))
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    fireEvent.click(run)
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
   })
 })
 
@@ -1117,6 +1399,7 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
   it('nothing selected → quick-task, and the queued affordance links the new run', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1129,6 +1412,17 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
     expect(document.querySelector('[data-slot="gh-view-run"]')?.getAttribute('href')).toBe('/tasks/run-1')
     // The list row grows the queued flag.
     expect(document.querySelector('[data-slot="gh-queued-flag"]')).not.toBeNull()
+  })
+
+  it('confirms the hand-off with a toast — the inline affordance is off-screen on a phone', async () => {
+    stubFetch()
+    await openDetail()
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(screen.getByText('Added to the queue — issue #142')).toBeTruthy())
+    expect(document.querySelector('[data-slot="toast"]')?.getAttribute('data-tone')).toBe('default')
   })
 
   it('a custom prompt is handed over WITH the item reference, not instead of it (#524)', async () => {
@@ -1195,6 +1489,7 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
       'POST /api/runs': () => jsonResponse({ error: 'a task is already running' }, 409),
     })
     await openDetail()
+    await waitForAgentRunEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1483,6 +1778,7 @@ describe('⌘/Ctrl+Enter submits the follow-up composer (#408 item 5)', () => {
   it('Ctrl+Enter runs the agent', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     const textarea = screen.getByLabelText('Custom prompt')
     fireEvent.change(textarea, { target: { value: 'go' } })
@@ -1498,6 +1794,7 @@ describe('⌘/Ctrl+Enter submits the follow-up composer (#408 item 5)', () => {
   it('⌘+Enter (metaKey) also runs the agent', async () => {
     const sent = stubFetch()
     await openDetail()
+    await waitForAgentRunEnabled()
 
     const textarea = screen.getByLabelText('Custom prompt')
     fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })

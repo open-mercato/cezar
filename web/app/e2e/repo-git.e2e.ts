@@ -143,13 +143,17 @@ describe('the repo view against the live dry-run server', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="repo-branch-list"]') !== null`)
 
     expect(browser.count('[data-slot="branch-row"]')).toBe(repo.branches.length)
-    // Exactly the current branch wears the marker (READ-ONLY: nothing is clicked here).
-    expect(browser.count('[data-slot="branch-current"]')).toBe(1)
-    expect(
-      browser.evaluate(
-        `document.querySelector('[data-slot="branch-current"]').closest('[data-slot="branch-row"]').dataset.branch`,
-      ),
-    ).toBe(repo.info?.branch)
+    // An attached checkout marks exactly its current branch. CI may run this suite from a
+    // detached task worktree; then git honestly reports no branch and no row may be marked.
+    const expectedCurrent = repo.info?.branch && repo.branches.includes(repo.info.branch) ? 1 : 0
+    expect(browser.count('[data-slot="branch-current"]')).toBe(expectedCurrent)
+    if (expectedCurrent === 1 && repo.info) {
+      expect(
+        browser.evaluate(
+          `document.querySelector('[data-slot="branch-current"]').closest('[data-slot="branch-row"]').dataset.branch`,
+        ),
+      ).toBe(repo.info.branch)
+    }
     // The base-branch picker exists — /api/repo carries baseBranch, so the control is honest.
     expect(browser.count('[data-slot="base-branch-picker"]')).toBe(1)
   })

@@ -20,6 +20,9 @@
  * Pure function over untrusted input: tool inputs come off the wire and may
  * be null, partial (streamed incrementally) or arbitrarily malformed —
  * `toolDisplay` must never throw.
+ *
+ * Known Codex items include commandExecution, contextCompaction, fileChange,
+ * imageView, mcpToolCall, webSearch and plan.
  */
 
 import type { ToolKind } from './ui-events.js'
@@ -173,6 +176,9 @@ export function toolDisplay(name: string, input?: unknown): ToolDisplay {
     case 'taskupdate':
     case 'tasklist':
       return { toolKind: 'plan', title: 'Update plan' }
+
+    case 'contextcompaction':
+      return { toolKind: 'other', title: 'Compacted context' }
 
     case 'mcptoolcall': {
       const server = field(input, 'server')

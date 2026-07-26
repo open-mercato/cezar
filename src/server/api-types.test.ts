@@ -9,6 +9,8 @@ import type {
   GithubCommentsData as WebGithubCommentsData,
   GithubData as WebGithubData,
   GithubItem as WebGithubItem,
+  GithubMergeMethod as WebGithubMergeMethod,
+  GithubPrMergeState as WebGithubPrMergeState,
   GithubTimelineEvent as WebGithubTimelineEvent,
   GithubTimelineEventKind as WebGithubTimelineEventKind,
   GroupResponse as WebGroupResponse,
@@ -18,6 +20,8 @@ import type {
   RepoCommitPayload as WebRepoCommitPayload,
   LogEntry as WebLogEntry,
   ProcessUsage as WebProcessUsage,
+  ProviderStatus as WebProviderStatus,
+  ProviderStatusResponse as WebProviderStatusResponse,
   RepoInfo as WebRepoInfo,
   RunEvent as WebRunEvent,
   QueuedMessage as WebQueuedMessage,
@@ -53,6 +57,7 @@ import type {
 } from '../../web/app/src/protocol/ui-events.js';
 import type { BackendCheck } from '../core/backend-detect.js';
 import type { ProcessUsage } from '../core/process-usage.js';
+import type { ProviderStatus, ProviderStatusResponse } from '../core/provider-auth.js';
 import type { ToolDisplay } from '../core/tool-display.js';
 import type {
   FileDiff,
@@ -77,6 +82,7 @@ import type { WorkflowLoadIssue, loadWorkflows } from '../workflows/load.js';
 import type { WorkflowDef, WorkflowStepDef } from '../workflows/types.js';
 import type { Capabilities } from './capabilities.js';
 import type { ForgeAvailability, ForgeKind } from './forge/index.js';
+import type { ForgeMergeMethod, ForgePrMergeState } from './forge/types.js';
 import type { BranchResult, ChangedFile, ChangesPayload, CommitPayload, DirEntry } from './git-changes.js';
 import type {
   ForgeComment,
@@ -138,6 +144,15 @@ const guards = {
   runEvent: true satisfies Exact<RunEvent, WebRunEvent>,
   processUsage: true satisfies Exact<ProcessUsage, WebProcessUsage>,
   backendCheck: true satisfies Exact<BackendCheck, WebBackendCheck>,
+  // The core row remains additive for workspace events, while every complete HTTP response is
+  // enriched with the required preference by applyProviderEnablement().
+  providerStatus: true satisfies Exact<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusKeys: true satisfies ExactKeys<ProviderStatus & { enabled: boolean }, WebProviderStatus>,
+  providerStatusResponse: true satisfies Exact<
+    { providers: Array<ProviderStatus & { enabled: boolean }> },
+    WebProviderStatusResponse
+  >,
+  providerStatusResponseKeys: true satisfies ExactKeys<ProviderStatusResponse, WebProviderStatusResponse>,
   repoInfo: true satisfies Exact<RepoInfo, WebRepoInfo>,
   statusEntry: true satisfies Exact<StatusEntry, WebStatusEntry>,
   logEntry: true satisfies Exact<LogEntry, WebLogEntry>,
@@ -153,6 +168,9 @@ const guards = {
   todoItem: true satisfies Exact<TodoItem, WebTodoItem>,
   githubItem: true satisfies Exact<GithubItem, WebGithubItem>,
   githubData: true satisfies Exact<GithubData, WebGithubData>,
+  githubMergeMethod: true satisfies Exact<ForgeMergeMethod, WebGithubMergeMethod>,
+  githubPrMergeState: true satisfies Exact<ForgePrMergeState, WebGithubPrMergeState>,
+  githubPrMergeStateKeys: true satisfies ExactKeys<ForgePrMergeState, WebGithubPrMergeState>,
   // The comment-thread payload (#499) and its timeline events (#525). ForgeComment was left
   // unpinned when #499 landed, which is exactly the drift this closes: `GET
   // /api/github/comments/:kind/:number` is a second consumer contract on the protected /api/github

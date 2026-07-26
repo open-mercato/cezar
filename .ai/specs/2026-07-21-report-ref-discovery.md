@@ -58,9 +58,10 @@ pretty distinguished"):
   subject; several resolve only when the task prompt names exactly one;
   ambiguity clears the chip.
 - An unambiguous resolution seeds `issueNumber` when nothing owns that field;
-  ambiguity takes the janitor's own seed back. Marker and namer outrank the
-  janitor and overwrite freely (a namer-written number equal to a revoked
-  seed being cleared alongside it is the documented residual).
+  the persisted `referencedIssueNumberSeeded` provenance bit lets ambiguity
+  take back only the janitor's own seed, including after a restart. Prompt,
+  marker, and namer writes clear that provenance and are never revoked merely
+  because their number equals the previous fuzzy resolution.
 - Issue tracking runs regardless of the created-PR state — a task that opened
   a PR can still be *about* an issue.
 
@@ -84,6 +85,7 @@ pretty distinguished"):
   markers, decorated/suffixed lines, skill-doc placeholders are inert);
   CRLF tolerance; strip leaves report lines visible.
 - Store: single-link adoption + `issueNumber` seed; independence from the
-  created-PR tier; ambiguity clearing chip and seeded number; task-prompt
+  created-PR tier; ambiguity clearing the chip and a persisted janitor seed;
+  ambiguity preserving an equal prompt-owned number; task-prompt
   disambiguation; declared-issue candidate filtering; marker-owned
   `issueNumber` never overwritten by stray links.

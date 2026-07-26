@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, useProjectRuns, useProjects, useTodos } from '@/api/queries'
-import type { HealthResponse } from '@/api/types'
+import { useHealth, useProjectRuns, useProjects, useSkillsUpdate, useTodos } from '@/api/queries'
+import type { HealthResponse, SkillsUpdateState } from '@/api/types'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { ListViewProvider } from '@/components/list-view'
+import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
@@ -33,6 +34,12 @@ export function repoChipOf(health: HealthResponse | undefined): RepoChip | null 
   return { name, branch: repo.branch }
 }
 
+/** Only a checked, still-actionable result earns chrome. An update failure may retain a proven
+ * available scope, so keep that signal; all unknown/transient/degraded states stay quiet. */
+export function skillsUpdateMarkerOf(state: SkillsUpdateState | undefined): boolean {
+  return state?.available === true && (state.status === 'available' || state.status === 'error')
+}
+
 /**
  * The app shell, wired to live data.
  *
@@ -53,6 +60,10 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // badge and the endpoint can only answer [], so the query parks rather than polls.
   const inboxAvailable = health.data?.capabilities.followups === true
   const todos = useTodos(inboxAvailable)
+  // One query in the shell feeds every rendering of the active project's navigation (desktop,
+  // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
+  const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
+  const skillsUpdateAvailable = skillsUpdateMarkerOf(skillsUpdate.data)
   const registry = useProjects().data
   const titleContext = pageTitleContext(pathname)
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
@@ -101,6 +112,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // `?? null` rather than `?? 0`: no badge while the inbox is unknown, and no badge when it
         // is known to be empty — AppShell renders neither for a falsy count.
         inboxCount={todos.data?.length ?? null}
+        skillsUpdateAvailable={skillsUpdateAvailable}
         // Hidden until health confirms the forge driver (R6 Step 1.1) — same honesty rule as
         // the chips: the nav must not claim a GitHub tab it cannot back. The Tools menu's
         // forge note says why it is absent.
@@ -108,6 +120,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
         // the nav must not offer an Inbox this server will never fill.
         inboxAvailable={inboxAvailable}
+        banner={<ProviderBannerContainer />}
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={<TaskQuickListContainer />}
         // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
@@ -124,6 +137,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
               forgeAvailable={health.data?.forge?.available === true}
               inboxAvailable={inboxAvailable}
               inboxCount={todos.data?.length ?? null}
+              skillsUpdateAvailable={skillsUpdateAvailable}
             />
           ) : undefined
         }

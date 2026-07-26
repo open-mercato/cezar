@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.js';
 import { workspaceConfigPath } from '../paths.js';
 
 /**
@@ -56,6 +57,10 @@ const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
     maxParallel: z.number().int().min(1).max(16).default(2).catch(2),
+    /** Extra durable `CEZ:MONITORING` sessions exempt from the active-task cap. */
+    maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
+    /** Optional cadence for re-checking monitored work; null parks at zero model cost. */
+    monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().default(null).catch(null),
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
@@ -64,10 +69,32 @@ const resourcesSchema = z
   })
   .passthrough();
 
+const composerDefaultsSchema = z
+  .object({
+    autonomous: z.boolean().optional().catch(undefined),
+    worktree: z.boolean().optional().catch(undefined),
+  })
+  .passthrough();
+
 const workspacePathSchema = (envName: 'CEZ_BROWSE_ROOT' | 'CEZ_PROJECTS_DIR', fallback: string) => {
   const defaultValue = () => process.env[envName]?.trim() || fallback;
   return z.string().min(1).max(4096).default(defaultValue).catch(defaultValue);
 };
+
+const providerIdSet = new Set<string>(PROVIDER_IDS);
+
+const disabledProvidersSchema = z
+  .array(z.unknown())
+  .default(() => [])
+  .catch(() => [])
+  .transform((values): ProviderId[] => {
+    const seen = new Set<ProviderId>();
+    for (const value of values) {
+      if (typeof value !== 'string' || !providerIdSet.has(value)) continue;
+      seen.add(value as ProviderId);
+    }
+    return PROVIDER_IDS.filter((provider) => seen.has(provider));
+  });
 
 const workspaceConfigSchema = z
   .object({
@@ -81,9 +108,16 @@ const workspaceConfigSchema = z
      *  `~` is expanded by the checkout flow, not here); validated writable
      *  when *changed*, never at load. */
     projectsDir: workspacePathSchema('CEZ_PROJECTS_DIR', '~/cezar/projects'),
+    /** Optional auto-update override. Absence inherits the environment/default
+     *  and must stay absent on unrelated merge-writes. */
+    skillsAutoUpdate: z.boolean().optional().catch(undefined),
     // Function-form default/catch: mutators (step 1.3's registerProject) edit
     // these objects in place, so parses must never share one reference.
     resources: resourcesSchema.default(() => ({})).catch(() => resourcesSchema.parse({})),
+    /** Optional New Task policy. Missing keys inherit exact 0/1 environment seeds. */
+    composerDefaults: composerDefaultsSchema.default(() => ({})).catch(() => ({})),
+    /** Host-wide provider preferences; absent means every provider is enabled. */
+    disabledProviders: disabledProvidersSchema,
     /** Per-entry salvage: a corrupt entry is dropped, the rest of the registry
      *  survives (a whole-array `.catch([])` would evict every project over one
      *  bad row). */
@@ -101,6 +135,28 @@ const workspaceConfigSchema = z
   .passthrough();
 
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+
+/** Resolve the auto-update preference without mutating or materializing it. */
+export function effectiveSkillsAutoUpdate(
+  config: Pick<WorkspaceConfig, 'skillsAutoUpdate'>,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (config.skillsAutoUpdate !== undefined) return config.skillsAutoUpdate;
+  if (env.CEZ_SKILLS_AUTO_UPDATE === '0') return false;
+  if (env.CEZ_SKILLS_AUTO_UPDATE === '1') return true;
+  return true;
+}
+
+export function effectiveComposerDefault(
+  stored: boolean | undefined,
+  envValue: string | undefined,
+  fallback: boolean,
+): boolean {
+  if (stored !== undefined) return stored;
+  if (envValue === '0') return false;
+  if (envValue === '1') return true;
+  return fallback;
+}
 
 /** The in-memory default — what a missing/corrupt file behaves like. */
 export function defaultWorkspaceConfig(): WorkspaceConfig {

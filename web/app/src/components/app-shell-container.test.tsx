@@ -5,8 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
-import type { HealthResponse, RunRecord } from '@/api/types'
-import { AppShellContainer, repoChipOf } from '@/components/app-shell-container'
+import type {
+  HealthResponse,
+  ProviderStatusResponse,
+  RunRecord,
+  SkillsUpdateState,
+} from '@/api/types'
+import { AppShellContainer, repoChipOf, skillsUpdateMarkerOf } from '@/components/app-shell-container'
 import { ThemeProvider } from '@/components/theme-provider'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -54,13 +59,28 @@ const TODOS = [
   { id: 't2', summary: 'Rebase the branch' },
 ]
 
+const PROVIDERS: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
 /** Answer each endpoint the shell reads; anything else 404s loudly rather than silently
  *  resolving to `{}` and making a broken wiring look fine. */
 function serve(routes: Record<string, unknown>): void {
   fetchMock.mockImplementation(async (input) => {
     const path = String(input)
-    if (!(path in routes)) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
-    return new Response(JSON.stringify(routes[path]), {
+    const response =
+      path === '/api/providers/status'
+        ? (routes[path] ?? PROVIDERS)
+        : path === '/api/workspace/ui-state'
+          ? (routes[path] ?? {})
+          : routes[path]
+    if (response === undefined) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
+    if (response instanceof Response) return response
+    return new Response(JSON.stringify(response), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
@@ -118,6 +138,24 @@ describe('repoChipOf', () => {
   it('is null while health is unknown, and outside a git repo', () => {
     expect(repoChipOf(undefined)).toBeNull()
     expect(repoChipOf({ ...HEALTH, repo: null })).toBeNull()
+  })
+})
+
+const UPDATE: SkillsUpdateState = {
+  status: 'available', available: true, autoUpdateEnabled: true, inherited: true,
+  checkedAt: '2026-07-22T00:00:00.000Z', updatedAt: null, scopes: [], needsUpgradeNotes: false,
+}
+
+describe('skillsUpdateMarkerOf', () => {
+  it.each([
+    ['loading', undefined, false],
+    ['available', UPDATE, true],
+    ['proven available with an error', { ...UPDATE, status: 'error' as const }, true],
+    ['current', { ...UPDATE, status: 'current' as const, available: false }, false],
+    ['unavailable', { ...UPDATE, status: 'unavailable' as const, available: false }, false],
+    ['updating', { ...UPDATE, status: 'updating' as const }, false],
+  ])('%s → %s', (_name, state, expected) => {
+    expect(skillsUpdateMarkerOf(state)).toBe(expected)
   })
 })
 
@@ -279,6 +317,88 @@ describe('sidebar wiring', () => {
     await waitFor(() => expect(versionChip()).not.toBeNull())
     expect(versionChip()?.textContent).toBe('v0.1.3')
     expect(repoChip()).toBeNull()
+  })
+
+  it('wires the provider query into the AppShell banner slot', async () => {
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'not-installed', enabled: true },
+          { provider: 'opencode', status: 'disconnected', enabled: true },
+        ],
+      },
+    })
+    renderShell('/p/cezar/')
+
+    const banner = await screen.findByRole('status')
+    expect(banner.textContent).toContain('No agent provider credentials were found.')
+    expect(document.querySelector('[data-slot="banner-slot"]')?.contains(banner)).toBe(true)
+  })
+
+  it('shows a runtime authentication incident in the global banner slot', async () => {
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
+        ],
+      },
+    })
+    renderShell('/p/cezar/')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(
+      'Provider authentication failed during a task: OpenCode.',
+    )
+    expect(document.querySelector('[data-slot="banner-slot"]')?.contains(alert)).toBe(true)
+  })
+
+  it('keeps the shell and route content when provider status fails', async () => {
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': new Response(JSON.stringify({ error: 'unavailable' }), { status: 500 }),
+    })
+    const client = createQueryClient()
+    client.setDefaultOptions({
+      queries: { ...client.getDefaultOptions().queries, retry: false },
+    })
+    renderShell('/', client)
+
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('error'),
+    )
+    expect(screen.getByText('route content')).toBeTruthy()
+    expect(document.querySelector('[data-slot="app-shell"]')).not.toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('keeps the shell and route content when a successful provider response is malformed', async () => {
+    const secret = 'unexpected-provider-payload'
+    serve({
+      '/api/health': HEALTH,
+      '/api/todos': [],
+      '/api/providers/status': { providers: [null, { provider: 'future', status: secret }] },
+    })
+    const client = createQueryClient()
+    client.setDefaultOptions({
+      queries: { ...client.getDefaultOptions().queries, retry: false },
+    })
+    renderShell('/', client)
+
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('error'),
+    )
+    expect(screen.getByText('route content')).toBeTruthy()
+    expect(document.querySelector('[data-slot="app-shell"]')).not.toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(secret)).toBeNull()
   })
 })
 

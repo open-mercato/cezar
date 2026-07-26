@@ -106,6 +106,10 @@ const runRecordSchema = z.object({
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
   activity: z.enum(['monitoring']).optional(),
+  /** Exact server-computed deadline for the next automatic monitoring check. */
+  monitoringWakeAt: z.string().datetime().optional().catch(undefined),
+  /** True only for the live epoch that exhausted all automatic monitoring checks. */
+  monitoringWakeCapReached: z.boolean().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -123,6 +127,10 @@ const runRecordSchema = z.object({
    *  cross-checked output. Display tier — never gates actions. */
   prNumber: z.number().optional(),
   issueNumber: z.number().optional(),
+  /** Provenance for an `issueNumber` seeded by referenced-issue discovery.
+   *  Persisted so ambiguity can revoke only the janitor's own value, including
+   *  after a restart. Any prompt, namer, or marker write clears this flag. */
+  referencedIssueNumberSeeded: z.boolean().optional(),
   /** Who owns the display title: `user` (PATCH rename — never auto-overwritten),
    *  `marker` (agent-declared via `CEZ:TITLE`, spec 2026-07-18-task-ref-markers —
    *  beats the namer, silences live refresh) or `auto` (namer-owned — a later
@@ -252,6 +260,25 @@ function eventTextFragments(event: Record<string, unknown>): string[] {
   return fragments;
 }
 
+/** Agent-authored event text, matching the trust boundary used by task markers.
+ * Tool titles, inputs, and outputs remain visible to the referenced-URL tier,
+ * but must never promote an issue into the shared `issueNumber` field (#538). */
+function eventAgentTextFragments(event: Record<string, unknown>): string[] {
+  const fragments: string[] = [];
+  for (const key of ['text', 'result'] as const) {
+    const value = event[key];
+    if (typeof value === 'string') fragments.push(value);
+  }
+  const item = event.item;
+  if (item && typeof item === 'object') {
+    const it = item as Record<string, unknown>;
+    if (it.kind === 'message' && it.role === 'assistant' && typeof it.text === 'string') {
+      fragments.push(it.text);
+    }
+  }
+  return fragments;
+}
+
 /**
  * The referenced tier's resolution rule, shared by the PR and issue janitors:
  * a marker-declared number (spec 2026-07-18-task-ref-markers) owns the answer
@@ -342,6 +369,13 @@ export class RunStore extends EventEmitter {
                 if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
               }
             }
+            if (!['running', 'waiting', 'queued'].includes(run.status)) {
+              run.activity = undefined;
+              run.monitoringWakeAt = undefined;
+            }
+            // The wake counter is intentionally process-local, so a restarted
+            // process starts a fresh epoch instead of displaying a stale cap.
+            run.monitoringWakeCapReached = undefined;
             store.runs.set(run.id, run);
           }
         }
@@ -414,7 +448,16 @@ export class RunStore extends EventEmitter {
   updateRun(id: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): RunRecord | undefined {
     const run = this.runs.get(id);
     if (!run) return undefined;
-    Object.assign(run, this.redactPatch(patch));
+    if (Object.prototype.hasOwnProperty.call(patch, 'issueNumber')) {
+      delete run.referencedIssueNumberSeeded;
+    }
+    const normalized = { ...patch };
+    if (normalized.status && !['running', 'waiting', 'queued'].includes(normalized.status)) {
+      normalized.activity = undefined;
+      normalized.monitoringWakeAt = undefined;
+      normalized.monitoringWakeCapReached = undefined;
+    }
+    Object.assign(run, this.redactPatch(normalized));
     this.touch(run);
     return run;
   }
@@ -518,6 +561,7 @@ export class RunStore extends EventEmitter {
     // fields AND nested v2 `item.*` content (#407). A URL without the created
     // phrasing still feeds the referenced tier (the PR the task is about).
     const haystack = eventTextFragments(full).join(' ');
+    const agentHaystack = eventAgentTextFragments(full).join(' ');
     if (haystack.length > 0) {
       let changed = false;
       if (!run.pullRequestUrl) {
@@ -531,7 +575,10 @@ export class RunStore extends EventEmitter {
       // Issue links feed their own referenced tier regardless of PR state —
       // a task that created a PR can still be ABOUT an issue
       // (spec 2026-07-21-report-ref-discovery).
-      if (ISSUE_URL_RE.test(haystack) && this.trackReferencedIssues(run, haystack)) {
+      if (
+        ISSUE_URL_RE.test(haystack) &&
+        this.trackReferencedIssues(run, haystack, agentHaystack)
+      ) {
         changed = true;
       }
       if (changed) this.touch(run);
@@ -569,33 +616,43 @@ export class RunStore extends EventEmitter {
    * resolution also seeds `issueNumber` when nothing owns that field yet —
    * marker and namer both outrank this janitor and overwrite it freely.
    */
-  private trackReferencedIssues(run: RunRecord, haystack: string): boolean {
+  private trackReferencedIssues(
+    run: RunRecord,
+    haystack: string,
+    seedHaystack = haystack,
+  ): boolean {
     const seen = new Set(run.referencedIssueCandidates ?? []);
     const before = seen.size;
     for (const match of haystack.matchAll(new RegExp(ISSUE_URL_RE.source, 'g'))) {
       if (seen.size >= MAX_PR_CANDIDATES) break;
       seen.add(match[0]);
     }
-    if (seen.size === before) return false;
-    run.referencedIssueCandidates = [...seen];
+    const candidatesChanged = seen.size !== before;
+    if (candidatesChanged) run.referencedIssueCandidates = [...seen];
     const prev = run.referencedIssueUrl;
     run.referencedIssueUrl = resolveReferencedRef(
-      run.referencedIssueCandidates,
+      run.referencedIssueCandidates ?? [],
       run.task,
       run.markerRefs?.issue,
     );
-    if (run.markerRefs?.issue === undefined) {
+    let numberChanged = false;
+    if (run.markerRefs?.issue === undefined && ISSUE_URL_RE.test(seedHaystack)) {
       if (run.referencedIssueUrl && run.issueNumber === undefined) {
         const n = Number(run.referencedIssueUrl.split('/').pop());
-        if (Number.isInteger(n) && n > 0) run.issueNumber = n;
-      } else if (!run.referencedIssueUrl && prev && run.issueNumber === Number(prev.split('/').pop())) {
+        if (Number.isInteger(n) && n > 0) {
+          run.issueNumber = n;
+          run.referencedIssueNumberSeeded = true;
+          numberChanged = true;
+        }
+      } else if (!run.referencedIssueUrl && prev && run.referencedIssueNumberSeeded) {
         // Ambiguity revoked the resolution — take back the number this janitor
-        // seeded from it (a namer-written number that happens to match is the
-        // documented residual). No chip beats a wrong chip.
+        // seeded from it. No chip beats a wrong chip.
         delete run.issueNumber;
+        delete run.referencedIssueNumberSeeded;
+        numberChanged = true;
       }
     }
-    return true;
+    return candidatesChanged || run.referencedIssueUrl !== prev || numberChanged;
   }
 
   /**
@@ -615,7 +672,10 @@ export class RunStore extends EventEmitter {
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
     if (refs.pr !== undefined) run.prNumber = refs.pr;
-    if (refs.issue !== undefined) run.issueNumber = refs.issue;
+    if (refs.issue !== undefined) {
+      run.issueNumber = refs.issue;
+      delete run.referencedIssueNumberSeeded;
+    }
     if (run.markerRefs.pr !== undefined) {
       run.referencedPullRequestUrl = resolveReferencedRef(
         run.referencedPrCandidates ?? [],

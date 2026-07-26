@@ -22,13 +22,16 @@ import {
   fetchTimelinePages,
   fetchCommentCounts,
   fetchCommitChecks,
+  fetchPrChecks,
   fetchGithub,
+  GH_CHECKS_MAX,
   ghCheckRunSchema,
   ghTimelineEventSchema,
   mergeThread,
   normalizeComments,
   normalizeEvents,
   normalizeReviews,
+  normalizeMergeState,
   parseCountsPage,
   parseOwnerName,
   rollupToChecks,
@@ -124,6 +127,54 @@ describe('rollupToChecks', () => {
   it('falls back through conclusion → state → status, then treats a blank as pending', () => {
     expect(rollupToChecks([{ conclusion: null, status: null, state: 'FAILURE' }])).toBe('failing');
     expect(rollupToChecks([{ conclusion: null, status: null, state: null }])).toBe('pending');
+  });
+});
+
+describe('normalizeMergeState', () => {
+  const ready = {
+    number: 128,
+    title: 'Ready PR',
+    url: 'https://github.com/acme/demo/pull/128',
+    state: 'OPEN',
+    isDraft: false,
+    headRefName: 'feat/ready',
+    baseRefName: 'main',
+    headRefOid: '0123456789abcdef0123456789abcdef01234567',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+    statusCheckRollup: [{ name: 'test', conclusion: 'SUCCESS', detailsUrl: 'https://example.com/check' }],
+  };
+
+  it('offers only repository-enabled methods and marks clean authoritative state ready', () => {
+    const state = normalizeMergeState(ready, {
+      allow_merge_commit: false,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+      squash_merge_commit_title: 'PR_TITLE',
+    }, { readable: true, requiredChecks: ['test'] });
+    expect(state.methods).toEqual(['squash', 'rebase']);
+    expect(state.defaultMethod).toBe('squash');
+    expect(state.canMerge).toBe(true);
+    expect(state.checks[0]).toMatchObject({ name: 'test', state: 'passing', required: true });
+  });
+
+  it('never presents unknown rules or a changed review decision as ready', () => {
+    expect(normalizeMergeState({ ...ready, mergeStateStatus: 'UNKNOWN' }, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }, { readable: true, requiredChecks: [] }).eligibility).toBe('unknown');
+    expect(normalizeMergeState({ ...ready, reviewDecision: 'CHANGES_REQUESTED' }, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }, { readable: true, requiredChecks: [] }).eligibility).toBe('blocked');
+    expect(normalizeMergeState(ready, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }).eligibility).toBe('unknown');
   });
 });
 
@@ -1319,5 +1370,124 @@ describe('fetchCommitChecks (#525 Phase 2)', () => {
     await fetchCommitChecks(runGraphql, 'o', 'n', [sha(1)]);
     expect(sent).toContain(`object(oid: "${sha(1)}")`);
     expect(sha(1)).toHaveLength(40);
+  });
+});
+
+/** `fetchPrChecks` (#664) hydrates the PR row's checks glyph lazily, keyed by PR number — the list
+ *  call no longer pays for `statusCheckRollup`. It mirrors `fetchCommitChecks`: aliased so N PRs
+ *  cost one subprocess, each alias resolves independently, and any failure degrades to absent
+ *  glyphs rather than failing the tab. */
+describe('fetchPrChecks (#664)', () => {
+  // One aliased `pullRequest` node per PR: `'missing'` → the alias resolved null (unknown PR),
+  // `null` → the PR exists but has no CI configured, a state → that rolled-up glyph.
+  const reply = (states: Array<string | null | 'missing'>) =>
+    JSON.stringify({
+      data: {
+        repository: Object.fromEntries(
+          states.map((state, i) => [
+            `p${i}`,
+            state === 'missing'
+              ? null
+              : { commits: { nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }] } },
+          ]),
+        ),
+      },
+    });
+
+  it('maps each alias back to its PR number', async () => {
+    const runGraphql = vi.fn(async () => reply(['SUCCESS', 'FAILURE', 'PENDING']));
+    const checks = await fetchPrChecks(runGraphql, 'o', 'n', [7, 12, 20]);
+    expect(checks).toEqual({ 7: 'passing', 12: 'failing', 20: 'pending' });
+  });
+
+  it('leaves an unknown PR absent rather than null — the alias resolved null', async () => {
+    const runGraphql = vi.fn(async () => reply(['SUCCESS', 'missing']));
+    const checks = await fetchPrChecks(runGraphql, 'o', 'n', [7, 8]);
+    expect(checks[7]).toBe('passing');
+    expect(8 in checks).toBe(false);
+  });
+
+  it('distinguishes "no CI configured" (null) from "not looked up" (absent)', async () => {
+    const runGraphql = vi.fn(async () => reply([null]));
+    const checks = await fetchPrChecks(runGraphql, 'o', 'n', [7]);
+    expect(7 in checks).toBe(true);
+    expect(checks[7]).toBeNull();
+  });
+
+  it('chunks at the given size, and a failed chunk costs only its own glyphs', async () => {
+    const runGraphql = vi.fn(async (q: string) => {
+      if (q.includes('pullRequest(number: 3)')) throw new Error('HTTP 502');
+      return reply(['SUCCESS', 'SUCCESS']);
+    });
+    const checks = await fetchPrChecks(runGraphql, 'o', 'n', [1, 2, 3, 4], 2);
+    expect(runGraphql).toHaveBeenCalledTimes(2); // [1,2] then [3,4]
+    expect(checks[1]).toBe('passing');
+    expect(checks[2]).toBe('passing');
+    expect(3 in checks).toBe(false); // its chunk threw
+    expect(4 in checks).toBe(false);
+  });
+
+  it('degrades to an empty map when every chunk fails, never throwing', async () => {
+    const runGraphql = vi.fn(async () => { throw new Error('offline'); });
+    await expect(fetchPrChecks(runGraphql, 'o', 'n', [7])).resolves.toEqual({});
+  });
+
+  it('spawns nothing for an empty PR list', async () => {
+    const runGraphql = vi.fn();
+    expect(await fetchPrChecks(runGraphql, 'o', 'n', [])).toEqual({});
+    expect(runGraphql).not.toHaveBeenCalled();
+  });
+
+  it('caps a single query at GH_CHECKS_MAX aliases', () => {
+    // The route caps the request at GH_CHECKS_MAX; the default chunk size matches so one query
+    // never exceeds it. A defensive guard so raising one constant without the other is caught.
+    expect(GH_CHECKS_MAX).toBe(100);
+  });
+});
+
+/** The list tier stopped fetching `statusCheckRollup` (#664): it was the dominant cost on repos
+ *  with many open PRs. This drives `gh` through `execFileMock` and asserts the PR list call omits
+ *  the rollup field and that PR rows come back with `checks: null` (hydrated lazily elsewhere). */
+describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => {
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', ''); // dry-run would short-circuit the gh path we are asserting on
+    execFileMock.mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('does not request the rollup field and leaves list PR checks null', async () => {
+    let prJsonArg = '';
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '{}';
+      if (argv[0] === 'repo') stdout = 'owner/n\n';
+      else if (argv[0] === 'issue') stdout = '[]';
+      else if (argv[0] === 'pr') {
+        prJsonArg = argv[argv.indexOf('--json') + 1] ?? '';
+        stdout = JSON.stringify([
+          {
+            number: 7,
+            title: 'a pr',
+            author: { login: 'x' },
+            createdAt: '2026-07-01T00:00:00Z',
+            labels: [],
+            body: 'b',
+            url: 'https://github.com/owner/n/pull/7',
+            isDraft: false,
+            additions: 1,
+            deletions: 2,
+          },
+        ]);
+      }
+      cb(null, { stdout, stderr: '' });
+    });
+
+    const data = await fetchGithub('/repo/no-rollup-664');
+    expect(prJsonArg).not.toContain('statusCheckRollup');
+    expect(prJsonArg).toContain('isDraft');
+    expect(data.prs[0]?.checks).toBeNull();
   });
 });

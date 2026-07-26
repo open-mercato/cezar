@@ -9,6 +9,7 @@ import type { WorkflowDef } from '../workflows/types.js';
 import type { TodoItem } from '../todos.js';
 import { createApp } from './server.js';
 import { apiRequest } from './loopback-request.testkit.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 
 /**
  * `POST /api/todos/:id/start` (spec 007, extended by #401 + #413): the "▶ Run" flow that turns
@@ -51,7 +52,13 @@ describe('POST /api/todos/:id/start', () => {
         return store.createRun({ title: 't', workflow: '(inbox)', task: input.task, steps: [] });
       },
     } as unknown as RunManager;
-    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
+    });
   });
 
   afterEach(() => {

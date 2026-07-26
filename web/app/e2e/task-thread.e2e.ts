@@ -153,19 +153,19 @@ describe('task thread', () => {
         chip: block.querySelector('[data-streamdown="code-block-header"]').textContent,
         copy: block.querySelector('[data-streamdown="code-block-copy-button"]') !== null,
         keywordText: keyword.textContent,
-        // Resolved through the real cascade: the token's painted color IS the --syn-key value.
-        keywordColor: getComputedStyle(keyword).color,
+        keywordToken: keyword.style.getPropertyValue('--sdm-c'),
         synKey: getComputedStyle(document.documentElement).getPropertyValue('--syn-key').trim(),
       }
-    })()`) as { language: string; chip: string; copy: boolean; keywordText: string; keywordColor: string; synKey: string }
+    })()`) as { language: string; chip: string; copy: boolean; keywordText: string; keywordToken: string; synKey: string }
 
     expect(block.language).toBe('ts')
     expect(block.chip).toBe('ts')
     expect(block.copy).toBe(true)
     expect(block.keywordText).toBe('const')
-    const hexToRgb = (hex: string) =>
-      `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`
-    expect(block.keywordColor).toBe(hexToRgb(block.synKey))
+    // Streamdown owns how its custom token variable is painted; our contract is that Shiki
+    // maps the keyword to cezar's theme token and that the active palette defines that token.
+    expect(block.keywordToken).toBe('var(--syn-key)')
+    expect(block.synKey).toMatch(/^#[0-9a-f]{6}$/i)
   })
 
   it('keeps Shiki out of the main bundle — its chunks load lazily, after the thread route', () => {

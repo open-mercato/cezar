@@ -8,7 +8,11 @@ import { createQueryClient } from './query-client'
 import { setApiScope } from './project-scope'
 import {
   queryKeys,
+  useProviderStatus,
+  useRefreshProviderStatus,
+  useRetryProviderAuth,
   useHealth,
+  useHealthSubscription,
   useRunnerModels,
   usePatchRun,
   usePutAgentConfigFile,
@@ -16,6 +20,8 @@ import {
   useRunChanges,
   useRuns,
   useSkills,
+  useSkillsUpdate,
+  workspaceQueryKeys,
 } from './queries'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -37,6 +43,14 @@ function json(body: unknown): Response {
   })
 }
 
+function deferredResponse() {
+  let resolve!: (response: Response) => void
+  const promise = new Promise<Response>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 /** A client per test: a shared cache would let one test's data satisfy the next test's query,
  *  and "loading → data" would pass without a fetch ever happening. */
 function wrapper() {
@@ -54,6 +68,51 @@ const HEALTH = {
   defaultRunner: 'claude',
 }
 
+/** Just enough WebSocket for useHealth's topic subscription (api/ws.ts): records the frames the
+ *  client sends, lets the test drive `open` and deliver server frames by hand. */
+class FakeHealthSocket {
+  static instances: FakeHealthSocket[] = []
+
+  readyState = 0 // CONNECTING
+  sent: string[] = []
+  private handlers = new Map<string, Set<(event: unknown) => void>>()
+
+  constructor(_url: string) {
+    FakeHealthSocket.instances.push(this)
+  }
+
+  addEventListener(name: string, handler: (event: unknown) => void): void {
+    let set = this.handlers.get(name)
+    if (!set) {
+      set = new Set()
+      this.handlers.set(name, set)
+    }
+    set.add(handler)
+  }
+
+  send(data: string): void {
+    this.sent.push(data)
+  }
+
+  close(): void {
+    this.readyState = 3
+    this.fire('close', {})
+  }
+
+  open(): void {
+    this.readyState = 1
+    this.fire('open', {})
+  }
+
+  message(frame: unknown): void {
+    this.fire('message', { data: JSON.stringify(frame) })
+  }
+
+  private fire(name: string, event: unknown): void {
+    for (const handler of this.handlers.get(name) ?? []) handler(event)
+  }
+}
+
 describe('useRunnerModels', () => {
   it('loads the workspace Codex catalog', async () => {
     fetchMock.mockResolvedValue(json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false }))
@@ -69,6 +128,266 @@ describe('useRunnerModels', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.models[0]?.id).toBe('deepseek/deepseek-v4-pro')
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/models?runner=opencode')
+  })
+})
+
+describe('provider status workspace query', () => {
+  const PROVIDERS = {
+    providers: [
+      { provider: 'claude', status: 'connected', enabled: true },
+      { provider: 'codex', status: 'disconnected', enabled: true, hint: 'Run codex login.' },
+      { provider: 'opencode', status: 'not-installed', enabled: true },
+    ],
+  }
+
+  afterEach(() => {
+    setApiScope(null)
+    vi.useRealTimers()
+  })
+
+  it('loads the workspace endpoint under any active project with one stable key', async () => {
+    setApiScope('proj-a')
+    fetchMock.mockResolvedValue(json(PROVIDERS))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/providers/status')
+    expect(workspaceQueryKeys.providerStatus).toEqual(['workspace', 'providers', 'status'])
+    expect(client.getQueryData(['workspace', 'providers', 'status'])).toEqual(PROVIDERS)
+
+    setApiScope('proj-b')
+    expect(workspaceQueryKeys.providerStatus).toEqual(['workspace', 'providers', 'status'])
+  })
+
+  it('loads once without interval polling and becomes focus-refreshable after five minutes', async () => {
+    fetchMock.mockResolvedValue(json(PROVIDERS))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const query = client.getQueryCache().find({ queryKey: workspaceQueryKeys.providerStatus })
+    expect(query?.observers[0]?.options.refetchInterval).toBe(false)
+    expect(query?.observers[0]?.options.staleTime).toBe(5 * 60_000)
+  })
+
+  it('refetches on window focus', async () => {
+    fetchMock.mockResolvedValue(json(PROVIDERS))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const query = client.getQueryCache().find({ queryKey: workspaceQueryKeys.providerStatus })
+    if (!query) throw new Error('provider status query was not created')
+    query.setState({ ...query.state, dataUpdatedAt: Date.now() - 5 * 60_000 - 1 })
+    window.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  it('surfaces an ApiError instead of synthesizing disconnected providers', async () => {
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ error: 'provider probe failed' }), {
+        status: 500,
+        statusText: 'Internal Server Error',
+      }),
+    )
+    const { result } = renderHook(() => useProviderStatus(), { wrapper: wrapper() })
+
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 })
+    expect(result.current.data).toBeUndefined()
+    expect(result.current.error).toBeInstanceOf(ApiError)
+    expect((result.current.error as ApiError).message).toBe('provider probe failed')
+  })
+
+  it('enters the query error state for a malformed successful response', async () => {
+    fetchMock.mockImplementation(async () =>
+      json({ providers: [null], raw: 'do-not-render-this' }),
+    )
+    const client = createQueryClient()
+    client.setDefaultOptions({
+      queries: { ...client.getDefaultOptions().queries, retry: false },
+    })
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 })
+    expect(result.current.data).toBeUndefined()
+    expect(result.current.error?.message).toBe('Invalid provider status response')
+  })
+
+  it('refreshes explicitly and replaces the workspace cache', async () => {
+    const refreshed = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+    fetchMock.mockResolvedValue(json(refreshed))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useRefreshProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate())
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/providers/status?refresh=1')
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(refreshed)
+  })
+
+  it('does not let a deferred polling response clear an SSE runtime incident', async () => {
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+
+    await act(async () => deferred.resolve(json(PROVIDERS)))
+
+    expect(client.getQueryData<typeof PROVIDERS>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
+      status: 'disconnected',
+      authFailureId: 'sse-1',
+    })
+  })
+
+  it('does not let a deferred refresh response clear an SSE runtime incident', async () => {
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    const { result } = renderHook(() => useRefreshProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate())
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+
+    await act(async () => deferred.resolve(json(PROVIDERS)))
+
+    expect(client.getQueryData<typeof PROVIDERS>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
+      status: 'disconnected',
+      authFailureId: 'sse-1',
+    })
+  })
+
+  it('retries a matching provider incident and replaces the confirmed workspace cache', async () => {
+    const confirmed = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: false },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+    fetchMock.mockResolvedValue(json(confirmed))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useRetryProviderAuth(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate({ provider: 'claude', authFailureId: 'incident-1' }))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock).toHaveBeenCalledWith('/api/providers/claude/retry', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ authFailureId: 'incident-1' }),
+    }))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(confirmed)
+  })
+
+  it('does not let a deferred retry clear a newer SSE runtime incident', async () => {
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'retry-1', hint: 'Reconnect.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+    const { result } = renderHook(() => useRetryProviderAuth(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate({ provider: 'claude', authFailureId: 'retry-1' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    client.setQueryData(workspaceQueryKeys.providerStatus, {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-2', hint: 'Reconnect again.' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+
+    await act(async () => deferred.resolve(json(PROVIDERS)))
+
+    expect(client.getQueryData<typeof PROVIDERS>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
+      status: 'disconnected',
+      authFailureId: 'sse-2',
+    })
+  })
+
+  it('keeps the last confirmed provider cache when retry fails', async () => {
+    const prior = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: 'stale incident' }), { status: 409 }))
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.providerStatus, prior)
+    const { result } = renderHook(() => useRetryProviderAuth(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate({ provider: 'claude', authFailureId: 'incident-1' }))
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(prior)
   })
 })
 
@@ -90,6 +409,14 @@ describe('queryKeys', () => {
   it('keys github by limit so two page sizes are two caches', () => {
     expect(queryKeys.github()).toEqual(['default', 'github', null])
     expect(queryKeys.github({ limit: 5 })).not.toEqual(queryKeys.github({ limit: 50 }))
+  })
+
+  it('keys github checks by the sorted PR set so the same window is one cache (#664)', () => {
+    // Order must not matter — a re-sorted visible window would otherwise refetch needlessly.
+    expect(queryKeys.githubChecks([12, 7])).toEqual(queryKeys.githubChecks([7, 12]))
+    expect(queryKeys.githubChecks([7, 12])).toEqual(['default', 'github', 'checks', '7,12'])
+    // Different windows are different caches.
+    expect(queryKeys.githubChecks([7])).not.toEqual(queryKeys.githubChecks([7, 12]))
   })
 
   it('is stable across calls — an unstable key refetches forever', () => {
@@ -155,6 +482,40 @@ describe('useSkills', () => {
   })
 })
 
+describe('useSkillsUpdate', () => {
+  it('retries a transient snapshot conservatively until the background server check converges', async () => {
+    fetchMock.mockResolvedValue(json({
+      status: 'idle',
+      available: false,
+      autoUpdateEnabled: false,
+      inherited: false,
+      checkedAt: null,
+      updatedAt: null,
+      scopes: [],
+      needsUpgradeNotes: false,
+    }))
+    const client = createQueryClient()
+    const key = workspaceQueryKeys.skillsUpdate('boot')
+    const { result } = renderHook(() => useSkillsUpdate('boot'), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await waitFor(() => expect(result.current.data?.status).toBe('idle'))
+
+    const query = client.getQueryCache().find({ queryKey: key })
+    const interval = query?.observers[0]?.options.refetchInterval
+    expect(typeof interval).toBe('function')
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(60_000)
+
+    client.setQueryData(key, { ...result.current.data!, status: 'current' })
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
+
+    client.setQueryData(key, { ...result.current.data!, status: 'available' })
+    expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
+  })
+})
+
 describe('useHealth', () => {
   it('goes loading → data', async () => {
     fetchMock.mockResolvedValue(json(HEALTH))
@@ -183,20 +544,62 @@ describe('useHealth', () => {
     expect((result.current.error as ApiError).message).toBe('boom')
   })
 
-  // #369: a `git checkout` in a foreground, connected tab fires none of reconnect/visibility/
-  // pageshow, so the branch chip needs its own poll rather than relying solely on those.
-  it('polls, so a branch switched outside the cockpit is caught without a reconnect', async () => {
+  it('does not touch the socket on its own — it is a pure read', () => {
+    vi.stubGlobal('WebSocket', FakeHealthSocket)
+    fetchMock.mockResolvedValue(json(HEALTH))
+    renderHook(() => useHealth(), { wrapper: wrapper() })
+    // The subscription lives once at the root (useHealthSubscription), NOT per useHealth reader,
+    // so mounting a reader must open no socket and flap no subscribe/unsubscribe frame.
+    expect(FakeHealthSocket.instances).toHaveLength(0)
+  })
+
+  // #369 moved server-side: the branch-switched-in-a-terminal case is now the `health` topic on
+  // /api/ws (ws.ts) pushing a changed snapshot, not a per-tab refetchInterval. The ONE root-level
+  // useHealthSubscription folds those pushes into the same cache useHealth reads; the poll is gone.
+  it('useHealthSubscription folds pushed frames into the cache instead of polling', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('WebSocket', FakeHealthSocket)
       fetchMock.mockResolvedValue(json(HEALTH))
-      const { result } = renderHook(() => useHealth(), { wrapper: wrapper() })
+      // The root wiring (subscription) and a reader together, sharing one query client.
+      const client = createQueryClient()
+      const scopedWrapper = ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      )
+      const { result } = renderHook(
+        () => {
+          useHealthSubscription()
+          return useHealth()
+        },
+        { wrapper: scopedWrapper },
+      )
 
       await act(() => vi.advanceTimersByTimeAsync(0))
       expect(result.current.isSuccess).toBe(true)
       expect(fetchMock).toHaveBeenCalledTimes(1)
+      // Read `.data` BEFORE the push: v5 result props are tracked on access, and an observer
+      // that never had `data` read would not re-render when only `data` changes.
+      expect(result.current.data?.repo?.branch).toBe('main')
 
+      const ws = FakeHealthSocket.instances.at(-1)
+      if (!ws) throw new Error('useHealthSubscription never opened the topic socket')
+      act(() => ws.open())
+      expect(ws.sent.map((raw) => JSON.parse(raw))).toContainEqual({ type: 'subscribe', topic: 'health' })
+
+      act(() =>
+        ws.message({
+          type: 'event',
+          topic: 'health',
+          data: { ...HEALTH, repo: { ...HEALTH.repo, branch: 'feature' } },
+        }),
+      )
+      // Flush react-query's batched notify (scheduled, so fake timers hold it) before reading.
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(result.current.data?.repo?.branch).toBe('feature')
+
+      // The old refetchInterval cadence passes with no further request — pushed, not polled.
       await act(() => vi.advanceTimersByTimeAsync(5000))
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
     }

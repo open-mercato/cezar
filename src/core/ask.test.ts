@@ -158,6 +158,36 @@ describe('stripAskMarker', () => {
   it('leaves text without a marker untouched', () => {
     expect(stripAskMarker('no marker here')).toBe('no marker here');
   });
+
+  // Regression (blank-question bug): an invalid payload never becomes an ask
+  // card, so stripping it would delete the agent's question from the transcript
+  // with nothing to replace it. Invalid → text left intact (spec
+  // 2026-07-18-askuser-across-runners: "invalid JSON / schema → null, text left
+  // intact").
+  it('keeps a marker whose JSON is valid but fails the schema (no card will render it)', () => {
+    const invalid = 'Pick one.\nCEZ:ASK {"questions":[]}';
+    expect(stripAskMarker(invalid)).toBe(invalid);
+  });
+
+  it('keeps a marker with an over-length header — the schema-invalid shape agents actually produce', () => {
+    const invalid =
+      'Zanim pójdziemy dalej:\nCEZ:ASK ' +
+      JSON.stringify({
+        questions: [
+          {
+            header: 'thirteen char', // 13 chars > the 12-char cap
+            question: 'Który wariant?',
+            options: [{ label: 'A' }, { label: 'B' }],
+          },
+        ],
+      });
+    expect(stripAskMarker(invalid)).toBe(invalid);
+  });
+
+  it('keeps a marker whose payload is not valid JSON at all', () => {
+    const invalid = 'Pick one.\nCEZ:ASK {"questions": [}';
+    expect(stripAskMarker(invalid)).toBe(invalid);
+  });
 });
 
 // The marker is detected on the ASSEMBLED turn text, which is how it stays

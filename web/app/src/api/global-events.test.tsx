@@ -1,5 +1,5 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, render, renderHook } from '@testing-library/react'
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -7,8 +7,8 @@ import { createUsageStore, type UsageStore } from './events'
 import { GlobalEventsProvider, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope } from './project-scope'
 import { createQueryClient } from './query-client'
-import { queryKeys } from './queries'
-import type { ApiRun, RunRecord } from './types'
+import { queryKeys, useProviderStatus, workspaceQueryKeys } from './queries'
+import type { ApiRun, ProviderStatusResponse, RunRecord } from './types'
 
 /**
  * jsdom ships no EventSource at all (it is not in its supported-API set), so there is nothing to
@@ -104,6 +104,14 @@ const SAMPLE = { cpuPct: 12, rssBytes: 1024, procCount: 3 }
  *  workspace stream's filter compares every stamp against it. */
 const BOOT = 'boot'
 
+const CONNECTED_PROVIDERS: ProviderStatusResponse = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'connected', enabled: false },
+    { provider: 'opencode', status: 'connected', enabled: true },
+  ],
+}
+
 /** A `run` frame as the workspace stream sends it (step 2.8): the record with a `project`
  *  stamp riding along, which the parser strips back off before the reducers see it. */
 function stampedRun(record: RunRecord, project = BOOT): string {
@@ -128,6 +136,21 @@ function setVisibility(state: 'visible' | 'hidden'): void {
   act(() => {
     document.dispatchEvent(new Event('visibilitychange'))
   })
+}
+
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+function deferredResponse() {
+  let resolve!: (response: Response) => void
+  const promise = new Promise<Response>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 beforeEach(() => {
@@ -362,6 +385,224 @@ describe('useGlobalEvents — usage', () => {
   })
 })
 
+describe('useGlobalEvents — provider status', () => {
+  it('patches the provider cache immediately from a workspace provider-status event', () => {
+    client.setQueryData(workspaceQueryKeys.providerStatus, CONNECTED_PROVIDERS)
+    const { source } = mount()
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'claude',
+      status: 'disconnected',
+      enabled: true,
+      hint: 'Authentication was rejected during a run. Reconnect, then try again.',
+    }))
+
+    expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[0]).toEqual({
+      provider: 'claude',
+      status: 'disconnected',
+      enabled: true,
+      hint: 'Authentication was rejected during a run. Reconnect, then try again.',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('ignores malformed frames without poisoning the next provider-status event', () => {
+    client.setQueryData(workspaceQueryKeys.providerStatus, CONNECTED_PROVIDERS)
+    const { source } = mount()
+
+    source.emit('provider-status', 'not json{')
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBe(CONNECTED_PROVIDERS)
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'future',
+      status: 'disconnected',
+    }))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBe(CONNECTED_PROVIDERS)
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'codex',
+      status: 'disconnected',
+      enabled: false,
+    }))
+    expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[1]).toEqual({
+      provider: 'codex',
+      status: 'disconnected',
+      enabled: false,
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('does not invent an unfetched provider cache', () => {
+    const { source } = mount()
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'claude',
+      status: 'disconnected',
+    }))
+
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('ignores malformed and unknown unfetched provider events without starting a query', () => {
+    const { source } = mount()
+
+    source.emit('provider-status', 'not json{')
+    source.emit('provider-status', JSON.stringify({ provider: 'future', status: 'disconnected' }))
+
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('cancels a stale initial provider request and refetches after an SSE incident', async () => {
+    const initial = deferredResponse()
+    const replacement = deferredResponse()
+    const staleConnected = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    const latched = {
+      providers: [
+        {
+          provider: 'claude',
+          status: 'disconnected',
+          enabled: true,
+          authFailureId: 'incident-1',
+          hint: 'Reconnect, then try again.',
+        },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    vi.mocked(fetch).mockReturnValueOnce(initial.promise).mockReturnValueOnce(replacement.promise)
+
+    function ProviderProbe() {
+      const status = useProviderStatus()
+      return <output data-testid="provider-status">{status.data?.providers[0]?.status ?? 'pending'}</output>
+    }
+
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEventsProvider>
+          <ProviderProbe />
+        </GlobalEventsProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+
+    FakeEventSource.last.emit('provider-status', JSON.stringify({
+      provider: 'claude',
+      status: 'disconnected',
+      authFailureId: 'incident-1',
+      hint: 'Reconnect, then try again.',
+    }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+
+    await act(async () => initial.resolve(json(staleConnected)))
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toBeUndefined()
+    expect(document.querySelector('[data-testid="provider-status"]')?.textContent).not.toBe('connected')
+
+    await act(async () => replacement.resolve(json(latched)))
+    await waitFor(() => expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[0]).toMatchObject({ status: 'disconnected', authFailureId: 'incident-1' }))
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('coalesces a second uncached provider event into one trailing refetch', async () => {
+    const initial = deferredResponse()
+    const replacement = deferredResponse()
+    const final = deferredResponse()
+    const staleConnected = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    const onlyClaudeIncident = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    const bothIncidents = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-b' },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    }
+    vi.mocked(fetch)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(replacement.promise)
+      .mockReturnValueOnce(final.promise)
+
+    function ProviderProbe() {
+      useProviderStatus()
+      return null
+    }
+
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEventsProvider>
+          <ProviderProbe />
+        </GlobalEventsProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+
+    FakeEventSource.last.emit('provider-status', JSON.stringify({
+      provider: 'claude', status: 'disconnected', authFailureId: 'incident-a',
+    }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    FakeEventSource.last.emit('provider-status', JSON.stringify({
+      provider: 'codex', status: 'disconnected', authFailureId: 'incident-b',
+    }))
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    await act(async () => initial.resolve(json(staleConnected)))
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await act(async () => replacement.resolve(json(onlyClaudeIncident)))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
+    await act(async () => final.resolve(json(bothIncidents)))
+
+    await waitFor(() => expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )).toEqual(bothIncidents))
+    await act(async () => {})
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('applies provider status while a different project scope is active', () => {
+    setApiScope('other-project')
+    client.setQueryData(workspaceQueryKeys.providerStatus, CONNECTED_PROVIDERS)
+    const { source } = mount()
+
+    source.emit('provider-status', JSON.stringify({
+      provider: 'opencode',
+      status: 'disconnected',
+      enabled: true,
+    }))
+
+    expect(client.getQueryData<ProviderStatusResponse>(
+      workspaceQueryKeys.providerStatus,
+    )?.providers[2]).toEqual({
+      provider: 'opencode',
+      status: 'disconnected',
+      enabled: true,
+    })
+  })
+})
+
 describe('useGlobalEvents — project scoping (multi-project spec, step 3.1)', () => {
   it('drops another project\'s stamped events when unscoped — no cross-project cache bleed', () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
@@ -450,6 +691,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.todos,
       queryKeys.health, // the repo/branch chip — health is not on the stream (#369)
       queryKeys.worktrees, // the Resources panel's list/total (#483)
+      workspaceQueryKeys.providerStatus,
     ])
   })
 
@@ -469,6 +711,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.todos,
       queryKeys.health,
       queryKeys.worktrees,
+      workspaceQueryKeys.providerStatus,
     ])
   })
 

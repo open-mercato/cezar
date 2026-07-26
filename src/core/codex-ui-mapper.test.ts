@@ -349,7 +349,7 @@ describe('mapCodexNotification edge cases', () => {
     });
   });
 
-  it('review-mode items map to task tools; unknown item types stay visible as generic tools', () => {
+  it('review-mode and context-compaction items have human labels', () => {
     const [review] = mapCodexNotification(
       { method: 'item/started', params: { item: { type: 'enteredReviewMode', id: 'item_rv' } } },
       state,
@@ -359,13 +359,20 @@ describe('mapCodexNotification edge cases', () => {
       item: { kind: 'tool', id: 'item_rv', name: 'enteredReviewMode', toolKind: 'task', title: 'Review', status: 'running' },
     });
 
-    const [unknown] = mapCodexNotification(
+    const [compaction] = mapCodexNotification(
       { method: 'item/completed', params: { item: { type: 'contextCompaction', id: 'item_cc' } } },
       state,
     ).events;
-    expect(unknown).toMatchObject({
+    expect(compaction).toMatchObject({
       type: 'item.completed',
-      item: { kind: 'tool', id: 'item_cc', name: 'contextCompaction', toolKind: 'other', status: 'completed' },
+      item: {
+        kind: 'tool',
+        id: 'item_cc',
+        name: 'contextCompaction',
+        toolKind: 'other',
+        title: 'Compacted context',
+        status: 'completed',
+      },
     });
   });
 

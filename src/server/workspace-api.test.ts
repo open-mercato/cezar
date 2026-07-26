@@ -22,6 +22,9 @@ describe('the workspace settings API (step 2.7)', () => {
   const savedHome = process.env.CEZ_HOME;
   const savedBrowseRoot = process.env.CEZ_BROWSE_ROOT;
   const savedProjectsDir = process.env.CEZ_PROJECTS_DIR;
+  const savedSkillsAutoUpdate = process.env.CEZ_SKILLS_AUTO_UPDATE;
+  const savedAutonomousDefault = process.env.CEZ_AUTONOMOUS_DEFAULT;
+  const savedWorktreeDefault = process.env.CEZ_WORKTREE_DEFAULT;
   let home: string;
   let repoRoot: string;
   let store: RunStore;
@@ -33,6 +36,9 @@ describe('the workspace settings API (step 2.7)', () => {
     process.env.CEZ_HOME = home; // paths.ts sends all workspace paths here
     delete process.env.CEZ_BROWSE_ROOT;
     delete process.env.CEZ_PROJECTS_DIR;
+    delete process.env.CEZ_SKILLS_AUTO_UPDATE;
+    delete process.env.CEZ_AUTONOMOUS_DEFAULT;
+    delete process.env.CEZ_WORKTREE_DEFAULT;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-workspace-api-repo-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -57,6 +63,12 @@ describe('the workspace settings API (step 2.7)', () => {
     else process.env.CEZ_BROWSE_ROOT = savedBrowseRoot;
     if (savedProjectsDir === undefined) delete process.env.CEZ_PROJECTS_DIR;
     else process.env.CEZ_PROJECTS_DIR = savedProjectsDir;
+    if (savedSkillsAutoUpdate === undefined) delete process.env.CEZ_SKILLS_AUTO_UPDATE;
+    else process.env.CEZ_SKILLS_AUTO_UPDATE = savedSkillsAutoUpdate;
+    if (savedAutonomousDefault === undefined) delete process.env.CEZ_AUTONOMOUS_DEFAULT;
+    else process.env.CEZ_AUTONOMOUS_DEFAULT = savedAutonomousDefault;
+    if (savedWorktreeDefault === undefined) delete process.env.CEZ_WORKTREE_DEFAULT;
+    else process.env.CEZ_WORKTREE_DEFAULT = savedWorktreeDefault;
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -79,8 +91,18 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(body).toEqual({
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
+      skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: true,
+      composerDefaults: {
+        autonomous: null,
+        worktree: null,
+        inheritedAutonomous: 'source-dependent',
+        inheritedWorktree: true,
+      },
       resources: {
         maxParallel: 2,
+        maxMonitoringSessions: 2,
+        monitoringWakeIntervalMinutes: null,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
       },
@@ -101,14 +123,24 @@ describe('the workspace settings API (step 2.7)', () => {
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {
     expect(semaphore.maxParallel()).toBe(2); // the pre-PUT snapshot
     const res = await putConfig({
-      resources: { maxParallel: 5, memoryLimitMb: 2048 },
+      resources: { maxParallel: 5, maxMonitoringSessions: 3, monitoringWakeIntervalMinutes: 5, memoryLimitMb: 2048 },
     });
     expect(res.status).toBe(200);
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
+      skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: true,
+      composerDefaults: {
+        autonomous: null,
+        worktree: null,
+        inheritedAutonomous: 'source-dependent',
+        inheritedWorktree: true,
+      },
       resources: {
         maxParallel: 5,
+        maxMonitoringSessions: 3,
+        monitoringWakeIntervalMinutes: 5,
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
       },
@@ -118,6 +150,8 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((rawConfig().resources as Record<string, unknown>).maxParallel).toBe(5);
     // The step-2.5 hook fired: the new cap applies WITHOUT a restart.
     expect(semaphore.maxParallel()).toBe(5);
+    expect(semaphore.maxMonitoringSessions()).toBe(3);
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBe(5);
     expect(semaphore.memoryLimitMb()).toBe(2048);
   });
 
@@ -126,9 +160,53 @@ describe('the workspace settings API (step 2.7)', () => {
     await putConfig({ resources: { worktreeRetentionDefault: 3 } });
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: null,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
     });
+  });
+
+  it('PUT stores explicit auto-update values and null clears back to the inherited env value', async () => {
+    process.env.CEZ_SKILLS_AUTO_UPDATE = '0';
+    expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({
+      skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: false,
+    });
+
+    const explicit = (await (await putConfig({ skillsAutoUpdate: true })).json()) as WorkspaceConfigResponse;
+    expect(explicit).toMatchObject({ skillsAutoUpdate: true, effectiveSkillsAutoUpdate: true });
+    expect(rawConfig().skillsAutoUpdate).toBe(true);
+
+    const inherited = (await (await putConfig({ skillsAutoUpdate: null })).json()) as WorkspaceConfigResponse;
+    expect(inherited).toMatchObject({ skillsAutoUpdate: null, effectiveSkillsAutoUpdate: false });
+    expect(rawConfig().skillsAutoUpdate).toBeUndefined();
+  });
+
+  it('PUT stores and independently clears composer defaults while exposing env inheritance', async () => {
+    process.env.CEZ_AUTONOMOUS_DEFAULT = '1';
+    process.env.CEZ_WORKTREE_DEFAULT = '0';
+    const inherited = (await (await getConfig()).json()) as WorkspaceConfigResponse;
+    expect(inherited.composerDefaults).toEqual({
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: true,
+      inheritedWorktree: false,
+    });
+
+    const explicit = (await (await putConfig({
+      composerDefaults: { autonomous: false, worktree: true },
+    })).json()) as WorkspaceConfigResponse;
+    expect(explicit.composerDefaults).toMatchObject({ autonomous: false, worktree: true });
+    expect(rawConfig().composerDefaults).toMatchObject({ autonomous: false, worktree: true });
+
+    await putConfig({ composerDefaults: { worktree: null } });
+    expect(rawConfig().composerDefaults).toEqual({ autonomous: false });
+  });
+
+  it('rejects invalid auto-update values without writing', async () => {
+    expect((await putConfig({ skillsAutoUpdate: 'false' })).status).toBe(400);
+    expect(() => readFileSync(workspaceConfigPath(), 'utf8')).toThrow();
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {
@@ -262,6 +340,33 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
     expect(await (await apiRequest(app, '/api/ui-state')).json()).toEqual({});
+  });
+
+  it('accepts bounded provider auth failure dismissals', async () => {
+    const response = await putUiState({
+      dismissedProviderAuthFailures: {
+        claude: 'incident-1',
+        opencode: 'incident-9',
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      dismissedProviderAuthFailures: {
+        claude: 'incident-1',
+        opencode: 'incident-9',
+      },
+    });
+  });
+
+  it.each([
+    ['an unknown provider', { future: 'incident-1' }],
+    ['an empty incident ID', { claude: '' }],
+    ['a non-string incident ID', { claude: 1 }],
+    ['an overlong incident ID', { claude: 'a'.repeat(129) }],
+  ])('rejects provider auth failure dismissals with %s without writing state', async (_case, dismissals) => {
+    const response = await putUiState({ dismissedProviderAuthFailures: dismissals });
+    expect(response.status).toBe(400);
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
   });
 
   it('unknown keys pass through and survive later PUTs (additive, like the per-repo route)', async () => {

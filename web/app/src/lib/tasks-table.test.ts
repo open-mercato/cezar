@@ -10,6 +10,7 @@ import {
   prNumber,
   taskReference,
   taskPrUrl,
+  taskIssueUrl,
   usageCells,
   workflowLabel,
 } from '@/lib/tasks-table'
@@ -180,6 +181,18 @@ describe('taskPrUrl', () => {
 
   it('is undefined when the task has no PR association at all', () => {
     expect(taskPrUrl(run())).toBeUndefined()
+  })
+})
+
+describe('taskIssueUrl', () => {
+  it('returns the discovered issue URL for display', () => {
+    expect(taskIssueUrl(run({ referencedIssueUrl: 'https://github.com/o/r/issues/544' }))).toBe(
+      'https://github.com/o/r/issues/544',
+    )
+  })
+
+  it('is undefined when the task has no issue URL association', () => {
+    expect(taskIssueUrl(run({ issueNumber: 544 }))).toBeUndefined()
   })
 })
 

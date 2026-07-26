@@ -18,8 +18,13 @@ import type {
   FsBrowseResponse,
   GitCommitResponse,
   GitPushResponse,
+  GithubChecksData,
   GithubCommentsData,
   GithubData,
+  GithubMergeMethod,
+  GithubMergeResponse,
+  GithubPrMergeStateResponse,
+  GithubPrChangesData,
   GroupResponse,
   HarnessLedgerResponse,
   HarnessProbeResponse,
@@ -37,6 +42,9 @@ import type {
   PatchRunInput,
   PickVariantResponse,
   PlanResponse,
+  ProviderConnectResponse,
+  ProviderId,
+  ProviderStatusResponse,
   ProjectsResponse,
   ReclaimWorktreesResponse,
   RegisterProjectResponse,
@@ -66,10 +74,11 @@ import type {
   WorkflowsResponse,
   WorkspaceConfigResponse,
   WorkspaceUiState,
+  SkillsUpdateState,
   WorktreeEntry,
   WorktreesResponse,
 } from './types'
-
+import { parseProviderStatusResponse } from '@/lib/provider-status'
 import { scopeApiPath } from './project-scope'
 
 /**
@@ -161,7 +170,12 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
 
 async function send(path: string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(scopeApiPath(path), init)
+    // Be explicit at the shared boundary: remote installations are commonly protected by
+    // reverse-proxy Basic Auth, and every background query/mutation must reuse that authenticated
+    // browser session just like navigation does. `include` is harmless for the root-relative,
+    // same-origin paths enforced above and prevents an individual call site from silently losing
+    // credentials when the browser/proxy combination is stricter than the fetch default.
+    return await fetch(scopeApiPath(path), { ...init, credentials: 'include' })
   } catch (cause) {
     // The request never got an answer. Not an HTTP failure — hence status 0 — but callers get
     // one error type either way instead of two.
@@ -218,6 +232,17 @@ export function getRunnerModels(
   opts?: ReadOptions,
 ): Promise<RunnerModelCatalogResponse> {
   return get<RunnerModelCatalogResponse>(`/api/models?runner=${runner}`, opts)
+}
+
+/** Host-local authentication state shared by every project. */
+export function getProviderStatus(
+  refresh = false,
+  opts?: ReadOptions,
+): Promise<ProviderStatusResponse> {
+  return get<unknown>(
+    `/api/providers/status${refresh ? '?refresh=1' : ''}`,
+    opts,
+  ).then(parseProviderStatusResponse)
 }
 
 /** The bookmarklet auto-start secret (spec 011). Fetched to compare against `/new?key=` —
@@ -376,6 +401,17 @@ export function getGithub(
   return get<GithubData>(`/api/github${search ? `?${search}` : ''}`, opts)
 }
 
+/** Lazy PR checks glyphs for on-screen rows (#664). The list call no longer ships
+ *  `statusCheckRollup`; this fills the glyph in per visible PR. Degrades to
+ *  `{ available: false, reason }` server-side — a missing glyph, never an ApiError. */
+export function getGithubChecks(
+  prNumbers: number[],
+  opts?: ReadOptions,
+): Promise<GithubChecksData> {
+  const search = new URLSearchParams({ prs: prNumbers.join(',') }).toString()
+  return get<GithubChecksData>(`/api/github/checks?${search}`, opts)
+}
+
 /** The full comment thread for one issue/PR (#499). Degrades to `{ available: false, reason }`
  *  server-side — an unreachable thread is a one-line hint in the detail view, not an ApiError. */
 export function getGithubComments(
@@ -389,6 +425,32 @@ export function getGithubComments(
   // "actually go and ask gh", exactly as `getGithub` can.
   const search = params.refresh ? '?refresh=1' : ''
   return get<GithubCommentsData>(`/api/github/comments/${kind}/${number}${search}`, opts)
+}
+
+export function getGithubPrMergeState(
+  number: number,
+  params: { refresh?: boolean } = {},
+  opts?: ReadOptions,
+): Promise<GithubPrMergeStateResponse> {
+  return get<GithubPrMergeStateResponse>(
+    `/api/github/prs/${number}/merge-state${params.refresh ? '?refresh=1' : ''}`,
+    opts,
+  )
+}
+
+export function mergeGithubPr(
+  number: number,
+  input: { method: GithubMergeMethod; expectedHeadSha: string },
+): Promise<GithubMergeResponse> {
+  return mutate<GithubMergeResponse>('POST', `/api/github/prs/${number}/merge`, input)
+}
+
+export function getGithubPrChanges(
+  number: number,
+  params: { refresh?: boolean } = {},
+  opts?: ReadOptions,
+): Promise<GithubPrChangesData> {
+  return get<GithubPrChangesData>(`/api/github/prs/${number}/changes${params.refresh ? '?refresh=1' : ''}`, opts)
 }
 
 /** The run's worktree diff against its base, as unified-diff text. Also the plain-text
@@ -429,6 +491,32 @@ export function getGroup(groupId: string, opts?: ReadOptions): Promise<GroupResp
 }
 
 // ---- workspace mutations ------------------------------------------------------------------
+
+export function connectProvider(provider: ProviderId): Promise<ProviderConnectResponse> {
+  return mutate<ProviderConnectResponse>('POST', '/api/providers/connect', { provider })
+}
+
+export function setProviderEnabled(
+  provider: ProviderId,
+  enabled: boolean,
+): Promise<ProviderStatusResponse> {
+  return mutate<unknown>(
+    'PUT',
+    `/api/providers/${encodeURIComponent(provider)}/enabled`,
+    { enabled },
+  ).then(parseProviderStatusResponse)
+}
+
+export function retryProviderAuth(
+  provider: ProviderId,
+  authFailureId: string,
+): Promise<ProviderStatusResponse> {
+  return mutate<unknown>(
+    'POST',
+    `/api/providers/${encodeURIComponent(provider)}/retry`,
+    { authFailureId },
+  ).then(parseProviderStatusResponse)
+}
 
 /**
  * Register an existing folder (`POST /api/projects`, step 4.2).
@@ -725,6 +813,22 @@ export function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceU
  *  (step 4.4) the checkout-root field. Workspace-level, so never scope-prefixed. */
 export function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceConfigResponse> {
   return get<WorkspaceConfigResponse>('/api/workspace/config', opts)
+}
+
+/** Cached Open Mercato update state for one registered project. The GET is immediate; the
+ * server may start a stale detection-only refresh after taking its snapshot. */
+export function getSkillsUpdate(projectId: string, opts?: ReadOptions): Promise<SkillsUpdateState> {
+  return get<SkillsUpdateState>(`/api/workspace/skills-update?projectId=${encodeURIComponent(projectId)}`, opts)
+}
+
+/** Force a bounded detection pass. The browser supplies identity only, never executable input. */
+export function checkSkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
+  return mutate<SkillsUpdateState>('POST', '/api/workspace/skills-update/check', { projectId })
+}
+
+/** Apply the server-owned, lock-authorized update set. Identity is the only browser input. */
+export function applySkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
+  return mutate<SkillsUpdateState>('POST', '/api/workspace/skills-update/apply', { projectId })
 }
 
 /** Partial update — absent keys stay untouched; answers the merged config. A `projectsDir`

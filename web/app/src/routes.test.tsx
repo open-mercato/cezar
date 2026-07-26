@@ -310,6 +310,7 @@ describe('the global settings area (/settings/global)', () => {
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
     ['/settings/global/resources', 'settings-global-resources', 'Resources'],
+    ['/settings/global/skills', 'settings-global-skills', 'Skills'],
     ['/settings/global/projects', 'settings-global-projects', 'Projects'],
   ]
   for (const [url, route, title] of GLOBAL_CASES) {

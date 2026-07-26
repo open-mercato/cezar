@@ -84,12 +84,46 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     store.updateRun(run.id, { status: 'running', activity: 'monitoring' });
     store.flush();
 
-    const reopened = RunStore.open(dataDir);
+    const reopened = RunStore.open(dataDir, { keepLive: true });
     expect(reopened.getRun(run.id)?.activity).toBe('monitoring');
     // Resume/terminal transitions clear it back to a plain running/other state.
     reopened.updateRun(run.id, { status: 'running', activity: undefined });
     reopened.flush();
-    expect(RunStore.open(dataDir).getRun(run.id)?.activity).toBeUndefined();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(run.id)?.activity).toBeUndefined();
+  });
+
+  it('round-trips the monitoring deadline and clears monitoring state on terminal writes', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    const deadline = '2026-07-25T10:15:00.000Z';
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeAt: deadline });
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBe(deadline);
+    store.updateRun(run.id, { status: 'done' });
+    expect(store.getRun(run.id)).toMatchObject({ status: 'done' });
+    expect(store.getRun(run.id)?.activity).toBeUndefined();
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBeUndefined();
+  });
+
+  it('clears process-local wake-cap display state when records reopen', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeCapReached: true });
+    store.flush();
+    const reopened = RunStore.open(dataDir, { keepLive: true }).getRun(run.id);
+    expect(reopened?.activity).toBe('monitoring');
+    expect(reopened?.monitoringWakeCapReached).toBeUndefined();
+  });
+
+  it('salvages a malformed wake deadline and stale terminal monitoring activity', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([{
+      ...LEGACY_RUN,
+      activity: 'monitoring',
+      monitoringWakeAt: 'not-a-date',
+    }]), 'utf8');
+    const loaded = RunStore.open(dataDir).getRun(LEGACY_RUN.id);
+    expect(loaded?.status).toBe('done');
+    expect(loaded?.activity).toBeUndefined();
+    expect(loaded?.monitoringWakeAt).toBeUndefined();
   });
 
   it('still loads an old runs.json that predates activity (#490)', () => {
@@ -743,6 +777,32 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     expect(loaded?.issueNumber).toBe(433);
   });
 
+  it('keeps issue links from tool output display-only until the agent names them', () => {
+    const { store, run } = freshRun();
+    const issueUrl = 'https://github.com/open-mercato/cezar/issues/99';
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't1',
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran gh pr view',
+        status: 'completed',
+        input: { command: 'gh pr view 1' },
+        output: `PR body: Fixes ${issueUrl}`,
+      },
+    });
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBe(issueUrl);
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
+
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: `This run is about ${issueUrl}.`,
+    });
+    expect(store.getRun(run.id)?.issueNumber).toBe(99);
+  });
+
   it('seeds an issue link while the run is still queued', () => {
     const { store, run } = freshRun('Fix https://github.com/open-mercato/cezar/issues/554');
     const loaded = store.getRun(run.id);
@@ -765,12 +825,14 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
   });
 
   it('ambiguity clears the chip and takes back the number the janitor seeded', () => {
-    const { store, run } = freshRun();
-    store.appendEvent(run.id, {
+    const { store: firstStore, run } = freshRun();
+    firstStore.appendEvent(run.id, {
       type: 'result',
       result: 'See https://github.com/open-mercato/cezar/issues/1',
     });
-    expect(store.getRun(run.id)?.issueNumber).toBe(1);
+    expect(firstStore.getRun(run.id)?.issueNumber).toBe(1);
+    firstStore.flush();
+    const store = RunStore.open(dataDir, { keepLive: true });
     store.appendEvent(run.id, {
       type: 'result',
       result: 'Also https://github.com/open-mercato/cezar/issues/2',
@@ -778,6 +840,22 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     const loaded = store.getRun(run.id);
     expect(loaded?.referencedIssueUrl).toBeUndefined();
     expect(loaded?.issueNumber).toBeUndefined();
+  });
+
+  it('ambiguity preserves a prompt-derived issueNumber equal to the previous resolution', () => {
+    const { store, run } = freshRun('port the fix from issue 12 into issue 433');
+    store.updateRun(run.id, { issueNumber: 12 });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/cezar/issues/12',
+    });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Also https://github.com/open-mercato/cezar/issues/433',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBeUndefined();
+    expect(loaded?.issueNumber).toBe(12);
   });
 
   it('disambiguates several issue links by the number named in the task prompt', () => {
@@ -847,6 +925,39 @@ describe('RunStore — seq survives a restart (#424 symptom class)', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
     expect(store.appendEvent(run.id, { type: 'note', message: 'first' }).seq).toBe(1);
+  });
+});
+
+describe('RunStore — provider authorization callouts', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-provider-auth-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('persists the structured provider-auth-required event without vendor error text', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+
+    store.appendEvent(run.id, {
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    });
+
+    expect(store.readEvents(run.id)).toEqual([expect.objectContaining({
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    })]);
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('OAuth');
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('token');
   });
 });
 

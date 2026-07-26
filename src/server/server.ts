@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
@@ -14,6 +15,13 @@ import { detectEnvironment } from '../core/backend-detect.js';
 import type { ContentBlock } from '../core/agent-runner.js';
 import { discoverCodexModels } from '../core/codex-model-catalog.js';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.js';
+import {
+  PROVIDER_IDS,
+  ProviderAuthService,
+  type ProviderId,
+  type ProviderStatusResponse,
+} from '../core/provider-auth.js';
+import { applyProviderEnablement } from '../core/provider-availability.js';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.js';
 import { currentUsage, onUsage } from '../core/process-usage.js';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.js';
@@ -29,6 +37,7 @@ import {
 } from '../workflows/types.js';
 import { planChain, slugify } from '../planner.js';
 import { discoverSkills } from '../skills.js';
+import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.js';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.js';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.js';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.js';
@@ -60,8 +69,10 @@ import { listAgentConfig } from '../agent-config/service.js';
 import {
   PROJECT_ID_RE,
   defaultWorkspaceConfig,
+  effectiveSkillsAutoUpdate,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
+  effectiveComposerDefault,
   type WorkspaceConfig,
   type WorkspaceProject,
 } from '../workspace/config.js';
@@ -82,13 +93,21 @@ import { reviewGateEnabled } from '../runs/review-gate.js';
 import { readUiState, uiStatePath } from '../ui-state.js';
 import { expandTilde } from '../paths.js';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.js';
+import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.js';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.js';
 import { resolveForge } from './forge/index.js';
-import { fetchGithub, fetchGithubComments } from './github.js';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.js';
 import { ensureLaunchKey } from './launch-key.js';
 import { openInTerminal } from './open-in-terminal.js';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.js';
 import { createDraftPr } from './pr.js';
+import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.js';
+import {
+  providerForActiveRun,
+  providerForExistingRun,
+  providersRequiredByWorkflow,
+  unavailableProviderMessage,
+} from './provider-action-gate.js';
 import {
   ASSET_CACHE_CONTROL,
   BUILD_HINT_HTML,
@@ -128,9 +147,10 @@ export interface ServerDeps {
    *  callers/tests change nothing. */
   semaphore?: WorkspaceSemaphore;
   /** Workspace-level SSE bus (spec, step 2.8): `project-added` /
-   *  `project-removed` / `checkout-progress` reach the `/api/workspace/events`
-   *  streams through this. Optional — createApp builds a private one; inject
-   *  to emit from outside the app (tests, future CLI hooks). */
+   *  `project-removed` / `checkout-progress` plus the host-wide unstamped
+   *  `provider-status` event reach `/api/workspace/events` through this.
+   *  Optional — createApp builds a private one; inject to emit from outside
+   *  the app (tests, future CLI hooks). */
   workspaceEvents?: WorkspaceEventBus;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
@@ -139,6 +159,27 @@ export interface ServerDeps {
   cloneRunner?: CloneRunner;
   /** Host-wide model discovery service. Tests inject a deterministic adapter. */
   modelCatalog?: RunnerModelCatalog;
+  /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
+  providerAuth?: ProviderAuthService;
+  /** Global provider enablement preferences. Tests may inject an in-memory store. */
+  workspaceConfig?: {
+    load: typeof loadWorkspaceConfig;
+    mergeWrite: typeof mergeWriteWorkspaceConfig;
+  };
+  /** Shared runtime rejection observer. The CLI injects the instance already
+   *  watching the boot store before recovery; createApp builds one for legacy
+   *  callers and tests. */
+  providerRuntimeAuth?: ProviderRuntimeAuthObserver;
+  /** Local terminal handoff for provider-owned login. */
+  openTerminal?: typeof openInTerminal;
+  /** Process-wide Open Mercato skills update detector. Injected in tests and
+   * shared by every workspace route/project; createApp owns the default. */
+  skillsUpdate?: SkillsUpdateService;
+  /** WebSocket subscription hub (`/api/ws`, src/server/ws.ts). `createApp`
+   *  only registers topics on it — `startServer` builds one and attaches it
+   *  to the HTTP server it binds. Optional so legacy callers/tests change
+   *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
+  socketHub?: SocketHub;
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -152,6 +193,16 @@ type ProjectApiEnv = { Variables: { project: ProjectContext } };
  *  or path. (`default` matches the slug regex too; the literal keeps the
  *  contract explicit.) */
 const projectIdSchema = z.union([z.literal('default'), z.string().regex(PROJECT_ID_RE)]);
+
+const providerConnectSchema = z.object({
+  provider: z.enum(PROVIDER_IDS),
+}).strict();
+
+const providerParamSchema = z.enum(PROVIDER_IDS);
+const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
+const providerRetrySchema = z.object({
+  authFailureId: z.string().min(1).max(128),
+}).strict();
 
 /** One row of the mirrored project-route table. */
 export interface ProjectRouteInfo {
@@ -261,8 +312,19 @@ export interface WorkspaceConfigResponse {
   browseRoot: string;
   /** Checkout root for GUI-cloned projects — stored as written (`~` kept). */
   projectsDir: string;
+  /** Stored override; null means inherit CEZ_SKILLS_AUTO_UPDATE, then true. */
+  skillsAutoUpdate: boolean | null;
+  effectiveSkillsAutoUpdate: boolean;
+  composerDefaults: {
+    autonomous: boolean | null;
+    worktree: boolean | null;
+    inheritedAutonomous: boolean | 'source-dependent';
+    inheritedWorktree: boolean;
+  };
   resources: {
     maxParallel: number;
+    maxMonitoringSessions: number;
+    monitoringWakeIntervalMinutes: number | null;
     memoryLimitMb: number | null;
     worktreeRetentionDefault: number;
   };
@@ -271,18 +333,23 @@ export interface WorkspaceConfigResponse {
 // ---- workspace SSE (multi-project spec, step 2.8) --------------------------
 
 /** Workspace-level event names carried ONLY on `GET /api/workspace/events`
- *  (never on the per-project streams): registry mutations plus the GUI-clone
- *  progress feed (step 4.3). */
-export type WorkspaceEventName = 'project-added' | 'project-removed' | 'checkout-progress';
+ *  (never on the per-project streams): registry mutations, the GUI-clone
+ *  progress feed (step 4.3), and host-wide unstamped provider status. */
+export type WorkspaceEventName =
+  | 'project-added'
+  | 'project-removed'
+  | 'checkout-progress'
+  | 'provider-status';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
  * routes (`POST /api/projects` — step 4.2, emits `project-added` for a
  * genuinely new entry; `DELETE /api/projects/:projectId` — step 4.4) and the
- * checkout flow (step 4.3) call `emit()`; every open `/api/workspace/events`
- * stream relays the
- * event verbatim under its name. Injectable via `ServerDeps.workspaceEvents`
- * so tests (and any out-of-createApp emitter) can drive the stream.
+ * checkout flow (step 4.3) call `emit()`; runtime provider auth observation
+ * emits host-wide `provider-status`; every open `/api/workspace/events` stream
+ * relays the event verbatim under its name. Injectable via
+ * `ServerDeps.workspaceEvents` so tests (and any out-of-createApp emitter) can
+ * drive the stream.
  */
 export class WorkspaceEventBus {
   private readonly listeners = new Set<(event: WorkspaceEventName, data: unknown) => void>();
@@ -497,6 +564,14 @@ const appearanceSchema = z.object({
   density: z.enum(['comfortable', 'compact', 'ultra']).optional(),
 });
 
+const providerAuthDismissalsSchema = z
+  .object({
+    claude: z.string().min(1).max(128).optional(),
+    codex: z.string().min(1).max(128).optional(),
+    opencode: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
 /** Global GUI state (`~/.cezar/ui-state.json`, step 2.7) — the workspace twin
  *  of `uiStateSchema` below, sharing its `.passthrough()` + key-cap + shallow
  *  merge-on-write semantics via `parseUiStateBody`. Known keys are the
@@ -506,6 +581,7 @@ const workspaceUiStateSchema = z
   .object({
     appearance: appearanceSchema.optional(),
     notifications: z.object({ enabled: z.boolean().optional() }).passthrough().optional(),
+    dismissedProviderAuthFailures: providerAuthDismissalsSchema.optional(),
     // Sidebar per-project collapse map, keyed by project id (slug ≤ 64 chars).
     // Entry-capped like `skillUsage`: the map is written straight to a file the
     // cockpit GETs on every load, so it must stay bounded on every axis.
@@ -783,6 +859,23 @@ export function createApp(deps: ServerDeps): Hono {
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
     },
   });
+  const providerAuth = deps.providerAuth ?? new ProviderAuthService();
+  const workspaceConfig = deps.workspaceConfig ?? {
+    load: loadWorkspaceConfig,
+    mergeWrite: mergeWriteWorkspaceConfig,
+  };
+  const providerStatus = async (options?: { refresh?: boolean }): Promise<ProviderStatusResponse> => {
+    const [discovered, workspace] = await Promise.all([
+      providerAuth.status(options?.refresh ? { refresh: true } : undefined),
+      workspaceConfig.load(),
+    ]);
+    return applyProviderEnablement(discovered, workspace.disabledProviders);
+  };
+  const providerActionError = async (
+    required: readonly ProviderId[],
+  ): Promise<string | null> => unavailableProviderMessage(required, await providerStatus());
+  const openTerminal = deps.openTerminal ?? openInTerminal;
+  const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -796,15 +889,16 @@ export function createApp(deps: ServerDeps): Hono {
   let bootProjectCache = bootProjectId;
   const resolveBootProject = async (projects?: readonly WorkspaceProject[]): Promise<string> => {
     if (bootProjectCache) return bootProjectCache;
+    let registry = projects ?? [];
     try {
-      const registry = projects ?? (await loadWorkspaceConfig()).projects;
+      registry = projects ?? (await loadWorkspaceConfig()).projects;
       const real = await realpath(bootRoot).catch(() => bootRoot);
       const match = registry.find((p) => p.root === real || p.root === bootRoot);
       if (match) bootProjectCache = match.id;
     } catch {
       // unreadable workspace — fall through to the slug fallback below
     }
-    return bootProjectCache ?? allocateProjectSlug(bootRoot, []);
+    return bootProjectCache ?? allocateProjectSlug(bootRoot, registry.map((project) => project.id));
   };
   // Health's workspace garnish: id+name ONLY — never `root` (#431, see the
   // health route). Reads only the registry file; no per-root status probes,
@@ -871,6 +965,19 @@ export function createApp(deps: ServerDeps): Hono {
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
+
+  const providerRuntimeAuth = deps.providerRuntimeAuth
+    ?? new ProviderRuntimeAuthObserver(providerAuth, (status) => {
+      workspaceEvents.emit('provider-status', status);
+    });
+
+  providerRuntimeAuth.watch(bootContext.store);
+  for (const id of contexts.ids()) {
+    const ctx = contexts.peek(id);
+    if (ctx) providerRuntimeAuth.watch(ctx.store);
+  }
+  contexts.onStoreCreated((store) => providerRuntimeAuth.watch(store));
+  contexts.onContextBuilt((ctx) => providerRuntimeAuth.watch(ctx.store));
 
   const app = new Hono();
 
@@ -1086,7 +1193,10 @@ export function createApp(deps: ServerDeps): Hono {
     }
     await next();
   });
-  app.get('/api/health', async (c) => {
+  // One builder for both transports: `GET /api/health` (the authoritative,
+  // CORS-open discovery endpoint) and the `health` topic on `/api/ws` below
+  // push the byte-identical shape, so the two can never drift.
+  const healthSnapshot = async (): Promise<Record<string, unknown>> => {
     const [checks, repo, config, workspace] = await Promise.all([
       detectEnvironment(),
       getRepoInfo(bootRoot),
@@ -1097,7 +1207,7 @@ export function createApp(deps: ServerDeps): Hono {
     // externally-depended-on JSON in the app (BACKWARD_COMPATIBILITY.md §2).
     const forge = resolveForge(repo);
     const caps = capabilities();
-    return c.json({
+    return {
       version,
       latestVersion: update?.latest,
       // Health is CORS-open and, in hosted mode, reachable off the loopback —
@@ -1125,8 +1235,103 @@ export function createApp(deps: ServerDeps): Hono {
       // unreadable workspace degrades to `projects: []`.
       projects: workspace.projects,
       bootProject: workspace.bootProject,
-    });
-  });
+    };
+  };
+  // ---- server-side health cache (stale-while-revalidate) -------------------
+  // The snapshot is expensive: ~0.8 s of agent-CLI `--version` probes plus
+  // ~0.4 s of git. Paying that on the browser's FIRST `GET /api/health` is
+  // exactly the few-seconds-blank the cockpit showed at load. So on the live
+  // server the snapshot is computed at the server's OWN pace: both the GET and
+  // the WS `health` topic serve the cached value immediately and revalidate
+  // behind the response, and the cache is pre-warmed at boot so that first
+  // request lands on a warm value instead of the cold compute.
+  const HEALTH_TTL_MS = 5_000;
+  // The staleness CEILING, which is a different job from the TTL above. The TTL
+  // decides how often a revalidation is kicked off; on its own it bounds nothing,
+  // because the revalidation is fire-and-forget. While a cockpit holds the
+  // `health` topic the publisher's interval keeps the cache warm and the two are
+  // the same number — but the normal state of a background `cezar serve` is NO
+  // subscriber, and then nothing refreshes the cache at all: the next `GET
+  // /api/health`, an hour later, would answer with the boot pre-warm's payload
+  // and only the request AFTER it would see the truth. That endpoint is the
+  // bookmarklet contract (BACKWARD_COMPATIBILITY.md §2, "the most
+  // externally-depended-on JSON in the app") and `repo.branch` going stale is
+  // literally #369, so past this age correctness beats the latency win and the
+  // read waits for the compute. `refreshHealth` dedupes, so waiting costs one.
+  const HEALTH_MAX_STALE_MS = 60_000;
+  let healthCache: { at: number; payload: Record<string, unknown>; body: string } | undefined;
+  let healthInFlight: Promise<Record<string, unknown>> | undefined;
+  // Set while the topic has a subscriber; a change a refresh detects is pushed
+  // here (a noop when nobody is listening).
+  let publishHealth: (data: unknown) => void = () => {};
+
+  const refreshHealth = (): Promise<Record<string, unknown>> => {
+    // Dedupe: a GET's background revalidation and the topic's interval tick
+    // share ONE compute (and one set of CLI spawns) rather than racing two.
+    if (healthInFlight) return healthInFlight;
+    healthInFlight = (async () => {
+      try {
+        const payload = await healthSnapshot();
+        const body = JSON.stringify(payload);
+        const changed = body !== healthCache?.body;
+        healthCache = { at: Date.now(), payload, body };
+        if (changed) publishHealth(payload); // only a real change reaches the wire
+        return payload;
+      } finally {
+        healthInFlight = undefined;
+      }
+    })();
+    return healthInFlight;
+  };
+
+  // The read the GET and the topic snapshot share. On the live server (a hub is
+  // injected) it answers from cache instantly and revalidates behind the
+  // response; without a hub — a bare app in tests — there is no refresher
+  // keeping a cache coherent, so it computes fresh, exactly as before.
+  const readHealth = async (): Promise<Record<string, unknown>> => {
+    if (!deps.socketHub) return healthSnapshot();
+    if (!healthCache) return refreshHealth(); // first ever: nothing to serve yet
+    const age = Date.now() - healthCache.at;
+    if (age > HEALTH_MAX_STALE_MS) return refreshHealth(); // too old to serve — wait for the truth
+    if (age > HEALTH_TTL_MS) void refreshHealth(); // stale: refresh, don't wait on it
+    return healthCache.payload;
+  };
+
+  app.get('/api/health', async (c) => c.json(await readHealth()));
+
+  // The push twin of the poll it replaced (#369): while at least one cockpit
+  // holds the `health` topic the server re-reads the snapshot on the old 5 s
+  // cadence and broadcasts ONLY when it changed — a `git checkout` in a
+  // terminal reaches every open tab within a tick — and an idle workspace (no
+  // subscriber) runs no timer. Nothing server-side watches `.git/HEAD`, so the
+  // interval stays the honest mechanism; it just lives behind the socket now
+  // instead of N tabs × 5 s HTTP polls. Every tick and every subscriber read
+  // goes through the cache above, so N subscribers still cost one compute.
+  deps.socketHub?.registerTopic(
+    'health',
+    {
+      snapshot: readHealth,
+      start: (publish) => {
+        publishHealth = publish;
+        const timer = setInterval(() => void refreshHealth(), HEALTH_TTL_MS);
+        timer.unref?.();
+        return () => {
+          clearInterval(timer);
+          publishHealth = () => {};
+        };
+      },
+    },
+    // health IS the CORS-open discovery payload (#431), so it is the one topic
+    // safe for any local page — including a cross-port page admitted by the
+    // loopback fallback on a no-Sec-Fetch browser. Every other (future) topic
+    // keeps the default: trusted connections only.
+    { loopbackReadable: true },
+  );
+  // Pre-warm on the live-server path only (startServer injects the hub; a bare
+  // app in tests does not, so tests never spawn the probes here): the cache
+  // fills while the browser is still downloading the bundle, so its first
+  // `GET /api/health` reads a warm value instead of the cold ~1 s compute.
+  if (deps.socketHub) void refreshHealth();
 
   // Host capability, not project state: one installed/authenticated CLI per
   // backend and one in-memory cache are shared by every registered workspace.
@@ -1135,6 +1340,90 @@ export function createApp(deps: ServerDeps): Hono {
     const query = z.object({ runner: z.enum(['codex', 'opencode']) }).safeParse(c.req.query());
     if (!query.success) return c.json({ error: 'runner must be codex or opencode' }, 400);
     return c.json(await modelCatalog.get(query.data.runner));
+  });
+
+  app.get('/api/providers/status', async (c) => {
+    const query = z.object({ refresh: z.literal('1').optional() }).safeParse(c.req.query());
+    if (!query.success) return c.json({ error: 'refresh must be 1 when provided' }, 400);
+    return c.json(await providerStatus({ refresh: query.data.refresh === '1' }));
+  });
+
+  app.put('/api/providers/:provider/enabled', async (c) => {
+    const provider = providerParamSchema.safeParse(c.req.param('provider'));
+    const body = providerEnabledSchema.safeParse(await c.req.json().catch(() => null));
+    if (!provider.success || !body.success) {
+      return c.json({ error: 'provider and enabled boolean are required' }, 400);
+    }
+    let workspace: WorkspaceConfig;
+    try {
+      workspace = await workspaceConfig.mergeWrite((config) => {
+        const disabled = new Set(config.disabledProviders);
+        if (body.data.enabled) disabled.delete(provider.data);
+        else disabled.add(provider.data);
+        config.disabledProviders = PROVIDER_IDS.filter((id) => disabled.has(id));
+      });
+    } catch {
+      return c.json({ error: 'Provider preference could not be saved.' }, 500);
+    }
+    const result = applyProviderEnablement(
+      await providerAuth.status(),
+      workspace.disabledProviders,
+    );
+    const row = result.providers.find(({ provider: id }) => id === provider.data);
+    if (row) workspaceEvents.emit('provider-status', row);
+    return c.json(result);
+  });
+
+  app.post('/api/providers/:provider/retry', async (c) => {
+    const provider = providerParamSchema.safeParse(c.req.param('provider'));
+    const body = providerRetrySchema.safeParse(await c.req.json().catch(() => null));
+    if (!provider.success || !body.success) {
+      return c.json({ error: 'provider and current authFailureId are required' }, 400);
+    }
+    if (!providerAuth.clearRuntimeAuthFailure(provider.data, body.data.authFailureId)) {
+      return c.json({ error: 'Authentication incident changed. Refresh and try again.' }, 409);
+    }
+    const result = await providerStatus({ refresh: true });
+    const row = result.providers.find(({ provider: id }) => id === provider.data);
+    if (row) workspaceEvents.emit('provider-status', row);
+    return c.json(result);
+  });
+
+  app.post('/api/providers/connect', async (c) => {
+    const body = providerConnectSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'provider must be claude, codex, or opencode' }, 400);
+
+    const provider = body.data.provider as ProviderId;
+    const command = providerAuth.loginCommand(provider);
+    const row = (await providerAuth.status({ refresh: true })).providers.find(
+      (candidate) => candidate.provider === provider,
+    );
+    if (!row) {
+      return c.json({ error: 'Authentication could not be verified. Try again.' }, 500);
+    }
+
+    if (row.status === 'connected') {
+      return c.json({ opened: false, connected: true, command });
+    }
+    if (row.status === 'not-installed') {
+      return c.json({ error: row.hint ?? providerAuth.installHint(provider), command }, 409);
+    }
+    if (row.status === 'unknown') {
+      return c.json({ error: row.hint ?? 'Authentication could not be verified. Try again.', command }, 409);
+    }
+    if (!capabilities().localHandoff) {
+      return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
+    }
+    let opened = false;
+    try {
+      opened = await openTerminal(bootRoot, command);
+    } catch {
+      // Terminal handoff is best-effort; the exact command remains the safe fallback.
+    }
+    if (!opened) {
+      return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
+    }
+    return c.json({ opened: true, command });
   });
 
   // ---- workspace projects (multi-project spec) -----------------------------
@@ -1415,6 +1704,61 @@ export function createApp(deps: ServerDeps): Hono {
     return c.json(body);
   });
 
+  // Workspace-level by design: update state spans project and global installs,
+  // but the selected registered project supplies the safe, server-owned cwd.
+  const skillsUpdateInputSchema = z.object({ projectId: projectIdSchema }).strict();
+  const resolveSkillsUpdateRoot = async (raw: string): Promise<
+    { root: string } | { status: 404 | 409; error: string }
+  > => {
+    if (!projectIdSchema.safeParse(raw).success) return { status: 404, error: `unknown project: ${raw}` };
+    const bootId = await resolveBootProject();
+    if (raw === 'default' || raw === bootId) return { root: bootRoot };
+    const project = (await loadWorkspaceConfig()).projects.find((entry) => entry.id === raw);
+    if (!project) return { status: 404, error: `unknown project: ${raw}` };
+    if ((await probeProjectStatus(project.root)).status === 'missing') {
+      return { status: 409, error: `project folder not found: ${raw}` };
+    }
+    return { root: project.root };
+  };
+
+  const skillsUpdateResponse = async (state: SkillsUpdateState): Promise<SkillsUpdateState> => {
+    const config = await loadWorkspaceConfig();
+    return { ...state, autoUpdateEnabled: effectiveSkillsAutoUpdate(config), inherited: config.skillsAutoUpdate === undefined };
+  };
+
+  app.get('/api/workspace/skills-update', async (c) => {
+    const parsed = skillsUpdateInputSchema.safeParse({ projectId: c.req.query('projectId') });
+    if (!parsed.success) return c.json({ error: 'projectId is required' }, 400);
+    const resolved = await resolveSkillsUpdateRoot(parsed.data.projectId);
+    if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status);
+    const state: SkillsUpdateState = skillsUpdate.snapshot(resolved.root);
+    void skillsUpdate.check(resolved.root).catch(() => {});
+    return c.json(await skillsUpdateResponse(state));
+  });
+
+  app.post('/api/workspace/skills-update/check', async (c) => {
+    const parsed = skillsUpdateInputSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: 'body must contain only projectId' }, 400);
+    const resolved = await resolveSkillsUpdateRoot(parsed.data.projectId);
+    if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status);
+    return c.json(await skillsUpdateResponse(await skillsUpdate.check(resolved.root, true)));
+  });
+
+  app.post('/api/workspace/skills-update/apply', async (c) => {
+    const parsed = skillsUpdateInputSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: 'body must contain only projectId' }, 400);
+    const resolved = await resolveSkillsUpdateRoot(parsed.data.projectId);
+    if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status);
+    try {
+      return c.json(await skillsUpdateResponse(await skillsUpdate.update(resolved.root, true)));
+    } catch (error) {
+      if (error instanceof SkillsUpdateConflictError) {
+        return c.json({ error: 'another skills update operation is running', state: await skillsUpdateResponse(skillsUpdate.snapshot(resolved.root)) }, 409);
+      }
+      throw error;
+    }
+  });
+
   // Edit one field of an existing registry entry (spec
   // 2026-07-22-per-project-concurrency): the per-project concurrency ceiling.
   // A PATCH (not PUT) because it touches a single field, and a distinct route
@@ -1547,8 +1891,27 @@ export function createApp(deps: ServerDeps): Hono {
   const workspaceConfigBody = (config: WorkspaceConfig): WorkspaceConfigResponse => ({
     browseRoot: config.browseRoot,
     projectsDir: config.projectsDir,
+    skillsAutoUpdate: config.skillsAutoUpdate ?? null,
+    effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
+    composerDefaults: {
+      autonomous: config.composerDefaults.autonomous ?? null,
+      worktree: config.composerDefaults.worktree ?? null,
+      inheritedAutonomous:
+        process.env.CEZ_AUTONOMOUS_DEFAULT === '0'
+          ? false
+          : process.env.CEZ_AUTONOMOUS_DEFAULT === '1'
+            ? true
+            : 'source-dependent',
+      inheritedWorktree: effectiveComposerDefault(
+        undefined,
+        process.env.CEZ_WORKTREE_DEFAULT,
+        true,
+      ),
+    },
     resources: {
       maxParallel: config.resources.maxParallel,
+      maxMonitoringSessions: config.resources.maxMonitoringSessions,
+      monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
@@ -1561,9 +1924,18 @@ export function createApp(deps: ServerDeps): Hono {
   const workspaceConfigUpdateSchema = z.object({
     browseRoot: z.string().trim().min(1).max(4096).optional(),
     projectsDir: z.string().trim().min(1).max(4096).optional(),
+    skillsAutoUpdate: z.boolean().nullable().optional(),
+    composerDefaults: z
+      .object({
+        autonomous: z.boolean().nullable().optional(),
+        worktree: z.boolean().nullable().optional(),
+      })
+      .optional(),
     resources: z
       .object({
         maxParallel: z.number().int().min(1).max(16).optional(),
+        maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
+        monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       })
@@ -1574,7 +1946,7 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
-    const { browseRoot, projectsDir, resources } = parsed.data;
+    const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources } = parsed.data;
     for (const [configuredRoot, create] of [
       [browseRoot, false],
       [projectsDir, true],
@@ -1608,7 +1980,23 @@ export function createApp(deps: ServerDeps): Hono {
         // Roots are stored as written (`~` kept); only the probe expands them.
         if (browseRoot !== undefined) config.browseRoot = browseRoot;
         if (projectsDir !== undefined) config.projectsDir = projectsDir;
+        if (skillsAutoUpdate === null) delete config.skillsAutoUpdate;
+        else if (skillsAutoUpdate !== undefined) config.skillsAutoUpdate = skillsAutoUpdate;
+        if (composerDefaults?.autonomous === null) delete config.composerDefaults.autonomous;
+        else if (composerDefaults?.autonomous !== undefined) {
+          config.composerDefaults.autonomous = composerDefaults.autonomous;
+        }
+        if (composerDefaults?.worktree === null) delete config.composerDefaults.worktree;
+        else if (composerDefaults?.worktree !== undefined) {
+          config.composerDefaults.worktree = composerDefaults.worktree;
+        }
         if (resources?.maxParallel !== undefined) config.resources.maxParallel = resources.maxParallel;
+        if (resources?.maxMonitoringSessions !== undefined) {
+          config.resources.maxMonitoringSessions = resources.maxMonitoringSessions;
+        }
+        if (resources?.monitoringWakeIntervalMinutes !== undefined) {
+          config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
+        }
         if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
         if (resources?.worktreeRetentionDefault !== undefined) {
           config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
@@ -1823,6 +2211,8 @@ export function createApp(deps: ServerDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
+    if (blocked) return c.json({ error: blocked }, 409);
     return c.json(await planChain(repoRoot, parsed.data.task));
   });
 
@@ -1907,6 +2297,9 @@ export function createApp(deps: ServerDeps): Hono {
       // claimants, so competing variants make no sense for a harness run.
       return c.json({ error: 'parallel variants are not available for harness runs — one staged handoff per task' }, 400);
     }
+    const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+    const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+    if (blocked) return c.json({ error: blocked }, 409);
     const images = parsed.data.images?.map((img): ContentBlock => ({
       type: 'image',
       source: { type: 'base64', media_type: img.mediaType, data: img.data },
@@ -2108,11 +2501,14 @@ export function createApp(deps: ServerDeps): Hono {
   api.post('/runs/:id/messages', async (c) => {
     const { store, manager } = c.get('project');
     const id = c.req.param('id');
-    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const run = store.getRun(id);
+    if (!run) return c.json({ error: 'not found' }, 404);
     const parsed = messageSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    const blocked = await providerActionError([providerForActiveRun(run)]);
+    if (blocked) return c.json({ error: blocked }, 409);
     const content: ContentBlock[] = [
       ...parsed.data.images.map((img): ContentBlock => ({
         type: 'image',
@@ -2127,14 +2523,14 @@ export function createApp(deps: ServerDeps): Hono {
     //   starting up  → buffered  · anything else → 409, exactly as before
     if (manager.sendMessage(id, content)) return c.json({ delivered: true });
 
-    const run = store.getRun(id);
-    const stack = run?.queuedMessages ?? [];
+    const currentRun = store.getRun(id);
+    const stack = currentRun?.queuedMessages ?? [];
     // Bounds apply only to a message that is actually about to be stacked. Without this
     // gate an over-long message posted to a *finished* run would answer `400 prompt too
     // long` when the truthful answer is `409 session closed`. The status read is safe
     // here because it only decides whether to reject EARLY — `enqueueMessage` still
     // re-checks against the engine's own queue before writing anything.
-    if (run?.status === 'queued') {
+    if (currentRun?.status === 'queued') {
       if (stack.length >= MAX_QUEUED_MESSAGES) {
         return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
       }
@@ -2142,7 +2538,7 @@ export function createApp(deps: ServerDeps): Hono {
       if (stackedImages + parsed.data.images.length > MAX_QUEUED_IMAGES) {
         return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
       }
-      const prospective = foldedLength(run.task, [...stack, { text: parsed.data.text }]);
+      const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
       if (prospective > MAX_FOLDED_TASK_CHARS) {
         return c.json(
           {
@@ -2237,13 +2633,16 @@ export function createApp(deps: ServerDeps): Hono {
   api.post('/runs/:id/continue', async (c) => {
     const { store, manager } = c.get('project');
     const id = c.req.param('id');
-    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const run = store.getRun(id);
+    if (!run) return c.json({ error: 'not found' }, 404);
     // Bounded resume text (#429); an empty/absent body still just re-runs on the
     // run's current backend, and a runner/model override reopens on that engine (#401).
     const parsed = continueSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
+    if (blocked) return c.json({ error: blocked }, 409);
     const result = manager.continueRun(id, {
       text: parsed.data.text,
       images: parsed.data.images?.map((img): ContentBlock => ({
@@ -2277,6 +2676,8 @@ export function createApp(deps: ServerDeps): Hono {
     }
     const sessionId = [...run.steps].reverse().find((s) => s.sessionId)?.sessionId;
     if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
+    const blocked = await providerActionError([providerForExistingRun(run)]);
+    if (blocked) return c.json({ error: blocked }, 409);
     const cwd = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
     const command = resumeCommand(run.runner, sessionId);
     // Fails closed on an id we do not recognise — see resumeCommand (#431).
@@ -2381,6 +2782,8 @@ export function createApp(deps: ServerDeps): Hono {
     // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
     const cliRunner = agentCliRunner(target);
     if (cliRunner) {
+      const blocked = await providerActionError([cliRunner]);
+      if (blocked) return c.json({ error: blocked }, 409);
       const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
       const sessionId = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId)?.sessionId;
       // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
@@ -2865,6 +3268,10 @@ export function createApp(deps: ServerDeps): Hono {
       workflow = workflows.find((w) => w.name === 'quick-task') ?? QUICK_TASK_WORKFLOW;
     }
 
+    const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+    const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+    if (blocked) return c.json({ error: blocked }, 409);
+
     const run = manager.startRun(workflow, {
       task,
       runner: parsed.data?.runner,
@@ -3072,11 +3479,12 @@ export function createApp(deps: ServerDeps): Hono {
       });
 
       // Workspace-level events (project-added / project-removed /
-      // checkout-progress) — relayed verbatim under their own names. A
-      // removal also drops the project's attach entry: the id guard in
-      // `attach` would otherwise pin the DISPOSED context forever, so a
-      // project removed and re-added on the same slug would rebuild a fresh
-      // context whose events never reach this already-open stream.
+      // checkout-progress plus host-wide unstamped provider-status) — relayed
+      // verbatim under their own names. A removal also drops the project's
+      // attach entry: the id guard in `attach` would otherwise pin the
+      // DISPOSED context forever, so a project removed and re-added on the
+      // same slug would rebuild a fresh context whose events never reach this
+      // already-open stream.
       const offWorkspace = workspaceEvents.on((event, data) => {
         if (event === 'project-removed') {
           const removed = (data as { id?: string }).id;
@@ -3130,6 +3538,79 @@ export function createApp(deps: ServerDeps): Hono {
     return c.json(
       await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.query('refresh') === '1'),
     );
+  });
+
+  // Lazy checks glyphs for on-screen PR rows (#664). Additive sibling of /api/github — the list
+  // call dropped `statusCheckRollup` (the dominant cost), so the glyph is hydrated here per
+  // visible row. `prs` is a comma-separated list of positive integers, capped at GH_CHECKS_MAX;
+  // anything malformed is a 400. Same in-payload availability degrade as the list (never a 5xx).
+  api.get('/github/checks', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const raw = c.req.query('prs');
+    if (!raw) return c.json({ error: 'missing prs query' }, 400);
+    const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0 || parts.length > GH_CHECKS_MAX) return c.json({ error: 'invalid prs query' }, 400);
+    const numbers: number[] = [];
+    for (const part of parts) {
+      const n = Number(part);
+      if (!Number.isInteger(n) || n <= 0 || String(n) !== part) return c.json({ error: 'invalid prs query' }, 400);
+      numbers.push(n);
+    }
+    return c.json(await fetchGithubChecks(repoRoot, numbers));
+  });
+
+  const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });
+  const mergeBodySchema = z.object({
+    method: z.enum(['merge', 'squash', 'rebase']),
+    expectedHeadSha: z.string().regex(/^[0-9a-f]{40}$/),
+  }).strict();
+
+  api.get('/github/prs/:number/merge-state', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsed = mergeNumberParams.safeParse({ number: c.req.param('number') });
+    if (!parsed.success) return c.json({ error: 'invalid pull request number' }, 400);
+    const forge = resolveForge(await getRepoInfo(repoRoot));
+    if (!forge?.prMergeState) return c.json({ available: false, reason: 'GitHub merge state is unavailable' });
+    return c.json(await forge.prMergeState(parsed.data.number, { refresh: c.req.query('refresh') === '1' }));
+  });
+
+  api.post('/github/prs/:number/merge', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsedNumber = mergeNumberParams.safeParse({ number: c.req.param('number') });
+    if (!parsedNumber.success) return c.json({ error: 'invalid pull request number' }, 400);
+    const body = mergeBodySchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'invalid merge request' }, 400);
+    const forge = resolveForge(await getRepoInfo(repoRoot));
+    if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
+    const result = await forge.mergePR(parsedNumber.data.number, body.data);
+    if (result.merged) return c.json(result);
+    return c.json(
+      {
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.current ? { current: result.current } : {}),
+      },
+      result.status,
+    );
+  });
+
+  const prChangesParams = z.object({
+    number: z.coerce.number().int().positive().safe(),
+    refresh: z.enum(['1']).optional(),
+  });
+  api.get('/github/prs/:number/changes', async (c) => {
+    const { root: repoRoot } = c.get('project');
+    const parsed = prChangesParams.safeParse({
+      number: c.req.param('number'),
+      refresh: c.req.query('refresh'),
+    });
+    if (!parsed.success) return c.json({ error: 'invalid pull request number or refresh flag' }, 400);
+    try {
+      return c.json(await fetchGithubPrDiff(repoRoot, parsed.data.number, parsed.data.refresh === '1'));
+    } catch (err) {
+      if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
+      throw err;
+    }
   });
 
   // ---- repo view -----------------------------------------------------------
@@ -3431,17 +3912,107 @@ export function createApp(deps: ServerDeps): Hono {
 }
 
 export function startServer(deps: ServerDeps, port: number): ServerType {
-  const app = createApp(deps);
+  const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
+  const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService({ invalidateCatalog: refreshTeamSkills });
+  // The subscription hub rides the same HTTP server (one port, zero config):
+  // createApp registers the topics, the `upgrade` hook below owns the socket.
+  const socketHub = deps.socketHub ?? createSocketHub();
+  const app = createApp({ ...deps, workspaceEvents, skillsUpdate, socketHub });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
   // expose an agent-executing box to the network. `bindHost` exists only for a deliberate
   // hosted/VPS deployment (which also flips CEZ_REMOTE to gate the local-handoff endpoints) —
   // src/index.ts never passes it, so the loopback guarantee holds for the normal CLI.
-  return serve({
+  const server = serve({
     fetch: app.fetch,
     port,
     hostname: deps.bindHost ?? '127.0.0.1',
   });
+  const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
+    effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
+  const unsubscribe = workspaceEvents.on((event, data) => {
+    if (event === 'project-added') {
+      const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
+      if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
+        coordinator.add(project.id, project.root);
+      }
+    } else if (event === 'project-removed') {
+      const id = (data as { id?: unknown }).id;
+      if (typeof id === 'string') coordinator.remove(id);
+    }
+  });
+  server.once('listening', () => {
+    void listProjects().then((projects) => {
+      const all = projects.some((project) => project.root === deps.repoRoot)
+        ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
+      coordinator.start(all);
+    }).catch(() => undefined);
+  });
+  server.once('close', () => { unsubscribe(); coordinator.stop(); });
+  socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
+  return server;
+}
+
+/**
+ * The WebSocket twin of the `/api/*` request-origin guard (#426), applied
+ * before the `/api/ws` handshake. WebSocket is NOT subject to CORS — any web
+ * page may open `ws://127.0.0.1:<port>/api/ws` and, unlike a forced HTTP GET,
+ * would get to READ what comes back — so this guard is load-bearing:
+ *
+ *   1. Host allowlist (local mode): a non-loopback Host is a DNS-rebound
+ *      request; kill it before the handshake. Same anchored
+ *      `isLoopbackHostHeader` rules as the HTTP guard.
+ *   2. Origin check: browsers always attach `Origin` to a WS handshake. A
+ *      same-authority Origin is the cockpit itself. A LOOPBACK origin with a
+ *      loopback Host is also admitted — that is the `npm run dev` Vite proxy
+ *      (`changeOrigin` rewrites Host, the browser's `localhost:5173` Origin
+ *      survives). Unlike the HTTP write guard we cannot REQUIRE `Sec-Fetch-Site`
+ *      here — Safari sends no `Sec-Fetch-*` at all and requiring it would lock
+ *      the dev proxy out of it — but we do honor it when it is there: Chromium
+ *      does send it on a WS handshake, and page JS cannot forge it (forbidden
+ *      header name), so a cross-port attacker page announcing `same-site` is
+ *      rejected on the browser that ships it while Safari/Firefox still fall
+ *      back to the loopback rule. Best available, not fail-open.
+ *      No Origin at all is a non-browser client — same stance as the HTTP guard.
+ *
+ * The loopback-origin fallback still admits, on a browser that sends no
+ * `Sec-Fetch-Site`, a page served from ANOTHER loopback port. That is no longer
+ * a caveat the caller must remember: the verdict carries a `trusted` flag, and
+ * the hub only lets an UNtrusted connection subscribe to topics a publisher
+ * marked `loopbackReadable`. `health` is flagged so (the CORS-open discovery
+ * payload, #431); every other topic stays trusted-only by default, so a topic
+ * carrying run or repo content is mechanically unreachable from a foreign local
+ * page without any per-topic vigilance. A connection is `trusted` when it is
+ * provably the cockpit itself: a same-authority Origin, a no-Origin native
+ * client, or a dev proxy the browser vouches for via `Sec-Fetch-Site`.
+ */
+export function verifyWsUpgrade(req: IncomingMessage, bindHost?: string): WsUpgradeVerdict {
+  const host = req.headers.host;
+  const hostName = hostnameOfHost(host);
+  const hosted = !resolveCapabilities(process.env, bindHost).localHandoff;
+  if (!hosted && !isLoopbackHostHeader(hostName)) return false;
+  const origin = req.headers.origin;
+  if (origin === undefined) return { trusted: true }; // non-browser client — no Origin to spoof
+  // Scheme-checked, like the HTTP guard's comparison: `authorityOfOrigin` is
+  // null for anything that is not an http(s) URL, so the opaque `"null"` origin
+  // of a sandboxed iframe AND a `ftp://127.0.0.1`-shaped one both stay out
+  // rather than reaching the loopback test below on hostname alone.
+  const originAuthority = authorityOfOrigin(origin);
+  const originHost = hostnameOfOrigin(origin);
+  if (originAuthority === null || !originHost) return false;
+  if (originAuthority === authorityOfHost(host)) return { trusted: true }; // the cockpit itself
+  // The dev-proxy fallback. An explicit `cross-site`/`same-site` is an attacker
+  // page on another local port and is refused even though both ends are
+  // loopback; anything else needs loopback on both ends to get in at all.
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (fetchSite !== undefined && fetchSite !== 'same-origin') return false;
+  if (!isLoopbackHostHeader(originHost) || !isLoopbackHostHeader(hostName)) return false;
+  // Loopback on both ends, admitted. If the browser vouches it is same-origin
+  // (`Sec-Fetch-Site: same-origin`, unforgeable by page JS), this is the dev
+  // proxy on Chromium → trust it. An ABSENT header is a browser that ships no
+  // metadata (Safari/Firefox), where the dev proxy and a foreign local page are
+  // indistinguishable: admit as UNTRUSTED so only `loopbackReadable` topics show.
+  return { trusted: fetchSite === 'same-origin' };
 }
 
 /** The bare hostname of a `Host` header — see `normalizeHostname`. `''` when the

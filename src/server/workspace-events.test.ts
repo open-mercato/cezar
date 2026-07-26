@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ProviderAuthService } from '../core/provider-auth.js';
 import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.js';
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
@@ -16,10 +17,11 @@ import { WorkspaceEventBus, createApp } from './server.js';
  * `GET /api/workspace/events` carries EVERY instantiated project's events,
  * each payload stamped with its `project` id; `usage` is split per project
  * (one stamped event per project with live rows); workspace-level bus events
- * (`project-added`, `project-removed`, `checkout-progress`) ride the same
- * stream. Subscribing never force-instantiates a project — late-built
- * contexts join dynamically. The legacy `/api/events` alias stays
- * boot-filtered with its UN-stamped, byte-identical shape (protected).
+ * (`project-added`, `project-removed`, `checkout-progress`) and the host-wide
+ * unstamped `provider-status` event ride the same stream. Subscribing never
+ * force-instantiates a project — late-built contexts join dynamically. The
+ * legacy `/api/events` alias stays boot-filtered with its UN-stamped,
+ * byte-identical shape (protected).
  */
 describe('GET /api/workspace/events', () => {
   const savedHome = process.env.CEZ_HOME;
@@ -58,6 +60,9 @@ describe('GET /api/workspace/events', () => {
       version: '0.0.0-test',
       contexts,
       workspaceEvents: bus,
+      providerAuth: new ProviderAuthService({
+        createAuthFailureId: () => 'auth-incident-1',
+      }),
     });
   });
 
@@ -260,6 +265,102 @@ describe('GET /api/workspace/events', () => {
     ]);
   });
 
+  it("broadcasts a late-built context's runtime provider invalidation without a project stamp", async () => {
+    const other = await buildOtherContext();
+    const ws = await openStream('/api/workspace/events');
+    await ws.readUntil('event: ping');
+
+    try {
+      delete process.env.CEZ_DRY_RUN;
+      const run = other.store.createRun({
+        title: 'auth',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'opencode',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      other.store.updateStep(run.id, 'work', { backend: 'opencode' });
+      other.store.appendEvent(run.id, {
+        type: 'session.error',
+        stepId: 'work',
+        message: 'OAuth access token is invalid',
+      });
+
+      const body = await ws.readUntil('event: provider-status');
+      expect(body).toContain(
+        'event: provider-status\n'
+        + 'data: {"provider":"opencode","status":"disconnected",'
+        + '"hint":"Authentication was rejected during a run. Reconnect, then try again.",'
+        + '"authFailureId":"auth-incident-1"}\n',
+      );
+      expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toEqual([{
+        provider: 'opencode',
+        status: 'disconnected',
+        hint: 'Authentication was rejected during a run. Reconnect, then try again.',
+        authFailureId: 'auth-incident-1',
+      }]);
+    } finally {
+      process.env.CEZ_DRY_RUN = '1';
+    }
+  });
+
+  it('broadcasts a global provider preference change with its enablement state', async () => {
+    const ws = await openStream('/api/workspace/events');
+    await ws.readUntil('event: ping');
+
+    const response = await apiRequest(app, '/api/providers/codex/enabled', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await ws.readUntil('event: provider-status');
+    expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toEqual([{
+      provider: 'codex',
+      status: 'connected',
+      enabled: false,
+    }]);
+  });
+
+  it('broadcasts an enabled provider row after an incident-safe retry', async () => {
+    const ws = await openStream('/api/workspace/events');
+    await ws.readUntil('event: ping');
+    const run = store.createRun({
+      title: 'auth retry',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+
+    try {
+      delete process.env.CEZ_DRY_RUN;
+      store.appendEvent(run.id, {
+        type: 'error',
+        message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      });
+      await ws.readUntil('event: provider-status');
+      process.env.CEZ_DRY_RUN = '1';
+
+      const response = await apiRequest(app, '/api/providers/claude/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ authFailureId: 'auth-incident-1' }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await ws.readUntil('"enabled":true');
+      expect(payloadsOf<Record<string, unknown>>(body, 'provider-status')).toContainEqual({
+        provider: 'claude',
+        status: 'connected',
+        enabled: true,
+      });
+    } finally {
+      process.env.CEZ_DRY_RUN = '1';
+    }
+  });
+
   it('a removed project re-added on the same slug resumes flowing on an already-open stream', async () => {
     const other = await buildOtherContext();
 
@@ -296,7 +397,7 @@ describe('GET /api/workspace/events', () => {
     ]);
   });
 
-  it('relays workspace-level bus events under their own names (project-added/removed, checkout-progress)', async () => {
+  it('relays workspace-level bus events under their own names (projects, checkout, provider status)', async () => {
     const ws = await openStream('/api/workspace/events');
     await ws.readUntil('event: ping');
 

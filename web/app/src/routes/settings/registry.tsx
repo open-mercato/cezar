@@ -7,6 +7,7 @@ import {
   FolderGit2Icon,
   FoldersIcon,
   GaugeIcon,
+  PackageCheckIcon,
   KeyboardIcon,
   NotebookPenIcon,
   PaletteIcon,
@@ -24,6 +25,7 @@ import { NotificationsSection } from './notifications-section'
 import { ProjectsSection } from './projects-section'
 import { PromptTemplatesSection } from './prompt-templates-section'
 import { ResourcesSection } from './resources-section'
+import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
 
 /**
@@ -54,6 +56,7 @@ export type SettingsSectionId =
   | 'notifications'
   | 'prompt-templates'
   | 'keyboard'
+  | 'skills'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -159,6 +162,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Parallel tasks and per-task memory limit, across every project.',
     icon: GaugeIcon,
     component: ResourcesSection,
+    scope: 'global',
+  },
+  {
+    id: 'skills',
+    title: 'Skills',
+    description: 'Updates for skills installed on this machine.',
+    icon: PackageCheckIcon,
+    component: SkillsSection,
     scope: 'global',
   },
   {

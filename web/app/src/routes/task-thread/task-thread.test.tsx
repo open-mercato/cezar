@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { ApiRun, RunEvent, RunStatus } from '@/api/types'
+import type { ApiRun, ProviderStatusResponse, RunEvent, RunStatus } from '@/api/types'
 
 import { buildThreadRows, TaskThreadRoute, ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
@@ -18,14 +18,30 @@ afterEach(() => {
 /** ThreadView now hosts the run header, whose hooks need a query client (mutations, the runs
  *  list) and a router (tabs, delete-navigates-home). Data assertions still drive the reduced
  *  fixture states directly — the providers are plumbing, not fixtures. */
-function renderView(ui: ReactElement) {
+function renderView(
+  ui: ReactElement,
+  providerStatus: ProviderStatusResponse = {
+    providers: [
+      { provider: 'claude', status: 'connected', enabled: true },
+      { provider: 'codex', status: 'not-installed', enabled: true },
+      { provider: 'opencode', status: 'not-installed', enabled: true },
+    ],
+  },
+) {
   vi.stubGlobal(
     'fetch',
-    vi.fn(() =>
-      Promise.resolve(
-        new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }),
-      ),
-    ),
+    vi.fn((input: RequestInfo | URL) => {
+      const body =
+        String(input) === '/api/providers/status'
+          ? providerStatus
+          : []
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }),
   )
   return render(
     <QueryClientProvider client={createQueryClient()}>
@@ -68,6 +84,19 @@ const EVENTS: RunEvent[] = [
 ]
 
 describe('ThreadView', () => {
+  it('keeps provider authorization recovery visible after the run reaches done', () => {
+    const authRequired = [
+      line(1, 'provider-auth-required', { provider: 'codex', authFailureId: 'incident-1' }),
+      line(2, 'done'),
+    ]
+    renderView(<ThreadView run={run('done')} thread={reduceThread(authRequired)} />)
+
+    expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
+    expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+  })
+
   it('renders the task as the leading user bubble and the v1 reply as another', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     const bubbles = document.querySelectorAll('[data-slot="user-bubble"]')
@@ -145,6 +174,52 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
   })
 
+  it.each([
+    ['disabled', { provider: 'claude', status: 'connected', enabled: false }, 'Claude Code is disabled. Enable it in Settings → Agents → Providers.'],
+    ['disconnected', { provider: 'claude', status: 'disconnected', enabled: true }, 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.'],
+  ] as const)('disables a queued composer when its active provider is %s', async (_case, claude, reason) => {
+    renderView(
+      <ThreadView run={run('queued', { runner: 'claude' })} thread={reduceThread([])} />,
+      {
+        providers: [
+          claude,
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+
+    const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+    await waitFor(() => expect(textarea.disabled).toBe(true))
+    expect(textarea.placeholder).toBe(reason)
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
+      '/settings/agents#providers',
+    )
+  })
+
+  it('keeps a waiting composer enabled when a retrying current step uses a usable provider', async () => {
+    renderView(
+      <ThreadView
+        run={run('waiting', {
+          runner: 'claude',
+          currentStepId: 'retry',
+          steps: [{ id: 'retry', name: 'Retry', kind: 'agent', status: 'waiting', iterations: 2, tokensUsed: 0, backend: 'codex' }],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+      {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+
+    const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+    await waitFor(() => expect(textarea.disabled).toBe(false))
+  })
+
   it('monitoring → no paused hint, "message" placeholder, and a "monitoring" pill (#490)', () => {
     renderView(<ThreadView run={run('running', { activity: 'monitoring' })} thread={reduceThread(EVENTS)} />)
     // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner.
@@ -157,7 +232,7 @@ describe('ThreadView', () => {
 
   /** A closed run with a session to resume is still AUTHORABLE: Continue takes a prompt, so
    *  the composer stays live and its send is that Continue. */
-  it('closed but resumable → the composer stays enabled, and sending is Continue', () => {
+  it('closed but resumable → the composer stays enabled, and sending is Continue', async () => {
     renderView(
       <ThreadView
         run={run('done', {
@@ -169,7 +244,7 @@ describe('ThreadView', () => {
       />,
     )
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
-    expect(textarea.disabled).toBe(false)
+    await waitFor(() => expect(textarea.disabled).toBe(false))
     expect(textarea.placeholder).toBe('Continue — add a prompt, or send to just reopen the session…')
     // Empty is still the one-click Continue, so send is live with nothing typed.
     expect((screen.getByLabelText('Continue') as HTMLButtonElement).disabled).toBe(false)
