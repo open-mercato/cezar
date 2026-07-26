@@ -3355,6 +3355,7 @@ export function createApp(deps: ServerDeps): Hono {
   const mergeBodySchema = z.object({
     method: z.enum(['merge', 'squash', 'rebase']),
     expectedHeadSha: z.string().regex(/^[0-9a-f]{40}$/),
+    overrideRules: z.boolean().optional().default(false),
   }).strict();
 
   api.get('/github/prs/:number/merge-state', async (c) => {

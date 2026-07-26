@@ -795,6 +795,7 @@ export interface GithubPrMergeState {
   eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown'
   blockers: Array<{ code: string; message: string }>
   canMerge: boolean
+  canOverride: boolean
 }
 
 export type GithubPrMergeStateResponse =
