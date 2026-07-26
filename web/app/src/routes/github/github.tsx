@@ -1,13 +1,17 @@
 import { hashKey, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeftIcon,
+  CircleCheckIcon,
   CheckIcon,
+  CircleIcon,
   CircleDotIcon,
+  CircleXIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ExternalLinkIcon,
   GitPullRequestIcon,
   MessageSquareIcon,
+  LoaderCircleIcon,
   RefreshCwIcon,
   SearchIcon,
   TagIcon,
@@ -734,6 +738,16 @@ const mergeLabels: Record<GithubMergeMethod, string> = {
   rebase: 'Rebase and merge',
 }
 
+type MergeRequirementState = 'passing' | 'failing' | 'pending' | 'unknown'
+
+function MergeRequirementIcon({ state }: { state: MergeRequirementState }) {
+  const iconClass = 'size-4 shrink-0'
+  if (state === 'passing') return <CircleCheckIcon aria-hidden="true" data-slot="gh-merge-status-passing" className={cn(iconClass, 'text-success')} />
+  if (state === 'failing') return <CircleXIcon aria-hidden="true" data-slot="gh-merge-status-failing" className={cn(iconClass, 'text-danger')} />
+  if (state === 'pending') return <LoaderCircleIcon aria-hidden="true" data-slot="gh-merge-status-pending" className={cn(iconClass, 'animate-spin text-warning')} />
+  return <CircleIcon aria-hidden="true" data-slot="gh-merge-status-unknown" className={cn(iconClass, 'text-soft-foreground')} />
+}
+
 function GithubMergeBox({ number }: { number: number }) {
   const queryClient = useQueryClient()
   const mergeState = useQuery({
@@ -744,6 +758,7 @@ function GithubMergeBox({ number }: { number: number }) {
   const state = mergeState.data?.available ? mergeState.data.mergeState : null
   const [method, setMethod] = useState<GithubMergeMethod | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const [overrideRules, setOverrideRules] = useState(false)
   const refreshMergeState = useMutation({
     mutationFn: () => getGithubPrMergeState(number, { refresh: true }),
     onSuccess: (data) => queryClient.setQueryData(queryKeys.githubMergeState(number), data),
@@ -755,7 +770,11 @@ function GithubMergeBox({ number }: { number: number }) {
   const merge = useMutation({
     mutationFn: () => {
       if (!state || !selectedMethod) throw new Error('No merge method is available.')
-      return mergeGithubPr(number, { method: selectedMethod, expectedHeadSha: state.headSha })
+      return mergeGithubPr(number, {
+        method: selectedMethod,
+        expectedHeadSha: state.headSha,
+        ...(overrideRules && state.canOverride ? { overrideRules: true } : {}),
+      })
     },
     onSuccess: () => {
       setConfirming(false)
@@ -792,6 +811,15 @@ function GithubMergeBox({ number }: { number: number }) {
           : state.mergeable === 'conflicting' ? 'Conflicts must be resolved'
             : state.canMerge ? 'Ready to merge'
               : 'Merge blocked'
+  const reviewState: MergeRequirementState =
+    state.reviewDecision === 'approved' ? 'passing'
+      : state.reviewDecision === 'unknown' ? 'unknown'
+        : 'failing'
+  const conflictState: MergeRequirementState =
+    state.mergeable === 'mergeable' ? 'passing'
+      : state.mergeable === 'conflicting' ? 'failing'
+        : 'unknown'
+  const mergeEnabled = Boolean(selectedMethod && (state.canMerge || (state.canOverride && overrideRules)))
 
   return (
     <section data-slot="gh-merge-box" aria-live="polite" className="mt-6 rounded-lg border border-border bg-card p-4">
@@ -819,16 +847,39 @@ function GithubMergeBox({ number }: { number: number }) {
             {state.headRef} ({state.headSha.slice(0, 7)}) → {state.baseRef}
           </p>
           <ul className="mt-3 space-y-2 text-xs">
-            <li>Reviews: {state.reviewDecision.replaceAll('-', ' ')}</li>
-            <li>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</li>
+            <li className="flex items-center gap-2">
+              <MergeRequirementIcon state={reviewState} />
+              <span>Reviews: {state.reviewDecision.replaceAll('-', ' ')}</span>
+            </li>
+            <li className="flex items-center gap-2">
+              <MergeRequirementIcon state={conflictState} />
+              <span>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</span>
+            </li>
             {state.checks.length === 0 ? <li>No checks configured</li> : state.checks.map((check) => (
               <li key={check.name} className="flex items-center justify-between gap-3">
-                <span>{check.name} · {check.state}{check.required === true ? ' · required' : check.required === null ? ' · requiredness unknown' : ''}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <MergeRequirementIcon state={check.state} />
+                  <span>{check.name} · {check.state}{check.required === true ? ' · required' : check.required === null ? ' · requiredness unknown' : ''}</span>
+                </span>
                 {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline">details</a> : null}
               </li>
             ))}
             {state.blockers.map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
           </ul>
+          {state.canOverride ? (
+            <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
+              <input
+                type="checkbox"
+                checked={overrideRules}
+                onChange={(event) => setOverrideRules(event.target.checked)}
+                className="mt-0.5 size-4 accent-primary"
+              />
+              <span>
+                <span className="block font-medium">Merge without waiting for requirements</span>
+                <span className="mt-0.5 block text-soft-foreground">GitHub will allow this only if your permissions can bypass the repository rules.</span>
+              </span>
+            </label>
+          ) : null}
           {state.state === 'open' && state.methods.length > 0 ? (
             <div className="mt-4 flex flex-col gap-2 sm:flex-row">
               <select
@@ -839,7 +890,7 @@ function GithubMergeBox({ number }: { number: number }) {
               >
                 {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
               </select>
-              <Button disabled={!state.canMerge || !selectedMethod} onClick={() => setConfirming(true)}>
+              <Button disabled={!mergeEnabled} onClick={() => setConfirming(true)}>
                 {selectedMethod ? mergeLabels[selectedMethod] : 'Merge'}
               </Button>
             </div>
@@ -852,6 +903,7 @@ function GithubMergeBox({ number }: { number: number }) {
             <DialogTitle>{selectedMethod ? mergeLabels[selectedMethod] : 'Merge'} pull request #{number}?</DialogTitle>
             <DialogDescription>
               This will merge “{state.title}” into {state.baseRef}. GitHub will re-check the exact reviewed head before changing the repository.
+              {overrideRules && state.canOverride ? ' You are asking GitHub to bypass unmet repository requirements; GitHub may refuse if your permissions do not allow it.' : ''}
             </DialogDescription>
           </DialogHeader>
           {merge.error ? <p className="text-sm text-danger">{merge.error.message}</p> : null}
