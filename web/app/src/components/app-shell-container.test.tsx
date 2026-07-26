@@ -121,7 +121,7 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 }
 
 const repoChip = () => document.querySelector('[data-slot="repo-chip"]')
-const versionChip = () => document.querySelector('[data-slot="version-chip"]')
+const toolsTrigger = () => document.querySelector('[data-slot="tools-menu-trigger"]')
 const navBadge = () => document.querySelector('[data-slot="nav-badge"]')
 
 describe('repoChipOf', () => {
@@ -160,14 +160,15 @@ describe('skillsUpdateMarkerOf', () => {
 })
 
 describe('sidebar wiring', () => {
-  it('renders the repo and version chips from /api/health', async () => {
+  it('renders the repo chip from /api/health, with the version on the Tools trigger', async () => {
     serve({ '/api/health': HEALTH, '/api/todos': [] })
     renderShell()
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
     // Basename of the root, then the branch — not the whole path.
     expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
-    expect(versionChip()?.textContent).toBe('v0.1.3')
+    // The version lives in the Tools menu now — its trigger tooltip names it.
+    expect(toolsTrigger()?.getAttribute('title')).toBe('cezar v0.1.3')
   })
 
   it('renders the inbox badge from /api/todos', async () => {
@@ -187,7 +188,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(toolsTrigger()).not.toBeNull())
     expect(screen.queryByRole('link', { name: /Inbox/ })).toBeNull()
     expect(navBadge()).toBeNull()
     // Every other view is untouched — the gate owns exactly one item.
@@ -202,7 +203,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(toolsTrigger()).not.toBeNull())
     // The badge query is keyed on the capability, so it never runs — unlike the /inbox route,
     // nothing here needs the list before health has spoken.
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
@@ -213,7 +214,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/health': HEALTH, '/api/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(toolsTrigger()).not.toBeNull())
     // Zero follow-ups is not "0 follow-ups" — a badge reading 0 is noise the spec's chrome
     // rules do not want.
     expect(navBadge()).toBeNull()
@@ -225,7 +226,7 @@ describe('sidebar wiring', () => {
     renderShell()
 
     expect(repoChip()).toBeNull()
-    expect(versionChip()).toBeNull()
+    expect(toolsTrigger()).toBeNull()
     expect(navBadge()).toBeNull()
     // …and the app itself is up. The chips being empty is not a loading screen.
     expect(screen.getByText('route content')).toBeTruthy()
@@ -240,7 +241,7 @@ describe('sidebar wiring', () => {
     // The honest empty state: cezar cannot answer what repo it is on, so it says nothing.
     // It does not invent one, and it does not take the whole cockpit down with it.
     expect(repoChip()).toBeNull()
-    expect(versionChip()).toBeNull()
+    expect(toolsTrigger()).toBeNull()
     expect(screen.getByText('route content')).toBeTruthy()
   })
 
@@ -278,7 +279,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(toolsTrigger()).not.toBeNull())
     expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
     expect(screen.getByRole('link', { name: /New task/ })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
@@ -308,14 +309,14 @@ describe('sidebar wiring', () => {
     expect(repoChip()).toBeNull()
   })
 
-  it('shows the version chip even outside a git repo', async () => {
+  it('keeps the Tools trigger and its version even outside a git repo', async () => {
     serve({ '/api/health': { ...HEALTH, repo: null }, '/api/todos': [] })
     renderShell()
 
     // Running cezar outside a repo is supported: no repo chip, but the rest of the chrome is
     // real and must not vanish with it.
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(versionChip()?.textContent).toBe('v0.1.3')
+    await waitFor(() => expect(toolsTrigger()).not.toBeNull())
+    expect(toolsTrigger()?.getAttribute('title')).toBe('cezar v0.1.3')
     expect(repoChip()).toBeNull()
   })
 

@@ -96,6 +96,12 @@ function renderHeader(record: ApiRun) {
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
 
+/** The one overflow surface (every breakpoint): open the kebab, get its menu. */
+async function openKebab(): Promise<HTMLElement> {
+  fireEvent.mouseDown(screen.getByRole('button', { name: 'Run actions' }))
+  return await screen.findByRole('menu')
+}
+
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
     stubFetch()
@@ -182,41 +188,47 @@ describe('editable title (#389)', () => {
   })
 })
 
-describe('action bar visibility per status (the legacy rules, rendered)', () => {
+describe('action bar visibility per status (primary worded actions only — the rest in the kebab)', () => {
   const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Cancel'] },
-    // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
+    { status: 'queued', visible: ['Cancel'] },
+    { status: 'running', visible: ['Cancel'] },
+    { status: 'waiting', visible: ['Finish', 'Cancel'] },
+    { status: 'review', visible: ['Finish', 'Continue'] },
+    { status: 'done', visible: ['Continue'] },
+    { status: 'failed', visible: ['Continue'] },
+    { status: 'cancelled', visible: ['Continue'] },
   ]
 
   it.each(matrix)('$status → $visible', ({ status, visible }) => {
     stubFetch()
     renderHeader(run(status))
-    const names = within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
-      .getAllByRole('button')
+    const buttons = within(document.querySelector('[data-slot="run-actions"]') as HTMLElement).getAllByRole('button')
+    const names = buttons
+      .filter((el) => el.getAttribute('aria-label') !== 'Run actions')
       .map((el) => el.textContent?.trim())
     expect(names).toEqual(visible)
+    // Never more than two worded buttons — one bar, every breakpoint.
+    expect(names.length).toBeLessThanOrEqual(2)
+    expect(actionBar().getByRole('button', { name: 'Run actions' })).not.toBeNull()
   })
 
-  it('an archived run offers Unarchive instead of Archive', () => {
+  it('an archived run offers Unarchive instead of Archive, in the kebab', async () => {
     stubFetch()
     renderHeader(run('done', { archived: true }))
-    expect(actionBar().queryByRole('button', { name: 'Archive' })).toBeNull()
-    expect(actionBar().getByRole('button', { name: 'Unarchive' })).not.toBeNull()
+    const menu = await openKebab()
+    expect(within(menu).queryByRole('menuitem', { name: 'Archive' })).toBeNull()
+    expect(within(menu).getByRole('menuitem', { name: 'Unarchive' })).not.toBeNull()
   })
 
-  it('VS Code is absent everywhere — the open-in-editor endpoint does not exist yet (R5)', () => {
+  it('VS Code is absent everywhere — the open-in-editor endpoint does not exist yet (R5)', async () => {
     stubFetch()
     renderHeader(run('done'))
     expect(screen.queryByRole('button', { name: /vs code/i })).toBeNull()
+    const menu = await openKebab()
+    expect(within(menu).queryByRole('menuitem', { name: /vs code/i })).toBeNull()
   })
 
-  it('the mobile kebab is there for every status, holding the same actions', () => {
+  it('the kebab is there for every status', () => {
     stubFetch()
     renderHeader(run('running'))
     expect(screen.getByRole('button', { name: 'Run actions' })).not.toBeNull()
@@ -266,28 +278,6 @@ describe('actions hit their endpoints', () => {
     expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
   })
 
-  it('disables mobile Continue and does not post when its menu item is selected', async () => {
-    const sent = stubFetch({
-      '/api/providers/status': () =>
-        jsonResponse({
-          providers: [
-            { provider: 'claude', status: 'disconnected', enabled: true },
-            { provider: 'codex', status: 'unknown', enabled: true },
-            { provider: 'opencode', status: 'not-installed', enabled: true },
-          ],
-        }),
-    })
-    renderHeader(run('done', { runner: 'claude' }))
-
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const item = await screen.findByRole('menuitem', { name: 'Continue' })
-    await waitFor(() => expect(item.getAttribute('data-disabled')).not.toBeNull())
-    fireEvent.click(item)
-    await act(() => Promise.resolve())
-
-    expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
-  })
-
   it('sends a connected fallback runner when the run provider is disconnected', async () => {
     const sent = stubFetch({
       '/api/providers/status': () =>
@@ -312,10 +302,11 @@ describe('actions hit their endpoints', () => {
     )
   })
 
-  it('Archive → POST /archive with the flipped flag', async () => {
+  it('Archive → POST /archive with the flipped flag, from the kebab', async () => {
     const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Unarchive' }))
+    const menu = await openKebab()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Unarchive' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/runs/r1/archive')?.body).toEqual({ archived: false })
     })
@@ -338,7 +329,8 @@ describe('actions hit their endpoints', () => {
   it('Delete confirms, DELETEs, and navigates home', async () => {
     const sent = stubFetch()
     renderHeader(run('failed'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    const menu = await openKebab()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Delete' }))
 
     expect(sent.some((r) => r.method === 'DELETE')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
@@ -355,7 +347,8 @@ describe('actions hit their endpoints', () => {
   it('the delete confirm button stays "Delete" even for a long task name, which appears in the description instead (#403)', async () => {
     const longTitle = 'create a github issue for saving unsuccessfully finished tasks automatically'
     renderHeader(run('failed', { titleSummary: longTitle }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    const menu = await openKebab()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Delete' }))
 
     const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('button', { name: 'Delete' })).not.toBeNull()
@@ -365,7 +358,8 @@ describe('actions hit their endpoints', () => {
   it('dismissing the confirm keeps the run', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    const menu = await openKebab()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Delete' }))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }))
     await waitFor(() => {
@@ -388,12 +382,11 @@ describe('actions hit their endpoints', () => {
   })
 })
 
-/** Terminal now lives inside the Open in… menu: open it (Radix opens on pointerdown) and click
- *  the resume item. */
+/** Terminal now lives inside the kebab's Open in group: open the kebab and click the
+ *  resume item. */
 async function clickTerminalResume(): Promise<void> {
-  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
-  const menu = await screen.findByRole('menu')
-  fireEvent.click(within(menu).getByRole('menuitem', { name: /Terminal \(resume session\)/ }))
+  const menu = await openKebab()
+  fireEvent.click(await within(menu).findByRole('menuitem', { name: /Terminal \(resume session\)/ }))
 }
 
 describe('Terminal — the copy-command 409 fallback', () => {
@@ -450,11 +443,9 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   })
 
   async function openMenu(): Promise<HTMLElement> {
-    // Without a resumable Terminal item, the button itself only appears once the async
-    // worktreeTargets query resolves (empty-until-loaded) — findByRole waits it in.
-    const trigger = await actionBar().findByRole('button', { name: 'Open in…' })
-    fireEvent.pointerDown(trigger)
-    return screen.findByRole('menu')
+    // The kebab exists regardless; the Open in items appear inside it once the async
+    // worktreeTargets query resolves (empty-until-loaded) — findByRole waits them in.
+    return openKebab()
   }
 
   it('labels the CLI matching the run\'s own runner "(resume)"; a foreign CLI stays plain', async () => {
@@ -544,8 +535,7 @@ describe('Open in… menu per-target icons (#361)', () => {
         }),
     })
     renderHeader(run('done', { worktreePath: '/tmp/wt' }))
-    fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
-    const menu = await screen.findByRole('menu')
+    const menu = await openKebab()
 
     // The menu opens immediately; the worktree targets only appear once useOpenTargets resolves.
     const ideaItem = await within(menu).findByRole('menuitem', { name: 'IntelliJ IDEA' })
@@ -562,7 +552,7 @@ describe('Open in… menu per-target icons (#361)', () => {
 })
 
 describe('notes panel', () => {
-  it('toggles open, fetches the handoff and renders it as markdown', async () => {
+  it('toggles open from the kebab, fetches the handoff and renders it as markdown', async () => {
     stubFetch({
       '/api/runs/r1/handoff': () =>
         new Response('# Handoff notes\n\nStill **todo**: the composer.', {
@@ -572,7 +562,8 @@ describe('notes panel', () => {
     })
     renderHeader(run('done'))
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    const menu = await openKebab()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Notes' }))
     await waitFor(() => {
       expect(document.querySelector('[data-slot="notes-panel"]')).not.toBeNull()
     })
@@ -580,8 +571,11 @@ describe('notes panel', () => {
     // Rendered markdown, not echoed source.
     expect(document.querySelector('[data-slot="notes-panel"]')?.textContent).not.toContain('#')
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
-    expect(document.querySelector('[data-slot="notes-panel"]')).toBeNull()
+    const reopened = await openKebab()
+    fireEvent.click(within(reopened).getByRole('menuitem', { name: 'Notes' }))
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="notes-panel"]')).toBeNull()
+    })
   })
 
   it('an unseeded handoff file reads as an honest empty state', async () => {
@@ -589,7 +583,8 @@ describe('notes panel', () => {
       '/api/runs/r1/handoff': () => new Response('', { status: 200 }),
     })
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    const menu = await openKebab()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Notes' }))
     await screen.findByText('No notes yet — the handoff file is seeded when the task starts.')
   })
 })
@@ -670,7 +665,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: opencode/ }))
+    fireEvent.mouseDown(within(meta).getByRole('button', { name: /Agent: opencode/ }))
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByText('runner: opencode')).not.toBeNull()
     expect(within(menu).getByText('model: auto')).not.toBeNull()

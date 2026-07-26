@@ -126,10 +126,10 @@ describe('AppShell', () => {
       expect(within(sidebar()).getByRole('link', { name: /New task/ }).getAttribute('href')).toBe('/new')
     })
 
-    it('renders the C hint (the browser-usable accelerator; ⌘N only fires in the desktop shell)', () => {
+    it('carries no kbd hint — the C accelerator lives in the ⌘K palette alone', () => {
       renderShell()
       const link = within(sidebar()).getByRole('link', { name: /New task/ })
-      expect(within(link).getByText('C').tagName).toBe('KBD')
+      expect(link.querySelector('kbd')).toBeNull()
     })
   })
 
@@ -153,46 +153,23 @@ describe('AppShell', () => {
   })
 
   describe('data slots stay empty rather than showing invented data', () => {
-    it('renders no repo chip, badge or version chip when unfed', () => {
+    it('renders no repo chip or badge when unfed', () => {
       renderShell()
       expect(document.querySelector('[data-slot="repo-chip"]')).toBeNull()
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
-      expect(document.querySelector('[data-slot="version-chip"]')).toBeNull()
     })
 
-    it('renders the repo chip and version chip from props', () => {
-      renderShell('/', { repo: { name: 'cezar', branch: 'main' }, version: '1.2.3' })
+    it('renders the repo chip from props', () => {
+      renderShell('/', { repo: { name: 'cezar', branch: 'main' } })
       expect(screen.getByText('cezar / main')).toBeTruthy()
-      // The chip prefixes the raw semver from /api/health — `v1.2.3`, mono, muted.
-      expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
     })
 
-    describe('version chip update affordance (#368)', () => {
-      const chip = () => document.querySelector('[data-slot="version-chip"]') as HTMLElement
-
-      it('stays plain while the registry has nothing newer', () => {
-        renderShell('/', { version: '1.2.3' })
-        expect(chip().getAttribute('data-update-available')).toBeNull()
-        expect(chip().getAttribute('title')).toBeNull()
-        expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
-      })
-
-      it('stays plain when latestVersion equals the running version', () => {
-        renderShell('/', { version: '1.2.3', latestVersion: '1.2.3' })
-        expect(chip().getAttribute('data-update-available')).toBeNull()
-        expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
-      })
-
-      it('pulses and names the newer version when one exists', () => {
-        renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
-        expect(chip().getAttribute('data-update-available')).toBe('true')
-        expect(chip().getAttribute('title')).toBe('update available: v1.3.0')
-        const dot = chip().querySelector('[data-slot="status-dot"]') as HTMLElement
-        expect(dot.getAttribute('data-tone')).toBe('pending')
-        expect(dot.className).toContain('animate-pulse')
-        // The version shown is still the one actually running.
-        expect(chip().textContent).toContain('v1.2.3')
-      })
+    // The footer is exactly three items — the version moved into the Tools menu (its own
+    // suite), and the ⌘K hint into the palette's search placeholder.
+    it('renders no version chip and no palette hint in the footer', () => {
+      renderShell()
+      expect(document.querySelector('[data-slot="version-chip"]')).toBeNull()
+      expect(document.querySelector('[data-slot="command-palette-hint"]')).toBeNull()
     })
 
     it('renders the Inbox badge only for a non-zero count', () => {
@@ -548,6 +525,57 @@ describe('AppShell', () => {
       // sidebar — which is exactly why these insets live on the shared content, not on a frame.
       expect(content.className).toContain('pt-[env(safe-area-inset-top)]')
       expect(content.className).toContain('pb-[env(safe-area-inset-bottom)]')
+    })
+  })
+
+  describe('sidebar collapse toggle', () => {
+    const STORAGE_KEY = 'cezar:sidebar-collapsed'
+    const drawer = () => screen.queryByRole('dialog', { name: 'Navigation' })
+    const openMenu = () => fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    afterEach(() => window.localStorage.removeItem(STORAGE_KEY))
+
+    it('collapses to the icon rail, persists, and expands back', () => {
+      renderShell('/', { inboxCount: 3 })
+      expect(sidebar().hasAttribute('data-collapsed')).toBe(false)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+      expect(sidebar().hasAttribute('data-collapsed')).toBe(true)
+      expect(window.localStorage.getItem(STORAGE_KEY)).toBe('1')
+
+      // Icon-only rows keep their accessible names — the Inbox one absorbs its badge count.
+      const railNav = within(sidebar()).getByRole('navigation', { name: 'Main' })
+      expect(within(railNav).getByRole('link', { name: 'Tasks' })).toBeTruthy()
+      expect(within(railNav).getByRole('link', { name: 'Inbox (3)' })).toBeTruthy()
+      expect(railNav.textContent).not.toContain('Tasks')
+      expect(sidebar().querySelector('[data-slot="nav-badge-dot"]')).not.toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
+      expect(sidebar().hasAttribute('data-collapsed')).toBe(false)
+      expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
+    })
+
+    it('restores the persisted rail on mount', () => {
+      window.localStorage.setItem(STORAGE_KEY, '1')
+      renderShell()
+      expect(sidebar().hasAttribute('data-collapsed')).toBe(true)
+      expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeTruthy()
+    })
+
+    it('keeps the footer essentials reachable from the rail', () => {
+      window.localStorage.setItem(STORAGE_KEY, '1')
+      renderShell()
+      expect(within(footer()).getByLabelText('Global settings')).toBeTruthy()
+      expect(footer().querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
+    })
+
+    it('leaves the drawer at full width regardless of the desktop preference', () => {
+      window.localStorage.setItem(STORAGE_KEY, '1')
+      renderShell()
+      openMenu()
+      const content = drawer() as HTMLElement
+      // The drawer renders the expanded sidebar: labels as text, no toggle to mis-click.
+      expect(within(content).getByRole('navigation', { name: 'Main' }).textContent).toContain('Tasks')
+      expect(within(content).queryByRole('button', { name: /sidebar/i })).toBeNull()
     })
   })
 })

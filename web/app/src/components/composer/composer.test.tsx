@@ -1,6 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import * as React from 'react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
@@ -206,6 +207,27 @@ describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
     expect(onSubmit).toHaveBeenCalledWith('', [expect.objectContaining({ mediaType: 'image/png' })])
   })
 
+  it('dragging files over shows the drop hint; leaving hides it', () => {
+    const { textarea } = renderComposer()
+    const root = textarea.closest('[data-slot="composer"]') as HTMLElement
+    const dataTransfer = { types: ['Files'], files: [] }
+    fireEvent.dragEnter(root, { dataTransfer })
+    expect(root.hasAttribute('data-dragging')).toBe(true)
+    expect(document.querySelector('[data-slot="composer-drop-hint"]')).not.toBeNull()
+    fireEvent.dragLeave(root, { dataTransfer })
+    expect(root.hasAttribute('data-dragging')).toBe(false)
+    expect(document.querySelector('[data-slot="composer-drop-hint"]')).toBeNull()
+  })
+
+  it('dropping clears the hint and attaches the files', async () => {
+    const { textarea } = renderComposer()
+    const root = textarea.closest('[data-slot="composer"]') as HTMLElement
+    fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'], files: [] } })
+    fireEvent.drop(root, { dataTransfer: { types: ['Files'], files: [pngFile('dropped.png')] } })
+    expect(root.hasAttribute('data-dragging')).toBe(false)
+    await screen.findByLabelText('Remove dropped.png')
+  })
+
   it('clicking a thumbnail removes exactly that image', async () => {
     const { textarea } = renderComposer()
     paste(textarea, [pngFile('a.png'), pngFile('b.png')])
@@ -256,7 +278,7 @@ describe('/ skills autocomplete (#380)', () => {
     const menu = document.querySelector('[data-slot="composer-menu"]')!
     // The clamp keeps the list inside the visual viewport once PopoverContent's
     // keyboard-aware collisionPadding has shrunk the popper's available space.
-    expect(menu.className).toContain('--radix-popover-content-available-height')
+    expect(menu.className).toContain('--available-height')
   })
 
   it('mid-word slashes (URLs) never open the menu', () => {
@@ -477,6 +499,51 @@ describe('disabled state', () => {
   it('the mic is hidden entirely when the Web Speech API is absent — no fake button', () => {
     renderComposer()
     expect(screen.queryByText('Dictation')).toBeNull()
+  })
+})
+
+describe('the "+" menu (templates host)', () => {
+  const TEMPLATES = [
+    { id: 'add-tests', label: 'Add tests', text: 'Also add or update tests covering this change.' },
+  ]
+
+  function renderTemplatesComposer() {
+    stubSkillsFetch()
+    const onSubmit = vi.fn(() => Promise.resolve({}))
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <Composer onSubmit={onSubmit} templates={TEMPLATES} />
+        </MemoryRouter>
+        <Toaster />
+      </QueryClientProvider>,
+    )
+    return { onSubmit, textarea: screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement }
+  }
+
+  it('with templates the paperclip becomes the "+" menu: attach item + template items', async () => {
+    const { textarea } = renderTemplatesComposer()
+    expect(screen.queryByLabelText('Attach images')).toBeNull()
+    fireEvent.mouseDown(screen.getByLabelText('Add to your task'))
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="composer-attach"]')).not.toBeNull(),
+    )
+    const option = document.querySelector<HTMLElement>(
+      '[data-slot="prompt-template-option"][data-template="add-tests"]',
+    )
+    expect(option).not.toBeNull()
+
+    type(textarea, 'Ship it')
+    fireEvent.click(option!)
+    await waitFor(() =>
+      expect(textarea.value).toBe('Ship it\n\nAlso add or update tests covering this change.'),
+    )
+  })
+
+  it('without templates the plain attach button stays', () => {
+    renderComposer()
+    expect(screen.getByLabelText('Attach images')).toBeTruthy()
+    expect(screen.queryByLabelText('Add to your task')).toBeNull()
   })
 })
 

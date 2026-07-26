@@ -69,8 +69,8 @@ describe('the GitHub tab against the live dry-run server', () => {
       // The item waits on the health answer — poll rather than sample.
       browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
     } else {
-      // Health has answered (other chips render from it) and still no GitHub item.
-      browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
+      // Health has answered (the Tools trigger renders from it) and still no GitHub item.
+      browser.waitForFunction(`document.querySelector('[data-slot="tools-menu-trigger"]') !== null`)
       expect(browser.count(`nav a[href="${scoped('/github')}"]`)).toBe(0)
     }
   })

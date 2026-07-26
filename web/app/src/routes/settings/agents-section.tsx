@@ -6,6 +6,7 @@ import { putConfig } from '@/api/client'
 import { queryKeys, useConfig, useProviderStatus, useRepo, useRunnerModels } from '@/api/queries'
 import type { ConfigResponse, Runner, SetConfigInput } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { PageBody } from '@/components/page-body'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
@@ -40,7 +41,7 @@ export function AgentsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="agents-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="agents-loading" className="p-4 text-sm text-soft-foreground md:p-6">
         Loading agent settings…
       </p>
     )
@@ -101,9 +102,9 @@ function AgentsForm({
     )
 
   return (
-    <div
+    <PageBody
       data-slot="agents-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="mx-auto w-full max-w-2xl gap-7"
     >
       <ProviderSettings />
 
@@ -145,7 +146,7 @@ function AgentsForm({
                 disabled={save.isPending || !providerConnected}
                 onClick={() => save.mutate({ defaultRunner: option.id })}
                 className={cn(
-                  'rounded-sm px-3 py-1.5 font-mono text-[13px] font-medium transition-colors disabled:opacity-50',
+                  'rounded-sm px-3 py-1.5 font-mono text-sm font-medium transition-colors disabled:opacity-50',
                   checked ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -157,7 +158,7 @@ function AgentsForm({
         {!providerStatus.isPending &&
         !providerStatus.isError &&
         providerStatusFor(providerStatus.data, config.defaultRunner)?.enabled === false ? (
-          <p className="text-[13px] text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             This provider is disabled. Enable it above or choose another provider.
           </p>
         ) : null}
@@ -242,12 +243,12 @@ function AgentsForm({
             Save
           </Button>
           {promptOverLimit ? (
-            <p data-slot="agents-prompt-limit" className="text-[11px] text-danger">
+            <p data-slot="agents-prompt-limit" className="text-2xs text-danger">
               {trimmedPrompt.length.toLocaleString()} characters — the limit is{' '}
               {SYSTEM_PROMPT_MAX.toLocaleString()}.
             </p>
           ) : (
-            <p className="text-[11px] text-soft-foreground">
+            <p className="text-2xs text-soft-foreground">
               Leave empty and save to clear. Applied to new runs only.
             </p>
           )}
@@ -271,7 +272,7 @@ function AgentsForm({
               )
             }
           />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-sm text-muted-foreground">
             {(config.liveTitleUpdates ?? true) ? 'On' : 'Off'}
             {config.liveTitleUpdates === null && ' (default)'}
           </span>
@@ -295,7 +296,7 @@ function AgentsForm({
               )
             }
           />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-sm text-muted-foreground">
             {(config.reviewGate ?? false) ? 'On' : 'Off'}
             {config.reviewGate === null && ' (default)'}
           </span>
@@ -323,12 +324,12 @@ function AgentsForm({
             ))}
           </select>
         ) : (
-          <p data-slot="agents-base-branch-unavailable" className="text-[13px] text-soft-foreground">
+          <p data-slot="agents-base-branch-unavailable" className="text-sm text-soft-foreground">
             {repo.isPending ? 'Loading branches…' : 'Not a git repository — tasks run in place, no branching.'}
           </p>
         )}
       </Field>
-    </div>
+    </PageBody>
   )
 }
 
@@ -338,7 +339,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-sm text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>

@@ -22,6 +22,15 @@ import { describe, expect, it } from 'vitest'
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SELF = path.basename(fileURLToPath(import.meta.url))
 
+/**
+ * Grandfathered violations from before the token-sheet-v2 rules landed, keyed by rule name.
+ * The guardian only fails NEW violations; each redesign work package deletes the entries for
+ * the files it touches (a stale entry fails the test below), and the final sweep deletes the
+ * whole file so the rules enforce absolutely.
+ */
+const ALLOWLIST_PATH = path.join(APP_ROOT, 'src/styles/design-guardian.allowlist.json')
+const allowlist: Record<string, string[]> = JSON.parse(readFileSync(ALLOWLIST_PATH, 'utf8'))
+
 interface SourceFile {
   /** Path relative to web/app, always with `/` separators (allowlists match on it). */
   rel: string
@@ -105,6 +114,38 @@ const RULES: Rule[] = [
     why: 'viewport height is 100dvh/h-dvh — 100vh ignores mobile browser chrome (iOS rule)',
     pattern: /\b(?:(?:h|min-h|max-h)-screen|100vh)\b/g,
     applies: styleSources,
+  },
+  {
+    name: 'no-arbitrary-text-size',
+    why: 'font sizes go through the 6-step type ramp (text-2xs…text-xl), never text-[Npx]',
+    pattern: /\btext-\[[0-9.]+px\]/g,
+    applies: styleSources,
+  },
+  {
+    name: 'no-arbitrary-radius',
+    why: 'corner radii go through the radius scale (rounded-sm/md/lg/xl), never rounded-[Npx]',
+    pattern: /\brounded(?:-[a-z]+)*-\[[0-9.]+px\]/g,
+    applies: styleSources,
+  },
+  {
+    name: 'no-arbitrary-tracking',
+    why: 'uppercase labels use the label-caps utility (--tracking-label), never tracking-[Nem]',
+    pattern: /\btracking-\[[0-9]*\.?[0-9]+em\]/g,
+    applies: styleSources,
+  },
+  {
+    name: 'no-hardcoded-sidebar-width',
+    why: 'the sidebar width is the --sidebar-width token (`w-(--sidebar-width)`), never w-[264px]',
+    pattern: /\bw-\[264px\]/g,
+    applies: styleSources,
+  },
+  {
+    name: 'grad-single-brand-moment',
+    why: 'the brand gradient is the ONE RunDock strip — --grad lives in index.css and run-dock.tsx only',
+    pattern: /--grad\b/g,
+    applies: styleSources,
+    allowed: (rel) =>
+      rel === 'src/styles/index.css' || rel === 'src/routes/task-thread/run-dock.tsx',
   },
 ]
 
@@ -230,10 +271,12 @@ describe('design guardian', () => {
 
   for (const rule of RULES) {
     it(`${rule.name}: ${rule.why}`, () => {
+      const grandfathered = new Set(allowlist[rule.name] ?? [])
       const violations: string[] = []
       for (const file of sources) {
         if (!rule.applies(file)) continue
         if (rule.allowed?.(file.rel)) continue
+        if (grandfathered.has(file.rel)) continue
         file.lines.forEach((line, index) => {
           for (const match of line.matchAll(rule.pattern)) {
             violations.push(`web/app/${file.rel}:${index + 1}  ${match[0].trim()}`)
@@ -243,4 +286,28 @@ describe('design guardian', () => {
       expect(violations, `${rule.name} — ${rule.why}`).toEqual([])
     })
   }
+
+  it('allowlist entries are still real violations (delete the entries for files you clean)', () => {
+    const stale: string[] = []
+    for (const [ruleName, rels] of Object.entries(allowlist)) {
+      const rule = RULES.find((r) => r.name === ruleName)
+      if (!rule) {
+        stale.push(...rels.map((rel) => `${ruleName}: ${rel} (unknown rule)`))
+        continue
+      }
+      for (const rel of rels) {
+        const file = sources.find((f) => f.rel === rel)
+        const hit =
+          file !== undefined &&
+          rule.applies(file) &&
+          !rule.allowed?.(file.rel) &&
+          file.lines.some((line) => {
+            rule.pattern.lastIndex = 0
+            return rule.pattern.test(line)
+          })
+        if (!hit) stale.push(`${ruleName}: ${rel}`)
+      }
+    }
+    expect(stale, 'stale design-guardian.allowlist.json entries').toEqual([])
+  })
 })

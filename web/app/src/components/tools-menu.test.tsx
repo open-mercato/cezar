@@ -69,9 +69,9 @@ const trigger = () => screen.getByRole('button', { name: /Tools/ })
 const triggerDot = () =>
   document.querySelector('[data-slot="tools-menu-trigger"] [data-slot="status-dot"]') as HTMLElement
 
-/** Radix opens the menu on pointerdown, not click. */
+/** Base UI opens the menu on mousedown, not click. */
 async function openMenu(): Promise<HTMLElement> {
-  fireEvent.pointerDown(trigger())
+  fireEvent.mouseDown(trigger())
   return await screen.findByRole('menu')
 }
 
@@ -170,6 +170,39 @@ describe('ToolsMenu', () => {
     fireEvent.click(settings)
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
     expect(screen.getByTestId('location').textContent).toBe('/settings/agents')
+  })
+
+  /** The version moved here from the footer's chip — the menu is where it lives now (#368). */
+  describe('version row', () => {
+    const versionRow = (menu: HTMLElement) =>
+      menu.querySelector('[data-slot="tools-version"]') as HTMLElement
+
+    it('names the running version at the foot of the menu', async () => {
+      renderMenu(ALL_GOOD)
+      const row = versionRow(await openMenu())
+      expect(row.textContent).toContain('v0.1.3')
+      expect(row.getAttribute('data-update-available')).toBeNull()
+      expect(row.querySelector('[data-slot="tools-update"]')).toBeNull()
+    })
+
+    it('stays plain when latestVersion equals the running version', async () => {
+      renderMenu({ ...ALL_GOOD, latestVersion: '0.1.3' })
+      const row = versionRow(await openMenu())
+      expect(row.getAttribute('data-update-available')).toBeNull()
+      expect(row.querySelector('[data-slot="tools-update"]')).toBeNull()
+    })
+
+    it('marks an available update with a STATIC pending dot — an affordance, not an alert', async () => {
+      renderMenu({ ...ALL_GOOD, latestVersion: '0.2.0' })
+      const row = versionRow(await openMenu())
+      expect(row.getAttribute('data-update-available')).toBe('true')
+      // The running version is still the one named first.
+      expect(row.textContent).toContain('v0.1.3')
+      expect(row.textContent).toContain('v0.2.0 available')
+      const dot = row.querySelector('[data-slot="tools-update"] [data-slot="status-dot"]') as HTMLElement
+      expect(dot.getAttribute('data-tone')).toBe('pending')
+      expect(dot.className).not.toContain('animate-pulse')
+    })
   })
 })
 

@@ -14,7 +14,6 @@ const runId = `e2e-palette-${process.pid}`
 
 const ROOT = '[cmdk-root]'
 const INPUT = '[cmdk-input]'
-const HINT = '[data-slot="command-palette-hint"]'
 
 let browser: AgentBrowser
 let baseUrl: string
@@ -56,11 +55,14 @@ describe('command palette', () => {
     expect(browser.count(ROOT)).toBe(0)
   })
 
-  it('opens from the sidebar footer hint and closes on Escape', () => {
-    browser.waitForFunction(`document.querySelector('${HINT}') !== null`)
-    browser.click(HINT)
+  it('advertises the shortcut in its search placeholder, and closes on Escape', () => {
+    browser.press('Control+k')
     browser.waitForFunction(`document.querySelector('${ROOT}') !== null`)
     expect(browser.isVisible(INPUT)).toBe(true)
+    // The footer hint is gone — the placeholder's ⌘K suffix is the one discoverability hint.
+    expect(
+      browser.evaluate(`document.querySelector('${INPUT}')?.getAttribute('placeholder')`),
+    ).toContain('⌘K')
 
     browser.press('Escape')
     browser.waitForFunction(`document.querySelector('${ROOT}') === null`)

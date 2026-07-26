@@ -3,7 +3,6 @@ import * as React from 'react'
 import { useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@/api/types'
-import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
 import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
@@ -108,9 +107,7 @@ export function QuickListBuckets({
     <>
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
-            {bucket.label}
-          </h2>
+          <h2 className="label-caps px-3 pt-2.5 pb-1">{bucket.label}</h2>
           {bucket.rows.map((row) => (
             <Row
               key={row.kind === 'group' ? row.groupId : row.run.id}
@@ -152,13 +149,13 @@ function ViewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-[12.5px] font-medium text-muted-foreground',
+        'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-sm text-xs font-medium text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset md:h-7',
         isActive && 'bg-card font-semibold text-foreground shadow-xs'
       )}
     >
       {children}
       {/* No "0": an empty bucket says so by being empty. */}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      {count > 0 ? <span className="font-mono text-2xs tabular-nums">{count}</span> : null}
     </button>
   )
 }
@@ -200,14 +197,14 @@ function Row({
           data-group-id={row.groupId}
           aria-expanded={expanded}
           onClick={() => onToggle(row.groupId)}
-          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-[7px] text-left"
+          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
         >
           <ChevronDownIcon
             className={cn('size-3 shrink-0 text-soft-foreground transition-transform', !expanded && '-rotate-90')}
             aria-hidden="true"
           />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{row.title}</span>
-          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{row.title}</span>
+          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-2xs font-semibold text-muted-foreground">
             ×{row.members.length}
           </span>
         </button>
@@ -216,7 +213,7 @@ function Row({
           data-slot="group-compare"
           title="Compare the variants"
           aria-label={`Compare the variants of ${row.title}`}
-          className="mr-1.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground hover:bg-violet/10 hover:text-violet"
+          className="inline-flex h-full w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
         >
           <ScaleIcon className="size-3.5" aria-hidden="true" />
         </Link>
@@ -258,8 +255,8 @@ function RunRow({
   now: number
   /** Explicit `/p/<id>` link scope for a non-active project's row; null = the active scope. */
   scope: string | null
-  /** A member row under an expanded group tile: indented, letter-chipped, and labelled with what
-   *  actually distinguishes the variants (runner and spend) rather than the shared title. */
+  /** A member row under an expanded group tile: indented, letter-prefixed, and labelled with
+   *  what actually distinguishes the variants (runner and spend) rather than the shared title. */
   variant?: boolean
 }) {
   const attention = deriveAttention(run)
@@ -289,26 +286,19 @@ function RunRow({
       <Link
         to={scopeTo(scope, `/tasks/${run.id}`)}
         // The row's accessible name is the title; `title` gives the full text back when the CSS
-        // truncates it, which for a one-line 264px column is most of the time.
-        title={runTitle(run)}
+        // truncates it — and carries the diff numbers, which the row itself no longer shows
+        // (one right-hand meta per row: the PR chip, else the age).
+        title={rowTitle(run)}
         aria-current={isActive ? 'page' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-[7px]"
+        className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
-        {variant ? (
-          <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
-            {run.variant ?? '?'}
-          </span>
-        ) : null}
         <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">
           {variant ? variantLabel(run) : runTitle(run)}
         </span>
-        {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
-            sidebar row has no column to hold an em dash open for. */}
-        {run.diffStat ? <DiffStatLabel stat={run.diffStat} className="shrink-0 text-[10.5px]" /> : null}
         {/* The PR chip takes the age's slot when there is one — same as the mockup. */}
         {prUrl || !age ? null : (
-          <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
+          <span className="shrink-0 text-2xs text-muted-foreground tabular-nums">{age}</span>
         )}
       </Link>
       {/* href protocol guard (#431): link only for http(s) URLs. */}
@@ -321,19 +311,28 @@ function RunRow({
           }}
           taskTitle={runTitle(run)}
           compact
-          className="mr-2.5 h-auto shrink-0 gap-[3px] px-1.5 py-px text-[10.5px]"
+          className="mr-2.5 h-auto shrink-0 px-1.5 py-px"
         />
       ) : null}
     </div>
   )
 }
 
-/** A variant row's subtitle: what differs between A and B — the backend and what it has spent.
- *  `runner` is absent on records predating the choice; those are Claude by definition. */
+/** A variant row's label: the letter, then what differs between A and B — the backend and what
+ *  it has spent. `runner` is absent on records predating the choice; those are Claude by
+ *  definition. */
 function variantLabel(run: RunRecord): string {
-  const parts: string[] = [run.runner ?? 'claude']
+  const parts: string[] = [run.variant ?? '?', run.runner ?? 'claude']
   if (run.tokensUsed > 0) parts.push(compactTokens(run.tokensUsed))
   return parts.join(' · ')
+}
+
+/** The row link's `title`: the full text back when the CSS truncates it, plus the diff numbers
+ *  once a turn has produced any (R2 #389). */
+function rowTitle(run: RunRecord): string {
+  const title = runTitle(run)
+  if (!run.diffStat) return title
+  return `${title} · +${run.diffStat.adds} −${run.diffStat.dels}`
 }
 
 /**

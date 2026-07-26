@@ -263,17 +263,30 @@ describe('task thread', () => {
     expect(rail.rows).toHaveLength(2)
     expect(rail.rows[0]).toMatchObject({ visual: 'done' })
     expect(rail.rows[0]!.text).toContain('Do the task')
-    expect(rail.rows[0]!.text).toContain('agent · step 1 of 2')
+    expect(rail.rows[0]!.text).toContain('agent')
+    expect(rail.rows[0]!.text).not.toContain('step 1 of 2')
     expect(rail.rows[1]).toMatchObject({ visual: 'done' })
     expect(rail.rows[1]!.text).toContain('Verify')
-    expect(rail.rows[1]!.text).toContain('check · step 2 of 2')
+    expect(rail.rows[1]!.text).toContain('check')
     expect(rail.bar).toBe('100%') // both steps terminal — (1 + 1) / 2
   })
 
-  it('the plan dock shows the LATEST snapshot (2/4), expanded on desktop, mirrored in the header', () => {
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('open')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+  it('the RunDock shows the LATEST snapshot (2/4), collapsed by default, mirrored in the header', () => {
+    expect(browser.evaluate(`document.querySelector('[data-slot="run-dock"]').dataset.state`)).toBe('collapsed')
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('2/4')
     expect(browser.evaluate(`document.querySelector('[data-slot="plan-mirror"]').textContent`)).toBe('Plan 2/4')
+    // Collapsed, the head names the current item by its activeForm.
+    expect(browser.evaluate(`document.querySelector('[data-slot="run-dock-current"]').textContent`)).toBe(
+      '— Summarizing cockpit features',
+    )
+
+    // It sits in the dock region above the composer area, not in the thread flow.
+    expect(browser.evaluate(`document.querySelector('[data-slot="thread-dock"] [data-slot="run-dock"]') !== null`)).toBe(true)
+  })
+
+  it('expanding the dock unfolds the checklist (turn-2 snapshot, sr-only in-progress words)', () => {
+    browser.click('[data-slot="run-dock-toggle"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="run-dock"]').dataset.state === 'open'`)
 
     // The turn-2 snapshot won (turn 1 said 0/4 with "Read README and docs" in progress).
     const items = browser.evaluate(`[...document.querySelectorAll('[data-slot="plan-item"]')].map((el) => ({
@@ -282,22 +295,14 @@ describe('task thread', () => {
     }))`) as Array<{ status: string; text: string }>
     expect(items.map((i) => i.status)).toEqual(['completed', 'completed', 'in_progress', 'pending'])
     expect(items[2]!.text).toContain('Summarize cockpit features')
-    expect(items[2]!.text).toContain('in progress')
+    expect(items[2]!.text).toContain('in progress') // the sr-only words, no pill
 
-    // It sits in the dock region above the composer area, not in the thread flow.
-    expect(browser.evaluate(`document.querySelector('[data-slot="thread-dock"] [data-slot="plan-dock"]') !== null`)).toBe(true)
-  })
-
-  it('collapsing the dock folds it to the odometer + the activeForm of the current item', () => {
-    browser.click('[data-slot="plan-dock"] button')
-    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'collapsed'`)
+    // Collapse and re-expand: the fold keeps the odometer + current item only.
+    browser.click('[data-slot="run-dock-toggle"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="run-dock"]').dataset.state === 'collapsed'`)
     expect(browser.count('[data-slot="plan-list"]')).toBe(0)
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-current"]').textContent`)).toBe(
-      '— Summarizing cockpit features',
-    )
-    // Re-expand so the desktop screenshot below captures the full checklist.
-    browser.click('[data-slot="plan-dock"] button')
-    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'open'`)
+    browser.click('[data-slot="run-dock-toggle"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="run-dock"]').dataset.state === 'open'`)
   })
 
   it('a card is closed by default and expands to its mono output (the #381 behavior)', () => {
@@ -356,10 +361,14 @@ describe('task thread', () => {
       { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
     ])
 
+    // The bar keeps only the state's worded primary action; everything else is in the kebab.
     const actions = browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim())`,
+      `[...document.querySelectorAll('[data-slot="run-actions"] button')]
+        .filter((b) => b.getAttribute('aria-label') !== 'Run actions')
+        .map((b) => b.textContent.trim())`,
     ) as string[]
-    expect(actions).toEqual(['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'])
+    expect(actions).toEqual(['Continue'])
+    expect(browser.count('[data-slot="run-actions"] [aria-label="Run actions"]')).toBe(1)
 
     // The take-over hint, per-backend (the fixture's last agent session, in its worktree).
     const hint = browser.evaluate(
@@ -369,19 +378,24 @@ describe('task thread', () => {
     expect(hint).toContain('cd /tmp/cezar-fixture-hg7X')
   })
 
-  it('opens the Notes panel — an unseeded handoff reads as the honest empty state', () => {
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+  it('opens the Notes panel from the kebab — an unseeded handoff reads as the honest empty state', () => {
+    const clickNotes = () => {
+      browser.click('[data-slot="run-actions"] [aria-label="Run actions"]')
+      browser.waitForFunction(
+        `[...document.querySelectorAll('[role="menuitem"]')].some((el) => el.textContent.trim() === 'Notes')`,
+      )
+      browser.evaluate(
+        `[...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent.trim() === 'Notes').click()`,
+      )
+    }
+    clickNotes()
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') !== null`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="notes-panel"]').textContent.includes('No notes yet')`,
     )
     // The 1.4 money shot: full header (title, meta, tabs+actions, rail, hint) + open notes.
     browser.screenshot(`${artifactsDir}/thread-header-desktop.png`)
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+    clickNotes()
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') === null`)
   })
 
@@ -431,25 +445,25 @@ describe('task thread', () => {
       })()`),
     ).toBe(true)
 
-    // Phone default: the dock collapses to the odometer (the mockup's mobile reflow).
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('collapsed')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+    // Fresh page load: the dock starts collapsed on every breakpoint.
+    expect(browser.evaluate(`document.querySelector('[data-slot="run-dock"]').dataset.state`)).toBe('collapsed')
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('2/4')
 
     browser.screenshot(`${artifactsDir}/thread-mobile.png`)
     browser.setViewport(1440, 900)
   })
 
-  it('mobile header: the action bar folds into the kebab next to the pill', () => {
+  it('mobile header: the ONE action bar stays, kebab included — no separate mobile surface', () => {
     browser.setViewport(390, 844)
     browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
     browser.waitForFunction(`document.querySelector('[data-slot="run-header"]') !== null`)
 
-    // The desktop action bar is gone (`md:flex`), the kebab is the mobile surface.
+    // The same bar renders on every breakpoint: worded primary action + the kebab.
     expect(
       browser.evaluate(
         `getComputedStyle(document.querySelector('[data-slot="run-actions"]')).display`,
       ),
-    ).toBe('none')
+    ).toBe('flex')
     expect(
       browser.evaluate(
         `(() => { const el = document.querySelector('[aria-label="Run actions"]'); return el !== null && el.offsetParent !== null })()`,

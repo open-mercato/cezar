@@ -158,10 +158,10 @@ const startBody = (sent: readonly SentRequest[], id: string): unknown =>
   sent.find((r) => r.method === 'POST' && r.path === `/api/todos/${id}/start`)?.body
 
 /** Open a pill's dropdown and choose an option by its visible label (the house pattern:
- *  Radix opens on pointerDown, and the menu renders in a portal outside the card). Scoped by
+ *  Base UI opens on mouseDown, and the menu renders in a portal outside the card). Scoped by
  *  card, because every runnable card carries its own pair. */
 async function pick(card: HTMLElement, slot: string, label: string) {
-  fireEvent.pointerDown(card.querySelector(`[data-slot="${slot}"]`)!)
+  fireEvent.mouseDown(card.querySelector(`[data-slot="${slot}"]`)!)
   const options = await screen.findAllByRole('menuitemradio')
   fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
 }

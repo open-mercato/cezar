@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
 
+import { Chip } from '@/components/ui/chip'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { cn } from '@/lib/utils'
+import type { StatusDotTone } from '@/components/status-dot'
 
 import type { SubagentSummary } from './subagent-dock'
 import type { ThreadEntry } from './thread-state'
@@ -47,15 +48,12 @@ function SheetBody({ agent, entries }: { agent: SubagentSummary; entries: Thread
   return (
     <>
       <SheetHeader className="gap-1.5 border-b border-border px-5 py-4">
-        <SheetTitle className="flex min-w-0 items-center gap-2 pr-8 text-[15px]">
+        <SheetTitle className="flex min-w-0 items-center gap-2 pr-8 text-base">
           <span className="min-w-0 truncate">{agent.title}</span>
           {agent.agentType !== undefined ? (
-            <span
-              data-slot="agent-type"
-              className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
-            >
+            <Chip data-slot="agent-type" size="sm">
               {agent.agentType}
-            </span>
+            </Chip>
           ) : null}
         </SheetTitle>
         <SheetDescription data-slot="subagent-meta" className="flex items-center gap-2 text-xs">
@@ -103,7 +101,7 @@ function SubagentStream({ entries, scope }: { entries: ThreadEntry[]; scope: str
 
   if (entries.length === 0) {
     return (
-      <div data-slot="subagent-empty" className="px-5 py-6 text-[13px] text-muted-foreground">
+      <div data-slot="subagent-empty" className="px-5 py-6 text-sm text-muted-foreground">
         No attributed output — see the thread card for this agent&apos;s result.
       </div>
     )
@@ -139,18 +137,17 @@ function StatusPill({ status }: { status: SubagentSummary['status'] }) {
           : status === 'pending'
             ? 'Pending'
             : 'Running'
+  const tone: StatusDotTone =
+    status === 'completed'
+      ? 'success'
+      : status === 'failed' || status === 'declined'
+        ? 'danger'
+        : status === 'running'
+          ? 'pending'
+          : 'neutral'
   return (
-    <span
-      data-slot="subagent-status"
-      data-status={status}
-      className={cn(
-        'rounded-full px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] uppercase',
-        status === 'completed' && 'bg-success/15 text-success',
-        (status === 'failed' || status === 'declined') && 'bg-danger/15 text-danger',
-        (status === 'running' || status === 'pending') && 'bg-muted text-muted-foreground',
-      )}
-    >
+    <Chip data-slot="subagent-status" data-status={status} size="sm" dot={tone}>
       {label}
-    </span>
+    </Chip>
   )
 }

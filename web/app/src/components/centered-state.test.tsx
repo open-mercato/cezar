@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { SearchXIcon } from 'lucide-react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { CenteredState, TwinkleBackdrop } from './centered-state'
+import { CenteredState } from './centered-state'
 
 // Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
 afterEach(cleanup)
@@ -60,40 +60,10 @@ describe('CenteredState', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
   })
 
-  // Textures are opt-in and hero-only — a data-dense caller must get a flat state by default.
-  it('has no backdrop unless requested', () => {
+  // The motion budget has no line for decoration — the twinkle scatter is gone for good.
+  it('renders no backdrop, ever', () => {
     const { container } = render(<CenteredState icon={<SearchXIcon />} title="T" />)
 
     expect(container.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
-  })
-
-  it('mounts the twinkle backdrop when requested', () => {
-    const { container } = render(<CenteredState icon={<SearchXIcon />} title="T" backdrop />)
-
-    expect(container.querySelector('[data-slot="twinkle-backdrop"]')).not.toBeNull()
-  })
-})
-
-describe('TwinkleBackdrop', () => {
-  it('is decorative: aria-hidden and pointer-transparent', () => {
-    const { container } = render(<TwinkleBackdrop />)
-    const backdrop = container.querySelector('[data-slot="twinkle-backdrop"]')
-
-    expect(backdrop?.getAttribute('aria-hidden')).toBe('true')
-    expect(backdrop?.className).toContain('pointer-events-none')
-  })
-
-  it('scatters brand-token squares whose pulse is motion-safe only', () => {
-    const { container } = render(<TwinkleBackdrop />)
-    const squares = [...container.querySelectorAll('[data-slot="twinkle-backdrop"] > span')]
-
-    expect(squares.length).toBeGreaterThan(5)
-    for (const square of squares) {
-      // Colors come from the theme tokens, never raw values.
-      expect(square.className).toMatch(/bg-(violet|primary|pending)/)
-      // The pulse is gated on motion-safe, so prefers-reduced-motion renders it static.
-      expect(square.className).toContain('motion-safe:animate-pulse')
-      expect(square.className).not.toMatch(/(?<!motion-safe:)animate-pulse/)
-    }
   })
 })

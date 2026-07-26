@@ -256,7 +256,7 @@ describe('ProjectGroups', () => {
     expect(taskLinks('shop')).toHaveLength(0)
   })
 
-  it('renders a missing project greyed and inert, with no nav behind it', async () => {
+  it('renders a missing project greyed, with the whole row linking at Global settings', async () => {
     serve({ '/api/workspace/ui-state': {}, '/api/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' })])
 
@@ -264,10 +264,13 @@ describe('ProjectGroups', () => {
     expect(group('gone').querySelector('[data-slot="project-missing"]')?.textContent).toBe(
       'folder not found',
     )
-    // Every pane of a missing project 409s, so there is nothing to expand into and nothing to
-    // link at — the row states the fact and stops.
+    // Every pane of a missing project 409s, so there is nothing to expand into — no chevron
+    // button, no nav. The one link is the row itself, into Global settings → Projects, where
+    // unregistering lives.
     expect(within(group('gone')).queryByRole('button')).toBeNull()
-    expect(within(group('gone')).queryAllByRole('link')).toHaveLength(0)
+    const links = within(group('gone')).queryAllByRole('link')
+    expect(links).toHaveLength(1)
+    expect(links[0]?.getAttribute('href')).toBe('/settings/global')
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/p/gone/runs')
   })
 })

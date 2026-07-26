@@ -10,6 +10,8 @@ import { queryKeys, useImportableSkills, useProjects, useSkills, useWorkflows } 
 import { useProjectScope } from '@/api/project-scope-context'
 import type { Skill } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { PageBody } from '@/components/page-body'
+import { PageHeader } from '@/components/page-header'
 import { ImportSkillsPanel } from '@/components/skills-import-panel'
 import { SkillDetailBody, SkillSourceTag } from '@/components/skill-detail'
 import { SkillEmptyHint } from '@/components/skill-empty-hint'
@@ -45,10 +47,11 @@ export function SkillsRoute() {
   return (
     <div data-route="skills" className="flex min-h-full flex-col">
       {/* Desktop header — below `md` the shell's top bar already says "Skills". */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Skills</h1>
-        <p className="text-[13px] text-muted-foreground">Markdown playbooks agents can follow.</p>
-      </header>
+      <PageHeader
+        className="max-md:hidden"
+        title="Skills"
+        meta={<p className="text-sm text-muted-foreground">Markdown playbooks agents can follow.</p>}
+      />
       <SkillsCatalog />
     </div>
   )
@@ -125,7 +128,7 @@ function SkillsCatalog() {
             aria-label="Filter skills"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="h-8 text-[13px]"
+            className="h-8 text-sm"
           />
           <button
             type="button"
@@ -133,7 +136,7 @@ function SkillsCatalog() {
             title="git fetch the team skills repos"
             disabled={refresh.isPending}
             onClick={() => refresh.mutate()}
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-55"
           >
             <RefreshCwIcon
               aria-hidden="true"
@@ -145,7 +148,7 @@ function SkillsCatalog() {
 
         <ul data-slot="skill-rows" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {skillsQuery.isPending ? (
-            <li className="px-2.5 py-2 text-[13px] text-soft-foreground">Loading…</li>
+            <li className="px-2.5 py-2 text-sm text-soft-foreground">Loading…</li>
           ) : shown.length > 0 ? (
             shown.map((skill) => <SkillRow key={skill.path} skill={skill} active={selection === skill.name} />)
           ) : (
@@ -169,10 +172,7 @@ function SkillsCatalog() {
             >
               <span className="flex min-w-0 items-center gap-2">
                 <DownloadIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
-                <span className="min-w-0 truncate text-[13px] font-medium">Manage skills</span>
-                <span className="ml-auto shrink-0 rounded-full border border-border px-2 py-px font-mono text-[10.5px] text-soft-foreground">
-                  open-mercato
-                </span>
+                <span className="min-w-0 truncate text-sm font-medium">Manage skills</span>
               </span>
               <span className="pl-[22px] text-xs text-soft-foreground">
                 Choose which open-mercato skills appear in your catalog.
@@ -190,10 +190,7 @@ function SkillsCatalog() {
           >
             <span className="flex min-w-0 items-center gap-2">
               <ZapIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
-              <span className="min-w-0 truncate text-[13px] font-medium">Run from GitHub</span>
-              <span className="ml-auto shrink-0 rounded-full border border-border px-2 py-px font-mono text-[10.5px] text-soft-foreground">
-                bookmarklets
-              </span>
+              <span className="min-w-0 truncate text-sm font-medium">Run from GitHub</span>
             </span>
             <span className="pl-[22px] text-xs text-soft-foreground">
               One-click skill launch from any GitHub PR or issue.
@@ -207,7 +204,7 @@ function SkillsCatalog() {
         data-slot="skills-detail"
         className={cn('min-w-0 flex-1 flex-col', param === null ? 'hidden md:flex' : 'flex')}
       >
-        <div className="min-w-0 flex-1 px-4 py-4 md:px-7 md:py-5">
+        <PageBody className="block">
           <Link
             to="/skills"
             data-slot="skills-back"
@@ -235,7 +232,7 @@ function SkillsCatalog() {
               subtitle="Pick a skill from the catalog."
             />
           )}
-        </div>
+        </PageBody>
       </section>
     </div>
   )
@@ -264,7 +261,7 @@ function SkillRow({ skill, active }: { skill: Skill; active: boolean }) {
           {/* Project skills read bold (#377) — the visual half of the ordering rule. */}
           <span
             className={cn(
-              'min-w-0 truncate font-mono text-[13px]',
+              'min-w-0 truncate font-mono text-sm',
               project ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground',
             )}
           >

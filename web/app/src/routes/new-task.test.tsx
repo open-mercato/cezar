@@ -277,6 +277,16 @@ function renderNewTask(entry = '/new') {
 const textarea = () => screen.getByLabelText('Describe a task for the agent') as HTMLTextAreaElement
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
 const location = () => screen.getByTestId('location').textContent
+const runOptionsPill = () => screen.getByRole('button', { name: 'Run options' })
+
+async function openRunOptions() {
+  if (document.querySelector('[data-slot="run-options-menu"]') === null) {
+    fireEvent.click(runOptionsPill())
+  }
+  await waitFor(() =>
+    expect(document.querySelector('[data-slot="run-options-menu"]')).not.toBeNull(),
+  )
+}
 
 /** The pickers resolve once workflows+skills+ui-state answered — wait for the real label. */
 async function pillReady(label = 'quick-task') {
@@ -296,12 +306,12 @@ const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '
 // ---- the hero surface -------------------------------------------------------------------------
 
 describe('the hero surface', () => {
-  it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
+  it('renders the hero: title, subtitle, no twinkle decoration, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
-    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBeNull()
     await pillReady()
     // ⌘N drops you here to type — after the provider check enables the composer, the caret
     // must land in the box without the user clicking it.
@@ -324,59 +334,62 @@ describe('the hero surface', () => {
 // ---- picker data flows ------------------------------------------------------------------------
 
 describe('picker data flows', () => {
-  it('hides the runner pill on a single-backend host (legacy rule)', async () => {
+  it('has no separate runner pill — the model pill carries the backend tier', async () => {
     serve()
     renderNewTask()
     await pillReady()
     expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
-    expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull()
+    const modelPill = document.querySelector('[data-slot="model-pill"]') as HTMLElement
+    expect(modelPill).not.toBeNull()
+    expect(modelPill.textContent).toContain('claude')
   })
 
-  it('shows the runner pill with >1 backend, and switching runner swaps the model presets', async () => {
+  it('the model menu groups presets per connected runner — one pick sets backend and model', async () => {
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
     await pillReady()
 
-    const runnerPill = () => document.querySelector('[data-slot="runner-pill"]') as HTMLElement
-    await waitFor(() => expect(runnerPill()).not.toBeNull())
-    expect(runnerPill().textContent).toContain('claude')
+    const modelPill = () => document.querySelector('[data-slot="model-pill"]') as HTMLElement
+    expect(modelPill().textContent).toContain('claude')
 
-    // claude's presets first…
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    let options = await screen.findAllByRole('menuitemradio')
-    expect(options.map((o) => o.textContent)).toEqual(
-      expect.arrayContaining([expect.stringContaining('opus'), expect.stringContaining('sonnet')]),
+    fireEvent.mouseDown(modelPill())
+    await screen.findAllByRole('menuitemradio')
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-slot="model-option"][data-runner="codex"][data-model="gpt-future"]'),
+      ).not.toBeNull()
+    })
+    const options = [...document.querySelectorAll('[data-slot="model-option"]')]
+    expect([...new Set(options.map((o) => o.getAttribute('data-runner')))]).toEqual([
+      'claude',
+      'codex',
+    ])
+    expect(options.some((o) => o.textContent?.includes('opus'))).toBe(true)
+
+    fireEvent.click(
+      document.querySelector(
+        '[data-slot="model-option"][data-runner="codex"][data-model="gpt-future"]',
+      ) as HTMLElement,
     )
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
-
-    // …pick codex…
-    fireEvent.pointerDown(runnerPill())
-    options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('codex')) as HTMLElement)
-    await waitFor(() => expect(runnerPill().textContent).toContain('codex'))
-    // …the model reset to auto and the presets are codex's now.
-    expect((document.querySelector('[data-slot="model-pill"]') as HTMLElement).textContent).toContain('auto')
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    options = await screen.findAllByRole('menuitemradio')
-    const labels = options.map((o) => o.textContent ?? '')
-    expect(labels.some((l) => l.includes('gpt-future'))).toBe(true)
-    expect(labels.some((l) => l.includes('opus'))).toBe(false)
+    await waitFor(() => expect(modelPill().textContent).toContain('codex'))
+    expect(modelPill().textContent).toContain('gpt-future')
   })
 
-  it('excludes disconnected providers from the runner choices even when health detects them', async () => {
+  it('excludes disconnected providers from the model menu even when health detects them', async () => {
     serve({ health: HEALTH_ALL, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
     await pillReady()
 
-    const runnerPill = document.querySelector('[data-slot="runner-pill"]') as HTMLElement
-    fireEvent.pointerDown(runnerPill)
-    const options = await screen.findAllByRole('menuitemradio')
-    expect(options.map((option) => option.textContent)).toEqual([
-      expect.stringContaining('claude'),
-      expect.stringContaining('codex'),
-    ])
-    expect(options.some((option) => option.textContent?.includes('opencode'))).toBe(false)
+    fireEvent.mouseDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    await screen.findAllByRole('menuitemradio')
+    const runners = [
+      ...new Set(
+        [...document.querySelectorAll('[data-slot="model-option"]')].map((option) =>
+          option.getAttribute('data-runner'),
+        ),
+      ),
+    ]
+    expect(runners).toEqual(['claude', 'codex'])
   })
 
   it('excludes connected but disabled providers while retaining an enabled runner choice', async () => {
@@ -408,36 +421,47 @@ describe('picker data flows', () => {
 
     const modelPill = document.querySelector('[data-slot="model-pill"]') as HTMLElement
     await waitFor(() => expect(modelPill.textContent).toContain('auto'))
-    fireEvent.pointerDown(modelPill)
-    const options = await screen.findAllByRole('menuitemradio')
-    expect(options.some((option) => option.textContent?.includes('claude-opus-4-8'))).toBe(false)
+    fireEvent.mouseDown(modelPill)
+    await screen.findAllByRole('menuitemradio')
+    const codexOptions = [
+      ...document.querySelectorAll('[data-slot="model-option"][data-runner="codex"]'),
+    ]
+    expect(codexOptions.length).toBeGreaterThan(0)
+    expect(
+      codexOptions.some((option) => option.getAttribute('data-model') === 'claude-opus-4-8'),
+    ).toBe(false)
   })
 
-  it('gates variants on git: no repo → pill disabled with the honest reason, base pill gone', async () => {
+  it('gates variants on git: no repo → options disabled with the honest reason, base branch gone', async () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
     renderNewTask()
     await pillReady()
-    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
-    expect(pill.disabled).toBe(true)
-    expect(pill.title).toContain('need a git repository')
-    expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
+    await openRunOptions()
+    const group = document.querySelector(
+      '[data-slot="variants-picker"] [role="radiogroup"]',
+    ) as HTMLElement
+    expect(group.title).toContain('need a git repository')
+    const options = [...group.querySelectorAll<HTMLButtonElement>('[data-slot="variants-option"]')]
+    expect(options).toHaveLength(3)
+    for (const option of options) expect(option.disabled).toBe(true)
+    expect(document.querySelector('[data-slot="base-branch"]')).toBeNull()
   })
 
-  it('base branch pill shows config default (falling back to the checkout) and PUTs /api/config', async () => {
+  it('base branch options show the config default and picking one PUTs /api/config', async () => {
     serve({ repo: { ...REPO, baseBranch: 'develop' } })
     renderNewTask()
     await pillReady()
-    const basePill = () => document.querySelector('[data-slot="base-pill"]') as HTMLElement
-    await waitFor(() => expect(basePill()).not.toBeNull())
-    expect(basePill().textContent).toContain('base: develop')
-
-    fireEvent.pointerDown(basePill())
-    const options = await screen.findAllByRole('menuitemradio')
+    await waitFor(() => expect(runOptionsPill().textContent).toContain('· 1'))
+    await openRunOptions()
+    const section = () => document.querySelector('[data-slot="base-branch"]') as HTMLElement
+    await waitFor(() => expect(section()).not.toBeNull())
+    const options = [...section().querySelectorAll('[data-slot="base-branch-option"]')]
     expect(options.map((o) => o.textContent)).toEqual([
       expect.stringContaining('current checkout (main)'),
       expect.stringContaining('main'),
       expect.stringContaining('develop'),
     ])
+    expect(options[2]?.getAttribute('aria-checked')).toBe('true')
     fireEvent.click(options[0] as HTMLElement)
     await waitFor(() =>
       expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/config')).toBe(true),
@@ -722,17 +746,17 @@ describe('submit', () => {
     renderNewTask()
     await pillReady()
 
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    let options = await screen.findAllByRole('menuitemradio')
+    fireEvent.mouseDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    const options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('sonnet')) as HTMLElement)
     await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
 
-    fireEvent.pointerDown(document.querySelector('[data-slot="variants-pill"]') as HTMLElement)
-    options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('×2')) as HTMLElement)
-    await waitFor(() =>
-      expect((document.querySelector('[data-slot="variants-pill"]') as HTMLElement).textContent).toContain('×2'),
-    )
+    await openRunOptions()
+    const x2 = () =>
+      document.querySelector('[data-slot="variants-option"][data-variants="2"]') as HTMLElement
+    fireEvent.click(x2())
+    await waitFor(() => expect(x2().getAttribute('aria-checked')).toBe('true'))
+    expect(runOptionsPill().textContent).toContain('· 1')
 
     fireEvent.change(textarea(), { target: { value: 'Race two attempts' } })
     await startTask()
@@ -768,6 +792,7 @@ describe('submit', () => {
     serve()
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     const toggle = document.querySelector(
       '[data-slot="generate-followups-toggle"]',
     ) as HTMLButtonElement
@@ -775,6 +800,7 @@ describe('submit', () => {
 
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(runOptionsPill().textContent).toContain('· 1')
     fireEvent.change(textarea(), { target: { value: 'No follow-up inbox items' } })
     await startTask()
 
@@ -790,6 +816,7 @@ describe('submit', () => {
     serve({ uiState: { lastGenerateFollowups: false } })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     expect(
       document
         .querySelector('[data-slot="generate-followups-toggle"]')
@@ -806,6 +833,7 @@ describe('submit', () => {
     })
     renderNewTask()
     await pillReady('om-fix')
+    await openRunOptions()
 
     const autonomous = document.querySelector(
       '[data-slot="autonomous-toggle"]',
@@ -833,6 +861,7 @@ describe('submit', () => {
     serve({ health: inboxOffHealth })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     await waitFor(() => expect(followupsToggle()).toBeNull())
     // The neighbouring toggles are untouched — the gate owns exactly one control.
     expect(document.querySelector('[data-slot="autonomous-toggle"]')).not.toBeNull()
@@ -842,6 +871,7 @@ describe('submit', () => {
     serve({ health: inboxOffHealth })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     await waitFor(() => expect(followupsToggle()).toBeNull())
 
     fireEvent.change(textarea(), { target: { value: 'No inbox on this server' } })
@@ -856,6 +886,7 @@ describe('submit', () => {
     serve({ health: inboxOffHealth, uiState: { lastGenerateFollowups: true } })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     await waitFor(() => expect(followupsToggle()).toBeNull())
 
     fireEvent.change(textarea(), { target: { value: 'Leave my preference alone' } })
@@ -932,6 +963,7 @@ describe('drafts and prefill', () => {
     serve()
     renderNewTask('/new?skill=deploy&ref=ship%20it&todo=t1')
     await pillReady('deploy')
+    await openRunOptions()
     fireEvent.click(
       document.querySelector('[data-slot="generate-followups-toggle"]') as HTMLElement,
     )
@@ -1250,8 +1282,10 @@ describe('the Start | Plan first toggle', () => {
       document.querySelector('[data-slot="autonomous-toggle"]') as HTMLButtonElement
 
     // Off plan mode the toggle is interactive.
+    await openRunOptions()
     expect(autonomous().disabled).toBe(false)
     fireEvent.click(planToggle())
+    await openRunOptions()
     expect(autonomous().disabled).toBe(true)
     expect(autonomous().getAttribute('aria-checked')).toBe('false')
   })
@@ -1411,7 +1445,9 @@ describe('the plan flow', () => {
     await waitFor(() => expect(textarea().disabled).toBe(true))
     const start = document.querySelector<HTMLButtonElement>('[data-slot="plan-start"]')!
     expect(start.disabled).toBe(true)
-    expect(screen.getByText('Connect an agent provider before starting a task.')).toBeTruthy()
+    expect(
+      screen.getAllByText('Connect an agent provider before starting a task.').length,
+    ).toBeGreaterThan(0)
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
       '/settings/agents#providers',
     )
@@ -1425,6 +1461,7 @@ describe('the plan flow', () => {
     serve({ createRun: { id: 'planned-no-followups' } })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     fireEvent.click(
       document.querySelector('[data-slot="generate-followups-toggle"]') as HTMLElement,
     )
@@ -1522,7 +1559,7 @@ describe('prompt templates on the new-task composer', () => {
     { id: 'manual', label: 'Manual', text: 'Never auto.' },
   ]
 
-  const templateTrigger = () => screen.getByRole('button', { name: 'Insert a prompt template' })
+  const plusTrigger = () => screen.getByRole('button', { name: 'Add to your task' })
   const option = (id: string) =>
     document.querySelector<HTMLElement>(`[data-slot="prompt-template-option"][data-template="${id}"]`)
 
@@ -1532,14 +1569,15 @@ describe('prompt templates on the new-task composer', () => {
     fireEvent.click(document.querySelector(`[data-slot="source-option"][data-source-ref="${ref}"]`)!)
   }
 
-  it('the trigger is icon-only here — the footer pill row is already full', async () => {
+  it('templates live in the composer "+" menu — no standalone trigger pill', async () => {
     serve()
     renderNewTask()
     await pillReady()
 
-    // No "templates" word next to the icon, unlike the roomier GitHub/Inbox composers.
-    expect(templateTrigger().textContent).toBe('')
-    expect(templateTrigger().querySelector('svg')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Insert a prompt template' })).toBeNull()
+    fireEvent.mouseDown(plusTrigger())
+    await waitFor(() => expect(option('add-tests')).not.toBeNull())
+    expect(document.querySelector('[data-slot="composer-attach"]')).not.toBeNull()
   })
 
   it('inserts a template into the composer draft at the caret', async () => {
@@ -1548,7 +1586,7 @@ describe('prompt templates on the new-task composer', () => {
     await pillReady()
 
     fireEvent.change(textarea(), { target: { value: 'Ship it' } })
-    fireEvent.click(templateTrigger())
+    fireEvent.mouseDown(plusTrigger())
     await waitFor(() => expect(option('add-tests')).not.toBeNull())
     fireEvent.click(option('add-tests')!)
 

@@ -153,7 +153,12 @@ describe('cockpit app shell', () => {
     // suite runs (any checkout, any branch).
     const repoName = health.repoRoot.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
     expect(browser.text('[data-slot="repo-chip"]')).toBe(`${repoName} / ${health.repo?.branch}`)
-    expect(browser.text('[data-slot="version-chip"]')).toBe(`v${health.version}`)
+    // The version moved into the Tools menu — its trigger tooltip names it.
+    expect(
+      browser.evaluate(
+        `document.querySelector('[data-slot="tools-menu-trigger"]')?.getAttribute('title')`,
+      ),
+    ).toContain(`cezar v${health.version}`)
 
     // Real values, not a placeholder that happens to match itself.
     expect(health.version).toMatch(/^\d+\.\d+\.\d+/)

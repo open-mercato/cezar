@@ -10,13 +10,6 @@
 
 @import "tailwindcss";
 
-/* Enter/exit animation utilities (`animate-in`, `fade-in-0`, `zoom-in-95`, `slide-in-from-*`) that the
- * shadcn primitives reference on their Radix `data-[state]` hooks. Tailwind v4 dropped the v3 plugin,
- * so without this import those classes are silently dead and overlays pop in with no transition.
- * It only adds animation tokens/utilities — it does not touch our color, radius or shadow scales.
- */
-@import "tw-animate-css";
-
 /* Streamdown (the thread's markdown renderer) styles itself with Tailwind utility classes that
  * live in node_modules — without this @source Tailwind would purge them and every code block /
  * table / blockquote would render unstyled (diff-highlight-tech.md §4, the documented gotcha). */
@@ -86,7 +79,10 @@
   --sidebar: var(--card);
   --muted: #262626;
   --muted-foreground: #a3a3a3;
-  --soft-foreground: #7b7b7b;
+  /* soft-foreground contract: placeholder, disabled, decorative icons, and meta text ≥ 12px
+   * ONLY. 11px text (`text-2xs`) must use `muted-foreground` or stronger. Both theme values
+   * are tuned to hold AA against their background (~5.6:1 here, ~4.55:1 in light). */
+  --soft-foreground: #8a8a8a;
   --border: #262626;
   --input: #262626;
   --contrast: #ebebeb;
@@ -115,7 +111,9 @@
   --diff-del-bg: rgba(239, 68, 68, 0.1);
   --diff-del-strong: rgba(239, 68, 68, 0.3);
 
-  /* brand gradient: lime → yellow → violet */
+  /* brand gradient: lime → yellow → violet.
+   * Contract: the app's ONE brand moment — the 3px strip on top of the RunDock. `--grad` may
+   * only appear in this file and in routes/task-thread/run-dock.tsx (design-guardian enforced). */
   --grad: linear-gradient(135deg, #b4f372 12%, #eefb63 58%, #bc9aff 100%);
 
   /* type stacks — the woff2 above, then platform fallbacks */
@@ -139,8 +137,18 @@
   --accent-foreground: var(--foreground);
   --secondary: var(--muted);
   --secondary-foreground: var(--foreground);
+  /* destructive contract: the `destructive` family is for ui/button.tsx variants ONLY. Every
+   * surface tint (bg-…/10, bg-…/15) goes through the `danger` family instead. */
   --destructive: var(--danger);
   --destructive-foreground: var(--danger-foreground);
+
+  /* layout + label metrics — single definition site for numbers that used to be magic:
+   * `w-(--sidebar-width)` for the rail and mobile drawer; `--dock-clearance` is the mobile
+   * composer-dock height that page bodies pad for (`pb-[calc(var(--dock-clearance)+env(safe-area-inset-bottom))]`);
+   * `--tracking-label` is the ONE letter-spacing for uppercase labels (see `label-caps`). */
+  --sidebar-width: 264px;
+  --dock-clearance: 90px;
+  --tracking-label: 0.05em;
 }
 
 /* ---------- tokens: light ---------- */
@@ -155,7 +163,7 @@
   --sidebar: #fafafa;
   --muted: #f7f7f7;
   --muted-foreground: #5c5c5c;
-  --soft-foreground: #a3a3a3;
+  --soft-foreground: #767676;
   --border: #ebebeb;
   --input: #ebebeb;
   --contrast: #262626;
@@ -209,29 +217,61 @@
   --spacing: 0.1875rem;
 }
 
-/* ---------- tokens: radius + shadow ----------
- * These two scales are declared in a plain `@theme` (not `@theme inline`) because their token names
+/* ---------- tokens: radius + shadow + type ramp ----------
+ * These scales are declared in a plain `@theme` (not `@theme inline`) because their token names
  * ARE Tailwind's own namespace keys — one declaration both defines `var(--radius-lg)` for hand-written
- * CSS and wires the `rounded-lg` / `shadow-md` utilities. Routing them through `@theme inline` instead
- * would emit a circular `--radius-lg: var(--radius-lg)`.
- * `initial` first wipes Tailwind's stock scales, so off-system steps (`shadow-2xl`, `rounded-3xl`) don't exist.
+ * CSS and wires the `rounded-lg` / `shadow-md` / `text-sm` utilities. Routing them through `@theme inline`
+ * instead would emit a circular `--radius-lg: var(--radius-lg)`.
+ * `initial` first wipes Tailwind's stock scales, so off-system steps (`shadow-2xl`, `rounded-3xl`,
+ * `text-2xl`) don't exist.
  * `static` keeps every step in the output even when no utility uses it yet, so hand-written CSS and
  * inline styles can rely on `var(--shadow-modal)` & co. being defined.
  */
 
 @theme static {
   --radius-*: initial;
-  --radius-sm: 8px;
-  --radius: 10px; /* default control radius — no namespace suffix, so it makes no utility of its own */
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  /* Mira-leaning dense scale: one notch tighter than the original mockup sheet so controls,
+   * cards and overlays read compact without touching any component markup. */
+  --radius-sm: 6px;
+  --radius: 8px; /* default control radius — no namespace suffix, so it makes no utility of its own */
+  --radius-lg: 10px;
+  --radius-xl: 14px;
 
-  /* restrained by design — borders carry most of the separation */
+  /* restrained by design — borders carry most of the separation. Three steps only:
+   * xs (control), md (popover), modal. */
   --shadow-*: initial;
   --shadow-xs: 0 1px 2px 0 rgba(10, 13, 20, 0.03);
-  --shadow-sm: 0 2px 4px 0 rgba(27, 28, 29, 0.04);
   --shadow-md: 0 16px 32px -12px rgba(14, 18, 27, 0.1);
   --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.45);
+
+  /* Type ramp — six steps, 11px floor, every step AA-capable. Wiping `--text-*` first means
+   * off-ramp utilities (`text-2xl`, `text-[13px]`) simply do not exist (guardian enforced).
+   * Roles: 2xs = mono meta / micro-label / badge; xs = caption, chip; sm = dense UI body
+   * (nav rows, tool cards, tables); base = message content, page h1; lg = hero/empty-state
+   * title; xl = rare large hero. `.thread-markdown` is em-based, so the wipe leaves it alone. */
+  --text-*: initial;
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem; /* 12px */
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem; /* 13px */
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem; /* 14px */
+  --text-base--line-height: 1.25rem;
+  --text-lg: 1rem; /* 16px */
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.25rem; /* 20px */
+  --text-xl--line-height: 1.75rem;
+}
+
+/* Uppercase label grammar — table headers, section labels, eyebrows. The single sanctioned
+ * combination of size/case/tracking (replaces ad-hoc tracking-[0.04em..0.08em] + tracking-wide). */
+@utility label-caps {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  font-weight: 500;
+  color: var(--muted-foreground);
 }
 
 /* ---------- Tailwind theme: utilities point at the tokens above ----------
@@ -338,31 +378,6 @@
   }
   ::-webkit-scrollbar-track {
     background: transparent;
-  }
-}
-
-/* ---------- shimmer (mockup tokens.css) ----------
- * Running tool-card titles. Token-driven (muted-foreground → foreground sweep) so it follows
- * the theme; reduced-motion readers get a plain muted title instead of an animation. */
-
-.shimmer {
-  background: linear-gradient(90deg, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer 1.8s linear infinite;
-}
-@keyframes shimmer {
-  to {
-    background-position: -200% 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .shimmer {
-    animation: none;
-    background: none;
-    color: var(--muted-foreground);
   }
 }
 

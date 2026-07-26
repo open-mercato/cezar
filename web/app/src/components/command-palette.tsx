@@ -26,14 +26,14 @@ import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
  * The ⌘K command palette (spec, "Cross-cutting"): tasks, views, actions, skills — everything,
  * one keystroke from anywhere.
  *
- * Opened by ⌘K *and* Ctrl+K (the shared `useCommandShortcut` registers both together), by the
- * sidebar footer's hint, or programmatically via `openCommandPalette()`. Escape and selecting
- * anything close it.
+ * Opened by ⌘K *and* Ctrl+K (the shared `useCommandShortcut` registers both together), or
+ * programmatically via `openCommandPalette()`. Escape and selecting anything close it. The
+ * search placeholder's ⌘K suffix is the shortcut's one discoverability hint.
  */
 
 /** The programmatic-open seam: a window event rather than a context, so chrome that must stay
- *  presentational (the sidebar hint today, an onboarding nudge tomorrow) can open the palette
- *  without threading a setter through the tree. */
+ *  presentational (an onboarding nudge tomorrow) can open the palette without threading a
+ *  setter through the tree. */
 export const OPEN_COMMAND_PALETTE_EVENT = 'cezar:open-command-palette'
 
 export function openCommandPalette(): void {
@@ -110,7 +110,7 @@ function PaletteContent({ close }: { close: () => void }) {
 
   return (
     <>
-      <CommandInput placeholder="Search tasks, views, actions, skills…" />
+      <CommandInput placeholder="Search tasks, views, actions, skills… ⌘K" />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
 

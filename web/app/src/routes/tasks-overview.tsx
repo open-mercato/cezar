@@ -19,6 +19,8 @@ import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
+import { PageBody } from '@/components/page-body'
+import { PageHeader } from '@/components/page-header'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { Button } from '@/components/ui/button'
@@ -85,47 +87,53 @@ export function TasksOverview({
     <div data-route="tasks" className="flex min-h-full flex-col">
       {/* Desktop header. Below `md` the shell's top bar already says "Tasks", and the drawer
           carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Tasks</h1>
-        <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
-          <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
-            Active
-          </OverviewTab>
-          <OverviewTab view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
-            Archived
-          </OverviewTab>
-        </div>
-        <div className="flex-1" />
-        {/* Only when there is something to sweep, like the legacy header's count-gated broom. */}
-        {view === 'active' && finished > 0 ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-slot="archive-finished"
-            onClick={onArchiveFinished}
-          >
-            <ArchiveIcon className="size-3.5" aria-hidden="true" />
-            Archive finished
-          </Button>
-        ) : null}
-        <div className="relative w-60">
-          <SearchIcon
-            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-soft-foreground"
-            aria-hidden="true"
-          />
-          <input
-            type="text"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search tasks…"
-            aria-label="Search tasks"
-            className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-[13px] text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          />
-        </div>
-      </header>
+      <PageHeader
+        className="max-md:hidden"
+        title="Tasks"
+        meta={
+          <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
+            <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
+              Active
+            </OverviewTab>
+            <OverviewTab view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
+              Archived
+            </OverviewTab>
+          </div>
+        }
+        actions={
+          <>
+            {/* Only when there is something to sweep, like the legacy header's count-gated broom. */}
+            {view === 'active' && finished > 0 ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                data-slot="archive-finished"
+                onClick={onArchiveFinished}
+              >
+                <ArchiveIcon className="size-3.5" aria-hidden="true" />
+                Archive finished
+              </Button>
+            ) : null}
+            <div className="relative w-60">
+              <SearchIcon
+                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-soft-foreground"
+                aria-hidden="true"
+              />
+              <input
+                type="text"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search tasks…"
+                aria-label="Search tasks"
+                className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-sm text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              />
+            </div>
+          </>
+        }
+      />
 
-      <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+      <PageBody>
         {runs === undefined ? null : visible.length === 0 ? (
           <TasksEmptyState view={view} query={query} />
         ) : (
@@ -184,7 +192,7 @@ export function TasksOverview({
             key={group.groupId}
             data-slot="compare-strip"
             data-group-id={group.groupId}
-            className="mt-3.5 flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-card px-3.5 py-2.5 text-[12.5px] text-muted-foreground shadow-xs"
+            className="mt-3.5 flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground shadow-xs"
           >
             <ScaleIcon className="size-[15px] shrink-0 text-soft-foreground" aria-hidden="true" />
             <span>
@@ -196,7 +204,7 @@ export function TasksOverview({
             </Button>
           </div>
         ))}
-      </div>
+      </PageBody>
 
       {/* The mobile New-task FAB. The desktop CTA lives in the sidebar. A router Link since
           R4 step 1.3 re-pointed /new at the React composer — no full page load needed. */}
@@ -240,22 +248,28 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
           subtitle="Finished tasks you archive land here."
         />
       ) : (
-        <CenteredState
-          heading="h2"
-          icon={<ListChecksIcon />}
-          tone="primary"
-          backdrop
-          title="No tasks yet"
-          subtitle="Describe a task to get started."
-          actions={
-            <Button asChild>
-              <Link to="/new">
-                <PlusIcon aria-hidden="true" />
-                New task
-              </Link>
-            </Button>
-          }
-        />
+        <div className="relative flex flex-1 flex-col">
+          <div
+            data-slot="twinkle-backdrop"
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 [background-image:radial-gradient(2px_2px_at_18%_28%,var(--primary)_50%,transparent_51%),radial-gradient(1.5px_1.5px_at_78%_22%,var(--primary)_50%,transparent_51%),radial-gradient(2px_2px_at_65%_72%,var(--primary)_50%,transparent_51%),radial-gradient(1.5px_1.5px_at_30%_78%,var(--primary)_50%,transparent_51%),radial-gradient(1px_1px_at_88%_58%,var(--primary)_50%,transparent_51%)] opacity-25"
+          />
+          <CenteredState
+            heading="h2"
+            icon={<ListChecksIcon />}
+            tone="primary"
+            title="No tasks yet"
+            subtitle="Describe a task to get started."
+            actions={
+              <Button asChild>
+                <Link to="/new">
+                  <PlusIcon aria-hidden="true" />
+                  New task
+                </Link>
+              </Button>
+            }
+          />
+        </div>
       )}
     </div>
   )
@@ -285,12 +299,12 @@ function OverviewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground',
+        'flex h-7 items-center justify-center gap-1.5 rounded-sm px-3 text-xs font-medium text-muted-foreground',
         isActive && 'bg-card font-semibold text-foreground shadow-xs'
       )}
     >
       {children}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      {count > 0 ? <span className="font-mono text-2xs tabular-nums">{count}</span> : null}
     </button>
   )
 }
@@ -299,7 +313,7 @@ function Th({ children, right = false }: { children: React.ReactNode; right?: bo
   return (
     <th
       className={cn(
-        'h-[38px] border-b border-border px-2.5 text-left text-[11px] font-semibold tracking-[0.05em] whitespace-nowrap text-soft-foreground uppercase first:pl-4 last:pr-4',
+        'label-caps h-[38px] border-b border-border px-2.5 text-left whitespace-nowrap first:pl-4 last:pr-4',
         right && 'text-right'
       )}
     >
@@ -353,7 +367,7 @@ function TableRow({
       <td className={cn(TD_BASE, 'w-[34%] max-w-0')}>
         <TitleCell run={run} to={to} onRename={onRename} />
       </td>
-      <td className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>{workflowLabel(run)}</td>
+      <td className={cn(TD_BASE, 'text-xs text-muted-foreground')}>{workflowLabel(run)}</td>
       <td className={TD_BASE}>{run.branch ? <BranchChip branch={run.branch} /> : <Dash />}</td>
       {/* ± — refreshed on every turn-end (#389); still an honest dash on records that predate it. */}
       <td className={TD_BASE}>{run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : <Dash />}</td>
@@ -368,7 +382,7 @@ function TableRow({
         <td
           data-slot="queue-note"
           colSpan={2}
-          className={cn(TD_BASE, 'text-right font-mono text-[11.5px] text-soft-foreground')}
+          className={cn(TD_BASE, 'text-right font-mono text-xs text-soft-foreground')}
         >
           #{queuePosition} in queue
         </td>
@@ -401,12 +415,12 @@ function TitleCell({
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
 
   if (editor.editing) {
-    return <TitleEditInput editor={editor} className="text-[13px] font-medium" />
+    return <TitleEditInput editor={editor} className="text-sm font-medium" />
   }
 
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <Link to={to} title={title} className="min-w-0 truncate text-[13px] font-medium">
+      <Link to={to} title={title} className="min-w-0 truncate text-sm font-medium">
         {title}
       </Link>
       <button
@@ -448,7 +462,7 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'mem'; cell: UsageCell }) {
         TD_BASE,
         'text-right font-mono tabular-nums',
         cell.kind === 'live' && 'bg-violet/5 text-xs font-medium text-foreground',
-        cell.kind === 'peak' && 'text-[11.5px] text-soft-foreground',
+        cell.kind === 'peak' && 'text-xs text-soft-foreground',
         cell.kind === 'none' && 'text-xs text-soft-foreground'
       )}
     >
@@ -486,14 +500,14 @@ function TaskCard({
         <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0">
           {attention.label}
         </Pill>
-        <Link to={to} className="min-w-0 flex-1 text-[13.5px] leading-[1.35] font-medium">
+        <Link to={to} className="min-w-0 flex-1 text-sm leading-[1.35] font-medium">
           {runTitle(run)}
         </Link>
-        <span className="mt-0.5 shrink-0 text-[11.5px] text-soft-foreground tabular-nums">
+        <span className="mt-0.5 shrink-0 text-xs text-soft-foreground tabular-nums">
           {shortAge(run.finishedAt ?? run.createdAt, now)}
         </span>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[11.5px] font-medium text-muted-foreground tabular-nums">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-xs font-medium text-muted-foreground tabular-nums">
         <span>{workflowLabel(run)}</span>
         {queuePosition !== null ? (
           <>
@@ -512,7 +526,7 @@ function TaskCard({
             {run.diffStat ? (
               <>
                 <Sep />
-                <DiffStatLabel stat={run.diffStat} className="text-[11.5px]" />
+                <DiffStatLabel stat={run.diffStat} className="text-xs" />
               </>
             ) : null}
             {run.tokensUsed > 0 ? (
@@ -546,7 +560,7 @@ function Sep() {
 
 function BranchChip({ branch }: { branch: string }) {
   return (
-    <span className="rounded-[6px] bg-muted px-1.5 py-0.5 font-mono text-[11.5px] font-medium text-muted-foreground">
+    <span className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground">
       {branch}
     </span>
   )

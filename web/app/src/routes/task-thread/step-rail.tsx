@@ -51,12 +51,12 @@ export function StepRail({ steps }: { steps: StepState[] }) {
   const pct = railProgress(steps) * 100
   return (
     <div data-slot="step-rail" className="flex min-w-0 flex-col gap-1">
-      {steps.map((step, index) => (
+      {steps.map((step) => (
         <div
           key={step.id}
           data-slot="step-row"
           data-visual={railVisual(step.status)}
-          className="flex min-h-[22px] min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
+          className="flex min-h-[22px] min-w-0 items-center gap-2 text-sm text-muted-foreground"
         >
           <RailIcon visual={railVisual(step.status)} />
           <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
@@ -65,9 +65,7 @@ export function StepRail({ steps }: { steps: StepState[] }) {
               ×{step.iterations}
             </span>
           ) : null}
-          <span className="ml-auto shrink-0 pl-2 text-[11.5px] text-soft-foreground tabular-nums">
-            {step.kind} · step {index + 1} of {steps.length}
-          </span>
+          <span className="ml-auto shrink-0 pl-2 text-xs text-soft-foreground">{step.kind}</span>
         </div>
       ))}
       <div data-slot="step-progress" className="mt-1 h-0.5 overflow-hidden rounded-full bg-muted">

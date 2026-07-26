@@ -12,7 +12,6 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, continueRun, createRunPr } from '@/api/client'
 import { queryKeys } from '@/api/queries'
 import type { ApiRun, RunStatus } from '@/api/types'
-import { TwinkleBackdrop } from '@/components/centered-state'
 import { RunDiff } from '@/components/run-diff'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -42,12 +41,7 @@ export function ReviewPanel({ run }: { run: ApiRun }) {
         className="flex items-center gap-2.5 rounded-md border border-violet/30 bg-violet/10 px-3.5 py-2.5"
       >
         <EyeIcon className="size-4 shrink-0 text-violet" aria-hidden="true" />
-        <p className="min-w-0 text-[13px]">
-          <span className="font-semibold">Review the changes before anything lands.</span>{' '}
-          <span className="text-muted-foreground">
-            Read the diff, send notes back, draft a PR — or accept. Nothing merges on its own.
-          </span>
-        </p>
+        <p className="min-w-0 text-sm">Nothing merges on its own — review, then accept.</p>
       </div>
 
       <RunDiff runId={run.id} />
@@ -137,7 +131,7 @@ function ReviewActions({ run }: { run: ApiRun }) {
             submitNotes()
           }
         }}
-        className="min-h-[52px] text-[13px]"
+        className="min-h-13 text-sm"
       />
       {!continuation.canContinue ? (
         <p
@@ -230,7 +224,7 @@ function ManualMergeLine({ command }: { command: string }) {
           .then(() => toast('Command copied to clipboard.'))
           .catch(() => toast(`Run manually: ${command}`))
       }}
-      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-2xs text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">manual path: {command}</span>
@@ -238,54 +232,19 @@ function ManualMergeLine({ command }: { command: string }) {
   )
 }
 
-// ---- the accept celebration -----------------------------------------------------------------
-
-/** True when the OS asks for reduced motion — the celebration renders nothing at all then
- *  (spec: "reduced-motion-safe"). False where `matchMedia` is missing (old jsdom, SSR). */
-export function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
-}
-
-const CELEBRATION_MS = 1500
+// ---- the accept toast -----------------------------------------------------------------------
 
 /**
- * The brief twinkle moment when a review is accepted (spec §"Design system": lifecycle
- * surfaces may twinkle): watches the run's status and, on the review → done transition —
- * however it was triggered: the panel's ✓ Accept, the header's Finish, a Draft PR — shows a
- * one-shot ~1.5s overlay of the brand scatter. Purely decorative (`aria-hidden`,
- * pointer-transparent); the status pill is the accessible record of what happened.
+ * The confirmation when a review is accepted: watches the run's status and, on the
+ * review → done transition — however it was triggered: the panel's ✓ Accept, the header's
+ * Finish, a Draft PR — fires the plain "Changes accepted" toast. The status pill remains the
+ * accessible record of what happened; the toast is just the moment's receipt.
  */
-export function AcceptCelebration({ status }: { status: RunStatus }) {
+export function useAcceptToast(status: RunStatus): void {
   const previous = useRef(status)
-  const [celebrating, setCelebrating] = useState(false)
-
   useEffect(() => {
     const before = previous.current
     previous.current = status
-    if (before !== 'review' || status !== 'done') return
-    if (prefersReducedMotion()) return
-    setCelebrating(true)
-    const timer = setTimeout(() => setCelebrating(false), CELEBRATION_MS)
-    return () => clearTimeout(timer)
+    if (before === 'review' && status === 'done') toast('Changes accepted')
   }, [status])
-
-  if (!celebrating) return null
-  return (
-    <div
-      data-slot="accept-celebration"
-      aria-hidden="true"
-      className="pointer-events-none fixed inset-0 isolate z-40"
-    >
-      <TwinkleBackdrop />
-      <div className="flex justify-center pt-24">
-        <span className="rounded-full border border-violet/30 bg-violet/15 px-4 py-1.5 text-[13px] font-medium text-violet shadow-modal">
-          ✓ Changes accepted
-        </span>
-      </div>
-    </div>
-  )
 }

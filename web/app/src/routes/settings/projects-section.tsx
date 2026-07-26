@@ -22,6 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { PageBody } from '@/components/page-body'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { SettingsField } from './settings-field'
@@ -81,7 +82,7 @@ export function ProjectsSection() {
 
   if (config.isPending || projects.isPending) {
     return (
-      <p data-slot="projects-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="projects-loading" className="p-4 text-sm text-soft-foreground md:p-6">
         Loading projects…
       </p>
     )
@@ -108,9 +109,9 @@ function ProjectsPane({
   registry: ProjectsResponse
 }) {
   return (
-    <div
+    <PageBody
       data-slot="projects-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="mx-auto w-full max-w-2xl gap-7"
     >
       <WorkspaceRootField
         configKey="browseRoot"
@@ -134,7 +135,7 @@ function ProjectsPane({
         refreshProjects
       />
       <RegistryTable registry={registry} workspaceMax={config.resources.maxParallel} />
-    </div>
+    </PageBody>
   )
 }
 
@@ -228,11 +229,11 @@ function WorkspaceRootField({
       {serverError !== null ? (
         // The mockup's error line: the reason, then what did NOT happen — a failed probe
         // persists nothing, and saying so stops the reader wondering which value is live.
-        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-[11px] text-danger">
+        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-2xs text-danger">
           {serverError} — setting unchanged
         </p>
       ) : (
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-2xs text-soft-foreground">
           {footer}
         </p>
       )}
@@ -269,7 +270,7 @@ function RegistryTable({
       hint={`Every folder cezar has run in, plus the ones added from the GUI. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
     >
       {registry.projects.length === 0 ? (
-        <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
+        <p data-slot="projects-empty" className="text-sm text-soft-foreground">
           No projects registered yet.
         </p>
       ) : (
@@ -277,7 +278,7 @@ function RegistryTable({
           <table className="w-full border-collapse text-sm">
             <caption className="sr-only">Projects registered in this workspace</caption>
             <thead>
-              <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
+              <tr className="border-b border-border text-left text-xs text-soft-foreground">
                 <th scope="col" className="px-3 py-2 font-medium">Project</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 font-medium">Max parallel</th>
@@ -309,7 +310,7 @@ function RegistryTable({
               This only unregisters the project — <strong>nothing on disk is deleted</strong>. The
               folder, its git history and its task history all stay exactly where they are, and
               opening it again re-registers it with everything intact.
-              <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={confirming?.root}>
+              <span className="mt-1 block truncate font-mono text-2xs text-foreground" title={confirming?.root}>
                 {confirming?.root}
               </span>
             </AlertDialogDescription>
@@ -347,19 +348,19 @@ function ProjectRow({
     <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
       <th scope="row" className="max-w-[260px] px-3 py-2 text-left font-normal">
         <span className="block truncate text-foreground">{project.name}</span>
-        <span className="block truncate font-mono text-[11px] text-soft-foreground" title={project.root}>
+        <span className="block truncate font-mono text-2xs text-soft-foreground" title={project.root}>
           {project.root}
         </span>
       </th>
       <td className="px-3 py-2">
         <span
           data-slot="project-status"
-          className={project.status === 'missing' ? 'text-[12px] text-danger' : 'text-[12px] text-soft-foreground'}
+          className={project.status === 'missing' ? 'text-xs text-danger' : 'text-xs text-soft-foreground'}
         >
           {STATUS_LABEL[project.status]}
         </span>
         {project.status !== 'missing' ? (
-          <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
+          <span className="ml-1 text-2xs text-soft-foreground">· {project.source}</span>
         ) : null}
       </td>
       <td className="px-3 py-2">

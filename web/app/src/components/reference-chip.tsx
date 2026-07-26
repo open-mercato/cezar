@@ -1,5 +1,6 @@
 import { ArrowUpRightIcon } from 'lucide-react'
 
+import { chipVariants } from '@/components/ui/chip'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 /** A task's out-of-app tracker link. The record carries no open/closed state, so PR and issue
@@ -18,7 +19,8 @@ export function ReferenceChip({
 }) {
   const { kind, number, url } = reference
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border border-violet/35 px-2 font-mono text-[11px] font-semibold text-violet',
+    chipVariants({ variant: 'outline' }),
+    'h-5 gap-1 px-2 font-mono text-2xs font-semibold',
     className,
   )
   const label =
@@ -44,7 +46,7 @@ export function ReferenceChip({
       rel="noopener noreferrer"
       title={url}
       aria-label={`Open the ${kind === 'PR' ? 'pull request' : 'issue'} for ${taskTitle}`}
-      className={cn(chipClass, 'hover:bg-violet/10')}
+      className={cn(chipClass, 'hover:bg-muted hover:text-foreground')}
     >
       {label}
       <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />

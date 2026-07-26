@@ -50,6 +50,9 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
   // Green only when nothing needs attention. `pending` (amber), not `danger`: a missing
   // optional tool is "worth a look", not an outage — the per-row dot is where red lives.
   const allAvailable = health.checks.every((check) => check.available)
+  // The npm registry's newer version, when the server's update check found one (#368). A quiet
+  // affordance, not an alert: a STATIC pending dot on the version row — updating is optional.
+  const updateAvailable = Boolean(health.latestVersion && health.latestVersion !== health.version)
 
   return (
     <DropdownMenu>
@@ -58,11 +61,11 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           type="button"
           data-slot="tools-menu-trigger"
           title={toolsTooltip(health)}
-          className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-2xs font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           <StatusDot tone={allAvailable ? 'success' : 'pending'} />
           Tools
-          <ChevronDownIcon className="size-[11px]" aria-hidden="true" />
+          <ChevronDownIcon className="size-3" aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
 
@@ -73,16 +76,14 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
         data-slot="tools-menu-content"
         className="w-[240px]"
       >
-        <DropdownMenuLabel className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
-          Installed tools
-        </DropdownMenuLabel>
+        <DropdownMenuLabel className="label-caps">Installed tools</DropdownMenuLabel>
         {health.checks.map((check) =>
           check.available ? <AvailableToolRow key={check.name} check={check} /> : <UnavailableToolRow key={check.name} check={check} />
         )}
         {forgeNote(health) ? (
           <>
             <DropdownMenuSeparator />
-            <p data-slot="forge-note" className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+            <p data-slot="forge-note" className="px-2 py-1.5 text-2xs leading-snug text-muted-foreground">
               {forgeNote(health)}
             </p>
           </>
@@ -92,12 +93,26 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           <Link
             to="/settings/agents"
             data-slot="tools-settings"
-            className="gap-2 text-[12.5px] text-muted-foreground"
+            className="gap-2 text-xs text-muted-foreground"
           >
             <SettingsIcon className="size-3.5" aria-hidden="true" />
             Tool settings
           </Link>
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <div
+          data-slot="tools-version"
+          data-update-available={updateAvailable ? 'true' : undefined}
+          className="flex items-center gap-2 px-2 py-1.5 font-mono text-2xs font-medium text-muted-foreground"
+        >
+          v{health.version}
+          {updateAvailable ? (
+            <span data-slot="tools-update" className="ml-auto flex items-center gap-1.5">
+              <StatusDot tone="pending" />
+              v{health.latestVersion} available
+            </span>
+          ) : null}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -114,10 +129,10 @@ function AvailableToolRow({ check }: { check: BackendCheck }) {
       className="flex items-center gap-2 rounded-sm px-2 py-1.5"
     >
       <StatusDot tone="success" />
-      <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
+      <span className="font-mono text-xs font-medium">{check.name}</span>
       <span
         data-slot="tool-version"
-        className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground tabular-nums"
+        className="ml-auto font-mono text-xs font-medium text-muted-foreground tabular-nums"
       >
         {check.version ?? 'not found'}
       </span>
@@ -142,21 +157,21 @@ function UnavailableToolRow({ check }: { check: BackendCheck }) {
       >
         <span className="flex items-center gap-2">
           <StatusDot tone="danger" />
-          <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
+          <span className="font-mono text-xs font-medium">{check.name}</span>
           <span
             data-slot="tool-version"
-            className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground"
+            className="ml-auto font-mono text-xs font-medium text-muted-foreground"
           >
             not found
           </span>
         </span>
-        <span className="flex items-end justify-between gap-3 pl-[15px]">
+        <span className="flex items-end justify-between gap-3 pl-4">
           {check.hint ? (
-            <span data-slot="tool-hint" className="min-w-0 text-[11px] leading-snug text-muted-foreground">
+            <span data-slot="tool-hint" className="min-w-0 text-2xs leading-snug text-muted-foreground">
               {check.hint}
             </span>
           ) : null}
-          <span data-slot="tool-setup" className="ml-auto shrink-0 text-[11.5px] font-semibold text-violet">
+          <span data-slot="tool-setup" className="ml-auto shrink-0 text-xs font-semibold text-violet">
             Set up →
           </span>
         </span>

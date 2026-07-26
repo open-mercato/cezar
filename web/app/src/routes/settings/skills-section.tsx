@@ -5,6 +5,7 @@ import { putWorkspaceConfig } from '@/api/client'
 import { useProjects, useSkillsUpdate, useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
 import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { PageBody } from '@/components/page-body'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
@@ -17,7 +18,7 @@ export function SkillsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="skills-settings-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="skills-settings-loading" className="p-4 text-sm text-soft-foreground md:p-6">
         Loading skill settings…
       </p>
     )
@@ -64,9 +65,9 @@ function SkillsForm({
   })()
 
   return (
-    <div
+    <PageBody
       data-slot="skills-settings-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="mx-auto w-full max-w-2xl gap-4"
     >
       <section className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-4">
@@ -74,7 +75,7 @@ function SkillsForm({
             <h2 className="text-sm font-semibold text-foreground">
               <label htmlFor="skills-auto-update">Update Open Mercato skills automatically</label>
             </h2>
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               Checks installed Open Mercato skills in the background and applies available updates. Other
               skills and untracked folders are never changed.
             </p>
@@ -87,7 +88,7 @@ function SkillsForm({
               disabled={save.isPending}
               onCheckedChange={(checked) => save.mutate({ skillsAutoUpdate: checked })}
             />
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-2xs text-soft-foreground">
               {config.effectiveSkillsAutoUpdate ? 'On' : 'Off'}
               {inherited ? ' (default)' : ''}
             </span>
@@ -113,11 +114,11 @@ function SkillsForm({
         <p
           data-slot="skills-installation-status"
           role={updateError || update?.status === 'unavailable' ? 'status' : undefined}
-          className="text-[13px] text-soft-foreground"
+          className="text-sm text-soft-foreground"
         >
           {status}
         </p>
       </section>
-    </div>
+    </PageBody>
   )
 }

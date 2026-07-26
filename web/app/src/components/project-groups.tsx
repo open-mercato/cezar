@@ -1,12 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDownIcon } from 'lucide-react'
 import * as React from 'react'
-import { useLocation } from 'react-router'
+import { Link as RouterLink, useLocation } from 'react-router'
 
 import { putWorkspaceUiState } from '@/api/client'
 import { useProjectRuns, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import type { ProjectListEntry, WorkspaceUiState } from '@/api/types'
-import { useSidebarNavigate } from '@/components/app-shell'
+import { useSidebarNavigate } from '@/components/sidebar/sidebar'
+import { NavBadge, NavRow } from '@/components/sidebar/nav-row'
 import { useListView } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { QuickListBuckets } from '@/components/task-quick-list'
@@ -229,26 +230,26 @@ function ProjectGroup({
   const buckets = runs.data ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
 
   // A missing project's panes all 409 (spec, "Registered project folder deleted/moved"), so
-  // there is nothing behind the chevron — the row renders greyed and inert rather than
-  // pretending to expand into a nav whose every link is a dead end. Unregistering lives in
-  // Global settings → Projects; the row says so instead of growing its own destructive button.
+  // there is nothing behind the chevron — the row renders greyed, and the whole row links to
+  // Global settings → Projects, where unregistering lives.
   if (missing) {
     return (
       <div data-slot="project-group" data-project={project.id} data-status="missing" className="mb-1">
-        <div
+        <RouterLink
+          to="/settings/global"
+          onClick={onNavigate}
           data-slot="project-group-header"
-          title={`${project.root} is gone — remove it in Global settings → Projects`}
-          className="flex h-11 w-full items-center gap-[7px] rounded-lg px-2 text-[13px] font-semibold opacity-55 md:h-[34px]"
+          className="flex h-11 w-full items-center gap-2 rounded-lg px-2 text-sm font-semibold opacity-55 transition-colors outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset md:h-8"
         >
           <span className="w-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{project.name}</span>
           <span
             data-slot="project-missing"
-            className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-[10px] font-medium text-danger"
+            className="ml-auto shrink-0 rounded-full bg-danger/15 px-2 py-px text-xs font-medium text-danger"
           >
             folder not found
           </span>
-        </div>
+        </RouterLink>
       </div>
     )
   }
@@ -270,9 +271,9 @@ function ProjectGroup({
         aria-controls={bodyId}
         data-slot="project-group-header"
         className={cn(
-          // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
+          // 44px touch target in the drawer, the nav row's h-8 on desktop — the same
           // relaxation the flat nav makes.
-          'flex h-11 w-full items-center gap-[7px] rounded-lg px-2 text-left text-[13px] font-semibold transition-colors hover:bg-muted md:h-[34px]',
+          'flex h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-sm font-semibold transition-colors outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset md:h-8',
           active && 'bg-muted',
         )}
       >
@@ -285,18 +286,18 @@ function ProjectGroup({
         />
         <span className="truncate">{project.name}</span>
         {waiting ? (
-          <span
+          <NavBadge
             data-slot="project-attention"
             title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
-            className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+            className="shrink-0"
           >
             {waiting}
-          </span>
+          </NavBadge>
         ) : null}
         {project.branch ? (
           <span
             data-slot="project-branch"
-            className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
+            className="ml-auto max-w-[92px] truncate font-mono text-2xs font-medium text-muted-foreground"
           >
             {project.branch}
           </span>
@@ -312,49 +313,27 @@ function ProjectGroup({
           // row's `bg-muted` and the two fuse into one block — the project name then reads as
           // just another menu item. The rail is offset to sit under the chevron, so the whole
           // body hangs off the same vertical the disclosure control is on.
-          className="mt-1 ml-[14px] border-l border-border pl-2"
+          className="mt-1 ml-3.5 border-l border-border pl-2"
         >
           <nav aria-label={`${project.name} navigation`}>
-            {visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable }).map((item) => {
+            {visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable }).map((item) => (
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.
-              const isActive = active && item.to === activeTo
-              const Icon = item.icon
               // Explicitly scoped (`/p/<id>/…`) rather than left to the wrapper's active-project
               // prefix: a group's whole point is linking into a project that is NOT active.
-              return (
-                <Link
-                  key={item.to}
-                  to={scopeTo(project.id, item.to)}
-                  onClick={onNavigate}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={cn(
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[30px]',
-                    isActive && 'bg-muted font-semibold text-foreground',
-                  )}
-                >
-                  <Icon className="size-3.5 shrink-0" aria-hidden="true" />
-                  {item.label}
-                  {/* `/api/todos` is fetched for the active scope only, so only the active
-                      group has a real count to show — a badge on the others would be the active
-                      project's number wearing someone else's name. */}
-                  {item.badge === 'inbox-count' && active && inboxCount ? (
-                    <span
-                      data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-                    >
-                      {inboxCount}
-                    </span>
-                  ) : null}
-                  {item.badge === 'skills-update' && active && skillsUpdateAvailable ? (
-                    <span data-slot="nav-update-marker" className="ml-auto flex items-center">
-                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-                      <span className="sr-only">Skills update available</span>
-                    </span>
-                  ) : null}
-                </Link>
-              )
-            })}
+              // `/api/todos` is fetched for the active scope only, so only the active group has
+              // a real count to show — a badge on the others would be the active project's
+              // number wearing someone else's name.
+              <NavRow
+                key={item.to}
+                item={item}
+                to={scopeTo(project.id, item.to)}
+                isActive={active && item.to === activeTo}
+                badge={item.badge === 'inbox-count' && active ? inboxCount : null}
+                updateDot={item.badge === 'skills-update' && active && skillsUpdateAvailable}
+                onNavigate={onNavigate}
+              />
+            ))}
           </nav>
 
           <QuickListBuckets
@@ -370,7 +349,7 @@ function ProjectGroup({
             to={scopeTo(project.id, '/')}
             onClick={onNavigate}
             data-slot="project-group-more"
-            className="flex h-9 items-center rounded-md px-3 text-[12px] text-muted-foreground transition-colors hover:text-foreground md:h-7"
+            className="flex h-9 items-center rounded-md px-3 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset md:h-7"
           >
             More…
           </Link>

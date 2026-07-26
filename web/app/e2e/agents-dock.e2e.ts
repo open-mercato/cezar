@@ -88,17 +88,29 @@ afterAll(() => {
   if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
 })
 
-const DOCK = '[data-slot="agents-dock"]'
+const DOCK = '[data-slot="run-dock"]'
 const ROW = '[data-slot="agent-item"]'
+const TOGGLE = '[data-slot="run-dock-toggle"]'
 
-describe('the Agents dock against a replayed fan-out', () => {
-  it('docks both sub-agents with odometer, type badge, activity and tool count', () => {
+/** The RunDock starts collapsed on every breakpoint — expand it to reach the rows. */
+function expandDock(): void {
+  browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+  if (browser.evaluate(`document.querySelector('${DOCK}').dataset.state`) === 'collapsed') {
+    browser.click(TOGGLE)
+  }
+  browser.waitForFunction(`document.querySelector('${DOCK}').dataset.state === 'open'`)
+}
+
+describe('the Agents tab of the RunDock against a replayed fan-out', () => {
+  it('docks both sub-agents with odometer, type chip, activity and tool count', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
-    // The dock mounts only once the replay has produced the fan-out.
-    browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
+    // The dock mounts only once the replay has produced the fan-out; the odometer reads
+    // even while collapsed.
     browser.waitForFunction(
       `document.querySelector('[data-slot="agents-count"]')?.textContent.includes('2/2')`,
     )
+    expandDock()
+    browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     const rows = JSON.parse(
       browser.evaluate(`JSON.stringify([...document.querySelectorAll('${ROW}')].map((row) => ({
@@ -123,6 +135,7 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('a row opens the drill-down sheet with that agent’s output and nobody else’s', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    expandDock()
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     // The second agent's row — a real dialog-opening button.
@@ -152,15 +165,16 @@ describe('the Agents dock against a replayed fan-out', () => {
     expect(browser.evaluate(`document.querySelector('${DOCK}') !== null`)).toBe(true)
   }, 120_000)
 
-  it('collapses to a one-line odometer', () => {
+  it('collapses back to a one-line odometer', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    expandDock()
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
-    browser.click(`${DOCK} > button`)
+    browser.click(TOGGLE)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 0`)
     expect(browser.evaluate(`document.querySelector('[data-slot="agents-count"]').textContent`)).toContain('2/2')
     expect(
-      browser.evaluate(`document.querySelector('${DOCK} > button').getAttribute('aria-expanded')`),
+      browser.evaluate(`document.querySelector('${TOGGLE}').getAttribute('aria-expanded')`),
     ).toBe('false')
 
     browser.screenshot(join(artifactsDir, 'agents-dock-collapsed.png'))

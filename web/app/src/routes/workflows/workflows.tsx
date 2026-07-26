@@ -35,6 +35,8 @@ import { ApiError, createWorkflow, deleteWorkflow, parseWorkflow, postPlan } fro
 import { queryKeys, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type { Skill, WorkflowDef, WorkflowStepDef } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { PageBody } from '@/components/page-body'
+import { PageHeader } from '@/components/page-header'
 import { SkillEmptyHintCompact } from '@/components/skill-empty-hint'
 import {
   AlertDialog,
@@ -332,12 +334,15 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
   return (
     <div data-route="workflows" className="flex min-h-full flex-col">
       {/* Desktop header — below `md` the shell's top bar already says "Workflows". */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Workflows</h1>
-        <p className="text-[13px] text-muted-foreground">
-          Portable skill chains — the agent applies them top to bottom.
-        </p>
-      </header>
+      <PageHeader
+        className="max-md:hidden"
+        title="Workflows"
+        meta={
+          <p className="text-sm text-muted-foreground">
+            Portable skill chains — the agent applies them top to bottom.
+          </p>
+        }
+      />
 
       <DndContext
         sensors={sensors}
@@ -350,7 +355,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
           setOverId(null)
         }}
       >
-        <div className="flex flex-1 flex-col gap-6 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:flex-row md:p-5 md:pb-5">
+        <PageBody className="gap-6 md:flex-row">
           {/* ---- canvas ---------------------------------------------------------------- */}
           <section data-slot="wb-main" className="mx-auto w-full min-w-0 max-w-3xl flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -362,7 +367,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
                   spellCheck={false}
                   value={draft.name}
                   onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                  className="h-8 max-w-56 font-mono text-[13px] font-semibold"
+                  className="h-8 max-w-56 font-mono text-sm font-semibold"
                 />
                 <span data-slot="wb-count" className="shrink-0 font-mono text-xs text-soft-foreground">
                   {stepCountLabel(steps)}
@@ -438,7 +443,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
 
             {/* Load chips: every known workflow, plus "+ new" — the legacy edit row. */}
             <div data-slot="wb-load" className="mt-3 flex flex-wrap items-center gap-1.5">
-              <span className="mr-0.5 text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+              <span className="mr-0.5 label-caps">
                 edit
               </span>
               {workflows.map((workflow) => (
@@ -451,7 +456,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
                   aria-pressed={trimmedName === workflow.name}
                   onClick={() => setDraft(draftFrom(workflow))}
                   className={cn(
-                    'rounded-full border border-border bg-card px-2.5 py-1 font-mono text-[11.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                    'rounded-full border border-border bg-card px-2.5 py-1 font-mono text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
                     trimmedName === workflow.name && 'border-primary/40 bg-primary/10 text-foreground',
                   )}
                 >
@@ -463,7 +468,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
                 data-slot="wb-new"
                 title="Start an empty workflow"
                 onClick={() => setDraft(emptyDraft())}
-                className="rounded-full border border-dashed border-border px-2.5 py-1 font-mono text-[11.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="rounded-full border border-dashed border-border px-2.5 py-1 font-mono text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 + new
               </button>
@@ -471,7 +476,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
 
             {autoOpen ? (
               <div data-slot="wb-auto-panel" className="mt-4 rounded-lg border border-border bg-card p-3 shadow-xs">
-                <div className="text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+                <div className="label-caps">
                   Build a chain from a prompt
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-soft-foreground">
@@ -492,7 +497,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
                       runAuto()
                     }
                   }}
-                  className="mt-2 min-h-20 text-[13px]"
+                  className="mt-2 min-h-20 text-sm"
                 />
                 <div className="mt-3 flex items-center gap-1.5">
                   <Button
@@ -524,7 +529,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
 
             {importOpen ? (
               <div data-slot="wb-import-panel" className="mt-4 rounded-lg border border-border bg-card p-3 shadow-xs">
-                <div className="text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+                <div className="label-caps">
                   Import workflow YAML
                 </div>
                 <Textarea
@@ -582,7 +587,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
 
           {/* ---- palette + YAML preview ------------------------------------------------- */}
           <aside data-slot="wb-aside" className="w-full shrink-0 md:w-[320px]">
-            <div className="text-[11px] font-medium tracking-wide text-soft-foreground uppercase">Skills</div>
+            <div className="label-caps">Skills</div>
             <p className="mt-1 text-xs leading-relaxed text-soft-foreground">
               Drag into the flow. Order is execution order — the agent applies them top to bottom.
             </p>
@@ -592,7 +597,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
               aria-label="Filter skills"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="mt-2.5 h-8 text-[13px]"
+              className="mt-2.5 h-8 text-sm"
             />
             <Palette
               skills={paletteSkills}
@@ -603,7 +608,7 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
             />
 
             <div className="mt-5 flex items-center gap-2">
-              <span className="text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+              <span className="label-caps">
                 workflow.yaml
               </span>
               <span className="flex-1" />
@@ -611,20 +616,20 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
             </div>
             <pre
               data-slot="wb-yaml"
-              className="mt-2 overflow-x-auto rounded-lg border border-border bg-card p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre text-muted-foreground shadow-xs"
+              className="mt-2 overflow-x-auto rounded-lg border border-border bg-card p-3 font-mono text-xs leading-relaxed whitespace-pre text-muted-foreground shadow-xs"
             >
               {yaml}
             </pre>
-            <p className="mt-2 text-[11.5px] leading-relaxed text-soft-foreground">
+            <p className="mt-2 text-xs leading-relaxed text-soft-foreground">
               Portable — export this file and import it in any repo running cezar.
             </p>
           </aside>
-        </div>
+        </PageBody>
 
         {/* What the pointer carries mid-drag: a copy of the pill/card, per dnd-kit. */}
         <DragOverlay>
           {dragging?.type === 'palette' ? (
-            <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-[13px] font-medium shadow-md">
+            <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-sm font-medium shadow-md">
               <SparklesIcon aria-hidden="true" className="size-3.5 text-primary" />
               {dragging.skill}
             </div>
@@ -712,7 +717,7 @@ function Canvas({
       {steps.length === 0 ? (
         <p
           className={cn(
-            'rounded-md px-3 py-10 text-center text-[13px] transition-colors',
+            'rounded-md px-3 py-10 text-center text-sm transition-colors',
             isOver ? 'text-primary' : 'text-muted-foreground',
           )}
         >
@@ -744,7 +749,7 @@ function Canvas({
               appendActive ? 'bg-primary' : 'bg-transparent',
             )}
           />
-          <div className="flex items-center justify-center gap-1.5 pt-1.5 pb-1 text-[11px] text-muted-foreground">
+          <div className="flex items-center justify-center gap-1.5 pt-1.5 pb-1 text-2xs text-muted-foreground">
             <ArrowDownIcon aria-hidden="true" className="size-3" />
             runs top to bottom
           </div>
@@ -863,7 +868,7 @@ function StepCardBody({
       >
         <GripVerticalIcon aria-hidden="true" className="size-3.5" />
       </button>
-      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+      <span className="shrink-0 font-mono text-2xs text-muted-foreground">
         {String(index + 1).padStart(2, '0')}
       </span>
       {isCheck ? (
@@ -872,7 +877,7 @@ function StepCardBody({
         <SparklesIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
       )}
       <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-[13px] font-medium">{title}</div>
+        <div className="truncate font-mono text-sm font-medium">{title}</div>
         {description ? (
           <div className="truncate text-xs text-muted-foreground">{description}</div>
         ) : null}
@@ -881,7 +886,7 @@ function StepCardBody({
         <span
           data-slot="wb-step-badge"
           className={cn(
-            'shrink-0 rounded-full border px-2 py-px font-mono text-[10.5px]',
+            'shrink-0 rounded-full border px-2 py-px font-mono text-2xs',
             badge === 'check' && 'border-success/30 text-success',
             badge === 'unknown' && 'border-danger/35 text-danger',
             badge === 'prompt' && 'border-border text-soft-foreground',
@@ -984,7 +989,7 @@ function PaletteSkill({
       />
       <span
         className={cn(
-          'min-w-0 flex-1 truncate font-mono text-[13px]',
+          'min-w-0 flex-1 truncate font-mono text-sm',
           isProjectSkill(skill) ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground',
         )}
       >

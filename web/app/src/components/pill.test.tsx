@@ -22,6 +22,13 @@ describe('Pill', () => {
     expect(pill.className).toContain('rounded-full')
   })
 
+  it('keeps the pill slot while riding the unified Chip', () => {
+    const pill = pillOf(<Pill>Idle</Pill>)
+
+    expect(pill.getAttribute('data-slot')).toBe('pill')
+    expect(pill.className).toContain('h-6.5')
+  })
+
   it('has no dot unless one is requested', () => {
     const pill = pillOf(<Pill>Idle</Pill>)
 

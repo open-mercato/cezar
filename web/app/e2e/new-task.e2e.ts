@@ -124,9 +124,9 @@ describe('the full-screen /new against a live dry-run server', () => {
     browser.waitForFunction(
       `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('lint-fix')`,
     )
-    // Health must have SETTLED before judging the runner pill — the version chip renders from
+    // Health must have SETTLED before judging the runner pill — the Tools trigger renders from
     // the same response, so it is the "health arrived" signal.
-    browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="tools-menu-trigger"]') !== null`)
     // The rule under test is legacy's: pill iff the HOST offers >1 backend. The host's own
     // CLIs are what they are (codex/opencode may genuinely be installed here), so assert
     // consistency with the live health answer rather than assuming a bare machine.

@@ -8,7 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus } from '@/api/types'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
-import { AcceptCelebration, ReviewPanel } from './review-panel'
+import { ReviewPanel } from './review-panel'
 import { ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
 
@@ -117,13 +117,13 @@ const diffFetches = (sent: SentRequest[]) =>
   sent.filter((r) => r.method === 'GET' && r.path === '/api/runs/r1/diff').length
 
 describe('the review gate on the thread', () => {
-  it('renders the violet banner + panel ONLY while the run rests at review', () => {
+  it('renders the one-line banner + panel ONLY while the run rests at review', () => {
     stubFetch()
     const { rerenderWithProviders } = renderWithProviders(
       <ThreadView run={run('review')} thread={reduceThread([])} />,
     )
-    expect(document.querySelector('[data-slot="review-banner"]')?.textContent).toContain(
-      'Review the changes before anything lands',
+    expect(document.querySelector('[data-slot="review-banner"]')?.textContent).toBe(
+      'Nothing merges on its own — review, then accept.',
     )
     expect(document.querySelector('[data-slot="review-panel"]')).not.toBeNull()
 
@@ -354,38 +354,28 @@ describe('the review gate on the thread', () => {
   })
 })
 
-describe('the accept celebration', () => {
-  it('review → done shows the one-shot twinkle overlay and clears it after ~1.5s', () => {
-    vi.useFakeTimers()
+describe('the accept toast', () => {
+  it('review → done fires the plain "Changes accepted" toast, and nothing else renders', () => {
     stubFetch()
-    const { rerenderWithProviders } = renderWithProviders(<AcceptCelebration status="review" />)
-    expect(document.querySelector('[data-slot="accept-celebration"]')).toBeNull()
-
-    rerenderWithProviders(<AcceptCelebration status="done" />)
-    const overlay = document.querySelector('[data-slot="accept-celebration"]')
-    expect(overlay).not.toBeNull()
-    expect(overlay?.querySelector('[data-slot="twinkle-backdrop"]')).not.toBeNull()
-    expect(overlay?.getAttribute('aria-hidden')).toBe('true')
-
-    act(() => vi.advanceTimersByTime(1600))
-    expect(document.querySelector('[data-slot="accept-celebration"]')).toBeNull()
-  })
-
-  it('does NOT celebrate transitions that are not review → done', () => {
-    stubFetch()
-    const { rerenderWithProviders } = renderWithProviders(<AcceptCelebration status="waiting" />)
-    rerenderWithProviders(<AcceptCelebration status="done" />)
-    expect(document.querySelector('[data-slot="accept-celebration"]')).toBeNull()
-  })
-
-  it('prefers-reduced-motion: reduce → no overlay at all', () => {
-    stubFetch()
-    vi.stubGlobal(
-      'matchMedia',
-      vi.fn((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' })),
+    const { rerenderWithProviders } = renderWithProviders(
+      <ThreadView run={run('review')} thread={reduceThread([])} />,
     )
-    const { rerenderWithProviders } = renderWithProviders(<AcceptCelebration status="review" />)
-    rerenderWithProviders(<AcceptCelebration status="done" />)
+    expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+
+    rerenderWithProviders(<ThreadView run={run('done')} thread={reduceThread([])} />)
+    const toastEl = document.querySelector('[data-slot="toast"]')
+    expect(toastEl?.textContent).toBe('Changes accepted')
+    expect(toastEl?.getAttribute('data-tone')).toBe('default')
+    // The celebration overlay is gone for good — the toast is the whole moment.
     expect(document.querySelector('[data-slot="accept-celebration"]')).toBeNull()
+  })
+
+  it('does NOT toast transitions that are not review → done', () => {
+    stubFetch()
+    const { rerenderWithProviders } = renderWithProviders(
+      <ThreadView run={run('waiting')} thread={reduceThread([])} />,
+    )
+    rerenderWithProviders(<ThreadView run={run('done')} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="toast"]')).toBeNull()
   })
 })

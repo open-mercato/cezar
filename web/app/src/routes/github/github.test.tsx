@@ -1040,9 +1040,9 @@ const MULTI_BACKEND = () => jsonResponse(health(['claude', 'codex']))
 /** Exactly one installed backend — a real single-backend host, not merely absent health. */
 const SINGLE_BACKEND = () => jsonResponse(health(['claude']))
 
-/** Open a pill's dropdown and choose an option by label (Radix opens on pointerDown). */
+/** Open a pill's dropdown and choose an option by label (Base UI opens on mouseDown). */
 async function pickPill(slot: string, label: string) {
-  fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`)!)
+  fireEvent.mouseDown(document.querySelector(`[data-slot="${slot}"]`)!)
   const options = await screen.findAllByRole('menuitemradio')
   fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
 }

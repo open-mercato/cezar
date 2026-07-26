@@ -16,7 +16,9 @@ import { createRun, putUiState } from '@/api/client'
 import { queryKeys, useUiState } from '@/api/queries'
 import type { GithubItem, Skill, WorkflowDef } from '@/api/types'
 import { EnginePills, engineBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
+import { Kbd } from '@/components/kbd'
 import { chipClass } from '@/components/picker-pill'
+import { ProviderGate } from '@/components/provider-gate'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -245,7 +247,7 @@ export function HandToAgent({
 
   return (
     <section data-slot="gh-hand" className="mt-7 rounded-lg border border-border bg-card p-4">
-      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
+      <h3 className="label-caps flex items-center gap-1.5">
         <ZapIcon aria-hidden="true" className="size-3.5 text-violet" />
         Hand this to the agent
       </h3>
@@ -263,21 +265,8 @@ export function HandToAgent({
           onChange={onEngineChange}
           disabled={start.isPending || !resolved.canRun}
         />
-        {!resolved.providerPending && !resolved.canRun ? (
-          <span
-            data-slot="gh-provider-gate"
-            className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
-          >
-            {resolved.providerError
-              ? 'Provider authentication could not be verified.'
-              : 'Connect an agent provider to run this item.'}
-            <Link
-              to="/settings/agents#providers"
-              className="font-medium text-foreground underline underline-offset-4"
-            >
-              Configure providers
-            </Link>
-          </span>
+        {!resolved.canRun ? (
+          <ProviderGate pending={resolved.providerPending} error={resolved.providerError} />
         ) : null}
         <PromptTemplateMenu templates={templates} onInsert={insertPromptTemplate} />
       </div>
@@ -295,7 +284,7 @@ export function HandToAgent({
               data-skill={name}
               onClick={() => toggleSkill(name)}
               title="Remove this skill"
-              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-2xs font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
             >
               {name}
               <XIcon aria-hidden="true" className="size-3" />
@@ -313,7 +302,7 @@ export function HandToAgent({
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={submitShortcut}
         placeholder={`Instructions for the agent… (#${item.number} and its link are always sent)`}
-        className="mt-3 min-h-20 text-[13px]"
+        className="mt-3 min-h-20 text-sm"
       />
 
       <div className="mt-4 flex flex-wrap items-center gap-2.5">
@@ -326,12 +315,7 @@ export function HandToAgent({
           <PlayIcon aria-hidden="true" className="size-3.5" />
           Run agent on this {kindLabel}
         </Button>
-        <kbd
-          aria-hidden="true"
-          className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-        >
-          {submitShortcutHint()}
-        </kbd>
+        <Kbd aria-hidden="true">{submitShortcutHint()}</Kbd>
         {queuedRunId ? (
           <>
             <span data-slot="gh-queued" className="flex items-center gap-1 text-xs font-medium text-success">
@@ -383,7 +367,7 @@ function WorkflowPicker({
           type="button"
           data-slot="gh-workflow-trigger"
           aria-label="Choose a workflow"
-          className={cn(chipClass, value && 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
+          className={cn(chipClass, value && 'border-foreground/60 font-mono text-xs font-semibold text-foreground')}
         >
           <WorkflowIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
           <span className="max-w-44 truncate">{value ?? 'workflow'}</span>
@@ -398,7 +382,7 @@ function WorkflowPicker({
             onValueChange={setSearch}
             onInput={() => listRef.current?.scrollTo(0, 0)}
           />
-          <CommandList ref={listRef} data-slot="gh-workflow-menu" className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]">
+          <CommandList ref={listRef} data-slot="gh-workflow-menu" className="max-h-[min(16rem,calc(var(--available-height)-3rem))]">
             {matched.length === 0 ? <CommandEmpty>Nothing matches.</CommandEmpty> : null}
             <CommandGroup>
               {matched.map((workflowDef) => {
@@ -528,7 +512,7 @@ function SkillsPicker({
               onValueChange={setSearch}
               onInput={() => listRef.current?.scrollTo(0, 0)}
             />
-            <CommandList ref={listRef} data-slot="gh-skill-menu" className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]">
+            <CommandList ref={listRef} data-slot="gh-skill-menu" className="max-h-[min(16rem,calc(var(--available-height)-3rem))]">
               {mostUsed.length === 0 && project.length === 0 && global.length === 0 ? (
                 <CommandEmpty>Nothing matches.</CommandEmpty>
               ) : null}

@@ -36,9 +36,9 @@ describe('Button', () => {
   describe('size → class mapping', () => {
     it.each([
       { size: 'default', expected: ['h-9', 'px-3.5'] },
-      { size: 'sm', expected: ['h-[30px]', 'rounded-sm'] },
+      { size: 'sm', expected: ['h-7.5', 'rounded-sm'] },
       { size: 'icon', expected: ['size-9'] },
-      { size: 'icon-sm', expected: ['size-[30px]', 'rounded-sm'] },
+      { size: 'icon-sm', expected: ['size-7.5', 'rounded-sm'] },
     ] as const)('$size', ({ size, expected }) => {
       render(<Button size={size}>Label</Button>)
       const button = screen.getByRole('button')

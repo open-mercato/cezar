@@ -1,9 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, ImageUpIcon, LoaderCircleIcon, MicIcon } from 'lucide-react'
 import {
   useCallback,
   useEffect,
-  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -12,30 +11,31 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
-  type Ref,
 } from 'react'
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { ImageInput } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { Command, CommandItem, CommandList } from '@/components/ui/command'
-import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { Popover, PopoverAnchor } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
-import { insertTemplate } from '@/lib/prompt-templates'
+import { insertTemplate, type PromptTemplate } from '@/lib/prompt-templates'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
-import { useNow } from '@/lib/use-now'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
 
+import { AttachButton } from './attach-button'
 import {
   fileToPendingImage,
   MAX_IMAGES,
   screenFiles,
   type PendingImage,
 } from './composer-images'
+import { ComposerMenu, ComposerPlusMenu, type MenuCandidate } from './composer-menu'
+import { ComposerThumbs } from './composer-thumbs'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
-import { formatElapsed, useDictation } from './dictation'
+import { DictationBar } from './dictation-bar'
+import { useDictation } from './dictation'
 
 /**
  * The SHARED composer (spec §"Task thread" composer + §"New task" composer intelligence —
@@ -45,7 +45,8 @@ import { formatElapsed, useDictation } from './dictation'
  * the Dictation mic (paseo pattern), and the Alt+A / Alt+C quick replies.
  *
  * Visual contract: docs/mockups/thread.html `.composer` — card, borderless textarea, footer
- * bar with paperclip · spacer · labeled Dictation · lime send.
+ * bar with paperclip · spacer · mic · lime send. The chrome around the state lives in the
+ * sibling files (thumbs, menu, dictation bar, attach button); this file owns the state.
  */
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
@@ -90,17 +91,7 @@ export interface ComposerProps {
    * plain text.
    */
   getMentionCandidates?: () => string[]
-  /** Exposes `ComposerHandle` — see there for why this exists. */
-  ref?: Ref<ComposerHandle>
-}
-
-/** The imperative seam a host needs when it wants to write INTO the draft the composer owns —
- *  today only the /new prompt-template menu (#413 follow-up), which must land a snippet at the
- *  caret the same way the GitHub/Inbox composers do with their own textarea refs. */
-export interface ComposerHandle {
-  /** Insert `snippet` at the caret, blank-line separated (`insertTemplate`), then refocus with
-   *  the caret parked right after it. */
-  insertAtCaret: (snippet: string) => void
+  templates?: readonly PromptTemplate[]
 }
 
 const QUICK_REPLIES: Record<string, string> = { KeyA: 'Yes, approved.', KeyC: 'Continue.' }
@@ -121,7 +112,7 @@ export function Composer({
   autocompleteSkills = true,
   quickReplies = false,
   getMentionCandidates,
-  ref,
+  templates,
 }: ComposerProps) {
   // Optionally controlled: `value` (when given) shadows the internal state, and every write is
   // mirrored to both — updater functions resolve against whichever is authoritative right now.
@@ -142,6 +133,10 @@ export function Composer({
   const imagesRef = useRef(images)
   imagesRef.current = images
   const [busy, setBusy] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  // dragenter/dragleave bubble from every child the pointer crosses — the depth counter is what
+  // keeps the overlay from flickering off at each internal boundary.
+  const dragDepthRef = useRef(0)
   const [trigger, setTrigger] = useState<TriggerState | null>(null)
   const [menuValue, setMenuValue] = useState('')
   // Skills load on the FIRST `/` trigger and stay cached — not on every thread visit.
@@ -165,17 +160,14 @@ export function Composer({
   // Rides the same `pendingCaretRef` + layout-effect restore the `/` autocomplete uses, rather
   // than a rAF: the caret is set in the same paint as the text, so there is no window in which a
   // closing dropdown can take the focus back (the QA finding on #413's first cut).
-  useImperativeHandle(
-    ref,
-    () => ({
-      insertAtCaret: (snippet: string) => {
-        const el = textareaRef.current
-        const result = insertTemplate(textRef.current, el?.selectionStart ?? textRef.current.length, snippet)
-        setText(result.text)
-        pendingCaretRef.current = result.caret
-        el?.focus()
-      },
-    }),
+  const insertAtCaret = useCallback(
+    (snippet: string) => {
+      const el = textareaRef.current
+      const result = insertTemplate(textRef.current, el?.selectionStart ?? textRef.current.length, snippet)
+      setText(result.text)
+      pendingCaretRef.current = result.caret
+      el?.focus()
+    },
     [setText],
   )
 
@@ -194,14 +186,6 @@ export function Composer({
     if (next?.trigger === '/') setSkillsWanted(true)
     setTrigger(next)
   }, [autocompleteSkills, disabled, getMentionCandidates])
-
-  interface MenuCandidate {
-    value: string
-    insert: string
-    label: string
-    description?: string
-    emphasized: boolean
-  }
 
   const candidates = useMemo((): MenuCandidate[] => {
     if (trigger === null) return []
@@ -297,7 +281,26 @@ export function Composer({
     addFiles(files)
   }
 
+  // ---- drag & drop (with a visible target — the affordance the drop handler alone never had) --
+
+  const dragHasFiles = (event: DragEvent) =>
+    [...(event.dataTransfer?.types ?? [])].includes('Files')
+
+  const onDragEnter = (event: DragEvent) => {
+    if (disabled || !dragHasFiles(event)) return
+    dragDepthRef.current += 1
+    setDragging(true)
+  }
+
+  const onDragLeave = (event: DragEvent) => {
+    if (disabled || !dragHasFiles(event)) return
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setDragging(false)
+  }
+
   const onDrop = (event: DragEvent) => {
+    dragDepthRef.current = 0
+    setDragging(false)
     const files = [...(event.dataTransfer?.files ?? [])]
     if (files.length === 0) return
     event.preventDefault()
@@ -419,41 +422,57 @@ export function Composer({
   }
 
   const recording = dictation.recording
+  const emptyDraft = text.trim() === '' && images.length === 0
 
   return (
-    <Popover open={menuOpen} onOpenChange={(open) => (open ? undefined : closeMenu())}>
+    <Popover
+      open={menuOpen}
+      onOpenChange={(open, eventDetails) => {
+        if (open) return
+        // Interacting with the composer itself (typing, clicking the textarea) is not
+        // "outside" — only a genuine elsewhere-click dismisses.
+        if (
+          eventDetails.reason === 'outside-press' &&
+          rootRef.current?.contains(eventDetails.event.target as Node)
+        ) {
+          eventDetails.cancel()
+          return
+        }
+        closeMenu()
+      }}
+    >
       <PopoverAnchor asChild>
         <div
           ref={rootRef}
           data-slot="composer"
           data-disabled={disabled || undefined}
+          data-busy={busy || undefined}
+          data-dragging={dragging || undefined}
           onDrop={onDrop}
+          onDragEnter={onDragEnter}
+          onDragLeave={onDragLeave}
           onDragOver={(event) => event.preventDefault()}
           className={cn(
-            'rounded-xl border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
+            'relative rounded-xl border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
             'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15',
             disabled && 'opacity-80',
           )}
         >
-          {images.length > 0 ? (
-            <div data-slot="composer-thumbs" className="flex flex-wrap gap-2 px-4 pt-3">
-              {images.map((image, index) => (
-                <button
-                  key={`${image.name}-${index}`}
-                  type="button"
-                  aria-label={`Remove ${image.name}`}
-                  title="Click to remove"
-                  className="group relative size-12 overflow-hidden rounded-md border border-border"
-                  onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
-                >
-                  <img src={image.preview} alt="" className="size-full object-cover" />
-                  <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex">
-                    <XIcon aria-hidden="true" className="size-4" />
-                  </span>
-                </button>
-              ))}
+          {dragging ? (
+            <div
+              data-slot="composer-drop-hint"
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-ring bg-card/90 text-sm font-medium text-foreground"
+            >
+              <ImageUpIcon aria-hidden="true" className="size-4" />
+              Drop images to attach
             </div>
           ) : null}
+
+          <ComposerThumbs
+            images={images}
+            onRemove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
+          />
 
           <textarea
             ref={textareaRef}
@@ -484,28 +503,41 @@ export function Composer({
           ) : (
             // The footer may WRAP (the /new pill row on narrow widths), but the trailing
             // controls stay one unbreakable group so the send button never strands alone.
-            <div className="flex flex-wrap items-center gap-1 gap-y-1.5 px-2 pt-1.5 pb-2">
+            <div className="flex flex-wrap items-center gap-1.5 px-2 pt-1.5 pb-2">
               {/* The paperclip shares ONE wrapping row with the footer pills — otherwise the
                   pill group is a single flex item that wraps as a block, stranding the
                   paperclip alone on the line above it (#composer-attach-line). */}
-              <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1">
-                <AttachButton disabled={disabled} onFiles={addFiles} />
+              <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1.5">
+                {templates !== undefined ? (
+                  <ComposerPlusMenu
+                    disabled={disabled}
+                    atCap={images.length >= MAX_IMAGES}
+                    onFiles={addFiles}
+                    templates={templates}
+                    onInsertTemplate={insertAtCaret}
+                  />
+                ) : (
+                  <AttachButton
+                    disabled={disabled}
+                    atCap={images.length >= MAX_IMAGES}
+                    onFiles={addFiles}
+                  />
+                )}
                 {footerStart}
               </div>
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex items-center gap-1.5">
                 {dictation.supported ? (
                   <Button
                     type="button"
                     variant="ghost"
-                    size="sm"
+                    size="icon-round"
                     disabled={disabled}
                     aria-label="Start dictation"
                     title="Dictation"
-                    className="h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground"
+                    className="text-muted-foreground"
                     onClick={dictation.start}
                   >
-                    <MicIcon aria-hidden="true" className="size-3.5" />
-                    Dictation
+                    <MicIcon aria-hidden="true" className="size-4" />
                   </Button>
                 ) : null}
                 {footerEnd ? (
@@ -515,15 +547,16 @@ export function Composer({
                 ) : null}
                 <Button
                   type="button"
-                  size="icon-sm"
+                  size="icon-round"
                   aria-label={sendAriaLabel}
-                  disabled={
-                    disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-                  }
-                  className="size-8"
+                  disabled={disabled || busy || (emptyDraft && !allowEmptySubmit)}
                   onClick={submitDraft}
                 >
-                  <ArrowUpIcon aria-hidden="true" />
+                  {busy ? (
+                    <LoaderCircleIcon aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+                  ) : (
+                    <ArrowUpIcon aria-hidden="true" />
+                  )}
                 </Button>
               </div>
             </div>
@@ -531,180 +564,14 @@ export function Composer({
         </div>
       </PopoverAnchor>
 
-      <PopoverContent
-        side="top"
-        align="start"
-        sideOffset={8}
-        className="w-80 max-w-[calc(100vw-2rem)] p-0"
-        // Focus stays in the textarea — the menu is a suggestion surface, not a focus trap.
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        // Interacting with the composer itself (typing, clicking the textarea) is not
-        // "outside" — only a genuine elsewhere-click dismisses.
-        onInteractOutside={(event) => {
-          if (rootRef.current?.contains(event.target as Node)) event.preventDefault()
-        }}
-      >
-        <Command shouldFilter={false} value={activeValue ?? ''} onValueChange={setMenuValue}>
-          <CommandList
-            data-slot="composer-menu"
-            data-trigger={trigger?.trigger}
-            // Clamped to the popper's reported space so the open keyboard (collisionPadding
-            // via the shared PopoverContent) shrinks the menu instead of hiding its tail.
-            className="max-h-[min(16rem,var(--radix-popover-content-available-height))] p-1"
-          >
-            {candidates.length === 0 ? (
-              <p className="px-3 py-4 text-center text-xs text-muted-foreground">
-                {trigger?.trigger === '@'
-                  ? 'No files seen in this session yet — full file search arrives with the Files tab.'
-                  : skills.isPending
-                    ? 'Loading skills…'
-                    : 'No matching skills.'}
-              </p>
-            ) : (
-              candidates.map((candidate) => (
-                <CommandItem
-                  key={candidate.value}
-                  value={candidate.value}
-                  data-slot="composer-menu-item"
-                  data-emphasized={candidate.emphasized || undefined}
-                  onSelect={() => pick(candidate)}
-                >
-                  <span
-                    className={cn(
-                      'shrink-0 truncate',
-                      candidate.emphasized && 'font-semibold',
-                      trigger?.trigger === '@' && 'font-mono text-xs',
-                    )}
-                  >
-                    {candidate.label}
-                  </span>
-                  {candidate.description ? (
-                    <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
-                      {candidate.description}
-                    </span>
-                  ) : null}
-                </CommandItem>
-              ))
-            )}
-          </CommandList>
-        </Command>
-      </PopoverContent>
+      <ComposerMenu
+        trigger={trigger}
+        candidates={candidates}
+        activeValue={activeValue}
+        skillsPending={skills.isPending}
+        onHighlight={setMenuValue}
+        onPick={pick}
+      />
     </Popover>
-  )
-}
-
-/** The paperclip + its hidden multi-file input (legacy `#msg-attach`). */
-function AttachButton({
-  disabled,
-  onFiles,
-}: {
-  disabled: boolean
-  onFiles: (files: readonly File[]) => void
-}) {
-  const inputRef = useRef<HTMLInputElement>(null)
-  return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Attach images"
-        title="Attach an image (or paste a screenshot)"
-        disabled={disabled}
-        className="size-8 text-muted-foreground"
-        onClick={() => inputRef.current?.click()}
-      >
-        <PaperclipIcon aria-hidden="true" className="size-[15px]" />
-      </Button>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        className="hidden"
-        aria-hidden="true"
-        tabIndex={-1}
-        onChange={(event) => {
-          onFiles([...(event.target.files ?? [])])
-          event.target.value = ''
-        }}
-      />
-    </>
-  )
-}
-
-/**
- * The recording overlay (paseo `DictationOverlay`): swaps in for the footer bar — pulsing
- * indicator, mm:ss, the growing partial transcript, then ✕ cancel / ✓ insert / ↑ insert-and-send.
- */
-function DictationBar({
-  transcript,
-  startedAt,
-  onCancel,
-  onInsert,
-  onInsertAndSend,
-}: {
-  transcript: string
-  startedAt: number
-  onCancel: () => void
-  onInsert: () => void
-  onInsertAndSend: () => void
-}) {
-  const now = useNow(1000)
-  return (
-    <div
-      data-slot="dictation-overlay"
-      role="status"
-      aria-label="Dictation in progress"
-      className="flex items-center gap-2.5 rounded-b-xl border-t border-border bg-muted/60 px-3 py-2"
-    >
-      <span
-        aria-hidden="true"
-        className="size-2 flex-none animate-pulse rounded-full bg-danger motion-reduce:animate-none"
-      />
-      <span data-slot="dictation-timer" className="text-xs font-medium text-muted-foreground tabular-nums">
-        {formatElapsed(startedAt, now)}
-      </span>
-      <span
-        data-slot="dictation-transcript"
-        aria-live="polite"
-        className="min-w-0 flex-1 truncate text-sm text-foreground"
-      >
-        {transcript === '' ? (
-          <span className="text-muted-foreground">Listening…</span>
-        ) : (
-          transcript
-        )}
-      </span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Cancel dictation"
-        className="size-8 text-muted-foreground"
-        onClick={onCancel}
-      >
-        <XIcon aria-hidden="true" />
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="icon-sm"
-        aria-label="Insert transcription"
-        className="size-8"
-        onClick={onInsert}
-      >
-        <CheckIcon aria-hidden="true" />
-      </Button>
-      <Button
-        type="button"
-        size="icon-sm"
-        aria-label="Insert transcription and send"
-        className="size-8"
-        onClick={onInsertAndSend}
-      >
-        <ArrowUpIcon aria-hidden="true" />
-      </Button>
-    </div>
   )
 }

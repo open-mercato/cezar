@@ -3,35 +3,19 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   BotIcon,
-  BoxesIcon,
-  BracesIcon,
   CheckIcon,
   CircleStopIcon,
   CodeIcon,
   CopyIcon,
-  CpuIcon,
-  DiamondIcon,
   EllipsisVerticalIcon,
   ExternalLinkIcon,
-  FeatherIcon,
   FileTextIcon,
   FolderIcon,
-  GemIcon,
-  GlobeIcon,
-  HammerIcon,
-  HexagonIcon,
   type LucideIcon,
-  MousePointer2Icon,
   PencilIcon,
   PlayIcon,
-  RocketIcon,
-  ShapesIcon,
-  SmartphoneIcon,
-  SparklesIcon,
   SquareTerminalIcon,
   Trash2Icon,
-  WavesIcon,
-  ZapIcon,
 } from 'lucide-react'
 import { Fragment, useState, type ReactNode } from 'react'
 import { useNavigate } from '@/lib/project-router'
@@ -128,7 +112,7 @@ export function RunHeader({
             {planTally ? (
               // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
               // the run header").
-              <span data-slot="plan-mirror" className="text-[11px] text-soft-foreground tabular-nums">
+              <span data-slot="plan-mirror" className="text-2xs text-muted-foreground tabular-nums">
                 Plan {planTally.done}/{planTally.total}
               </span>
             ) : null}
@@ -136,7 +120,6 @@ export function RunHeader({
               {attention.label}
               {queuePosition !== undefined ? ` #${queuePosition}` : ''}
             </Pill>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
           </span>
         </div>
 
@@ -157,7 +140,9 @@ export function RunHeader({
             Files
           </TabLink>
 
-          <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
+          {/* ONE action bar for every breakpoint: at most two worded buttons for the state's
+              primary actions; everything else lives in the kebab. */}
+          <div data-slot="run-actions" className="ml-auto flex items-center gap-1 pb-1">
             {flags.finish ? (
               <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
                 <CheckIcon aria-hidden="true" />
@@ -176,36 +161,13 @@ export function RunHeader({
                 Continue
               </Button>
             ) : null}
-            {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-            <OpenInMenu run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
-            <Button
-              variant="ghost"
-              size="sm"
-              title="Handoff notes — what the agent did and what's left"
-              aria-expanded={notesOpen}
-              onClick={() => setNotesOpen((open) => !open)}
-            >
-              <FileTextIcon aria-hidden="true" />
-              Notes
-            </Button>
-            {flags.archive ? (
-              <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
-                {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
-                {run.archived ? 'Unarchive' : 'Archive'}
-              </Button>
-            ) : null}
             {flags.cancel ? (
               <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('cancel')}>
                 <CircleStopIcon aria-hidden="true" />
                 Cancel
               </Button>
             ) : null}
-            {flags.deleteRun ? (
-              <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('delete')}>
-                <Trash2Icon aria-hidden="true" />
-                Delete
-              </Button>
-            ) : null}
+            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
           </div>
         </div>
 
@@ -224,33 +186,32 @@ export function RunHeader({
   )
 }
 
-/** Icon key (`OpenTarget.icon`, #361) → the Lucide icon that renders it in the menu. Distinct per
- *  target so the "Open in…" list reads at a glance instead of as a wall of text — a few picks
- *  lean on the target's own branding (RubyMine → gem, Android Studio → phone, CLion → cpu),
- *  the rest just aim for visual variety. An icon key the client doesn't recognize (older server,
- *  newer server) falls back to the menu's own ExternalLinkIcon rather than rendering nothing. */
+/** Icon key (`OpenTarget.icon`, #361) → one of FOUR group icons (terminal / editor / file
+ *  manager / agent CLI) — the group is the information, not the vendor's branding. An icon key
+ *  the client doesn't recognize (older server, newer server) falls back to the menu's generic
+ *  ExternalLinkIcon rather than rendering nothing. */
 const OPEN_IN_ICONS: Record<string, LucideIcon> = {
   folder: FolderIcon,
   terminal: SquareTerminalIcon,
-  vscode: CodeIcon,
-  cursor: MousePointer2Icon,
-  zed: ZapIcon,
-  windsurf: WavesIcon,
-  sublime: FeatherIcon,
-  idea: DiamondIcon,
-  pycharm: HexagonIcon,
-  webstorm: GlobeIcon,
-  goland: ShapesIcon,
-  rubymine: GemIcon,
-  phpstorm: BracesIcon,
-  clion: CpuIcon,
-  rider: BoxesIcon,
-  'android-studio': SmartphoneIcon,
-  xcode: HammerIcon,
-  warp: RocketIcon,
+  warp: SquareTerminalIcon,
   claude: BotIcon,
-  codex: SparklesIcon,
+  codex: BotIcon,
   opencode: BotIcon,
+  vscode: CodeIcon,
+  cursor: CodeIcon,
+  zed: CodeIcon,
+  windsurf: CodeIcon,
+  sublime: CodeIcon,
+  idea: CodeIcon,
+  pycharm: CodeIcon,
+  webstorm: CodeIcon,
+  goland: CodeIcon,
+  rubymine: CodeIcon,
+  phpstorm: CodeIcon,
+  clion: CodeIcon,
+  rider: CodeIcon,
+  'android-studio': CodeIcon,
+  xcode: CodeIcon,
 }
 
 /** The icon component for a target — `target.icon` when it's one the UI knows, else the
@@ -260,12 +221,12 @@ function openInIcon(target: OpenTarget): LucideIcon {
 }
 
 /**
- * "Open in…" session takeover (#open-in): resume the session in a real terminal, open the run's
- * worktree in a local editor / Finder / terminal / agent CLI, or copy its path. The old standalone
- * Terminal button folds in here as the first item. Renders when the session can be resumed OR the
- * machine offers worktree targets (both empty in hosted mode → nothing to show).
+ * "Open in…" session takeover (#open-in), now a GROUP inside the kebab: resume the session in a
+ * real terminal, open the run's worktree in a local editor / Finder / terminal / agent CLI, or
+ * copy its path. Renders when the session can be resumed OR the machine offers worktree targets
+ * (both empty in hosted mode → nothing to show).
  */
-function OpenInMenu({
+function OpenInItems({
   run,
   canResume,
   onResume,
@@ -305,56 +266,46 @@ function OpenInMenu({
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" title="Resume in a terminal, or open the worktree locally">
-          <ExternalLinkIcon aria-hidden="true" />
-          Open in…
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {canResumeHere ? (
-          <DropdownMenuItem data-target="terminal-resume" onSelect={onResume}>
-            <SquareTerminalIcon aria-hidden="true" />
-            Terminal (resume session)
+    <>
+      <DropdownMenuLabel data-slot="open-in-label">Open in</DropdownMenuLabel>
+      {canResumeHere ? (
+        <DropdownMenuItem data-target="terminal-resume" onSelect={onResume}>
+          <SquareTerminalIcon aria-hidden="true" />
+          Terminal (resume session)
+        </DropdownMenuItem>
+      ) : null}
+      {worktreeTargets.map((target) => {
+        // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
+        // session when one exists — label that explicitly so it reads as different from just
+        // opening the editor/file-manager entries above. Every other CLI (wrong backend, or no
+        // session yet) still opens, just starts clean — no silent cross-backend resume attempt.
+        const resumes = cliTargetResumes(run, target.id)
+        const Icon = openInIcon(target)
+        return (
+          <DropdownMenuItem
+            key={target.id}
+            data-target={target.id}
+            title={resumes ? "Resume this run's session" : undefined}
+            onSelect={() => open.mutate(target.id)}
+          >
+            <Icon aria-hidden="true" />
+            {target.label}
+            {resumes ? ' (resume)' : ''}
           </DropdownMenuItem>
-        ) : null}
-        {canResumeHere && worktreeTargets.length > 0 ? <DropdownMenuSeparator /> : null}
-        {worktreeTargets.map((target) => {
-          // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
-          // session when one exists — label that explicitly so it reads as different from just
-          // opening the editor/file-manager entries above. Every other CLI (wrong backend, or no
-          // session yet) still opens, just starts clean — no silent cross-backend resume attempt.
-          const resumes = cliTargetResumes(run, target.id)
-          const Icon = openInIcon(target)
-          return (
-            <DropdownMenuItem
-              key={target.id}
-              data-target={target.id}
-              title={resumes ? "Resume this run's session" : undefined}
-              onSelect={() => open.mutate(target.id)}
-            >
-              <Icon aria-hidden="true" />
-              {target.label}
-              {resumes ? ' (resume)' : ''}
-            </DropdownMenuItem>
-          )
-        })}
-        {run.worktreePath ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={copyPath}>
-              <CopyIcon aria-hidden="true" />
-              Copy worktree path
-            </DropdownMenuItem>
-          </>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        )
+      })}
+      {run.worktreePath ? (
+        <DropdownMenuItem onSelect={copyPath}>
+          <CopyIcon aria-hidden="true" />
+          Copy worktree path
+        </DropdownMenuItem>
+      ) : null}
+      <DropdownMenuSeparator />
+    </>
   )
 }
 
-/** The mutations + confirm state, bundled so the desktop bar and the mobile kebab drive the
+/** The mutations + confirm state, bundled so the action bar and the kebab drive the
  *  exact same behavior. Every failure surfaces the server's own words as a danger toast. */
 function useRunActions(run: ApiRun) {
   const queryClient = useQueryClient()
@@ -445,19 +396,19 @@ function EditableTitle({ run }: { run: ApiRun }) {
   )
 
   if (editor.editing) {
-    return <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
+    return <TitleEditInput editor={editor} className="flex-1 text-base font-semibold" />
   }
 
   return (
     <span className="group flex min-w-0 items-center gap-1">
-      <h1 className="min-w-0 truncate text-[15px] font-semibold" title={run.task}>
+      <h1 className="min-w-0 truncate text-base font-semibold" title={run.task}>
         {title}
       </h1>
       <button
         type="button"
         aria-label="Rename task"
         onClick={editor.begin}
-        className="shrink-0 rounded-sm p-1 text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="flex size-7 shrink-0 items-center justify-center rounded-sm text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground outline-none focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         <PencilIcon className="size-3.5" aria-hidden="true" />
       </button>
@@ -479,7 +430,7 @@ function MetaRow({ run }: { run: ApiRun }) {
       <span
         key="branch"
         data-slot="branch-chip"
-        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
+        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-2xs font-medium"
       >
         {run.branch}
       </span>,
@@ -493,7 +444,6 @@ function MetaRow({ run }: { run: ApiRun }) {
         key="pr"
         reference={{ kind: 'PR', ...(number ? { number: Number(number) } : {}), url: prUrl }}
         taskTitle={runTitle(run)}
-        className="h-5"
       />,
     )
   }
@@ -505,7 +455,6 @@ function MetaRow({ run }: { run: ApiRun }) {
         key="issue"
         reference={{ kind: 'Issue', ...(number ? { number: Number(number) } : {}), url: issueUrl }}
         taskTitle={runTitle(run)}
-        className="h-5"
       />,
     )
   }
@@ -618,16 +567,16 @@ function AgentBadge({ run }: { run: ApiRun }) {
           data-slot="agent-badge"
           title={`${runner} · ${model}`}
           aria-label={`Agent: ${runner}, model ${model}`}
-          className="flex shrink-0 items-center justify-center rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="flex size-7 shrink-0 items-center justify-center rounded-sm text-soft-foreground hover:bg-muted hover:text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           <BotIcon className="size-3.5" aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[9rem]">
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-2xs font-normal text-muted-foreground">
           runner: {runner}
         </DropdownMenuLabel>
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-2xs font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
       </DropdownMenuContent>
@@ -635,8 +584,8 @@ function AgentBadge({ run }: { run: ApiRun }) {
   )
 }
 
-/** The <md action surface: everything the desktop bar offers, folded into a kebab menu next to
- *  the pill (the mockup's mobile pattern — `.tabs-row .actions { display:none }` under 768px). */
+/** The overflow surface, every breakpoint: the Open in… group, Notes, Archive and Delete live
+ *  here — the bar itself keeps only the state's worded primary actions. */
 function ActionsKebab({
   run,
   actions,
@@ -650,30 +599,12 @@ function ActionsKebab({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Run actions" className="md:hidden">
+        <Button variant="ghost" size="icon-sm" aria-label="Run actions">
           <EllipsisVerticalIcon aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
-        {flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> Finish
-          </DropdownMenuItem>
-        ) : null}
-        {flags.continueRun ? (
-          <DropdownMenuItem
-            disabled={!actions.continuation.canContinue || actions.continueRun.isPending}
-            title={actions.continuation.reason}
-            onSelect={() => actions.continueRun.mutate()}
-          >
-            <PlayIcon aria-hidden="true" /> Continue
-          </DropdownMenuItem>
-        ) : null}
-        {flags.terminal ? (
-          <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
-            <SquareTerminalIcon aria-hidden="true" /> Terminal
-          </DropdownMenuItem>
-        ) : null}
+        <OpenInItems run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>
@@ -683,16 +614,13 @@ function ActionsKebab({
             {run.archived ? 'Unarchive' : 'Archive'}
           </DropdownMenuItem>
         ) : null}
-        {flags.cancel || flags.deleteRun ? <DropdownMenuSeparator /> : null}
-        {flags.cancel ? (
-          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('cancel')}>
-            <CircleStopIcon aria-hidden="true" /> Cancel
-          </DropdownMenuItem>
-        ) : null}
         {flags.deleteRun ? (
-          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('delete')}>
-            <Trash2Icon aria-hidden="true" /> Delete
-          </DropdownMenuItem>
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('delete')}>
+              <Trash2Icon aria-hidden="true" /> Delete
+            </DropdownMenuItem>
+          </>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -749,7 +677,7 @@ function ResumeHintLine({ hint }: { hint: string }) {
       data-slot="resume-hint"
       title="Copy the command"
       onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-2xs text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">take over interactively: {hint}</span>

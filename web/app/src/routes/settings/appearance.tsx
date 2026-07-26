@@ -2,6 +2,7 @@ import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react'
 import type { ComponentType, ReactNode, SVGProps } from 'react'
 
 import { useAppearance } from '@/components/appearance-provider'
+import { PageBody } from '@/components/page-body'
 import { useTheme } from '@/components/theme-provider'
 import { cn } from '@/lib/utils'
 import type { Accent, Density } from '@/lib/appearance'
@@ -71,7 +72,7 @@ function Segmented<V extends string>({
             data-value={option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              'flex items-center gap-2 rounded-sm px-3 py-1.5 text-[13px] font-medium transition-colors',
+              'flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors',
               checked
                 ? 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
@@ -98,7 +99,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-sm text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>
@@ -110,9 +111,9 @@ export function AppearanceSection() {
   const { accent, density, setAccent, setDensity } = useAppearance()
 
   return (
-    <div
+    <PageBody
       data-slot="appearance-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="mx-auto w-full max-w-2xl gap-7"
     >
       <Field title="Theme" hint="System follows your OS preference. Applies to this browser.">
         <Segmented slot="appearance-theme" label="Theme" value={theme} options={THEME_OPTIONS} onChange={setTheme} />
@@ -128,6 +129,6 @@ export function AppearanceSection() {
       >
         <Segmented slot="appearance-density" label="Density" value={density} options={DENSITY_OPTIONS} onChange={setDensity} />
       </Field>
-    </div>
+    </PageBody>
   )
 }

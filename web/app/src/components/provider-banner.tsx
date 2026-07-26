@@ -40,7 +40,7 @@ export function ProviderBanner({
       <div
         data-slot="provider-banner"
         role="alert"
-        className="flex min-h-9 items-center gap-2 border-b border-border bg-destructive/10 px-4 text-sm text-foreground"
+        className="flex min-h-9 items-center gap-2 border-b border-border bg-danger/10 px-4 text-sm text-foreground"
       >
         <StatusDot tone="danger" />
         <span>
@@ -49,7 +49,7 @@ export function ProviderBanner({
         </span>
         <Link
           to="/settings/agents#providers"
-          className="ml-auto shrink-0 font-medium underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="ml-auto shrink-0 font-medium underline underline-offset-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           Open agent settings
         </Link>
@@ -57,7 +57,7 @@ export function ProviderBanner({
           type="button"
           aria-label="Dismiss provider authentication alert"
           onClick={() => onDismissAuthFailures(incidents)}
-          className="shrink-0 rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="shrink-0 rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           <XIcon className="size-4" aria-hidden="true" />
         </button>
@@ -90,7 +90,7 @@ export function ProviderBanner({
       <span>{message}</span>
       <Link
         to="/settings/agents#providers"
-        className="ml-auto shrink-0 font-medium text-foreground underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="ml-auto shrink-0 font-medium text-foreground underline underline-offset-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         Configure providers
       </Link>

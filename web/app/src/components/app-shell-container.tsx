@@ -43,9 +43,9 @@ export function skillsUpdateMarkerOf(state: SkillsUpdateState | undefined): bool
 /**
  * The app shell, wired to live data.
  *
- * AppShell itself stays presentational — it takes repo/version/inboxCount and renders them, or
- * renders nothing. This is the seam where those become real: `useHealth()` for the repo and
- * version chips, `useTodos()` for the inbox badge.
+ * AppShell itself stays presentational — it takes repo/inboxCount and renders them, or
+ * renders nothing. This is the seam where those become real: `useHealth()` for the repo chip
+ * and the Tools menu (which carries the cezar version), `useTodos()` for the inbox badge.
  *
  * Nothing here caches boot-time values (#369: the legacy UI read the branch once at startup and
  * then showed a stale branch forever). The chips read whatever is currently in the health query,
@@ -107,8 +107,6 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
     <ListViewProvider>
       <AppShell
         repo={repoChipOf(health.data)}
-        version={health.data?.version ?? null}
-        latestVersion={health.data?.latestVersion ?? null}
         // `?? null` rather than `?? 0`: no badge while the inbox is unknown, and no badge when it
         // is known to be empty — AppShell renders neither for a falsy count.
         inboxCount={todos.data?.length ?? null}

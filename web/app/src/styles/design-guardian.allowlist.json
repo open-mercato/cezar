@@ -1,0 +1,34 @@
+{
+  "no-arbitrary-text-size": [
+    "src/components/add-project-dialog.tsx",
+    "src/components/clone-project-dialog.tsx",
+    "src/components/diff/diff-view.tsx",
+    "src/components/diff/diff.tsx",
+    "src/components/diff/image-preview.tsx",
+    "src/components/run-diff.tsx",
+    "src/components/skill-detail.tsx",
+    "src/components/skills-import-panel.tsx",
+    "src/components/tab-link.tsx",
+    "src/components/ui/toaster.tsx",
+    "src/routes/plan-review.tsx",
+    "src/routes/repo-git/repo-branches.tsx",
+    "src/routes/repo-git/repo-commits.tsx",
+    "src/routes/skills-loading.tsx",
+    "src/routes/task-git/changes-tree.tsx",
+    "src/routes/task-git/commit-list.tsx",
+    "src/routes/task-git/diff-controls.tsx",
+    "src/routes/task-git/files-tree.tsx",
+    "src/routes/task-git/task-commits.tsx",
+    "src/routes/unknown-project.tsx"
+  ],
+  "no-arbitrary-radius": [
+    "src/components/diff/diff-view.tsx",
+    "src/routes/task-git/diff-controls.tsx"
+  ],
+  "no-arbitrary-tracking": [
+    "src/components/skill-detail.tsx",
+    "src/routes/plan-review.tsx"
+  ],
+  "no-hardcoded-sidebar-width": [],
+  "grad-single-brand-moment": []
+}

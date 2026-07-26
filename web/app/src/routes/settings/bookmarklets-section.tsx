@@ -20,7 +20,7 @@ export function BookmarkletsSection() {
   // user "(no skills yet)" — a claim that is simply false while the fetch is still running.
   if (skillsQuery.isPending) {
     return (
-      <p data-slot="bookmarklets-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="bookmarklets-loading" className="p-4 text-sm text-soft-foreground md:p-6">
         Loading bookmarklets…
       </p>
     )
@@ -93,12 +93,12 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
   return (
     <div data-slot="bookmarklet-panel" className="mx-auto w-full max-w-2xl">
       <h2 className="text-base font-semibold">Run from GitHub</h2>
-      <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
         Drag a button below to your browser&apos;s bookmarks bar. On any GitHub PR or issue, click it
         to open this cockpit directly. The cockpit must be running: <span className="font-mono">npx cezar</span>.
       </p>
 
-      <label className="mt-4 flex items-center gap-2 text-[13px] font-medium">
+      <label className="mt-4 flex items-center gap-2 text-sm font-medium">
         <input
           type="checkbox"
           data-slot="bm-auto"
@@ -125,7 +125,7 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
         aria-label="Filter bookmarklet skills"
         value={filter}
         onChange={(event) => setFilter(event.target.value)}
-        className="mt-5 h-8 text-[13px]"
+        className="mt-5 h-8 text-sm"
       />
       <div data-slot="bm-list" className="mt-3 flex flex-col gap-2">
         {shown.length > 0 ? (
@@ -193,7 +193,7 @@ function BookmarkletRow({ label, url, hint }: { label: string; url: string; hint
       >
         Copy
       </button>
-      {hint ? <span className="min-w-0 truncate text-[11px] text-soft-foreground">{hint}</span> : null}
+      {hint ? <span className="min-w-0 truncate text-2xs text-soft-foreground">{hint}</span> : null}
     </div>
   )
 }

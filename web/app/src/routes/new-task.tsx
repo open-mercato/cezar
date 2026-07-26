@@ -1,11 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckIcon,
-  ChevronDownIcon,
   EyeIcon,
   FolderOpenIcon,
+  SlidersHorizontalIcon,
   SparklesIcon,
-  SquareIcon,
   WorkflowIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -33,13 +32,15 @@ import type {
   ProjectListEntry,
   RepoResponse,
   Runner,
+  RunnerModelCatalogResponse,
   Skill,
   WorkflowDef,
 } from '@/api/types'
-import { TwinkleBackdrop } from '@/components/centered-state'
-import { Composer, type ComposerHandle } from '@/components/composer/composer'
-import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
-import { PromptTemplateMenu } from '@/components/prompt-template-menu'
+import { CheckChip } from '@/components/check-chip'
+import { Composer } from '@/components/composer/composer'
+import { Kbd } from '@/components/kbd'
+import { chevron, chipClass } from '@/components/picker-pill'
+import { ProviderGate, providerDisabledReason } from '@/components/provider-gate'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
   Command,
@@ -49,6 +50,16 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import {
@@ -90,6 +101,7 @@ import {
   resolveModel,
   resolveRunner,
   resolveSource,
+  RUNNERS,
   startedRunPath,
   type TaskSource,
 } from './new-task-form'
@@ -99,10 +111,11 @@ import { PlanReview } from './plan-review'
 
 /**
  * `/new` — the full-screen new-task hero (spec §"New task (full-screen, #386)"; visual
- * contract docs/mockups/new-task.html): centered composer card on the twinkle surface, the
- * picker pill row inside the card below the textarea, suggested-task ghost chips underneath.
- * In plan-first mode (#383, the `Start | Plan first` segment) submit runs `POST /api/plan`
- * and opens the review overlay (plan-review.tsx) instead of starting a run.
+ * contract docs/mockups/new-task.html): centered composer card, the four-pill picker row
+ * inside the card below the textarea (Project · Source · Model · Run options), suggested-task
+ * ghost chips underneath. In plan-first mode (#383, the `Start | Plan first` segment) submit
+ * runs `POST /api/plan` and opens the review overlay (plan-review.tsx) instead of starting a
+ * run.
  *
  * This route also owns the saved-bookmarklet contract (spec 011, BACKWARD_COMPATIBILITY.md):
  * a full document load of `/new?skill=&ref=&auto=1&key=` auto-starts a run unattended when the
@@ -184,10 +197,10 @@ export function NewTaskRoute() {
     : undefined
 
   // ---- prompt templates (#413 follow-up) ----------------------------------------------------
-  // The same list the GitHub hand-over and Inbox composers read. Two ways in here: the footer's
-  // icon trigger inserts one by hand at the caret, and a skill whose templates are assigned to it
-  // applies them on selection — but only into a box the user has not typed in (`resolveAutoApply`).
-  const composerRef = useRef<ComposerHandle>(null)
+  // The same list the GitHub hand-over and Inbox composers read. Two ways in here: the
+  // composer's "+" menu inserts one by hand at the caret, and a skill whose templates are
+  // assigned to it applies them on selection — but only into a box the user has not typed in
+  // (`resolveAutoApply`).
   const templates = useMemo(
     () => normalizePromptTemplates(uiState.data?.promptTemplates),
     [uiState.data?.promptTemplates],
@@ -215,9 +228,6 @@ export function NewTaskRoute() {
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels()
-  const models = runner === null
-    ? []
-    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
   const model = runner === null
     ? ''
     : resolveModel(draft.model, runner, config.data?.defaultModels, catalog.data)
@@ -254,7 +264,7 @@ export function NewTaskRoute() {
   // workspace default applies ('source-dependent' → skills default ON, everything else OFF).
   // Plan-first forces it OFF (and disables the toggle): planning is inherently interactive, so
   // the run must be able to hand the ball back.
-  const runMode = resolveComposerRunMode({
+  const runModeInput = {
     hasGit,
     variants,
     forceWorktree: !singleStepSource,
@@ -271,6 +281,12 @@ export function NewTaskRoute() {
       ?? workspaceConfig.data?.composerDefaults?.inheritedWorktree
       ?? true,
     source: source.source,
+  }
+  const runMode = resolveComposerRunMode(runModeInput)
+  const defaultRunMode = resolveComposerRunMode({
+    ...runModeInput,
+    explicitAutonomous: null,
+    explicitWorktree: null,
   })
   const worktreeOn = runMode.worktree
   const autonomousOn = runMode.autonomous
@@ -286,6 +302,13 @@ export function NewTaskRoute() {
   const generateFollowupsOn = followupsToggleShown
     ? (draft.generateFollowups ?? uiState.data?.lastGenerateFollowups ?? true)
     : false
+
+  const runOptionDeviations =
+    (worktreeToggleShown && worktreeOn !== defaultRunMode.worktree ? 1 : 0)
+    + (autonomousOn !== defaultRunMode.autonomous ? 1 : 0)
+    + (followupsToggleShown && !generateFollowupsOn ? 1 : 0)
+    + (variants > 1 ? 1 : 0)
+    + (repo.data?.baseBranch != null ? 1 : 0)
 
   // ---- plan mode (#383 + spec 008) ----------------------------------------------------------
   const [plan, setPlan] = useState<PendingPlan | null>(null)
@@ -391,11 +414,7 @@ export function NewTaskRoute() {
   const submit = async (text: string, images: ImageInput[]) => {
     if (!providersReady || runner === null) {
       throw new Error(
-        providers.isPending
-          ? 'Checking agent providers…'
-          : providers.isError
-            ? 'Provider authentication could not be verified.'
-            : 'Connect an agent provider before starting a task.',
+        providerDisabledReason({ pending: providers.isPending, error: providers.isError }),
       )
     }
     if (!sourcesReady) {
@@ -504,12 +523,11 @@ export function NewTaskRoute() {
     return (
       <div
         data-route="new"
-        className="relative isolate flex min-h-full flex-col items-center justify-center overflow-x-clip px-6"
+        className="flex min-h-full flex-col items-center justify-center overflow-x-clip px-6"
       >
-        <TwinkleBackdrop />
         <div data-slot="auto-starting" role="status" className="text-center">
           <h1 className="animate-pulse text-lg font-semibold tracking-tight">Starting task…</h1>
-          <p className="mt-1.5 text-[13.5px] text-muted-foreground">
+          <p className="mt-1.5 text-sm text-muted-foreground">
             Launched from a bookmarklet — taking you to the run.
           </p>
         </div>
@@ -520,22 +538,19 @@ export function NewTaskRoute() {
   return (
     <div
       data-route="new"
-      className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
+      className="flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
     >
-      <TwinkleBackdrop />
-
       <div className="w-full max-w-[720px]">
         <header className="mb-6 text-center max-md:mb-4">
           <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
             What should the agent work on?
           </h1>
-          <p className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
+          <p className="mt-1.5 text-sm text-muted-foreground max-md:text-xs">
             Runs in an isolated worktree — review everything before it lands.
           </p>
         </header>
 
         <Composer
-          ref={composerRef}
           onSubmit={submit}
           value={draft.text}
           onValueChange={(text) => update({ text })}
@@ -544,13 +559,11 @@ export function NewTaskRoute() {
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={draft.planFirst ? 'Plan task' : 'Start task'}
           disabled={!providersReady || starting}
-          disabledReason={
-            providers.isPending
-              ? 'Checking agent providers…'
-              : providers.isError
-                ? 'Provider authentication could not be verified.'
-                : 'Connect an agent provider before starting a task.'
-          }
+          disabledReason={providerDisabledReason({
+            pending: providers.isPending,
+            error: providers.isError,
+          })}
+          templates={templates}
           autocompleteSkills
           footerStart={
             <>
@@ -577,96 +590,78 @@ export function NewTaskRoute() {
                 workflows={workflowList}
                 onPick={(next) => update({ source: next })}
               />
-              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
-                  autonomous/branch, and templates is the least-used of them. */}
-              <PromptTemplateMenu
-                templates={templates}
-                iconOnly
-                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
-              />
-              {runners.length > 1 ? (
-                <RunnerPill
-                  runners={runners}
-                  value={displayRunner}
-                  disabled={!providersReady}
-                  onPick={(next) => update({ runner: next, model: null })}
-                />
-              ) : null}
-              <PickerPill
-                slot="model-pill"
-                ariaLabel="Model"
-                label={models.find((m) => m.id === model)?.label ?? 'auto'}
-                value={model}
+              <ModelPill
+                runners={runners}
+                runner={displayRunner}
+                model={model}
+                defaultModels={config.data?.defaultModels}
+                catalog={catalog.data}
+                catalogFailed={catalog.isError}
                 disabled={!providersReady}
-                onPick={(next) => update({ model: next })}
-                options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
-                status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+                onPick={(nextRunner, nextModel) => update({ runner: nextRunner, model: nextModel })}
               />
-              <PickerPill
-                slot="variants-pill"
-                ariaLabel="Parallel variants"
-                label={variants > 1 ? `×${variants} variants` : '×1'}
-                value={String(variants)}
-                onPick={(next) => update({ variants: Number(next) })}
-                disabled={!hasGit}
-                hint="How many times to run this task in parallel — each variant gets its own worktree, and you pick the diff you keep. ×1 runs it once."
-                disabledHint="Parallel variants need a git repository — each variant runs in its own worktree."
-                options={[
-                  { value: '1', label: '×1', desc: 'One run' },
-                  { value: '2', label: '×2 variants', desc: 'Two competing runs — pick the diff you keep' },
-                  { value: '3', label: '×3 variants', desc: 'Three competing runs — pick the diff you keep' },
-                ]}
-              />
-              {worktreeToggleShown ? (
-                <WorktreeToggle
-                  on={worktreeOn}
-                  disabled={worktreeForced}
-                  disabledReason={variants > 1
-                    ? 'Parallel variants always use isolated worktrees'
-                    : 'Multi-step workflows require an isolated worktree'}
-                  onChange={(on) => update({ worktree: on })}
+              <RunOptionsMenu deviations={runOptionDeviations}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {worktreeToggleShown ? (
+                    <CheckChip
+                      slot="worktree-toggle"
+                      label="Worktree"
+                      on={worktreeOn}
+                      disabled={worktreeForced}
+                      titleOn="Runs in an isolated worktree — uncheck to run in the repo working tree"
+                      titleOff="Runs in the repo working tree — check to isolate in a worktree"
+                      disabledTitle={variants > 1
+                        ? 'Parallel variants always use isolated worktrees'
+                        : 'Multi-step workflows require an isolated worktree'}
+                      onChange={(on) => update({ worktree: on })}
+                    />
+                  ) : null}
+                  <CheckChip
+                    slot="autonomous-toggle"
+                    label="Autonomous"
+                    on={autonomousOn}
+                    disabled={draft.planFirst}
+                    titleOn="Autonomous — the agent runs to completion without pausing for you"
+                    titleOff="Runs interactively — check to let the agent finish without pausing for you"
+                    disabledTitle="Plan-first runs are interactive — autonomous is unavailable"
+                    onChange={(on) => update({ autonomous: on })}
+                  />
+                  {followupsToggleShown ? (
+                    <CheckChip
+                      slot="generate-followups-toggle"
+                      label="Follow-ups"
+                      on={generateFollowupsOn}
+                      titleOn="Agents can add newly discovered follow-up work to the task inbox"
+                      titleOff="Follow-up generation is off; agents still maintain the handoff journal"
+                      onChange={(on) => update({ generateFollowups: on })}
+                    />
+                  ) : null}
+                </div>
+                {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
+                  <p className="text-xs text-muted-foreground" data-slot="interactive-skill-hint">
+                    This skill recommends an interactive run in the current checkout. You can change either setting.
+                  </p>
+                ) : null}
+                <VariantsPicker
+                  variants={variants}
+                  hasGit={hasGit}
+                  onPick={(next) => update({ variants: next })}
                 />
-              ) : null}
-              <AutonomousToggle
-                on={autonomousOn}
-                disabled={draft.planFirst}
-                onChange={(on) => update({ autonomous: on })}
-              />
-              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
-                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
-                  This skill recommends an interactive run in the current checkout. You can change either setting.
-                </p>
-              ) : null}
-              {followupsToggleShown ? (
-                <GenerateFollowupsToggle
-                  on={generateFollowupsOn}
-                  onChange={(on) => update({ generateFollowups: on })}
-                />
-              ) : null}
-              {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
+                {repo.data ? <BaseBranchPicker repo={repo.data} /> : null}
+              </RunOptionsMenu>
             </>
           }
           footerEnd={
             <>
-              {!providersReady && !providers.isPending ? (
-                <Link
-                  to="/settings/agents#providers"
-                  className="text-xs font-medium text-foreground underline underline-offset-4"
-                >
-                  Configure providers
-                </Link>
+              {!providersReady ? (
+                <ProviderGate pending={providers.isPending} error={providers.isError} />
               ) : null}
               <ModeSegment
                 planFirst={draft.planFirst}
                 planning={planning}
                 onModeChange={(planFirst) => update({ planFirst })}
               />
-              <kbd
-                aria-hidden="true"
-                className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-              >
-                {submitShortcutHint()}
-              </kbd>
+              <Kbd aria-hidden="true">{submitShortcutHint()}</Kbd>
             </>
           }
         />
@@ -679,13 +674,10 @@ export function NewTaskRoute() {
           plan={plan}
           starting={starting}
           startAvailable={providersReady}
-          startUnavailableReason={
-            providers.isPending
-              ? 'Checking agent providers…'
-              : providers.isError
-                ? 'Provider authentication could not be verified.'
-                : 'Connect an agent provider before starting a task.'
-          }
+          startUnavailableReason={providerDisabledReason({
+            pending: providers.isPending,
+            error: providers.isError,
+          })}
           startUnavailableAction={
             !providers.isPending ? (
               <Link to="/settings/agents#providers">Configure providers</Link>
@@ -700,114 +692,170 @@ export function NewTaskRoute() {
   )
 }
 
-/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for single skill runs.
- *  Checked = isolated worktree (the default); unchecked = run in the repo working tree. */
-function WorktreeToggle({
-  on,
-  disabled,
-  disabledReason,
-  onChange,
+function ModelPill({
+  runners,
+  runner,
+  model,
+  defaultModels,
+  catalog,
+  catalogFailed,
+  disabled = false,
+  onPick,
 }: {
-  on: boolean
+  runners: readonly Runner[]
+  runner: Runner
+  model: string
+  defaultModels?: Partial<Record<Runner, string>>
+  catalog?: RunnerModelCatalogResponse
+  catalogFailed: boolean
   disabled?: boolean
-  disabledReason?: string
-  onChange: (on: boolean) => void
+  onPick: (runner: Runner, model: string) => void
 }) {
-  return (
+  const groups = (runners.length > 0 ? runners : [runner]).map((id) => ({
+    id,
+    label: RUNNERS.find((entry) => entry.id === id)?.label ?? id,
+    models: modelsForRunner(id, catalog, [id === runner ? model : defaultModels?.[id]]),
+    status: modelCatalogStatus(id, catalog, catalogFailed),
+  }))
+  const currentModels = groups.find((group) => group.id === runner)?.models ?? []
+  const trigger = (
     <button
       type="button"
-      role="checkbox"
-      aria-checked={on}
+      data-slot="model-pill"
+      aria-label="Model"
       disabled={disabled}
-      data-slot="worktree-toggle"
-      onClick={() => onChange(!on)}
-      title={
-        disabled
-          ? disabledReason
-          : on
-          ? 'Runs in an isolated worktree — uncheck to run in the repo working tree'
-          : 'Runs in the repo working tree — check to isolate in a worktree'
-      }
-      className={cn(chipClass, on && 'border-primary/60 text-foreground')}
+      title="Which agent backend and model run this task"
+      className={chipClass}
     >
-      {on ? (
-        <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-      ) : (
-        <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-      )}
-      Worktree
+      <span className="flex min-w-0 flex-col items-start gap-px text-left">
+        <span className="max-w-36 truncate text-2xs leading-none font-medium">
+          {currentModels.find((m) => m.id === model)?.label ?? 'auto'}
+        </span>
+        <span className="text-2xs leading-none text-soft-foreground">
+          {RUNNERS.find((entry) => entry.id === runner)?.label ?? runner}
+        </span>
+      </span>
+      {chevron}
     </button>
+  )
+  if (disabled) return <span className="inline-flex">{trigger}</span>
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuContent align="start" data-testid="model-pill-menu">
+        {groups.map((group) => (
+          <DropdownMenuGroup key={group.id}>
+            {groups.length > 1 ? (
+              <DropdownMenuLabel className="label-caps">{group.label}</DropdownMenuLabel>
+            ) : null}
+            <DropdownMenuRadioGroup
+              value={group.id === runner ? model : '__none__'}
+              onValueChange={(next) => onPick(group.id, next)}
+            >
+              {group.models.map((m) => (
+                <DropdownMenuRadioItem
+                  key={`${group.id}:${m.id}`}
+                  value={m.id}
+                  data-slot="model-option"
+                  data-runner={group.id}
+                  data-model={m.id}
+                  className="gap-2.5"
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="text-xs font-medium">{m.label}</span>
+                    {m.desc ? (
+                      <span className="text-xs text-muted-foreground">{m.desc}</span>
+                    ) : null}
+                  </span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+            {group.status ? (
+              <DropdownMenuItem
+                disabled
+                className="border-t border-border text-xs text-muted-foreground"
+              >
+                {group.status}
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuGroup>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
-/** Autonomous toggle (#autonomous): checked = the run never pauses for you, auto-continuing
- *  until the agent is done. No "needs you" is ever raised. */
-function AutonomousToggle({
-  on,
-  disabled,
-  onChange,
+function RunOptionsMenu({
+  deviations,
+  children,
 }: {
-  on: boolean
-  disabled?: boolean
-  onChange: (on: boolean) => void
+  deviations: number
+  children: ReactNode
 }) {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={on}
-      disabled={disabled}
-      data-slot="autonomous-toggle"
-      onClick={() => onChange(!on)}
-      title={
-        disabled
-          ? 'Plan-first runs are interactive — autonomous is unavailable'
-          : on
-            ? 'Autonomous — the agent runs to completion without pausing for you'
-            : 'Runs interactively — check to let the agent finish without pausing for you'
-      }
-      className={cn(chipClass, on && !disabled && 'border-primary/60 text-foreground')}
-    >
-      {on ? (
-        <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-      ) : (
-        <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-      )}
-      Autonomous
-    </button>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-slot="run-options-pill"
+          aria-label="Run options"
+          title="Worktree, autonomy, follow-ups, parallel variants and the base branch"
+          className={cn(chipClass, deviations > 0 && 'border-foreground/60 font-semibold text-foreground')}
+        >
+          <SlidersHorizontalIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
+          Options{deviations > 0 ? ` · ${deviations}` : ''}
+          {chevron}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={8}
+        data-slot="run-options-menu"
+        className="flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-3 p-3"
+      >
+        {children}
+      </PopoverContent>
+    </Popover>
   )
 }
 
-/** Follow-up toggle: checked lets agents append newly discovered work to the task inbox.
- *  Handoff journaling remains active either way. */
-function GenerateFollowupsToggle({
-  on,
-  onChange,
+function VariantsPicker({
+  variants,
+  hasGit,
+  onPick,
 }: {
-  on: boolean
-  onChange: (on: boolean) => void
+  variants: number
+  hasGit: boolean
+  onPick: (variants: number) => void
 }) {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={on}
-      data-slot="generate-followups-toggle"
-      onClick={() => onChange(!on)}
-      title={
-        on
-          ? 'Agents can add newly discovered follow-up work to the task inbox'
-          : 'Follow-up generation is off; agents still maintain the handoff journal'
-      }
-      className={cn(chipClass, on && 'border-primary/60 text-foreground')}
-    >
-      {on ? (
-        <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-      ) : (
-        <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-      )}
-      Follow-ups
-    </button>
+    <div data-slot="variants-picker" className="flex flex-col gap-1.5">
+      <p className="label-caps">Parallel variants</p>
+      <div
+        role="radiogroup"
+        aria-label="Parallel variants"
+        title={hasGit
+          ? 'How many times to run this task in parallel — each variant gets its own worktree, and you pick the diff you keep. ×1 runs it once.'
+          : 'Parallel variants need a git repository — each variant runs in its own worktree.'}
+        className="flex items-center gap-1.5"
+      >
+        {[1, 2, 3].map((count) => (
+          <button
+            key={count}
+            type="button"
+            role="radio"
+            aria-checked={variants === count}
+            disabled={!hasGit}
+            data-slot="variants-option"
+            data-variants={count}
+            onClick={() => onPick(count)}
+            className={cn(chipClass, variants === count && 'border-primary/60 text-foreground')}
+          >
+            ×{count}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -900,7 +948,7 @@ function ProjectPill({
           {/* Same 3rem headroom rule as the source picker: the list must not eat the search box. */}
           <CommandList
             data-slot="project-menu"
-            className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-3rem))]"
+            className="max-h-[min(18rem,calc(var(--available-height)-3rem))]"
           >
             {matched.length === 0 ? <CommandEmpty>Nothing matches.</CommandEmpty> : null}
             {matched.map((project) => (
@@ -921,9 +969,9 @@ function ProjectPill({
               >
                 <span className="min-w-0 flex-1 truncate text-xs font-medium">{project.name}</span>
                 {project.status === 'missing' ? (
-                  <span className="shrink-0 text-[11px] text-soft-foreground">folder not found</span>
+                  <span className="shrink-0 text-2xs text-soft-foreground">folder not found</span>
                 ) : project.branch !== undefined ? (
-                  <span className="shrink-0 font-mono text-[11px] text-soft-foreground">
+                  <span className="shrink-0 font-mono text-2xs text-soft-foreground">
                     {project.branch}
                   </span>
                 ) : null}
@@ -935,7 +983,7 @@ function ProjectPill({
           </CommandList>
           {/* The mockup's `dd-note`. Worth the two lines: picking here does far more than
               relabel a pill, and nothing else on screen says so. */}
-          <p className="border-t border-border px-3 py-2 text-[11px] leading-snug text-soft-foreground">
+          <p className="border-t border-border px-3 py-2 text-2xs leading-snug text-soft-foreground">
             Skills, workflows, settings and the draft re-resolve against the selected project.
           </p>
         </Command>
@@ -1038,7 +1086,7 @@ function SourcePill({
             data-slot="source-pill"
             aria-label="Choose a skill or workflow"
             disabled={!ready}
-            className={cn(chipClass, 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
+            className={cn(chipClass, 'border-foreground/60 font-mono text-xs font-semibold text-foreground')}
           >
             {source.source === 'skill' ? (
               <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
@@ -1066,7 +1114,7 @@ function SourcePill({
             <CommandList
               ref={listRef}
               data-slot="source-menu"
-              className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-3rem))]"
+              className="max-h-[min(18rem,calc(var(--available-height)-3rem))]"
             >
               {nothingMatches ? <CommandEmpty>Nothing matches.</CommandEmpty> : null}
               {/* Most used leads (#519), then Project skills before Global — the closer a
@@ -1123,7 +1171,7 @@ function SourcePill({
 /** Base-branch picker: worktrees fork from it and PRs target it. It is repo-level CONFIG
  *  (`PUT /api/config`, exactly the legacy Repo tab's picker), not a per-run flag — so it
  *  mutates the server and refetches, rather than living in the draft. Hidden without git. */
-function BaseBranchPill({ repo }: { repo: RepoResponse }) {
+function BaseBranchPicker({ repo }: { repo: RepoResponse }) {
   const queryClient = useQueryClient()
   const mutation = useMutation({
     mutationFn: (baseBranch: string | null) => putConfig({ baseBranch }),
@@ -1138,19 +1186,48 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
   if (!repo.info) return null
-  const current = repo.baseBranch ?? repo.info.branch
+  const options = [
+    {
+      value: '',
+      label: `current checkout (${repo.info.branch})`,
+      desc: 'Follow whatever is checked out',
+    },
+    ...repo.branches.map((branch) => ({ value: branch, label: branch, desc: undefined })),
+  ]
   return (
-    <PickerPill
-      slot="base-pill"
-      ariaLabel="Base branch"
-      label={<span className="font-mono text-[11.5px]">base: {current}</span>}
-      value={repo.baseBranch ?? ''}
-      onPick={(value) => mutation.mutate(value === '' ? null : value)}
-      options={[
-        { value: '', label: `current checkout (${repo.info.branch})`, desc: 'Follow whatever is checked out' },
-        ...repo.branches.map((branch) => ({ value: branch, label: branch })),
-      ]}
-    />
+    <div data-slot="base-branch" className="flex flex-col gap-1.5">
+      <p className="label-caps">Base branch</p>
+      <div
+        role="radiogroup"
+        aria-label="Base branch"
+        className="flex max-h-40 flex-col gap-0.5 overflow-y-auto"
+      >
+        {options.map((option) => {
+          const selected = (repo.baseBranch ?? '') === option.value
+          return (
+            <button
+              key={option.value === '' ? '(checkout)' : option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={mutation.isPending}
+              data-slot="base-branch-option"
+              data-branch={option.value}
+              onClick={() => mutation.mutate(option.value === '' ? null : option.value)}
+              className="flex h-7 shrink-0 items-center gap-2 rounded-sm px-2 text-left text-xs outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+            >
+              <span className="min-w-0 flex-1 truncate font-mono">{option.label}</span>
+              {option.desc ? (
+                <span className="shrink-0 text-2xs text-soft-foreground">{option.desc}</span>
+              ) : null}
+              {selected ? (
+                <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
+              ) : null}
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -1172,7 +1249,7 @@ function ModeSegment({
       data-slot="mode-seg"
       role="radiogroup"
       aria-label="Run mode"
-      className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-[3px]"
+      className="inline-flex h-8 items-center gap-0.5 rounded-full bg-muted p-[3px]"
     >
       <button
         type="button"
@@ -1180,7 +1257,7 @@ function ModeSegment({
         aria-checked={!planFirst}
         onClick={() => onModeChange(false)}
         className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
+          'h-6.5 rounded-full px-2.5 text-xs transition-colors',
           !planFirst
             ? 'bg-card font-semibold text-foreground shadow-xs'
             : 'font-medium text-muted-foreground hover:text-foreground',
@@ -1196,7 +1273,7 @@ function ModeSegment({
         data-slot="mode-plan"
         onClick={() => onModeChange(true)}
         className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
+          'h-6.5 rounded-full px-2.5 text-xs transition-colors',
           planFirst
             ? 'bg-contrast font-semibold text-contrast-foreground ring-2 ring-ring/55'
             : 'font-medium text-muted-foreground hover:text-foreground',
@@ -1226,9 +1303,8 @@ function SuggestedChips({ onPick }: { onPick: (text: string) => void }) {
           type="button"
           data-slot="suggested-chip"
           onClick={() => onPick(suggestion)}
-          className="inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="inline-flex h-7.5 items-center rounded-full border border-border px-3 text-xs font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
-          <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
           {suggestion}
         </button>
       ))}

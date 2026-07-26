@@ -508,15 +508,14 @@ describe('ThreadView', () => {
     expect(bodies[0]).toMatchObject({ task: 'a better prompt' })
   })
 
-  /** #472 — a queued run has not started, so its prompt is still authorable. */
-  it('queued → the composer is ENABLED with its own placeholder and hint, and no Continue', () => {
+  /** #472 — a queued run has not started, so its prompt is still authorable. The composer's
+   *  own placeholder says so; the old queued-hint line is gone (it repeated the placeholder). */
+  it('queued → the composer is ENABLED with its own placeholder, no hint block, and no Continue', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread(EVENTS)} />)
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
     expect(textarea.placeholder).toBe('Add to the prompt — sent when the run starts…')
-    expect(document.querySelector('[data-slot="queued-hint"]')?.textContent).toContain(
-      'folded into the prompt before the run starts',
-    )
+    expect(document.querySelector('[data-slot="queued-hint"]')).toBeNull()
     // Continue is meaningless for a run that has not run, so no engine pills either.
     expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
   })
@@ -533,7 +532,6 @@ describe('ThreadView', () => {
     expect(textarea.disabled).toBe(true)
     expect(textarea.placeholder).toBe('Session closed — no session to resume.')
     expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
-    expect(document.querySelector('[data-slot="queued-hint"]')).toBeNull()
   })
 
   it('done → the closed footer; failed → the danger footer carrying the run error', () => {
@@ -584,14 +582,14 @@ describe('ThreadView', () => {
         thread={reduceThread(EVENTS)}
       />,
     )
-    expect(document.querySelector('[data-slot="plan-dock"]')).toBeNull()
+    expect(document.querySelector('[data-slot="run-dock"]')).toBeNull()
     expect(document.querySelector('[data-slot="plan-mirror"]')).toBeNull()
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['active', 'pending'])
     expect(rows[0]!.textContent).toContain('Do the task')
   })
 
-  it('a plan in the stream → the dock above the composer area + the compact header mirror', () => {
+  it('a plan in the stream → the RunDock above the composer area + the compact header mirror', () => {
     const withPlan: RunEvent[] = [
       ...EVENTS,
       line(8, 'plan.updated', {
@@ -603,8 +601,8 @@ describe('ThreadView', () => {
       }),
     ]
     renderView(<ThreadView run={run('running')} thread={reduceThread(withPlan)} />)
-    expect(document.querySelector('[data-slot="plan-dock"]')).not.toBeNull()
-    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('· 1/3')
+    expect(document.querySelector('[data-slot="run-dock"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
     expect(document.querySelector('[data-slot="plan-mirror"]')?.textContent).toBe('Plan 1/3')
     // No steps on this run — the rail knows to stay away.
     expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
@@ -629,8 +627,9 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('running')} thread={reduceThread(events)} />)
     expect(document.querySelector('[data-slot="tool-card"]')).toBeNull()
-    expect(document.querySelector('[data-slot="plan-dock"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="run-dock"]')).not.toBeNull()
   })
+
 })
 
 /** Route-level: loading and 404 — driven through the real fetch boundary. jsdom has no

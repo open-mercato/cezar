@@ -1,3 +1,4 @@
+import { CheckIcon } from 'lucide-react'
 import { useState } from 'react'
 
 import { useSendMessage } from '@/api/queries'
@@ -65,10 +66,10 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
     <div
       data-slot="ask-card"
       data-resolved="false"
-      className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
+      className="rounded-lg border border-border border-l-2 border-l-primary bg-card px-4 pt-3.5 pb-3.5"
     >
       <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-xs font-medium text-primary">The agent is asking</span>
+        <span className="text-xs font-medium text-muted-foreground">The agent is asking</span>
       </div>
       <div className="flex flex-col gap-4">
         {questions.map((question, index) => (
@@ -90,7 +91,7 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
           <Button size="sm" disabled={sendMessage.isPending || providerBlocked || !allAnswered} onClick={sendAll}>
             Send answer
           </Button>
-          <span className="text-[11.5px] text-soft-foreground">
+          <span className="text-xs text-soft-foreground">
             {questions.length > 1 ? 'answer each question' : 'pick one or more'} — or type a reply below
           </span>
         </div>
@@ -133,11 +134,9 @@ function AskQuestionBlock({
   return (
     <div role="group" aria-label={question.question}>
       <div className="mb-0.5 flex items-center gap-2">
-        <span className="rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground">
-          {question.header}
-        </span>
+        <span className="label-caps">{question.header}</span>
         {multiSelect ? (
-          <span className="ml-auto text-[10.5px] text-soft-foreground">select all that apply</span>
+          <span className="ml-auto text-2xs text-muted-foreground">select all that apply</span>
         ) : null}
       </div>
       <p className="mb-2.5 text-sm font-semibold text-foreground">{question.question}</p>
@@ -157,18 +156,18 @@ function AskQuestionBlock({
                 isSelected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
               )}
             >
-              <span className="flex items-center gap-2 text-[13.5px] font-semibold text-foreground">
+              <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 {multiSelect ? (
                   <span
                     aria-hidden
                     className={cn(
-                      'flex size-4 items-center justify-center rounded border text-[10px]',
+                      'flex size-4 items-center justify-center rounded border',
                       isSelected
                         ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-soft-foreground',
                     )}
                   >
-                    {isSelected ? '✓' : ''}
+                    {isSelected ? <CheckIcon className="size-3" aria-hidden="true" /> : null}
                   </span>
                 ) : null}
                 {option.label}

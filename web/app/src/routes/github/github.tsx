@@ -33,6 +33,9 @@ import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffFileChange } from '@/components/diff'
 import type { EnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
+import { PageBody } from '@/components/page-body'
+import { PageHeader } from '@/components/page-header'
+import { PickerPill } from '@/components/picker-pill'
 import { TabLink } from '@/components/tab-link'
 import { Button } from '@/components/ui/button'
 import {
@@ -324,61 +327,75 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
           n === undefined ? 'flex' : 'hidden',
         )}
       >
-        <header data-slot="gh-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <h1 className="text-lg font-semibold">GitHub</h1>
-            {gh.repo ? (
-              <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-[11px] text-soft-foreground">
+        <PageHeader
+          data-slot="gh-header"
+          title="GitHub"
+          meta={
+            gh.repo ? (
+              <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-2xs text-soft-foreground">
                 {gh.repo}
               </span>
-            ) : null}
-            <button
-              type="button"
-              data-slot="gh-refresh"
-              title="Refresh from GitHub"
-              disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
-              className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
-            >
-              <RefreshCwIcon
-                aria-hidden="true"
-                className={cn('size-[9px]', refresh.isPending && 'motion-safe:animate-spin')}
-              />
-              {gh.syncedAt ? `synced ${shortAge(gh.syncedAt)} ago` : 'refresh'}
-            </button>
-          </div>
-          <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
-            <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
-              Issues · {countLabel(gh.issues.length)}
-            </TabLink>
-            <TabLink to="/github/prs" active={view === 'prs'} onClick={() => saveGithubView('prs')}>
-              Pull requests · {countLabel(gh.prs.length)}
-            </TabLink>
-          </div>
-          <div className="mt-2.5 flex items-center gap-2 pb-3">
-            <div className="relative min-w-0 flex-1">
-              <SearchIcon
-                aria-hidden="true"
-                className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground"
-              />
-              <input
-                type="search"
-                data-slot="gh-search"
-                aria-label={`Search ${view}`}
-                placeholder="Search #id, title, author…"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              />
-            </div>
-            <LabelFilter
-              options={labelOptions}
-              colors={labelColors}
-              selected={labelFilter}
-              onChange={setLabelFilter}
-            />
-          </div>
-        </header>
+            ) : null
+          }
+          actions={
+            <>
+              {gh.syncedAt ? (
+                <span data-slot="gh-synced" className="text-2xs text-muted-foreground">
+                  synced {shortAge(gh.syncedAt)} ago
+                </span>
+              ) : null}
+              <button
+                type="button"
+                data-slot="gh-refresh"
+                aria-label="Refresh from GitHub"
+                title="Refresh from GitHub"
+                disabled={refresh.isPending}
+                onClick={() => refresh.mutate()}
+                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-55"
+              >
+                <RefreshCwIcon
+                  aria-hidden="true"
+                  className={cn('size-3.5', refresh.isPending && 'motion-safe:animate-spin')}
+                />
+              </button>
+            </>
+          }
+          tabs={
+            <>
+              <div data-slot="gh-tabs" className="flex items-end gap-1 px-4 md:px-5">
+                <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
+                  Issues · {countLabel(gh.issues.length)}
+                </TabLink>
+                <TabLink to="/github/prs" active={view === 'prs'} onClick={() => saveGithubView('prs')}>
+                  Pull requests · {countLabel(gh.prs.length)}
+                </TabLink>
+              </div>
+              <div className="flex items-center gap-2 px-4 pt-2.5 pb-3 md:px-5">
+                <div className="relative min-w-0 flex-1">
+                  <SearchIcon
+                    aria-hidden="true"
+                    className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground"
+                  />
+                  <input
+                    type="search"
+                    data-slot="gh-search"
+                    aria-label={`Search ${view}`}
+                    placeholder="Search #id, title, author…"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  />
+                </div>
+                <LabelFilter
+                  options={labelOptions}
+                  colors={labelColors}
+                  selected={labelFilter}
+                  onChange={setLabelFilter}
+                />
+              </div>
+            </>
+          }
+        />
 
         {items.length === 0 ? (
           <p className="px-4 py-4 text-sm text-soft-foreground">
@@ -520,11 +537,11 @@ function GithubRow({
             aria-hidden="true"
             className={cn('size-3.5 shrink-0', item.kind === 'issue' ? 'text-success' : 'text-violet')}
           />
-          <span className={cn('min-w-0 truncate text-[13px] font-medium', active && 'font-semibold')}>
+          <span className={cn('min-w-0 truncate text-sm font-medium', active && 'font-semibold')}>
             {item.title}
           </span>
         </span>
-        <span className="flex items-center gap-2 pl-[22px] font-mono text-[10.5px] text-muted-foreground">
+        <span className="flex items-center gap-2 pl-[22px] font-mono text-2xs text-muted-foreground">
           <span>#{item.number}</span>
           <span className="min-w-0 truncate">{item.author}</span>
           <span>{shortAge(item.createdAt)}</span>
@@ -572,7 +589,7 @@ function LabelFilter({
           data-slot="gh-label-filter"
           disabled={options.length === 0}
           className={cn(
-            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
+            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
             selected.length > 0 && 'border-primary/60 text-foreground',
           )}
         >
@@ -583,7 +600,7 @@ function LabelFilter({
       <PopoverContent align="end" sideOffset={6} className="w-60 p-0">
         <Command>
           <CommandInput placeholder="Filter labels…" />
-          <CommandList className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]">
+          <CommandList className="max-h-[min(16rem,calc(var(--available-height)-3rem))]">
             <CommandEmpty>No labels.</CommandEmpty>
             {selected.length > 0 ? (
               <CommandItem value="__clear__" onSelect={() => onChange([])} className="text-soft-foreground">
@@ -618,7 +635,7 @@ function LabelChip({ label, color }: { label: string; color: string | undefined 
       data-slot="gh-label"
       data-label={label}
       style={labelChipStyle(color)}
-      className="rounded-full border px-1.5 py-px text-[10px] font-medium"
+      className="rounded-full border px-1.5 py-px text-2xs font-medium"
     >
       {label}
     </span>
@@ -644,7 +661,7 @@ function GithubDetail({
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
   const hasDiffStat = item.kind === 'pr' && Boolean(item.additions || item.deletions)
   return (
-    <article data-slot="gh-detail-inner" className="min-w-0 px-4 py-4 md:px-7 md:py-5">
+    <PageBody data-slot="gh-detail-inner" className="block">
       <Link
         to={listPath}
         data-slot="gh-back"
@@ -654,7 +671,7 @@ function GithubDetail({
         Back to the list
       </Link>
 
-      <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10.5px] text-soft-foreground">
+      <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-2xs text-soft-foreground">
         <span>#{item.number}</span>·<span>{kindWord}</span>·<span>opened by {item.author}</span>·
         <span>{shortAge(item.createdAt)} ago</span>
         {item.comments ? (
@@ -724,7 +741,7 @@ function GithubDetail({
 
       {children}
       </>}
-    </article>
+    </PageBody>
   )
 }
 
@@ -815,7 +832,7 @@ function GithubMergeBox({ number }: { number: number }) {
               Refresh
             </Button>
           </div>
-          <p className="mt-1 font-mono text-[11px] text-soft-foreground">
+          <p className="mt-1 font-mono text-2xs text-soft-foreground">
             {state.headRef} ({state.headSha.slice(0, 7)}) → {state.baseRef}
           </p>
           <ul className="mt-3 space-y-2 text-xs">
@@ -830,15 +847,18 @@ function GithubMergeBox({ number }: { number: number }) {
             {state.blockers.map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
           </ul>
           {state.state === 'open' && state.methods.length > 0 ? (
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <select
-                aria-label="Merge method"
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <PickerPill
+                slot="gh-merge-method"
+                ariaLabel="Merge method"
+                label={selectedMethod ? mergeLabels[selectedMethod] : 'Merge method'}
                 value={selectedMethod ?? ''}
-                onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
-              >
-                {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
-              </select>
+                options={state.methods.map((candidate) => ({
+                  value: candidate,
+                  label: mergeLabels[candidate],
+                }))}
+                onPick={(next) => setMethod(next as GithubMergeMethod)}
+              />
               <Button disabled={!state.canMerge || !selectedMethod} onClick={() => setConfirming(true)}>
                 {selectedMethod ? mergeLabels[selectedMethod] : 'Merge'}
               </Button>
@@ -909,29 +929,102 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
         <strong>{data.files.length} changed files</strong>
         <span className="text-success">+{data.additions}</span>
         <span className="text-danger">−{data.deletions}</span>
-        <span className="font-mono text-muted-foreground" title={data.headSha}>head {data.headSha.slice(0, 8)}</span>
-        <Button type="button" variant="outline" size="sm" className="ml-auto min-h-11" onClick={() => void refresh()}>Refresh</Button>
+        <span className="font-mono text-muted-foreground" title={data.headSha}>
+          head {data.headSha.slice(0, 8)}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          className="ml-auto max-md:min-h-11"
+          onClick={() => void refresh()}
+        >
+          Refresh
+        </Button>
       </div>
-      {data.truncated ? <p role="status" className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">{data.reason ?? 'This response is incomplete.'} {fallback ? <a href={fallback} target="_blank" rel="noopener noreferrer" className="underline">Open all files on GitHub</a> : null}</p> : null}
+      {data.truncated ? (
+        <p role="status" className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">
+          {data.reason ?? 'This response is incomplete.'}{' '}
+          {fallback ? (
+            <a href={fallback} target="_blank" rel="noopener noreferrer" className="underline">
+              Open all files on GitHub
+            </a>
+          ) : null}
+        </p>
+      ) : null}
       <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0">
-          <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm lg:hidden">
-            {files.map((file) => <option key={file.path}>{file.path}</option>)}
-          </select>
+          <input
+            aria-label="Filter changed files"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter files…"
+            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:min-h-11"
+          />
+          <div className="mt-2 lg:hidden">
+            <PickerPill
+              slot="gh-file-pick"
+              ariaLabel="Select changed file"
+              label={<span className="min-w-0 truncate">{selected ?? 'Select a file'}</span>}
+              value={selected ?? ''}
+              options={files.map((file) => ({ value: file.path, label: file.path }))}
+              onPick={setSelected}
+            />
+          </div>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
-            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left text-xs', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status} · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
+            {files.map((file) => (
+              <li key={file.path}>
+                <button
+                  type="button"
+                  onClick={() => setSelected(file.path)}
+                  className={cn(
+                    'h-8 w-full truncate rounded-sm px-2 text-left text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset',
+                    selected === file.path && 'bg-muted font-medium',
+                  )}
+                  title={file.path}
+                >
+                  {file.status} · {file.path}{' '}
+                  <span className="text-success">+{file.additions}</span>{' '}
+                  <span className="text-danger">−{file.deletions}</span>
+                </button>
+              </li>
+            ))}
           </ul>
         </aside>
         <div className="min-w-0">
           <div className="mb-2 flex justify-end gap-1">
-            <Button aria-label="Previous file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current <= 0} onClick={() => setSelected(files[current - 1]?.path ?? null)}><ChevronLeftIcon /></Button>
-            <Button aria-label="Next file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current < 0 || current >= files.length - 1} onClick={() => setSelected(files[current + 1]?.path ?? null)}><ChevronRightIcon /></Button>
+            <Button
+              aria-label="Previous file"
+              variant="outline"
+              size="icon"
+              className="max-md:min-h-11 max-md:min-w-11"
+              disabled={current <= 0}
+              onClick={() => setSelected(files[current - 1]?.path ?? null)}
+            >
+              <ChevronLeftIcon />
+            </Button>
+            <Button
+              aria-label="Next file"
+              variant="outline"
+              size="icon"
+              className="max-md:min-h-11 max-md:min-w-11"
+              disabled={current < 0 || current >= files.length - 1}
+              onClick={() => setSelected(files[current + 1]?.path ?? null)}
+            >
+              <ChevronRightIcon />
+            </Button>
           </div>
-          {files.length === 0 ? <p className="text-sm text-muted-foreground">No changed files match this filter.</p> : <>
-            <Diff files={diffFiles.filter((file) => file.path === selected)} wrap className="min-w-0" />
-            {active && !active.patch ? <p className="rounded-b border border-border p-3 text-xs text-muted-foreground">Patch unavailable: {active.patchUnavailableReason ?? 'not-provided'}.</p> : null}
-          </>}
+          {files.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No changed files match this filter.</p>
+          ) : (
+            <>
+              <Diff files={diffFiles.filter((file) => file.path === selected)} wrap className="min-w-0" />
+              {active && !active.patch ? (
+                <p className="rounded-b border border-border p-3 text-xs text-muted-foreground">
+                  Patch unavailable: {active.patchUnavailableReason ?? 'not-provided'}.
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
     </section>
@@ -1013,7 +1106,7 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
     <section data-slot="gh-thread" className="mt-6 border-t border-border pt-5">
       <h3
         data-slot="gh-thread-header"
-        className="mb-4 text-[11px] font-semibold tracking-wide text-soft-foreground uppercase"
+        className="label-caps mb-4"
       >
         {/* "Activity", not "Comments": heading a twenty-row list `Comments · 2` would be
             incoherent once events render. The comment count stays as a secondary. This is a
@@ -1119,7 +1212,7 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
             type="button"
             aria-expanded={true}
             onClick={() => setOpen(false)}
-            className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+            className="flex items-center gap-1.5 font-mono text-2xs text-soft-foreground hover:text-foreground"
           >
             <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
             <span className="font-sans font-medium text-foreground">{actor}</span>
@@ -1139,7 +1232,7 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
         type="button"
         aria-expanded={false}
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+        className="flex items-center gap-1.5 font-mono text-2xs text-soft-foreground hover:text-foreground"
       >
         <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
         <span className="font-sans font-medium text-foreground">{actor}</span>
@@ -1178,7 +1271,7 @@ function EventRow({ event, colors }: { event: GithubTimelineEvent; colors: Recor
       data-slot="gh-event-row"
       data-kind={event.kind}
       className={cn(
-        'flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-soft-foreground',
+        'flex min-w-0 items-center gap-1.5 font-mono text-2xs text-soft-foreground',
         event.kind === 'merged' && 'text-accent-foreground',
       )}
     >
@@ -1227,7 +1320,7 @@ function EventPhrase({ event, colors }: { event: GithubTimelineEvent; colors: Re
             <span
               data-slot="gh-event-label"
               style={labelChipStyle(event.label.color ?? colors[event.label.name])}
-              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px font-sans text-[10px]"
+              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px font-sans text-2xs"
             >
               {event.label.name}
             </span>
@@ -1297,7 +1390,7 @@ function ThreadEntry({ comment }: { comment: GithubComment }) {
   const chip = comment.reviewState ? REVIEW_CHIP[comment.reviewState] : null
   return (
     <li data-slot="gh-thread-entry" data-kind={comment.kind} className="min-w-0">
-      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground">
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-2xs text-soft-foreground">
         <Avatar url={comment.avatarUrl} login={comment.author} />
         <span className="font-sans font-medium text-foreground">{comment.author}</span>
         <span>{shortAge(comment.createdAt)}</span>
@@ -1305,7 +1398,7 @@ function ThreadEntry({ comment }: { comment: GithubComment }) {
           <span
             data-slot="gh-review-chip"
             data-review-state={comment.reviewState}
-            className={cn('rounded-full border px-1.5 py-px font-sans text-[10px] font-medium', chip.tone)}
+            className={cn('rounded-full border px-1.5 py-px font-sans text-2xs font-medium', chip.tone)}
           >
             {chip.label}
           </span>
@@ -1349,7 +1442,7 @@ function Avatar({ url, login }: { url?: string; login: string }) {
     <span
       data-slot="gh-avatar-fallback"
       aria-hidden="true"
-      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-semibold text-muted-foreground uppercase"
+      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-2xs font-semibold text-muted-foreground uppercase"
     >
       {login.slice(0, 1) || '?'}
     </span>
@@ -1387,7 +1480,7 @@ function CommentCount({ count }: { count: number }) {
 /** The checks badge — the legacy tab's three phrases, tinted by outcome. Links out
  *  to the PR's checks tab on GitHub (issue #415) when a URL is available. */
 function ChecksBadge({ checks, url }: { checks: Checks; url?: string }) {
-  const className = cn('text-[11px] font-medium', CHECKS_TONE[checks], url && 'hover:underline')
+  const className = cn('text-2xs font-medium', CHECKS_TONE[checks], url && 'hover:underline')
   const label = `${CHECKS_GLYPH[checks]} checks ${checks}`
 
   if (!url) {
@@ -1422,7 +1515,7 @@ function ChecksGlyph({ checks }: { checks: Checks }) {
       data-checks={checks}
       title={`checks ${checks}`}
       aria-label={`checks ${checks}`}
-      className={cn('shrink-0 font-sans text-[11px] font-semibold', CHECKS_TONE[checks])}
+      className={cn('shrink-0 font-sans text-2xs font-semibold', CHECKS_TONE[checks])}
     >
       {CHECKS_GLYPH[checks]}
     </span>

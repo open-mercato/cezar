@@ -36,11 +36,10 @@ import {
   WorkingIndicator,
 } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
-import { AgentsDock } from './agents-dock'
-import { PlanDock, planCounts } from './plan-dock'
+import { planCounts, RunDock } from './run-dock'
 import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
-import { AcceptCelebration, ReviewPanel } from './review-panel'
+import { ReviewPanel, useAcceptToast } from './review-panel'
 import { queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
@@ -181,6 +180,7 @@ export function buildThreadRows(
  *  thread body stays presentational — tests drive it with reduced fixture states directly. */
 export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }) {
   const footer = threadFooter(run.status, run.error)
+  useAcceptToast(run.status)
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(thread)
@@ -332,8 +332,6 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
         {run.status === 'review' ? <ReviewPanel run={run} /> : null}
       </div>
 
-      <AcceptCelebration status={run.status} />
-
       {/* The drill-down for whichever Agents-dock row was clicked. Rendered outside the dock
           so the sheet's portal is not affected by the dock's collapse state — but inside its
           own card cache (module-level and run-keyed, so this is the SAME store the thread
@@ -360,14 +358,14 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
           </div>
         ) : null}
         <div className="mx-auto flex w-full max-w-[820px] flex-col gap-2.5">
-          {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
-              and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
-          <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
-
-          {plan !== undefined && plan.length > 0 ? (
-            // Keyed by run id: the collapse default re-derives per task (see PlanDock).
-            <PlanDock key={run.id} runId={run.id} entries={plan} />
-          ) : null}
+          {/* Keyed by run id: the collapse default re-derives per task (see RunDock). */}
+          <RunDock
+            key={run.id}
+            runId={run.id}
+            plan={plan ?? []}
+            agents={agents}
+            onSelectAgent={setOpenAgentId}
+          />
 
           {run.status === 'waiting' ? (
             <div
@@ -376,16 +374,6 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
             >
               <StatusDot tone="pending" pulse />
               The agent is paused, waiting for your reply
-            </div>
-          ) : null}
-
-          {queued ? (
-            <div
-              data-slot="queued-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" />
-              Messages you add now are folded into the prompt before the run starts.
             </div>
           ) : null}
 
@@ -440,7 +428,7 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
   return (
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
-      <p className="text-[13px] font-medium">
+      <p className="text-sm font-medium">
         Waiting for a free agent slot{position !== undefined ? ` — #${position} in queue` : ''}
       </p>
       <p className="text-xs text-soft-foreground">

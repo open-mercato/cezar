@@ -14,7 +14,7 @@ import { AgentBrowser, fixtureServeEnv } from './agent-browser'
  * (the settleSuccess rule). This spec then does what a reviewer does: reads the banner and
  * the real worktree diff, sends notes back (which must land in the same session — the
  * transcript grows with the `Review feedback:` bubble), lets the run gate again, and accepts
- * — run done, celebration fired, banner gone.
+ * — run done, "Changes accepted" toast fired, banner gone.
  *
  * Draft PR success/409 stays in the component tests: even under CEZ_DRY_RUN the endpoint's
  * failure modes are gh-dependent, and the semantics are fully pinned there.
@@ -118,7 +118,7 @@ afterAll(() => {
 describe('the review gate against a live parked run', () => {
   it('shows the banner and the real worktree diff as per-file sections', () => {
     expect(browser.text('[data-slot="review-banner"]')).toContain(
-      'Review the changes before anything lands',
+      'Nothing merges on its own — review, then accept.',
     )
     // The diff is REAL — the mock touched notes.md in the worktree, and it renders as an
     // added-file section with add-tinted lines.
@@ -176,13 +176,14 @@ describe('the review gate against a live parked run', () => {
     expect(browser.text('[data-slot="diff-file-path"]')).toContain('notes.md')
   }, 90_000)
 
-  it('✓ Accept finishes the run as done and fires the one-shot celebration', async () => {
-    // The overlay lives ~1.5s — watch for it with an observer armed BEFORE the click, so the
+  it('✓ Accept finishes the run as done and fires the "Changes accepted" toast', async () => {
+    // The toast auto-dismisses — watch for it with an observer armed BEFORE the click, so the
     // assertion cannot lose a race against its own polling.
     browser.evaluate(`(() => {
       window.__cezCelebrated = false
       new MutationObserver(() => {
-        if (document.querySelector('[data-slot="accept-celebration"]')) window.__cezCelebrated = true
+        const toast = document.querySelector('[data-slot="toast"]')
+        if (toast && toast.textContent.includes('Changes accepted')) window.__cezCelebrated = true
       }).observe(document.body, { childList: true, subtree: true })
       return true
     })()`)

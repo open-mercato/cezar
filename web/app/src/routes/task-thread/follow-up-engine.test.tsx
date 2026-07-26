@@ -195,12 +195,12 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     renderAction(makeRun())
 
     // Two backends detected → the runner pill appears; pick codex.
-    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Runner' }))
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'Runner' }))
     let options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('codex')) as HTMLElement)
 
     // The model pill now lists codex presets; pin one.
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Model' }))
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Model' }))
     options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('gpt-future')) as HTMLElement)
 
@@ -219,7 +219,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
   it('a model-only pick on a legacy run can only send a claude model — never a codex one', async () => {
     serve({ ...HEALTH_MULTI, defaultRunner: 'codex' })
     renderAction(makeRun({ runner: undefined }))
-    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Model' }))
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'Model' }))
     const options = await screen.findAllByRole('menuitemradio')
     // The menu lists claude presets, so a codex model id cannot even be picked.
     expect(options.some((o) => o.textContent?.includes('gpt-5.1-codex'))).toBe(false)
@@ -355,7 +355,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     serve(HEALTH_MULTI, {}, providers)
     renderAction(makeRun({ runner: 'claude' }))
 
-    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Runner' }))
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'Runner' }))
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((option) => option.textContent)).toEqual(
       expect.arrayContaining([expect.stringContaining('claude'), expect.stringContaining('opencode')]),

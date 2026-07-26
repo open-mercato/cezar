@@ -61,14 +61,14 @@ export function WorktreesPanel() {
 
   if (worktrees.isPending) {
     return (
-      <p data-slot="worktrees-loading" className="text-[13px] text-soft-foreground">
+      <p data-slot="worktrees-loading" className="text-sm text-soft-foreground">
         Loading worktrees…
       </p>
     )
   }
   if (worktrees.isError) {
     return (
-      <p data-slot="worktrees-error" className="text-[13px] text-danger">
+      <p data-slot="worktrees-error" className="text-sm text-danger">
         Worktrees did not load: {worktrees.error.message}
       </p>
     )
@@ -86,7 +86,7 @@ export function WorktreesPanel() {
   return (
     <div data-slot="worktrees-panel" className="flex flex-col gap-3">
       {rows.length === 0 ? (
-        <p data-slot="worktrees-empty" className="text-[13px] text-soft-foreground">
+        <p data-slot="worktrees-empty" className="text-sm text-soft-foreground">
           No task worktrees on disk.
         </p>
       ) : (
@@ -94,7 +94,7 @@ export function WorktreesPanel() {
           <table className="w-full border-collapse text-sm">
             <caption className="sr-only">Task worktrees currently materialized on disk</caption>
             <thead>
-              <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
+              <tr className="border-b border-border text-left text-xs text-soft-foreground">
                 <th scope="col" className="px-3 py-2 font-medium">Task</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 font-medium">Size</th>
@@ -117,7 +117,7 @@ export function WorktreesPanel() {
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p data-slot="worktrees-footer" className="text-[12px] text-soft-foreground">
+        <p data-slot="worktrees-footer" className="text-xs text-soft-foreground">
           {rows.length} worktree{rows.length === 1 ? '' : 's'}
           {totalBytes !== null ? ` · ${formatMem(totalBytes) || '0 kB'} on disk` : ' · size unavailable'}
           {' · '}
@@ -184,14 +184,14 @@ function WorktreeRow({
     <tr data-slot="worktree-row" data-run={worktree.runId} className="border-b border-border last:border-0">
       <th scope="row" className="max-w-[220px] px-3 py-2 text-left font-normal">
         <span className="block truncate text-foreground" title={worktree.title}>{worktree.title}</span>
-        <span className="block truncate font-mono text-[11px] text-soft-foreground">
+        <span className="block truncate font-mono text-2xs text-soft-foreground">
           {worktree.branch ?? worktree.runId.slice(0, 8)}
         </span>
       </th>
       <td className="px-3 py-2">
-        <span className="text-[12px] text-soft-foreground">{worktree.status}</span>
+        <span className="text-xs text-soft-foreground">{worktree.status}</span>
         {worktree.reclaimable ? (
-          <span data-slot="worktree-reclaimable" className="ml-1 text-[11px] text-soft-foreground">
+          <span data-slot="worktree-reclaimable" className="ml-1 text-2xs text-soft-foreground">
             (reclaimable)
           </span>
         ) : null}

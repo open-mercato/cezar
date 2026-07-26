@@ -9,6 +9,8 @@ import { ApiError, pickVariant } from '@/api/client'
 import { queryKeys, useGroup, useRuns } from '@/api/queries'
 import type { GroupVariant } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { PageBody } from '@/components/page-body'
+import { PageHeader } from '@/components/page-header'
 import { Pill } from '@/components/pill'
 import { RunDiff } from '@/components/run-diff'
 import {
@@ -117,70 +119,75 @@ function CompareView({ groupId, variants }: { groupId: string; variants: GroupVa
   })
 
   return (
-    <div data-route="compare" className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-5 md:px-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <ScaleIcon className="size-5 shrink-0 text-violet" aria-hidden="true" />
-          <span className="min-w-0 truncate" title={title}>
-            {title}
+    <div data-route="compare" className="flex min-h-full flex-col">
+      <PageHeader
+        title={
+          <span className="flex min-w-0 items-center gap-2">
+            <ScaleIcon className="size-4 shrink-0 text-violet" aria-hidden="true" />
+            <span className="min-w-0 truncate" title={title}>
+              {title}
+            </span>
           </span>
-        </h1>
-        <p className="text-[13px] text-muted-foreground">
+        }
+      />
+
+      <PageBody className="mx-auto w-full max-w-6xl gap-4">
+        <p className="text-sm text-muted-foreground">
           {variants.length} variants of the same task, each in its own worktree — pick the diff you
           want to keep. The others are cancelled and archived, their worktrees and branches removed.
         </p>
-      </header>
 
-      <div
-        data-slot="compare-columns"
-        className={cn(
-          'grid grid-cols-1 gap-3',
-          variants.length >= 3 ? 'md:grid-cols-3' : 'md:grid-cols-2',
-        )}
-      >
-        {variants.map((variant) => (
-          <VariantColumn
-            key={variant.id}
-            variant={variant}
-            allTerminal={allTerminal}
-            pickPending={pick.isPending}
-            onPick={() => setConfirming(variant)}
-          />
-        ))}
-      </div>
+        <div
+          data-slot="compare-columns"
+          className={cn(
+            'grid grid-cols-1 gap-3',
+            variants.length >= 3 ? 'md:grid-cols-3' : 'md:grid-cols-2',
+          )}
+        >
+          {variants.map((variant) => (
+            <VariantColumn
+              key={variant.id}
+              variant={variant}
+              allTerminal={allTerminal}
+              pickPending={pick.isPending}
+              onPick={() => setConfirming(variant)}
+            />
+          ))}
+        </div>
 
-      <section aria-label="Full diffs" className="flex flex-col gap-2">
-        {variants.map((variant) => (
-          <VariantDiff key={variant.id} variant={variant} />
-        ))}
-      </section>
+        <section aria-label="Full diffs" className="flex flex-col gap-2">
+          {variants.map((variant) => (
+            <VariantDiff key={variant.id} variant={variant} />
+          ))}
+        </section>
 
-      <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Pick variant {confirming?.variant}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Variant {confirming?.variant}'s changes go to the review gate. The other{' '}
-              {variants.length - 1 === 1 ? 'variant is' : `${variants.length - 1} variants are`}{' '}
-              cancelled if still open, archived, and their worktrees and branches removed. There is
-              no undo.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep comparing</AlertDialogCancel>
-            <AlertDialogAction
-              data-slot="confirm-pick"
-              onClick={() => {
-                if (confirming) pick.mutate(confirming.id)
-                setConfirming(null)
-              }}
-            >
-              <CheckIcon aria-hidden="true" />
-              Pick variant {confirming?.variant}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Pick variant {confirming?.variant}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Variant {confirming?.variant}'s changes go to the review gate. The other{' '}
+                {variants.length - 1 === 1 ? 'variant is' : `${variants.length - 1} variants are`}{' '}
+                cancelled if still open, archived, and their worktrees and branches removed. There is
+                no undo.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep comparing</AlertDialogCancel>
+              <AlertDialogAction
+                data-slot="confirm-pick"
+                onClick={() => {
+                  if (confirming) pick.mutate(confirming.id)
+                  setConfirming(null)
+                }}
+              >
+                <CheckIcon aria-hidden="true" />
+                Pick variant {confirming?.variant}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </PageBody>
     </div>
   )
 }
@@ -217,7 +224,7 @@ function VariantColumn({
         <Pill dot={attention.tone} pulse={attention.pulse}>
           {attention.label}
         </Pill>
-        <span className="ml-auto shrink-0 font-mono text-[11px] text-soft-foreground tabular-nums">
+        <span className="ml-auto shrink-0 font-mono text-2xs text-soft-foreground tabular-nums">
           {compactTokens(variant.tokensUsed)}
           {cost ? ` · ${cost}` : ''}
         </span>
@@ -226,25 +233,25 @@ function VariantColumn({
       {/* Honestly labeled: this block is git's own `git diff --stat` output from the variant's
           worktree, not this UI's ± stat — the numbers can disagree with a partial fetch. */}
       <div className="flex min-w-0 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <span className="label-caps">
           git diff --stat
         </span>
         <pre
           data-slot="variant-diffstat"
-          className="max-h-36 overflow-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-[11px] leading-[1.6] whitespace-pre text-muted-foreground"
+          className="max-h-36 overflow-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-2xs leading-[1.6] whitespace-pre text-muted-foreground"
         >
           {variant.diffStat.trimEnd() || '(no changes)'}
         </pre>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <span className="label-caps">
           Progress
         </span>
         {variant.handoffExcerpt ? (
           <div
             data-slot="variant-progress"
-            className="max-h-28 min-w-0 overflow-hidden text-[12.5px] text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
+            className="max-h-28 min-w-0 overflow-hidden text-xs text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
           >
             <Markdown>{variant.handoffExcerpt}</Markdown>
           </div>
@@ -284,7 +291,7 @@ function VariantDiff({ variant }: { variant: GroupVariant }) {
       data-variant={variant.variant}
       className="min-w-0 overflow-hidden rounded-lg border border-border bg-card"
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-[13px] font-medium hover:bg-muted/50">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-sm font-medium hover:bg-muted/50">
         <ChevronRightIcon
           className={cn('size-3.5 shrink-0 text-soft-foreground transition-transform', open && 'rotate-90')}
           aria-hidden="true"

@@ -73,13 +73,13 @@ const card = () => document.querySelector('[data-slot="tool-card"]')!
 const trigger = (name: RegExp) => screen.getByRole('button', { name })
 
 describe('ToolCard — states', () => {
-  it('running without output: shimmering verb, spinner, locked (disabled trigger, no chevron)', () => {
+  it('running without output: spinner is the only busy signal, locked (disabled trigger, no chevron)', () => {
     const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'running')
     render(<ToolCard item={item} />)
     expect(card().getAttribute('data-status')).toBe('running')
     const button = trigger(/Ran.*git status --short/)
-    expect((button as HTMLButtonElement).disabled).toBe(true)
-    expect(button.querySelector('.shimmer')?.textContent).toBe('Ran')
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    expect(button.querySelector('.shimmer')).toBeNull()
     expect(screen.getByRole('status', { name: 'Running' })).toBeTruthy()
     expect(document.querySelector('[data-slot="tool-output"]')).toBeNull()
   })
@@ -89,8 +89,7 @@ describe('ToolCard — states', () => {
     render(<ToolCard item={item} />)
     expect(card().getAttribute('data-status')).toBe('completed')
     const button = trigger(/Ran.*git status --short/)
-    expect((button as HTMLButtonElement).disabled).toBe(false)
-    expect(button.querySelector('.shimmer')).toBeNull()
+    expect(button.getAttribute('aria-disabled')).not.toBe('true')
     expect(screen.queryByText(/M src\/example\.ts/)).toBeNull() // closed by default
     fireEvent.click(button)
     expect(document.querySelector('[data-slot="tool-output"] pre')?.textContent).toBe(' M src/example.ts')
@@ -121,7 +120,7 @@ describe('ToolCard — states', () => {
     render(<ToolCard item={item} />)
     expect(card().getAttribute('data-status')).toBe('declined')
     expect(screen.getByText('declined')).toBeTruthy()
-    expect((screen.getByRole('button', { name: /declined/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: /declined/ }).getAttribute('aria-disabled')).toBe('true')
   })
 
   it('edit with diffs: old/new render as a tinted unified block inside InlineDiffPreview', () => {
@@ -145,13 +144,11 @@ describe('ToolCard — states', () => {
 })
 
 describe('ToolCard — exit-code pill (execute kind)', () => {
-  it('exit 0 (the golden opencode bash item) → success pill', () => {
+  it('exit 0 (the golden opencode bash item) → no pill, success is the quiet default', () => {
     const item = goldenItem(opencodeToolLifecycle, 'prt_01J8ZE21TOOL', 'completed')
     expect(item.exitCode).toBe(0)
     render(<ToolCard item={item} />)
-    const pill = document.querySelector('[data-slot="tool-exit"]')!
-    expect(pill.textContent).toBe('0')
-    expect(pill.className).toContain('text-success')
+    expect(document.querySelector('[data-slot="tool-exit"]')).toBeNull()
   })
 
   it('a non-zero exit → danger pill', () => {
@@ -274,6 +271,17 @@ describe('ContextGroup + ToolStreak', () => {
     fireEvent.click(button)
     expect(screen.getByTestId('older-card')).toBeTruthy()
   })
+
+  it('a streak given blocks flattens context groups to their tool cards — no nested group row', () => {
+    const read = goldenItem(subagentTask, 'toolu_sub_01', 'completed')
+    const blocks = groupThreadItems([read, { ...read, id: 'toolu_sub_02' }])
+    const group = blocks[0]!
+    if (group.kind !== 'context-group') throw new Error('expected a context group')
+    render(<ToolStreak count={2} blocks={[group]} scope="turn-1" />)
+    fireEvent.click(screen.getByRole('button', { name: '2 earlier tool calls' }))
+    expect(document.querySelectorAll('[data-slot="ctx-group"]')).toHaveLength(0)
+    expect(document.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(2)
+  })
 })
 
 describe('sub-agent nesting (golden subagent-task fixture, end to end through the reducer)', () => {
@@ -285,10 +293,13 @@ describe('sub-agent nesting (golden subagent-task fixture, end to end through th
     render(<ToolCard item={task.item} nested={task.children} />)
 
     const button = screen.getByRole('button', { name: /Task/ })
-    expect((button as HTMLButtonElement).disabled).toBe(false) // nested children ARE detail — the card is not locked
+    expect(button.getAttribute('aria-disabled')).not.toBe('true') // nested children ARE detail — the card is not locked
     fireEvent.click(button)
     const nested = document.querySelector('[data-slot="tool-nested"]')!
     expect(nested.querySelector('[data-slot="assistant-message"]')?.textContent).toContain('Scanning the auth middleware')
     expect(nested.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(1)
+    const nestedCard = nested.querySelector('[data-slot="tool-card"]')!
+    expect(nestedCard.className).not.toContain('bg-card')
+    expect(nestedCard.className).not.toContain('border-border')
   })
 })

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
  * destructive affordance. There is deliberately no `secondary`/`link` — the design system doesn't use them.
  */
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
@@ -20,10 +20,11 @@ const buttonVariants = cva(
         "danger-ghost": "text-danger hover:bg-danger/10",
       },
       size: {
-        default: "h-9 px-3.5 text-[13.5px]",
-        sm: "h-[30px] rounded-sm px-2.5 text-[12.5px]",
+        default: "h-9 px-3.5 text-sm",
+        sm: "h-7.5 rounded-sm px-2.5 text-xs",
         icon: "size-9",
-        "icon-sm": "size-[30px] rounded-sm",
+        "icon-sm": "size-7.5 rounded-sm",
+        "icon-round": "size-8 rounded-full",
       },
     },
     defaultVariants: {

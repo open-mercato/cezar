@@ -54,7 +54,7 @@ describe('StepRail', () => {
     expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
   })
 
-  it('one row per step with the mapped glyph, name, kind and position', () => {
+  it('one row per step with the mapped glyph, name and kind — no repeated "step N of M" label', () => {
     render(
       <StepRail
         steps={[
@@ -66,9 +66,9 @@ describe('StepRail', () => {
     )
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
-    expect(rows[0]!.textContent).toContain('Do the task')
-    expect(rows[0]!.textContent).toContain('agent · step 1 of 3')
-    expect(rows[1]!.textContent).toContain('check · step 2 of 3')
+    expect(rows[0]!.textContent).toBe('Do the taskagent')
+    expect(rows[1]!.textContent).toBe('Verifycheck')
+    expect(rows[0]!.textContent).not.toContain('step 1 of 3')
     // The amber spinner announces itself; done/pending rows carry no live status.
     expect(screen.getAllByRole('status', { name: 'Step running' })).toHaveLength(1)
   })

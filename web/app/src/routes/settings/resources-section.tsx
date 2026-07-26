@@ -7,6 +7,7 @@ import { putWorkspaceConfig } from '@/api/client'
 import { useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
 import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { PageBody } from '@/components/page-body'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { SettingsField } from './settings-field'
@@ -41,7 +42,7 @@ export function ResourcesSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="resources-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="resources-loading" className="p-4 text-sm text-soft-foreground md:p-6">
         Loading resource settings…
       </p>
     )
@@ -114,9 +115,9 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   })
 
   return (
-    <div
+    <PageBody
       data-slot="resources-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="mx-auto w-full max-w-2xl gap-7"
     >
       <SettingsField
         title="Max parallel tasks"
@@ -138,7 +139,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
             ),
           )}
         </select>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-2xs text-soft-foreground">
           Need a different limit for one project?{' '}
           <Link
             to="/settings/global/projects"
@@ -167,7 +168,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
             <option key={n} value={n}>{n}</option>
           ))}
         </select>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-2xs text-soft-foreground">
           Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
         </p>
       </SettingsField>
@@ -207,9 +208,9 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
         </div>
         {wakeMode === 'interval' && wakeInvalid ? (
-          <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
+          <p data-slot="resources-monitoring-wake-invalid" className="text-2xs text-danger">Enter a whole number from 1 to 60 minutes.</p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
+          <p className="text-2xs text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
         )}
       </SettingsField>
 
@@ -244,11 +245,11 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           </Button>
         </div>
         {memoryInvalid ? (
-          <p data-slot="resources-memory-invalid" className="text-[11px] text-danger">
+          <p data-slot="resources-memory-invalid" className="text-2xs text-danger">
             Enter a whole number of at least {MEMORY_MIN_MB} MiB, or leave empty for no limit.
           </p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
+          <p className="text-2xs text-soft-foreground">Applies to newly started tasks.</p>
         )}
       </SettingsField>
 
@@ -270,7 +271,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-2xs text-soft-foreground">
               Inherited: {composerDefaults.inheritedAutonomous === 'source-dependent'
                 ? 'Source-dependent — skills on, workflows off'
                 : composerDefaults.inheritedAutonomous ? 'On' : 'Off'}
@@ -289,15 +290,15 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-2xs text-soft-foreground">
               Inherited: {composerDefaults.inheritedWorktree ? 'On' : 'Off'}
             </span>
           </label>
         </div>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-2xs text-soft-foreground">
           Interactive skills may recommend both off. Multi-step and parallel runs remain isolated.
         </p>
       </SettingsField>
-    </div>
+    </PageBody>
   )
 }

@@ -22,7 +22,7 @@ import type { FileDiff, ToolKind, UiToolItem } from '@/protocol/ui-events'
 import { cn } from '@/lib/utils'
 
 import { Markdown } from './markdown'
-import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-groups'
+import { splitToolTitle, streakLabel, type ContextGroupBlock, type ToolCardBlock } from './thread-groups'
 import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
 import type { ThreadEntry, ThreadImage, ThreadNote, ThreadProviderAuthRequired } from './thread-state'
@@ -115,7 +115,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+        className="max-w-[78%] self-end rounded-xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-[1.55] md:max-w-[70%]"
       >
         <textarea
           autoFocus
@@ -133,14 +133,14 @@ export function UserBubble({
               void save()
             }
           }}
-          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[13.5px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
         <span className="mt-1.5 flex justify-end gap-1.5">
           <button
             type="button"
             onClick={() => setEditing(false)}
             disabled={busy}
-            className="rounded-sm px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+            className="rounded-sm px-2 py-1 text-xs font-medium text-muted-foreground outline-none hover:bg-background hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             Cancel
           </button>
@@ -148,7 +148,7 @@ export function UserBubble({
             type="button"
             onClick={() => void save()}
             disabled={busy}
-            className="rounded-sm bg-primary px-2 py-1 text-xs font-semibold text-primary-foreground hover:brightness-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+            className="rounded-sm bg-primary px-2 py-1 text-xs font-semibold text-primary-foreground outline-none hover:brightness-[0.96] focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             {busy ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : 'Save'}
           </button>
@@ -161,7 +161,7 @@ export function UserBubble({
   return (
     <div
       data-slot="user-bubble"
-      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+      className="group max-w-[78%] min-w-0 self-end rounded-xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-[1.55] md:max-w-[70%]"
     >
       {onEdit || onRemove ? (
         <span
@@ -174,7 +174,7 @@ export function UserBubble({
               aria-label={editLabel}
               onClick={startEditing}
               disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+              className="inline-flex size-7 items-center justify-center rounded-sm text-soft-foreground outline-none hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               <SquarePenIcon className="size-3.5" />
             </button>
@@ -185,7 +185,7 @@ export function UserBubble({
               aria-label={removeLabel}
               onClick={() => void remove()}
               disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+              className="inline-flex size-7 items-center justify-center rounded-sm text-soft-foreground outline-none hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               <Trash2Icon className="size-3.5" />
             </button>
@@ -218,7 +218,7 @@ export function UserBubble({
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 text-[15px] leading-[1.65]">
+    <div data-slot="assistant-message" className="min-w-0 text-base leading-[1.65]">
       <Markdown>{text}</Markdown>
     </div>
   )
@@ -257,7 +257,7 @@ export function ProviderAuthRequiredCard({
       data-slot="provider-auth-required"
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">
+      <p className="text-sm font-semibold text-foreground">
         This run needed {label} authorization
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -288,11 +288,11 @@ export function ReasoningItem({ text }: { text: string }) {
     <Collapsible data-slot="reasoning" className="group/reasoning min-w-0">
       <div
         id={previewId}
-        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-[13px] text-soft-foreground hover:text-muted-foreground"
+        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-sm text-soft-foreground hover:text-muted-foreground"
       >
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 transition-transform group-data-[state=open]/reasoning:rotate-90"
+          className="size-3.5 shrink-0 transition-transform group-data-[open]/reasoning:rotate-90"
         />
         <span className="shrink-0">Thinking — </span>
         <div className="min-w-0 truncate text-muted-foreground">
@@ -303,11 +303,11 @@ export function ReasoningItem({ text }: { text: string }) {
             button overlays the preview without inheriting invalid block descendants. */}
         <CollapsibleTrigger
           aria-labelledby={previewId}
-          className="absolute inset-0 rounded-md focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="absolute inset-0 rounded-md"
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-[13px] leading-[1.6] text-soft-foreground">
+        <div className="px-6 py-1.5 text-sm leading-[1.6] text-soft-foreground">
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>
@@ -319,17 +319,17 @@ export function ReasoningItem({ text }: { text: string }) {
  * Live "the agent is working" affordance for an active session. A running run
  * streams in bursts with quiet gaps between turns (thinking, tool setup), and
  * with nothing on screen the user cannot tell whether more output is coming.
- * This spinner + shimmering label sits at the tail of the thread for exactly
- * the `running` window, so the session never looks stalled when it is not.
+ * This spinner sits at the tail of the thread for exactly the `running`
+ * window, so the session never looks stalled when it is not.
  */
 export function WorkingIndicator() {
   return (
     <div
       data-slot="working-indicator"
-      className="flex items-center gap-2 py-1 text-[13px] text-soft-foreground"
+      className="flex items-center gap-2 py-1 text-sm text-soft-foreground"
     >
       <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
-      <span className="shimmer font-medium">Working…</span>
+      <span className="font-medium">Working…</span>
     </div>
   )
 }
@@ -384,8 +384,8 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
           }
           className={cn(
             'overflow-x-auto',
-            streaming && 'max-h-[216px] overflow-y-auto',
-            clamped && 'max-h-[216px] overflow-y-hidden',
+            streaming && 'max-h-56 overflow-y-auto',
+            clamped && 'max-h-56 overflow-y-hidden',
           )}
         >
           <pre className="px-4 py-3 font-mono text-xs leading-[1.7] whitespace-pre text-muted-foreground">{text}</pre>
@@ -403,7 +403,7 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
           type="button"
           data-slot="tool-output-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-2xs font-medium text-soft-foreground hover:text-foreground"
         >
           {expanded ? 'Show less' : `Show all ${lines} lines`}
         </button>
@@ -422,7 +422,7 @@ export function InlineDiffPreview({ diffs }: { diffs: FileDiff[] }) {
     <>
       {diffs.map((diff, index) => (
         <div key={`${diff.path}:${index}`} data-slot="diff-preview" className="min-w-0">
-          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-[11px] text-soft-foreground">
+          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-2xs text-soft-foreground">
             {diff.path}
           </div>
           <pre className="overflow-x-auto py-2 font-mono text-xs leading-[1.7] whitespace-pre">
@@ -489,10 +489,12 @@ export function ToolCard({
   item,
   nested = [],
   cacheKey,
+  flat = false,
 }: {
   item: UiToolItem
   nested?: ThreadEntry[]
   cacheKey?: string
+  flat?: boolean
 }) {
   const cache = useThreadCardCache()
   const [userOpen, setUserOpenState] = useState<boolean | null>(
@@ -520,18 +522,19 @@ export function ToolCard({
       open={open}
       onOpenChange={setUserOpen}
       className={cn(
-        'min-w-0 overflow-hidden rounded-md border bg-card',
-        item.status === 'failed' ? 'border-danger/40' : 'border-border',
+        'min-w-0 overflow-hidden',
+        !flat && 'rounded-md border bg-card',
+        !flat && (item.status === 'failed' ? 'border-danger/40' : 'border-border'),
       )}
     >
       <CollapsibleTrigger
         disabled={!hasDetail}
-        className="group flex min-h-[28px] w-full items-center gap-1.5 px-2.5 py-0.5 text-left text-[13px] enabled:hover:bg-muted"
+        className="group flex h-7 w-full items-center gap-1.5 px-2.5 py-0.5 text-left text-sm not-aria-disabled:hover:bg-muted"
       >
         <ChevronRightIcon
           aria-hidden
           className={cn(
-            'size-3 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-90',
+            'size-3 shrink-0 text-soft-foreground transition-transform group-data-[panel-open]:rotate-90',
             !hasDetail && 'invisible',
           )}
         />
@@ -539,7 +542,6 @@ export function ToolCard({
         <span
           className={cn(
             'shrink-0 font-semibold',
-            busy && 'shimmer',
             item.status === 'failed' && 'text-danger',
             item.status === 'declined' && 'text-muted-foreground',
           )}
@@ -555,13 +557,10 @@ export function ToolCard({
           ) : null}
           {item.status === 'failed' ? <span className="text-xs text-danger">failed</span> : null}
           {item.status === 'declined' ? <span className="text-xs text-soft-foreground">declined</span> : null}
-          {item.toolKind === 'execute' && typeof item.exitCode === 'number' ? (
+          {item.toolKind === 'execute' && typeof item.exitCode === 'number' && item.exitCode !== 0 ? (
             <span
               data-slot="tool-exit"
-              className={cn(
-                'rounded-full px-2 py-px font-mono text-[10.5px] font-semibold',
-                item.exitCode === 0 ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger',
-              )}
+              className="rounded-full bg-danger/10 px-2 py-px font-mono text-2xs font-semibold text-danger"
             >
               {item.exitCode}
             </span>
@@ -569,7 +568,7 @@ export function ToolCard({
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="border-t border-border bg-card-2">
+        <div className={cn(!flat && 'border-t border-border bg-card-2')}>
           {item.error !== undefined && item.error !== '' ? (
             <div data-slot="tool-error" className="px-4 py-3 font-mono text-xs leading-[1.7] whitespace-pre-wrap text-danger">
               {item.error}
@@ -605,7 +604,7 @@ export function NestedEntry({ entry, scope }: { entry: ThreadEntry; scope?: stri
     case 'reasoning':
       return <ReasoningItem text={entry.text} />
     case 'tool':
-      return <ToolCard item={entry} cacheKey={scope !== undefined ? `${scope}:${entry.id}` : undefined} />
+      return <ToolCard item={entry} flat cacheKey={scope !== undefined ? `${scope}:${entry.id}` : undefined} />
     case 'note':
       return <NoteLine note={entry} />
     case 'image':
@@ -622,10 +621,10 @@ export function NestedEntry({ entry, scope }: { entry: ThreadEntry; scope?: stri
 export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope?: string }) {
   return (
     <Collapsible data-slot="ctx-group" className="min-w-0">
-      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+      <CollapsibleTrigger className="group flex h-8 w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-90"
+          className="size-3.5 shrink-0 text-soft-foreground transition-transform group-data-[panel-open]:rotate-90"
         />
         {group.label}
       </CollapsibleTrigger>
@@ -641,19 +640,52 @@ export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope
 }
 
 /** The legacy tool-streak fold, kept: older finished tool cards collapse under
- *  "▸ N earlier tool calls". The caller renders the folded blocks as children. */
-export function ToolStreak({ count, children }: { count: number; children: ReactNode }) {
+ *  "▸ N earlier tool calls". The streak only counts — folded context groups flatten to their
+ *  member tool cards here instead of nesting a second collapsible level. `children` is the
+ *  legacy render path for callers that have not moved to `blocks` yet. */
+export function ToolStreak({
+  count,
+  blocks = [],
+  scope,
+  children,
+}: {
+  count: number
+  blocks?: ReadonlyArray<ToolCardBlock | ContextGroupBlock>
+  scope?: string
+  children?: ReactNode
+}) {
   return (
     <Collapsible data-slot="tool-streak" className="min-w-0">
       <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-xs text-soft-foreground hover:text-muted-foreground">
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
+          className="size-3.5 shrink-0 transition-transform group-data-[panel-open]:rotate-90"
         />
         {streakLabel(count)}
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="flex flex-col gap-2 pt-2">{children}</div>
+        <div className="flex flex-col gap-2 pt-2">
+          {blocks.length > 0
+            ? blocks.flatMap((block) =>
+                block.kind === 'context-group'
+                  ? block.tools.map((tool) => (
+                      <ToolCard
+                        key={tool.id}
+                        item={tool}
+                        cacheKey={scope !== undefined ? `${scope}:${tool.id}` : undefined}
+                      />
+                    ))
+                  : (
+                      <ToolCard
+                        key={block.id}
+                        item={block.item}
+                        nested={block.children}
+                        cacheKey={scope !== undefined ? `${scope}:${block.id}` : undefined}
+                      />
+                    ),
+              )
+            : children}
+        </div>
       </CollapsibleContent>
     </Collapsible>
   )

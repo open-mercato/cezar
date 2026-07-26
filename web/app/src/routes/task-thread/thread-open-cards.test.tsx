@@ -33,7 +33,10 @@ const card = (runId: string, tool: UiToolItem = item()) => (
   </ThreadCardCache>
 )
 
-const state = () => document.querySelector('[data-slot="tool-card"]')!.getAttribute('data-state')
+const state = () => {
+  const card = document.querySelector('[data-slot="tool-card"]')!
+  return card.hasAttribute('data-open') ? 'open' : card.hasAttribute('data-closed') ? 'closed' : null
+}
 const trigger = () => document.querySelector('[data-slot="collapsible-trigger"]')!
 
 describe('the per-run open-card cache', () => {

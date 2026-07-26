@@ -106,7 +106,7 @@ describe('TaskQuickList', () => {
     expect(within(row('raw') as HTMLElement).getByRole('link', { name: /fix the search crash/ })).not.toBeNull()
   })
 
-  it('shows the diff pair when a turn recorded one, and nothing when none exists', () => {
+  it('carries the diff numbers in the row title, never as a second right-hand meta', () => {
     renderList({
       runs: [
         run({ id: 'diffed', title: 'Has a diff', status: 'review', diffStat: { adds: 42, dels: 7, files: 3 } }),
@@ -114,13 +114,13 @@ describe('TaskQuickList', () => {
       ],
     })
 
-    const pair = row('diffed')?.querySelector('[data-slot="diff-stat"]')
-    expect(pair?.textContent).toBe('+42 −7')
-    // Two colored halves through the design tokens — green adds, red dels, like the mockup.
-    expect(pair?.querySelector('.text-success')?.textContent).toBe('+42')
-    expect(pair?.querySelector('.text-danger')?.textContent).toBe('−7')
-    // A sidebar row has no ± column to hold an em dash open for — absence is just absence.
-    expect(row('plain')?.querySelector('[data-slot="diff-stat"]')).toBeNull()
+    // One right-hand meta per row (the PR chip, else the age) — the diff pair moved into the
+    // link's title attribute.
+    const link = row('diffed')?.querySelector('a[href="/tasks/diffed"]')
+    expect(link?.getAttribute('title')).toBe('Has a diff · +42 −7')
+    expect(row('diffed')?.querySelector('[data-slot="diff-stat"]')).toBeNull()
+    // No diff, no numbers — absence is just absence.
+    expect(row('plain')?.querySelector('a')?.getAttribute('title')).toBe('No diff yet')
     expect(row('plain')?.textContent).not.toContain('—')
   })
 
@@ -285,9 +285,9 @@ describe('TaskQuickList', () => {
       fireEvent.click(screen.getByRole('button', { expanded: false }))
       expect(screen.getByRole('button', { expanded: true })).not.toBeNull()
 
-      // The letter chip, its own dot, and what actually differs between the variants.
-      expect(row('va')?.textContent).toBe('Aclaude · 96.2k')
-      expect(row('vb')?.textContent).toBe('Bcodex · 41.8k')
+      // The letter prefix, its own dot, and what actually differs between the variants.
+      expect(row('va')?.textContent).toBe('A · claude · 96.2k')
+      expect(row('vb')?.textContent).toBe('B · codex · 41.8k')
       expect(dotOf('va')?.getAttribute('data-tone')).toBe('violet')
       // Each variant is still its own deep link.
       expect(row('vb')?.querySelector('a')?.getAttribute('href')).toBe('/tasks/vb')
@@ -308,7 +308,7 @@ describe('TaskQuickList', () => {
     it('omits the token count from a variant that has not spent anything yet', () => {
       renderList({ runs: variants().map((v, i) => ({ ...v, tokensUsed: i === 0 ? 0 : v.tokensUsed })) })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude')
+      expect(row('va')?.textContent).toBe('A · claude')
     })
   })
 

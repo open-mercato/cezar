@@ -1,7 +1,8 @@
-import { ChevronDownIcon, NotebookPenIcon, SparklesIcon } from 'lucide-react'
+import { NotebookPenIcon, SparklesIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useNavigate } from '@/lib/project-router'
 
+import { chevron, chipClass } from '@/components/picker-pill'
 import {
   Command,
   CommandEmpty,
@@ -17,11 +18,11 @@ import { multiWordFilter } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
 /**
- * "Insert a template" — the trigger shared by all three follow-up composers: the GitHub
- * hand-over (`routes/github/hand-to-agent.tsx`), the Inbox's "Add instructions"
- * (`routes/inbox.tsx`), and the /new task composer (`routes/new-task.tsx`). Picking one calls
- * `onInsert` with the snippet text; the composer decides where it lands (caret position via
- * `lib/prompt-templates.ts#insertTemplate`).
+ * "Insert a template" — the trigger shared by the follow-up composers: the GitHub hand-over
+ * (`routes/github/hand-to-agent.tsx`) and the Inbox's "Add instructions" (`routes/inbox.tsx`);
+ * the /new composer folds the same templates into its "+" menu instead (`ComposerPlusMenu`).
+ * Picking one calls `onInsert` with the snippet text; the composer decides where it lands
+ * (caret position via `lib/prompt-templates.ts#insertTemplate`).
  *
  * Searchable (#413 follow-up), so a long list stays usable: Popover + cmdk with `multiWordFilter`
  * — the same grammar as the skill and workflow pickers next to it, rather than a second kind of
@@ -36,15 +37,11 @@ export function PromptTemplateMenu({
   onInsert,
   triggerClassName,
   disabled,
-  /** Drop the "templates" label and render just the icon — the /new composer footer, where the
-   *  pill row is already full and every one of these competes with the send button for space. */
-  iconOnly = false,
 }: {
   templates: readonly PromptTemplate[]
   onInsert: (text: string) => void
   triggerClassName?: string
   disabled?: boolean
-  iconOnly?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -63,19 +60,11 @@ export function PromptTemplateMenu({
           aria-label="Insert a prompt template"
           title="Insert a prompt template"
           disabled={disabled}
-          className={cn(
-            'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
-            iconOnly ? 'w-[26px] justify-center px-0' : 'px-2.5',
-            triggerClassName,
-          )}
+          className={cn(chipClass, triggerClassName)}
         >
           <NotebookPenIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-          {iconOnly ? null : (
-            <>
-              templates
-              <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
-            </>
-          )}
+          templates
+          {chevron}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -96,7 +85,7 @@ export function PromptTemplateMenu({
           <CommandList
             ref={listRef}
             data-slot="prompt-template-list-menu"
-            className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]"
+            className="max-h-[min(16rem,calc(var(--available-height)-3rem))]"
           >
             <CommandEmpty>Nothing matches.</CommandEmpty>
             <CommandGroup heading="Insert a template">
@@ -118,21 +107,21 @@ export function PromptTemplateMenu({
                   }}
                 >
                   <span className="flex w-full items-center gap-1.5">
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                       {template.label}
                     </span>
                     {template.skills && template.skills.length > 0 ? (
                       <span
                         data-slot="prompt-template-assigned"
                         title={`Applied automatically with: ${template.skills.join(', ')}`}
-                        className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-violet"
+                        className="inline-flex shrink-0 items-center gap-0.5 text-2xs font-medium text-violet"
                       >
                         <SparklesIcon aria-hidden="true" className="size-2.5" />
                         {template.skills.length}
                       </span>
                     ) : null}
                   </span>
-                  <span className="line-clamp-1 text-[11px] text-soft-foreground">
+                  <span className="line-clamp-1 text-2xs text-soft-foreground">
                     {template.text}
                   </span>
                 </CommandItem>
@@ -143,7 +132,7 @@ export function PromptTemplateMenu({
               <CommandItem
                 value="edit prompt templates settings"
                 data-slot="prompt-template-settings"
-                className="text-[12px] text-muted-foreground"
+                className="text-xs text-muted-foreground"
                 onSelect={() => {
                   setOpen(false)
                   void navigate('/settings/prompt-templates')

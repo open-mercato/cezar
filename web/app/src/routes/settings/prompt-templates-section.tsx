@@ -6,6 +6,7 @@ import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { Skill } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
+import { PageBody } from '@/components/page-body'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -44,7 +45,7 @@ export function PromptTemplatesSection() {
 
   if (uiState.isPending) {
     return (
-      <p data-slot="prompt-templates-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="prompt-templates-loading" className="p-4 text-sm text-soft-foreground md:p-6">
         Loading prompt templates…
       </p>
     )
@@ -121,9 +122,9 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
   const resetToDefaults = () => setTemplates(DEFAULT_PROMPT_TEMPLATES.map((t) => ({ ...t })))
 
   return (
-    <div
+    <PageBody
       data-slot="prompt-templates-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="mx-auto w-full max-w-2xl gap-7"
     >
       <Field
         title="Prompt templates"
@@ -131,7 +132,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
       >
         <div data-slot="prompt-template-list" className="flex flex-col gap-3">
           {templates.length === 0 ? (
-            <p data-slot="prompt-templates-empty" className="text-[13px] text-soft-foreground">
+            <p data-slot="prompt-templates-empty" className="text-sm text-soft-foreground">
               No templates. Add one below, or reset to the built-ins.
             </p>
           ) : (
@@ -168,7 +169,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
                   value={template.text}
                   maxLength={2000}
                   onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
-                  className="min-h-14 text-[13px]"
+                  className="min-h-14 text-sm"
                 />
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                   <TemplateSkillsPicker
@@ -188,7 +189,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
                       data-skill={name}
                       title={`Stop applying “${template.label}” automatically with ${name}`}
                       onClick={() => toggleTemplateSkill(template.id, name)}
-                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-2xs font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
                     >
                       {name}
                       <XIcon aria-hidden="true" className="size-3" />
@@ -219,7 +220,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
             value={newText}
             maxLength={2000}
             onChange={(event) => setNewText(event.target.value)}
-            className="min-h-14 text-[13px]"
+            className="min-h-14 text-sm"
           />
           <Button
             type="button"
@@ -257,13 +258,13 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
             Reset to defaults
           </Button>
           {invalid ? (
-            <p data-slot="prompt-templates-invalid" className="text-[11px] text-danger">
+            <p data-slot="prompt-templates-invalid" className="text-2xs text-danger">
               Every template needs both a label and text.
             </p>
           ) : null}
         </div>
       </Field>
-    </div>
+    </PageBody>
   )
 }
 
@@ -347,7 +348,7 @@ function TemplateSkillsPicker({
           <CommandList
             ref={listRef}
             data-slot="prompt-template-skill-menu"
-            className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]"
+            className="max-h-[min(16rem,calc(var(--available-height)-3rem))]"
           >
             <CommandEmpty>Nothing matches.</CommandEmpty>
             {mostUsed.length > 0 ? (
@@ -376,7 +377,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-sm text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>

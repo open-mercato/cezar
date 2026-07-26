@@ -8,7 +8,10 @@ import { queryKeys, useHealth, useRuns, useTodos, useUiState } from '@/api/queri
 import type { TodoItem } from '@/api/types'
 import { CenteredState } from '@/components/centered-state'
 import { EnginePills, engineBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
+import { PageBody } from '@/components/page-body'
+import { PageHeader } from '@/components/page-header'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
+import { ProviderGate } from '@/components/provider-gate'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -81,16 +84,19 @@ export function InboxRoute() {
   return (
     <div data-route="inbox" className="flex min-h-full flex-col">
       {/* Desktop header — below `md` the shell's top bar already says "Inbox". */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Inbox</h1>
-        <p className="text-[13px] text-soft-foreground">
-          {inboxOff
-            ? 'Disabled for this server; per-task Notes still run.'
-            : 'Follow-ups agents suggested when they finished a task.'}
-        </p>
-      </header>
+      <PageHeader
+        className="max-md:hidden"
+        title="Inbox"
+        meta={
+          <p className="text-sm text-soft-foreground">
+            {inboxOff
+              ? 'Disabled for this server; per-task Notes still run.'
+              : 'Follow-ups agents suggested when they finished a task.'}
+          </p>
+        }
+      />
 
-      <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+      <PageBody>
         {inboxOff ? (
           <CenteredState
             icon={<InboxIcon />}
@@ -139,7 +145,7 @@ export function InboxRoute() {
             ))}
           </ul>
         )}
-      </div>
+      </PageBody>
     </div>
   )
 }
@@ -323,21 +329,8 @@ function TodoCard({
       {runnable ? (
         <div data-slot="todo-engine" className="flex flex-wrap items-center gap-2 pl-5">
           <EnginePills pick={engine} onChange={setEngine} disabled={busy || !resolved.canRun} />
-          {!resolved.providerPending && !resolved.canRun ? (
-            <span
-              data-slot="todo-provider-gate"
-              className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
-            >
-              {resolved.providerError
-                ? 'Provider authentication could not be verified.'
-                : 'Connect an agent provider to run this follow-up.'}
-              <Link
-                to="/settings/agents#providers"
-                className="font-medium text-foreground underline underline-offset-4"
-              >
-                Configure providers
-              </Link>
-            </span>
+          {!resolved.canRun ? (
+            <ProviderGate pending={resolved.providerPending} error={resolved.providerError} />
           ) : null}
         </div>
       ) : null}
@@ -359,31 +352,34 @@ function TodoCard({
               // stopped at the keystroke rather than by a 400 on Run (the Settings inputs cap the
               // same way).
               maxLength={20_000}
-              className="min-h-16 text-[13px]"
+              className="min-h-16 text-sm"
             />
             <div className="flex items-center gap-2">
               <PromptTemplateMenu templates={templates} onInsert={insertNotesTemplate} />
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 data-slot="todo-instructions-hide"
                 onClick={() => setNotesOpen(false)}
-                className="text-xs font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
               >
                 Hide
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             data-slot="todo-instructions-toggle"
             onClick={() => setNotesOpen(true)}
-            className="self-start pl-5 text-xs font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+            className="ml-2.5 self-start"
           >
             {/* A collapsed composer keeps its draft, and Run still carries it — so say so
                 rather than hiding instructions the next Run would silently send. */}
             {notes.trim() ? 'Edit instructions (added)' : '+ Add instructions'}
-          </button>
+          </Button>
         )
       ) : null}
     </li>
