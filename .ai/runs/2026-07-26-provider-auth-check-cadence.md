@@ -47,8 +47,8 @@ Prevent authenticated remote cockpit sessions from being interrupted by recurrin
 
 ### Phase 2: Session-safe check cadence
 
-- [ ] 2.1 Change provider status from interval polling to one cached session load with a five-minute focus refresh window and update query tests.
-- [ ] 2.2 Slow transient skills-update convergence to one minute while preserving the one-time mount check and update query tests.
+- [x] 2.1 Change provider status from interval polling to one cached session load with a five-minute focus refresh window and update query tests. — f20e572d
+- [x] 2.2 Slow transient skills-update convergence to one minute while preserving the one-time mount check and update query tests. — f20e572d
 
 ### Phase 3: Verification and handoff
 
