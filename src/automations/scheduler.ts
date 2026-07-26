@@ -17,6 +17,7 @@ export interface ProjectAutomationHandle {
   store: AutomationStore;
   poller: GithubPoller;
   launch?: AutomationLauncher;
+  onChange?: (automationId: string, revision: number) => void;
 }
 
 /** One request chain process-wide. The promise tail also prevents a failed request from
@@ -76,6 +77,7 @@ export class ProjectAutomationScheduler {
           nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
         });
       }
+      this.handle.onChange?.(definition.id, definition.revision);
       return { ...result, candidates: eligible };
     } catch (error) {
       if (mode === 'execute') this.recordFailure(definition, error);
@@ -113,6 +115,7 @@ export class ProjectAutomationScheduler {
       nextCheckAt: new Date(Date.now() + delay).toISOString(),
     });
     this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason: error instanceof Error ? error.message : String(error) });
+    this.handle.onChange?.(definition.id, definition.revision);
   }
 }
 

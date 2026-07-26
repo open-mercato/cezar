@@ -34,7 +34,7 @@ import {
   ZapIcon,
 } from 'lucide-react'
 import { Fragment, useState, type ReactNode } from 'react'
-import { useNavigate } from '@/lib/project-router'
+import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
 import { queryKeys, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
@@ -510,6 +510,17 @@ function MetaRow({ run }: { run: ApiRun }) {
     )
   }
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
+  if (run.automation) {
+    parts.push(
+      <Link
+        key="automation"
+        to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
+        className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+      >
+        Automation
+      </Link>,
+    )
+  }
 
   const usage: ReactNode[] = []
   if (run.tokensUsed > 0) {

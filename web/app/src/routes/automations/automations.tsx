@@ -9,14 +9,22 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Link, useNavigate } from '@/lib/project-router'
+import { useActiveProjectId } from '@/lib/project-router'
+import { onWorkspaceEvent } from '@/api/global-events'
 
 export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'edit' | 'log' }) {
   const { automationId } = useParams()
   const navigate = useNavigate()
+  const projectId = useActiveProjectId()
   const [data, setData] = useState<AutomationsResponse>()
   const [error, setError] = useState('')
   const refresh = () => getAutomations().then(setData).catch((cause) => setError(String(cause)))
   useEffect(() => { void refresh() }, [])
+  useEffect(() => onWorkspaceEvent((name, payload) => {
+    if (name !== 'automation-change') return
+    const changed = payload as { project?: unknown }
+    if (typeof changed.project === 'string' && (projectId === null || changed.project === projectId)) void refresh()
+  }), [projectId])
 
   if (mode === 'new') return <AutomationEditor onSaved={() => navigate('/automations')} />
   if (mode === 'edit') {

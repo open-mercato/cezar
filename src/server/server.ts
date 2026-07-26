@@ -377,7 +377,8 @@ export type WorkspaceEventName =
   | 'project-added'
   | 'project-removed'
   | 'checkout-progress'
-  | 'provider-status';
+  | 'provider-status'
+  | 'automation-change';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -930,6 +931,8 @@ export function createApp(deps: ServerDeps): Hono {
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
+  const emitAutomationChange = (project: ProjectContext, automationId: string, revision: number) =>
+    workspaceEvents.emit('automation-change', { project: project.id, automationId, revision });
 
   const providerRuntimeAuth = deps.providerRuntimeAuth
     ?? new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -2224,6 +2227,7 @@ export function createApp(deps: ServerDeps): Hono {
           nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
         });
       }
+      emitAutomationChange(c.get('project'), automation.id, automation.revision);
       return c.json({ automation }, 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -2247,17 +2251,21 @@ export function createApp(deps: ServerDeps): Hono {
     const { expectedRevision, ...input } = parsed.data;
     if (!automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
     try {
-      return c.json({ automation: automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false }) });
+      const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false });
+      emitAutomationChange(c.get('project'), automation.id, automation.revision);
+      return c.json({ automation });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return c.json({ error: message }, message.includes('conflict') ? 409 : 400);
     }
   });
 
-  api.delete('/automations/:id', (c) =>
-    c.get('project').automationStore.delete(c.req.param('id'))
-      ? c.body(null, 204)
-      : c.json({ error: 'not found' }, 404));
+  api.delete('/automations/:id', (c) => {
+    const id = c.req.param('id');
+    if (!c.get('project').automationStore.delete(id)) return c.json({ error: 'not found' }, 404);
+    emitAutomationChange(c.get('project'), id, 0);
+    return c.body(null, 204);
+  });
 
   api.post('/automations/:id/enable', (c) => {
     const store = c.get('project').automationStore;
@@ -2273,6 +2281,7 @@ export function createApp(deps: ServerDeps): Hono {
       nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
     });
     store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+    emitAutomationChange(c.get('project'), automation.id, automation.revision);
     return c.json({ automation });
   });
 
@@ -2280,7 +2289,9 @@ export function createApp(deps: ServerDeps): Hono {
     const store = c.get('project').automationStore;
     const current = store.get(c.req.param('id'));
     if (!current) return c.json({ error: 'not found' }, 404);
-    return c.json({ automation: store.update(current.id, current.revision, { ...editableAutomation(current), enabled: false }) });
+    const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: false });
+    emitAutomationChange(c.get('project'), automation.id, automation.revision);
+    return c.json({ automation });
   });
 
   api.post('/automations/:id/check', async (c) => {
@@ -3914,6 +3925,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
         repo: project.repo,
         store,
         poller: new GithubPoller(),
+        onChange: (automationId, revision) =>
+          workspaceEvents.emit('automation-change', { project: projectId, automationId, revision }),
         launch: async (definition, candidate, receiptId) => {
           const bootId = deps.bootProjectId ?? 'default';
           const context = projectId === bootId
