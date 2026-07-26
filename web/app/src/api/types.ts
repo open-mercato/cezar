@@ -164,6 +164,14 @@ export interface RunRecord {
   /** Autonomous mode (#autonomous): the run never parks at `waiting` or the terminal `review`
    *  gate. Absent = falsy = not autonomous. */
   autonomous?: boolean
+  /** GitHub automation provenance; additive and absent for ordinary runs. */
+  automation?: {
+    automationId: string
+    automationRevision: number
+    receiptId: string
+    event: string
+    githubUrl: string
+  }
   /** Absent when the run executed in the repo working tree rather than its own worktree. */
   worktreePath?: string
   /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is

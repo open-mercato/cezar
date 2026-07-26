@@ -4,6 +4,7 @@ import { AutomationStore } from '../automations/store.js';
 import { AutomationCoordinator } from '../automations/coordinator.js';
 import { GithubPoller } from '../automations/github-poller.js';
 import { WorkspaceAutomationScheduler } from '../automations/scheduler.js';
+import { launchAutomationRun, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.js';
 import {
   automationEventSchema,
   automationFiltersSchema,
@@ -2209,6 +2210,8 @@ export function createApp(deps: ServerDeps): Hono {
     const { automationStore } = c.get('project');
     const parsed = automationCreateSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+    if (promptIssue) return c.json({ error: promptIssue }, 400);
     const { enable, ...input } = parsed.data;
     try {
       const automation = automationStore.create({ ...input, enabled: enable === true });
@@ -2239,6 +2242,8 @@ export function createApp(deps: ServerDeps): Hono {
     const { automationStore } = c.get('project');
     const parsed = automationUpdateSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+    if (promptIssue) return c.json({ error: promptIssue }, 400);
     const { expectedRevision, ...input } = parsed.data;
     if (!automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
     try {
@@ -3882,7 +3887,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
-  const app = createApp({ ...deps, workspaceEvents, skillsUpdate, socketHub });
+  const sharedContexts = deps.contexts ?? new ProjectContexts({ listProjects, semaphore: deps.semaphore });
+  const app = createApp({ ...deps, contexts: sharedContexts, workspaceEvents, skillsUpdate, socketHub });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
   // expose an agent-executing box to the network. `bindHost` exists only for a deliberate
@@ -3901,7 +3907,28 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     coordinator: automationCoordinator,
     handle: (projectId, store) => {
       const project = automationProjects.get(projectId);
-      return project ? { projectId, owner: project.owner, repo: project.repo, store, poller: new GithubPoller() } : undefined;
+      if (!project) return undefined;
+      return {
+        projectId,
+        owner: project.owner,
+        repo: project.repo,
+        store,
+        poller: new GithubPoller(),
+        launch: async (definition, candidate, receiptId) => {
+          const bootId = deps.bootProjectId ?? 'default';
+          const context = projectId === bootId
+            ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
+            : await sharedContexts.context(projectId);
+          return launchAutomationRun({
+            root: context.root,
+            manager: context.manager,
+            store: context.store,
+            definition,
+            candidate,
+            receiptId,
+          });
+        },
+      };
     },
   });
   const unsubscribe = workspaceEvents.on((event, data) => {
@@ -3925,6 +3952,11 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       void Promise.all(all.map(async (project) => {
         const parsed = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
         if (parsed?.host === 'github.com') automationProjects.set(project.id, { root: project.root, owner: parsed.owner, repo: parsed.repo });
+        const automationStore = automationCoordinator.store(project.id, project.root);
+        const runStore = project.id === (deps.bootProjectId ?? 'default')
+          ? deps.store
+          : sharedContexts.peek(project.id)?.store;
+        if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });

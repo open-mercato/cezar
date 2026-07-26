@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.js';
+import { reconcileAutomationReceipts } from '../automations/task-template.js';
 import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.js';
 import { pruneOrphans } from '../git-worktree.js';
 import { reclaimWorktrees } from '../runs/retention.js';
@@ -205,6 +206,7 @@ export class ProjectContexts {
     // when this project's context last existed are re-queued or resumed.
     const store = RunStore.open(dataDir, { keepLive: true });
     const automationStore = AutomationStore.open(dataDir);
+    reconcileAutomationReceipts(automationStore, store);
     this.notifyStoreCreated(store);
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore });
     try {
