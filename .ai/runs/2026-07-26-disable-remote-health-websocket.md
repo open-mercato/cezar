@@ -37,6 +37,8 @@ Source doc: .ai/specs/2026-07-23-websocket-subscriptions.md
 
 ## Progress
 
+PR: #688
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Remote-safe health transport
@@ -47,4 +49,4 @@ Source doc: .ai/specs/2026-07-23-websocket-subscriptions.md
 
 ### Phase 2: Verification and handoff
 
-- [ ] 2.1 Run the configured validation gate, review security/compatibility/scope, and publish the verified corrective PR.
+- [x] 2.1 Run the configured validation gate, review security/compatibility/scope, and publish the verified corrective PR. — 091dd4bc
