@@ -309,6 +309,64 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(a.store.getRun(a2.id)?.status).toBe('done');
   }, 60_000);
 
+  it('restart recovery queues interrupted continuations behind the per-project cap', async () => {
+    const root = fixtureRepo('cez-wsem-recover-cap-', roots);
+    const projectLimits = new Map([[realpathSync(root), 1]]);
+    const semaphore = new WorkspaceSemaphore({
+      load: () =>
+        Promise.resolve({ maxParallel: 3, memoryLimitMb: null, projectLimits }),
+      initial: { maxParallel: 3 },
+    });
+    await semaphore.refresh();
+    const store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
+    const manager = new RunManager(store, root, { semaphore });
+    stores.push(store);
+    managers.push(manager);
+
+    for (const suffix of ['one', 'two', 'three']) {
+      const record = store.createRun({
+        title: suffix,
+        workflow: 'quick-task',
+        task: `interrupted ${suffix}`,
+        runner: 'claude',
+        steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+      });
+      store.updateStep(record.id, 'task', {
+        status: 'running',
+        iterations: 1,
+        sessionId: `session-${suffix}`,
+        backend: 'claude',
+      });
+      store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
+    }
+
+    // Hold the first admitted continuation open. This isolates scheduler
+    // admission from backend timing and makes the cap observable.
+    const never = new Promise<void>(() => undefined);
+    (
+      manager as unknown as {
+        runContinuation(runId: string): Promise<void>;
+      }
+    ).runContinuation = async (runId: string) => {
+      store.updateRun(runId, { status: 'running' });
+      await never;
+    };
+
+    await manager.recover();
+    await waitFor(
+      () => store.listRuns().filter((run) => run.status === 'running').length === 1,
+      'one recovered continuation to take the project slot',
+    );
+    expect(store.listRuns().filter((run) => run.status === 'running')).toHaveLength(1);
+    expect(store.listRuns().filter((run) => run.status === 'queued')).toHaveLength(2);
+    expect(semaphore.busy()).toBe(1);
+
+    // Keep fixture teardown independent of the deliberately unresolved stub.
+    for (const run of store.listRuns()) {
+      store.updateRun(run.id, { status: 'cancelled', finishedAt: new Date().toISOString() });
+    }
+  });
+
   it('#347 with a per-project cap: a waiting run on the capped project still resumes immediately', async () => {
     const projectLimits = new Map<string, number>();
     const semaphore = new WorkspaceSemaphore({
