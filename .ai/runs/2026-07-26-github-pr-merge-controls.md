@@ -44,6 +44,8 @@ Add scannable requirement status icons to the GitHub pull-request merge box and 
 
 ## Progress
 
+PR: #686
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Merge policy contract
@@ -59,4 +61,4 @@ Add scannable requirement status icons to the GitHub pull-request merge box and 
 ### Phase 3: Verification
 
 - [x] 3.1 Run targeted and full validation gates — f22b5472
-- [ ] 3.2 Complete self-review, PR review, and QA handoff
+- [x] 3.2 Complete self-review, PR review, and QA handoff — 2196e90f
