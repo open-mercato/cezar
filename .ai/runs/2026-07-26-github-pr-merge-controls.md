@@ -58,5 +58,5 @@ Add scannable requirement status icons to the GitHub pull-request merge box and 
 
 ### Phase 3: Verification
 
-- [ ] 3.1 Run targeted and full validation gates
+- [x] 3.1 Run targeted and full validation gates — f22b5472
 - [ ] 3.2 Complete self-review, PR review, and QA handoff
