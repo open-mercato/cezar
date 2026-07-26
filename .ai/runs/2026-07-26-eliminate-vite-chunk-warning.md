@@ -35,6 +35,8 @@ Remove the production build's oversized-chunk warning by splitting the stable Re
 
 ## Progress
 
+PR: #692
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Configure focused runtime splitting
@@ -44,5 +46,5 @@ Remove the production build's oversized-chunk warning by splitting the stable Re
 
 ### Phase 2: Verify the shipped build
 
-- [ ] 2.1 Confirm the production bundle stays below Vite's warning threshold and run the full configured validation gate.
-- [ ] 2.2 Review the final diff and document the verified outcome for reviewers.
+- [x] 2.1 Confirm the production bundle stays below Vite's warning threshold and run the full configured validation gate. — ba7024ff
+- [x] 2.2 Review the final diff and document the verified outcome for reviewers. — ba7024ff
