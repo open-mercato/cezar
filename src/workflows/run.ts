@@ -274,6 +274,9 @@ const VARIANT_HINTS: Record<string, string | undefined> = {
   C: 'Approach hint: prefer a thorough, structural approach.',
 };
 
+const RESTART_CONTINUATION_PROMPT =
+  'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+
 /**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
  * at a time, persisting every event to the RunStore (which the SSE endpoints
@@ -692,6 +695,35 @@ export class RunManager {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const run of live) {
       if (run.status === 'queued') {
+        // A second restart can find a continuation that the first restart put
+        // behind a capacity gate. Its executable details are process-local,
+        // but the queued continue step and preceding provider session are
+        // durable, so reconstruct that job before considering workflow revival.
+        const queuedContinuation = [...run.steps]
+          .reverse()
+          .find((step) => step.status === 'pending' && step.id.startsWith('continue-'));
+        const sessionStep = queuedContinuation
+          ? [...run.steps]
+              .reverse()
+              .find((step) => step.id !== queuedContinuation.id && step.sessionId)
+          : undefined;
+        if (queuedContinuation && sessionStep?.sessionId) {
+          const backend = run.runner ?? 'claude';
+          const sessionBackend = sessionStep.backend ?? backend;
+          this.pendingContinuations.set(run.id, {
+            stepId: queuedContinuation.id,
+            sessionId: sessionBackend === backend ? sessionStep.sessionId : undefined,
+            backend,
+            prompt: RESTART_CONTINUATION_PROMPT,
+            images: [],
+          });
+          this.queue.push(run.id);
+          this.store.appendEvent(run.id, {
+            type: 'lifecycle',
+            message: 'cezar restarted — interrupted continuation re-queued',
+          });
+          continue;
+        }
         const workflow = await this.reviveWorkflow(run);
         if (workflow) {
           // Re-apply the inbox ceiling (#471). `execute()` gates again at spawn time, so the
@@ -766,7 +798,7 @@ export class RunManager {
       const resumed = this.continueRun(
         run.id,
         {
-          text: 'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.',
+          text: RESTART_CONTINUATION_PROMPT,
         },
         true,
       );

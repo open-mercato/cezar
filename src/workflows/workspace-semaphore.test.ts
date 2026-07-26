@@ -319,9 +319,8 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     });
     await semaphore.refresh();
     const store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
-    const manager = new RunManager(store, root, { semaphore });
+    const firstManager = new RunManager(store, root, { semaphore });
     stores.push(store);
-    managers.push(manager);
 
     for (const suffix of ['one', 'two', 'three']) {
       const record = store.createRun({
@@ -343,20 +342,61 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     // Hold the first admitted continuation open. This isolates scheduler
     // admission from backend timing and makes the cap observable.
     const never = new Promise<void>(() => undefined);
-    (
-      manager as unknown as {
-        runContinuation(runId: string): Promise<void>;
-      }
-    ).runContinuation = async (runId: string) => {
-      store.updateRun(runId, { status: 'running' });
-      await never;
+    const holdContinuation = (manager: RunManager) => {
+      (
+        manager as unknown as {
+          runContinuation(runId: string, stepId: string): Promise<void>;
+        }
+      ).runContinuation = async (runId: string, stepId: string) => {
+        store.updateStep(runId, stepId, { status: 'running' });
+        store.updateRun(runId, { status: 'running', currentStepId: stepId });
+        await never;
+      };
     };
+    holdContinuation(firstManager);
 
-    await manager.recover();
+    await firstManager.recover();
     await waitFor(
       () => store.listRuns().filter((run) => run.status === 'running').length === 1,
       'one recovered continuation to take the project slot',
     );
+    expect(store.listRuns().filter((run) => run.status === 'running')).toHaveLength(1);
+    expect(store.listRuns().filter((run) => run.status === 'queued')).toHaveLength(2);
+    expect(semaphore.busy()).toBe(1);
+
+    const queuedStepCounts = new Map(
+      store
+        .listRuns()
+        .filter((run) => run.status === 'queued')
+        .map((run) => [run.id, run.steps.filter((step) => step.id.startsWith('continue-')).length]),
+    );
+    firstManager.dispose();
+
+    // Simulate another process start before the queued continuations receive a
+    // slot. They must reconstruct those same Continue jobs, not revive the
+    // original quick-task workflow or append duplicate continuation steps.
+    const secondManager = new RunManager(store, root, { semaphore });
+    managers.push(secondManager);
+    holdContinuation(secondManager);
+    await secondManager.recover();
+    await waitFor(
+      () => store.listRuns().filter((run) => run.status === 'running').length === 1,
+      'one continuation to take the project slot after the second restart',
+    );
+    for (const [runId, stepCount] of queuedStepCounts) {
+      expect(store.getRun(runId)?.steps.filter((step) => step.id.startsWith('continue-'))).toHaveLength(
+        stepCount,
+      );
+      expect(
+        store
+          .readEvents(runId)
+          .some(
+            (event) =>
+              event.type === 'lifecycle' &&
+              event.message === 'cezar restarted — interrupted continuation re-queued',
+          ),
+      ).toBe(true);
+    }
     expect(store.listRuns().filter((run) => run.status === 'running')).toHaveLength(1);
     expect(store.listRuns().filter((run) => run.status === 'queued')).toHaveLength(2);
     expect(semaphore.busy()).toBe(1);
