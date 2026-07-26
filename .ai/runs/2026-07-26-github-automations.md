@@ -80,9 +80,9 @@ Implement zero-configuration, bounded GitHub polling automations that launch ord
 
 ### Phase 4: GitHub detection and scheduling
 
-- [ ] 4.1 Add bounded GitHub polling with fixed argument arrays, filters, caps, ETags, fixtures, and rate metadata.
-- [ ] 4.2 Add the workspace due timer, project handles, shared request arbitration, backoff, pagination watermarks, leases, baselines, cursors, and overlap tests.
-- [ ] 4.3 Add issue label-event timeline reconstruction and stable event identity with receipt deduplication.
+- [x] 4.1 Add bounded GitHub polling with fixed argument arrays, filters, caps, ETags, fixtures, and rate metadata. — 02f952f2
+- [x] 4.2 Add the workspace due timer, project handles, shared request arbitration, backoff, pagination watermarks, leases, baselines, cursors, and overlap tests. — b38c42c8
+- [x] 4.3 Add issue label-event timeline reconstruction and stable event identity with receipt deduplication. — 02f952f2
 
 ### Phase 5: Launch, live updates, and diagnostics
 
