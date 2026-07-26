@@ -61,6 +61,7 @@ describe('GitHub automations', () => {
     browser.goto(`${baseUrl}/p/${bootProject}/automations/${automationId}/log`)
     browser.waitForFunction(`document.body.textContent.includes('Execution log') && document.body.textContent.includes('Enabled from a current-time baseline')`)
     expect(browser.text('main')).toContain('Baseline')
+    expect(browser.text('main')).toContain('Preview')
     browser.screenshot(`${artifactsDir}/automations-execution-log.png`)
   }, 60_000)
 })

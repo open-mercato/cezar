@@ -1038,7 +1038,7 @@ export interface AutomationLogRecord {
   automationId: string
   revision: number
   event?: AutomationEvent
-  result: 'launched' | 'no-match' | 'duplicate' | 'rate-limited' | 'error' | 'baseline'
+  result: 'launched' | 'no-match' | 'duplicate' | 'rate-limited' | 'error' | 'baseline' | 'preview'
   reason?: string
   durationMs?: number
   receiptId?: string

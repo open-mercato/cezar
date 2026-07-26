@@ -24,6 +24,10 @@ describe('ProjectAutomationScheduler', () => {
     expect(store.state(definition.id)).toBeUndefined();
     expect(store.receipts()).toEqual([]);
     expect(launch).not.toHaveBeenCalled();
+    expect(store.logs({ automationId: definition.id })[0]).toMatchObject({
+      result: 'preview',
+      reason: 'Bounded preview found 1 match; no tasks were launched.',
+    });
   });
 
   it('reserves before launch and deduplicates the overlap window', async () => {

@@ -42,6 +42,7 @@ export class ProjectAutomationScheduler {
     const lease = store.acquireLease();
     if (!lease) throw new Error('automation polling lease is held by another process');
     const started = Date.now();
+    let completion: { result: 'preview' | 'no-match'; reason: string } | undefined;
     try {
       const state = store.state(definition.id) ?? {};
       if (state.backoffUntil && Date.parse(state.backoffUntil) > Date.now()) {
@@ -78,12 +79,16 @@ export class ProjectAutomationScheduler {
         });
       }
       this.handle.onChange?.(definition.id, definition.revision);
+      completion = mode === 'preview'
+        ? { result: 'preview', reason: `Bounded preview found ${eligible.length} match${eligible.length === 1 ? '' : 'es'}; no tasks were launched.` }
+        : { result: 'no-match', reason: 'Scheduled check completed.' };
       return { ...result, candidates: eligible };
     } catch (error) {
       if (mode === 'execute') this.recordFailure(definition, error);
+      else store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason: error instanceof Error ? error.message : String(error) });
       throw error;
     } finally {
-      store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'no-match', reason: mode === 'preview' ? 'Bounded preview completed without launching tasks.' : 'Scheduled check completed.', durationMs: Date.now() - started });
+      if (completion) store.appendLog({ automationId: definition.id, revision: definition.revision, ...completion, durationMs: Date.now() - started });
       try { store.maybeCompact(); } catch { /* append-only state remains readable; next check retries */ }
       lease.release();
     }

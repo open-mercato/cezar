@@ -141,6 +141,7 @@ export const automationLogResultSchema = z.enum([
   'rate-limited',
   'error',
   'baseline',
+  'preview',
 ]);
 
 export const automationLogRecordSchema = z
