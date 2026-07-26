@@ -43,6 +43,7 @@ Source doc: .ai/specs/2026-07-23-websocket-subscriptions.md
 
 - [x] 1.1 Gate the root health subscription on a completed local-mode health bootstrap and update the subscription API without opening a pre-bootstrap socket. — 26e2a42b
 - [x] 1.2 Add focused tests for remote no-socket behavior, local subscription behavior, and authenticated HTTP fallback semantics. — 26e2a42b
+- [x] Post-review fix: explicitly include credentials on workspace and run EventSource reconnects. — a84de0e7
 
 ### Phase 2: Verification and handoff
 
