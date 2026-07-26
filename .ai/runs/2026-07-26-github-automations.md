@@ -86,9 +86,9 @@ Implement zero-configuration, bounded GitHub polling automations that launch ord
 
 ### Phase 5: Launch, live updates, and diagnostics
 
-- [ ] 5.1 Add bounded task templates, untrusted-context delimiters, ordinary run/group launching, optional run provenance, and crash reconciliation.
-- [ ] 5.2 Add additive workspace SSE invalidations and run/automation cross-links without UI polling.
-- [ ] 5.3 Add log compaction, aggregate health/status, redacted diagnostics, and explicit retry controls.
+- [x] 5.1 Add bounded task templates, untrusted-context delimiters, ordinary run/group launching, optional run provenance, and crash reconciliation. — 3ea0055a
+- [x] 5.2 Add additive workspace SSE invalidations and run/automation cross-links without UI polling. — 5b1bdbb8
+- [x] 5.3 Add log compaction, aggregate health/status, redacted diagnostics, and explicit retry controls. — e05700ea
 
 ### Phase 6: Final verification
 
