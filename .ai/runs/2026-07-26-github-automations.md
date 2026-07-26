@@ -92,4 +92,4 @@ Implement zero-configuration, bounded GitHub polling automations that launch ord
 
 ### Phase 6: Final verification
 
-- [ ] 6.1 Run the full configured validation gate and browser E2E flow for create, preview, baseline, launch, dedupe, and log inspection.
+- [x] 6.1 Run the full configured validation gate and browser E2E flow for create, preview, baseline, launch, dedupe, and log inspection. — 6fac511d
