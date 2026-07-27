@@ -2,10 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { AutomationCoordinator } from '../automations/coordinator.js';
+import { WorkspaceAutomationScheduler } from '../automations/scheduler.js';
+import { AutomationStore } from '../automations/store.js';
 import { RunStore } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { createApp, WorkspaceEventBus } from './server.js';
 
 describe('GitHub automation API', () => {
   let root: string;
@@ -33,7 +36,8 @@ describe('GitHub automation API', () => {
     filters: { lookbackDays: 7, maxRecords: 25 },
     task: { prompt: 'Review {{github.url}}' },
   };
-  const app = () => createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test' });
+  const app = (over: Partial<Parameters<typeof createApp>[0]> = {}) =>
+    createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test', ...over });
   const json = (body: unknown, method = 'POST'): RequestInit => ({
     method,
     headers: { 'content-type': 'application/json' },
@@ -77,6 +81,85 @@ describe('GitHub automation API', () => {
     const list = await apiRequest(server, '/api/automations');
     expect(((await list.json()) as any).automations).toHaveLength(1);
     expect(readFileOrEmpty(join(root, '.ai/cezar/automation-receipts.ndjson'))).toBe('');
+  });
+
+  it('shares API mutations with the workspace scheduler store', async () => {
+    const coordinator = new AutomationCoordinator({
+      listProjects: async () => [{ id: 'default', root, status: 'ok' }],
+    });
+    const automationStore = coordinator.store('default', root)!;
+    let rescheduled: Promise<void> | undefined;
+    const scheduler = new WorkspaceAutomationScheduler({
+      coordinator,
+      handle: (_projectId, sharedStore) => ({
+        projectId: 'default',
+        owner: 'open-mercato',
+        repo: 'cezar',
+        store: sharedStore,
+        poller: { poll: async () => ({ candidates: [], truncated: false, pages: 1 }) } as never,
+      }),
+    });
+    const server = app({
+      automationStore,
+      automationsChanged: () => {
+        rescheduled = scheduler.reschedule();
+      },
+    });
+
+    await scheduler.start();
+    const created = ((await (await apiRequest(server, '/api/automations', json(input))).json()) as any).automation;
+    expect(scheduler.hasTimer()).toBe(false);
+
+    const enabled = await apiRequest(server, `/api/automations/${created.id}/enable`, { method: 'POST' });
+    expect(enabled.status).toBe(200);
+    await rescheduled;
+    expect(coordinator.store('default')).toBe(automationStore);
+    expect(coordinator.store('default')?.get(created.id)?.enabled).toBe(true);
+    expect(scheduler.hasTimer()).toBe(true);
+
+    coordinator.store('default')?.setState(created.id, {
+      revision: 2,
+      lastSuccessAt: '2026-07-27T00:00:00.000Z',
+    });
+    const detail = await apiRequest(server, `/api/automations/${created.id}`);
+    expect(((await detail.json()) as any).state.lastSuccessAt).toBe('2026-07-27T00:00:00.000Z');
+    scheduler.stop();
+  });
+
+  it('accepts preview as an automation-log result filter', async () => {
+    const automationStore = AutomationStore.open(join(root, '.ai/cezar'));
+    automationStore.appendLog({
+      automationId: 'previewed',
+      revision: 1,
+      result: 'preview',
+      reason: 'test preview',
+    });
+    const response = await apiRequest(
+      app({ automationStore }),
+      '/api/automation-log?result=preview',
+    );
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as any).records).toEqual([
+      expect.objectContaining({ automationId: 'previewed', result: 'preview' }),
+    ]);
+  });
+
+  it('marks delete events explicitly while retaining a positive revision', async () => {
+    const bus = new WorkspaceEventBus();
+    const changes: unknown[] = [];
+    bus.on((event, data) => {
+      if (event === 'automation-change') changes.push(data);
+    });
+    const server = app({ workspaceEvents: bus });
+    const created = ((await (await apiRequest(server, '/api/automations', json(input))).json()) as any).automation;
+    const response = await apiRequest(server, `/api/automations/${created.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(204);
+    expect(changes.at(-1)).toEqual({
+      project: 'default',
+      automationId: created.id,
+      revision: 1,
+      deleted: true,
+    });
   });
 });
 

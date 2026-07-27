@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AutomationStore } from '../automations/store.js';
 import { emitUsageForTest } from '../core/process-usage.js';
 import { ProjectContextError, ProjectContexts, type ProjectContextSource } from './project-context.js';
 
@@ -58,6 +59,19 @@ describe('ProjectContexts', () => {
     const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
     const [one, two] = await Promise.all([contexts.context('a'), contexts.context('a')]);
     expect(one).toBe(two);
+  });
+
+  it('uses the injected coordinator-owned automation store', async () => {
+    const automationStore = AutomationStore.open(join(rootA, '.ai/cezar'));
+    const resolveAutomationStore = vi.fn(() => automationStore);
+    const contexts = new ProjectContexts({
+      listProjects: async () => [{ id: 'a', root: rootA, status: 'not-git' }],
+      automationStore: resolveAutomationStore,
+    });
+    const context = await contexts.context('a');
+    expect(context.automationStore).toBe(automationStore);
+    expect(resolveAutomationStore).toHaveBeenCalledWith('a', rootA);
+    contexts.disposeAll();
   });
 
   it('never instantiates a missing-root project (even when the directory happens to exist)', async () => {

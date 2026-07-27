@@ -8,6 +8,7 @@ import { launchAutomationRun, reconcileAutomationReceipts, validateAutomationPro
 import {
   automationEventSchema,
   automationFiltersSchema,
+  automationLogResultSchema,
   automationTaskSchema,
   type AutomationDefinition,
 } from '../automations/types.js';
@@ -146,6 +147,10 @@ export interface ServerDeps {
    *  context is seeded from `deps.{store,manager}` (which src/index.ts already
    *  recovered/pruned at startup) and the resolver short-circuits to it. */
   contexts?: ProjectContexts;
+  /** Boot project's shared automation store. `startServer` injects the
+   *  coordinator-owned instance so HTTP routes and the scheduler never cache
+   *  separate views of the same project files. */
+  automationStore?: AutomationStore;
   /** Workspace-wide parallel-cap semaphore + cached resource config (spec
    *  2026-07-20, step 2.5): the ONE instance boot created, refreshed, and gave
    *  the boot manager — threaded into the default `ProjectContexts` so every
@@ -229,7 +234,7 @@ const automationUpdateSchema = automationEditableSchema.extend({ expectedRevisio
 const automationCheckSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
 const automationLogQuerySchema = z.object({
   automationId: z.string().optional(),
-  result: z.enum(['launched', 'no-match', 'duplicate', 'rate-limited', 'error', 'baseline']).optional(),
+  result: automationLogResultSchema.optional(),
   event: automationEventSchema.optional(),
   since: z.string().datetime().optional(),
   cursor: z.coerce.number().int().positive().optional(),
@@ -920,7 +925,7 @@ export function createApp(deps: ServerDeps): Hono {
     dataDir: bootDataDir,
     store: deps.store,
     manager: deps.manager,
-    automationStore: AutomationStore.open(bootDataDir),
+    automationStore: deps.automationStore ?? AutomationStore.open(bootDataDir),
     launchKey: ensureLaunchKey(bootDataDir), // bookmarklet auto-start secret (spec 011)
   };
   // Non-boot projects build lazily on first scoped request; their managers
@@ -937,8 +942,17 @@ export function createApp(deps: ServerDeps): Hono {
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
-  const emitAutomationChange = (project: ProjectContext, automationId: string, revision: number) =>
-    workspaceEvents.emit('automation-change', { project: project.id, automationId, revision });
+  const emitAutomationChange = (
+    project: ProjectContext,
+    automationId: string,
+    revision: number,
+    deleted = false,
+  ) => workspaceEvents.emit('automation-change', {
+    project: project.id,
+    automationId,
+    revision,
+    ...(deleted ? { deleted: true } : {}),
+  });
   const automationsChanged = () => deps.automationsChanged?.();
 
   const providerRuntimeAuth = deps.providerRuntimeAuth
@@ -2291,8 +2305,10 @@ export function createApp(deps: ServerDeps): Hono {
 
   api.delete('/automations/:id', (c) => {
     const id = c.req.param('id');
-    if (!c.get('project').automationStore.delete(id)) return c.json({ error: 'not found' }, 404);
-    emitAutomationChange(c.get('project'), id, 0);
+    const store = c.get('project').automationStore;
+    const current = store.get(id);
+    if (!current || !store.delete(id)) return c.json({ error: 'not found' }, 404);
+    emitAutomationChange(c.get('project'), id, current.revision, true);
     automationsChanged();
     return c.body(null, 204);
   });
@@ -3972,9 +3988,24 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
-  const sharedContexts = deps.contexts ?? new ProjectContexts({ listProjects, semaphore: deps.semaphore });
+  const automationCoordinator = new AutomationCoordinator({ listProjects });
+  const bootProjectId = deps.bootProjectId ?? 'default';
+  const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
+  const sharedContexts = deps.contexts ?? new ProjectContexts({
+    listProjects,
+    semaphore: deps.semaphore,
+    automationStore: (projectId, root) => automationCoordinator.store(projectId, root)!,
+  });
   let rescheduleAutomations = () => {};
-  const app = createApp({ ...deps, contexts: sharedContexts, workspaceEvents, skillsUpdate, socketHub, automationsChanged: () => rescheduleAutomations() });
+  const app = createApp({
+    ...deps,
+    contexts: sharedContexts,
+    automationStore: bootAutomationStore,
+    workspaceEvents,
+    skillsUpdate,
+    socketHub,
+    automationsChanged: () => rescheduleAutomations(),
+  });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
   // expose an agent-executing box to the network. `bindHost` exists only for a deliberate
@@ -3988,7 +4019,6 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
   const automationProjects = new Map<string, { root: string; owner: string; repo: string }>();
-  const automationCoordinator = new AutomationCoordinator({ listProjects });
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
     handle: (projectId, store) => {
