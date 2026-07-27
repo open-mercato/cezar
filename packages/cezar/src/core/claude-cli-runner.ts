@@ -14,6 +14,7 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.js';
+import { isSignalTerminationExit } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
 import { costWeightedTokens, type RawUsage } from './usage.js';
 import { readNdjson } from './ndjson.js';
@@ -146,6 +147,16 @@ export class ClaudeCliRunner implements AgentRunner {
       }
     };
 
+    // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
+    // wall-clock kill switch. claude installs its own SIGTERM handler and exits
+    // 143 instead of dying from the signal, so without this flag our own
+    // teardown reads as an agent failure (#703).
+    let terminatedByCezar = false;
+    const signalChild = (signal: 'SIGTERM' | 'SIGKILL'): void => {
+      terminatedByCezar = true;
+      child.kill(signal);
+    };
+
     const end = (): void => {
       if (!stdinOpen) return;
       stdinOpen = false;
@@ -155,9 +166,9 @@ export class ClaudeCliRunner implements AgentRunner {
         // already gone
       }
       eofTermTimer = setTimeout(() => {
-        if (child.exitCode == null && !child.killed) child.kill('SIGTERM');
+        if (child.exitCode == null && !child.killed) signalChild('SIGTERM');
         eofKillTimer = setTimeout(() => {
-          if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
+          if (child.exitCode == null && !child.killed) signalChild('SIGKILL');
         }, EOF_KILL_GRACE_MS);
         eofKillTimer.unref?.();
       }, EOF_TERM_GRACE_MS);
@@ -166,7 +177,7 @@ export class ClaudeCliRunner implements AgentRunner {
 
     const interrupt = (): void => {
       stdinOpen = false;
-      if (!child.killed) child.kill('SIGTERM');
+      if (!child.killed) signalChild('SIGTERM');
     };
 
     // Seed the first user message — the same path every follow-up takes.
@@ -198,7 +209,7 @@ export class ClaudeCliRunner implements AgentRunner {
         interrupt();
         child.stdout.destroy();
         killTimer = setTimeout(() => {
-          if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
+          if (child.exitCode == null && !child.killed) signalChild('SIGKILL');
         }, KILL_GRACE_MS);
         killTimer.unref?.();
       }, limitMs);
@@ -266,6 +277,18 @@ export class ClaudeCliRunner implements AgentRunner {
       if (timedOut) {
         const mins = Math.round((limitMs / 60_000) * 10) / 10;
         onEvent?.({ type: 'error', message: `claude CLI timed out after ${mins}m and was killed` });
+        onEvent?.({ type: 'done' });
+        return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
+      }
+
+      // A session cezar itself tore down (EOF watchdog after `end()`, or a
+      // cancel) exits 143/137 — that is our own signal coming back, not an
+      // agent failure, so it settles on the normal path with a note (#703).
+      if (terminatedByCezar && isSignalTerminationExit(exitCode)) {
+        onEvent?.({
+          type: 'note',
+          message: `claude CLI did not exit on its own after close; terminated by cezar (code ${exitCode})`,
+        });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }

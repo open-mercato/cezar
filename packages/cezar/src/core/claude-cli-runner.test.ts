@@ -1,6 +1,8 @@
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { prependSystemPrompt } from './agent-runner.js';
-import { buildClaudeArgs } from './claude-cli-runner.js';
+import type { AgentEvent } from './agent-runner.js';
+import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.js';
+import { ClaudeCliRunner, buildClaudeArgs } from './claude-cli-runner.js';
 
 /**
  * The per-backend system-prompt delivery mechanism (spec §protocol v2
@@ -37,6 +39,57 @@ describe('buildClaudeArgs approval gate', () => {
     const idx = args.indexOf('--permission-mode');
     expect(args[idx + 1]).toBe('acceptEdits');
   });
+});
+
+/**
+ * #703 — a session cezar tore down itself must not settle as an agent
+ * failure. Every agent CLI installs its own stop-signal handler and exits
+ * `128 + signal`, so the runner sees a NON-ZERO code for a teardown it
+ * asked for (goal achieved → `end()`, or a user cancel → `interrupt()`).
+ */
+describe('isSignalTerminationExit', () => {
+  it('recognizes the 128+signal codes a signalled CLI reports', () => {
+    expect(isSignalTerminationExit(130)).toBe(true); // SIGINT
+    expect(isSignalTerminationExit(137)).toBe(true); // SIGKILL
+    expect(isSignalTerminationExit(143)).toBe(true); // SIGTERM
+  });
+
+  it('leaves genuine failures and clean exits alone', () => {
+    for (const code of [0, 1, 2, 127, null]) {
+      expect(isSignalTerminationExit(code)).toBe(false);
+    }
+  });
+});
+
+describe('a teardown cezar initiated', () => {
+  const stubBin = fileURLToPath(
+    new URL('./__fixtures__/claude/stub-ignores-eof-exits-143.mjs', import.meta.url),
+  );
+
+  it('settles the session instead of failing it when the CLI exits 143', async () => {
+    const runner = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    let sawText: () => void = () => {};
+    const firstText = new Promise<void>((resolve) => {
+      sawText = resolve;
+    });
+    const session = runner.startSession({ userPrompt: 'do it', cwd: process.cwd() }, (event) => {
+      events.push(event);
+      if (event.type === 'text') sawText();
+    });
+    await firstText;
+
+    // The cancel path; the EOF watchdog reaches the same `signalChild`.
+    session.interrupt();
+    const result = await session.result;
+
+    expect(result.text).toBe('work done');
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(events.at(-1)).toEqual({ type: 'done' });
+    expect(
+      events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
+    ).toBe(true);
+  }, 15_000);
 });
 
 describe('prependSystemPrompt (codex/opencode delivery)', () => {

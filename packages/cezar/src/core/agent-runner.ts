@@ -66,6 +66,20 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
 }
 
+/**
+ * True for the `128 + signal` exit codes an agent CLI reports when it handles
+ * a stop signal itself instead of dying from it (SIGINT/SIGKILL/SIGTERM).
+ *
+ * Every runner arms a SIGTERM→SIGKILL watchdog on `end()` and signals on
+ * `interrupt()` (#703): the CLIs install their own handlers, so a session the
+ * runner tore down on purpose comes back as a NON-ZERO exit. Paired with a
+ * "we sent the signal" flag, this predicate keeps that teardown out of the
+ * error path — an exit cezar caused is never an agent failure.
+ */
+export function isSignalTerminationExit(exitCode: number | null): boolean {
+  return exitCode === 130 || exitCode === 137 || exitCode === 143;
+}
+
 /** One content block of a user message — mirrors the Anthropic wire format
  *  so it can be written to the claude CLI's stdin verbatim. */
 export type ContentBlock =
