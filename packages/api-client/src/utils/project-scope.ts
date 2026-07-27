@@ -23,6 +23,30 @@
  */
 export const API_PREFIX = '/api/v1'
 
+/**
+ * Where the service lives, when it is not the origin serving this bundle.
+ *
+ * Empty is the cockpit's own case and the default: the service serves the page and owns
+ * `/api/v1/*` under the same authority, so a root-relative request is correct and needs no
+ * configuration. A separate product embedding this client — or a cockpit served from a
+ * different origin than its API — sets it once at boot.
+ *
+ * Deliberately a setter rather than a build-time constant: this package is framework-neutral
+ * (it cannot read Vite's `import.meta.env`), and a deployment that is configured at RUN time
+ * — a `<meta>` tag in the served HTML — must be able to change it without a rebuild.
+ */
+let baseUrl = ''
+
+/** Set the service origin. `''` (the default) means "same origin as this page". */
+export function setApiBaseUrl(url: string): void {
+  // A trailing slash would double up against the leading slash of every route.
+  baseUrl = url.replace(/\/+$/, '')
+}
+
+export function getApiBaseUrl(): string {
+  return baseUrl
+}
+
 let activeProjectId: string | null = null
 
 /** Written by ProjectScopeProvider on mount/param change (and cleared on unmount). Everything
@@ -37,9 +61,9 @@ export function getApiScope(): string | null {
 
 /** The scoped API base — what the context carries and what deep links embed. */
 export function apiBase(): string {
-  return activeProjectId === null
-    ? API_PREFIX
-    : `${API_PREFIX}/p/${encodeURIComponent(activeProjectId)}`
+  const scoped =
+    activeProjectId === null ? '' : `/p/${encodeURIComponent(activeProjectId)}`
+  return `${baseUrl}${API_PREFIX}${scoped}`
 }
 
 /**
@@ -77,7 +101,7 @@ export function apiPath(route: string): string {
     activeProjectId === null || WORKSPACE_LEVEL.test(route)
       ? route
       : `/p/${encodeURIComponent(activeProjectId)}${route}`
-  return `${API_PREFIX}${scoped}`
+  return `${baseUrl}${API_PREFIX}${scoped}`
 }
 
 /** Matches a cockpit API URL and captures the part after `/api`, scope included. */
@@ -100,10 +124,13 @@ const API_URL = /^\/api(?:\/v1)?(\/.*)$/
  * is returned untouched. It is not ours to rewrite.
  */
 export function resolveApiUrl(url: string): string {
-  const match = API_URL.exec(url)
+  // Already absolute (a full origin) — the server minted it complete; not ours to re-base.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url
+  const withoutBase = baseUrl && url.startsWith(baseUrl) ? url.slice(baseUrl.length) : url
+  const match = API_URL.exec(withoutBase)
   if (!match) return url
   const route = match[1] as string
   // Already scoped (`/p/<id>/…`) — the stored URL names its own project, so leave it.
-  if (route.startsWith('/p/')) return `${API_PREFIX}${route}`
+  if (route.startsWith('/p/')) return `${baseUrl}${API_PREFIX}${route}`
   return apiPath(route)
 }

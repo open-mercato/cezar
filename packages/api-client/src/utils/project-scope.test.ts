@@ -4,14 +4,17 @@ import {
   API_PREFIX,
   apiBase,
   apiPath,
+  getApiBaseUrl,
   getApiScope,
   queryScope,
   resolveApiUrl,
+  setApiBaseUrl,
   setApiScope,
 } from './project-scope.ts'
 
 afterEach(() => {
   setApiScope(null)
+  setApiBaseUrl('')
 })
 
 describe('apiPath — unscoped', () => {
@@ -130,5 +133,52 @@ describe('resolveApiUrl — URLs the server minted', () => {
     expect(resolveApiUrl('/raw/assets/icon.svg')).toBe('/raw/assets/icon.svg')
     expect(resolveApiUrl('https://github.com/o/r/pull/7')).toBe('https://github.com/o/r/pull/7')
     expect(resolveApiUrl('data:image/png;base64,AAAA')).toBe('data:image/png;base64,AAAA')
+  })
+})
+
+describe('setApiBaseUrl — the service on another origin', () => {
+  it('defaults to same-origin, which is the cockpit\'s own case', () => {
+    expect(getApiBaseUrl()).toBe('')
+    expect(apiPath('/runs')).toBe('/api/v1/runs')
+  })
+
+  it('prefixes every route once the base is set', () => {
+    setApiBaseUrl('https://cezar.example.com')
+    expect(apiPath('/runs')).toBe('https://cezar.example.com/api/v1/runs')
+    expect(apiBase()).toBe('https://cezar.example.com/api/v1')
+  })
+
+  it('composes with the project scope', () => {
+    setApiBaseUrl('https://cezar.example.com')
+    setApiScope('cezar')
+    expect(apiPath('/runs')).toBe('https://cezar.example.com/api/v1/p/cezar/runs')
+    expect(apiBase()).toBe('https://cezar.example.com/api/v1/p/cezar')
+  })
+
+  it('tolerates a trailing slash — it would otherwise double against the route', () => {
+    setApiBaseUrl('https://cezar.example.com/')
+    expect(apiPath('/runs')).toBe('https://cezar.example.com/api/v1/runs')
+  })
+
+  it('works with a path prefix, for a service behind a reverse proxy', () => {
+    setApiBaseUrl('/cezar')
+    expect(apiPath('/runs')).toBe('/cezar/api/v1/runs')
+  })
+
+  it('re-bases a stored transcript URL rather than double-prefixing one', () => {
+    setApiBaseUrl('https://cezar.example.com')
+    // Written by a server that had no base — still has to resolve against this one.
+    expect(resolveApiUrl('/api/runs/r1/images/a.png')).toBe(
+      'https://cezar.example.com/api/v1/runs/r1/images/a.png',
+    )
+    // Already based: must not gain a second copy of the origin.
+    expect(resolveApiUrl('https://cezar.example.com/api/v1/runs/r1/images/a.png')).toBe(
+      'https://cezar.example.com/api/v1/runs/r1/images/a.png',
+    )
+  })
+
+  it('leaves a foreign absolute URL alone', () => {
+    setApiBaseUrl('https://cezar.example.com')
+    expect(resolveApiUrl('https://github.com/o/r/pull/7')).toBe('https://github.com/o/r/pull/7')
   })
 })

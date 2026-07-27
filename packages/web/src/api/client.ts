@@ -75,7 +75,7 @@ import type {
   SkillsUpdateState,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
-import { apiPath, createCezarClient } from '@open-mercato/cezar-api-client'
+import { apiPath, createCezarClient, getApiBaseUrl } from '@open-mercato/cezar-api-client'
 import type { Ok } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { AppType } from '@open-mercato/cezar/app-type'
@@ -188,8 +188,17 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
  * until the server tightens its own return types.
  */
 const cez = createCezarClient<AppType>({
-  fetch: (input: string | URL | Request, init?: RequestInit) => fetchOrThrow(String(input), init),
+  // The base URL is resolved per request, not baked in at construction: this module is imported
+  // before `main.tsx` configures it, and a `<meta>`-configured deployment must still take
+  // effect. `hc` builds a root-relative URL, so prefixing here is the whole job.
+  fetch: (input: string | URL | Request, init?: RequestInit) =>
+    fetchOrThrow(withApiBase(String(input)), init),
 })
+
+/** Prefix a root-relative URL the typed client built with the configured service origin. */
+function withApiBase(url: string): string {
+  return url.startsWith('/') ? `${getApiBaseUrl()}${url}` : url
+}
 
 /**
  * Apply this module's answer contract to a Response the typed client produced.
