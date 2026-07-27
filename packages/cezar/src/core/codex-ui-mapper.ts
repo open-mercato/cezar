@@ -346,6 +346,11 @@ function mapItemLifecycle(
     return mapReviewMode(raw, id, type, eventType, state);
   }
 
+  // Internal collaboration telemetry is not a user tool. Codex emits one
+  // `subAgentActivity(kind: started)` when it creates a child thread, followed
+  // by `interacted` bookkeeping as control returns between threads.
+  if (type === 'subAgentActivity') return mapSubAgentActivity(raw, id, state);
+
   const item =
     type === 'agentMessage'
       ? messageItem(raw, id)
@@ -374,6 +379,31 @@ function mapItemLifecycle(
   }
   if (state.knownItems.has(id)) return { events, state };
   return { events, state: { ...state, knownItems: new Set(state.knownItems).add(id) } };
+}
+
+function mapSubAgentActivity(
+  raw: Record<string, unknown>,
+  id: string,
+  state: CodexUiMapperState,
+): CodexUiMapping {
+  if (str(raw.kind) !== 'started' || state.knownItems.has(id)) return { events: [], state };
+  const agentPath = str(raw.agentPath);
+  const agentName = agentPath?.split('/').filter(Boolean).at(-1)?.replaceAll('_', ' ');
+  const agentThreadId = str(raw.agentThreadId);
+  const display = toolDisplay('Task', agentName ? { description: agentName } : undefined);
+  const task: CodexCollabTask = { itemId: id, ...(agentName ? { prompt: agentName } : {}) };
+  const collabTasks = new Map(state.collabTasks);
+  if (agentThreadId) collabTasks.set(agentThreadId, task);
+  return {
+    events: [{
+      type: 'item.started',
+      item: {
+        kind: 'tool', id, name: 'spawnAgent', toolKind: 'task', title: display.title, status: 'running',
+        input: { ...(agentPath ? { agentPath } : {}), ...(agentThreadId ? { agentThreadId } : {}) },
+      },
+    }],
+    state: { ...state, knownItems: new Set(state.knownItems).add(id), collabTasks },
+  };
 }
 
 /** A spawn creates one task row; later send/wait/resume/close calls update the

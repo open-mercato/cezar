@@ -561,6 +561,7 @@ describe('the GitHub detail pane', () => {
           eligibility: 'ready',
           blockers: [],
           canMerge: true,
+          canOverride: false,
         },
       }),
       'GET /api/github/prs/137/merge-state?refresh=1': () => jsonResponse({
@@ -582,6 +583,7 @@ describe('the GitHub detail pane', () => {
           eligibility: 'ready',
           blockers: [],
           canMerge: true,
+          canOverride: false,
         },
       }),
       'POST /api/github/prs/137/merge': () => jsonResponse({
@@ -594,6 +596,7 @@ describe('the GitHub detail pane', () => {
     renderAt('/github/prs/137')
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-merge-box"]')?.textContent).toContain('Ready to merge'))
+    expect(document.querySelectorAll('[data-slot="gh-merge-status-passing"]')).toHaveLength(3)
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(sent.some((request) => request.path.endsWith('merge-state?refresh=1'))).toBe(true))
     fireEvent.click(screen.getByRole('button', { name: 'Squash and merge' }))
@@ -603,6 +606,54 @@ describe('the GitHub detail pane', () => {
     await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.body).toEqual({
       method: 'squash',
       expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
+    }))
+  })
+
+  it('allows an explicit rules override while warning that GitHub still authorizes it', async () => {
+    const sent = stubFetch({
+      'GET /api/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'review-required',
+          checks: [{ name: 'test', state: 'pending', required: true }],
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'blocked',
+          blockers: [{ code: 'reviews', message: 'A required review is missing.' }],
+          canMerge: false,
+          canOverride: true,
+        },
+      }),
+      'POST /api/github/prs/137/merge': () => jsonResponse({
+        merged: true,
+        number: 137,
+        url: PR_137.url,
+        method: 'squash',
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    const override = await screen.findByRole('checkbox', { name: /Merge without waiting for requirements/ })
+    expect(screen.getByRole('button', { name: 'Squash and merge' }).hasAttribute('disabled')).toBe(true)
+    expect(document.querySelectorAll('[data-slot="gh-merge-status-failing"]')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-slot="gh-merge-status-pending"]')).toHaveLength(1)
+    fireEvent.click(override)
+    fireEvent.click(screen.getByRole('button', { name: 'Squash and merge' }))
+    expect(await screen.findByText(/asking GitHub to bypass unmet repository requirements/)).toBeTruthy()
+    fireEvent.click(within(document.querySelector('[data-slot="gh-merge-confirm"]')!).getByRole('button', { name: 'Squash and merge' }))
+    await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.body).toEqual({
+      method: 'squash',
+      expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
+      overrideRules: true,
     }))
   })
 })

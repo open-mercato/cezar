@@ -169,6 +169,7 @@ export interface ForgePrMergeState {
   eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown';
   blockers: Array<{ code: string; message: string }>;
   canMerge: boolean;
+  canOverride: boolean;
 }
 
 export type ForgePrMergeStateResult =
@@ -178,6 +179,7 @@ export type ForgePrMergeStateResult =
 export interface ForgeMergeInput {
   method: ForgeMergeMethod;
   expectedHeadSha: string;
+  overrideRules?: boolean;
 }
 
 export type ForgeMergeResult =
