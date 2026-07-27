@@ -103,4 +103,5 @@ bar, and group the remaining controls into a single aligned row.
 
 - [x] 3.1 Full validation gate green — typecheck / npm test (4625) / test:unit (36) / build / test:package (9), all green at 59994942
 - [x] 3.2 Before/after screenshots attached to the PR
-- [ ] 3.3 `om-auto-review-pr --autofix` clean
+- [x] 3.3 `om-auto-review-pr --autofix` clean — no blockers or majors; two minors and one nit auto-fixed at 118bc26d
+- [x] Post-review fix: platform-aware `commandShortcutHint` behind the search bar's kbd, and the redundant `aria-label` dropped so the accessible name matches the visible label — 118bc26d
