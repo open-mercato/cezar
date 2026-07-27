@@ -1665,6 +1665,13 @@ export function normalizeMergeState(
     eligibility = 'unknown';
     blockers.push({ code: 'unknown', message: 'GitHub could not confirm every merge requirement.' });
   }
+  const canMerge = eligibility === 'ready';
+  const canOverride =
+    !canMerge &&
+    state === 'open' &&
+    !pr.isDraft &&
+    mergeable !== 'conflicting' &&
+    methods.length > 0;
   return {
     number: pr.number,
     title: pr.title,
@@ -1681,7 +1688,8 @@ export function normalizeMergeState(
     defaultMethod,
     eligibility,
     blockers,
-    canMerge: eligibility === 'ready',
+    canMerge,
+    canOverride,
   };
 }
 
@@ -1775,7 +1783,7 @@ async function mergePullRequest(
     if (!current.methods.includes(input.method)) {
       return { merged: false, status: 409, error: 'That merge method is no longer enabled.', code: 'disabled-method', current };
     }
-    if (!current.canMerge) {
+    if (!mergePreflightAllowed(current, input.overrideRules)) {
       return { merged: false, status: 409, error: current.blockers[0]?.message ?? 'The pull request is not eligible to merge.', code: current.eligibility, current };
     }
     if (process.env.CEZ_DRY_RUN === '1') {
@@ -1798,6 +1806,10 @@ async function mergePullRequest(
   } finally {
     mergeInflight.delete(key);
   }
+}
+
+export function mergePreflightAllowed(current: ForgePrMergeState, overrideRules = false): boolean {
+  return current.canMerge || (overrideRules && current.canOverride);
 }
 
 /** owner/repo parsed out of the origin remote — feeds `viewUrl`. */

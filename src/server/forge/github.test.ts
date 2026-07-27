@@ -28,6 +28,7 @@ import {
   ghCheckRunSchema,
   ghTimelineEventSchema,
   mergeThread,
+  mergePreflightAllowed,
   normalizeComments,
   normalizeEvents,
   normalizeReviews,
@@ -156,25 +157,52 @@ describe('normalizeMergeState', () => {
     expect(state.methods).toEqual(['squash', 'rebase']);
     expect(state.defaultMethod).toBe('squash');
     expect(state.canMerge).toBe(true);
+    expect(state.canOverride).toBe(false);
     expect(state.checks[0]).toMatchObject({ name: 'test', state: 'passing', required: true });
   });
 
   it('never presents unknown rules or a changed review decision as ready', () => {
-    expect(normalizeMergeState({ ...ready, mergeStateStatus: 'UNKNOWN' }, {
+    const unknown = normalizeMergeState({ ...ready, mergeStateStatus: 'UNKNOWN' }, {
       allow_merge_commit: true,
       allow_squash_merge: true,
       allow_rebase_merge: true,
-    }, { readable: true, requiredChecks: [] }).eligibility).toBe('unknown');
-    expect(normalizeMergeState({ ...ready, reviewDecision: 'CHANGES_REQUESTED' }, {
+    }, { readable: true, requiredChecks: [] });
+    expect(unknown.eligibility).toBe('unknown');
+    expect(unknown.canOverride).toBe(true);
+    const changesRequested = normalizeMergeState({ ...ready, reviewDecision: 'CHANGES_REQUESTED' }, {
       allow_merge_commit: true,
       allow_squash_merge: true,
       allow_rebase_merge: true,
-    }, { readable: true, requiredChecks: [] }).eligibility).toBe('blocked');
+    }, { readable: true, requiredChecks: [] });
+    expect(changesRequested.eligibility).toBe('blocked');
+    expect(changesRequested.canOverride).toBe(true);
     expect(normalizeMergeState(ready, {
       allow_merge_commit: true,
       allow_squash_merge: true,
       allow_rebase_merge: true,
     }).eligibility).toBe('unknown');
+  });
+
+  it('never makes terminal, draft, or conflicting pull requests overridable', () => {
+    const policy = {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    };
+    expect(normalizeMergeState({ ...ready, state: 'CLOSED' }, policy).canOverride).toBe(false);
+    expect(normalizeMergeState({ ...ready, isDraft: true }, policy).canOverride).toBe(false);
+    expect(normalizeMergeState({ ...ready, mergeable: 'CONFLICTING' }, policy).canOverride).toBe(false);
+  });
+
+  it('requires explicit override intent before attempting an overridable merge', () => {
+    const state = normalizeMergeState({ ...ready, reviewDecision: 'REVIEW_REQUIRED' }, {
+      allow_merge_commit: true,
+      allow_squash_merge: true,
+      allow_rebase_merge: true,
+    }, { readable: true, requiredChecks: [] });
+    expect(mergePreflightAllowed(state)).toBe(false);
+    expect(mergePreflightAllowed(state, true)).toBe(true);
+    expect(mergePreflightAllowed({ ...state, canOverride: false }, true)).toBe(false);
   });
 });
 

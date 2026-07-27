@@ -415,7 +415,7 @@ export function getGithubPrMergeState(
 
 export function mergeGithubPr(
   number: number,
-  input: { method: GithubMergeMethod; expectedHeadSha: string },
+  input: { method: GithubMergeMethod; expectedHeadSha: string; overrideRules?: boolean },
 ): Promise<GithubMergeResponse> {
   return mutate<GithubMergeResponse>('POST', `/api/github/prs/${number}/merge`, input)
 }

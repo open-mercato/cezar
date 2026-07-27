@@ -46,9 +46,9 @@ describe('the GitHub merge API', () => {
     expect(stateResponse.status).toBe(200);
     const state = (await stateResponse.json()) as {
       available: true;
-      mergeState: { canMerge: boolean; headSha: string; methods: string[] };
+      mergeState: { canMerge: boolean; canOverride: boolean; headSha: string; methods: string[] };
     };
-    expect(state.mergeState).toMatchObject({ canMerge: true, methods: ['squash', 'merge', 'rebase'] });
+    expect(state.mergeState).toMatchObject({ canMerge: true, canOverride: false, methods: ['squash', 'merge', 'rebase'] });
 
     const mergeResponse = await apiRequest(app, '/api/github/prs/128/merge', {
       method: 'POST',
