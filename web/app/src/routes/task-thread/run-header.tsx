@@ -37,7 +37,7 @@ import { Fragment, useState, type ReactNode } from 'react'
 import { useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
-import { queryKeys, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
+import { queryKeys, useConfig, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@/api/types'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -605,10 +605,10 @@ function AgentBadge({ run }: { run: ApiRun }) {
   // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
   // hardcoding 'claude' would name the wrong agent on a repo whose `defaultRunner` is
   // codex/opencode, and "which agent produced this?" is the one question #416 exists to answer.
-  // 'claude' stays the last resort only while health is in flight (it is `config.defaultRunner`'s
-  // own default).
-  const health = useHealth()
-  const runner = run.runner ?? health.data?.defaultRunner ?? 'claude'
+  // 'claude' stays the last resort only while the active project's config is in flight.
+  // `/api/health` describes the boot project and can name the wrong runner on scoped routes.
+  const config = useConfig()
+  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
   const model = run.model ?? 'auto'
   return (
     <DropdownMenu>

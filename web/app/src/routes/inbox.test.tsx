@@ -133,7 +133,9 @@ function stubFetch(
       if (method === 'GET' && path === '/api/health') return jsonResponse(health(backends))
       if (method === 'GET' && path === '/api/providers/status') return jsonResponse(providers)
       if (method === 'GET' && path === '/api/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (method === 'GET' && path === '/api/config') return jsonResponse({ defaultModels })
+      if (method === 'GET' && path === '/api/config') {
+        return jsonResponse({ defaultRunner: backends[0] ?? 'claude', defaultModels })
+      }
       if (method === 'DELETE' && path.startsWith('/api/todos/')) {
         const id = path.slice('/api/todos/'.length)
         inbox = inbox.filter((item) => item.id !== id)
@@ -310,7 +312,7 @@ describe('Run — backend selection (#401)', () => {
     await waitFor(() => expect(startBody(sent, 't1')).toBeUndefined())
   })
 
-  it('sends the connected runner explicitly when provider status resolves before health', async () => {
+  it('uses project config while boot health is pending', async () => {
     const sent = stubFetch({
       'GET /api/health': () => new Promise<Response>(() => {}),
     })
@@ -321,7 +323,7 @@ describe('Run — backend selection (#401)', () => {
     await waitFor(() => expect(run.disabled).toBe(false))
     fireEvent.click(run)
 
-    await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'claude' }))
+    await waitFor(() => expect(startBody(sent, 't1')).toBeUndefined())
   })
 
   it('an untouched card honors Settings → Agents defaultModels — the one real behavior change', async () => {
@@ -352,7 +354,11 @@ describe('Run — backend selection (#401)', () => {
   })
 
   it('a multi-backend host offers the runner pill, and the pick reaches the POST', async () => {
-    const sent = stubFetch({}, TODOS, ['claude', 'codex'])
+    const sent = stubFetch({
+      // Reproduce a non-boot project whose default is Claude while boot health says Codex.
+      'GET /api/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
+      'GET /api/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
+    }, TODOS, ['claude', 'codex'])
     renderInbox()
 
     await waitFor(() => expect(cards()).toHaveLength(2))
