@@ -207,6 +207,19 @@ describe('AskCard — answering after the session has ended', () => {
     expect(screen.getByText('the session has ended — sending reopens it')).toBeTruthy()
   })
 
+  // The resume affordance must be identifiable without reading copy — and must NOT be claimed
+  // by a live run's ordinary "pick one or more" hint, which sits in the same slot position.
+  it('marks the delivery seam on the card, and only names the resume hint when resuming', () => {
+    const { unmount } = renderAsk(twoQuestionAsk, activeRun)
+    expect(document.querySelector('[data-slot="ask-card"]')?.getAttribute('data-delivery')).toBe('live')
+    expect(document.querySelector('[data-slot="ask-resume-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="ask-hint"]')).toBeTruthy()
+    unmount()
+    renderAsk(twoQuestionAsk, closedRun)
+    expect(document.querySelector('[data-slot="ask-card"]')?.getAttribute('data-delivery')).toBe('resume')
+    expect(document.querySelector('[data-slot="ask-resume-hint"]')).toBeTruthy()
+  })
+
   it('combined Send on a closed run resumes once with every answer', async () => {
     renderAsk(twoQuestionAsk, closedRun)
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))

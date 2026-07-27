@@ -132,3 +132,4 @@ pending ask card — and runs in the task's worktree.
 - [x] 3.1 Update the AskUser spec (no changelog entry — it is assembled per release) — 1de87482
 - [x] 3.2 Run the full validation gate — typecheck ✅, `npm test` 4660 ✅, `npm run test:unit` 36 ✅, `npm run build` ✅, `npm run test:package` 9 ✅
 - [x] 3.3 Pin the cross-session resolution in the reducer and verify the loop in a real cockpit
+- [x] Post-review fix: split the resolved card from the delivery hook, scope the hint slot to the resume state, and stop the blocked path from echoing a reason the card already shows

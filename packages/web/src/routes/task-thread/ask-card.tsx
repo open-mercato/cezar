@@ -29,14 +29,10 @@ function formatAnswer(question: UiAskQuestion, labels: string[]): string {
  * "Other". Once resolved, the card collapses to a compact summary.
  */
 export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
-  const delivery = useAskAnswer(run)
-  const blocked = delivery.blockedBy !== undefined
-  const questions = ask.questions
-  // One-tap only when there is a single single-select question; every other
-  // shape needs a combined Send so no question's answer is dropped.
-  const oneTap = questions.length === 1 && questions[0]?.multiSelect !== true
-  const [selections, setSelections] = useState<Record<number, string[]>>({})
-
+  // An answered card is a static summary — split so the delivery hook (two mutations and a
+  // provider-status subscription) only mounts for a question that can still be answered.
+  // Threads accumulate asks; every resolved one would otherwise carry live machinery for a
+  // question nobody can answer again.
   if (ask.resolved) {
     return (
       <div
@@ -51,6 +47,18 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       </div>
     )
   }
+  return <PendingAsk ask={ask} run={run} />
+}
+
+/** The unanswered card: option chips wired to whichever delivery seam the run's state allows. */
+function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
+  const delivery = useAskAnswer(run)
+  const blocked = delivery.blockedBy !== undefined
+  const questions = ask.questions
+  // One-tap only when there is a single single-select question; every other
+  // shape needs a combined Send so no question's answer is dropped.
+  const oneTap = questions.length === 1 && questions[0]?.multiSelect !== true
+  const [selections, setSelections] = useState<Record<number, string[]>>({})
 
   const setQuestion = (index: number, labels: string[]) =>
     setSelections((prev) => ({ ...prev, [index]: labels }))
@@ -102,7 +110,12 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
           <Button size="sm" disabled={delivery.isPending || blocked || !allAnswered} onClick={sendAll}>
             {resuming ? 'Send answer & reopen' : 'Send answer'}
           </Button>
-          <span data-slot="ask-resume-hint" className="text-[11.5px] text-soft-foreground">
+          {/* The slot names the resume state, so a selector for it can never match the ordinary
+              "pick one or more" hint a live run shows. */}
+          <span
+            data-slot={resuming ? 'ask-resume-hint' : 'ask-hint'}
+            className="text-[11.5px] text-soft-foreground"
+          >
             {resuming
               ? 'the session has ended — sending reopens it'
               : `${questions.length > 1 ? 'answer each question' : 'pick one or more'} — or type a reply below`}

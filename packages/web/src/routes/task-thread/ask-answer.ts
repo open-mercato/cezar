@@ -99,10 +99,9 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
     })
 
   const send = async (text: string): Promise<void> => {
-    if (blockedBy) {
-      setError(reason)
-      return
-    }
+    // Defense in depth — every entry point is already disabled while blocked, and the card
+    // renders `reason` on its own, so repeating it as an error would say the same thing twice.
+    if (blockedBy) return
     setError(undefined)
     if (mode === 'resume') {
       try {
