@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { nginxVhost, serviceExecStart, systemdUnit, ubuntuVps } from './ubuntu-vps.js';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  isNpxExecStart,
+  nginxVhost,
+  refreshNpxCacheForRedeploy,
+  serviceExecStart,
+  systemdUnit,
+  ubuntuVps,
+} from './ubuntu-vps.js';
 import { StepAborted } from '../steps.js';
 import { createAutoUi } from '../ui.js';
 import type { InstallContext, InstallStep, Runner, Ui } from '../types.js';
@@ -264,6 +272,67 @@ describe('serviceExecStart', () => {
   it('falls back to a resolved global bin when the entry is missing', () => {
     expect(serviceExecStart({ ...base, pkgRoot: '/pkg', entryExists: false, globalBin: '/usr/bin/cezar-cli' }))
       .toBe('/n/node /usr/bin/cezar-cli');
+  });
+});
+
+describe('isNpxExecStart (#696)', () => {
+  it('is true for the unpinned npx launch form', () => {
+    expect(isNpxExecStart('/home/u/.nvm/versions/node/v24/bin/npx --yes cezar-cli serve --no-open --port 4321')).toBe(true);
+  });
+  it('is false for a checkout (<node> dist/index.js) unit', () => {
+    expect(isNpxExecStart('/usr/bin/node /home/cezar/cezar/dist/index.js serve --no-open --port 4321')).toBe(false);
+  });
+  it('is false for a global bin unit (no npx)', () => {
+    expect(isNpxExecStart('/usr/bin/node /usr/bin/cezar-cli serve --no-open --port 4321')).toBe(false);
+  });
+});
+
+describe('ubuntu-vps redeploy npx-cache refresh (#696)', () => {
+  // A UI that records info() lines so we can assert what the deploy reported.
+  function recordingCtx(execStart: string) {
+    const infos: string[] = [];
+    const runner: Runner = {
+      // `systemctl show … -p ExecStart` returns the unit's launch form; every
+      // other systemctl call (restart/is-active) is a no-op success.
+      capture: async (_p, args) =>
+        args.includes('ExecStart') ? { code: 0, stdout: execStart, stderr: '' } : { code: 0, stdout: '', stderr: '' },
+      interactive: async () => 0,
+    };
+    const ui = { ...createAutoUi(), info: (m: string) => infos.push(m) } as Ui;
+    return { ctx: ctxWith({ dryRun: true, runner, ui }), infos };
+  }
+
+  it('reports clearing the npx cache before restarting an npx-based unit', async () => {
+    const { ctx, infos } = recordingCtx('/n/npx --yes cezar-cli serve --no-open --port 4321');
+    await ubuntuVps.redeploy!(ctx);
+    expect(infos.some((m) => /clear cached cezar-cli|npx refetch/i.test(m))).toBe(true);
+  });
+
+  it('does NOT touch the npx cache for a checkout-based unit', async () => {
+    const { ctx, infos } = recordingCtx('/usr/bin/node /home/cezar/cezar/dist/index.js serve --no-open --port 4321');
+    await ubuntuVps.redeploy!(ctx);
+    expect(infos.some((m) => /npx/i.test(m))).toBe(false);
+  });
+
+  it('really deletes only the cezar-cli entries in the npx cache', () => {
+    const cache = mkdtempSync(join(tmpdir(), 'cez-npx-'));
+    const prev = process.env.npm_config_cache;
+    process.env.npm_config_cache = cache;
+    try {
+      // one cezar-cli cache entry (must be removed) + one unrelated (kept)
+      mkdirSync(join(cache, '_npx', 'aaaa', 'node_modules', 'cezar-cli'), { recursive: true });
+      writeFileSync(join(cache, '_npx', 'aaaa', 'node_modules', 'cezar-cli', 'x'), '');
+      mkdirSync(join(cache, '_npx', 'bbbb', 'node_modules', 'prettier'), { recursive: true });
+
+      refreshNpxCacheForRedeploy(ctxWith({}), '/n/npx --yes cezar-cli serve --port 4321');
+
+      expect(existsSync(join(cache, '_npx', 'aaaa'))).toBe(false); // cezar-cli entry gone
+      expect(existsSync(join(cache, '_npx', 'bbbb'))).toBe(true); // unrelated entry kept
+    } finally {
+      if (prev === undefined) delete process.env.npm_config_cache;
+      else process.env.npm_config_cache = prev;
+      rmSync(cache, { recursive: true, force: true });
+    }
   });
 });
 
