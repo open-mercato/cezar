@@ -270,7 +270,14 @@ export interface RepoInfo {
  *  `{ kind, ...detect() }`. Null means plain-git features only — no PR/issue surfaces. */
 export interface ForgeInfo {
   kind: 'github'
-  available: boolean
+  /**
+   * Whether the forge is reachable — **absent until the availability probe has warmed**.
+   *
+   * Health must never pay a `gh` shell-out, so it serves whatever the cache holds and `null`
+   * before the first probe lands. Absent therefore means "not determined yet", which is not the
+   * same as `false` ("we checked, it is down") — read it as `forge?.available === true`.
+   */
+  available?: boolean
   /** Human-readable hint when unavailable (`gh` missing, offline…). */
   reason?: string
 }

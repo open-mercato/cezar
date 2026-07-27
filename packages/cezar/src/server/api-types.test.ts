@@ -194,7 +194,11 @@ const guards = {
   changesPayload: true satisfies Exact<ChangesPayload, WebChangesPayload>,
   worktreeDirEntry: true satisfies Exact<DirEntry, WebWorktreeDirEntry>,
   capabilities: true satisfies Exact<Capabilities, WebCapabilities>,
-  forgeInfo: true satisfies Exact<{ kind: ForgeKind } & ForgeAvailability, WebForgeInfo>,
+  // `Partial` is the point: the health handler spreads `detectCached() ?? {}`, so a warm-up
+  // answer carries `kind` alone. Asserting the non-partial shape here is what let the DTO
+  // over-promise `available: boolean` while the wire omitted it — the drift that typing the
+  // handler's return value surfaced.
+  forgeInfo: true satisfies Exact<{ kind: ForgeKind } & Partial<ForgeAvailability>, WebForgeInfo>,
   // Repo view (R5 Step 1.7): the structured commit diff and the branch action's answer
   // (the `/api/v1/repo/branch` route serializes the ok-arm of BranchResult minus its `ok`).
   repoCommitPayload: true satisfies Exact<CommitPayload, WebRepoCommitPayload>,

@@ -76,6 +76,8 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import { apiPath, createCezarClient } from '@open-mercato/cezar-api-client'
+import type { Ok } from '@open-mercato/cezar-api-client'
+import type { ClientResponse } from 'hono/client'
 import type { AppType } from '@open-mercato/cezar/app-type'
 
 /**
@@ -197,14 +199,17 @@ const cez = createCezarClient<AppType>({
  * message, a non-JSON body becomes an `ApiError` naming the URL, anything else is the parsed
  * value — whose type the caller gets from the route, not from a hand-written declaration.
  */
-async function unwrap<T>(res: Response, label: string): Promise<T> {
+async function unwrap<R extends ClientResponse<unknown, number, 'json'>>(
+  res: R,
+  label: string,
+): Promise<Ok<R>> {
   const body = await res.text()
   if (!res.ok) throw errorFor(res.status, res.statusText, body)
   const parsed = parseJson(body)
   if (parsed === undefined) {
     throw new ApiError(res.status, `the cezar server answered ${label} with a non-JSON body`)
   }
-  return parsed as T
+  return parsed as Ok<R>
 }
 
 async function send(path: string, init: RequestInit): Promise<Response> {

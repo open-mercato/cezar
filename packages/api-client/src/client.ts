@@ -1,6 +1,6 @@
 import { hc } from 'hono/client'
 import type { Hono } from 'hono'
-import type { ClientRequestOptions } from 'hono/client'
+import type { ClientRequestOptions, ClientResponse } from 'hono/client'
 
 /**
  * The typed HTTP client for a cezar service.
@@ -66,3 +66,20 @@ export function createCezarClient<
     ...(fetch ? { fetch } : {}),
   })
 }
+
+/**
+ * The 200 member of a typed response union — the shape a caller actually receives.
+ *
+ * `hc` types a call as the union of everything the handler can answer, error branches included:
+ * a route that answers `{runner, models}` or `{error}` infers both. That is honest about the
+ * wire, but a caller that treats a non-2xx as a thrown error (as cezar's client does) only ever
+ * holds the success shape, and forcing it to narrow a union it can never see would be noise.
+ *
+ * Selecting the 200 branch is what makes an inferred type a drop-in replacement for the
+ * hand-written DTO it retires.
+ */
+export type Ok<R> = R extends ClientResponse<infer T, infer S, 'json'>
+  ? S extends 200
+    ? T
+    : never
+  : never

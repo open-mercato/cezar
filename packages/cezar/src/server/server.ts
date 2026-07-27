@@ -5,6 +5,11 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context } from 'hono';
+// Type-only: erased at build, so the published CLI gains no runtime dependency on the
+// api-client. Naming the response here is what lets the route INFER it — the typed client
+// reads the handler, so a loose `Record<string, unknown>` would hand every consumer a shape
+// weaker than the DTO it is meant to retire.
+import type { HealthResponse } from '@open-mercato/cezar-api-client';
 import type { Next } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
@@ -1142,7 +1147,7 @@ export function createApp(deps: ServerDeps) {
   // One builder for both transports: `GET /api/health` (the authoritative,
   // CORS-open discovery endpoint) and the `health` topic on `/api/v1/ws` below
   // push the byte-identical shape, so the two can never drift.
-  const healthSnapshot = async (): Promise<Record<string, unknown>> => {
+  const healthSnapshot = async (): Promise<HealthResponse> => {
     const [checks, repo, config, workspace] = await Promise.all([
       detectEnvironment(),
       getRepoInfo(bootRoot),
@@ -1205,13 +1210,13 @@ export function createApp(deps: ServerDeps) {
   // literally #369, so past this age correctness beats the latency win and the
   // read waits for the compute. `refreshHealth` dedupes, so waiting costs one.
   const HEALTH_MAX_STALE_MS = 60_000;
-  let healthCache: { at: number; payload: Record<string, unknown>; body: string } | undefined;
-  let healthInFlight: Promise<Record<string, unknown>> | undefined;
+  let healthCache: { at: number; payload: HealthResponse; body: string } | undefined;
+  let healthInFlight: Promise<HealthResponse> | undefined;
   // Set while the topic has a subscriber; a change a refresh detects is pushed
   // here (a noop when nobody is listening).
   let publishHealth: (data: unknown) => void = () => {};
 
-  const refreshHealth = (): Promise<Record<string, unknown>> => {
+  const refreshHealth = (): Promise<HealthResponse> => {
     // Dedupe: a GET's background revalidation and the topic's interval tick
     // share ONE compute (and one set of CLI spawns) rather than racing two.
     if (healthInFlight) return healthInFlight;
@@ -1234,7 +1239,7 @@ export function createApp(deps: ServerDeps) {
   // injected) it answers from cache instantly and revalidates behind the
   // response; without a hub — a bare app in tests — there is no refresher
   // keeping a cache coherent, so it computes fresh, exactly as before.
-  const readHealth = async (): Promise<Record<string, unknown>> => {
+  const readHealth = async (): Promise<HealthResponse> => {
     if (!deps.socketHub) return healthSnapshot();
     if (!healthCache) return refreshHealth(); // first ever: nothing to serve yet
     const age = Date.now() - healthCache.at;

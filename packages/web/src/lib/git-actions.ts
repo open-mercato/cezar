@@ -1,4 +1,4 @@
-import type { RunStatus } from '@open-mercato/cezar-api-client'
+import type { ForgeInfo, RunStatus } from '@open-mercato/cezar-api-client'
 
 /**
  * The git action policy object (spec §"Session git view — Changes & Files tabs (#390)",
@@ -22,8 +22,10 @@ export interface GitActionState {
   changedFiles?: number
   /** The repo's remote from `/api/health` (`repo.remote`); undefined when none configured. */
   remote?: string
-  /** `/api/health` `forge` — null means no supported forge remote (plain-git features only). */
-  forge: { kind: 'github'; available: boolean; reason?: string } | null
+  /** `/api/v1/health` `forge` — null means no supported forge remote (plain-git features only).
+   *  The DTO rather than a local copy: `available` is OPTIONAL there (absent until the
+   *  availability probe warms), and re-declaring it here is what hid that. */
+  forge: ForgeInfo | null
   /** `/api/health` `capabilities.localHandoff`. False (or unknown) = hosted mode: local-
    *  machine actions are HIDDEN entirely, never shown disabled. */
   localHandoff: boolean
