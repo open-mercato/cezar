@@ -104,12 +104,20 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
       return
     }
     setError(undefined)
+    if (mode === 'resume') {
+      try {
+        await resumeWith(text)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
+      return
+    }
     try {
-      if (mode === 'resume') await resumeWith(text)
-      else await sendMessage.mutateAsync({ text })
+      await sendMessage.mutateAsync({ text })
     } catch (err) {
       // The cached record said "live" but the session had already closed — resume instead
-      // of dropping the answer the user just gave.
+      // of dropping the answer the user just gave. Only ever from the live path: a resume
+      // that answers 409 has already been refused on its own terms.
       if (err instanceof ApiError && err.status === 409 && lastSessionId(run) !== undefined) {
         try {
           await resumeWith(text)
