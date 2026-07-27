@@ -101,6 +101,6 @@ bar, and group the remaining controls into a single aligned row.
 
 ### Phase 3: Validation, QA evidence and review
 
-- [ ] 3.1 Full validation gate green
-- [ ] 3.2 Before/after screenshots attached to the PR
+- [x] 3.1 Full validation gate green — typecheck / npm test (4625) / test:unit (36) / build / test:package (9), all green at 59994942
+- [x] 3.2 Before/after screenshots attached to the PR
 - [ ] 3.3 `om-auto-review-pr --autofix` clean
