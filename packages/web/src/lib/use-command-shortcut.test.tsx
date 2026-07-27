@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  commandShortcutHint,
   isEditableTarget,
   shouldTriggerCommandShortcut,
   shouldTriggerKeyShortcut,
@@ -174,5 +175,28 @@ describe('useCommandShortcut', () => {
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
 
     expect(onFire).not.toHaveBeenCalled()
+  })
+})
+
+/* The chord is both bindings at once; only its printed label is platform-specific, and the
+ * spec's rule is that a kbd hint renders the platform's own symbol. The sidebar's search bar
+ * is the first caller (#702) — it used to hardcode ⌘K, which is simply wrong on a PC. */
+describe('commandShortcutHint — the platform symbol a kbd hint prints', () => {
+  it.each([
+    { platform: 'MacIntel', hint: '⌘K' },
+    { platform: 'iPhone', hint: '⌘K' },
+    { platform: 'iPad', hint: '⌘K' },
+    { platform: 'Win32', hint: 'Ctrl+K' },
+    { platform: 'Linux x86_64', hint: 'Ctrl+K' },
+    // Chrome froze navigator.platform behind an empty string on some clients — the safe
+    // default is the one every keyboard has.
+    { platform: '', hint: 'Ctrl+K' },
+  ])('renders $hint on $platform', ({ platform, hint }) => {
+    expect(commandShortcutHint('k', platform)).toBe(hint)
+  })
+
+  it('upper-cases the key so callers can pass the same lowercase letter the binding uses', () => {
+    expect(commandShortcutHint('n', 'MacIntel')).toBe('⌘N')
+    expect(commandShortcutHint('N', 'Win32')).toBe('Ctrl+N')
   })
 })
