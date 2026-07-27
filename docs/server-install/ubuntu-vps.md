@@ -49,7 +49,7 @@ Or from a git checkout on the box:
 ```bash
 git clone https://github.com/open-mercato/cezar && cd cezar
 npm install && npm run build
-node dist/index.js server-install --platform ubuntu-vps
+node packages/cezar/dist/index.js server-install --platform ubuntu-vps
 ```
 
 ### What each step does
@@ -152,7 +152,7 @@ Once a new cezar is available (a fresh local build, or a newly published
 
 ```bash
 npx cezar-cli server-deploy --platform ubuntu-vps
-#   from a checkout:  node dist/index.js server-deploy --platform ubuntu-vps
+#   from a checkout:  node packages/cezar/dist/index.js server-deploy --platform ubuntu-vps
 #   npm script:       npm run server-deploy -- --platform ubuntu-vps
 ```
 
@@ -160,7 +160,7 @@ npx cezar-cli server-deploy --platform ubuntu-vps
 answer, and re-runs the same authenticated end-to-end check as install — so a
 green deploy means the cockpit is actually serving the new version.
 
-- **From a checkout** the service runs `<node> <repo>/dist/index.js` — so build
+- **From a checkout** the service runs `<node> <repo>/packages/cezar/dist/index.js` — so build
   first, then deploy: `git pull && npm run build && npx cezar-cli server-deploy --platform ubuntu-vps`.
 - **Via npx** the service runs `npx --yes cezar-cli`. npx caches the resolved
   package under `~/.npm/_npx` and reuses it on restart, so `server-deploy` first
@@ -234,7 +234,7 @@ What differs per instance:
 ## Uninstall
 
 ```bash
-node dist/index.js server-uninstall --platform ubuntu-vps
+node packages/cezar/dist/index.js server-uninstall --platform ubuntu-vps
 ```
 
 Removes what cezar **owns**: the nginx vhost, htpasswd, systemd unit, and boot
