@@ -188,8 +188,7 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
  * until the server tightens its own return types.
  */
 const cez = createCezarClient<AppType>({
-  fetch: (input: string | URL | Request, init?: RequestInit) =>
-    fetch(input as RequestInfo, { ...init, credentials: 'include' }),
+  fetch: (input: string | URL | Request, init?: RequestInit) => fetchOrThrow(String(input), init),
 })
 
 /**
@@ -199,6 +198,9 @@ const cez = createCezarClient<AppType>({
  * message, a non-JSON body becomes an `ApiError` naming the URL, anything else is the parsed
  * value — whose type the caller gets from the route, not from a hand-written declaration.
  */
+/** The per-request options `hc` takes, from this module's `ReadOptions`. */
+const init = (opts?: ReadOptions) => ({ init: { signal: opts?.signal } })
+
 async function unwrap<R extends ClientResponse<unknown, number, 'json'>>(
   res: R,
   label: string,
@@ -212,23 +214,33 @@ async function unwrap<R extends ClientResponse<unknown, number, 'json'>>(
   return parsed as Ok<R>
 }
 
-async function send(path: string, init: RequestInit): Promise<Response> {
-  // Resolved once: the error below has to name the URL that actually failed, not the route the
-  // caller asked for — "cannot reach /health" would send someone looking for the wrong thing.
-  const url = apiPath(path)
+/**
+ * The one `fetch` both request paths go through — hand-written and typed alike.
+ *
+ * Shared rather than duplicated because the two behaviours below are the contract, and a
+ * migrated route that quietly lost either of them would be a regression nobody sees until a
+ * server is down:
+ *
+ * - **Credentials.** Remote installations are commonly behind reverse-proxy Basic Auth, and
+ *   every background query/mutation must reuse that authenticated browser session just like
+ *   navigation does. `include` is harmless for the root-relative, same-origin paths used here.
+ * - **Unreachable is an `ApiError`, not a `TypeError`.** The request never got an answer — not
+ *   an HTTP failure, hence status 0 — but callers get one error type either way instead of two.
+ *   An abort is re-thrown untouched: that is the caller cancelling, not the server failing.
+ */
+async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> {
   try {
-    // Be explicit at the shared boundary: remote installations are commonly protected by
-    // reverse-proxy Basic Auth, and every background query/mutation must reuse that authenticated
-    // browser session just like navigation does. `include` is harmless for the root-relative,
-    // same-origin paths enforced above and prevents an individual call site from silently losing
-    // credentials when the browser/proxy combination is stricter than the fetch default.
     return await fetch(url, { ...init, credentials: 'include' })
   } catch (cause) {
-    // The request never got an answer. Not an HTTP failure — hence status 0 — but callers get
-    // one error type either way instead of two.
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
+}
+
+async function send(path: string, init: RequestInit): Promise<Response> {
+  // Resolved here so the error names the URL that actually failed, not the route the caller
+  // asked for — "cannot reach /health" would send someone looking for the wrong thing.
+  return fetchOrThrow(apiPath(path), init)
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -268,8 +280,8 @@ const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent
 // ---- reads --------------------------------------------------------------------------------
 
 /** Version, update check, repo/branch, and the tool probes behind the Tools menu. */
-export function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
-  return get<HealthResponse>('/health', opts)
+export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
+  return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
 /** Host-local Codex catalog. Workspace-level: one CLI/account serves every project. */
@@ -301,7 +313,7 @@ export function getLaunchKey(opts?: ReadOptions): Promise<LaunchKeyResponse> {
  *  server's handler, and `ProjectsResponse` here is an assertion that the inferred type still
  *  matches the DTO rather than the source of it. */
 export async function getProjects(opts?: ReadOptions): Promise<ProjectsResponse> {
-  return unwrap(await cez.api.v1.projects.$get({}, { init: { signal: opts?.signal } }), '/projects')
+  return unwrap(await cez.api.v1.projects.$get({}, init(opts)), '/projects')
 }
 
 /** One directory listing for the folder picker (`GET /api/fs/browse`, step 4.1). `path`
@@ -829,8 +841,8 @@ export function putUiState(patch: UiState): Promise<UiState> {
 
 /** The cross-project GUI state (`~/.cezar/ui-state.json`, step 2.7). Workspace-level:
  *  `apiPath` never prefixes `/api/workspace/*`. */
-export function getWorkspaceUiState(opts?: ReadOptions): Promise<WorkspaceUiState> {
-  return get<WorkspaceUiState>('/workspace/ui-state', opts)
+export async function getWorkspaceUiState(opts?: ReadOptions): Promise<WorkspaceUiState> {
+  return unwrap(await cez.api.v1.workspace['ui-state'].$get({}, init(opts)), '/workspace/ui-state')
 }
 
 /** Shallow top-level merge server-side, same as its per-repo twin — send whole top-level
@@ -841,8 +853,8 @@ export function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceU
 
 /** The global settings slice of `~/.cezar/config.json` (step 2.7) — Settings → Resources and
  *  (step 4.4) the checkout-root field. Workspace-level, so never scope-prefixed. */
-export function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceConfigResponse> {
-  return get<WorkspaceConfigResponse>('/workspace/config', opts)
+export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceConfigResponse> {
+  return unwrap(await cez.api.v1.workspace.config.$get({}, init(opts)), '/workspace/config')
 }
 
 /** Cached Open Mercato update state for one registered project. The GET is immediate; the
