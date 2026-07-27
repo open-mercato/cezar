@@ -434,6 +434,9 @@ Useful environment variables:
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
+| `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
+| `CEZ_AUTONOMOUS_DEFAULT=0` | Seed the New Task Autonomous default (`0` or `1`). Without a seed, skills default on and workflows off; a saved global Resources setting overrides it. |
+| `CEZ_WORKTREE_DEFAULT=1` | Seed the New Task Worktree default (`0` or `1`). Without a seed, eligible runs default on; a saved global Resources setting overrides it. |
 | `CEZ_SINGLE_PROJECT=1` | Opt into a launch-project-only cockpit: only the exact value `1` enables it. Project add, edit, checkout, folder browsing, and removal are refused and only the launch project is shown. Off by default; stored registry rows are retained, so unsetting it and restarting restores the full multi-project workspace without migration or data loss. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
@@ -494,7 +497,7 @@ Parallel variants (×2/×3) of one task share that task's backend — mixing
 happens per task and per step, not inside a variant group.
 
 The seam is deliberately small: a backend is one class implementing the
-`AgentRunner` interface (`src/core/agent-runner.ts`) that turns a prompt into
+`AgentRunner` interface (`packages/cezar/src/core/agent-runner.ts`) that turns a prompt into
 a stream of normalized events. Other CLIs — pi, aider, whatever ships next —
 can slot in the same way.
 
@@ -610,8 +613,8 @@ cd cezar
 npm install
 ```
 
-**3. Build** — compiles the server (`tsc → dist/`) and the cockpit
-(`vite build → web/dist/`), then runs the pack gate:
+**3. Build** — compiles the api-client and the server (`tsc → packages/cezar/dist/`) and the cockpit
+(`vite build → packages/cezar/web/dist/`), then runs the pack gate:
 
 ```bash
 npm run build
@@ -663,9 +666,9 @@ npm run uninstall-as-command    # removes cezar / cez / cezar-cli (either flavor
 
 ```bash
 npm run dev          # server (API :4321) + Vite dev server, opens the cockpit in the browser
-npm run dev:server   # tsx src/index.ts — the API server alone
+npm run dev:server   # tsx packages/cezar/src/index.ts — the API server alone
 npm run dev:web      # Vite dev server alone (proxies /api to :4321)
-npm run build        # tsc → dist/, vite build → web/dist/, then the pack gate
+npm run build        # tsc → packages/cezar/dist/, vite build → packages/cezar/web/dist/, then the pack gate
 npm run typecheck    # server + web (tsc --noEmit)
 npm test             # vitest — server + cockpit unit suites
 npm run test:unit    # node:test — fast core-module tests
@@ -675,7 +678,7 @@ npm run test:e2e     # real-browser cockpit suite (agent-browser)
 
 The stack is deliberately small: **TypeScript** (strict, ESM), **Hono** + SSE for
 the server, **Zod** at every boundary, **YAML** for workflows, and a **React 19 +
-Vite + Tailwind v4 + shadcn/ui** cockpit shipped pre-built in `web/dist/` — the
+Vite + Tailwind v4 + shadcn/ui** cockpit shipped pre-built in `packages/cezar/web/dist/` — the
 published package carries the built app, so `npx` users never run a bundler.
 Every module is meant to be read in one sitting.
 

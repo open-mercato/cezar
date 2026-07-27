@@ -1,0 +1,68 @@
+{
+  "name": "@open-mercato/cezar",
+  "version": "0.9.1",
+  "description": "Local cockpit for running and tracking AI agent tasks in your repo. Uses your logged-in `claude` CLI and `gh` — zero config, zero database.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cezar": "dist/index.js",
+    "cez": "dist/index.js",
+    "cezar-cli": "dist/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./app-type": "./dist/server/app-type.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "web/dist",
+    "scripts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prebuild": "node scripts/sync-readme.mjs",
+    "build": "tsc",
+    "check:pack": "node scripts/check-pack.mjs",
+    "dev": "tsx src/index.ts",
+    "install-as-command": "node scripts/install-as-command.mjs --mode link",
+    "install-as-command:global": "node scripts/install-as-command.mjs --mode global",
+    "uninstall-as-command": "node scripts/install-as-command.mjs --mode uninstall",
+    "server-install": "tsx src/index.ts server-install",
+    "server-deploy": "tsx src/index.ts server-deploy",
+    "server-uninstall": "tsx src/index.ts server-uninstall",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "node --import tsx --test test/unit/*.test.ts",
+    "test:package": "node --import tsx --test test/e2e/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "@hono/node-server": "^1.13.0",
+    "hono": "^4.6.0",
+    "smol-toml": "^1.7.0",
+    "ws": "^8.21.1",
+    "yaml": "^2.5.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@open-mercato/cezar-api-client": "^0.9.1",
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-mercato/cezar",
+    "directory": "packages/cezar"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

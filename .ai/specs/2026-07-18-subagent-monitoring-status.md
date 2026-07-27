@@ -1,5 +1,7 @@
 # A "monitoring" run activity — stop false "Needs attention" while the agent is still working
 
+> Superseded for lifecycle/accounting by issue #654: monitoring sessions become durable and bounded separately from ordinary user waits; optional periodic wake-ups are designed in the linked #654 specs.
+
 > FR: #490 · Slug: `subagent-monitoring-status`
 
 ## TLDR
