@@ -3,6 +3,10 @@ dist/
 *.tsbuildinfo
 .idea
 
+# Build artifact: the one README lives at the repo root and is copied into the published
+# package by packages/cezar/scripts/sync-readme.mjs. Never edit the copy.
+/packages/cezar/README.md
+
 # cezar runtime state in this repo (runs, worktrees, launch-key)
 .ai/cezar/
 

@@ -27,9 +27,14 @@ import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DEST = join(ROOT, 'vendor', 'skills');
+// The vendored tree lives INSIDE the cezar package (2026-07-27, after the
+// packages/* split): `bundledSkillsDir()` resolves `<package>/vendor/skills`
+// from `packages/cezar/src` in dev and from `dist/` in the tarball alike, so
+// the generator has to write where that resolution looks.
+const CEZAR_PKG = join(ROOT, 'packages', 'cezar');
+const DEST = join(CEZAR_PKG, 'vendor', 'skills');
 /** Staging area for CEZAR_OWNED dirs across the wipe/regenerate cycle. */
-const HOLD = join(ROOT, 'vendor', '.skills-hold');
+const HOLD = join(CEZAR_PKG, 'vendor', '.skills-hold');
 // Longest-first where one name prefixes another; the lookahead keeps
 // om-fix from eating om-fix-issue and om-harness from eating the
 // om-harness-adapter- tmp prefixes. om-harness-review (the output-style
@@ -417,6 +422,6 @@ writeFileSync(
   )}\n`,
 );
 console.log(
-  `vendored ${vendored.length - preserved.size} skills from ${ref}@${commit.slice(0, 7)} into vendor/skills/` +
+  `vendored ${vendored.length - preserved.size} skills from ${ref}@${commit.slice(0, 7)} into packages/cezar/vendor/skills/` +
     (preserved.size ? ` (preserved cezar-authored: ${[...preserved.keys()].join(', ')})` : ''),
 );
