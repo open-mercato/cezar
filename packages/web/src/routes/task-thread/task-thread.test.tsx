@@ -586,9 +586,15 @@ describe('ThreadView', () => {
     )
     expect(document.querySelector('[data-slot="plan-dock"]')).toBeNull()
     expect(document.querySelector('[data-slot="plan-mirror"]')).toBeNull()
-    const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
-    expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['active', 'pending'])
-    expect(rows[0]!.textContent).toContain('Do the task')
+    // The header shows the compact one-line summary (collapsed by default): a dot per step and
+    // the active step's name + position. The full rows only mount once it's expanded.
+    const summary = document.querySelector('[data-slot="workflow-steps"]')
+    expect(summary).not.toBeNull()
+    expect(summary!.textContent).toContain('Do the task')
+    expect(summary!.textContent).toContain('step 1 of 2')
+    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
+    expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['active', 'pending'])
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 
   it('a plan in the stream → the dock above the composer area + the compact header mirror', () => {

@@ -74,7 +74,7 @@ import { isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { StepRail } from './step-rail'
+import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -121,7 +121,7 @@ export function RunHeader({
       data-slot="run-header"
       className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
     >
-      <div className="mx-auto w-full max-w-[820px]">
+      <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
@@ -210,8 +210,8 @@ export function RunHeader({
         </div>
 
         {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-2.5 pb-1">
-            <StepRail steps={run.steps} />
+          <div className="border-t border-border pt-2 pb-1">
+            <WorkflowSteps steps={run.steps} />
           </div>
         ) : null}
 

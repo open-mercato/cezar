@@ -1,9 +1,9 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
 
-import { railProgress, railVisual, StepRail, type RailVisual } from './step-rail'
+import { activeStepIndex, railProgress, railVisual, StepRail, WorkflowSteps, type RailVisual } from './step-rail'
 
 afterEach(cleanup)
 
@@ -94,5 +94,45 @@ describe('StepRail', () => {
     render(<StepRail steps={[step('a', 'done'), step('b', 'running'), step('c', 'pending'), step('d', 'pending')]} />)
     const bar = document.querySelector<HTMLElement>('[data-slot="step-progress"] > div')!
     expect(bar.style.width).toBe('37.5%') // (1 + 0.5) / 4
+  })
+})
+
+describe('activeStepIndex — who the summary speaks for', () => {
+  it('points at the first in-flight step, else the last (a finished run reads "N of N")', () => {
+    expect(activeStepIndex([step('a', 'done'), step('b', 'running'), step('c', 'pending')])).toBe(1)
+    expect(activeStepIndex([step('a', 'done'), step('b', 'done')])).toBe(1)
+    expect(activeStepIndex([step('a', 'pending'), step('b', 'pending')])).toBe(0)
+  })
+})
+
+describe('WorkflowSteps — the collapsible header summary', () => {
+  const steps = [
+    step('implement', 'done', { name: 'Do the task' }),
+    step('verify', 'running', { name: 'Verify', kind: 'check' }),
+    step('review', 'pending', { name: 'Review' }),
+  ]
+
+  it('renders nothing without steps', () => {
+    render(<WorkflowSteps steps={[]} />)
+    expect(document.querySelector('[data-slot="workflow-steps"]')).toBeNull()
+  })
+
+  it('collapsed by default: names the active step, one dot per step, and hides the full rows', () => {
+    render(<WorkflowSteps steps={steps} />)
+    const summary = document.querySelector('[data-slot="workflow-steps"]')!
+    expect(summary.textContent).toContain('Verify')
+    expect(summary.textContent).toContain('step 2 of 3')
+    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
+    expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
+    // The full rows are not mounted until the user expands.
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('expands to the full rail on click', () => {
+    render(<WorkflowSteps steps={steps} />)
+    fireEvent.click(screen.getByRole('button'))
+    const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
+    expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
+    expect(rows[1]!.textContent).toContain('check · step 2 of 3')
   })
 })
