@@ -232,7 +232,9 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
 
     const connect = (): void => {
       source?.close()
-      source = new Source(url)
+      // Remote cockpits commonly sit behind HTTP Basic Auth. EventSource supports an explicit
+      // credentials mode (unlike WebSocket), so keep every automatic reconnect authenticated.
+      source = new Source(url, { withCredentials: true })
 
       source.addEventListener('open', () => {
         // Not the first one: at boot the queries are fetching anyway, and invalidating them here

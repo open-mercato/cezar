@@ -31,7 +31,7 @@ class FakeEventSource {
   closeCount = 0
   private readonly listeners = new Map<string, Set<(event: Event) => void>>()
 
-  constructor(readonly url: string) {
+  constructor(readonly url: string, readonly init?: EventSourceInit) {
     FakeEventSource.instances.push(this)
   }
 
@@ -180,6 +180,7 @@ describe('useGlobalEvents — connection', () => {
     mount()
     expect(FakeEventSource.instances).toHaveLength(1)
     expect(FakeEventSource.last.url).toBe('/api/workspace/events')
+    expect(FakeEventSource.last.init).toEqual({ withCredentials: true })
   })
 
   it('closes the stream on unmount', () => {

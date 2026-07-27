@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 
 import {
+  ApiError,
   browseFs,
   checkoutProject,
   getAgentConfig,
@@ -215,7 +216,13 @@ export function useProviderStatus() {
         response,
       )
     },
-    refetchInterval: 30_000,
+    // One bootstrap per session cache. Runtime incidents arrive over the workspace stream and
+    // user-driven Connect/Check again/Try again actions update this same key immediately; a
+    // background interval only re-probes unchanged credentials and can repeatedly challenge a
+    // reverse-proxy-authenticated mobile browser. A focus refresh is allowed once the answer is
+    // five minutes old, covering credentials changed outside cezar without permanent polling.
+    staleTime: 5 * 60_000,
+    refetchInterval: false,
     refetchOnWindowFocus: true,
   })
 }
@@ -357,21 +364,43 @@ export function useCheckoutProject() {
  * not any one view. Subscribing per `useHealth` consumer instead would tie that global signal to
  * ~15 component lifecycles — the topic would flap `subscribe`/`unsubscribe` on every mount,
  * unmount and StrictMode remount, and would drop entirely for any instant no consumer happened
- * to be mounted. One root-level subscription keeps it live continuously, so the cockpit is
- * always notified when health changes; the `useHealth` readers below just read the cache it fills.
+ * to be mounted. One root-level subscription keeps local cockpits live continuously, so they are
+ * always notified when health changes; remote cockpits stay on authenticated HTTP because browser
+ * WebSocket cannot carry proxy credentials explicitly. The `useHealth` readers below just read
+ * the cache either transport fills.
  *
  * The cache key is read inside the callback (`queryKeys.health` is a scope-aware getter), so a
  * project switch routes each pushed snapshot to the active scope's cache without re-subscribing.
  */
 export function useHealthSubscription(): void {
   const queryClient = useQueryClient()
-  useEffect(
-    () =>
-      subscribeTopic('health', (data) => {
-        queryClient.setQueryData(queryKeys.health, data as HealthResponse)
-      }),
-    [queryClient],
-  )
+  useEffect(() => {
+    let releaseTopic: (() => void) | undefined
+
+    const syncTransport = (): void => {
+      const health = queryClient.getQueryData<HealthResponse>(queryKeys.health)
+      const local = health?.capabilities?.localHandoff === true
+      if (local && releaseTopic === undefined) {
+        releaseTopic = subscribeTopic('health', (data) => {
+          queryClient.setQueryData(queryKeys.health, data as HealthResponse)
+        })
+      } else if (!local && releaseTopic !== undefined) {
+        releaseTopic()
+        releaseTopic = undefined
+      }
+    }
+
+    // Do not open a socket before the authenticated HTTP bootstrap tells us the deployment
+    // mode. Browser WebSocket has no credentials option, so a remote Basic Auth proxy can reject
+    // the upgrade and trigger ws.ts's three-second reconnect loop (and a login prompt each time).
+    // Local cockpits opt in after health arrives; remote/failed bootstraps fail closed to HTTP.
+    syncTransport()
+    const releaseCache = queryClient.getQueryCache().subscribe(syncTransport)
+    return () => {
+      releaseCache()
+      releaseTopic?.()
+    }
+  }, [queryClient])
 }
 
 /** Version + update check + repo/branch + tool probes. Feeds the sidebar's repo and version
@@ -379,7 +408,7 @@ export function useHealthSubscription(): void {
  *
  * A pure read: the HTTP query is the authoritative bootstrap and the reconcile target
  * (global-events.tsx invalidates it on reconnect/visibility), and live updates arrive by the
- * one `useHealthSubscription` at the root folding pushed `/api/ws` frames into this same cache
+ * one local-only `useHealthSubscription` at the root folding pushed `/api/ws` frames into this same cache
  * (#369 — this replaced the old 5 s `refetchInterval` per tab). Safe to call from as many
  * components as need health; they all read one cache and none of them touches the socket. */
 export function useHealth() {
@@ -727,12 +756,13 @@ export function useSkillsUpdate(projectId: string, enabled = true) {
     enabled,
     // GET deliberately answers the current snapshot and starts a stale check in the
     // background. Retry only while that snapshot is transient so an initial `idle`
-    // response converges. Checks may legitimately take tens of seconds, so a ten-second
-    // cadence avoids flooding the local API while still refreshing promptly after completion.
+    // response converges. Checks may legitimately take tens of seconds, so a one-minute cadence
+    // avoids repeatedly challenging authenticated remote sessions while still converging after
+    // a long-running operation. The initial mount remains the session's one automatic check.
     refetchInterval: (query) => {
       const status = query.state.data?.status
       return status === undefined || status === 'idle' || status === 'checking' || status === 'updating'
-        ? 10_000
+        ? 60_000
         : false
     },
   })
@@ -766,12 +796,20 @@ export function usePatchRun(id: string) {
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself
  *  grows over SSE (`user-message`, then the agent's turn); the invalidation refreshes the
  *  record (status flips waiting → running). Errors are the CALLER's to surface — the composer
- *  restores the draft and toasts, so no toast fires here. */
+ *  restores the draft and toasts, so no toast fires here. A 409 ("session closed") still
+ *  invalidates: it means the cached record claimed a live session the server no longer has, so
+ *  the refetch flips the composer to its closed/Continue form instead of leaving it aimed at a
+ *  session that will keep refusing. */
 export function useSendMessage(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (message: MessageInput) => sendMessage(id, message),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+      }
+    },
   })
 }
 
