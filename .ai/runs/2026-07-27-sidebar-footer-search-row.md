@@ -86,6 +86,8 @@ bar, and group the remaining controls into a single aligned row.
 
 ## Progress
 
+PR: #705
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Restructure the footer into two intentional rows
