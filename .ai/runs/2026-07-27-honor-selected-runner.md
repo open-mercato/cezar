@@ -57,7 +57,7 @@ Ensure every task-start and continuation surface honors the runner shown or expl
 ### Phase 2: Lock behavior with regressions
 
 - [x] 2.1 Add pure and component tests for mismatched boot/project defaults across New Task, GitHub, Inbox, plans, bookmarklets, and continuations. — 4182b046
-- [ ] 2.2 Run focused cockpit tests and manually verify the effective request/runner behavior for the cross-project scenario.
+- [x] 2.2 Run focused cockpit tests and manually verify the effective request/runner behavior for the cross-project scenario. — 4182b046
 
 ### Phase 3: Validate and review
 
