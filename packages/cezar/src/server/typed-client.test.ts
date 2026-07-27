@@ -123,4 +123,27 @@ describe('createCezarClient<AppType>', () => {
     // @ts-expect-error — `client.api['agent-config']` is not part of the typed contract.
     expect(() => client.api['agent-config']).toBeDefined();
   });
+
+  it('does not offer the legacy surface for workspace routes either', () => {
+    // Workspace families are mounted through a deliberately UN-chained holder on the `/api`
+    // side (see `workspaceLegacy` in server.ts). Mounting them straight onto the chain would
+    // have typed their legacy spelling too — this is the assertion that keeps that split real.
+    // @ts-expect-error — `client.api.projects` is the frozen spelling, not the typed contract.
+    expect(() => client.api.projects).toBeDefined();
+  });
+
+  it('covers the whole surface now that every family is chained', async () => {
+    // Phase 3 converted all 77 registrations, so the typed client is no longer a proof of
+    // concept over three families — these are a project family and a workspace family that
+    // were loose statements until then.
+    const runs = await client.api.v1.runs.$get();
+    expect(runs.status).toBe(200);
+    expectTypeOf(await runs.json()).not.toBeAny();
+
+    const projects = await client.api.v1.projects.$get();
+    expect(projects.status).toBe(200);
+    const body = await projects.json();
+    expectTypeOf(body).not.toBeAny();
+    expect(body).toHaveProperty('projects');
+  });
 });

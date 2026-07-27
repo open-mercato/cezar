@@ -43,10 +43,10 @@ is internal for now — installable by others once its surface settles.
 - [x] 5. Docs swept for the new paths (AGENTS.md gained a Repository layout section; `.ai/specs` and `.ai/runs` left alone as historical records).
 - [x] 6. api-client marked `private` (amended decision 7): stamped in lockstep, never published, publication gated on npm's own flag. CI's pack step verifies only what actually ships.
 
-### Phase 3 — Chain the rest; single-source DTOs; delete the mirror — **~25%**
+### Phase 3 — Chain the rest; single-source DTOs; delete the mirror — **~60%**
 - [x] 1. DTOs relocated to `packages/api-client/src/dto/types.ts` and exported from the barrel. Forced by the restructure: once the mirror lived in `packages/web`, the server's drift guard reached across a package boundary and broke `rootDir` — which is exactly the coupling this spec removes.
 - [x] 2. All 138 web files import DTOs from `@open-mercato/cezar-api-client`; `api-types.test.ts` imports the package too, not a relative path.
-- [ ] 3. **Chain the remaining route families.** 8 of ~75 routes are chained; **67 registrations are still loose statements** (52 on `api`, 15 on `app`). This is the bulk of the remaining work and the gate on everything below it.
+- [x] 3. **Chain the remaining route families — done.** All 77 registrations converted into 23 family builders; zero loose `api.get(…)`/`app.get('/api/…')` statements remain. `/api/v1` now mirrors the legacy surface completely, so `AppType` covers the whole API. The legacy side mounts through un-chained holders (`api`, `workspaceLegacy`) so `/api/*` stays untyped by design. `v1-parity.test.ts` gained the guard that replaces per-family spot checks: every `/api` route must have a `/api/v1` twin, with a vacuous-pass check beneath it.
 - [ ] 4. Server imports the shared DTOs for its own `c.json()` typing; the api-client moves from the server's `devDependencies` to `dependencies`.
 - [ ] 5. Migrate the other mirrored logic (model presets, skills ordering, skills banner) into the api-client.
 - [ ] 6. **Delete `dto/types.ts` (43 KB) + `api-types.test.ts`** once `AppType` demonstrably covers the surface. Neither can go until step 3 is finished.

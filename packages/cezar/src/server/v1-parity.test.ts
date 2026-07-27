@@ -24,6 +24,9 @@ import { createApp } from './server.js';
  * silently loosening this suite would leave the fold in `bc-route-inventory.test.ts` (which
  * maps `/api/v1/x` onto `/api/x`) lying about the inventory.
  */
+/** The versioned prefix, spelled once here so the guards below cannot drift from server.ts. */
+const V1 = '/api/v1';
+
 describe('/api/v1 parity with the legacy surface', () => {
   const savedHome = process.env.CEZ_HOME;
   const savedDryRun = process.env.CEZ_DRY_RUN;
@@ -118,11 +121,43 @@ describe('/api/v1 parity with the legacy surface', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
 
-  it('leaves an unchained family out of the versioned surface', async () => {
-    // Not an accident to be fixed by loosening the test: a family is reachable under `/api/v1`
-    // only once it has been chained, which is what makes it part of the typed contract. Until
-    // then it stays legacy-only, and this asserts the boundary is real.
-    expect((await answer('/api/config')).status).toBe(200);
-    expect((await answer('/api/v1/config')).status).toBe(404);
+  /**
+   * The completeness guard, and the reason the per-route cases above can stay a short list.
+   *
+   * Every family is chained now, so the versioned surface is no longer opt-in per family — it
+   * is supposed to mirror the legacy one exactly. This walks the built app's own route table
+   * and demands a `/api/v1` twin for every `/api` route, which is what catches the realistic
+   * regression: someone adds a route with a loose `app.get('/api/…')` statement (the shape 77
+   * of these used to have) and it silently never reaches v1, `AppType`, or the typed client.
+   *
+   * It compares the table rather than making requests, so it stays fast and needs no fixtures.
+   */
+  it('gives every legacy /api route a versioned twin', () => {
+    const routes = app.routes.filter((route) => route.method !== 'ALL');
+    const spellings = new Set(routes.map((route) => `${route.method} ${route.path}`));
+
+    const missing = routes
+      .filter((route) => route.path.startsWith('/api/'))
+      // Skip the versioned side itself, and the project-scoped mirrors — `route-parity.test.ts`
+      // owns those, and each one's unscoped spelling is checked here anyway.
+      .filter((route) => !route.path.startsWith(`${V1}/`) && !route.path.startsWith('/api/p/'))
+      .map((route) => ({ route, twin: `${route.method} ${V1}${route.path.slice('/api'.length)}` }))
+      .filter(({ twin }) => !spellings.has(twin))
+      .map(({ route }) => `${route.method} ${route.path}`)
+      .sort();
+
+    expect(
+      missing,
+      'These routes exist under /api but have no /api/v1 twin. A route registered as a loose ' +
+        'statement never reaches the versioned surface — chain it into a family and mount that ' +
+        'family into both tables (see the assembly block at the end of createApp).',
+    ).toEqual([]);
+  });
+
+  it('finds a non-trivial number of routes — guards against a vacuous pass', () => {
+    // Without this, a filter that stopped matching would make the guard above pass by comparing
+    // two empty sets, which is exactly the failure mode a drift guard must not have.
+    const versioned = app.routes.filter((r) => r.method !== 'ALL' && r.path.startsWith(`${V1}/`));
+    expect(versioned.length).toBeGreaterThan(70);
   });
 });
