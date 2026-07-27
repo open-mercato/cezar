@@ -217,6 +217,21 @@ describe('Markdown', () => {
       )
     })
 
+    it('announces the address as part of the dialog’s description, not just visually', () => {
+      // The address is the whole reason the prompt exists; announcing only the sentence would
+      // leave a screen-reader user with exactly the question the dialog was opened to answer.
+      const { container } = renderLink()
+
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      const dialog = document.querySelector('[data-slot="link-safety-dialog"]') as HTMLElement
+      const describedBy = dialog.getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(document.getElementById(describedBy as string)?.textContent).toContain(
+        'https://example.com/a/very/long/path?q=1',
+      )
+    })
+
     it('opens the link in a new tab only once confirmed', () => {
       const { container } = renderLink()
       fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)

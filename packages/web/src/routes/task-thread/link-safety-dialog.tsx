@@ -48,19 +48,24 @@ export function LinkSafetyDialog({ isOpen, onClose, onConfirm, url }: LinkSafety
       <AlertDialogContent data-slot="link-safety-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle>Open this link?</AlertDialogTitle>
+          {/* The address rides INSIDE the description on purpose: Radix points the dialog's
+              `aria-describedby` at this node, and the address is the whole reason the prompt
+              exists — a screen reader that announced only the sentence would leave its user
+              with exactly the question the dialog was opened to answer. A <span> (block only
+              by CSS) because the description renders a <p>, which cannot contain a <div>. */}
           <AlertDialogDescription>
-            It leaves cezar in a new tab. The words of a link in a transcript are the agent&apos;s
-            — the address below is where it actually goes.
+            It leaves cezar in a new tab. The words of a link in a transcript are the
+            agent&apos;s — the address below is where it actually goes.
+            {/* The full URL, never truncated: a shortened address is exactly the one a reader
+                cannot check. `wrap-anywhere` keeps a long one inside the dialog. */}
+            <span
+              data-slot="link-safety-url"
+              className="mt-3 block wrap-anywhere rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs text-foreground"
+            >
+              {url}
+            </span>
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {/* The full URL, never truncated: a shortened address is exactly the one a reader
-            cannot check. `wrap-anywhere` keeps a long one inside the dialog. */}
-        <p
-          data-slot="link-safety-url"
-          className="wrap-anywhere rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs text-foreground"
-        >
-          {url}
-        </p>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           {/* Streamdown's `onConfirm` is the one that opens the tab (`_blank`, `noreferrer`);
