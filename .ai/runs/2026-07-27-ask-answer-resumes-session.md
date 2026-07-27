@@ -115,16 +115,16 @@ pending ask card — and runs in the task's worktree.
 
 ### Phase 1: The delivery seam
 
-- [ ] 1.1 Add the ask-delivery routing module and the `useAnswerAsk` hook
-- [ ] 1.2 Unit-test the delivery routing table
+- [x] 1.1 Add the ask-delivery routing module and the `useAskAnswer` hook — ab5d6150
+- [x] 1.2 Unit-test the delivery routing table — ab5d6150
 
 ### Phase 2: The card
 
-- [ ] 2.1 Deliver the ask answer through the new seam
-- [ ] 2.2 Surface delivery failures and the no-session state on the card
-- [ ] 2.3 Extend the AskCard tests for the resume, fallback and failure paths
+- [x] 2.1 Deliver the ask answer through the new seam — 5d7f0350
+- [x] 2.2 Surface delivery failures and the no-session state on the card — 5d7f0350
+- [x] 2.3 Extend the AskCard tests for the resume, fallback and failure paths — 5d7f0350
 
 ### Phase 3: Docs and validation
 
-- [ ] 3.1 Update the AskUser spec and the changelog
+- [x] 3.1 Update the AskUser spec (no changelog entry — it is assembled per release) — 1de87482
 - [ ] 3.2 Run the full validation gate
