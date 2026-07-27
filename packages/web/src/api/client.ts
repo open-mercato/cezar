@@ -75,24 +75,29 @@ import type {
   SkillsUpdateState,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
-import { apiPath } from '@open-mercato/cezar-api-client'
+import { apiPath, createCezarClient } from '@open-mercato/cezar-api-client'
+import type { AppType } from '@open-mercato/cezar/app-type'
 
 /**
- * The typed client for the cockpit's own HTTP API.
+ * The cockpit's client for its own HTTP API.
  *
- * Same-origin by construction: the Hono server serves this bundle and owns `/api/*`, and the
- * Vite dev server proxies `/api` to it. So every path here is root-relative — there is no base
+ * Same-origin by construction: the Hono server serves this bundle and owns `/api/v1/*`, and the
+ * Vite dev server proxies `/api` to it. So every URL here is root-relative — there is no base
  * URL to configure and no cross-origin case to get wrong.
  *
- * Multi-project (spec, step 3.1): every path below is spelled in the legacy unscoped form and
- * prefixed to `/api/p/<id>` at request time by `send()` (via `apiPath`) when a project
- * scope is active. Unscoped, `apiPath` is the identity — the request paths stay
- * byte-identical to the single-project cockpit. `runFileRawUrl` is the one URL this module
- * hands out instead of fetching itself, so it applies the scope at build time.
+ * Calls name a ROUTE (`/runs/:id/diff`), never a URL: `apiPath` (api-client) adds the version
+ * and, when a project scope is active, the `/p/<id>` segment. That is why the version appears
+ * once in this repo rather than at every call site. `runFileRawUrl` is the one URL this module
+ * hands out instead of fetching itself, so it resolves the route at build time.
  *
  * This module is the boundary. It parses responses, turns every non-2xx into an `ApiError`
  * carrying the server's own words, and does nothing else: no caching, no retries, no
  * reconnect. Freshness is SSE's job and TanStack Query's (queries.ts, and Step 3.2's reconcile).
+ *
+ * Two request paths live here during the migration to the typed client: the hand-written
+ * `send()`/`request()` pair, and `cez`/`unwrap` below, which check the route against the
+ * server's own handlers. Both end in the same `ApiError` contract, so a caller cannot tell
+ * which one a given function uses.
  */
 
 /**
@@ -162,6 +167,44 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
     command: str(json.command),
     exists: typeof json.exists === 'boolean' ? json.exists : undefined,
   })
+}
+
+/**
+ * The typed client over the same service (`@open-mercato/cezar-api-client`).
+ *
+ * Routes are being moved onto this one at a time. What it buys is compile-time checking of the
+ * path, the request body and the response shape against the server's OWN handlers — the thing
+ * the hand-written DTOs in this package approximate by hand and can drift from.
+ *
+ * It does NOT replace this module. `client.ts` stays the boundary: it owns `ApiError` (with the
+ * server's own words), the credentials policy, and the non-JSON-body case. The typed client
+ * only builds and sends the request; `unwrap` applies the same answer contract to whatever
+ * comes back, so a migrated call behaves identically to a hand-written one.
+ *
+ * Not every route is ready. A handler that returns a loose type (`/health` answers
+ * `Record<string, unknown>`) infers a weaker response than the DTO it replaces, so those wait
+ * until the server tightens its own return types.
+ */
+const cez = createCezarClient<AppType>({
+  fetch: (input: string | URL | Request, init?: RequestInit) =>
+    fetch(input as RequestInfo, { ...init, credentials: 'include' }),
+})
+
+/**
+ * Apply this module's answer contract to a Response the typed client produced.
+ *
+ * Same three outcomes as `request()`: a non-2xx becomes an `ApiError` carrying the server's own
+ * message, a non-JSON body becomes an `ApiError` naming the URL, anything else is the parsed
+ * value — whose type the caller gets from the route, not from a hand-written declaration.
+ */
+async function unwrap<T>(res: Response, label: string): Promise<T> {
+  const body = await res.text()
+  if (!res.ok) throw errorFor(res.status, res.statusText, body)
+  const parsed = parseJson(body)
+  if (parsed === undefined) {
+    throw new ApiError(res.status, `the cezar server answered ${label} with a non-JSON body`)
+  }
+  return parsed as T
 }
 
 async function send(path: string, init: RequestInit): Promise<Response> {
@@ -246,10 +289,14 @@ export function getLaunchKey(opts?: ReadOptions): Promise<LaunchKeyResponse> {
   return get<LaunchKeyResponse>('/launch-key', opts)
 }
 
-/** The workspace project registry (multi-project spec). Workspace-level, so `apiPath`
- *  never prefixes it — one registry no matter which project is active. */
-export function getProjects(opts?: ReadOptions): Promise<ProjectsResponse> {
-  return get<ProjectsResponse>('/projects', opts)
+/** The workspace project registry (multi-project spec). Workspace-level — one registry no
+ *  matter which project is active, so it has no project-scoped spelling.
+ *
+ *  Migrated to the typed client: the path and the response shape are checked against the
+ *  server's handler, and `ProjectsResponse` here is an assertion that the inferred type still
+ *  matches the DTO rather than the source of it. */
+export async function getProjects(opts?: ReadOptions): Promise<ProjectsResponse> {
+  return unwrap(await cez.api.v1.projects.$get({}, { init: { signal: opts?.signal } }), '/projects')
 }
 
 /** One directory listing for the folder picker (`GET /api/fs/browse`, step 4.1). `path`

@@ -1,7 +1,7 @@
 {
   "name": "@open-mercato/cezar-web",
   "version": "0.9.1",
-  "description": "The cezar cockpit SPA — one client of the cezar API service.",
+  "description": "The cezar cockpit SPA \u2014 one client of the cezar API service.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -43,6 +43,7 @@
     "jsdom": "^29.1.1",
     "typescript": "^7.0.2",
     "vite": "^8.1.4",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "@open-mercato/cezar": "^0.9.1"
   }
 }
