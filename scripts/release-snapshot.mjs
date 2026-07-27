@@ -6,8 +6,8 @@
 //
 // Reads the CI facts from GitHub Actions' env, decides via computeSnapshot,
 // stamps every manifest in the release set (intra-release dependencies pinned
-// exact), publishes them in DEPENDENCY ORDER — api-client, then the service,
-// then the alias — always with an explicit --tag so a snapshot can never move
+// exact), publishes the non-`private` ones in DEPENDENCY ORDER — api-client,
+// then the service, then the alias — always with an explicit --tag so a snapshot can never move
 // `latest`, then emits a one-line JSON result to $GITHUB_OUTPUT for the
 // PR-comment and summary steps.
 //
@@ -34,6 +34,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isPublishable } from '../packages/cezar/dist/release/manifests.js';
 import {
   buildInstallLines,
   computeSnapshot,
@@ -132,7 +133,17 @@ const publish = (dir, label) => {
   runNpm(args, dir);
 };
 
-for (const key of order) publish(dirs[key], stamped[key].name);
+// A `private` manifest is stamped above but never published — part of the release without
+// being on the registry.
+const published = [];
+for (const key of order) {
+  if (!isPublishable(stamped[key])) {
+    console.log(`release-snapshot: ${stamped[key].name} is private — stamped, not published.`);
+    continue;
+  }
+  publish(dirs[key], stamped[key].name);
+  published.push(stamped[key].name);
+}
 
 emitOutput({
   attempted: true,
@@ -142,5 +153,6 @@ emitOutput({
   aliasName: stamped.alias.name,
   version: plan.version,
   distTag: plan.distTag,
+  publishedNames: published.join(','),
   installLines: buildInstallLines(stamped.alias.name, plan.version),
 });

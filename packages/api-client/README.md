@@ -6,11 +6,13 @@ contract types behind it.
 cezar is a local cockpit for running AI agent tasks in your repo. It runs as an HTTP service,
 and this package is how anything else talks to it — the cockpit UI is just its first consumer.
 
-## Install
+## Status
 
-```sh
-npm install @open-mercato/cezar-api-client
-```
+**Not published yet.** The package is `private`: it is consumed inside the cezar
+workspace (the cockpit bundles it, the service's tests import it) and will be
+released once its surface settles — it still carries hand-written DTOs for the
+routes that have not been converted to the versioned, type-inferred surface, and
+those shrink with every family that is.
 
 ## Use
 

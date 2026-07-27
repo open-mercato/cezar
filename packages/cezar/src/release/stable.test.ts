@@ -5,6 +5,7 @@ import {
   stampStableManifests,
   type ReleaseManifests,
 } from './stable.js';
+import { isPublishable } from './manifests.js';
 
 describe('computeStableVersion', () => {
   it('increments each semver component the way npm version does', () => {
@@ -93,6 +94,27 @@ describe('stampStableManifests', () => {
 
   it('leaves the alias untouched when the service declares no repository', () => {
     expect('repository' in stampStableManifests(set(), '0.1.6').alias).toBe(false);
+  });
+
+  it('stamps a private package like any other — it is in the release, just not on the registry', () => {
+    // The api-client is consumed inside the workspace long before it is offered to anyone
+    // else. Freezing its version would leave the service's pin against it pointing at a build
+    // the release was never cut from, which is the drift this pipeline exists to prevent.
+    const manifests = set();
+    manifests.apiClient = { ...manifests.apiClient, private: true };
+
+    const stamped = stampStableManifests(manifests, '0.1.6');
+
+    expect(stamped.apiClient.version).toBe('0.1.6');
+    expect(stamped.apiClient.private).toBe(true);
+    expect(isPublishable(stamped.apiClient)).toBe(false);
+    // …and the service's pin against it still moves.
+    expect(stamped.cezar.devDependencies).toEqual({ '@scope/client': '^0.1.6' });
+  });
+
+  it('treats a manifest with no `private` flag as publishable', () => {
+    expect(isPublishable(set().cezar)).toBe(true);
+    expect(isPublishable({ name: 'x', version: '1.0.0', private: false })).toBe(true);
   });
 
   it('does not mutate its inputs', () => {

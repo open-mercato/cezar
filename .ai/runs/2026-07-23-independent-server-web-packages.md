@@ -12,8 +12,9 @@ decision 5. Every phase leaves the suite green.
 ## Goal
 
 Turn the server into a standalone headless service with its own package, make the
-cockpit one client of it, and let the two meet through a single installable
-package (`@open-mercato/cezar-api-client`) instead of a hand-copied mirror.
+cockpit one client of it, and let the two meet through a single package
+(`@open-mercato/cezar-api-client`) instead of a hand-copied mirror. That package
+is internal for now — installable by others once its surface settles.
 
 ## Progress
 
@@ -40,6 +41,7 @@ package (`@open-mercato/cezar-api-client`) instead of a hand-copied mirror.
 - [x] 3. Two couplings the move forced out into the open: the **logo** now has one home (`packages/web/public/` → built into `web/dist`, served at `/open-mercato.svg`) instead of a bundled hash *and* a static file; the **README** stays the repo front page and is copied into the package at `prebuild` (gitignored) so the npm page cannot drift.
 - [x] 4. Release pipeline reworked for a three-package set: `manifests.ts` holds the shared stamper, `pinDependency` rewrites a range in whichever section declares it (so the api-client's `devDependencies` → `dependencies` move in Phase 3 needs no release change), publish order is api-client → cezar → alias. Unit + e2e tests cover the order and the pins.
 - [x] 5. Docs swept for the new paths (AGENTS.md gained a Repository layout section; `.ai/specs` and `.ai/runs` left alone as historical records).
+- [x] 6. api-client marked `private` (amended decision 7): stamped in lockstep, never published, publication gated on npm's own flag. CI's pack step verifies only what actually ships.
 
 ### Phase 3 — Chain the rest; single-source DTOs; delete the mirror — **~25%**
 - [x] 1. DTOs relocated to `packages/api-client/src/dto/types.ts` and exported from the barrel. Forced by the restructure: once the mirror lived in `packages/web`, the server's drift guard reached across a package boundary and broke `rootDir` — which is exactly the coupling this spec removes.
@@ -69,7 +71,7 @@ package (`@open-mercato/cezar-api-client`) instead of a hand-copied mirror.
 
 1. **`AppType` drags the server's whole `.d.ts` graph** (`node:http`, `NodeJS`, `@hono/node-server`) into any consumer's program. It typechecks today because every real tsconfig sets `skipLibCheck` (verified with an external consumer using `types: []`), but pointing the *browser* at it would re-import the Node types the mirror existed to keep out. **Emit a self-contained, pre-computed client type before migrating the web app** — the spec's own "Hono RPC inference blow-up" edge case, now concrete.
 2. Order that follows: pre-computed type → web migrates onto `createCezarClient` (Phase 4.3–4.4) → chain the remaining 67 registrations (3.3) → delete the mirror (3.6).
-3. `install-as-command --mode global` (`npm install --global .`) breaks once the server's api-client dependency becomes a runtime one, until the client is actually published.
+3. **Publish the api-client before Phase 3 makes it a runtime dependency.** While it is `private`, the service may only import it in tests. The moment `packages/cezar` imports the DTOs from it at runtime, the published CLI gains a dependency npm cannot resolve — `npm i -g @open-mercato/cezar` and `install-as-command --mode global` both break. Publishing also needs the release token scoped to `@open-mercato/*` (a package-list token cannot create a new package; npm reports `E404 … PUT`).
 4. **pnpm migration** was considered and deliberately deferred (owner, 2026-07-25): it touches the same five `npm_execpath` scripts and three workflows this branch just rewrote, and `check:pack`'s contract is npm's `pack --dry-run --json` output, which needs a redesign rather than a port. Do it as its own PR after this lands and **before** the Phase 3 chaining grind, so that work happens once on the final toolchain.
 
 ## Validation state (2026-07-25)

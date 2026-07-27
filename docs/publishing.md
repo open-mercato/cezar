@@ -11,18 +11,29 @@ How cezar reaches npm. Two paths, deliberately separate
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
   after a fully green `verify` run — on `develop` pushes and same-repo PRs only.
 
-Three packages ship, always at the same version:
+Three packages are in the release, always at the same version; two of them ship:
 
-| Package | What it is |
-|---|---|
-| `@open-mercato/cezar-api-client` | the typed client and shared contract types (`packages/api-client`) |
-| `@open-mercato/cezar` | the service + CLI, ships the built cockpit (`packages/cezar`) |
-| `cezar-cli` | the unscoped bin alias, so `npx cezar-cli` works (`alias-cezar`) |
+| Package | Ships? | What it is |
+|---|---|---|
+| `@open-mercato/cezar-api-client` | **no — `private`** | the typed client and shared contract types (`packages/api-client`) |
+| `@open-mercato/cezar` | yes | the service + CLI, ships the built cockpit (`packages/cezar`) |
+| `cezar-cli` | yes | the unscoped bin alias, so `npx cezar-cli` works (`alias-cezar`) |
 
 That table is also the **publish order**, and it is load-bearing: each package
 depends on the one above it, so publishing a dependent first would briefly
 advertise a version of its dependency that is not on the registry yet. The
-workspace root itself is `private` and publishes nothing.
+workspace root itself is `private` and is not in the release at all.
+
+**Private ≠ excluded.** The api-client is stamped like everything else — its
+version moves in lockstep and the service's pin against it is rewritten — it is
+simply never handed to npm. It is consumed inside the workspace (the cockpit
+bundles it from source, the service's tests import it) and stays unpublished
+until its surface stops moving: it still carries the hand-written DTOs, which
+shrink family by family as routes are converted, so publishing now would
+advertise a contract that changes materially every release. Publishing it is one
+line — delete `"private": true` from its manifest; the release code reads npm's
+own flag and needs no change. Note the token requirement in step 3 below before
+doing so.
 
 ## Stable releases
 

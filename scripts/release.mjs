@@ -14,6 +14,11 @@
 // before its dependency would briefly advertise a version that is not on the
 // registry yet.
 //
+// A manifest marked `private` is stamped but NOT published: it is part of the
+// release — its version moves in lockstep and the pins against it are rewritten
+// — without being on the registry. That is how a package can be consumed inside
+// the workspace long before it is offered to anyone else.
+//
 // Publishes with --ignore-scripts: the workflow ran `npm run build` (whose last
 // leg, check:pack, is the tarball-integrity gate) immediately before this, and
 // dist/ must exist for this script to even import. Stamping only rewrites the
@@ -31,6 +36,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isPublishable } from '../packages/cezar/dist/release/manifests.js';
 import {
   computeStableVersion,
   isReleaseBump,
@@ -122,10 +128,17 @@ const publish = (dir, label) => {
 };
 
 // Dependency order — see the header. `ReleaseManifests` declares its fields in this order for
-// exactly this reason.
-publish(dirs.apiClient, stamped.apiClient.name);
-publish(dirs.cezar, stamped.cezar.name);
-publish(dirs.alias, stamped.alias.name);
+// exactly this reason. A `private` manifest is stamped above but never published: it is part of
+// the release (its version moves, its pins are rewritten) without being on the registry.
+const published = [];
+for (const key of ['apiClient', 'cezar', 'alias']) {
+  if (!isPublishable(stamped[key])) {
+    console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
+    continue;
+  }
+  publish(dirs[key], stamped[key].name);
+  published.push(stamped[key].name);
+}
 
 emitOutput({
   published: !dryRun,
@@ -135,4 +148,5 @@ emitOutput({
   rootName: stamped.cezar.name,
   apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,
+  publishedNames: published.join(','),
 });

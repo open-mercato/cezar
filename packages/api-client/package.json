@@ -3,6 +3,7 @@
   "version": "0.9.1",
   "description": "Typed client and shared contract types for the cezar cockpit HTTP API.",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "exports": {
     ".": {

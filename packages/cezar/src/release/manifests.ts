@@ -12,9 +12,25 @@
 export interface ManifestLike {
   name: string;
   version: string;
+  /** npm's own opt-out. A private package is still versioned in lockstep, never published. */
+  private?: boolean;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   [key: string]: unknown;
+}
+
+/**
+ * Whether a release stamps AND publishes this package, or only stamps it.
+ *
+ * The distinction exists because "in the release" and "on the registry" are different things.
+ * A package that ships nowhere yet still needs its version moved in lockstep: the api-client is
+ * the worked example — the service pins it, so a frozen version would leave that range pointing
+ * at a build the release was not cut from, which is exactly the drift this pipeline exists to
+ * prevent. Publishing is gated on npm's own `private` flag rather than a list here, so opening
+ * a package up is one line in ITS manifest and no change to the release code.
+ */
+export function isPublishable(pkg: ManifestLike): boolean {
+  return pkg.private !== true;
 }
 
 /**

@@ -126,6 +126,40 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
   }
 });
 
+test('a private package is stamped but never published', { timeout: 120_000 }, async () => {
+  const root = await makeFixture('0.1.5');
+  try {
+    // Mark the client private, the way the api-client is until its contract stops moving.
+    const clientPath = join(root, 'packages', 'api-client', 'package.json');
+    const clientPkg = JSON.parse(await readFile(clientPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(clientPath, `${JSON.stringify({ ...clientPkg, private: true }, null, 2)}\n`);
+
+    await writeFile(join(root, 'github-output.txt'), '');
+    const { stdout } = await runScript(root, ['patch', '--dry-run']);
+
+    // Stamped in lockstep — a frozen version would strand the service's pin against it.
+    assert.equal((await readPkg(root, 'packages', 'api-client')).version, '0.1.6');
+    assert.deepEqual((await readPkg(root, 'packages', 'cezar')).devDependencies, {
+      '@scope/fake-client': '^0.1.6',
+    });
+
+    // …but never handed to npm, and the skip is stated rather than silent.
+    assert.match(stdout, /@scope\/fake-client is private — stamped to 0\.1\.6, not published/);
+    assert.ok(
+      !/npm publish[^\n]*\(@scope\/fake-client\)/.test(stdout),
+      'a private package must not be published',
+    );
+    // The other two still publish.
+    assert.match(stdout, /\(@scope\/fake-root\)/);
+    assert.match(stdout, /\(fake-alias\)/);
+
+    const output = await readFile(join(root, 'github-output.txt'), 'utf8');
+    assert.match(output, /^publishedNames=@scope\/fake-root,fake-alias$/m);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('the existing bump publishes the committed version verbatim', { timeout: 120_000 }, async () => {
   const root = await makeFixture('2.3.4');
   try {

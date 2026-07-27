@@ -25,7 +25,7 @@ Three npm workspaces under a `private` root that publishes nothing itself:
 | Path | Package | What it is |
 | --- | --- | --- |
 | `packages/cezar` | `@open-mercato/cezar` | The service + CLI, and everything behind them (runs, workflows, agent runners, workspace state). The published artifact: `bin`, plus the built cockpit in `web/dist`. |
-| `packages/api-client` | `@open-mercato/cezar-api-client` | The contract between the two: the typed client, the SSE/protocol types, the scope helpers, and the DTOs still waiting to be inferred. **Node-free by construction** — no `node:*`, no `@types/node` — because it is bundled into a browser AND imported by the Node service. |
+| `packages/api-client` | `@open-mercato/cezar-api-client` | The contract between the two: the typed client, the SSE/protocol types, the scope helpers, and the DTOs still waiting to be inferred. **Node-free by construction** — no `node:*`, no `@types/node` — because it is bundled into a browser AND imported by the Node service. `private` for now: versioned with the release but not on npm, because its surface still shrinks with every route family that gets chained. The service may therefore only import it in TESTS — a runtime import would make the published CLI depend on something npm cannot resolve. |
 | `packages/web` | `@open-mercato/cezar-web` | The cockpit SPA. Private; its output is an artifact of the service (`vite build` writes into `packages/cezar/web/dist`, which the CLI ships and serves). |
 
 Rules that follow from that:
