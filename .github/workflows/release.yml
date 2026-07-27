@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Version bump (`existing` publishes the version already in package.json)'
+        description: 'Version bump (`existing` publishes the version already in packages/cezar/package.json)'
         required: true
         default: patch
         type: choice
@@ -89,7 +89,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add package.json alias-cezar/package.json
+          git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json
           git commit -m "chore(release): v${VERSION}"
           git push origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" \
@@ -102,11 +102,13 @@ jobs:
         env:
           RESULT: ${{ steps.release.outputs.version }}
           ROOT_NAME: ${{ steps.release.outputs.rootName }}
+          API_CLIENT_NAME: ${{ steps.release.outputs.apiClientName }}
           ALIAS_NAME: ${{ steps.release.outputs.aliasName }}
         with:
           script: |
             const version = process.env.RESULT;
             const root = process.env.ROOT_NAME;
+            const apiClient = process.env.API_CLIENT_NAME;
             const alias = process.env.ALIAS_NAME;
             const body = [
               '## Published packages',
@@ -114,6 +116,7 @@ jobs:
               '| Package | Version |',
               '|---|---|',
               `| \`${root}\` | \`${version}\` |`,
+              `| \`${apiClient}\` | \`${version}\` |`,
               `| \`${alias}\` | \`${version}\` |`,
               '',
               '### Install',

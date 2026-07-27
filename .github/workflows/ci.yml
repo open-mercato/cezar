@@ -116,7 +116,7 @@ jobs:
           console.log('');
           console.log(`- Version: \`${r.version}\``);
           console.log(`- Dist-tag: \`${r.distTag}\``);
-          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\``);
+          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
           console.log('');
           console.log('```bash');
           for (const line of r.installLines) console.log(line);
@@ -145,7 +145,7 @@ jobs:
               lines,
               '',
               `Also tagged: \`npm install -g ${r.aliasName}@${r.distTag}\` (moving tag for this PR).`,
-              `Packages: \`${r.aliasName}@${r.version}\` → \`${r.rootName}@${r.version}\`${r.dryRun ? '' : ' (provenance attested)'}.`,
+              `Packages: \`${r.aliasName}@${r.version}\` → \`${r.rootName}@${r.version}\` → \`${r.apiClientName}@${r.version}\`${r.dryRun ? '' : ' (provenance attested)'}.`,
             ].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               ...context.repo,

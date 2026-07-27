@@ -7,10 +7,12 @@
 // Unlike the snapshot pipeline, this is the ONLY thing that ever moves the
 // `latest` dist-tag, and it never runs from a push — a human dispatches it and
 // picks the bump (patch/minor/major, or `existing` to publish the version
-// already committed). It stamps both manifests (alias dependency kept as a
-// caret range so a stable cezar-cli follows compatible impl releases), then
-// publishes the scoped package FIRST and the alias second (the alias depends on
-// it), always with `--tag latest`.
+// already committed). It stamps every manifest in the release set (intra-release
+// dependencies kept as caret ranges so a stable cezar-cli follows compatible impl
+// releases), then publishes them in DEPENDENCY ORDER — api-client, then the
+// service, then the alias — always with `--tag latest`. Publishing a dependent
+// before its dependency would briefly advertise a version that is not on the
+// registry yet.
 //
 // Publishes with --ignore-scripts: the workflow ran `npm run build` (whose last
 // leg, check:pack, is the tarball-integrity gate) immediately before this, and
@@ -29,12 +31,21 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { computeStableVersion, isReleaseBump, stampStableManifests } from '../dist/release/stable.js';
+import {
+  computeStableVersion,
+  isReleaseBump,
+  stampStableManifests,
+} from '../packages/cezar/dist/release/stable.js';
 
 const repoRoot = process.env.CEZ_RELEASE_ROOT
   ? path.resolve(process.env.CEZ_RELEASE_ROOT)
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const aliasDir = path.join(repoRoot, 'alias-cezar');
+// The workspace root publishes nothing; every publishable manifest is named here explicitly.
+const dirs = {
+  apiClient: path.join(repoRoot, 'packages/api-client'),
+  cezar: path.join(repoRoot, 'packages/cezar'),
+  alias: path.join(repoRoot, 'alias-cezar'),
+};
 
 const readManifest = (dir) => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
 const writeManifest = (dir, pkg) =>
@@ -54,13 +65,17 @@ if (!isReleaseBump(bump)) {
   process.exit(1);
 }
 
-const rootPkg = readManifest(repoRoot);
-const aliasPkg = readManifest(aliasDir);
+const manifests = {
+  apiClient: readManifest(dirs.apiClient),
+  cezar: readManifest(dirs.cezar),
+  alias: readManifest(dirs.alias),
+};
 
-const version = computeStableVersion(bump, rootPkg.version);
+// The service manifest is the base: it is the package whose version the release is named after.
+const version = computeStableVersion(bump, manifests.cezar.version);
 if (!version) {
   console.error(
-    `release: cannot ${bump}-bump base version "${rootPkg.version}" — a stable release must start from a plain x.y.z.`,
+    `release: cannot ${bump}-bump base version "${manifests.cezar.version}" — a stable release must start from a plain x.y.z.`,
   );
   process.exit(1);
 }
@@ -73,11 +88,11 @@ if (!dryRun && !token) {
   dryRun = true;
 }
 
-const stamped = stampStableManifests(rootPkg, aliasPkg, version);
-writeManifest(repoRoot, stamped.root);
-writeManifest(aliasDir, stamped.alias);
+const stamped = stampStableManifests(manifests, version);
+for (const key of ['apiClient', 'cezar', 'alias']) writeManifest(dirs[key], stamped[key]);
+const stampedNames = ['apiClient', 'cezar', 'alias'].map((key) => stamped[key].name);
 console.log(
-  `release: stamped ${stamped.root.name} + ${stamped.alias.name} to ${version} (bump ${bump}, dist-tag latest${dryRun ? ', dry run' : ''})`,
+  `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag latest${dryRun ? ', dry run' : ''})`,
 );
 
 // Provenance needs the job's OIDC token (permissions: id-token: write); only
@@ -106,14 +121,18 @@ const publish = (dir, label) => {
   runNpm(args, dir);
 };
 
-publish(repoRoot, stamped.root.name);
-publish(aliasDir, stamped.alias.name);
+// Dependency order — see the header. `ReleaseManifests` declares its fields in this order for
+// exactly this reason.
+publish(dirs.apiClient, stamped.apiClient.name);
+publish(dirs.cezar, stamped.cezar.name);
+publish(dirs.alias, stamped.alias.name);
 
 emitOutput({
   published: !dryRun,
   dryRun,
   bump,
   version,
-  rootName: stamped.root.name,
+  rootName: stamped.cezar.name,
+  apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,
 });
