@@ -102,6 +102,9 @@ describe('activeStepIndex — who the summary speaks for', () => {
     expect(activeStepIndex([step('a', 'done'), step('b', 'running'), step('c', 'pending')])).toBe(1)
     expect(activeStepIndex([step('a', 'done'), step('b', 'done')])).toBe(1)
     expect(activeStepIndex([step('a', 'pending'), step('b', 'pending')])).toBe(0)
+    // An empty list has no index to point at; 0 keeps `steps[index]` undefined rather than
+    // handing back a -1 that would silently address the wrong element.
+    expect(activeStepIndex([])).toBe(0)
   })
 })
 
@@ -111,14 +114,17 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     step('verify', 'running', { name: 'Verify', kind: 'check' }),
     step('review', 'pending', { name: 'Review' }),
   ]
+  /** Unique per test — the expand memory below is module-level and keyed by run id. */
+  let seq = 0
+  const freshRun = () => `run-steps-${(seq += 1)}`
 
   it('renders nothing without steps', () => {
-    render(<WorkflowSteps steps={[]} />)
+    render(<WorkflowSteps runId={freshRun()} steps={[]} />)
     expect(document.querySelector('[data-slot="workflow-steps"]')).toBeNull()
   })
 
   it('collapsed by default: names the active step, one dot per step, and hides the full rows', () => {
-    render(<WorkflowSteps steps={steps} />)
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
     const summary = document.querySelector('[data-slot="workflow-steps"]')!
     expect(summary.textContent).toContain('Verify')
     expect(summary.textContent).toContain('step 2 of 3')
@@ -129,10 +135,31 @@ describe('WorkflowSteps — the collapsible header summary', () => {
   })
 
   it('expands to the full rail on click', () => {
-    render(<WorkflowSteps steps={steps} />)
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
     fireEvent.click(screen.getByRole('button'))
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
     expect(rows[1]!.textContent).toContain('check · step 2 of 3')
+  })
+
+  it('remembers an explicit expand per run across remounts — a tab switch must not collapse it', () => {
+    const runId = freshRun()
+    const first = render(<WorkflowSteps runId={runId} steps={steps} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+    first.unmount()
+
+    // Same run, remounted by another task route's RunHeader: still expanded.
+    render(<WorkflowSteps runId={runId} steps={steps} />)
+    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+  })
+
+  it('does not leak that choice to a different run — a fresh run opens collapsed', () => {
+    const first = render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    fireEvent.click(screen.getByRole('button'))
+    first.unmount()
+
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 })

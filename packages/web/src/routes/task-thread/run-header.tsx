@@ -211,7 +211,7 @@ export function RunHeader({
 
         {run.steps.length > 0 ? (
           <div className="border-t border-border pt-2 pb-1">
-            <WorkflowSteps steps={run.steps} />
+            <WorkflowSteps runId={run.id} steps={run.steps} />
           </div>
         ) : null}
 

@@ -108,7 +108,9 @@ export function activeStepIndex(steps: ReadonlyArray<Pick<StepState, 'status'>>)
   if (active >= 0) return active
   const pending = steps.findIndex((step) => railVisual(step.status) === 'pending')
   if (pending >= 0) return pending
-  return steps.length - 1
+  // `steps.length - 1` would hand an empty list back a -1 that indexes nothing; 0 keeps every
+  // caller's `steps[index]` honest (undefined for an empty list, never a silent wrong element).
+  return Math.max(0, steps.length - 1)
 }
 
 /** One status dot in the collapsed summary — the rail's four glyphs compressed to a color.
@@ -132,20 +134,31 @@ function StepDot({ visual }: { visual: RailVisual }) {
   )
 }
 
+/** Expand memory per run id — the same module-level map the Agents dock keeps (`openByRun` in
+ *  agents-dock.tsx), for the same reason: `RunHeader` is rendered separately by each of the four
+ *  task routes, so without it a Session → Changes → Commits hop would throw the reader's explicit
+ *  expand away every time. Session-lifetime only; no server persistence invented for it. */
+const openByRun = new Map<string, boolean>()
+
 /**
  * The step rail as it sits in the run header: a ONE-LINE summary by default — a dot per step,
  * the current step's name, its position, and the progress bar — so the sticky header stays
  * shallow and the thread gets the vertical room. Clicking it expands the full `StepRail`.
- * Collapsed by default because the summary already answers "where is this run?" at a glance.
+ * Collapsed by default because the summary already answers "where is this run?" at a glance;
+ * an explicit expand is remembered for that run across tab switches.
  */
-export function WorkflowSteps({ steps }: { steps: StepState[] }) {
-  const [open, setOpen] = useState(false)
+export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepState[] }) {
+  const [open, setOpen] = useState(() => openByRun.get(runId) ?? false)
   if (steps.length === 0) return null
+  const toggle = (next: boolean) => {
+    openByRun.set(runId, next)
+    setOpen(next)
+  }
   const index = activeStepIndex(steps)
   const current = steps[index]!
   const pct = railProgress(steps) * 100
   return (
-    <Collapsible data-slot="workflow-steps" open={open} onOpenChange={setOpen} className="min-w-0">
+    <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
       <CollapsibleTrigger
         aria-label={`Workflow: ${current.name}, step ${index + 1} of ${steps.length}`}
         className="group flex min-h-[30px] w-full items-center gap-2.5 text-left text-xs text-muted-foreground hover:text-foreground"
