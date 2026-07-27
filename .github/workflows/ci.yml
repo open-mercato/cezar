@@ -52,8 +52,17 @@ jobs:
       - name: Run packaged CLI E2E tests
         run: npm run test:package
 
-      - name: Verify release package
-        run: npm pack --dry-run --ignore-scripts
+      # Every package the release publishes must be packable — the workspace root is `private`
+      # and publishes nothing, so packing THERE just errors ("must have name and version").
+      # Named explicitly rather than with `--workspaces`, which would also pack the private
+      # cockpit SPA and quietly report a 1 MB tarball that is never published.
+      # `alias-cezar` is not a workspace, so it packs from its own directory.
+      - name: Verify release packages
+        run: |
+          npm pack --dry-run --ignore-scripts \
+            -w @open-mercato/cezar-api-client \
+            -w @open-mercato/cezar
+          (cd alias-cezar && npm pack --dry-run --ignore-scripts)
 
   # npm preview publishing (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
   # Publishes a snapshot of both packages after a fully green verify run:
