@@ -1,4 +1,5 @@
 import { ChevronRightIcon, ListTreeIcon } from 'lucide-react'
+import { Fragment } from 'react'
 
 import type { HarnessLedgerResponse, HarnessPhaseRecord } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
@@ -124,6 +125,11 @@ const STAGE_OF: ReadonlyArray<[RegExp, string]> = [
   [/^stage/i, 'Handoff'],
 ]
 
+/** Wall time attributable to one stage — the sum of its phases. */
+function stageMs(phases: readonly HarnessPhaseRecord[]): number {
+  return phases.reduce((sum, phase) => sum + phaseDurationMs(phase), 0)
+}
+
 function stageOf(phase: HarnessPhaseRecord): string {
   const id = `${phase.id} ${phase.name ?? ''}`
   for (const [pattern, stage] of STAGE_OF) if (pattern.test(id)) return stage
@@ -150,6 +156,34 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
 
   const totalMs = phases.reduce((sum, phase) => sum + phaseDurationMs(phase), 0)
   const retries = phases.reduce((sum, phase) => sum + Math.max(0, (phase.attempts ?? 1) - 1), 0)
+  const starts = phases.map((p) => (p.startedAt ? Date.parse(p.startedAt) : NaN)).filter((n) => !Number.isNaN(n))
+  const ends = phases.map((p) => (p.endedAt ? Date.parse(p.endedAt) : NaN)).filter((n) => !Number.isNaN(n))
+  const wallMs =
+    starts.length > 0 && ends.length > 0 ? Math.max(0, Math.max(...ends) - Math.min(...starts)) : 0
+  const councilRounds = new Set(ledger.councils.map((council) => council.round)).size
+  const reviewerCount = new Set(
+    ledger.councils.flatMap((council) => (council.reviewers ?? []).map((r) => r.id)),
+  ).size
+  /**
+   * A council's reviewers, so a review phase can expand in place (mockup 04).
+   *
+   * ONLY for phases that are actually councils — matching on the round alone
+   * attached the round-1 council to Preflight, Capture and every other phase,
+   * because a label without "round N" defaulted to 1.
+   */
+  const councilFor = (phase: HarnessPhaseRecord) => {
+    const name = `${phase.id} ${phase.name ?? ''}`
+    if (!/council|review/i.test(name)) return undefined
+    const round = Number(/round (\d+)/i.exec(phaseLabel(phase))?.[1] ?? 1)
+    const kind = /spec/i.test(name) ? 'spec' : 'implementation'
+    return ledger.councils.find((council) => council.round === round && council.kind === kind)
+  }
+  /** What a reviewer spent IN THIS phase. `models[].totalDurationMs` is its
+   *  whole-run total, which read as though every round cost 81 minutes. */
+  const reviewerPhaseMs = (phaseId: string, reviewerId: string) =>
+    ledger.invocations
+      .filter((inv) => inv.phaseId === phaseId && inv.reviewerId === reviewerId)
+      .reduce((sum, inv) => sum + (inv.durationMs ?? 0), 0)
 
   return (
     <section
@@ -160,11 +194,28 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-4 py-2.5">
         <h2 className="text-[13px] font-semibold">Run timeline</h2>
         <span className="text-xs text-muted-foreground tabular-nums">
-          {phases.length} phases
-          {retries > 0 ? ` · ${retries} ${retries === 1 ? 'retry' : 'retries'}` : ''}
-          {totalMs > 0 ? ` · ${elapsed(totalMs)}` : ''}
+          {phases.length} phases · {councilRounds} council{' '}
+          {councilRounds === 1 ? 'round' : 'rounds'}
         </span>
       </div>
+
+      {/* The headline numbers (mockup 04): where a long run's time actually
+          went. Wall clock is the run's span; model time is the sum of the
+          phases, which is smaller when phases overlap and is the honest answer
+          to "how much of this was waiting on models". */}
+      <dl className="grid grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-4">
+        {[
+          ['Wall clock', wallMs > 0 ? elapsed(wallMs) : '—'],
+          ['Model time', totalMs > 0 ? elapsed(totalMs) : '—'],
+          ['Retries', String(retries)],
+          ['Reviewers', String(reviewerCount)],
+        ].map(([label, value]) => (
+          <div key={label} className="bg-card px-4 py-2.5">
+            <dt className="text-[10px] tracking-[0.05em] text-soft-foreground uppercase">{label}</dt>
+            <dd className="text-[15px] font-semibold tabular-nums">{value}</dd>
+          </div>
+        ))}
+      </dl>
 
       <div className="flex flex-col gap-3 px-4 py-3">
         {groups.map((group, index) => (
@@ -173,13 +224,37 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
               <span className="text-[10px] font-semibold tracking-[0.07em] text-soft-foreground uppercase">
                 {group.stage}
               </span>
-              <span className="h-px flex-1 bg-border" />
+              {/* One segment per phase, width proportional to its duration and
+                  tinted by how it went — so a stage that burned its time on
+                  retries looks different from one that ran clean. */}
+              <span className="flex h-1 min-w-[40px] flex-1 overflow-hidden rounded-full bg-muted">
+                {group.phases.map((phase) => {
+                  const share = stageMs(group.phases) > 0
+                    ? (phaseDurationMs(phase) / stageMs(group.phases)) * 100
+                    : 100 / group.phases.length
+                  return (
+                    <i
+                      key={phase.id}
+                      style={{ width: `${share}%` }}
+                      className={cn(
+                        'block h-full',
+                        phase.status === 'failed' ? 'bg-danger'
+                        : (phase.attempts ?? 1) > 1 ? 'bg-pending'
+                        : phase.status === 'done' ? 'bg-success'
+                        : 'bg-muted',
+                      )}
+                    />
+                  )
+                })}
+              </span>
               <span className="text-[11px] text-soft-foreground tabular-nums">
-                {group.phases.length} {group.phases.length === 1 ? 'phase' : 'phases'}
+                {group.phases.length} {group.phases.length === 1 ? 'phase' : 'phases'} ·{' '}
+                {elapsed(stageMs(group.phases))}
               </span>
             </div>
             <ol className="flex flex-col gap-1">
               {group.phases.map((phase) => (
+                <Fragment key={phase.id}>
                 <li
                   key={phase.id}
                   className={cn(
@@ -214,6 +289,53 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
                     {phaseDurationMs(phase) > 0 ? elapsed(phaseDurationMs(phase)) : '—'}
                   </span>
                 </li>
+                {/* A council phase opens into the reviewers that ran in it —
+                    the round is where the run's judgement and money went, so it
+                    should not be one opaque row (mockup 04). */}
+                {(councilFor(phase)?.reviewers ?? []).length > 0 ? (
+                  <li className="ml-[7px] border-l border-border pl-3.5">
+                    <ul className="flex flex-col">
+                      {(councilFor(phase)?.reviewers ?? []).map((reviewer) => {
+                        const blocking = (reviewer.findings ?? []).filter(
+                          (f) => f.severity === 'blocker' || f.severity === 'major',
+                        ).length
+                        const model = ledger.models.find((m) => m.id === reviewer.id)
+                        return (
+                          <li
+                            key={reviewer.id}
+                            className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2.5 py-1 text-[11.5px]"
+                          >
+                            <StatusDot tone={toneOf(reviewer.status)} pulse={reviewer.status === 'running'} />
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {model?.model || reviewer.id.replace(/^[^/]+\//, '')}
+                              {model?.family ? (
+                                <span className="ml-1.5 text-[10px] text-soft-foreground">{model.family}</span>
+                              ) : null}
+                            </span>
+                            <span
+                              className={cn(
+                                'rounded px-1.5 py-0.5 text-[9.5px] font-bold tracking-[0.05em] uppercase',
+                                blocking > 0
+                                  ? 'bg-danger/15 text-danger'
+                                  : 'bg-muted text-muted-foreground',
+                              )}
+                            >
+                              {blocking > 0
+                                ? `${blocking} major`
+                                : (reviewer.verdict ?? reviewer.status ?? '—').replace('_', ' ')}
+                            </span>
+                            <span className="w-14 text-right text-soft-foreground tabular-nums">
+                              {reviewerPhaseMs(phase.id, reviewer.id) > 0
+                                ? elapsed(reviewerPhaseMs(phase.id, reviewer.id))
+                                : '—'}
+                            </span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </li>
+                ) : null}
+                </Fragment>
               ))}
             </ol>
           </div>

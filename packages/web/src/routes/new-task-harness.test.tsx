@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { HarnessRoles } from '@open-mercato/cezar-api-client'
@@ -220,14 +220,44 @@ describe('harness presets (2026-07-24)', () => {
 })
 
 describe('per-role reasoning effort + add-models (2026-07-24)', () => {
+  // The dial is a segmented control now (mockup 03): the whole scale is visible
+  // instead of hidden behind a dropdown, so the setting reads as a position.
   it('changes a role effort through its dial', () => {
     const onRoles = vi.fn()
     render(<HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={onRoles} options={options} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Implementer effort' }))
-    fireEvent.click(screen.getByRole('option', { name: /max/i }))
+    const dial = screen.getByRole('radiogroup', { name: 'Implementer effort' })
+    fireEvent.click(within(dial).getByRole('radio', { name: 'max' }))
     expect(onRoles).toHaveBeenCalledWith(
       expect.objectContaining({ implementer: { runner: 'codex', model: '', effort: 'max' } }),
     )
+  })
+
+  it('shows the whole effort scale, with the current step marked', () => {
+    render(
+      <HarnessPanel
+        mode="fix-issue"
+        onMode={noop}
+        roles={{ ...roles, implementer: { runner: 'codex', model: '', effort: 'high' } }}
+        onRoles={noop}
+        options={options}
+      />,
+    )
+    const dial = screen.getByRole('radiogroup', { name: 'Implementer effort' })
+    expect(within(dial).getAllByRole('radio').map((r) => r.textContent)).toEqual([
+      'auto',
+      'low',
+      'med',
+      'high',
+      'max',
+    ])
+    expect(within(dial).getByRole('radio', { name: 'high' }).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('states each picked model provider family beside its pill', () => {
+    render(<HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={noop} options={options} />)
+    // The council's diversity rule is checkable by eye, not just enforced.
+    expect(screen.getAllByText('anthropic').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('openai').length).toBeGreaterThan(0)
   })
 
   it('always offers a way to add providers or models', () => {

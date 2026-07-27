@@ -43,6 +43,7 @@ import { cn } from '@/lib/utils'
 
 import {
   HARNESS_MODES,
+  modelFamilyOf,
   canSaveHarnessPreset,
   groupHarnessOptions,
   harnessRolesIssue,
@@ -231,17 +232,31 @@ export function ModelPickerPill({
   )
 }
 
-const EFFORT_OPTIONS: ReadonlyArray<{ id: HarnessEffort | ''; label: string; desc: string }> = [
-  { id: '', label: 'auto', desc: "The backend's default reasoning" },
-  { id: 'low', label: 'low', desc: 'Fast and cheap — scoped, mechanical work' },
-  { id: 'medium', label: 'medium', desc: 'Balanced reasoning' },
-  { id: 'high', label: 'high', desc: 'Deep reasoning for hard problems' },
-  { id: 'max', label: 'max', desc: 'Everything the model has' },
+const EFFORT_OPTIONS: ReadonlyArray<{
+  id: HarnessEffort | ''
+  label: string
+  /** The segmented control is narrow; `medium` does not fit five-across. */
+  short: string
+  desc: string
+}> = [
+  { id: '', label: 'auto', short: 'auto', desc: "The backend's default reasoning" },
+  { id: 'low', label: 'low', short: 'low', desc: 'Fast and cheap — scoped, mechanical work' },
+  { id: 'medium', label: 'medium', short: 'med', desc: 'Balanced reasoning' },
+  { id: 'high', label: 'high', short: 'high', desc: 'Deep reasoning for hard problems' },
+  { id: 'max', label: 'max', short: 'max', desc: 'Everything the model has' },
 ]
 
 /** Per-role reasoning dial (user feedback 2026-07-24): the seam's neutral tiers, mapped per
  *  backend server-side (claude thinking budget, codex reasoning level; opencode ignores it). */
-function EffortPill({
+/**
+ * The reasoning dial as a SEGMENTED control (mockup 03).
+ *
+ * It was a dropdown pill, which hid the scale behind a click and read as just
+ * another chip beside the model — so a row was a run of near-identical pills
+ * with no visual hierarchy. Five segments show the whole range at a glance and
+ * make the current setting a position rather than a word.
+ */
+function EffortSegments({
   slot,
   ariaLabel,
   value,
@@ -252,68 +267,82 @@ function EffortPill({
   value: HarnessEffort | undefined
   onPick: (effort: HarnessEffort | undefined) => void
 }) {
-  const [open, setOpen] = useState(false)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button type="button" data-slot={slot} aria-label={ariaLabel} className={chipClass}>
-          <span className="text-[11px] text-soft-foreground">effort</span>
-          <span className="font-mono text-[11px]">{value ?? 'auto'}</span>
-          <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-[240px] p-1">
-        <ul role="listbox" aria-label={ariaLabel} className="flex flex-col">
-          {EFFORT_OPTIONS.map((option) => (
-            <li key={option.id}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={(value ?? '') === option.id}
-                onClick={() => {
-                  onPick(option.id === '' ? undefined : option.id)
-                  setOpen(false)
-                }}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted"
-              >
-                <span className="w-14 shrink-0 font-mono text-xs font-medium">{option.label}</span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-soft-foreground">{option.desc}</span>
-                {(value ?? '') === option.id ? (
-                  <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
-                ) : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </PopoverContent>
-    </Popover>
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      data-slot={slot}
+      className="inline-flex h-[27px] shrink-0 overflow-hidden rounded-full border border-border"
+    >
+      {EFFORT_OPTIONS.map((option) => {
+        const active = (value ?? '') === option.id
+        return (
+          <button
+            key={option.id}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={option.desc}
+            onClick={() => onPick(option.id === '' ? undefined : option.id)}
+            className={cn(
+              'grid place-items-center border-r border-border px-2 text-[10.5px] transition-colors last:border-r-0',
+              active
+                ? 'bg-muted font-semibold text-foreground'
+                : 'text-soft-foreground hover:bg-muted/60 hover:text-foreground',
+            )}
+          >
+            {option.short}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
-/** One lineup row (2026-07-24 layout): icon + uppercase label in a fixed column, the pills,
- *  and the role's one-line hint always UNDER the pills — one rhythm for every role instead
- *  of helper text floating wherever space allowed. */
+/** The provider family a picked model belongs to — the council's diversity axis,
+ *  stated beside the pill (mockup 03) so "at least two families" is checkable by
+ *  eye instead of being a rule you have to take on trust. */
+function FamilyTag({ family }: { family: string }) {
+  return (
+    <span className="shrink-0 text-[9.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+      {family}
+    </span>
+  )
+}
+
+/**
+ * One lineup row (mockup 03): a three-column grid — role label, the model picks,
+ * and the effort dial in its own right-hand column — with the role's one-line
+ * hint spanning underneath.
+ *
+ * Effort used to sit inline among the model pills, so a reviewer row read as
+ * five interchangeable chips. Giving it a column makes "which models" and "how
+ * hard they think" two separate questions, which is what they are.
+ */
 function RoleRow({
   icon,
   label,
   hint,
+  effort,
   children,
 }: {
   icon: ReactNode
   label: string
   hint: string
+  effort?: ReactNode
   children: ReactNode
 }) {
   return (
-    <div className="flex flex-wrap items-start gap-2.5">
-      <span className="flex w-[112px] shrink-0 items-center gap-1.5 pt-1 text-[11px] font-semibold tracking-[0.05em] text-soft-foreground uppercase">
+    <div className="grid grid-cols-[116px_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-b border-border py-2.5 last:border-b-0 max-md:grid-cols-1">
+      <span className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.05em] text-soft-foreground uppercase">
         {icon}
         {label}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex flex-wrap items-center gap-1.5">{children}</div>
-        <span className="text-[11.5px] leading-relaxed text-soft-foreground">{hint}</span>
-      </div>
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">{children}</div>
+      {effort ?? <span />}
+      <span className="col-start-2 text-[11.5px] leading-relaxed text-soft-foreground max-md:col-start-1">
+        {hint}
+      </span>
     </div>
   )
 }
@@ -606,6 +635,14 @@ export function HarnessPanel({
             icon={<WaypointsIcon aria-hidden="true" className="size-3.5 shrink-0" />}
             label="Orchestrator"
             hint="directs every phase — a 1M+ context model is recommended, it reads the most"
+            effort={
+              <EffortSegments
+                slot="harness-orchestrator-effort"
+                ariaLabel="Orchestrator effort"
+                value={roles.orchestrator.effort}
+                onPick={(effort) => onRoles({ ...roles, orchestrator: { ...roles.orchestrator, effort } })}
+              />
+            }
           >
             <ModelPickerPill
               slot="harness-orchestrator"
@@ -616,18 +653,21 @@ export function HarnessPanel({
               onPick={(ref) => onRoles({ ...roles, orchestrator: ref })}
               onAddModels={onAddModels}
             />
-            <EffortPill
-              slot="harness-orchestrator-effort"
-              ariaLabel="Orchestrator effort"
-              value={roles.orchestrator.effort}
-              onPick={(effort) => onRoles({ ...roles, orchestrator: { ...roles.orchestrator, effort } })}
-            />
+            <FamilyTag family={modelFamilyOf(roles.orchestrator)} />
           </RoleRow>
 
           <RoleRow
             icon={<HammerIcon aria-hidden="true" className="size-3.5 shrink-0" />}
             label="Implementer"
             hint="writes the code and the fixes"
+            effort={
+              <EffortSegments
+                slot="harness-implementer-effort"
+                ariaLabel="Implementer effort"
+                value={roles.implementer.effort}
+                onPick={(effort) => onRoles({ ...roles, implementer: { ...roles.implementer, effort } })}
+              />
+            }
           >
             <ModelPickerPill
               slot="harness-implementer"
@@ -638,12 +678,7 @@ export function HarnessPanel({
               onPick={(ref) => onRoles({ ...roles, implementer: ref })}
               onAddModels={onAddModels}
             />
-            <EffortPill
-              slot="harness-implementer-effort"
-              ariaLabel="Implementer effort"
-              value={roles.implementer.effort}
-              onPick={(effort) => onRoles({ ...roles, implementer: { ...roles.implementer, effort } })}
-            />
+            <FamilyTag family={modelFamilyOf(roles.implementer)} />
           </RoleRow>
 
           <RoleRow
@@ -651,24 +686,34 @@ export function HarnessPanel({
             label="Reviewers"
             hint="each reviewer runs its own fresh review of the final diff; findings are merged — 2–5, unique, at least two model families"
           >
-                {roles.reviewers.map((reviewer, index) => (
-                  <span key={`${refKey(reviewer)}-${index}`} className="inline-flex items-center gap-1">
-                    <ModelPickerPill
-                      slot={`harness-reviewer-${index + 1}`}
-                      ariaLabel={`Reviewer ${index + 1} model`}
-                      readiness={readinessOf(reviewer)}
-                      value={reviewer}
-                      options={options}
-                      onPick={(ref) =>
-                        onRoles({
-                          ...roles,
-                          reviewers: roles.reviewers.map((r, i) => (i === index ? ref : r)),
-                        })
-                      }
-                      onAddModels={onAddModels}
-                    />
+            {/* One LINE per reviewer, not a wrap of chips. The mockup drew a
+                single effort control for this row, but effort is per-reviewer in
+                the data model and collapsing it would take away a real choice —
+                so each reviewer carries its own dial on its own line. */}
+            <div className="flex min-w-0 flex-col gap-1.5">
+              {roles.reviewers.map((reviewer, index) => (
+                <div
+                  key={`${refKey(reviewer)}-${index}`}
+                  className="flex min-w-0 flex-wrap items-center gap-1.5"
+                >
+                  <ModelPickerPill
+                    slot={`harness-reviewer-${index + 1}`}
+                    ariaLabel={`Reviewer ${index + 1} model`}
+                    readiness={readinessOf(reviewer)}
+                    value={reviewer}
+                    options={options}
+                    onPick={(ref) =>
+                      onRoles({
+                        ...roles,
+                        reviewers: roles.reviewers.map((r, i) => (i === index ? ref : r)),
+                      })
+                    }
+                    onAddModels={onAddModels}
+                  />
+                  <FamilyTag family={modelFamilyOf(reviewer)} />
+                  <span className="ml-auto flex items-center gap-1.5">
                     {reviewer.runner !== 'harness' ? (
-                      <EffortPill
+                      <EffortSegments
                         slot={`harness-reviewer-${index + 1}-effort`}
                         ariaLabel={`Reviewer ${index + 1} effort`}
                         value={reviewer.effort}
@@ -679,7 +724,10 @@ export function HarnessPanel({
                           })
                         }
                       />
-                    ) : null}
+                    ) : (
+                      // Advisors are tuned by the repo config, not here.
+                      <span className="text-[10.5px] text-soft-foreground">configured</span>
+                    )}
                     {roles.reviewers.length > 2 ? (
                       <button
                         type="button"
@@ -687,38 +735,40 @@ export function HarnessPanel({
                         onClick={() =>
                           onRoles({ ...roles, reviewers: roles.reviewers.filter((_, i) => i !== index) })
                         }
-                        className="inline-flex size-5 items-center justify-center rounded-full text-soft-foreground hover:bg-muted hover:text-foreground"
+                        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-soft-foreground hover:bg-muted hover:text-foreground"
                       >
                         <XIcon aria-hidden="true" className="size-3" />
                       </button>
                     ) : null}
                   </span>
-                ))}
-                {roles.reviewers.length < 5 ? (
-                  <button
-                    type="button"
-                    data-slot="harness-add-reviewer"
-                    onClick={() => {
-                      const used = new Set(roles.reviewers.map(refKey))
-                      const next = options.find((o) => !used.has(refKey(o)))
-                      if (next) {
-                        onRoles({
-                          ...roles,
-                          reviewers: [
-                            ...roles.reviewers,
-                            next.runner === 'harness'
-                              ? { runner: 'harness', model: next.model, family: next.family }
-                              : { runner: next.runner, model: next.model },
-                          ],
-                        })
-                      }
-                    }}
-                    className="inline-flex h-[26px] items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-                  >
-                    <PlusIcon aria-hidden="true" className="size-3" />
-                    Add reviewer
-                  </button>
-                ) : null}
+                </div>
+              ))}
+              {roles.reviewers.length < 5 ? (
+                <button
+                  type="button"
+                  data-slot="harness-add-reviewer"
+                  onClick={() => {
+                    const used = new Set(roles.reviewers.map(refKey))
+                    const next = options.find((o) => !used.has(refKey(o)))
+                    if (next) {
+                      onRoles({
+                        ...roles,
+                        reviewers: [
+                          ...roles.reviewers,
+                          next.runner === 'harness'
+                            ? { runner: 'harness', model: next.model, family: next.family }
+                            : { runner: next.runner, model: next.model },
+                        ],
+                      })
+                    }
+                  }}
+                  className="inline-flex h-[27px] w-fit items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <PlusIcon aria-hidden="true" className="size-3" />
+                  Add reviewer
+                </button>
+              ) : null}
+            </div>
           </RoleRow>
 
           {issue ? (
