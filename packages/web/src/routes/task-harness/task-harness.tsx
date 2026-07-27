@@ -128,7 +128,7 @@ function HarnessPage({
         {timelineOpen ? <HarnessTimeline ledger={ledger} /> : null}
         <div className={RUN_RAIL_GRID}>
           <div className="flex min-w-0 flex-col gap-3">{children}</div>
-          <HarnessRail ledger={ledger} />
+          <HarnessRail ledger={ledger} onOpenTimeline={() => setTimelineOpen((open) => !open)} />
         </div>
       </main>
     </div>

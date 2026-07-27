@@ -420,7 +420,12 @@ export function ThreadView({
 
           {/* Phase / council / models beside the transcript, so watching a run
               never means leaving the tab you are watching it in. */}
-          {harnessLedger ? <HarnessRail ledger={harnessLedger} /> : null}
+          {harnessLedger ? (
+            <HarnessRail
+              ledger={harnessLedger}
+              onOpenTimeline={() => setTimelineOpen((open) => !open)}
+            />
+          ) : null}
         </div>
       </div>
 

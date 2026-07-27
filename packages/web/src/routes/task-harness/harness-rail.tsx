@@ -1,6 +1,6 @@
 import { BotIcon, ShieldCheckIcon, WaypointsIcon } from 'lucide-react'
 
-import type { HarnessLedgerResponse } from '@open-mercato/cezar-api-client'
+import type { HarnessLedgerResponse, HarnessPhaseRecord } from '@open-mercato/cezar-api-client'
 import { Pill } from '@/components/pill'
 import { StatusDot } from '@/components/status-dot'
 import { cn } from '@/lib/utils'
@@ -20,7 +20,14 @@ import { activeHarnessPhase, blockingReasonList, currentImplementationCouncil } 
  * It folds away under `xl` — below that the reading measure is worth more than
  * the companion column, and the Review tab still holds everything.
  */
-export function HarnessRail({ ledger }: { ledger: HarnessLedgerResponse }) {
+export function HarnessRail({
+  ledger,
+  onOpenTimeline,
+}: {
+  ledger: HarnessLedgerResponse
+  /** Opens the full run timeline — the rail shows only the tail. */
+  onOpenTimeline?: () => void
+}) {
   if (ledger.phases.length === 0 && ledger.models.length === 0) return null
   return (
     <aside
@@ -28,7 +35,7 @@ export function HarnessRail({ ledger }: { ledger: HarnessLedgerResponse }) {
       aria-label="Run state"
       className="sticky hidden flex-col gap-3 self-start overflow-y-auto xl:flex top-[calc(var(--run-header-h,0px)+0.75rem)] max-h-[calc(100dvh-var(--run-header-h,0px)-1.5rem)] [scrollbar-width:thin]"
     >
-      <PhaseSection ledger={ledger} />
+      <PhaseSection ledger={ledger} onOpenTimeline={onOpenTimeline} />
       <CouncilSection ledger={ledger} />
       <ModelsSection ledger={ledger} />
     </aside>
@@ -60,9 +67,24 @@ function Section({
   )
 }
 
+/** Wall time for one phase; a live phase measures to now. */
+function phaseDurationMs(phase: HarnessPhaseRecord): number {
+  if (!phase.startedAt) return 0
+  const started = Date.parse(phase.startedAt)
+  if (Number.isNaN(started)) return 0
+  const ended = phase.endedAt ? Date.parse(phase.endedAt) : Date.now()
+  return Number.isNaN(ended) ? 0 : Math.max(0, ended - started)
+}
+
 /** The last few phases, newest last — the shape of a timeline without the
  *  2620px of history the old horizontal rail insisted on showing at once. */
-function PhaseSection({ ledger }: { ledger: HarnessLedgerResponse }) {
+function PhaseSection({
+  ledger,
+  onOpenTimeline,
+}: {
+  ledger: HarnessLedgerResponse
+  onOpenTimeline?: () => void
+}) {
   const phases = ledger.phases
   if (phases.length === 0) return null
   const active = activeHarnessPhase(ledger)
@@ -81,28 +103,62 @@ function PhaseSection({ ledger }: { ledger: HarnessLedgerResponse }) {
         </span>
       }
     >
+      {/* The connector line is the point of the shape (mockup 01): without it
+          this is a list of unrelated rows, with it you can see a run moving
+          through its phases. It is drawn behind the dots, clipped at the first
+          and last row, and each dot punches a hole in it with a card-coloured
+          ring so the line never appears to pass through a status. */}
       <ol className="flex flex-col">
-        {shown.map((phase) => (
+        {shown.map((phase, index) => (
           <li
             key={phase.id}
             className={cn(
-              'flex items-center gap-2 py-1 text-[12.5px]',
+              'grid grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-2.5 py-1 text-[12.5px]',
               phase === active ? 'font-semibold text-foreground' : 'text-muted-foreground',
             )}
           >
-            <StatusDot tone={toneOf(phase.status)} pulse={phase.status === 'running'} />
-            <span className="min-w-0 flex-1 truncate">{phaseLabel(phase)}</span>
-            {phase.attempts > 1 ? (
+            <span className="relative flex justify-center">
               <span
-                title={`${phase.attempts} attempts`}
-                className="shrink-0 rounded bg-muted px-1 text-[10px] font-semibold text-muted-foreground tabular-nums"
-              >
-                {phase.attempts}×
-              </span>
-            ) : null}
+                aria-hidden="true"
+                className={cn(
+                  'absolute w-px bg-border',
+                  index === 0 ? 'top-1/2' : '-top-3.5',
+                  index === shown.length - 1 ? 'bottom-1/2' : '-bottom-3.5',
+                )}
+              />
+              <StatusDot
+                tone={toneOf(phase.status)}
+                pulse={phase.status === 'running'}
+                className="relative z-[1] shadow-[0_0_0_3px_var(--card)]"
+              />
+            </span>
+            <span className="min-w-0 truncate">
+              {phaseLabel(phase)}
+              {phase.attempts > 1 ? (
+                <span
+                  title={`${phase.attempts} attempts`}
+                  className="ml-1 font-normal text-soft-foreground tabular-nums"
+                >
+                  {phase.attempts}×
+                </span>
+              ) : null}
+            </span>
+            <span className="shrink-0 text-[11px] font-normal text-soft-foreground tabular-nums">
+              {phaseDurationMs(phase) > 0 ? elapsed(phaseDurationMs(phase)) : ''}
+            </span>
           </li>
         ))}
       </ol>
+      {onOpenTimeline ? (
+        <button
+          type="button"
+          data-slot="harness-rail-timeline"
+          onClick={onOpenTimeline}
+          className="mt-2.5 inline-flex h-[22px] items-center rounded-full border border-border px-2.5 text-[11.5px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          Full timeline · {phases.length} phases
+        </button>
+      ) : null}
     </Section>
   )
 }
@@ -171,6 +227,7 @@ function CouncilSection({ ledger }: { ledger: HarnessLedgerResponse }) {
 function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
   if (ledger.models.length === 0) return null
   const working = ledger.invocations.filter((invocation) => invocation.status === 'running').length
+  const roles = [...new Set(ledger.models.flatMap((model) => model.roles))]
   return (
     <Section
       icon={<BotIcon aria-hidden="true" className="size-3.5" />}
@@ -205,6 +262,21 @@ function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
           </li>
         ))}
       </ul>
+      {/* The roles present in this run (mockup 01). The per-row identity is the
+          model; this says what the roster is FOR without repeating a tag on
+          every line. */}
+      {roles.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {roles.map((role) => (
+            <span
+              key={role}
+              className="rounded-[5px] bg-muted px-1.5 py-px text-[9px] font-bold tracking-[0.04em] text-muted-foreground uppercase"
+            >
+              {role}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </Section>
   )
 }
