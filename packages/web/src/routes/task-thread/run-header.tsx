@@ -75,6 +75,7 @@ import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { StepRail } from './step-rail'
+import { HScroller } from '@/components/h-scroller'
 import { runShellClass } from './run-shell'
 import { useFinishRun } from './use-finish-run'
 
@@ -161,7 +162,7 @@ export function RunHeader({
             was clipped ("Archive" rendered as "Arch"). Only the tab list may
             scroll now, and the actions are always reachable. */}
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
-          <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+          <HScroller ariaLabel="Run tabs" className="flex-1">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             Session
           </TabLink>
@@ -187,7 +188,7 @@ export function RunHeader({
             Files
           </TabLink>
 
-          </div>
+          </HScroller>
 
           <div data-slot="run-actions" className="ml-auto hidden shrink-0 items-center gap-1 pb-1 lg:flex">
             {flags.finish ? (

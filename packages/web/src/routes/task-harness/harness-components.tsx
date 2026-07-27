@@ -69,41 +69,6 @@ function elapsed(ms: number): string {
   return `${minutes}m${rest ? ` ${rest}s` : ''}`
 }
 
-/** Compact, horizontally scrollable phase progress. It derives entirely from the durable
- *  ledger + the existing run SSE feed, so a ten-hour run survives route changes and reloads. */
-export function HarnessPhaseRail({ ledger }: { ledger: HarnessLedgerResponse }) {
-  const phases = ledger.phases
-  if (phases.length === 0) return null
-  return (
-    <div
-      data-slot="harness-phase-rail"
-      aria-label="Harness phases"
-      className="border-b border-border bg-background px-4 py-2 md:px-6"
-    >
-      <ol className="mx-auto flex w-full max-w-[820px] items-center gap-1 overflow-x-auto pb-0.5">
-        {phases.map((phase, index) => (
-          <li key={phase.id} className="flex shrink-0 items-center gap-1">
-            {index > 0 ? <span aria-hidden="true" className="px-0.5 text-xs text-soft-foreground">›</span> : null}
-            <span
-              className={cn(
-                'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11.5px] font-medium',
-                phase.status === 'running'
-                  ? 'border-pending/60 bg-pending/10 text-foreground'
-                  : 'border-border bg-card text-muted-foreground',
-              )}
-              title={phase.error}
-            >
-              <StatusDot tone={toneOf(phase.status)} pulse={phase.status === 'running'} />
-              {phaseLabel(phase)}
-              {phase.attempts > 1 ? <span className="tabular-nums">· {phase.attempts}×</span> : null}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </div>
-  )
-}
-
 function modelRole(model: HarnessModelRecord): string {
   if (model.roles.includes('host')) return 'host'
   if (model.roles.includes('implementer')) return 'worker'

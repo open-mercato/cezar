@@ -16,8 +16,15 @@
  *    becomes a drawer and this collapses back to the reading measure on its own.
  */
 
-export const RUN_SHELL_NARROW = 'mx-auto w-full max-w-[820px]'
-export const RUN_SHELL_WIDE = 'mx-auto w-full max-w-[1240px]'
+export const RUN_SHELL_NARROW = 'mx-auto w-full max-w-[920px]'
+/**
+ * FLUID, not a fixed 1240px (user feedback 2026-07-27: "huge margins on both
+ * sides ... stretch it a bit"). A harness run has more to show than a chat does
+ * — transcript, phase, council, roster — and on a wide display a fixed cap threw
+ * the surplus away as symmetric dead space. It still stops at 1920 so an
+ * ultrawide does not turn the transcript into a billboard.
+ */
+export const RUN_SHELL_WIDE = 'mx-auto w-full max-w-[min(100%,1920px)]'
 
 /** The shell container class for a run detail surface. `wide` is the harness
  *  layout — pass `Boolean(run.harness)`. */
@@ -31,4 +38,8 @@ export const RUN_RAIL_GRID =
   // `items-start` matters: without it the rail stretches to the full grid-row
   // height and `position: sticky` can never engage (a 93,000px-tall element has
   // nothing left to stick within).
-  'grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_336px]'
+  //
+  // The rail widens with the shell at 2xl — at that point the transcript already
+  // has all the measure it can use, so the extra pixels are worth more to the
+  // council and roster rows, which were the ones truncating.
+  'grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_336px] 2xl:grid-cols-[minmax(0,1fr)_400px]'
