@@ -17,7 +17,7 @@ import {
  * It exists so those two cannot drift from the composer: the resolution quartet
  * (`usableRunners` → `resolveRunner` → `modelsForRunner` → `resolveModel`) and the
  * "hide the runner pill on a single-backend host" rule live here once, read from the same
- * provider/health/config queries new-task.tsx reads. The composer itself keeps its own inline copy —
+ * provider/config queries new-task.tsx reads. The composer itself keeps its own inline copy —
  * it threads the pills through a persisted draft and a variants pill this pair has no notion of.
  *
  * The caller owns the pick (`null` = never touched, so the configured default shows through);
@@ -39,7 +39,7 @@ export interface ResolvedEngine {
   model: string
   /** The backends this host offers — the runner pill renders only when there is a choice. */
   runners: readonly Runner[]
-  /** What the server would pick on its own, once health has authoritatively reported it. */
+  /** What the active project's server context would pick from its authoritative config. */
   defaultRunner?: Runner
   /** True only after provider status confirms at least one connected backend. */
   canRun: boolean
