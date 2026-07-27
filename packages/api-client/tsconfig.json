@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    // DOM for the browser APIs the client wrapper speaks (fetch, EventSource); no `types`
+    // entry at all, because this package must stay Node-free — asking for @types/node here
+    // is what would let a `node:*` import slip into the web bundle unnoticed.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    // Imports name the real `.ts` file; tsc rewrites the extension to `.js` in the emitted
+    // JS and `.d.ts`, so `dist` is still a plain resolvable ESM package for Node consumers.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  // Build config: tests never reach `dist` (or the published tarball). They are still
+  // typechecked — tsconfig.test.json adds them back.
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

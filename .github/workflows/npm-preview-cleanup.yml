@@ -44,9 +44,12 @@ jobs:
             echo "NPM_TOKEN is not configured — nothing to clean up."
             exit 0
           fi
-          ROOT_PKG=$(node -p "require('./package.json').name")
+          # Every published package carries the PR's dist-tag, so every one needs it removed.
+          # Names come from the manifests, never hardcoded, so a rename cannot orphan a tag.
+          ROOT_PKG=$(node -p "require('./packages/cezar/package.json').name")
+          CLIENT_PKG=$(node -p "require('./packages/api-client/package.json').name")
           ALIAS_PKG=$(node -p "require('./alias-cezar/package.json').name")
-          for pkg in "$ROOT_PKG" "$ALIAS_PKG"; do
+          for pkg in "$ROOT_PKG" "$CLIENT_PKG" "$ALIAS_PKG"; do
             # Best effort: the tag may never have existed (PR predating the
             # pipeline, or closed before its first green run).
             npm dist-tag rm "$pkg" "$TAG" || echo "no $TAG tag on $pkg (ok)"
