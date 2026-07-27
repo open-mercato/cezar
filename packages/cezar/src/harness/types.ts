@@ -126,6 +126,12 @@ export const harnessInvocationSchema = z
     inputSha256: z.string().min(1),
     artifactPath: z.string().optional(),
     artifactSha256: z.string().optional(),
+    /** The exact prompt this invocation was given (2026-07-27). Reviewers are
+     *  the expensive, judgement-carrying part of a run, and until now the only
+     *  record of one was its verdict — you could not read what it was asked or
+     *  what it actually said. Optional: older ledgers have none, and some
+     *  invocations (validation gates) have no prompt to speak of. */
+    promptPath: z.string().optional(),
     startedAt: z.string().optional(),
     endedAt: z.string().optional(),
     durationMs: z.number().int().min(0).optional(),

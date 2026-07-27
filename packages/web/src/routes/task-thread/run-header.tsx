@@ -33,7 +33,7 @@ import {
   WavesIcon,
   ZapIcon,
 } from 'lucide-react'
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -111,6 +111,12 @@ export function RunHeader({
   // keeps the reading measure. One source of truth so the header can never sit
   // at a different width than the body under it (review 2026-07-27).
   const wide = Boolean(run.harness)
+  // The header is sticky, so anything else that sticks has to know how tall it
+  // is (review 2026-07-27): the run rail was pinning at 12px and disappearing
+  // behind 185px of header. Its height is genuinely dynamic — the title wraps,
+  // the step rail expands, the notes panel opens — so it is measured and
+  // published as a custom property rather than guessed at.
+  const headerRef = useRef<HTMLElement>(null)
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
@@ -124,8 +130,35 @@ export function RunHeader({
   const queuePosition =
     run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const publish = () => {
+      document.documentElement.style.setProperty(
+        '--run-header-h',
+        `${Math.round(el.getBoundingClientRect().height)}px`,
+      )
+    }
+    publish()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', publish)
+      return () => {
+        window.removeEventListener('resize', publish)
+        document.documentElement.style.removeProperty('--run-header-h')
+      }
+    }
+    const observer = new ResizeObserver(publish)
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      // Leaving a stale height behind would misalign every other route.
+      document.documentElement.style.removeProperty('--run-header-h')
+    }
+  }, [])
+
   return (
     <header
+      ref={headerRef}
       data-slot="run-header"
       className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
     >

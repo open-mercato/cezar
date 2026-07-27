@@ -55,6 +55,7 @@ import {
 } from '../harness/probe.js';
 import { createLiveTransport } from '../harness/probe-transports.js';
 import { resolveHarnessPlan } from '../harness/profile-plan.js';
+import { harnessArtifactDir } from '../harness/driver.js';
 import { providerFamilyOf } from '../harness/model-family.js';
 import { HARNESS_PROFILES, harnessProfileSchema } from '../harness/types.js';
 import { isHarnessWorkflow } from '../harness/workflows.js';
@@ -3444,6 +3445,10 @@ export function createApp(deps: ServerDeps) {
 
   // The run's harness ledger — refetch-on-reconnect companion to the
   // `harness.*` events on the run's SSE stream.
+  /** A review prompt carries diff context; a result carries every finding.
+   *  Generous, but bounded — the response is rendered in a drawer, not streamed. */
+  const HARNESS_ARTIFACT_CHAR_CAP = 400_000;
+
   api.get('/runs/:id/harness', (c) => {
     const { dataDir, store } = c.get('project');
     const id = c.req.param('id');
@@ -3461,6 +3466,63 @@ export function createApp(deps: ServerDeps) {
       return c.json({ error: `harness ledger version ${String(read.version)} is not supported` }, 409);
     }
     return c.json({ ...read.ledger, snapshotSeq });
+  });
+
+  /**
+   * One reviewer invocation's actual conversation: the prompt it was given and
+   * the result it produced (2026-07-27).
+   *
+   * Both paths come from the LEDGER record, never from the request — the
+   * invocation id selects a row and the row supplies the filenames, so a crafted
+   * id can address nothing the driver did not itself write. Sizes are capped:
+   * a review prompt embeds diff context and a pathological one must not become
+   * an unbounded response.
+   */
+  api.get('/runs/:id/harness/invocations/:invocationId', (c) => {
+    const { dataDir, store } = c.get('project');
+    const id = c.req.param('id');
+    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const read = readLedger(dataDir, id);
+    if (read.status !== 'valid') {
+      return c.json({ error: 'no harness ledger for this run' }, 404);
+    }
+    const invocationId = c.req.param('invocationId');
+    const invocation = read.ledger.invocations.find((entry) => entry.id === invocationId);
+    if (!invocation) return c.json({ error: 'no such invocation' }, 404);
+
+    const artifactRoot = resolve(harnessArtifactDir(dataDir, id));
+    const readArtifact = (path: string | undefined): string | null => {
+      if (!path) return null;
+      // Defence in depth: the ledger is trusted, but it is a file on disk that
+      // a compromised run could have rewritten, so confine reads to the run's
+      // own artifact directory regardless.
+      const full = resolve(path);
+      if (full !== artifactRoot && !full.startsWith(`${artifactRoot}${sep}`)) return null;
+      try {
+        const text = readFileSync(full, 'utf8');
+        return text.length > HARNESS_ARTIFACT_CHAR_CAP
+          ? `${text.slice(0, HARNESS_ARTIFACT_CHAR_CAP)}\n\n… truncated (${text.length} characters total)`
+          : text;
+      } catch {
+        return null;
+      }
+    };
+
+    return c.json({
+      id: invocation.id,
+      reviewerId: invocation.reviewerId,
+      role: invocation.role,
+      phaseId: invocation.phaseId,
+      status: invocation.status,
+      attempt: invocation.attempt,
+      binding: invocation.binding,
+      startedAt: invocation.startedAt,
+      endedAt: invocation.endedAt,
+      durationMs: invocation.durationMs,
+      error: invocation.error,
+      prompt: readArtifact(invocation.promptPath),
+      result: readArtifact(invocation.artifactPath),
+    });
   });
 
   api.post('/runs/:id/harness/accept-contested', async (c) => {

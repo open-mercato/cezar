@@ -372,3 +372,61 @@ describe('finding attribution', () => {
     expect(blockingFindings(rows).map((f) => f.title)).toEqual(['a', 'b'])
   })
 })
+
+
+/**
+ * User request 2026-07-27: a reviewer's response has to read as prose, not as
+ * the raw JSON artifact the model wrote.
+ */
+describe('formatReviewResponse', () => {
+  it('renders a verdict and its findings in readable form', async () => {
+    const { formatReviewResponse } = await import('./task-harness')
+
+    const out = formatReviewResponse(
+      JSON.stringify({
+        verdict: 'request_changes',
+        findings: [
+          {
+            severity: 'major',
+            title: 'Auth check removed',
+            location: 'src/a.ts:4',
+            evidence: 'the guard no longer runs',
+          },
+        ],
+        notes: ['checked against the diff'],
+      }),
+    )!
+
+    expect(out).toContain('Verdict: request changes')
+    expect(out).toContain('1 finding')
+    expect(out).toContain('1. [MAJOR] Auth check removed')
+    expect(out).toContain('at src/a.ts:4')
+    expect(out).toContain('the guard no longer runs')
+    expect(out).toContain('checked against the diff')
+    // The escaped-JSON wall is exactly what this exists to avoid.
+    expect(out).not.toContain('\\"')
+  })
+
+  it('passes anything that is not a review result through untouched', async () => {
+    const { formatReviewResponse } = await import('./task-harness')
+
+    expect(formatReviewResponse('not json at all')).toBe('not json at all')
+    expect(formatReviewResponse('{"unrelated":1}')).toBe('{"unrelated":1}')
+    expect(formatReviewResponse('[1,2,3]')).toBe('[1,2,3]')
+  })
+
+  it('has nothing to say about a missing response', async () => {
+    const { formatReviewResponse } = await import('./task-harness')
+
+    expect(formatReviewResponse(null)).toBeNull()
+  })
+
+  it('handles a clean approval without inventing findings', async () => {
+    const { formatReviewResponse } = await import('./task-harness')
+
+    const out = formatReviewResponse(JSON.stringify({ verdict: 'approve', findings: [] }))!
+
+    expect(out).toContain('Verdict: approve')
+    expect(out).toContain('0 findings')
+  })
+})

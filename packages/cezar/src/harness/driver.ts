@@ -791,6 +791,11 @@ export async function runHarnessDriver(
     reviewerId?: string;
     binding: HarnessInvocation['binding'];
     inputSha256: string;
+    /** The exact text handed to the model. Persisted beside the result so a
+     *  reviewer's reasoning can be read back — see `promptPath` in types.ts. */
+    prompt?: string;
+    /** An already-on-disk prompt (the advisor council's shared criteria file). */
+    promptPath?: string;
   }): HarnessInvocation => {
     const now = new Date().toISOString();
     const existing = ledger.invocations.find((entry) => entry.id === init.id);
@@ -817,6 +822,18 @@ export async function runHarnessDriver(
     invocation.artifactSha256 = undefined;
     invocation.error = undefined;
     invocation.process = undefined;
+    if (init.promptPath) {
+      invocation.promptPath = init.promptPath;
+    } else if (init.prompt !== undefined) {
+      const promptPath = join(artifactDir, `invocation-${sha256(init.id).slice(0, 20)}-prompt.md`);
+      try {
+        writeFileSync(promptPath, init.prompt, 'utf8');
+        invocation.promptPath = promptPath;
+      } catch {
+        // A prompt we could not persist is a missing convenience, never a
+        // reason to fail the paid model call that follows.
+      }
+    }
     persist();
     emitInvocation(invocation);
     return invocation;
@@ -1995,6 +2012,10 @@ export async function runHarnessDriver(
               family: member.family,
             },
             inputSha256: meta.inputSha256,
+            // Advisors are all given the same criteria document by the runtime,
+            // so the prompt is a file that already exists — point at it rather
+            // than writing N identical copies.
+            promptPath: criteriaPath,
           }),
         );
       }
@@ -2939,6 +2960,7 @@ export async function runHarnessDriver(
                   family: councilFamilyOf(reviewer),
                 },
                 inputSha256,
+                prompt: renderedPrompt,
               });
               const failure = await runReadOnlyReviewer(invocation, {
                 concurrent: true,
@@ -3618,6 +3640,7 @@ export async function runHarnessDriver(
                 family: councilFamilyOf(reviewer),
               },
               inputSha256,
+              prompt: renderedPrompt,
             });
             const failure = await runReadOnlyReviewer(invocation, {
               concurrent: true,

@@ -18,6 +18,7 @@ import {
   getGithubPrChanges,
   getGroup,
   getHarnessStatus,
+  getHarnessInvocation,
   getRunHarness,
   getHealth,
   getImportableSkills,
@@ -491,6 +492,18 @@ export function useRunHarness(id: string | undefined, enabled = true) {
     queryKey: queryKeys.runs.harness(id ?? ''),
     queryFn: ({ signal }) => getRunHarness(id as string, { signal }),
     enabled: Boolean(id) && enabled,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+}
+
+/** A reviewer's conversation. Enabled only while its drawer is open, and cached
+ *  indefinitely — a finished invocation's artifacts never change. */
+export function useHarnessInvocation(id: string | undefined, invocationId: string | null) {
+  return useQuery({
+    queryKey: [...queryKeys.runs.harness(id ?? ''), 'invocation', invocationId ?? ''] as const,
+    queryFn: ({ signal }) => getHarnessInvocation(id as string, invocationId as string, { signal }),
+    enabled: Boolean(id) && Boolean(invocationId),
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
   })

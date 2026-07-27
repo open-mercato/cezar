@@ -624,4 +624,105 @@ describe('harness API', () => {
       expect(res.status).toBe(400);
     });
   });
+
+  /**
+   * User request 2026-07-27: read a reviewer's whole thread — the prompt it was
+   * given and what it answered. Until this endpoint the only trace of an
+   * expensive council member was its verdict, so there was no way to tell
+   * whether it had been asked the right question.
+   */
+  describe('GET /api/runs/:id/harness/invocations/:invocationId', () => {
+    const seedRun = (invocations: unknown[]) => {
+      const run = store.createRun({ title: 't', workflow: HARNESS_FIX_ISSUE, task: 'x', steps: [] });
+      const artifactDir = join(dataDir, 'runs', `${run.id}-harness`);
+      mkdirSync(artifactDir, { recursive: true });
+      writeFileSync(join(artifactDir, 'p.md'), 'review this diff', 'utf8');
+      writeFileSync(
+        join(artifactDir, 'r.json'),
+        JSON.stringify({ verdict: 'request_changes', findings: [] }),
+        'utf8',
+      );
+      const ledger = createLedger({
+        workflow: HARNESS_FIX_ISSUE,
+        requestedProfile: 'standard',
+        subject: { kind: 'brief', text: 'x' },
+      });
+      ledger.invocations = invocations as typeof ledger.invocations;
+      saveLedger(dataDir, run.id, ledger);
+      return { run, artifactDir };
+    };
+
+    const reviewer = (extra: Record<string, unknown>) => ({
+      id: 'inv-1',
+      phaseId: 'review',
+      role: 'reviewer',
+      reviewerId: 'codex/gpt',
+      binding: { runner: 'codex', model: 'gpt' },
+      status: 'completed',
+      attempt: 1,
+      inputSha256: 'x',
+      ...extra,
+    });
+
+    it('answers with the prompt and the result the ledger points at', async () => {
+      const { run, artifactDir } = seedRun([]);
+      const ledger = readLedger(dataDir, run.id);
+      if (ledger.status !== 'valid') throw new Error('seed failed');
+      ledger.ledger.invocations = [
+        reviewer({
+          promptPath: join(artifactDir, 'p.md'),
+          artifactPath: join(artifactDir, 'r.json'),
+        }),
+      ] as typeof ledger.ledger.invocations;
+      saveLedger(dataDir, run.id, ledger.ledger);
+
+      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/inv-1`);
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { prompt: string; result: string; reviewerId: string };
+      expect(body.prompt).toBe('review this diff');
+      expect(JSON.parse(body.result).verdict).toBe('request_changes');
+      expect(body.reviewerId).toBe('codex/gpt');
+    });
+
+    it('404s an invocation id that is not in the ledger', async () => {
+      const { run } = seedRun([]);
+
+      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/nope`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('refuses a ledger path that escapes the run artifact directory', async () => {
+      const { run } = seedRun([]);
+      const ledger = readLedger(dataDir, run.id);
+      if (ledger.status !== 'valid') throw new Error('seed failed');
+      // The ledger is trusted, but it is still a file on disk. A rewritten path
+      // must not turn a review reader into an arbitrary file read.
+      ledger.ledger.invocations = [
+        reviewer({ promptPath: '/etc/passwd', artifactPath: join(dataDir, 'runs.json') }),
+      ] as typeof ledger.ledger.invocations;
+      saveLedger(dataDir, run.id, ledger.ledger);
+
+      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/inv-1`);
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { prompt: string | null; result: string | null };
+      expect(body.prompt).toBeNull();
+      expect(body.result).toBeNull();
+    });
+
+    it('reports an unrecorded prompt as null rather than failing', async () => {
+      const { run } = seedRun([]);
+      const ledger = readLedger(dataDir, run.id);
+      if (ledger.status !== 'valid') throw new Error('seed failed');
+      ledger.ledger.invocations = [reviewer({})] as typeof ledger.ledger.invocations;
+      saveLedger(dataDir, run.id, ledger.ledger);
+
+      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/inv-1`);
+
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { prompt: string | null }).prompt).toBeNull();
+    });
+  });
 });

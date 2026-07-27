@@ -1195,11 +1195,33 @@ export interface HarnessInvocationRecord {
   inputSha256: string
   artifactPath?: string
   artifactSha256?: string
+  /** Where the exact prompt this invocation was given was persisted (2026-07-27). */
+  promptPath?: string
   startedAt?: string
   endedAt?: string
   durationMs?: number
   error?: string
   [key: string]: unknown
+}
+
+/** One reviewer's actual conversation, from
+ *  `GET /api/runs/:id/harness/invocations/:invocationId`. Both texts are read
+ *  from the run's own artifact directory and are null when never recorded (an
+ *  older ledger) or unreadable. */
+export interface HarnessInvocationDetail {
+  id: string
+  reviewerId?: string
+  role: string
+  phaseId: string
+  status: HarnessInvocationRecord['status']
+  attempt: number
+  binding: HarnessInvocationRecord['binding']
+  startedAt?: string
+  endedAt?: string
+  durationMs?: number
+  error?: string
+  prompt: string | null
+  result: string | null
 }
 
 export interface HarnessPendingMessageRecord {

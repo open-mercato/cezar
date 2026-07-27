@@ -26,6 +26,7 @@ import type {
   GithubPrMergeStateResponse,
   GithubPrChangesData,
   GroupResponse,
+  HarnessInvocationDetail,
   HarnessLedgerResponse,
   HarnessProbeResponse,
   HarnessProfile,
@@ -353,6 +354,20 @@ export function probeHarness(
 /** The run's harness ledger — 404s (throws) when the run has none. */
 export function getRunHarness(id: string, opts?: ReadOptions): Promise<HarnessLedgerResponse> {
   return get<HarnessLedgerResponse>(runPath(id, '/harness'), opts)
+}
+
+/** One reviewer invocation's prompt and result — the conversation behind a
+ *  verdict. Fetched on demand: prompts embed diff context and are far too large
+ *  to ride along with every ledger read. */
+export function getHarnessInvocation(
+  id: string,
+  invocationId: string,
+  opts: ReadOptions = {},
+): Promise<HarnessInvocationDetail> {
+  return get<HarnessInvocationDetail>(
+    runPath(id, `/harness/invocations/${encodeURIComponent(invocationId)}`),
+    opts,
+  )
 }
 
 /** Explicitly accept a contested harness result before publishing it. The reason is retained

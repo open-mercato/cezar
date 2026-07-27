@@ -1,5 +1,6 @@
 import {
   AlertTriangleIcon,
+  ChevronDownIcon,
   CheckCircle2Icon,
   GitPullRequestArrowIcon,
   Layers3Icon,
@@ -11,12 +12,18 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 
 import { ApiError } from '@/api/client'
-import { useAcceptContestedHarness, useRun, useRunHarness } from '@/api/queries'
+import {
+  useAcceptContestedHarness,
+  useHarnessInvocation,
+  useRun,
+  useRunHarness,
+} from '@/api/queries'
 import { useRunEvents } from '@/api/run-events'
 import type {
   ApiRun,
   HarnessCouncilRecord,
   HarnessFindingRecord,
+  HarnessInvocationRecord,
   HarnessLedgerResponse,
   HarnessPacketRecord,
 } from '@open-mercato/cezar-api-client'
@@ -588,11 +595,158 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
  * never what it said, how long its transport took, whether it retried, or what
  * it cost — the review itself, the thing you paid for, had no surface at all.
  */
+/**
+ * The reviewer's actual conversation (user request 2026-07-27): what was sent,
+ * and what came back — in prose, not as a raw artifact dump.
+ *
+ * A council reviewer is the expensive, judgement-carrying part of a run, and
+ * until now the only trace of one was its verdict and a finding list. You could
+ * not check whether it was asked the right question, whether it answered it, or
+ * why two reviewers disagreed. One turn per attempt: the prompt, then the reply.
+ */
+function ReviewerConversation({
+  runId,
+  invocations,
+}: {
+  runId: string
+  invocations: readonly HarnessInvocationRecord[]
+}) {
+  // Newest attempt first — a retry is the one you usually want to read.
+  const ordered = [...invocations].reverse()
+  const [openId, setOpenId] = useState<string | null>(ordered[0]?.id ?? null)
+  const detail = useHarnessInvocation(runId, openId)
+
+  if (ordered.length === 0) return null
+
+  return (
+    <section data-slot="reviewer-conversation" className="mb-5">
+      <h3 className="text-[10.5px] font-semibold tracking-[0.06em] text-soft-foreground uppercase">
+        Conversation
+      </h3>
+      {ordered.length > 1 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {ordered.map((invocation, index) => (
+            <button
+              key={invocation.id}
+              type="button"
+              onClick={() => setOpenId(invocation.id)}
+              className={cn(
+                'inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium',
+                invocation.id === openId
+                  ? 'border-primary/60 text-foreground'
+                  : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              <StatusDot tone={toneOf(invocation.status)} />
+              attempt {ordered.length - index}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {detail.isPending ? (
+        <p className="mt-2 text-xs text-soft-foreground">Loading the conversation…</p>
+      ) : detail.isError ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          This conversation was not recorded — the run predates prompt capture.
+        </p>
+      ) : (
+        <div className="mt-2 flex flex-col gap-2">
+          <Turn
+            label="Sent to the reviewer"
+            body={detail.data?.prompt ?? null}
+            empty="No prompt was recorded for this attempt."
+          />
+          <Turn
+            label="Reviewer's response"
+            body={formatReviewResponse(detail.data?.result ?? null)}
+            empty={detail.data?.error ?? 'This attempt produced no response.'}
+            tone={detail.data?.status === 'failed' ? 'danger' : 'default'}
+          />
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** One side of the exchange, collapsed by default: prompts run to thousands of
+ *  lines and would otherwise bury the reply underneath them. */
+function Turn({
+  label,
+  body,
+  empty,
+  tone = 'default',
+}: {
+  label: string
+  body: string | null
+  empty: string
+  tone?: 'default' | 'danger'
+}) {
+  const lines = body ? body.split('\n').length : 0
+  return (
+    <details className="overflow-hidden rounded-lg border border-border bg-card-2">
+      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs [&::-webkit-details-marker]:hidden">
+        <span className={cn('font-semibold', tone === 'danger' ? 'text-danger' : 'text-foreground')}>
+          {label}
+        </span>
+        {body ? (
+          <span className="text-soft-foreground tabular-nums">
+            {lines} {lines === 1 ? 'line' : 'lines'}
+          </span>
+        ) : null}
+        <ChevronDownIcon aria-hidden="true" className="ml-auto size-3.5 text-soft-foreground" />
+      </summary>
+      <pre className="max-h-96 overflow-auto border-t border-border px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+        {body ?? empty}
+      </pre>
+    </details>
+  )
+}
+
+/**
+ * Reviewers answer with a JSON result file. Rendered raw it is a wall of escaped
+ * strings, so it becomes readable prose — and anything that is not the expected
+ * shape falls through untouched rather than being hidden.
+ */
+export function formatReviewResponse(raw: string | null): string | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return raw
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return raw
+  const result = parsed as {
+    verdict?: unknown
+    findings?: unknown
+    notes?: unknown
+  }
+  if (typeof result.verdict !== 'string' && !Array.isArray(result.findings)) return raw
+
+  const out: string[] = []
+  if (typeof result.verdict === 'string') out.push(`Verdict: ${result.verdict.replace('_', ' ')}`)
+  const findings = Array.isArray(result.findings) ? result.findings : []
+  out.push(`${findings.length} ${findings.length === 1 ? 'finding' : 'findings'}`)
+  findings.forEach((entry, index) => {
+    const finding = (entry ?? {}) as Record<string, unknown>
+    const severity = typeof finding.severity === 'string' ? finding.severity.toUpperCase() : '—'
+    out.push('', `${index + 1}. [${severity}] ${String(finding.title ?? 'untitled')}`)
+    if (typeof finding.location === 'string') out.push(`   at ${finding.location}`)
+    if (typeof finding.evidence === 'string') out.push(`   ${finding.evidence}`)
+  })
+  const notes = Array.isArray(result.notes) ? result.notes.filter((n) => typeof n === 'string') : []
+  if (notes.length > 0) out.push('', 'Notes:', ...notes.map((note) => `   ${String(note)}`))
+  return out.join('\n')
+}
+
 function ReviewerDrawer({
+  runId,
   ledger,
   reviewerId,
   onClose,
 }: {
+  runId: string
   ledger: HarnessLedgerResponse
   reviewerId: string | null
   onClose: () => void
@@ -642,6 +796,9 @@ function ReviewerDrawer({
               {reviewer.reason}
             </p>
           ) : null}
+
+          <ReviewerConversation runId={runId} invocations={invocations} />
+
           <h3 className="text-[10.5px] font-semibold tracking-[0.06em] text-soft-foreground uppercase">
             Findings
           </h3>
@@ -716,7 +873,12 @@ export function TaskHarnessReviewRoute() {
       <Findings ledger={ledger} />
       <CouncilProgress ledger={ledger} />
       <CouncilTable ledger={ledger} onOpenReviewer={setOpenReviewer} />
-      <ReviewerDrawer ledger={ledger} reviewerId={openReviewer} onClose={() => setOpenReviewer(null)} />
+      <ReviewerDrawer
+        runId={id ?? run.data.id}
+        ledger={ledger}
+        reviewerId={openReviewer}
+        onClose={() => setOpenReviewer(null)}
+      />
     </HarnessPage>
   )
 }

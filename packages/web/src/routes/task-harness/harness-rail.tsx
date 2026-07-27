@@ -26,7 +26,7 @@ export function HarnessRail({ ledger }: { ledger: HarnessLedgerResponse }) {
     <aside
       data-slot="harness-rail"
       aria-label="Run state"
-      className="sticky top-3 hidden max-h-[calc(100dvh-2rem)] flex-col gap-3 self-start overflow-y-auto xl:flex"
+      className="sticky hidden flex-col gap-3 self-start overflow-y-auto xl:flex top-[calc(var(--run-header-h,0px)+0.75rem)] max-h-[calc(100dvh-var(--run-header-h,0px)-1.5rem)] [scrollbar-width:thin]"
     >
       <PhaseSection ledger={ledger} />
       <CouncilSection ledger={ledger} />
