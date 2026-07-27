@@ -68,6 +68,7 @@ const GOLDEN_FIXTURES = [
   // Codex 0.144.6 generated schema, plus the current upstream spelling.
   'collab-agent-tool-call',
   'collab-tool-call',
+  'sub-agent-activity',
 ] as const;
 
 describe('codex → v2 golden fixtures', () => {
@@ -743,6 +744,22 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
     });
     expect(v2).toContainEqual({ type: 'usage.updated', usage: { input: 1200, output: 300, total: 1500 } });
     expect(v2).toContainEqual({ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' });
+  }, 30_000);
+
+  it('normalizes collaboration telemetry while preserving the legacy stream', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const v1: AgentEvent[] = [];
+    const v2: UiEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:subagent-activity', cwd: process.cwd() },
+      (event) => v1.push(event),
+      { autoEndAfterFirstTurn: true, onUiEvent: (event) => v2.push(event) },
+    );
+    await session.result;
+    const tools = v1.flatMap((event) => event.type === 'tool-call' ? [event.tool] : []);
+    expect(tools).toContain('subAgentActivity');
+    expect(tools).toContain('collabAgentToolCall');
+    expect(v2.filter((event) => event.type === 'item.started' && event.item.kind === 'tool' && event.item.toolKind === 'task')).toHaveLength(1);
   }, 30_000);
 
   it('keeps autonomous full-access permissions when resuming a thread', async () => {

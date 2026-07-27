@@ -132,6 +132,15 @@ describe('reduceThread — item ids across workflow steps', () => {
 })
 
 describe('reduceThread — v1-only fallback (pre-v2 transcripts)', () => {
+  it('hides Codex collaboration bookkeeping that protocol v2 renders as grouped agents', () => {
+    const { turns } = reduceThread([
+      line(1, 'tool-call', { id: 'activity', tool: 'subAgentActivity', input: { kind: 'started' } }),
+      line(2, 'tool-call', { id: 'wait', tool: 'collabAgentToolCall', input: { tool: 'wait' } }),
+      line(3, 'tool-call', { id: 'wait-new', tool: 'collabToolCall', input: { tool: 'wait' } }),
+    ])
+    expect(turns.flatMap((turn) => turn.items)).toEqual([])
+  })
+
   // Verbatim shapes from a real pre-R2 transcript (.ai/cezar/runs/2d012907….ndjson), trimmed.
   const v1Only: RunEvent[] = [
     line(1, 'lifecycle', { message: 'run started — workflow "quick-task" (runner: claude)' }),

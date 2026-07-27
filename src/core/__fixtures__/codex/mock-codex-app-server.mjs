@@ -47,6 +47,14 @@ rl.on('line', (line) => {
     emit({ id: msg.id, result: { turn: { id: 'turn_mock_1' } } });
     emit({ method: 'turn/started', params: { turn: { id: 'turn_mock_1', status: 'inProgress', items: [] } } });
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
+    if (turnText.includes('mock:subagent-activity')) {
+      emit({ method: 'item/started', params: { item: { type: 'subAgentActivity', id: 'activity_1', kind: 'started', agentThreadId: 'th_child', agentPath: '/root/scope_review' } } });
+      emit({ method: 'item/completed', params: { item: { type: 'subAgentActivity', id: 'activity_1', kind: 'started', agentThreadId: 'th_child', agentPath: '/root/scope_review' } } });
+      emit({ method: 'item/started', params: { item: { type: 'collabAgentToolCall', id: 'wait_1', tool: 'wait', status: 'inProgress', receiverThreadIds: [] } } });
+      emit({ method: 'item/completed', params: { item: { type: 'collabAgentToolCall', id: 'wait_1', tool: 'wait', status: 'completed', receiverThreadIds: [] } } });
+      emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } });
+      return;
+    }
     if (process.env.MOCK_CODEX_ASK === '1' || turnText.includes('mock:native-codex-ask')) {
       const questions = turnText.includes('multi free text')
         ? [{ id: 'first', header: 'First', question: 'First choice?', isOther: true, isSecret: false,
