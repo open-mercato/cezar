@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -681,23 +681,43 @@ export function isNpxExecStart(execStart: string): boolean {
  * directly).
  */
 export function refreshNpxCacheForRedeploy(ctx: InstallContext, execStart: string): void {
-  if (!isNpxExecStart(execStart)) return; // checkout / global bin — nothing cached to invalidate
+  if (!isNpxExecStart(execStart)) return;
   const dir = npxCacheDir();
   if (ctx.dryRun) {
     ctx.ui.info(`DRY RUN — would clear cached ${OFFICIAL_CLI_PKG} builds under ${dir} so npx refetches the latest.`);
     return;
   }
-  let cleared = 0;
+
+  let entries: string[];
   try {
-    for (const entry of readdirSync(dir)) {
-      const pkgDir = join(dir, entry);
-      if (existsSync(join(pkgDir, 'node_modules', OFFICIAL_CLI_PKG))) {
-        rmSync(pkgDir, { recursive: true, force: true });
-        cleared++;
-      }
+    entries = readdirSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      ctx.ui.info(`No cached ${OFFICIAL_CLI_PKG} npx build found — the restart will fetch the latest published version.`);
+      return;
     }
-  } catch {
-    // No _npx dir (or unreadable) — the next npx launch fetches latest anyway.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new StepAborted(`cannot inspect the npx cache at ${dir}: ${message} — the service was not restarted`);
+  }
+
+  let cleared = 0;
+  for (const entry of entries) {
+    const pkgDir = join(dir, entry);
+    const packageDir = join(pkgDir, 'node_modules', OFFICIAL_CLI_PKG);
+    try {
+      statSync(packageDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new StepAborted(`cannot inspect the npx cache entry at ${packageDir}: ${message} — the service was not restarted`);
+    }
+    try {
+      rmSync(pkgDir, { recursive: true, force: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new StepAborted(`cannot remove the cached ${OFFICIAL_CLI_PKG} build at ${pkgDir}: ${message} — the service was not restarted`);
+    }
+    cleared++;
   }
   ctx.ui.info(
     cleared > 0

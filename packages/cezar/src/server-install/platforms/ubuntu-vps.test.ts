@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import {
   isNpxExecStart,
   nginxVhost,
@@ -288,30 +287,27 @@ describe('isNpxExecStart (#696)', () => {
 });
 
 describe('ubuntu-vps redeploy npx-cache refresh (#696)', () => {
-  // A UI that records info() lines so we can assert what the deploy reported.
   function recordingCtx(execStart: string) {
     const infos: string[] = [];
     const runner: Runner = {
-      // `systemctl show … -p ExecStart` returns the unit's launch form; every
-      // other systemctl call (restart/is-active) is a no-op success.
-      capture: async (_p, args) =>
+      capture: async (_program, args) =>
         args.includes('ExecStart') ? { code: 0, stdout: execStart, stderr: '' } : { code: 0, stdout: '', stderr: '' },
       interactive: async () => 0,
     };
-    const ui = { ...createAutoUi(), info: (m: string) => infos.push(m) } as Ui;
+    const ui = { ...createAutoUi(), info: (message: string) => infos.push(message) } as Ui;
     return { ctx: ctxWith({ dryRun: true, runner, ui }), infos };
   }
 
   it('reports clearing the npx cache before restarting an npx-based unit', async () => {
     const { ctx, infos } = recordingCtx('/n/npx --yes cezar-cli serve --no-open --port 4321');
     await ubuntuVps.redeploy!(ctx);
-    expect(infos.some((m) => /clear cached cezar-cli|npx refetch/i.test(m))).toBe(true);
+    expect(infos.some((message) => /clear cached cezar-cli|npx refetch/i.test(message))).toBe(true);
   });
 
   it('does NOT touch the npx cache for a checkout-based unit', async () => {
     const { ctx, infos } = recordingCtx('/usr/bin/node /home/cezar/cezar/dist/index.js serve --no-open --port 4321');
     await ubuntuVps.redeploy!(ctx);
-    expect(infos.some((m) => /npx/i.test(m))).toBe(false);
+    expect(infos.some((message) => /npx/i.test(message))).toBe(false);
   });
 
   it('really deletes only the cezar-cli entries in the npx cache', () => {
@@ -319,18 +315,41 @@ describe('ubuntu-vps redeploy npx-cache refresh (#696)', () => {
     const prev = process.env.npm_config_cache;
     process.env.npm_config_cache = cache;
     try {
-      // one cezar-cli cache entry (must be removed) + one unrelated (kept)
       mkdirSync(join(cache, '_npx', 'aaaa', 'node_modules', 'cezar-cli'), { recursive: true });
       writeFileSync(join(cache, '_npx', 'aaaa', 'node_modules', 'cezar-cli', 'x'), '');
       mkdirSync(join(cache, '_npx', 'bbbb', 'node_modules', 'prettier'), { recursive: true });
 
       refreshNpxCacheForRedeploy(ctxWith({}), '/n/npx --yes cezar-cli serve --port 4321');
 
-      expect(existsSync(join(cache, '_npx', 'aaaa'))).toBe(false); // cezar-cli entry gone
-      expect(existsSync(join(cache, '_npx', 'bbbb'))).toBe(true); // unrelated entry kept
+      expect(existsSync(join(cache, '_npx', 'aaaa'))).toBe(false);
+      expect(existsSync(join(cache, '_npx', 'bbbb'))).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.npm_config_cache;
       else process.env.npm_config_cache = prev;
+      rmSync(cache, { recursive: true, force: true });
+    }
+  });
+
+  it('aborts before restart when the npx cache cannot be read', async () => {
+    const cache = mkdtempSync(join(tmpdir(), 'cez-npx-'));
+    const previousCache = process.env.npm_config_cache;
+    process.env.npm_config_cache = cache;
+    writeFileSync(join(cache, '_npx'), 'not a directory');
+    const capture = vi.fn(async () => ({
+      code: 0,
+      stdout: '/n/npx --yes cezar-cli serve --port 4321',
+      stderr: '',
+    }));
+    const interactive = vi.fn(async () => 0);
+
+    try {
+      await expect(ubuntuVps.redeploy!(ctxWith({ runner: { capture, interactive } }))).rejects.toThrow(
+        /cannot inspect the npx cache.*service was not restarted/,
+      );
+      expect(interactive).not.toHaveBeenCalled();
+    } finally {
+      if (previousCache === undefined) delete process.env.npm_config_cache;
+      else process.env.npm_config_cache = previousCache;
       rmSync(cache, { recursive: true, force: true });
     }
   });
