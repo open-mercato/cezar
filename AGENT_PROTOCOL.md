@@ -10,7 +10,7 @@ It is the concise, load-bearing contract. The deep design record lives in
 `.ai/analysis/cockpit-ui-redesign/agent-event-protocols.md` (§7 schema, §7.1 the
 per-backend mapping tables) and the spec `.ai/specs/2026-07-14-cockpit-ui-redesign.md`
 (§"Normalized agent-event protocol v2", §"Backend parity requirement"). The code
-in `src/core/` cites those two by section; this file cites the code. When the two
+in `packages/cezar/src/core/` cites those two by section; this file cites the code. When the two
 disagree, **the code wins** — the golden fixtures and the parity test are
 executable, the prose is not.
 
@@ -25,11 +25,11 @@ The protocol has **two layers that ship together**:
 
 ---
 
-## 1. The runner seam (`src/core/agent-runner.ts`)
+## 1. The runner seam (`packages/cezar/src/core/agent-runner.ts`)
 
 Every backend is one class implementing `AgentRunner`, constructed through the
-single factory `createRunner(backend)` in `src/core/runner-factory.ts`. Nothing
-outside `src/core/` should ever `new` a concrete runner or branch on the backend
+single factory `createRunner(backend)` in `packages/cezar/src/core/runner-factory.ts`. Nothing
+outside `packages/cezar/src/core/` should ever `new` a concrete runner or branch on the backend
 id — that is the whole point of the seam.
 
 ### Identity
@@ -152,11 +152,11 @@ does not change backend parity or expose the raw error.
 
 ---
 
-## 3. v2 `UiEvent` — the normalized protocol (`src/core/ui-events.ts`)
+## 3. v2 `UiEvent` — the normalized protocol (`packages/cezar/src/core/ui-events.ts`)
 
 Pure vocabulary: no runtime imports, no runner coupling. Mirrored into the
-cockpit bundle at `web/app/src/protocol/ui-events.ts`; the mirror is **checked**,
-not trusted — `src/server/api-types.test.ts` asserts type-exactness between the
+api-client package at `packages/api-client/src/protocol/ui-events.ts`; the mirror is **checked**,
+not trusted — `packages/cezar/src/server/api-types.test.ts` asserts type-exactness between the
 two, so drift fails `npm run typecheck` (the gate) rather than the UI at runtime.
 
 ### Design rules baked in
@@ -226,7 +226,7 @@ backend-neutral: the agent asks a structured
 multiple-choice question by ending a turn with a `CEZ:ASK <json>` control marker
 (a sibling of `CEZ:DONE` / `CEZ:MONITORING`); the RunManager detects it on the
 *assembled* turn text — uniform across claude, codex and opencode with no mapper
-work — validates the payload (`src/core/ask.ts`, modeled on Claude Code's
+work — validates the payload (`packages/cezar/src/core/ask.ts`, modeled on Claude Code's
 `AskUserQuestion`: 1–4 questions, 2–4 options each, `header` ≤12 chars), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
 chips; the user's pick (or a free-form reply) rides the normal reply seam
@@ -248,7 +248,7 @@ standalone truth.
 
 ## 4. Per-backend mapping (summary)
 
-Each backend has a mapper (`src/core/<backend>-ui-mapper.ts`) turning its wire
+Each backend has a mapper (`packages/cezar/src/core/<backend>-ui-mapper.ts`) turning its wire
 transport into `UiEvent`s. The authoritative table is
 `agent-event-protocols.md` §7.1; the load-bearing rows:
 
@@ -267,7 +267,7 @@ transport into `UiEvent`s. The authoritative table is
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
 partial or malformed. A mapper **must never throw**: unparseable NDJSON lines are
-skipped (`src/core/ndjson.ts` + the mapper), unknown message/content types
+skipped (`packages/cezar/src/core/ndjson.ts` + the mapper), unknown message/content types
 produce **no events**, and malformed entries in a `plan.updated` payload are
 filtered out (a non-array plan emits no plan event at all). Mapper state is
 **explicit and immutable** — each mapper's map function takes `(frame, state)`
@@ -278,7 +278,7 @@ messages" tests).
 
 ---
 
-## 5. The tool display model (`src/core/tool-display.ts`)
+## 5. The tool display model (`packages/cezar/src/core/tool-display.ts`)
 
 `toolDisplay(name, input)` turns a backend tool name + raw input into
 `{ toolKind, title, subtitle? }`, computed **once** in the protocol layer (never
@@ -290,7 +290,7 @@ heuristic subtitle. `mcp__server__tool` names collapse to `server.tool`.
 
 ---
 
-## 6. Backend parity — the hard rule (`src/core/ui-parity.test.ts`)
+## 6. Backend parity — the hard rule (`packages/cezar/src/core/ui-parity.test.ts`)
 
 > Every capability in the parity matrix MUST be emitted by **all three**
 > backends, so the GUI degrades **per-capability, never per-backend**.
@@ -317,11 +317,11 @@ A new backend is not "done" until it produces every row.
 
 ## 7. The golden-fixture testing contract
 
-Each backend has, under `src/core/__fixtures__/<backend>/`:
+Each backend has, under `packages/cezar/src/core/__fixtures__/<backend>/`:
 
 - `<name>.ndjson` — a **wire-faithful** transcript of the backend's real output
   (shapes from `agent-event-protocols.md`, cross-checked against the backend's
-  actual CLI / the dry-run mock, e.g. `scripts/mock-claude.mjs`).
+  actual CLI / the dry-run mock, e.g. `packages/cezar/scripts/mock-claude.mjs`).
 - `<name>.expected.json` — the **exact** `UiEvent[]` the mapper must produce for
   that transcript.
 
@@ -355,27 +355,27 @@ these events get persisted as NDJSON), and asserts `toStrictEqual` against the
 ## 9. Adding a new runner (the #387 `pi` checklist)
 
 A new backend is a **single class behind the seam** plus its mapper, fixtures and
-the parity row — never backend-specific types leaking past `src/core/`. PR #387
+the parity row — never backend-specific types leaking past `packages/cezar/src/core/`. PR #387
 adds `pi` and enumerates every place the `'claude' | 'codex' | 'opencode'` union
 is duplicated; that list is the concrete map. To be first-class:
 
-1. **Runner** — `src/core/pi-runner.ts` implementing `AgentRunner` /
+1. **Runner** — `packages/cezar/src/core/pi-runner.ts` implementing `AgentRunner` /
    `AgentSession` (persistent process; `pid`; `sendMessage`/`end`/`interrupt`;
    `result`). Honor `AgentRunSpec` uniformly — use `prependSystemPrompt` if the
    backend has no native system-prompt channel.
 2. **Factory** — add the id to `RunnerId` / `RUNNER_IDS` (`agent-runner.ts`) and
    a `case` in `createRunner` (`runner-factory.ts`). Add `UiBackend` in
-   `ui-events.ts` **and its mirror** `web/app/src/protocol/ui-events.ts` (the
+   `ui-events.ts` **and its mirror** `packages/api-client/src/protocol/ui-events.ts` (the
    type-exactness test guards drift).
 3. **Detection** — a `probePi()` in `backend-detect.ts` plus the `BackendCheck`
    name union; degrade gracefully when the CLI is absent (never fail boot). If it
    needs a binary override, add `CEZ_PI_BIN` — and per AGENTS.md's zero-config
    rule, document any new `CEZ_*` var in `.env.example` in the same commit.
-4. **Mapper** — `src/core/pi-ui-mapper.ts` emitting the full v2 `UiEvent` stream
+4. **Mapper** — `packages/cezar/src/core/pi-ui-mapper.ts` emitting the full v2 `UiEvent` stream
    **alongside** v1. Never throw on malformed input; explicit immutable state.
 5. **v1 alongside v2** — wire `SessionOptions.onUiEvent`; keep the v1
    `AgentEvent` stream flowing unchanged.
-6. **Golden fixtures** — `src/core/__fixtures__/pi/*.ndjson` + `*.expected.json`,
+6. **Golden fixtures** — `packages/cezar/src/core/__fixtures__/pi/*.ndjson` + `*.expected.json`,
    wire-faithful and citing their upstream source, covering **every** parity
    matrix capability (§6), and a `pi-ui-mapper.test.ts` replaying them.
 7. **Parity** — add `pi` to `BACKENDS` in `ui-parity.test.ts`; every capability

@@ -64,7 +64,7 @@ fi
 
 # ---- 3. run the specs -------------------------------------------------------
 cd "$REPO_ROOT"
-if npx vitest run --config web/app/e2e/vitest.config.ts; then
+if npx vitest run --config packages/web/e2e/vitest.config.ts; then
   echo "TEST_E2E_STATUS=passed"
   exit 0
 fi

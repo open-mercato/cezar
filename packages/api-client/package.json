@@ -1,0 +1,43 @@
+{
+  "name": "@open-mercato/cezar-api-client",
+  "version": "0.9.1",
+  "description": "Typed client and shared contract types for the cezar cockpit HTTP API.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-mercato/cezar",
+    "directory": "web/api-client"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
