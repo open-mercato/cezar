@@ -46,6 +46,8 @@ Ensure every task-start and continuation surface honors the runner shown or expl
 
 ## Progress
 
+PR: #699
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Correct runner resolution
@@ -61,4 +63,4 @@ Ensure every task-start and continuation surface honors the runner shown or expl
 
 ### Phase 3: Validate and review
 
-- [ ] 3.1 Run the configured validation gate, complete the authoritative PR review/autofix pass, and record verification evidence.
+- [x] 3.1 Run the configured validation gate, complete the authoritative PR review/autofix pass, and record verification evidence. — 9a0a2d15
