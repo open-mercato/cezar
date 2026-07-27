@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import {
   createLedger,
   ledgerPath,
   loadLedger,
+  readLedger,
   saveLedger,
   startPhase,
   finishPhase,
@@ -38,7 +39,7 @@ describe('harness ledger', () => {
     saveLedger(dataDir, runId, ledger);
     const loaded = loadLedger(dataDir, runId);
     expect(loaded).not.toBeNull();
-    expect(loaded?.version).toBe(1);
+    expect(loaded?.version).toBe(2);
     expect(loaded?.workflow).toBe('harness-fix-issue');
     expect(loaded?.requestedProfile).toBe('standard');
     expect(loaded?.effectiveProfile).toBe('standard');
@@ -51,7 +52,7 @@ describe('harness ledger', () => {
     expect(loadLedger(dataDir, 'nope')).toBeNull();
   });
 
-  it('returns null for a corrupt ledger instead of throwing', () => {
+  it('distinguishes a corrupt ledger from an absent ledger without changing its bytes', () => {
     saveLedger(dataDir, runId, createLedger({
       workflow: 'harness-fix-issue',
       requestedProfile: 'standard',
@@ -59,6 +60,50 @@ describe('harness ledger', () => {
     }));
     writeFileSync(ledgerPath(dataDir, runId), '{ not json', 'utf8');
     expect(loadLedger(dataDir, runId)).toBeNull();
+    const read = readLedger(dataDir, runId);
+    expect(read.status).toBe('corrupt');
+    expect(readFileSync(ledgerPath(dataDir, runId), 'utf8')).toBe('{ not json');
+  });
+
+  it('refuses a future ledger version instead of treating it as a missing ledger', () => {
+    const path = ledgerPath(dataDir, runId);
+    mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 999, workflow: 'harness-fix-issue' }), 'utf8');
+
+    const read = readLedger(dataDir, runId);
+
+    expect(read).toMatchObject({ status: 'unsupported', version: 999 });
+    expect(readFileSync(path, 'utf8')).toContain('"version":999');
+  });
+
+  it('migrates a valid v1 ledger in memory without rewriting it on read', () => {
+    const path = ledgerPath(dataDir, runId);
+    mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    const v1 = {
+      version: 1,
+      workflow: 'harness-fix-issue',
+      requestedProfile: 'standard',
+      effectiveProfile: 'standard',
+      subject: { kind: 'brief', text: 'x' },
+      phases: [],
+      models: [],
+      councils: [],
+      packets: [],
+      validation: [],
+      loops: { fixRounds: 0, maxFixRounds: 3 },
+      stage: { status: 'pending' },
+      decisions: [],
+    };
+    writeFileSync(path, JSON.stringify(v1), 'utf8');
+
+    const read = readLedger(dataDir, runId);
+
+    expect(read.status).toBe('valid');
+    if (read.status !== 'valid') throw new Error('expected valid ledger');
+    expect(read.migrated).toBe(true);
+    expect(read.ledger.version).toBe(2);
+    expect(read.ledger.invocations).toEqual([]);
+    expect(readFileSync(path, 'utf8')).toBe(JSON.stringify(v1));
   });
 
   it('writes atomically — no .tmp file remains after save', () => {

@@ -401,7 +401,6 @@ describe('picker data flows', () => {
     writeDraft({
       text: '', source: null, runner: 'codex', model: 'claude-opus-4-8', variants: 1,
       planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
-      harnessProfile: null,
       composerMode: null,
       harnessMode: null,
   harnessRoles: null,
@@ -698,7 +697,7 @@ describe('submit', () => {
     writeDraft({
       text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, model: null,
       variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
-      harnessProfile: null, composerMode: null, harnessMode: null, harnessRoles: null,
+      composerMode: null, harnessMode: null, harnessRoles: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()

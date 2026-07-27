@@ -1,0 +1,133 @@
+/* Cezar cockpit tokens, copied from web/app/src/styles/index.css so these mockups
+ * render in the product's own design system. Values only — no build step. */
+
+:root {
+  color-scheme: dark;
+  --background: #0d0d0d;
+  --foreground: #ffffff;
+  --card: #171717;
+  --card-2: #1c1c1c;
+  --sidebar: #171717;
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --soft-foreground: #7b7b7b;
+  --border: #262626;
+  --input: #262626;
+  --contrast: #ebebeb;
+  --contrast-foreground: #171717;
+
+  --primary: #a8f372;
+  --primary-foreground: #0d0d0d;
+  --violet: #8f86e8;
+  --ring: #a8f372;
+
+  --danger: #ef4444;
+  --success: #10b981;
+  --pending: #fbbf24;
+
+  --diff-add-bg: rgba(16, 185, 129, 0.1);
+  --diff-del-bg: rgba(239, 68, 68, 0.1);
+  --grad: linear-gradient(135deg, #b4f372 12%, #eefb63 58%, #bc9aff 100%);
+
+  --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --shadow-xs: 0 1px 2px 0 rgba(10, 13, 20, 0.03);
+  --shadow-md: 0 16px 32px -12px rgba(14, 18, 27, 0.1);
+  --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.45);
+
+  /* mockup-only: the ONE shell width token this proposal introduces (finding A1) */
+  --shell: 1240px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font: 400 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+code, .mono { font-family: var(--mono); }
+
+/* ---- shared shell chrome ---- */
+
+.app { display: grid; grid-template-columns: 264px 1fr; min-height: 100vh; }
+
+.side {
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; padding: 4px 6px; }
+.brand .logo { width: 26px; height: 26px; border-radius: var(--radius-sm); background: var(--grad); }
+.newtask {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--card-2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 10px 12px; font-weight: 600; font-size: 13px;
+}
+.newtask kbd {
+  margin-left: auto; font: 600 10.5px var(--mono); color: var(--muted-foreground);
+  border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px;
+}
+.proj { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius); font-size: 13px; color: var(--muted-foreground); }
+.proj.active { background: var(--muted); color: var(--foreground); font-weight: 600; }
+.proj .branch { margin-left: auto; font: 500 10.5px var(--mono); color: var(--soft-foreground); }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.ok { background: var(--success); }
+.dot.run { background: var(--pending); }
+.dot.bad { background: var(--danger); }
+.dot.idle { background: var(--soft-foreground); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: 999px;
+  font-size: 11.5px; font-weight: 500; color: var(--muted-foreground); white-space: nowrap;
+}
+.pill.solid { background: var(--muted); }
+.pill.warn { border-color: rgba(239,68,68,.4); background: rgba(239,68,68,.08); color: #fca5a5; }
+.pill.good { border-color: rgba(16,185,129,.4); background: rgba(16,185,129,.08); color: #6ee7b7; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: transparent; color: var(--foreground);
+  font: 600 12.5px var(--sans); white-space: nowrap;
+}
+.btn.ghost { border-color: transparent; color: var(--muted-foreground); }
+.btn.primary { background: var(--contrast); color: var(--contrast-foreground); border-color: var(--contrast); }
+.btn.accent { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); }
+.card > .hd { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+.card > .hd h2 { margin: 0; font-size: 13px; font-weight: 650; }
+
+.eyebrow { font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--soft-foreground); }
+.soft { color: var(--soft-foreground); }
+.mut { color: var(--muted-foreground); }
+.num { font-variant-numeric: tabular-nums; }
+
+.note {
+  position: fixed; right: 12px; bottom: 10px; z-index: 40;
+  font-size: 10.5px; color: var(--soft-foreground);
+  background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px;
+}
+
+/* callouts that annotate what changed vs. today */
+.fixnote {
+  display: flex; gap: 8px; align-items: flex-start;
+  border-left: 2px solid var(--primary); background: rgba(168,243,114,.05);
+  padding: 7px 11px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 11.5px; color: var(--muted-foreground);
+}
+.fixnote b { color: var(--primary); font-weight: 650; }

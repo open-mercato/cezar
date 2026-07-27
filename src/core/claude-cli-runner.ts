@@ -19,6 +19,10 @@ import { buildChildEnv } from './agent-env.js';
 import { costWeightedTokens, type RawUsage } from './usage.js';
 import { readNdjson } from './ndjson.js';
 import {
+  AGENT_PROCESS_DETACHED,
+  terminateAgentProcessTree,
+} from './process-tree.js';
+import {
   claudeTurnStarted,
   createClaudeUiState,
   mapClaudeMessage,
@@ -104,6 +108,7 @@ export class ClaudeCliRunner implements AgentRunner {
       child = nodeSpawn(this.bin, args, {
         cwd: spec.cwd,
         env: buildChildEnv({ backend: this.backend, extraEnv: { ...spec.env, ...effortEnv } }),
+        detached: AGENT_PROCESS_DETACHED,
       });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
@@ -117,6 +122,20 @@ export class ClaudeCliRunner implements AgentRunner {
      *  the resulting non-zero exit is clean closure, not a failure (the
      *  turn's result was already delivered before stdin closed). */
     let eofKilled = false;
+
+    // A failed pipe write does NOT throw at the call site — libuv reports it
+    // asynchronously as an 'error' event, and an EventEmitter 'error' with no
+    // listener is an uncaught exception. The RunManager shares this process with
+    // the HTTP server and there is no process-level net, so a CLI that exits
+    // while a turn is still buffered (cancel, the wall-clock kill, an expired
+    // login) would take the cockpit and every concurrent run down with it. The
+    // try/catch around `write()` cannot see this; only a listener can.
+    child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+      stdinOpen = false;
+      // EPIPE just means the CLI is gone — the exit/close path owns settlement.
+      if (err.code === 'EPIPE') return;
+      onEvent?.({ type: 'note', message: `claude: stdin error: ${err.message}` });
+    });
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -170,22 +189,15 @@ export class ClaudeCliRunner implements AgentRunner {
       eofTermTimer = setTimeout(() => {
         if (child.exitCode == null && !child.killed) {
           eofKilled = true;
-          child.kill('SIGTERM');
+          eofKillTimer = terminateAgentProcessTree(child, EOF_KILL_GRACE_MS);
         }
-        eofKillTimer = setTimeout(() => {
-          if (child.exitCode == null && !child.killed) {
-            eofKilled = true;
-            child.kill('SIGKILL');
-          }
-        }, EOF_KILL_GRACE_MS);
-        eofKillTimer.unref?.();
       }, EOF_TERM_GRACE_MS);
       eofTermTimer.unref?.();
     };
 
     const interrupt = (): void => {
       stdinOpen = false;
-      if (!child.killed) child.kill('SIGTERM');
+      if (!child.killed) terminateAgentProcessTree(child, KILL_GRACE_MS);
     };
 
     // Seed the first user message — the same path every follow-up takes.
@@ -209,17 +221,12 @@ export class ClaudeCliRunner implements AgentRunner {
     // Optional wall-clock kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
     let timedOut = false;
-    let killTimer: NodeJS.Timeout | undefined;
     let deadline: NodeJS.Timeout | undefined;
     if (limitMs > 0) {
       deadline = setTimeout(() => {
         timedOut = true;
         interrupt();
         child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
       }, limitMs);
       deadline.unref?.();
     }
@@ -269,7 +276,6 @@ export class ClaudeCliRunner implements AgentRunner {
         if (!timedOut) throw err;
       } finally {
         if (deadline) clearTimeout(deadline);
-        if (killTimer) clearTimeout(killTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
       }
@@ -324,6 +330,7 @@ export class ClaudeCliRunner implements AgentRunner {
       end,
       interrupt,
       pid: child.pid,
+      processGroup: true,
       get open() {
         return stdinOpen;
       },

@@ -97,6 +97,248 @@ const injectRequires = (skillMd, names) => {
   return `${skillMd.slice(0, close)}\nrequires: [${names.join(', ')}]${skillMd.slice(close)}`;
 };
 
+/**
+ * Cezar-specific hardening applied while generating the mirrored harness. Keep these as narrow,
+ * checked transforms: a changed upstream anchor makes regeneration fail instead of silently
+ * dropping a safety boundary. The source checkout remains pristine and MANIFEST provenance stays
+ * truthful about the input commit.
+ */
+const replaceRequired = (text, before, after, label) => {
+  if (!text.includes(before)) throw new Error(`cannot apply cezar harness patch (${label}): upstream anchor changed`);
+  return text.replace(before, after);
+};
+
+const patchCezarHarnessFile = (skill, relativePath, input) => {
+  if (skill !== 'cez-harness') return input;
+  if (relativePath === 'hooks/freeze-tests.sh') {
+    return replaceRequired(
+      input,
+      "grep -qE '(\\.spec\\.|\\.test\\.|/__tests__/|/__integration__/)'",
+      "grep -qE '(\\.spec\\.|\\.test\\.|/__tests__/|/__integration__/|/(test|tests|spec)/|/(test_[^/]+|[^/]+_test)\\.[^/]+$)'",
+      'language-agnostic test freeze',
+    );
+  }
+  if (relativePath !== 'scripts/harness.mjs') return input;
+  let text = replaceRequired(
+    input,
+    'const LEDGER_OUTPUT_LIMIT = 20000',
+    'const LEDGER_OUTPUT_LIMIT = 20000\nconst MODEL_OUTPUT_LIMIT = 2_000_000',
+    'model output cap constant',
+  );
+  text = replaceRequired(
+    text,
+    `function extractJson(text) {
+  const trimmed = text.trim()
+  try { return JSON.parse(trimmed) } catch {}
+  for (let start = trimmed.indexOf('{'); start >= 0; start = trimmed.indexOf('{', start + 1)) {
+    for (let end = trimmed.lastIndexOf('}'); end > start; end = trimmed.lastIndexOf('}', end - 1)) {
+      try { return JSON.parse(trimmed.slice(start, end + 1)) } catch {}
+    }
+  }
+  throw new Error('No valid JSON object in model output')
+}`,
+    `function extractJson(text) {
+  const trimmed = text.trim()
+  if (trimmed.length > MODEL_OUTPUT_LIMIT) throw new Error(\`Model output exceeds \${MODEL_OUTPUT_LIMIT} bytes\`)
+  try { return JSON.parse(trimmed) } catch {}
+  let start = -1
+  let depth = 0
+  let quoted = false
+  let escaped = false
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (char === '\\\\') escaped = true
+      else if (char === '"') quoted = false
+      continue
+    }
+    if (char === '"') {
+      quoted = true
+      continue
+    }
+    if (char === '{') {
+      if (depth === 0) start = index
+      depth += 1
+      continue
+    }
+    if (char !== '}' || depth === 0) continue
+    depth -= 1
+    if (depth !== 0 || start < 0) continue
+    try { return JSON.parse(trimmed.slice(start, index + 1)) } catch {}
+    start = -1
+  }
+  throw new Error('No valid JSON object in model output')
+}`,
+    'linear bounded JSON extraction',
+  );
+  text = replaceRequired(
+    text,
+    `    let stderr = ''
+    let timedOut = false
+    let settled = false`,
+    `    let stderr = ''
+    let outputOverflow = false
+    let timedOut = false
+    let settled = false`,
+    'model output overflow state',
+  );
+  text = replaceRequired(
+    text,
+    `    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })`,
+    `    const collect = (target, chunk) => {
+      const current = target === 'stdout' ? stdout : stderr
+      const incoming = chunk.toString()
+      const remaining = MODEL_OUTPUT_LIMIT - current.length
+      if (remaining <= 0 || incoming.length > remaining) outputOverflow = true
+      const next = current + incoming.slice(0, Math.max(0, remaining))
+      if (target === 'stdout') stdout = next
+      else stderr = next
+    }
+    child.stdout.on('data', (chunk) => collect('stdout', chunk))
+    child.stderr.on('data', (chunk) => collect('stderr', chunk))`,
+    'bounded model output collection',
+  );
+  text = replaceRequired(
+    text,
+    `      resolvePromise({ code, stdout, stderr, error: null, timedOut, durationMs: Date.now() - started })`,
+    `      resolvePromise({
+        code,
+        stdout,
+        stderr,
+        error: outputOverflow ? new Error(\`Model output exceeds \${MODEL_OUTPUT_LIMIT} bytes\`) : null,
+        timedOut,
+        durationMs: Date.now() - started
+      })`,
+    'model output overflow result',
+  );
+  text = replaceRequired(
+    text,
+    `function sanitizedCliEnvironment(additions) {
+  return { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !SECRET_ENV_PATTERN.test(key))), ...additions }
+}`,
+    `const SAFE_CLI_ENV_NAMES = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'COLORTERM', 'NO_COLOR',
+  'FORCE_COLOR', 'CI', 'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'HTTP_PROXY', 'HTTPS_PROXY',
+  'NO_PROXY', 'ALL_PROXY', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE',
+  'SSL_CERT_DIR'
+])
+
+function sanitizedCliEnvironment(additions, trustedNames = []) {
+  const names = new Set([...SAFE_CLI_ENV_NAMES, ...trustedNames])
+  return {
+    ...Object.fromEntries(
+      [...names]
+        .filter((key) => /^[A-Z_][A-Z0-9_]*$/.test(key) && process.env[key] !== undefined)
+        .map((key) => [key, process.env[key]])
+    ),
+    ...additions
+  }
+}`,
+    'explicit subprocess environment allowlist',
+  );
+  text = replaceRequired(
+    text,
+    `import { createHash } from 'node:crypto'`,
+    `import { createHash, randomUUID } from 'node:crypto'`,
+    'atomic packet ledger nonce',
+  );
+  text = replaceRequired(
+    text,
+    `function savePacketLedger(ledgerPath, ledger) {
+  mkdirSync(dirname(ledgerPath), { recursive: true })
+  writeFileSync(ledgerPath, \`\${JSON.stringify(ledger, null, 2)}\\n\`)
+}`,
+    `function savePacketLedger(ledgerPath, ledger) {
+  mkdirSync(dirname(ledgerPath), { recursive: true })
+  const temp = \`\${ledgerPath}.\${process.pid}.\${randomUUID()}.tmp\`
+  writeFileSync(temp, \`\${JSON.stringify(ledger, null, 2)}\\n\`)
+  renameSync(temp, ledgerPath)
+}`,
+    'atomic packet ledger write',
+  );
+  text = replaceRequired(
+    text,
+    `async function runCommandReviewer(id, model, prompt, worktree, timeoutMs = null) {
+  const before = captureGitState(worktree)
+  const { result, provenance } = await runCommandAdapter(model, 'review', { worktree, prompt, timeoutMs: timeoutMs ?? undefined })
+  const after = captureGitState(worktree)
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    return { status: 'failed', durationMs: result.durationMs, error: 'reviewer changed Git refs or reflogs; reviewer commands must be read-only' }
+  }`,
+    `function captureReviewerMutationState(worktree) {
+  return {
+    git: captureGitState(worktree),
+    cached: git(['diff', '--cached', '--binary', '--no-ext-diff', '--full-index', '--'], worktree),
+    unstaged: git(['diff', '--binary', '--no-ext-diff', '--full-index', '--'], worktree),
+    untracked: git(['ls-files', '--others', '--exclude-standard'], worktree).split(/\\r?\\n/).filter(Boolean).sort()
+      .map((path) => {
+        const absolute = resolve(worktree, path)
+        const stat = lstatSync(absolute)
+        if (stat.isSymbolicLink()) return [path, sha256(\`symlink:\${readlinkSync(absolute)}\`)]
+        if (stat.isFile()) {
+          return [path, stat.size <= MODEL_OUTPUT_LIMIT
+            ? sha256(readFileSync(absolute))
+            : git(['hash-object', '--no-filters', '--', path], worktree).trim()]
+        }
+        return [path, sha256(\`mode:\${stat.mode}\`)]
+      })
+  }
+}
+
+async function runCommandReviewer(id, model, prompt, worktree, timeoutMs = null) {
+  const before = captureReviewerMutationState(worktree)
+  const { result, provenance } = await runCommandAdapter(model, 'review', { worktree, prompt, timeoutMs: timeoutMs ?? undefined })
+  const after = captureReviewerMutationState(worktree)
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    return { status: 'failed', durationMs: result.durationMs, error: 'reviewer changed the worktree, index, refs, or reflogs; reviewer commands must be read-only' }
+  }`,
+    'reviewer full mutation capture',
+  );
+  text = replaceRequired(
+    text,
+    `function workerEnvironment(additions) {
+  return sanitizedCliEnvironment({`,
+    `function workerEnvironment(additions, trustedNames = []) {
+  return sanitizedCliEnvironment({`,
+    'worker trusted environment signature',
+  );
+  text = replaceRequired(
+    text,
+    `    ...additions
+  })
+}
+
+function runProcess`,
+    `    ...additions
+  }, trustedNames)
+}
+
+function runProcess`,
+    'worker trusted environment forwarding',
+  );
+  text = replaceRequired(
+    text,
+    `      env: env === 'worker' ? workerEnvironment(additions) : sanitizedCliEnvironment(additions),`,
+    `      env: env === 'worker'
+        ? workerEnvironment(additions, [model.credentialEnv, model.binaryEnv].filter(Boolean))
+        : sanitizedCliEnvironment(additions, [model.credentialEnv, model.binaryEnv].filter(Boolean)),`,
+    'trusted command credential environment',
+  );
+  text = replaceRequired(
+    text,
+    `  const allow = new Set(paths)
+  const unexpected = stagedPaths.filter((entry) => !allow.has(entry))`,
+    `  const allowed = (entry) => paths.some((scope) => entry === scope || entry.startsWith(\`\${scope}/\`))
+  const unexpected = stagedPaths.filter((entry) => !allowed(entry))`,
+    'directory-aware final stage allowlist',
+  );
+  return text;
+};
+
 // Lift the cezar-authored skills out of the way, wipe, then put them back —
 // regeneration must never silently revert a deliberate divergence.
 const preserved = new Map();
@@ -150,6 +392,7 @@ for (const [from, to] of NAME_MAP) {
       if (!TEXT_EXT.has(extname(renamedName).toLowerCase())) continue;
       let text = rename(readFileSync(renamedPath, 'utf8'));
       if (renamedName === 'SKILL.md' && REQUIRES[to]) text = injectRequires(text, REQUIRES[to]);
+      text = patchCezarHarnessFile(to, renamedPath.slice(destDir.length + 1), text);
       writeFileSync(renamedPath, text, { mode: statSync(renamedPath).mode });
     }
   };

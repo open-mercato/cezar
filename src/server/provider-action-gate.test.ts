@@ -4,6 +4,7 @@ import type { WorkflowDef } from '../workflows/types.js';
 import {
   providerForActiveRun,
   providerForExistingRun,
+  providersRequiredByHarness,
   providersRequiredByWorkflow,
   unavailableProviderMessage,
 } from './provider-action-gate.js';
@@ -35,6 +36,42 @@ describe('provider action gate', () => {
     };
 
     expect(providersRequiredByWorkflow(workflow, 'claude')).toEqual(['claude', 'codex', 'opencode']);
+  });
+
+  it('collects every runner-backed dynamic harness role', () => {
+    expect(
+      providersRequiredByHarness(
+        {
+          roles: {
+            orchestrator: { runner: 'claude' },
+            implementer: { runner: 'codex' },
+            reviewers: [{ runner: 'opencode' }, { runner: 'harness' }],
+          },
+        },
+        undefined,
+      ),
+    ).toEqual(['claude', 'codex', 'opencode']);
+  });
+
+  it('collects command-backed providers from a configured profile', () => {
+    expect(
+      providersRequiredByHarness(
+        { profile: 'multi-optimized' },
+        {
+          models: {
+            codex: { commands: { worker: ['codex', 'exec'] } },
+            kimi: { adapter: 'preset' },
+          },
+          profiles: {
+            'multi-optimized': { workers: ['codex'], reviewers: ['kimi'] },
+          },
+        },
+      ),
+    ).toEqual(['claude', 'codex']);
+  });
+
+  it('includes the Claude host for a standard profile with no configuration', () => {
+    expect(providersRequiredByHarness({ profile: 'standard' }, undefined)).toEqual(['claude']);
   });
 
   it('reports disabled before missing credentials', () => {

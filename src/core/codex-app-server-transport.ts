@@ -1,6 +1,10 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { buildChildEnv } from './agent-env.js';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.js';
+import {
+  AGENT_PROCESS_DETACHED,
+  terminateAgentProcessTree,
+} from './process-tree.js';
 
 export interface CodexAppServerMessage {
   id?: number | string;
@@ -33,6 +37,7 @@ export function spawnCodexAppServer(
     return nodeSpawn(bin, ['app-server'], {
       cwd,
       env: buildCodexAppServerEnv(extraEnv),
+      detached: AGENT_PROCESS_DETACHED,
     });
   } catch (error) {
     throw codexSpawnError(error, bin);
@@ -44,7 +49,14 @@ export class CodexAppServerRpc {
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
 
-  constructor(readonly child: ChildProcessWithoutNullStreams) {}
+  constructor(readonly child: ChildProcessWithoutNullStreams) {
+    // Same reason as the claude runner: a failed pipe write surfaces as an
+    // asynchronous 'error' event, which is an uncaught exception — and fatal for
+    // the whole server — when nothing listens. `destroyed` and the try/catch in
+    // `write()` cover the synchronous cases only. The read/exit path already
+    // owns settlement, so swallowing here is correct.
+    this.child.stdin.on('error', () => undefined);
+  }
 
   allocateId(): number {
     return this.nextId++;
@@ -111,11 +123,9 @@ export function endCodexAppServer(
   }
   let killTimer: NodeJS.Timeout | undefined;
   const termTimer = setTimeout(() => {
-    if (child.exitCode == null && !child.killed) child.kill('SIGTERM');
-    killTimer = setTimeout(() => {
-      if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
-    }, EOF_KILL_GRACE_MS);
-    killTimer.unref?.();
+    if (child.exitCode == null && !child.killed) {
+      killTimer = terminateAgentProcessTree(child, EOF_KILL_GRACE_MS);
+    }
     onTimers?.(termTimer, killTimer);
   }, EOF_TERM_GRACE_MS);
   termTimer.unref?.();

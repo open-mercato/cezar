@@ -370,7 +370,9 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
     expect(harnessWorkflowName({ source: 'skill', ref: 'harness-fix-issue' })).toBeNull()
   })
 
-  it('offers all five profiles with standard first, under human names', () => {
+  // Display-only since 2026-07-27: the composer no longer offers a profile, but
+  // Settings -> Harness still labels whatever `agentHarness.profiles` declares.
+  it('keeps the profile label map for the settings status view', () => {
     expect(HARNESS_PROFILE_OPTIONS.map((p) => p.id)).toEqual([
       'standard',
       'optimized',
@@ -378,8 +380,6 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
       'multi-optimized',
       'high-assurance',
     ])
-    // Wire ids stay om-config protocol; labels are what people read (user
-    // feedback 2026-07-23: names must say what the mode actually does).
     expect(HARNESS_PROFILE_OPTIONS.map((p) => p.label)).toEqual([
       'Claude solo',
       'Worker offload',
@@ -406,11 +406,10 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
       harnessStartBlock({ profile: 'multi', ready: false, reason: 'not yet driven', models: [] }),
     ).toBe('not yet driven')
     expect(harnessStartBlock({ profile: 'multi', ready: false, models: [] })).toMatch(/not ready/)
-    // No probe answer yet — don't block the button on a loading state.
-    expect(harnessStartBlock(undefined)).toBeNull()
+    expect(harnessStartBlock(undefined)).toMatch(/not been verified/)
   })
 
-  it('buildCreateRunBody sends the profile for harness workflows only', () => {
+  it('buildCreateRunBody sends the role lineup for harness workflows only', () => {
     const base = {
       task: 'Fix issue #642',
       model: '',
@@ -419,23 +418,31 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
       variants: 1,
       images: [],
     }
+    const roles = {
+      orchestrator: { runner: 'claude' as const, model: 'sonnet' },
+      implementer: { runner: 'codex' as const, model: '' },
+      reviewers: [
+        { runner: 'claude' as const, model: 'opus' },
+        { runner: 'codex' as const, model: 'gpt-5.6-sol' },
+      ],
+    }
     const harness = buildCreateRunBody({
       ...base,
       source: { source: 'workflow', ref: 'harness-fix-issue' },
-      harnessProfile: 'standard',
+      harnessRoles: roles,
     })
     expect(harness.workflow).toBe('harness-fix-issue')
-    expect(harness.harness).toEqual({ profile: 'standard' })
+    expect(harness.harness).toEqual({ roles })
     const plain = buildCreateRunBody({
       ...base,
       source: { source: 'workflow', ref: 'quick-task' },
-      harnessProfile: 'standard',
+      harnessRoles: roles,
     })
     expect(plain.harness).toBeUndefined()
     const skillRun = buildCreateRunBody({
       ...base,
       source: { source: 'skill', ref: 'om-fix' },
-      harnessProfile: 'multi',
+      harnessRoles: roles,
     })
     expect(skillRun.harness).toBeUndefined()
   })
@@ -573,6 +580,52 @@ describe('harness picker grouping and presets (2026-07-24)', () => {
     expect(normalizeHarnessPresets([{ id: 'x', name: 'bad', roles: { nope: true } }, good])).toEqual([good])
     const many = Array.from({ length: HARNESS_PRESETS_MAX + 4 }, (_, i) => ({ ...good, id: `p${i}`, name: `P${i}` }))
     expect(normalizeHarnessPresets(many)).toHaveLength(HARNESS_PRESETS_MAX)
+  })
+
+  /**
+   * Review finding (2026-07-27): `isModelRefShape` accepted only the three
+   * runner ids, so a preset whose council contained a configured advisor failed
+   * the whole shape check and vanished on the very next refetch — silently,
+   * because the write path swallows errors. The draft store already accepted
+   * all four runners, so the lineup survived where the preset did not.
+   */
+  it('keeps presets whose reviewers are configured advisors', () => {
+    const withAdvisor = {
+      id: 'p2',
+      name: 'Cheap council',
+      roles: {
+        orchestrator: { runner: 'claude', model: 'sonnet' },
+        implementer: { runner: 'codex', model: '' },
+        reviewers: [
+          { runner: 'harness', model: 'deepseek-api', family: 'deepseek' },
+          { runner: 'claude', model: 'opus' },
+        ],
+      },
+    }
+
+    const [kept] = normalizeHarnessPresets([withAdvisor])
+
+    expect(kept).toEqual(withAdvisor)
+    // `family` IS the advisor's identity — dropping it makes the ref
+    // unresolvable and silently breaks the diversity rule it feeds.
+    expect(kept?.roles.reviewers[0]).toHaveProperty('family', 'deepseek')
+  })
+
+  it('still rejects an advisor ref with no provider family', () => {
+    const noFamily = {
+      id: 'p3',
+      name: 'Broken',
+      roles: {
+        orchestrator: { runner: 'claude', model: 'sonnet' },
+        implementer: { runner: 'codex', model: '' },
+        reviewers: [
+          { runner: 'harness', model: 'deepseek-api' },
+          { runner: 'claude', model: 'opus' },
+        ],
+      },
+    }
+
+    expect(normalizeHarnessPresets([noFamily])).toEqual([])
   })
 
   it('rolesEqual compares selections structurally', () => {

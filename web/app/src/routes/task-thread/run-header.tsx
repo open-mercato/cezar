@@ -75,6 +75,7 @@ import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { StepRail } from './step-rail'
+import { runShellClass } from './run-shell'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -92,17 +93,23 @@ import { useFinishRun } from './use-finish-run'
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files'
+export type RunTab = 'session' | 'review' | 'packets' | 'changes' | 'commits' | 'files'
 
 export function RunHeader({
   run,
   planTally,
   tab = 'session',
+  publishBlockedReason,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
+  publishBlockedReason?: string
 }) {
+  // Harness runs render the wide shell (they carry a run rail); everything else
+  // keeps the reading measure. One source of truth so the header can never sit
+  // at a different width than the body under it (review 2026-07-27).
+  const wide = Boolean(run.harness)
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
@@ -121,7 +128,7 @@ export function RunHeader({
       data-slot="run-header"
       className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
     >
-      <div className="mx-auto w-full max-w-[820px]">
+      <div className={runShellClass(wide)}>
         <div className="flex min-w-0 items-center gap-2">
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
@@ -136,17 +143,40 @@ export function RunHeader({
               {attention.label}
               {queuePosition !== undefined ? ` #${queuePosition}` : ''}
             </Pill>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
+            <ActionsKebab
+              run={run}
+              actions={actions}
+              publishBlockedReason={publishBlockedReason}
+              onToggleNotes={() => setNotesOpen((open) => !open)}
+            />
           </span>
         </div>
 
         <MetaRow run={run} />
         <MonitoringSchedule run={run} />
 
+        {/* Tabs and actions are separate flex children (review 2026-07-27): they
+            used to share one horizontal scroller, so at ANY width — 926px of
+            content in an 812px box even at a 1600px viewport — the last action
+            was clipped ("Archive" rendered as "Arch"). Only the tab list may
+            scroll now, and the actions are always reachable. */}
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
+          <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             Session
           </TabLink>
+          {run.harness ? (
+            <>
+              <TabLink to={`/tasks/${run.id}/review`} active={tab === 'review'}>
+                Review
+              </TabLink>
+              {run.harness.profile === 'high-assurance' ? (
+                <TabLink to={`/tasks/${run.id}/packets`} active={tab === 'packets'}>
+                  Packets
+                </TabLink>
+              ) : null}
+            </>
+          ) : null}
           <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
             Changes
           </TabLink>
@@ -157,9 +187,17 @@ export function RunHeader({
             Files
           </TabLink>
 
-          <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
+          </div>
+
+          <div data-slot="run-actions" className="ml-auto hidden shrink-0 items-center gap-1 pb-1 lg:flex">
             {flags.finish ? (
-              <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
+              <Button
+                variant="outline"
+                size="sm"
+                title={publishBlockedReason ?? finishTitle(run.status)}
+                disabled={publishBlockedReason !== undefined}
+                onClick={() => actions.finish.mutate()}
+              >
                 <CheckIcon aria-hidden="true" />
                 Finish
               </Button>
@@ -211,7 +249,14 @@ export function RunHeader({
 
         {run.steps.length > 0 ? (
           <div className="border-t border-border pt-2.5 pb-1">
-            <StepRail steps={run.steps} />
+            <StepRail
+              steps={run.steps}
+              // Conversation-first, like a desktop coding chat: terminal histories and long
+              // workflows start as a compact status line instead of consuming the viewport.
+              defaultExpanded={
+                ['running', 'waiting'].includes(run.status) && run.steps.length <= 6
+              }
+            />
           </div>
         ) : null}
 
@@ -641,22 +686,28 @@ function ActionsKebab({
   run,
   actions,
   onToggleNotes,
+  publishBlockedReason,
 }: {
   run: ApiRun
   actions: RunActions
   onToggleNotes: () => void
+  publishBlockedReason?: string
 }) {
   const flags = runActionFlags(run)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Run actions" className="md:hidden">
+        <Button variant="ghost" size="icon-sm" aria-label="Run actions" className="lg:hidden">
           <EllipsisVerticalIcon aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
         {flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
+          <DropdownMenuItem
+            disabled={publishBlockedReason !== undefined}
+            title={publishBlockedReason}
+            onSelect={() => actions.finish.mutate()}
+          >
             <CheckIcon aria-hidden="true" /> Finish
           </DropdownMenuItem>
         ) : null}

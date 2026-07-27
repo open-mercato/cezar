@@ -19,6 +19,7 @@ import {
 import { parseAskRequest, type AskQuestion } from './ask.js';
 import { readNdjson } from './ndjson.js';
 import { V1TextCoalescer } from './v1-text-coalescer.js';
+import { terminateAgentProcessTree } from './process-tree.js';
 import {
   CodexAppServerRpc,
   codexSpawnError,
@@ -149,17 +150,12 @@ class CodexSession implements AgentSession {
 
     // Optional wall-clock kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? timeoutMs;
-    let killTimer: NodeJS.Timeout | undefined;
     let deadline: NodeJS.Timeout | undefined;
     if (limitMs > 0) {
       deadline = setTimeout(() => {
         this.timedOut = true;
         this.interrupt();
         this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (this.child.exitCode == null && !this.child.killed) this.child.kill('SIGKILL');
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
       }, limitMs);
       deadline.unref?.();
     }
@@ -198,7 +194,6 @@ class CodexSession implements AgentSession {
         }
       } finally {
         if (deadline) clearTimeout(deadline);
-        if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
       }
@@ -249,6 +244,10 @@ class CodexSession implements AgentSession {
     return this.child.pid;
   }
 
+  get processGroup(): boolean {
+    return true;
+  }
+
   sendMessage(content: ContentBlock[]): boolean {
     if (!this.stdinOpen) return false;
     if (this.autoEndTimer) {
@@ -296,7 +295,7 @@ class CodexSession implements AgentSession {
         () => undefined,
       );
     }
-    if (!this.child.killed) this.child.kill('SIGTERM');
+    if (!this.child.killed) terminateAgentProcessTree(this.child, KILL_GRACE_MS);
   }
 
   // ---- protocol -----------------------------------------------------------

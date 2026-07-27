@@ -61,6 +61,10 @@ export interface ProbeCacheEntry {
   expiresAt: number;
 }
 
+/** Shared across the start surface and run preflight so one measured binding
+ * is paid for at most once per TTL in this Cezar process. */
+export const sharedHarnessProbeCache = new Map<string, ProbeCacheEntry>();
+
 export interface ModelProber {
   probe(ref: ProbeRef): Promise<ProbeVerdict>;
   /** Probe a whole roster, once per distinct model, concurrently.
@@ -98,10 +102,6 @@ export function createModelProber(opts: ProberOptions): ModelProber {
   const inFlight = new Map<string, Promise<ProbeVerdict>>();
 
   const probe = async (ref: ProbeRef): Promise<ProbeVerdict> => {
-    // The claude host is the session already executing this run: it has proven
-    // itself by running. A round-trip here would bill a model to learn nothing.
-    if (ref.runner === 'claude') return { status: 'ready', detail: 'host session' };
-
     const key = probeKey(ref);
     const hit = cache.get(key);
     if (hit && hit.expiresAt > now()) return hit.verdict;

@@ -196,6 +196,13 @@ const runRecordSchema = z.object({
        *  driver input are authoritative; this copy makes recovery re-queues
        *  conduct the same roles. */
       roles: z.record(z.string(), z.unknown()).optional(),
+      baseAcknowledgement: z
+        .object({
+          configuredBase: z.string(),
+          remoteDefault: z.string(),
+          reason: z.string(),
+        })
+        .optional(),
     })
     .optional(),
 });
@@ -751,6 +758,16 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  /** Highest sequence already allocated for a run. Harness snapshots expose this as their
+   * replay watermark so an older SSE prefix cannot overwrite newer durable ledger state. */
+  eventHighWaterMark(runId: string): number {
+    const cached = this.seqs.get(runId);
+    if (cached !== undefined) return cached;
+    const restored = this.rehydrateSeq(runId);
+    this.seqs.set(runId, restored);
+    return restored;
+  }
+
   deleteRun(id: string): boolean {
     const existed = this.runs.delete(id);
     if (existed) {
@@ -782,7 +799,7 @@ export class RunStore extends EventEmitter {
   private seqs = new Map<string, number>();
 
   private nextSeq(runId: string): number {
-    const next = (this.seqs.get(runId) ?? this.rehydrateSeq(runId)) + 1;
+    const next = this.eventHighWaterMark(runId) + 1;
     this.seqs.set(runId, next);
     return next;
   }

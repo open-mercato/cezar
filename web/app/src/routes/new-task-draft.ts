@@ -1,4 +1,4 @@
-import type { HarnessModelRef, HarnessProfile, HarnessRoles, Runner } from '@/api/types'
+import type { HarnessModelRef, HarnessRoles, Runner } from '@/api/types'
 import type { TaskSource } from './new-task-form'
 
 /**
@@ -30,10 +30,6 @@ export interface NewTaskDraft {
   autonomous: boolean | null
   /** Follow-up generation is default-on. null → remembered value / on. */
   generateFollowups: boolean | null
-  /** Harness profile for the built-in harness workflows (spec
-   *  2026-07-23-harness-orchestration). null → standard. Sticky like the other
-   *  pickers; inert while a non-harness source is selected. */
-  harnessProfile: HarnessProfile | null
   /** Which composer tab is active: the ordinary Task surface or the Multi-model
    *  one (user feedback 2026-07-23). null → derived (a harness lastTask lands
    *  on 'multi', everything else on 'task'). */
@@ -92,7 +88,6 @@ const EMPTY: NewTaskDraft = {
   worktree: null,
   autonomous: null,
   generateFollowups: null,
-  harnessProfile: null,
   composerMode: null,
   harnessMode: null,
   harnessRoles: null,
@@ -130,7 +125,6 @@ function normalize(raw: unknown): NewTaskDraft {
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
-    harnessProfile: isHarnessProfile(obj.harnessProfile) ? obj.harnessProfile : null,
     composerMode: obj.composerMode === 'task' || obj.composerMode === 'multi' ? obj.composerMode : null,
     harnessMode:
       obj.harnessMode === 'fix-issue' || obj.harnessMode === 'implement-feature' ? obj.harnessMode : null,
@@ -138,7 +132,7 @@ function normalize(raw: unknown): NewTaskDraft {
   }
 }
 
-const RUNNERS: readonly string[] = ['claude', 'codex', 'opencode']
+const RUNNERS: readonly string[] = ['claude', 'codex', 'opencode', 'harness']
 
 function isModelRef(raw: unknown): raw is HarnessModelRef {
   return (
@@ -158,18 +152,6 @@ function isHarnessRoles(raw: unknown): raw is HarnessRoles {
     Array.isArray(roles.reviewers) &&
     roles.reviewers.every(isModelRef)
   )
-}
-
-const HARNESS_PROFILES: readonly string[] = [
-  'standard',
-  'optimized',
-  'multi',
-  'multi-optimized',
-  'high-assurance',
-]
-
-function isHarnessProfile(raw: unknown): raw is HarnessProfile {
-  return typeof raw === 'string' && HARNESS_PROFILES.includes(raw)
 }
 
 function isSource(raw: unknown): raw is TaskSource {

@@ -21,6 +21,7 @@
  */
 
 import type { HarnessRoleRef } from './driver.js';
+import { familyByModelName } from './model-family.js';
 
 /** A synthesized `agentHarness.models` entry, in the runtime's own shape. */
 export interface ReviewerBinding {
@@ -41,29 +42,11 @@ const GATEWAYS: Record<string, { endpoint: string; authStoreProvider: string }> 
   },
 };
 
-/** Weight lineage, which is what "independent family" is actually asking about
- *  — two models behind one gateway can still be genuinely different models. */
-const FAMILY_BY_NAME: ReadonlyArray<[RegExp, string]> = [
-  [/^glm/i, 'zhipu'],
-  [/^kimi/i, 'moonshot'],
-  [/^deepseek/i, 'deepseek'],
-  [/^mimo/i, 'xiaomi'],
-  [/^qwen/i, 'alibaba'],
-  [/^gpt|^o[0-9]|^codex/i, 'openai'],
-  [/^claude/i, 'anthropic'],
-  [/^gemini/i, 'google'],
-  [/^grok/i, 'xai'],
-  [/^llama/i, 'meta'],
-  [/^mistral|^magistral/i, 'mistral'],
-  [/^nemotron/i, 'nvidia'],
-  [/^ling|^ring/i, 'inclusionai'],
-];
-
 /** Best-effort weight family for a bare model id; the gateway is the fallback
- *  so an unrecognised model never silently merges into another's family. */
+ *  so an unrecognised model never silently merges into another's family. The
+ *  table itself lives in `model-family.ts`, which every layer now shares. */
 export function reviewerFamily(bareModel: string, gateway: string): string {
-  for (const [pattern, family] of FAMILY_BY_NAME) if (pattern.test(bareModel)) return family;
-  return gateway;
+  return familyByModelName(bareModel, gateway);
 }
 
 /**

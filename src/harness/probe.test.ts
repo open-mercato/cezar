@@ -135,13 +135,13 @@ describe('createModelProber', () => {
     expect(verdicts.get('codex/auto')?.status).toBe('failed');
   });
 
-  it('treats the claude host as ready without a round-trip — it is the session already running', async () => {
+  it('requires the Claude host to complete the same measured round-trip contract', async () => {
     const { transport, calls } = recorder({});
     const prober = createModelProber({ transport });
 
     const verdict = await prober.probe({ runner: 'claude', model: 'claude-opus-4-8' });
 
     expect(verdict.status).toBe('ready');
-    expect(calls).toEqual([]); // the host proves itself by executing
+    expect(calls).toEqual(['claude/claude-opus-4-8']);
   });
 });

@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { StepState, StepStatus } from '@/api/types'
@@ -94,5 +94,74 @@ describe('StepRail', () => {
     render(<StepRail steps={[step('a', 'done'), step('b', 'running'), step('c', 'pending'), step('d', 'pending')]} />)
     const bar = document.querySelector<HTMLElement>('[data-slot="step-progress"] > div')!
     expect(bar.style.width).toBe('37.5%') // (1 + 0.5) / 4
+  })
+
+  it('starts compact on request, names the active step, and expands the full history on demand', () => {
+    render(
+      <StepRail
+        defaultExpanded={false}
+        steps={[
+          step('capture', 'done', { name: 'Capture' }),
+          step('implement', 'running', { name: 'Implement' }),
+          step('review', 'pending', { name: 'Review' }),
+        ]}
+      />,
+    )
+
+    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
+      'collapsed',
+    )
+    expect(document.querySelector('[data-slot="step-summary"]')?.textContent).toBe('Implement')
+    expect(document.querySelector('[data-slot="step-summary-position"]')?.textContent).toBe(
+      '· Step 2 of 3',
+    )
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /show steps/i }))
+    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
+      'open',
+    )
+    expect(document.querySelectorAll('[data-slot="step-row"]')).toHaveLength(3)
+    expect(screen.getByRole('button', { name: /hide steps/i }).getAttribute('aria-expanded')).toBe(
+      'true',
+    )
+  })
+
+  it('keeps a terminal failure visible in the compact summary', () => {
+    render(
+      <StepRail
+        defaultExpanded={false}
+        steps={[
+          step('implement', 'done', { name: 'Implement' }),
+          step('fix', 'failed', { name: 'Fix (round 3)' }),
+        ]}
+      />,
+    )
+    expect(document.querySelector('[data-slot="step-summary"]')?.textContent).toBe(
+      'Fix (round 3) failed',
+    )
+    expect(document.querySelector('[data-slot="step-summary-position"]')?.textContent).toBe(
+      '· Step 2 of 2',
+    )
+  })
+
+  it('automatically folds a short workflow when its session closes', () => {
+    const steps = [
+      step('implement', 'running', { name: 'Implement' }),
+      step('validate', 'pending', { name: 'Validate' }),
+    ]
+    const view = render(<StepRail defaultExpanded steps={steps} />)
+    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+
+    view.rerender(
+      <StepRail
+        defaultExpanded={false}
+        steps={steps.map((entry) => ({ ...entry, status: 'done' }))}
+      />,
+    )
+    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
+      'collapsed',
+    )
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 })

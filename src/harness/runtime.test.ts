@@ -1,11 +1,22 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   HarnessRuntime,
   exportTrustedConfig,
+  harnessChildEnvironment,
+  harnessConfigEnvironmentNames,
+  reconcileHarnessProcess,
   loadAgenticConfig,
   resolveHarnessRuntimeInfo,
   resolveHarnessScript,
@@ -35,6 +46,24 @@ describe('harness runtime bridge', () => {
     const script = join(dir, 'harness.mjs');
     writeFileSync(script, body, 'utf8');
     return script;
+  };
+
+  const waitFor = async (predicate: () => boolean, timeoutMs = 3_000): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return predicate();
+  };
+
+  const processExists = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   it('resolveHarnessRuntimeInfo reports the bundled collection with its pinned commit', async () => {
@@ -103,6 +132,91 @@ describe('harness runtime bridge', () => {
     expect(result.ok).toBe(false);
   });
 
+  it.skipIf(process.platform === 'win32')('kill() terminates the complete provider process tree', async () => {
+    const grandchildPidPath = join(dir, 'grandchild.pid');
+    const script = writeStub(`
+      import { spawn } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000)'], { stdio: 'ignore' });
+      writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));
+      setInterval(() => {}, 60000);
+    `);
+    const rt = new HarnessRuntime({ script, cwd: dir });
+    const pending = rt.run('worker', []);
+    expect(await waitFor(() => existsSync(grandchildPidPath))).toBe(true);
+    const grandchildPid = Number(readFileSync(grandchildPidPath, 'utf8'));
+    expect(processExists(grandchildPid)).toBe(true);
+
+    rt.kill();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(await waitFor(() => !processExists(grandchildPid))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('reconciles a recorded matching process identity after a host restart', async () => {
+    const script = writeStub('setInterval(() => {}, 60_000);');
+    const rt = new HarnessRuntime({ script, cwd: dir });
+    let identity: Parameters<typeof reconcileHarnessProcess>[0] | undefined;
+    const pending = rt.run('review', [], {
+      onSpawn: (spawned) => {
+        identity = spawned;
+      },
+    });
+    expect(await waitFor(() => identity !== undefined)).toBe(true);
+
+    await expect(reconcileHarnessProcess(identity!)).resolves.toEqual({ status: 'terminated' });
+    await expect(pending).resolves.toMatchObject({ ok: false });
+  });
+
+  it('bounds captured runtime output exactly at the configured cap', async () => {
+    const script = writeStub(`process.stdout.write('x'.repeat(250_000));`);
+    const result = await new HarnessRuntime({ script, cwd: dir }).run('probe', []);
+    expect(result.stdout).toHaveLength(200_000);
+  });
+
+  it('passes only safe base variables plus explicitly trusted provider variables', () => {
+    const source = {
+      PATH: '/bin',
+      HOME: '/tmp/home',
+      OPENAI_API_KEY: 'provider',
+      DEEPSEEK_API_KEY: 'deepseek',
+      DATABASE_URL: 'must-not-leak',
+      AWS_SECRET_ACCESS_KEY: 'must-not-leak',
+    };
+    expect(harnessChildEnvironment(['DEEPSEEK_API_KEY'], source)).toEqual({
+      PATH: '/bin',
+      HOME: '/tmp/home',
+      OPENAI_API_KEY: 'provider',
+      DEEPSEEK_API_KEY: 'deepseek',
+    });
+    expect(
+      harnessConfigEnvironmentNames({
+        models: {
+          deepseek: { credentialEnv: 'DEEPSEEK_API_KEY' },
+          kimi: { binaryEnv: 'OM_KIMI_BIN' },
+          invalid: { credentialEnv: 'bad-name' },
+        },
+      }),
+    ).toEqual(['DEEPSEEK_API_KEY', 'OM_KIMI_BIN', 'bad-name']);
+  });
+
+  it('does not expose unrelated parent secrets to the harness process', async () => {
+    const script = writeStub('console.log(JSON.stringify(process.env));');
+    const previous = process.env.CEZ_TEST_DATABASE_SECRET;
+    process.env.CEZ_TEST_DATABASE_SECRET = 'do-not-forward';
+    try {
+      const result = await new HarnessRuntime({ script, cwd: dir }).run('probe', []);
+      const environment = JSON.parse(result.stdout) as Record<string, string>;
+      expect(environment.CEZ_TEST_DATABASE_SECRET).toBeUndefined();
+      expect(environment.PATH).toBe(process.env.PATH);
+      expect(environment.CEZ_PROCESS_TOKEN).toBeTruthy();
+    } finally {
+      if (previous === undefined) delete process.env.CEZ_TEST_DATABASE_SECRET;
+      else process.env.CEZ_TEST_DATABASE_SECRET = previous;
+    }
+  });
+
   it('runValidationCommands records real per-command evidence and stops on failure', async () => {
     const checks = await runValidationCommands(['echo ok', 'exit 2', 'echo never'], dir);
     expect(checks).toHaveLength(3);
@@ -110,6 +224,51 @@ describe('harness runtime bridge', () => {
     expect(checks[1]).toMatchObject({ command: 'exit 2', status: 'failed', exitCode: 2 });
     // Commands after a failure are recorded as skipped, never silently absent.
     expect(checks[2]).toMatchObject({ command: 'echo never', status: 'skipped', exitCode: null });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'provisions Corepack shims for a repository-pinned package manager',
+    async () => {
+      const fakeBin = join(dir, 'fake-bin');
+      mkdirSync(fakeBin);
+      const corepack = join(fakeBin, 'corepack');
+      writeFileSync(
+        corepack,
+        [
+          '#!/bin/sh',
+          'install_dir="$3"',
+          'printf \'#!/bin/sh\\necho repository-yarn\\n\' > "$install_dir/yarn"',
+          'chmod +x "$install_dir/yarn"',
+        ].join('\n'),
+        'utf8',
+      );
+      chmodSync(corepack, 0o755);
+      writeFileSync(
+        join(dir, 'package.json'),
+        JSON.stringify({ packageManager: 'yarn@4.17.1' }),
+        'utf8',
+      );
+
+      const [check] = await runValidationCommands(['yarn --version'], dir, {
+        env: { PATH: `${fakeBin}:/usr/bin:/bin` },
+      });
+
+      expect(check).toMatchObject({
+        command: 'yarn --version',
+        status: 'passed',
+        exitCode: 0,
+        evidence: 'repository-yarn',
+      });
+    },
+  );
+
+  it('bounds validation output exactly at the configured cap', async () => {
+    const [check] = await runValidationCommands(
+      [`node -e "process.stdout.write('x'.repeat(250000))"`],
+      dir,
+    );
+    expect(check?.status).toBe('passed');
+    expect(check?.evidence).toHaveLength(200_000);
   });
 
   it('loadAgenticConfig reads validation commands and tolerates absence', async () => {

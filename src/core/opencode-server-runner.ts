@@ -11,6 +11,10 @@ import type {
 import type { AgentSession, SessionOptions } from './agent-runner.js';
 import { prependSystemPrompt } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
+import {
+  AGENT_PROCESS_DETACHED,
+  terminateAgentProcessTree,
+} from './process-tree.js';
 import { jsonRequest, streamRequest } from './json-http.js';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.js';
 import { parseModelIdentity } from './model-identity.js';
@@ -131,6 +135,7 @@ class OpencodeSession implements AgentSession {
       this.child = nodeSpawn(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
         cwd: spec.cwd,
         env: buildChildEnv({ backend: 'opencode', extraEnv: spec.env }),
+        detached: AGENT_PROCESS_DETACHED,
       });
     } catch (err) {
       throw wrapSpawnError(err, bin);
@@ -187,7 +192,7 @@ class OpencodeSession implements AgentSession {
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.sse.abort();
         this.serverOpen = false;
-        if (!this.child.killed) this.child.kill('SIGTERM');
+        if (!this.child.killed) terminateAgentProcessTree(this.child, 4_000);
       }
 
       await this.exited;
@@ -221,6 +226,10 @@ class OpencodeSession implements AgentSession {
     return this.child.pid;
   }
 
+  get processGroup(): boolean {
+    return true;
+  }
+
   sendMessage(content: ContentBlock[]): boolean {
     if (!this.serverOpen) return false;
     if (this.autoEndTimer) {
@@ -242,10 +251,7 @@ class OpencodeSession implements AgentSession {
     if (!this.serverOpen) return;
     this.serverOpen = false;
     this.sse.abort();
-    if (!this.child.killed) this.child.kill('SIGTERM');
-    setTimeout(() => {
-      if (this.child.exitCode == null && !this.child.killed) this.child.kill('SIGKILL');
-    }, 4_000).unref?.();
+    if (!this.child.killed) terminateAgentProcessTree(this.child, 4_000);
   }
 
   interrupt(): void {
@@ -254,7 +260,7 @@ class OpencodeSession implements AgentSession {
       void this.http('POST', `/session/${this.sessionId}/abort`, undefined).catch(() => undefined);
     }
     this.sse.abort();
-    if (!this.child.killed) this.child.kill('SIGTERM');
+    if (!this.child.killed) terminateAgentProcessTree(this.child, 4_000);
   }
 
   // ---- server lifecycle ---------------------------------------------------

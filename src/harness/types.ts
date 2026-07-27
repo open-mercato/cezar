@@ -11,9 +11,9 @@ import { z } from 'zod';
  *  - `harness.mjs` owns mechanics: op phases record the artifact paths its
  *    versioned JSON results live at — those artifacts stay authoritative.
  *
- * Everything is additive and versioned. A run without a ledger renders
- * exactly as before; an unknown future version loads as null (callers treat
- * that as "no ledger", never as an error).
+ * Everything is additive and versioned. The reader distinguishes an absent
+ * ledger from corrupt or future state so recovery can fail closed instead of
+ * silently restarting expensive work.
  */
 
 export const HARNESS_PROFILES = [
@@ -54,6 +54,12 @@ export type HarnessPhase = z.infer<typeof harnessPhaseSchema>;
 const harnessModelSchema = z.object({
   id: z.string().min(1),
   family: z.string().optional(),
+  /** The ref's parts, kept separate so a surface never has to re-split `id`
+   *  (2026-07-27). `id` is `runner/model`, so a gateway-qualified model renders
+   *  as `opencode/opencode/mimo-v2.5-free` when a UI prints it whole — and `id`
+   *  itself cannot change, it is the ledger's stable cross-record key. */
+  runner: z.string().optional(),
+  model: z.string().optional(),
   binding: z.string().optional(),
   roles: z.array(z.string()).default([]),
   readiness: z.enum(['ready', 'missing', 'failed', 'unknown']).default('unknown'),
@@ -69,7 +75,7 @@ const harnessModelSchema = z.object({
 export type HarnessModel = z.infer<typeof harnessModelSchema>;
 
 /** One validation-gate command result — real exit codes, never a model claim. */
-const validationCheckSchema = z.object({
+export const validationCheckSchema = z.object({
   command: z.string(),
   status: z.enum(['passed', 'failed', 'skipped']),
   exitCode: z.number().int().nullable(),
@@ -101,8 +107,67 @@ const harnessDecisionSchema = z.object({
   detail: z.string().optional(),
 });
 
-export const harnessLedgerSchema = z.object({
-  version: z.literal(1),
+export const harnessInvocationSchema = z
+  .object({
+    id: z.string().min(1),
+    phaseId: z.string().min(1),
+    role: z.string().min(1),
+    reviewerId: z.string().optional(),
+    binding: z
+      .object({
+        runner: z.string().min(1),
+        model: z.string().optional(),
+        effort: z.string().optional(),
+        family: z.string().optional(),
+      })
+      .passthrough(),
+    status: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+    attempt: z.number().int().min(1),
+    inputSha256: z.string().min(1),
+    artifactPath: z.string().optional(),
+    artifactSha256: z.string().optional(),
+    startedAt: z.string().optional(),
+    endedAt: z.string().optional(),
+    durationMs: z.number().int().min(0).optional(),
+    error: z.string().optional(),
+    process: z
+      .object({
+        pid: z.number().int().positive(),
+        token: z.string().min(1),
+        startedAt: z.string(),
+        /** Runtime ops are dedicated process-group leaders; ordinary runner
+         * sessions currently reconcile their owned root process directly. */
+        group: z.boolean().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+export type HarnessInvocation = z.infer<typeof harnessInvocationSchema>;
+
+const harnessPendingMessageSchema = z
+  .object({
+    id: z.string().min(1),
+    text: z.string(),
+    createdAt: z.string(),
+    assignedToPhaseId: z.string().optional(),
+    consumedAt: z.string().optional(),
+    consumedByPhaseId: z.string().optional(),
+  })
+  .passthrough();
+
+const harnessOutcomeSchema = z
+  .object({
+    status: z.enum(['pending', 'ready', 'blocked', 'contested', 'no-action']).default('pending'),
+    blockingReasons: z.array(z.string()).default([]),
+    acceptedAt: z.string().optional(),
+    acceptedBy: z.literal('user').optional(),
+    acceptanceReason: z.string().optional(),
+  })
+  .passthrough();
+
+const harnessLedgerBaseShape = {
   workflow: z.string().min(1),
   requestedProfile: harnessProfileSchema,
   /** Differs from `requestedProfile` only after an explicit, recorded user
@@ -118,7 +183,29 @@ export const harnessLedgerSchema = z.object({
     text: z.string(),
   }),
   trustedConfig: z
-    .object({ baseRef: z.string(), path: z.string(), overlay: z.boolean() })
+    .object({
+      baseRef: z.string(),
+      path: z.string(),
+      overlay: z.boolean(),
+      /** Hash of the exact immutable bytes used for provider bindings and
+       * executable validation commands. Optional only for legacy ledgers. */
+      sha256: z.string().min(1).optional(),
+    })
+    .optional(),
+  /** The harness runtime this run executes, pinned (2026-07-27).
+   *
+   * The runtime used to be spawned straight from
+   * `<worktree>/.claude/skills/cez-harness/scripts/harness.mjs` — a path inside
+   * the tree the sandboxed worker and every agent phase can write — with the
+   * full provider credential env and no integrity check. Rewriting that file
+   * turned the next op into arbitrary code execution outside the worker's
+   * sandbox. The bytes are now copied out of the worktree at preflight and
+   * re-verified before every op. Optional only for legacy ledgers. */
+  runtimeScript: z
+    .object({
+      path: z.string(),
+      sha256: z.string().min(1),
+    })
     .optional(),
   models: z.array(harnessModelSchema).default([]),
   phases: z.array(harnessPhaseSchema).default([]),
@@ -131,6 +218,22 @@ export const harnessLedgerSchema = z.object({
   claim: z.object({ held: z.boolean(), issueId: z.string().optional() }).optional(),
   stage: harnessStageSchema.default({ status: 'pending' }),
   decisions: z.array(harnessDecisionSchema).default([]),
+};
+
+/** Exact legacy shape accepted for the in-memory v1 → v2 migration. */
+export const harnessLedgerV1Schema = z.object({
+  version: z.literal(1),
+  ...harnessLedgerBaseShape,
 });
+
+export const harnessLedgerSchema = z
+  .object({
+    version: z.literal(2),
+    ...harnessLedgerBaseShape,
+    invocations: z.array(harnessInvocationSchema).default([]),
+    pendingMessages: z.array(harnessPendingMessageSchema).default([]),
+    outcome: harnessOutcomeSchema.default({ status: 'pending', blockingReasons: [] }),
+  })
+  .passthrough();
 
 export type HarnessLedger = z.infer<typeof harnessLedgerSchema>;

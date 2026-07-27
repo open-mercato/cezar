@@ -27,6 +27,7 @@ interface FakeSession {
 interface FakeState {
   cancelled: boolean;
   interrupt: () => void;
+  interruptHandlers: Set<() => void>;
   session?: FakeSession;
   liveSessions: Set<FakeSession>;
 }
@@ -49,10 +50,40 @@ function register(state: FakeState, session: FakeSession, concurrent: boolean): 
   }
 }
 
+/** Mirrors `runAgentStep`'s `finally`: the singular slot is cleared when a
+ *  non-concurrent phase ends. This is what used to erase the driver's runtime
+ *  killer along with it. */
+function unregister(state: FakeState, session: FakeSession, concurrent: boolean): void {
+  state.liveSessions.delete(session);
+  if (!concurrent) {
+    state.session = undefined;
+    state.interrupt = () => undefined;
+  }
+}
+
+/** Mirrors the driver's `host.onInterrupt(() => runtime.kill())`. */
+function onInterrupt(state: FakeState, fn: () => void): () => void {
+  state.interruptHandlers.add(fn);
+  return () => {
+    state.interruptHandlers.delete(fn);
+  };
+}
+
 /** Mirrors `RunManager.cancel`. */
 function cancel(state: FakeState): void {
   state.cancelled = true;
-  state.interrupt();
+  try {
+    state.interrupt();
+  } catch {
+    /* already gone */
+  }
+  for (const handler of state.interruptHandlers) {
+    try {
+      handler();
+    } catch {
+      /* already gone */
+    }
+  }
   for (const session of state.liveSessions) {
     try {
       session.interrupt();
@@ -65,6 +96,7 @@ function cancel(state: FakeState): void {
 const freshState = (): FakeState => ({
   cancelled: false,
   interrupt: () => undefined,
+  interruptHandlers: new Set(),
   liveSessions: new Set(),
 });
 
@@ -144,6 +176,79 @@ describe('cancel() with concurrent phase sessions', () => {
   });
 });
 
+/**
+ * The harness runtime killer (review 2026-07-27).
+ *
+ * `runHarnessDriver` registers `host.onInterrupt(() => runtime.kill())` right
+ * after preflight (driver.ts:1636). That handler used to be CHAINED onto
+ * `state.interrupt` — the same single slot every non-concurrent agent phase
+ * assigns to its own session and resets to a no-op when it ends. So the first
+ * qualify/diagnose/spec phase silently evicted it, and from then on Cancel
+ * stopped the visible agent session while `harness.mjs` and every reviewer CLI
+ * beneath it kept running and kept billing.
+ */
+describe('cancel() reaches handlers that outlive a phase', () => {
+  it('still kills the harness runtime after an agent phase has come and gone', () => {
+    const state = freshState();
+    let runtimeKilled = false;
+    onInterrupt(state, () => {
+      runtimeKilled = true;
+    });
+
+    // A non-concurrent phase runs to completion, claiming and then clearing
+    // the singular slots.
+    const phase = makeSession('qualify');
+    register(state, phase, false);
+    unregister(state, phase, false);
+
+    cancel(state);
+
+    expect(runtimeKilled).toBe(true);
+  });
+
+  it('kills the runtime alongside the live session mid-phase', () => {
+    const state = freshState();
+    let runtimeKilled = false;
+    onInterrupt(state, () => {
+      runtimeKilled = true;
+    });
+    const phase = makeSession('implement');
+    register(state, phase, false);
+
+    cancel(state);
+
+    expect(runtimeKilled).toBe(true);
+    expect(phase.interrupted).toBe(true);
+  });
+
+  it('honours the disposer so a finished scoped handler is not called', () => {
+    const state = freshState();
+    let aborted = false;
+    const off = onInterrupt(state, () => {
+      aborted = true;
+    });
+    off();
+
+    cancel(state);
+
+    expect(aborted).toBe(false);
+  });
+
+  it('keeps running the remaining handlers when one throws', () => {
+    const state = freshState();
+    let second = false;
+    onInterrupt(state, () => {
+      throw new Error('runtime already exited');
+    });
+    onInterrupt(state, () => {
+      second = true;
+    });
+
+    expect(() => cancel(state)).not.toThrow();
+    expect(second).toBe(true);
+  });
+});
+
 describe('the real implementation still honours the contract', () => {
   const source = readFileSync(join(import.meta.dirname, 'run.ts'), 'utf8');
 
@@ -151,6 +256,19 @@ describe('the real implementation still honours the contract', () => {
     const cancelBody = source.slice(source.indexOf('  cancel(runId: string): boolean {'));
     expect(cancelBody).toMatch(/for \(const session of state\.liveSessions\)/);
     expect(cancelBody).toMatch(/session\.interrupt\(\)/);
+  });
+
+  it('cancel() runs the phase-independent interrupt handlers', () => {
+    const cancelBody = source.slice(source.indexOf('  cancel(runId: string): boolean {'));
+    expect(cancelBody).toMatch(/for \(const handler of state\.interruptHandlers\)/);
+  });
+
+  it('onInterrupt registers in the durable set instead of chaining onto the slot', () => {
+    const start = source.indexOf('onInterrupt: (fn) => {');
+    const body = source.slice(start, source.indexOf('},', start));
+    expect(body).toMatch(/state\.interruptHandlers\.add\(fn\)/);
+    // The old shape — the one a phase could evict.
+    expect(body).not.toMatch(/state\.interrupt = \(\) => \{/);
   });
 
   it('every session registers in liveSessions regardless of concurrency', () => {

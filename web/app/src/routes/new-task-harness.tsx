@@ -12,7 +12,14 @@ import {
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
-import type { HarnessEffort, HarnessModelRef, HarnessPreset, HarnessRoles } from '@/api/types'
+import type {
+  HarnessEffort,
+  HarnessModelRef,
+  HarnessPreset,
+  HarnessProbeResponse,
+  HarnessRoles,
+} from '@/api/types'
+import { StatusDot } from '@/components/status-dot'
 import { chipClass } from '@/components/picker-pill'
 import {
   Command,
@@ -51,7 +58,44 @@ import {
  * preset topology. One orchestrator (the main agent — long context recommended, it reads the
  * most), one implementer, and 2–5 unique reviewers spanning at least two model families. The
  * route owns fetching and draft state; this stays presentational.
+ *
+ * The named execution profiles (Claude solo / Worker offload / Review council / Council +
+ * worker / High assurance) were removed from this surface (user feedback 2026-07-27): the
+ * lineup IS the choice, and a second, coarser topology picker above it only asked the same
+ * question twice. `agentHarness.profiles` still exists in the repo config — Settings → Harness
+ * reports it — but the composer always starts a custom lineup.
  */
+
+/**
+ * One readable line for a provider's readiness failure.
+ *
+ * Providers return operational prose meant for a terminal — codex nests the same
+ * 400 twice inside its own exit message — and the raw text is kept verbatim
+ * behind a disclosure. This is only the headline.
+ */
+export function humanReadinessError(detail: string): string {
+  if (/not supported when using Codex with a ChatGPT account/i.test(detail)) {
+    return "This Codex login can't run the selected model — pick a named model (e.g. gpt-5.6-luna), or bind an API key."
+  }
+  if (/\b(401|403)\b|unauthor|invalid[_ -]?api[_ -]?key|authentication/i.test(detail)) {
+    return 'The provider rejected the credentials for this binding — re-authenticate the CLI or update the API key.'
+  }
+  if (/\b429\b|rate.?limit|quota/i.test(detail)) {
+    return 'The provider is rate-limiting or out of quota for this binding.'
+  }
+  if (/ENOENT|not found|command not found/i.test(detail)) {
+    return 'The backend CLI for this binding is not installed or is not on PATH.'
+  }
+  if (/timed? ?out|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|socket hang up/i.test(detail)) {
+    return 'The binding could not be reached — the local server or the endpoint did not answer.'
+  }
+  if (/adapter missing|no endpoint|no credential/i.test(detail)) {
+    return 'This model has no usable binding configured yet.'
+  }
+  // Unrecognised: the first sentence still beats 300 characters of nested JSON.
+  const first = detail.split(/(?<=[.!?])\s|:\s/)[0] ?? detail
+  return first.length > 140 ? `${first.slice(0, 137)}…` : first
+}
 
 const refKey = (ref: HarnessModelRef) => `${ref.runner}::${ref.model}`
 const fromKey = (key: string): HarnessModelRef => {
@@ -77,6 +121,7 @@ export function ModelPickerPill({
   options,
   onPick,
   onAddModels,
+  readiness,
 }: {
   slot: string
   ariaLabel: string
@@ -85,6 +130,9 @@ export function ModelPickerPill({
   onPick: (ref: HarnessModelRef) => void
   /** Pinned menu footer (2026-07-24): the always-visible path to more providers/models. */
   onAddModels?: () => void
+  /** This model's live probe result (2026-07-27). Readiness sat 700px below the
+   *  models it was judging; the verdict belongs ON the thing it is about. */
+  readiness?: 'ready' | 'missing' | 'failed' | 'unknown'
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -99,7 +147,26 @@ export function ModelPickerPill({
       }}
     >
       <PopoverTrigger asChild>
-        <button type="button" data-slot={slot} aria-label={ariaLabel} className={chipClass}>
+        <button
+          type="button"
+          data-slot={slot}
+          aria-label={ariaLabel}
+          data-readiness={readiness}
+          className={cn(
+            chipClass,
+            readiness === 'failed' || readiness === 'missing' ? 'border-danger/50 bg-danger/5' : '',
+          )}
+        >
+          {readiness ? (
+            <StatusDot
+              tone={
+                readiness === 'ready' ? 'success'
+                : readiness === 'failed' || readiness === 'missing' ? 'danger'
+                : 'pending'
+              }
+              pulse={readiness === 'unknown'}
+            />
+          ) : null}
           <span className="font-mono text-[11.5px]">{optionLabel(options, value)}</span>
           <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
         </button>
@@ -278,7 +345,7 @@ function PresetRow({
       {visible.map((preset) => {
         const active = rolesEqual(roles, preset.roles)
         return (
-          <span key={preset.id} className="group/preset inline-flex items-center gap-0.5">
+          <span key={preset.id} className="group/preset relative inline-flex items-center gap-0.5">
             <button
               type="button"
               aria-pressed={active}
@@ -292,6 +359,35 @@ function PresetRow({
             >
               <span className="truncate">{preset.name}</span>
             </button>
+            {/* A chip used to show a NAME and nothing else, so the only way to
+                learn what a lineup held was to apply it — which destroyed the one
+                you had. Hover/focus previews the three roles instead. */}
+            <span
+              role="tooltip"
+              data-slot="harness-preset-preview"
+              className="pointer-events-none absolute top-[30px] left-0 z-30 hidden w-[250px] rounded-lg border border-border bg-card p-2.5 shadow-md group-focus-within/preset:block group-hover/preset:block"
+            >
+              {(
+                [
+                  ['orchestrator', [preset.roles.orchestrator]],
+                  ['implementer', [preset.roles.implementer]],
+                  ['reviewers', preset.roles.reviewers],
+                ] as const
+              ).map(([label, refs]) => (
+                <span key={label} className="flex gap-2 py-0.5">
+                  <span className="w-[68px] shrink-0 pt-px text-[9.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+                    {label}
+                  </span>
+                  <span className="min-w-0 flex-1 font-mono text-[10.5px] text-muted-foreground">
+                    {refs.map((ref) => (
+                      <span key={`${ref.runner}::${ref.model}`} className="block truncate">
+                        {ref.runner} · {ref.model || 'auto'}
+                      </span>
+                    ))}
+                  </span>
+                </span>
+              ))}
+            </span>
             <button
               type="button"
               aria-label={`Delete preset ${preset.name}`}
@@ -400,6 +496,10 @@ function PresetRow({
 export function HarnessPanel({
   mode,
   onMode,
+  probe,
+  base,
+  baseAcknowledgementReason = '',
+  onBaseAcknowledgementReason,
   roles,
   onRoles,
   options,
@@ -411,6 +511,15 @@ export function HarnessPanel({
 }: {
   mode: HarnessMode['id']
   onMode: (mode: HarnessMode['id']) => void
+  probe?: HarnessProbeResponse
+  base?: {
+    configured: string | null
+    remoteDefault: string | null
+    stale: boolean
+    note?: string
+  }
+  baseAcknowledgementReason?: string
+  onBaseAcknowledgementReason?: (reason: string) => void
   /** Null while the workspace cannot offer a sound default (the modal case). */
   roles: HarnessRoles | null
   onRoles: (roles: HarnessRoles) => void
@@ -425,6 +534,10 @@ export function HarnessPanel({
 }) {
   const issue = roles ? harnessRolesIssue(roles) : null
   const freeTierWarning = freeTierReviewerWarning(roles)
+  // The probe reports one row per distinct binding, keyed `runner/model` — the
+  // same id the driver's roster uses.
+  const readinessOf = (ref: HarnessModelRef) =>
+    probe?.models.find((model) => model.id === `${ref.runner}/${ref.model || 'auto'}`)?.readiness
   return (
     <section
       data-slot="harness-panel"
@@ -497,6 +610,7 @@ export function HarnessPanel({
             <ModelPickerPill
               slot="harness-orchestrator"
               ariaLabel="Orchestrator model"
+              readiness={readinessOf(roles.orchestrator)}
               value={roles.orchestrator}
               options={options.filter((o) => o.runner !== 'harness')}
               onPick={(ref) => onRoles({ ...roles, orchestrator: ref })}
@@ -518,6 +632,7 @@ export function HarnessPanel({
             <ModelPickerPill
               slot="harness-implementer"
               ariaLabel="Implementer model"
+              readiness={readinessOf(roles.implementer)}
               value={roles.implementer}
               options={options.filter((o) => o.runner !== 'harness')}
               onPick={(ref) => onRoles({ ...roles, implementer: ref })}
@@ -541,6 +656,7 @@ export function HarnessPanel({
                     <ModelPickerPill
                       slot={`harness-reviewer-${index + 1}`}
                       ariaLabel={`Reviewer ${index + 1} model`}
+                      readiness={readinessOf(reviewer)}
                       value={reviewer}
                       options={options}
                       onPick={(ref) =>
@@ -626,6 +742,103 @@ export function HarnessPanel({
               <span>{freeTierWarning}</span>
             </p>
           ) : null}
+
+          {/* Readiness belongs to the lineup now that the profile picker is gone (2026-07-27):
+              the Start gate is this exact probe, so the evidence behind it has to be visible
+              next to the models it is judging — not behind a topology tab. */}
+          <div className="rounded-lg border border-border bg-card-2" data-slot="harness-profile-readiness">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">
+              <span className="font-semibold">Model readiness</span>
+              <span className="text-soft-foreground">
+                {probe ? (probe.ready ? 'verified now' : probe.reason ?? 'not ready') : 'checking bindings…'}
+              </span>
+            </div>
+            {(probe?.models ?? []).map((model) => {
+              const failed = model.readiness === 'failed' || model.readiness === 'missing'
+              const detail = model.readinessDetail ?? model.readiness ?? 'checking'
+              return (
+                <div
+                  key={model.id}
+                  className="grid grid-cols-[auto_minmax(5rem,.7fr)_minmax(0,1fr)] items-start gap-2 border-b border-border/70 px-3 py-2 text-xs last:border-0"
+                >
+                  <StatusDot
+                    tone={
+                      model.readiness === 'ready' ? 'success'
+                      : failed ? 'danger'
+                      : 'pending'
+                    }
+                    pulse={model.readiness === 'unknown'}
+                  />
+                  <span className="font-semibold text-foreground">{model.id}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate font-mono text-[10.5px] text-soft-foreground">
+                      {model.binding ?? model.model ?? 'default'}
+                    </span>
+                    {/* A failure used to print the provider's raw JSON — often the
+                        same error nested twice, ~300 characters — right-aligned in
+                        the widest column, with no remedy. One human line, the raw
+                        text behind a disclosure, and a way out. */}
+                    {failed ? (
+                      <>
+                        <span className="mt-0.5 block leading-relaxed text-danger">
+                          {humanReadinessError(detail)}
+                        </span>
+                        <details className="mt-1">
+                          <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                            Show what the provider returned
+                          </summary>
+                          <pre className="mt-1 max-h-32 overflow-auto rounded border border-border bg-background px-2 py-1.5 font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-soft-foreground">
+                            {detail}
+                          </pre>
+                        </details>
+                      </>
+                    ) : (
+                      <span className="mt-0.5 block text-muted-foreground">{detail}</span>
+                    )}
+                  </span>
+                </div>
+              )
+            })}
+            {probe && !probe.ready ? (
+              <div className="flex flex-wrap items-center gap-2 border-t border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+                <CircleAlertIcon aria-hidden="true" className="mt-px size-3.5 shrink-0" />
+                <span className="min-w-0 flex-1">
+                  {probe.reason ?? 'Every selected model must pass its live readiness probe.'}
+                </span>
+                {onAddModels ? (
+                  <button
+                    type="button"
+                    data-slot="harness-fix-bindings"
+                    onClick={onAddModels}
+                    className="shrink-0 rounded-md border border-danger/40 px-2 py-1 text-[11.5px] font-semibold text-foreground hover:bg-danger/10"
+                  >
+                    Fix this
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {base?.stale && base.configured && base.remoteDefault ? (
+        <div className="mx-4 mt-3 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2.5" data-slot="harness-stale-base">
+          <p className="flex items-start gap-2 text-xs text-danger">
+            <CircleAlertIcon aria-hidden="true" className="mt-px size-3.5 shrink-0" />
+            <span>
+              {base.note ?? `Configured base ${base.configured} differs from remote default ${base.remoteDefault}.`}
+              {' '}Starting is blocked before worktree creation unless you update the base or acknowledge this exact pair.
+            </span>
+          </p>
+          {onBaseAcknowledgementReason ? (
+            <textarea
+              aria-label="Reason for using a stale harness base"
+              value={baseAcknowledgementReason}
+              onChange={(event) => onBaseAcknowledgementReason(event.target.value)}
+              placeholder="Why is this base intentional for this run?"
+              className="mt-2 min-h-14 w-full resize-y rounded-lg border border-input bg-background px-2.5 py-2 text-xs outline-none focus:border-ring"
+            />
+          ) : null}
         </div>
       ) : null}
 
@@ -645,12 +858,19 @@ export function HarnessPanel({
  */
 export function HarnessSetupDialog({
   families,
+  advisorFamilies = [],
   onConfigure,
   onBackToTask,
   onClose,
 }: {
-  /** The families currently available (e.g. ['anthropic']). */
+  /** RUNNER-backed families currently available (e.g. ['anthropic']). Only these
+   *  can fill orchestrator and implementer, which is why the count that gates
+   *  this dialog is theirs, not the whole roster's. */
   families: readonly string[]
+  /** Configured advisor families (reviewer-only). Present but unusable alone —
+   *  saying "no models are available" when three of these exist is false, and
+   *  points at the wrong fix (review 2026-07-27). */
+  advisorFamilies?: readonly string[]
   onConfigure: () => void
   onBackToTask: () => void
   onClose: () => void
@@ -659,11 +879,26 @@ export function HarnessSetupDialog({
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent data-slot="harness-setup-dialog" className="max-w-[460px]">
         <DialogHeader>
-          <DialogTitle>Multi-model needs more than one model</DialogTitle>
+          <DialogTitle>
+            {advisorFamilies.length > 0 && families.length <= 1
+              ? 'Multi-model needs a second agent backend'
+              : 'Multi-model needs more than one model'}
+          </DialogTitle>
           <DialogDescription asChild>
             <div className="flex flex-col gap-2 text-[13px] leading-relaxed">
               <p>
-                {families.length === 1 ? (
+                {advisorFamilies.length > 0 && families.length <= 1 ? (
+                  <>
+                    You have{' '}
+                    <span className="font-medium text-foreground">
+                      {advisorFamilies.length} configured reviewer{advisorFamilies.length > 1 ? 's' : ''}
+                    </span>{' '}
+                    ({advisorFamilies.join(', ')}), but they can only review. The orchestrator and the
+                    implementer need an agent backend, and only{' '}
+                    <span className="font-medium text-foreground">{families[0] ?? 'none'}</span> is
+                    connected.
+                  </>
+                ) : families.length === 1 ? (
                   <>
                     Only <span className="font-medium text-foreground">{families[0]}</span> models are
                     available here, and this tab runs a genuine council — reviewers from at least two

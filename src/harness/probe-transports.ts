@@ -6,12 +6,14 @@
  * Zen HTTP endpoint while the local opencode server 500'd on every prompt.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ClaudeCliRunner } from '../core/claude-cli-runner.js';
 import type { ProbeRef, ProbeTransport, ProbeVerdict } from './probe.js';
+import { harnessChildEnvironment, terminateProcessTree } from './runtime.js';
 
 /** Smallest prompt that still proves the whole pipeline answers. */
 const PROBE_PROMPT = 'Reply with exactly: OK';
@@ -30,6 +32,36 @@ function freePort(): Promise<number> {
   });
 }
 
+/** One real no-tools host round-trip. Provider discovery/login presence is not
+ * enough: an expired Claude subscription must never render green. */
+export async function probeClaude(
+  ref: ProbeRef,
+  opts: { bin?: string; cwd?: string; timeoutMs?: number } = {},
+): Promise<ProbeVerdict> {
+  const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS;
+  try {
+    const result = await new ClaudeCliRunner({
+      ...(opts.bin ? { bin: opts.bin } : {}),
+      timeoutMs,
+    }).run({
+      systemPrompt: 'You are a readiness probe. Use no tools and follow the response format exactly.',
+      userPrompt: PROBE_PROMPT,
+      cwd: opts.cwd ?? process.cwd(),
+      allowedTools: [],
+      model: ref.model || undefined,
+      timeoutMs,
+    });
+    return result.text.trim()
+      ? { status: 'ready', detail: 'round-trip ok via Claude host CLI' }
+      : { status: 'failed', detail: 'Claude host CLI completed without a response' };
+  } catch (error) {
+    return {
+      status: 'failed',
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 /** `opencode serve` + one real prompt. A session that creates fine but 500s on
  *  `message` (the schema-skew failure mode) is only visible if we post one. */
 export async function probeOpencode(
@@ -40,11 +72,14 @@ export async function probeOpencode(
   const port = await freePort();
   const child = spawn(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
     cwd: opts.cwd ?? process.cwd(),
+    env: harnessChildEnvironment(),
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+    windowsHide: true,
   });
 
   const done = (verdict: ProbeVerdict): ProbeVerdict => {
-    if (!child.killed) child.kill('SIGTERM');
+    terminateProcessTree(child);
     return verdict;
   };
 
@@ -57,7 +92,7 @@ export async function probeOpencode(
       );
       timer.unref?.();
       const onData = (chunk: Buffer) => {
-        buffer += chunk.toString('utf8');
+        if (buffer.length < 64_000) buffer += chunk.toString('utf8').slice(0, 64_000 - buffer.length);
         const m = /https?:\/\/[\d.]+:\d+/.exec(buffer);
         if (m) {
           clearTimeout(timer);
@@ -145,13 +180,19 @@ export async function probeCodex(
     '-',
   ];
   return new Promise<ProbeVerdict>((resolve) => {
-    const child = spawn(bin, args, { cwd: opts.cwd ?? process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, {
+      cwd: opts.cwd ?? process.cwd(),
+      env: harnessChildEnvironment(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+    });
     let stderr = '';
     let settled = false;
     const finish = (verdict: ProbeVerdict) => {
       if (settled) return;
       settled = true;
-      if (!child.killed) child.kill('SIGTERM');
+      terminateProcessTree(child);
       resolve(verdict);
     };
     const timer = setTimeout(
@@ -160,7 +201,7 @@ export async function probeCodex(
     );
     timer.unref?.();
     child.stderr.on('data', (c: Buffer) => {
-      stderr += c.toString('utf8');
+      if (stderr.length < 200_000) stderr += c.toString('utf8').slice(0, 200_000 - stderr.length);
     });
     child.once('error', (err) => {
       clearTimeout(timer);
@@ -174,6 +215,116 @@ export async function probeCodex(
           : { status: 'failed', detail: `${bin} exec exited ${code}: ${stderr.trim().slice(-300)}` },
       );
     });
+    child.stdin.end(PROBE_PROMPT);
+  });
+}
+
+function kimiBinary(model: { binaryEnv?: string }): string | null {
+  const candidates = [
+    model.binaryEnv ? process.env[model.binaryEnv] : undefined,
+    join(homedir(), '.kimi', 'bin', 'kimi', 'kimi'),
+    'kimi',
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  for (const candidate of [...new Set(candidates)]) {
+    const result = spawnSync(candidate, ['--version'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env: harnessChildEnvironment(model.binaryEnv ? [model.binaryEnv] : []),
+    });
+    if (!result.error && result.status === 0) return candidate;
+  }
+  return null;
+}
+
+/** The same subscription CLI path the runtime's Kimi reviewer uses, with a tiny no-tools
+ * prompt. A version check is insufficient: expired login/subscription state only appears on
+ * an actual completion. */
+export async function probeKimiSubscription(
+  model: { model: string; binaryEnv?: string },
+  opts: { timeoutMs?: number } = {},
+): Promise<ProbeVerdict> {
+  const binary = kimiBinary(model);
+  if (!binary) {
+    return {
+      status: 'failed',
+      detail: `missing Kimi CLI (${model.binaryEnv ?? 'OM_KIMI_BIN'} or managed subscription install)`,
+    };
+  }
+  const temp = mkdtempSync(join(tmpdir(), 'cez-kimi-probe-'));
+  const worktree = join(temp, 'worktree');
+  const agentFile = join(temp, 'agent.yaml');
+  const systemFile = join(temp, 'system.md');
+  mkdirSync(worktree);
+  writeFileSync(systemFile, 'You are a readiness probe with no tools. Follow the user response format exactly.\n');
+  writeFileSync(
+    agentFile,
+    'version: 1\nagent:\n  name: readiness-probe\n  system_prompt_path: ./system.md\n  tools: []\n',
+  );
+  const args = [
+    '--quiet',
+    '--input-format',
+    'text',
+    '--thinking',
+    '--agent-file',
+    agentFile,
+    '--work-dir',
+    worktree,
+    '--model',
+    model.model,
+  ];
+  return new Promise<ProbeVerdict>((resolve) => {
+    const child = spawn(binary, args, {
+      cwd: worktree,
+      env: {
+        ...harnessChildEnvironment(model.binaryEnv ? [model.binaryEnv] : []),
+        COLUMNS: '100000',
+        NO_COLOR: '1',
+        TERM: 'dumb',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (verdict: ProbeVerdict) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      terminateProcessTree(child);
+      rmSync(temp, { recursive: true, force: true });
+      resolve(verdict);
+    };
+    const timer = setTimeout(
+      () =>
+        finish({
+          status: 'failed',
+          detail: `Kimi subscription probe timed out after ${opts.timeoutMs ?? PROBE_TIMEOUT_MS}ms`,
+        }),
+      opts.timeoutMs ?? PROBE_TIMEOUT_MS,
+    );
+    timer.unref?.();
+    const collect = (target: 'stdout' | 'stderr', chunk: Buffer) => {
+      const current = target === 'stdout' ? stdout : stderr;
+      const next = current + chunk.toString('utf8').slice(0, Math.max(0, 64_000 - current.length));
+      if (target === 'stdout') stdout = next;
+      else stderr = next;
+    };
+    child.stdout.on('data', (chunk: Buffer) => collect('stdout', chunk));
+    child.stderr.on('data', (chunk: Buffer) => collect('stderr', chunk));
+    child.once('error', (error) => finish({ status: 'failed', detail: error.message }));
+    child.once('exit', (code) =>
+      finish(
+        code === 0 && stdout.trim()
+          ? { status: 'ready', detail: `round-trip ok via ${binary}` }
+          : {
+              status: 'failed',
+              detail: `Kimi CLI exited ${code}: ${(stderr || stdout).trim().slice(-300) || 'no response'}`,
+            },
+      ),
+    );
+    child.stdin.on('error', () => undefined);
     child.stdin.end(PROBE_PROMPT);
   });
 }
@@ -251,26 +402,24 @@ export async function probeAdvisorHttp(
 /** Build the transport that routes a ref to its real code path. `advisors`
  *  supplies the `agentHarness.models` entry for `runner: 'harness'` refs. */
 export function createLiveTransport(deps: {
-  advisors?: Record<string, { model: string; preset?: string; endpoint?: string; credentialEnv?: string; authStoreProvider?: string }>;
+  advisors?: Record<string, { model: string; preset?: string; endpoint?: string; credentialEnv?: string; authStoreProvider?: string; binaryEnv?: string }>;
   cwd?: string;
   timeoutMs?: number;
 }): ProbeTransport {
   return async (ref) => {
+    if (ref.runner === 'claude') {
+      return probeClaude(ref, { cwd: deps.cwd, timeoutMs: deps.timeoutMs });
+    }
     if (ref.runner === 'opencode') return probeOpencode(ref, { cwd: deps.cwd, timeoutMs: deps.timeoutMs });
     if (ref.runner === 'codex') return probeCodex(ref, { cwd: deps.cwd, timeoutMs: deps.timeoutMs });
     if (ref.runner === 'harness') {
       const advisor = deps.advisors?.[ref.model];
       if (!advisor) return { status: 'failed', detail: `advisor "${ref.model}" is not bound in agentHarness.models` };
-      // A subscription CLI has no round-trip shape cezar owns. Say so plainly
-      // rather than reporting a binary check as readiness.
       if (advisor.preset === 'kimi-subscription') {
-        return {
-          status: 'unverified',
-          detail: 'subscription CLI — cezar has no round-trip probe for this adapter',
-        };
+        return probeKimiSubscription(advisor, { timeoutMs: deps.timeoutMs });
       }
       return probeAdvisorHttp(advisor, { timeoutMs: deps.timeoutMs });
     }
-    return { status: 'ready', detail: 'host session' };
+    return { status: 'failed', detail: `unsupported harness probe transport: ${ref.runner}` };
   };
 }

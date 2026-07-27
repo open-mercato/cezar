@@ -8,17 +8,9 @@
  * discarded because a third (a free-tier model) could not finish inside its
  * budget. The user got nothing, twice over, for work that was 2/3 done.
  *
- * The principle survives as a QUORUM. A council means independent voices, so
- * "accept whatever we got" is not the answer either. What must hold is:
- *
- *   - at least two reviewers completed, and
- *   - those survivors span at least two independent families.
- *
- * Both mirror the constraint the server already enforces when a run is
- * submitted, so a degraded round is never weaker than a round the user could
- * have configured on purpose. When a reviewer drops but quorum holds, the round
- * proceeds and is marked `degraded` — the caller is expected to record and
- * surface that, never to swallow it.
+ * The default is the upstream harness contract: every selected reviewer is
+ * required. A lower quorum is available only when an explicit resolved profile
+ * says so; it is never an implicit fallback after a paid reviewer fails.
  */
 
 export interface CouncilOutcome {
@@ -40,11 +32,27 @@ const MIN_REVIEWERS = 2;
 /** Minimum independent families among the survivors. */
 const MIN_FAMILIES = 2;
 
-export function councilQuorum(outcomes: readonly CouncilOutcome[]): CouncilQuorum {
+export interface CouncilPolicy {
+  mode: 'all-required' | 'quorum';
+}
+
+export function councilQuorum(
+  outcomes: readonly CouncilOutcome[],
+  policy: CouncilPolicy = { mode: 'all-required' },
+): CouncilQuorum {
   const completed = outcomes.filter((o) => o.status === 'completed');
   const failed = outcomes.filter((o) => o.status === 'failed');
   const describeFailures = () =>
     failed.map((f) => `${f.label} (${f.reason ?? 'no valid review'})`).join('; ');
+
+  if (policy.mode === 'all-required' && failed.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `${failed.length} of ${outcomes.length} required reviewers did not complete. ` +
+        `Failed: ${describeFailures()}`,
+    };
+  }
 
   if (completed.length < MIN_REVIEWERS) {
     return {
@@ -67,7 +75,7 @@ export function councilQuorum(outcomes: readonly CouncilOutcome[]): CouncilQuoru
     };
   }
 
-  return { ok: true, degraded: failed.length > 0, completed, failed };
+  return { ok: true, degraded: policy.mode === 'quorum' && failed.length > 0, completed, failed };
 }
 
 /**

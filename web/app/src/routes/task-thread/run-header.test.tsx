@@ -96,6 +96,59 @@ function renderHeader(record: ApiRun) {
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
 
+describe('workflow step density', () => {
+  it('folds terminal workflow history into one summary line', () => {
+    stubFetch()
+    renderHeader(
+      run('review', {
+        steps: Array.from({ length: 18 }, (_, index) =>
+          step({ id: `step-${index + 1}`, name: `Step ${index + 1}` }),
+        ),
+      }),
+    )
+
+    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
+      'collapsed',
+    )
+    expect(document.querySelector('[data-slot="step-summary-position"]')?.textContent).toBe(
+      '· 18 of 18 finished',
+    )
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('keeps short live workflows open but folds long live workflows', () => {
+    stubFetch()
+    const short = renderHeader(
+      run('running', {
+        steps: [
+          step({ id: 'implement', status: 'running' }),
+          step({ id: 'validate', name: 'Validate', status: 'pending' }),
+        ],
+      }),
+    )
+    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
+      'open',
+    )
+    short.unmount()
+
+    renderHeader(
+      run('running', {
+        steps: Array.from({ length: 7 }, (_, index) =>
+          step({
+            id: `step-${index + 1}`,
+            name: `Step ${index + 1}`,
+            status: index === 3 ? 'running' : index < 3 ? 'done' : 'pending',
+          }),
+        ),
+      }),
+    )
+    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
+      'collapsed',
+    )
+    expect(document.querySelector('[data-slot="step-summary"]')?.textContent).toBe('Step 4')
+  })
+})
+
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
     stubFetch()

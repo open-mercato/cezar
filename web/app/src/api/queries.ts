@@ -5,6 +5,7 @@ import { mergeProviderStatusResponse } from '@/lib/provider-status'
 
 import {
   ApiError,
+  acceptContestedHarness,
   browseFs,
   checkoutProject,
   editQueuedMessage,
@@ -17,6 +18,7 @@ import {
   getGithubPrChanges,
   getGroup,
   getHarnessStatus,
+  getRunHarness,
   getHealth,
   getImportableSkills,
   getImportableSkillsWhenReady,
@@ -62,6 +64,7 @@ import { queryScope } from './project-scope'
 import type {
   CheckoutProjectInput,
   HarnessProfile,
+  HarnessRoles,
   HealthResponse,
   MessageInput,
   PatchRunInput,
@@ -104,6 +107,7 @@ export const queryKeys = {
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
+    harness: (id: string) => [queryScope(), 'runs', 'harness', id] as const,
   },
   groups: {
     detail: (groupId: string) => [queryScope(), 'groups', groupId] as const,
@@ -458,6 +462,56 @@ export function useRun(id: string | undefined) {
   })
 }
 
+/** Durable harness snapshot. Live progress is folded from the existing per-run SSE stream by
+ *  the routed views, so this query never polls and does not open another connection. */
+export function useRunHarness(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.runs.harness(id ?? ''),
+    queryFn: ({ signal }) => getRunHarness(id as string, { signal }),
+    enabled: Boolean(id) && enabled,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+}
+
+export function useAcceptContestedHarness(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (reason: string) => acceptContestedHarness(id, reason),
+    onSuccess: ({ outcome, decisions }) => {
+      // BOTH halves, or publishing never unlocks (review 2026-07-27): the gate
+      // requires the matching `accept-contested` decision row as well as the
+      // acceptance stamp on `outcome`, and this query never refetches on its own
+      // (`staleTime: Infinity`, no polling), so a partial patch is permanent —
+      // the panel said "accepted" while Finish and Draft PR stayed disabled.
+      queryClient.setQueryData<import('./types').HarnessLedgerResponse>(
+        queryKeys.runs.harness(id),
+        (ledger) => {
+          if (!ledger) return ledger
+          // An older server answers with `outcome` only. Everything the row
+          // needs is already on the acceptance stamp the server just wrote, so
+          // reconstruct it rather than refetching — the server persisted the
+          // identical row, and a refetch would only be a slower way to agree.
+          const rows =
+            decisions ??
+            (outcome.acceptedAt && outcome.acceptanceReason
+              ? [
+                  ...(ledger.decisions ?? []),
+                  {
+                    at: outcome.acceptedAt,
+                    kind: 'accept-contested',
+                    by: outcome.acceptedBy ?? 'user',
+                    detail: outcome.acceptanceReason,
+                  },
+                ]
+              : ledger.decisions)
+          return { ...ledger, outcome, ...(rows ? { decisions: rows } : {}) }
+        },
+      )
+    },
+  })
+}
+
 export function useRunDiff(id: string | undefined) {
   return useQuery({
     queryKey: queryKeys.runs.diff(id ?? ''),
@@ -684,10 +738,15 @@ export function useHarnessStatus(enabled = true) {
 
 /** Probe one profile's readiness. Keyed per profile so switching the segment shows each
  *  profile's own cached answer instantly; a fresh probe still runs on mount. */
-export function useHarnessProbe(profile: HarnessProfile, enabled = true) {
+export function useHarnessProbe(
+  profile: HarnessProfile | undefined,
+  roles: HarnessRoles | undefined,
+  enabled = true,
+) {
+  const key = profile ?? JSON.stringify(roles ?? null)
   return useQuery({
-    queryKey: queryKeys.harness.probe(profile),
-    queryFn: () => probeHarness(profile),
+    queryKey: queryKeys.harness.probe(key),
+    queryFn: () => probeHarness(profile, roles),
     enabled,
   })
 }
@@ -813,7 +872,12 @@ export function useSendMessage(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (message: MessageInput) => sendMessage(id, message),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onSuccess: (response) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+      if (response.queuedForPhase) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+      }
+    },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })

@@ -18,6 +18,7 @@ import { useProjectScope } from '@/api/project-scope-context'
 import {
   queryKeys,
   useConfig,
+  useHarnessProbe,
   useHarnessStatus,
   useHealth,
   useProviderStatus,
@@ -86,6 +87,7 @@ import {
 } from './new-task-draft'
 import {
   HARNESS_MODES,
+  harnessStartBlock,
   buildCreateRunBody,
   canSaveHarnessPreset,
   defaultHarnessRoles,
@@ -282,6 +284,7 @@ export function NewTaskRoute() {
   // join the reviewer options (spec 2026-07-24-advisor-reviewers).
   const harnessStatus = useHarnessStatus()
   const harnessStatusData = harnessStatus.data
+  const [harnessBaseReason, setHarnessBaseReason] = useState('')
   const harnessOptions = useMemo<HarnessModelOption[]>(
     () => [
       ...runners.flatMap((r) =>
@@ -299,18 +302,45 @@ export function NewTaskRoute() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [runners.join(','), codexCatalogData, opencodeCatalogData, harnessStatusData],
   )
-  const harnessFamilies = useMemo(
-    () => [...new Set(harnessOptions.map((o) => o.family))],
+  // Split by transport, because they answer different questions (2026-07-27):
+  // orchestrator and implementer can ONLY be runner-backed, so a workspace with
+  // one runner family and three configured advisors still cannot field a lineup
+  // — and used to be told "no models are available yet", which is false and
+  // sends the user to the wrong fix.
+  const harnessRunnerFamilies = useMemo(
+    () => [...new Set(harnessOptions.filter((o) => o.runner !== 'harness').map((o) => o.family))],
+    [harnessOptions],
+  )
+  const harnessAdvisorFamilies = useMemo(
+    () => [...new Set(harnessOptions.filter((o) => o.runner === 'harness').map((o) => o.family))],
     [harnessOptions],
   )
   /** Null while the workspace cannot field a council — the setup-dialog case. */
   const harnessRoles = draft.harnessRoles ?? defaultHarnessRoles(harnessOptions)
-  const harnessBlocked = harnessFamilies.length < 2 || harnessRoles === null
+  const harnessBlocked = harnessRoles === null
+  // The composer always probes the custom lineup (2026-07-27: the named execution profiles
+  // are gone from this surface, so there is no second thing to probe).
+  const harnessProbe = useHarnessProbe(
+    undefined,
+    harnessRoles ?? undefined,
+    composerMode === 'multi' && harnessRoles !== null,
+  )
+  const harnessProbeBlock = harnessStartBlock(
+    harnessProbe.data,
+    harnessProbe.isPending,
+    harnessProbe.isError,
+  )
   const [harnessSetupOpen, setHarnessSetupOpen] = useState(false)
   useEffect(() => {
     // Opening the Multi-model tab without the models to field a council prompts setup
     // immediately (user feedback 2026-07-24) — not an inline error after the fact.
-    if (composerMode === 'multi' && harnessBlocked && health.data !== undefined) setHarnessSetupOpen(true)
+    //
+    // It also has to CLOSE again (2026-07-27): the model catalogs and
+    // `/harness/status` land asynchronously, so the first render of this tab is
+    // always "blocked", and a dialog that only ever opened then sat on top of a
+    // perfectly valid lineup once the data arrived.
+    if (health.data === undefined) return
+    setHarnessSetupOpen(composerMode === 'multi' && harnessBlocked)
   }, [composerMode, harnessBlocked, health.data !== undefined]) // eslint-disable-line react-hooks/exhaustive-deps
   // Saved lineups (2026-07-24) live in the project's ui-state — passthrough by design, so
   // this is purely additive client state. Save replaces a same-named preset; the list caps.
@@ -514,6 +544,16 @@ export function NewTaskRoute() {
         setHarnessSetupOpen(true)
         throw new Error('Multi-model needs models from at least two families — configure models first.')
       }
+      if (harnessProbeBlock) throw new Error(harnessProbeBlock)
+      const staleBase = harnessStatusData?.base
+      if (
+        staleBase?.stale &&
+        staleBase.configured &&
+        staleBase.remoteDefault &&
+        harnessBaseReason.trim().length < 3
+      ) {
+        throw new Error('Explain why this run should use the configured stale base, or update the base branch first.')
+      }
       const rolesIssue = harnessRolesIssue(harnessRoles)
       if (rolesIssue) throw new Error(rolesIssue)
       const modeDef = HARNESS_MODES.find((m) => m.id === harnessMode) ?? HARNESS_MODES[0]!
@@ -528,6 +568,14 @@ export function NewTaskRoute() {
           variants: 1,
           images,
           harnessRoles,
+          harnessBaseAcknowledgement:
+            staleBase?.stale && staleBase.configured && staleBase.remoteDefault
+              ? {
+                  configuredBase: staleBase.configured,
+                  remoteDefault: staleBase.remoteDefault,
+                  reason: harnessBaseReason.trim(),
+                }
+              : undefined,
         }),
       )
       void putUiState({
@@ -731,6 +779,10 @@ export function NewTaskRoute() {
           sendAriaLabel={
             composerMode === 'multi' ? 'Start multi-model run' : draft.planFirst ? 'Plan task' : 'Start task'
           }
+          // A harness precondition blocks SENDING, never typing (2026-07-27):
+          // it used to disable the whole box, which put the probe's error text
+          // where the prompt's instructions belong and wiped the ability to
+          // keep writing every time a model changed and the probe re-ran.
           disabled={!providersReady || starting}
           disabledReason={
             providers.isPending
@@ -738,6 +790,14 @@ export function NewTaskRoute() {
               : providers.isError
                 ? 'Provider authentication could not be verified.'
                 : 'Connect an agent provider before starting a task.'
+          }
+          sendBlockedReason={
+            composerMode === 'multi'
+              ? (harnessProbeBlock ??
+                (harnessBlocked
+                  ? 'Multi-model needs models from at least two families — configure models first.'
+                  : undefined))
+              : undefined
           }
           autocompleteSkills={composerMode !== 'multi'}
           footerStart={
@@ -878,6 +938,10 @@ export function NewTaskRoute() {
           <HarnessPanel
             mode={harnessMode}
             onMode={(next) => update({ harnessMode: next })}
+            probe={harnessProbe.data}
+            base={harnessStatusData?.base}
+            baseAcknowledgementReason={harnessBaseReason}
+            onBaseAcknowledgementReason={setHarnessBaseReason}
             roles={harnessRoles}
             onRoles={(next) => update({ harnessRoles: next })}
             options={harnessOptions}
@@ -893,7 +957,8 @@ export function NewTaskRoute() {
 
         {composerMode === 'multi' && harnessSetupOpen ? (
           <HarnessSetupDialog
-            families={harnessFamilies}
+            families={harnessRunnerFamilies}
+            advisorFamilies={harnessAdvisorFamilies}
             onConfigure={startHarnessSetup}
             onBackToTask={() => {
               setHarnessSetupOpen(false)

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
@@ -44,11 +45,28 @@ import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type 
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.js';
 import { isV2WireEventType } from '../runs/ui-event-sink.js';
 import type { RunManager } from '../workflows/run.js';
-import { loadLedger } from '../harness/ledger.js';
+import { createLedger, readLedger, saveLedger } from '../harness/ledger.js';
 import { loadAgenticConfig, resolveHarnessRuntimeInfo } from '../harness/runtime.js';
+import {
+  createModelProber,
+  probeKey,
+  sharedHarnessProbeCache,
+  type ModelProber,
+} from '../harness/probe.js';
+import { createLiveTransport } from '../harness/probe-transports.js';
+import { resolveHarnessPlan } from '../harness/profile-plan.js';
+import { providerFamilyOf } from '../harness/model-family.js';
 import { HARNESS_PROFILES, harnessProfileSchema } from '../harness/types.js';
 import { isHarnessWorkflow } from '../harness/workflows.js';
-import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.js';
+import {
+  remoteDefaultBranch,
+  removeWorktree,
+  resolveBaseRef,
+  staleBaseNote,
+  worktreeDiff,
+  worktreeDiffStat,
+  worktreeSizeBytes,
+} from '../git-worktree.js';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.js';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.js';
 import {
@@ -105,6 +123,7 @@ import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.js';
 import {
   providerForActiveRun,
   providerForExistingRun,
+  providersRequiredByHarness,
   providersRequiredByWorkflow,
   unavailableProviderMessage,
 } from './provider-action-gate.js';
@@ -161,6 +180,9 @@ export interface ServerDeps {
   modelCatalog?: RunnerModelCatalog;
   /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
   providerAuth?: ProviderAuthService;
+  /** Harness binding readiness. Production uses live transports; tests inject
+   * a no-network prober so start-gate behavior stays deterministic. */
+  harnessProber?: ModelProber;
   /** Global provider enablement preferences. Tests may inject an in-memory store. */
   workspaceConfig?: {
     load: typeof loadWorkspaceConfig;
@@ -400,14 +422,11 @@ const harnessAdvisorRefSchema = z.object({
 });
 
 /** The provider family a role ref belongs to — the diversity axis of the
- *  strictly-multi-model rule (mirrors `modelFamilyOf` in the web form rules). */
-function harnessFamilyOf(ref: { runner: string; model: string; family?: string }): string {
-  if (ref.runner === 'harness') return ref.family ?? 'harness';
-  if (ref.runner === 'claude') return 'anthropic';
-  if (ref.runner === 'codex') return 'openai';
-  const slash = ref.model.indexOf('/');
-  return slash > 0 ? ref.model.slice(0, slash) : 'opencode';
-}
+ *  strictly-multi-model rule. Delegates to the ONE shared definition
+ *  (`src/harness/model-family.ts`) so admission and the driver's quorum check
+ *  can no longer measure different things; `modelFamilyOf` in the web form
+ *  rules mirrors it for the browser. */
+const harnessFamilyOf = providerFamilyOf;
 
 /** Role-based harness selection (2026-07-24): one orchestrator, one
  *  implementer, 2–5 unique reviewers spanning ≥2 model families. The same
@@ -503,6 +522,14 @@ const startRunSchema = z
         profile: harnessProfileSchema.optional(),
         roles: harnessRolesSchema.optional(),
         issueId: z.string().trim().min(1).max(200).optional(),
+        baseAcknowledgement: z
+          .object({
+            configuredBase: z.string().trim().min(1).max(200),
+            remoteDefault: z.string().trim().min(1).max(200),
+            reason: z.string().trim().min(3).max(2_000),
+          })
+          .strict()
+          .optional(),
       })
       .optional(),
   })
@@ -699,6 +726,10 @@ const gitCommitSchema = z.object({
   message: z.string().trim().min(1, 'commit message must not be empty').max(5_000),
 });
 
+const acceptContestedHarnessSchema = z
+  .object({ reason: z.string().trim().min(3).max(2_000) })
+  .strict();
+
 // "Open in…" (#open-in / #365): `target` selects the app; `path` (optional, worktree-relative)
 // narrows the target's own worktree/repo-root default to one file — used by the diff pane's
 // "open in default app" action for images. Containment is re-checked server-side via
@@ -747,10 +778,14 @@ const MAX_FOLDED_TASK_CHARS = 200_000;
  *  PROSPECTIVE state so the user is stopped at the write, not at dequeue where
  *  there would be no one left to tell. */
 function foldedLength(task: string, stack: Array<{ text: string }>): number {
+  return foldedTask(task, stack).length;
+}
+
+function foldedTask(task: string, stack: Array<{ text: string }>): string {
   return [task, ...stack.map((m) => m.text)]
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
-    .join('\n\n').length;
+    .join('\n\n');
 }
 
 // "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
@@ -2297,8 +2332,112 @@ export function createApp(deps: ServerDeps): Hono {
       // claimants, so competing variants make no sense for a harness run.
       return c.json({ error: 'parallel variants are not available for harness runs — one staged handoff per task' }, 400);
     }
-    const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-    const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+    const harnessInput = isHarnessWorkflow(workflow.name)
+      ? {
+          ...(parsed.data.harness ?? {}),
+          profile:
+            parsed.data.harness?.profile ??
+            (parsed.data.harness?.roles
+              ? parsed.data.harness.roles.implementer.runner === 'claude'
+                ? ('multi' as const)
+                : ('multi-optimized' as const)
+              : ('standard' as const)),
+        }
+      : undefined;
+    const cezarConfig = await loadConfig(repoRoot);
+    if (harnessInput && cezarConfig.baseBranch) {
+      const [remoteDefault, resolvedBase] = await Promise.all([
+        remoteDefaultBranch(repoRoot).catch(() => null),
+        resolveBaseRef(repoRoot, cezarConfig.baseBranch),
+      ]);
+      if (!resolvedBase) {
+        return c.json(
+          {
+            error:
+              `harness start blocked: configured base branch "${cezarConfig.baseBranch}" ` +
+              'does not resolve locally or on origin',
+          },
+          409,
+        );
+      }
+      const stale = staleBaseNote(cezarConfig.baseBranch, remoteDefault);
+      if (stale && remoteDefault) {
+        const acceptance = harnessInput.baseAcknowledgement;
+        if (
+          !acceptance ||
+          acceptance.configuredBase !== cezarConfig.baseBranch ||
+          acceptance.remoteDefault !== remoteDefault
+        ) {
+          return c.json(
+            {
+              error:
+                `harness start blocked before worktree creation: ${stale}. ` +
+                'Update the base branch or explicitly acknowledge this exact base/default pair with a reason.',
+              configuredBase: cezarConfig.baseBranch,
+              remoteDefault,
+            },
+            409,
+          );
+        }
+      }
+    }
+
+    const fallback = parsed.data.runner ?? cezarConfig.defaultRunner;
+    const requiredProviders = new Set<ProviderId>(
+      providersRequiredByWorkflow(workflow, fallback),
+    );
+    if (harnessInput) {
+      const agentic = await loadAgenticConfig(repoRoot);
+      for (const provider of providersRequiredByHarness(harnessInput, agentic.agentHarness)) {
+        requiredProviders.add(provider);
+      }
+      const resolved = harnessInput.roles
+        ? {
+            ok: true as const,
+            plan: {
+              orchestrator: harnessInput.roles.orchestrator,
+              implementer: harnessInput.roles.implementer,
+              reviewers: harnessInput.roles.reviewers,
+            },
+          }
+        : resolveHarnessPlan(harnessInput.profile, agentic.agentHarness);
+      if (!resolved.ok) return c.json({ error: `harness start blocked: ${resolved.error}` }, 409);
+      const refs = [
+        resolved.plan.orchestrator,
+        resolved.plan.implementer,
+        ...resolved.plan.reviewers,
+      ];
+      const prober = deps.harnessProber ?? createModelProber({
+        transport: createLiveTransport({
+          advisors: (agentic.agentHarness?.models ?? {}) as Parameters<
+            typeof createLiveTransport
+          >[0]['advisors'],
+          cwd: repoRoot,
+        }),
+        cache: sharedHarnessProbeCache,
+      });
+      const verdicts = await prober.probeAll(refs);
+      const unavailable = refs
+        .filter((ref, index) => refs.findIndex((candidate) => probeKey(candidate) === probeKey(ref)) === index)
+        .map((ref) => ({ ref, verdict: verdicts.get(probeKey(ref)) }))
+        .filter(({ verdict }) => verdict?.status !== 'ready');
+      if (unavailable.length > 0) {
+        return c.json(
+          {
+            error:
+              'harness start blocked before worktree creation: ' +
+              unavailable
+                .map(
+                  ({ ref, verdict }) =>
+                    `${probeKey(ref)} — ${verdict?.detail ?? 'binding was not verified'}`,
+                )
+                .join('; '),
+          },
+          409,
+        );
+      }
+    }
+    const blocked = await providerActionError([...requiredProviders]);
     if (blocked) return c.json({ error: blocked }, 409);
     const images = parsed.data.images?.map((img): ContentBlock => ({
       type: 'image',
@@ -2312,7 +2451,7 @@ export function createApp(deps: ServerDeps): Hono {
       systemPrompt: parsed.data.systemPrompt,
       worktree: parsed.data.worktree,
       autonomous: parsed.data.autonomous,
-      harness: parsed.data.harness,
+      harness: harnessInput,
       // Opt-in inbox (#471): the capability is the ceiling, so a client asking
       // for follow-ups on a server that has them off gets a plain `false`
       // rather than an error — the run is still perfectly valid without them.
@@ -2551,7 +2690,102 @@ export function createApp(deps: ServerDeps): Hono {
 
     const queued = manager.enqueueMessage(id, content);
     if (queued) return c.json({ queued: true, message: queued });
-    if (manager.deferMessage(id, content)) return c.json({ deferred: true });
+    // Harness startup messages must never enter RunManager's in-memory-only
+    // dequeue buffer. Persist them in the ledger even if the driver has not
+    // reached its first checkpoint yet; its merge-on-save path adopts them.
+    if (!run.harness && manager.deferMessage(id, content)) return c.json({ deferred: true });
+    if (
+      run.harness &&
+      ['queued', 'running', 'waiting'].includes(store.getRun(id)?.status ?? '')
+    ) {
+      if (parsed.data.images.length > 0) {
+        return c.json(
+          {
+            error:
+              'phase-boundary harness messages currently accept text only; send images while a model session is live',
+          },
+          409,
+        );
+      }
+      const harnessDataDir = c.get('project').dataDir;
+      let read = readLedger(harnessDataDir, id);
+      if (read.status === 'missing') {
+        const profile = harnessProfileSchema.safeParse(run.harness.profile);
+        if (!profile.success) {
+          return c.json(
+            { error: `harness recovery profile is invalid: ${run.harness.profile}` },
+            409,
+          );
+        }
+        const ledger = createLedger({
+          workflow: run.harness.workflow,
+          requestedProfile: profile.data,
+          subject: run.harness.issueId
+            ? {
+                kind: 'issue',
+                id: run.harness.issueId,
+                text: foldedTask(run.task, run.queuedMessages ?? []),
+              }
+            : {
+                kind: 'brief',
+                text: foldedTask(run.task, run.queuedMessages ?? []),
+              },
+        });
+        saveLedger(harnessDataDir, id, ledger);
+        read = { status: 'valid', path: '', ledger, migrated: false };
+      }
+      if (read.status !== 'valid') {
+        return c.json(
+          {
+            error:
+              read.status === 'corrupt'
+                  ? `harness ledger is corrupt: ${read.error}`
+                  : `harness ledger version ${String(read.version)} is not supported`,
+          },
+          409,
+        );
+      }
+      const pending = read.ledger.pendingMessages.filter((message) => !message.consumedAt);
+      if (pending.length >= MAX_QUEUED_MESSAGES) {
+        return c.json(
+          { error: `too many phase-boundary messages — ${MAX_QUEUED_MESSAGES} message limit` },
+          400,
+        );
+      }
+      const totalChars =
+        pending.reduce((sum, message) => sum + message.text.length, 0) +
+        parsed.data.text.length;
+      if (totalChars > MAX_FOLDED_TASK_CHARS) {
+        return c.json(
+          {
+            error: `phase-boundary messages exceed the ${MAX_FOLDED_TASK_CHARS} character limit`,
+          },
+          400,
+        );
+      }
+      const message = {
+        id: randomUUID(),
+        text: parsed.data.text,
+        createdAt: new Date().toISOString(),
+      };
+      read.ledger.pendingMessages.push(message);
+      saveLedger(harnessDataDir, id, read.ledger);
+      // A phase-boundary message is already user-authored even though its delivery to the next
+      // model session is deferred. Emit the ordinary transcript event now so the bubble remains
+      // visible across reloads; the driver only marks the durable ledger row consumed later and
+      // must not emit a second user-message event.
+      store.appendEvent(id, {
+        type: 'user-message',
+        text: message.text,
+        imageCount: 0,
+        images: [],
+      });
+      store.appendEvent(id, {
+        type: 'harness.message.queued',
+        message: { id: message.id, createdAt: message.createdAt },
+      });
+      return c.json({ queuedForPhase: true });
+    }
     return c.json({ error: 'session closed' }, 409);
   });
 
@@ -2953,8 +3187,46 @@ export function createApp(deps: ServerDeps): Hono {
   /** The stage-only publish guard: a harness run's worktree must not be
    *  pushed or PR'd before the run parks at its review gate — the cockpit
    *  twin of the harness `block-push-and-pr` hook. */
-  const harnessPublishBlocked = (run: RunRecord): boolean =>
-    Boolean(run.harness) && !['review', 'done'].includes(run.status);
+  const harnessPublishBlockReason = (run: RunRecord, dataDir: string): string | null => {
+    if (!run.harness) return null;
+    if (!['review', 'done'].includes(run.status)) {
+      return 'stage-only: this harness run has not reached its review gate — publishing stays yours after review';
+    }
+    const read = readLedger(dataDir, run.id);
+    if (read.status === 'missing') {
+      return 'harness recovery state is missing — publishing is blocked until the ledger is restored';
+    }
+    if (read.status === 'corrupt') {
+      return `harness recovery state is corrupt — publishing is blocked: ${read.error}`;
+    }
+    if (read.status === 'unsupported') {
+      return `harness recovery state uses unsupported version ${String(read.version)} — update cezar before publishing`;
+    }
+    if (read.ledger.stage.status !== 'staged') {
+      return 'stage-only: the harness has not produced a verified staged handoff';
+    }
+    if (read.ledger.outcome.status === 'ready') return null;
+    if (read.ledger.outcome.status === 'contested') {
+      const accepted =
+        read.ledger.outcome.acceptedAt &&
+        read.ledger.outcome.acceptedBy === 'user' &&
+        read.ledger.outcome.acceptanceReason &&
+        read.ledger.decisions.some(
+          (decision) =>
+            decision.kind === 'accept-contested' &&
+            decision.by === 'user' &&
+            decision.at === read.ledger.outcome.acceptedAt &&
+            decision.detail === read.ledger.outcome.acceptanceReason,
+        );
+      if (accepted) return null;
+      return `harness review is contested — explicitly accept the unresolved findings with a reason before publishing: ${read.ledger.outcome.blockingReasons.join('; ')}`;
+    }
+    return `harness outcome is ${read.ledger.outcome.status} — publishing requires a verified ready outcome or an explicitly accepted contested outcome${
+      read.ledger.outcome.blockingReasons.length > 0
+        ? `: ${read.ledger.outcome.blockingReasons.join('; ')}`
+        : ''
+    }`;
+  };
 
   // Installed/configured summary for the start surface and Settings →
   // Harness. `standard` is always offered — it needs no provider and no
@@ -2964,7 +3236,11 @@ export function createApp(deps: ServerDeps): Hono {
   // `cez-setup-harness` as a task.
   api.get('/harness/status', async (c) => {
     const { root: repoRoot } = c.get('project');
-    const agentic = await loadAgenticConfig(repoRoot);
+    const [agentic, cezarConfig, remoteDefault] = await Promise.all([
+      loadAgenticConfig(repoRoot),
+      loadConfig(repoRoot),
+      remoteDefaultBranch(repoRoot).catch(() => null),
+    ]);
     const rawProfiles = (agentic.agentHarness?.profiles as Record<string, unknown> | undefined) ?? {};
     const configuredProfiles = Object.keys(rawProfiles);
     const profiles = [...new Set(['standard', ...configuredProfiles])].filter((p) =>
@@ -3002,9 +3278,22 @@ export function createApp(deps: ServerDeps): Hono {
     return c.json({
       configured: agentic.agentHarness !== undefined,
       profiles,
-      /** Which profiles this cezar can conduct itself (spec Phases 3–5 widen this). */
-      driven: ['standard'],
+      /** All public profiles have a concrete driver plan; configured bindings
+       * are still measured by the probe endpoint before a run may start. */
+      driven: [...HARNESS_PROFILES],
       models,
+      base: {
+        configured: cezarConfig.baseBranch ?? null,
+        remoteDefault,
+        stale: Boolean(
+          cezarConfig.baseBranch &&
+            staleBaseNote(cezarConfig.baseBranch, remoteDefault),
+        ),
+        note:
+          cezarConfig.baseBranch
+            ? staleBaseNote(cezarConfig.baseBranch, remoteDefault) ?? undefined
+            : undefined,
+      },
       /** Where the harness collection would come from — normally `bundled`
        *  (the vendored cez-* tree shipped with cezar) with its pinned
        *  upstream commit; repo-local/team overrides report as themselves. */
@@ -3012,32 +3301,92 @@ export function createApp(deps: ServerDeps): Hono {
     });
   });
 
-  // Readiness for the start surface. Version 1 answers `standard` locally
-  // (the host is the only model) and reports council/worker profiles as not
-  // yet driven — an honest refusal, never a silent degrade.
+  // Readiness for the start surface: resolve the same immutable plan the
+  // driver will use, then measure every distinct binding on its real transport.
   api.post('/harness/probe', async (c) => {
     const body = z
-      .object({ profile: harnessProfileSchema })
+      .object({
+        profile: harnessProfileSchema.optional(),
+        roles: harnessRolesSchema.optional(),
+      })
+      .refine((value) => value.profile !== undefined || value.roles !== undefined, {
+        message: 'profile or roles is required',
+      })
       .safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json({ error: body.error.issues.map((i) => i.message).join('; ') }, 400);
     }
-    if (body.data.profile !== 'standard') {
+    const { root: repoRoot } = c.get('project');
+    const agentic = await loadAgenticConfig(repoRoot);
+    const profile = body.data.profile ?? 'multi-optimized';
+    const resolved = body.data.roles
+      ? {
+          ok: true as const,
+          plan: {
+            profile,
+            orchestrator: body.data.roles.orchestrator,
+            implementer: body.data.roles.implementer,
+            reviewers: body.data.roles.reviewers,
+            reviewPolicy: 'all-required' as const,
+            packetized: false,
+          },
+        }
+      : resolveHarnessPlan(profile, agentic.agentHarness);
+    if (!resolved.ok) {
       return c.json({
-        profile: body.data.profile,
+        profile,
         ready: false,
-        reason:
-          `profile "${body.data.profile}" is not yet driven by cezar — only "standard" is. ` +
-          `The run would stop at preflight; start with the standard profile instead.`,
+        reason: resolved.error,
         models: [],
       });
     }
+    const refs = [
+      resolved.plan.orchestrator,
+      resolved.plan.implementer,
+      ...resolved.plan.reviewers,
+    ];
+    const prober = deps.harnessProber ?? createModelProber({
+      transport: createLiveTransport({
+        advisors: (agentic.agentHarness?.models ?? {}) as Parameters<
+          typeof createLiveTransport
+        >[0]['advisors'],
+        cwd: repoRoot,
+      }),
+      cache: sharedHarnessProbeCache,
+    });
+    const verdicts = await prober.probeAll(refs);
+    const seen = new Set<string>();
+    const models = refs.flatMap((ref) => {
+      const key = probeKey(ref);
+      if (seen.has(key)) return [];
+      seen.add(key);
+      const id = ref.runner === 'claude' && !ref.model ? 'claude' : key;
+      const verdict = verdicts.get(key);
+      return [
+        {
+          id,
+          family: ref.runner === 'harness' ? ref.family : ref.runner,
+          binding:
+            ref.runner === 'harness'
+              ? `council · ${ref.model}`
+              : `${ref.runner} · ${ref.model || 'default model'}`,
+          readiness:
+            verdict?.status === 'ready'
+              ? 'ready'
+              : verdict?.status === 'failed'
+                ? 'failed'
+                : 'unknown',
+          readinessDetail: verdict?.detail,
+        },
+      ];
+    });
     return c.json({
-      profile: 'standard',
-      ready: true,
-      models: [
-        { id: 'claude', family: 'anthropic', binding: 'host app', roles: ['host', 'reviewer'], readiness: 'ready' },
-      ],
+      profile,
+      ready: models.every((model) => model.readiness === 'ready'),
+      ...(!models.every((model) => model.readiness === 'ready')
+        ? { reason: 'one or more required model bindings could not be verified' }
+        : {}),
+      models,
     });
   });
 
@@ -3047,9 +3396,85 @@ export function createApp(deps: ServerDeps): Hono {
     const { dataDir, store } = c.get('project');
     const id = c.req.param('id');
     if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-    const ledger = loadLedger(dataDir, id);
-    if (!ledger) return c.json({ error: 'no harness ledger for this run' }, 404);
-    return c.json(ledger);
+    // The driver persists before emitting. Sampling the event watermark first
+    // means the following ledger read is at least as new as every event the
+    // reducer is instructed to discard.
+    const snapshotSeq = store.eventHighWaterMark(id);
+    const read = readLedger(dataDir, id);
+    if (read.status === 'missing') return c.json({ error: 'no harness ledger for this run' }, 404);
+    if (read.status === 'corrupt') {
+      return c.json({ error: `harness ledger is corrupt: ${read.error}` }, 409);
+    }
+    if (read.status === 'unsupported') {
+      return c.json({ error: `harness ledger version ${String(read.version)} is not supported` }, 409);
+    }
+    return c.json({ ...read.ledger, snapshotSeq });
+  });
+
+  api.post('/runs/:id/harness/accept-contested', async (c) => {
+    const { dataDir, store } = c.get('project');
+    const id = c.req.param('id');
+    const run = store.getRun(id);
+    if (!run) return c.json({ error: 'not found' }, 404);
+    if (!run.harness) return c.json({ error: 'run is not a harness run' }, 409);
+    const parsed = acceptContestedHarnessSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    }
+    const read = readLedger(dataDir, id);
+    if (read.status !== 'valid') {
+      return c.json(
+        {
+          error:
+            read.status === 'missing'
+              ? 'no harness ledger for this run'
+              : read.status === 'corrupt'
+                ? `harness ledger is corrupt: ${read.error}`
+                : `harness ledger version ${String(read.version)} is not supported`,
+        },
+        409,
+      );
+    }
+    if (read.ledger.outcome.status !== 'contested') {
+      return c.json({ error: 'harness outcome is not contested' }, 409);
+    }
+    if (run.status !== 'review' || read.ledger.stage.status !== 'staged') {
+      return c.json(
+        { error: 'contested risk can be accepted only at the final staged review gate' },
+        409,
+      );
+    }
+    const at = new Date().toISOString();
+    read.ledger.outcome = {
+      ...read.ledger.outcome,
+      acceptedAt: at,
+      acceptedBy: 'user',
+      acceptanceReason: parsed.data.reason,
+    };
+    read.ledger.decisions.push({
+      at,
+      kind: 'accept-contested',
+      by: 'user',
+      detail: parsed.data.reason,
+    });
+    read.ledger.stage.prBody = [
+      read.ledger.stage.prBody ?? '',
+      '',
+      `Risk accepted by the user at ${at}: ${parsed.data.reason}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    saveLedger(dataDir, id, read.ledger);
+    store.appendEvent(id, {
+      type: 'harness.outcome.updated',
+      outcome: read.ledger.outcome,
+    });
+    // `decisions` rides along because the publish gate — here AND in the client,
+    // which mirrors it — requires the matching `accept-contested` row, not just
+    // the acceptance stamp on `outcome`. Returning only `outcome` left the
+    // client's cached ledger without that row, so the panel said "accepted"
+    // while Finish and Draft PR stayed disabled (review 2026-07-27).
+    return c.json({ outcome: read.ledger.outcome, decisions: read.ledger.decisions });
   });
 
   api.post('/runs/:id/git/commit', async (c) => {
@@ -3068,15 +3493,11 @@ export function createApp(deps: ServerDeps): Hono {
   });
 
   api.post('/runs/:id/git/push', async (c) => {
-    const { store } = c.get('project');
+    const { dataDir, store } = c.get('project');
     const run = store.getRun(c.req.param('id'));
     if (!run) return c.json({ error: 'not found' }, 404);
-    if (harnessPublishBlocked(run)) {
-      return c.json(
-        { error: 'stage-only: this harness run has not reached its review gate — publishing stays yours after review' },
-        409,
-      );
-    }
+    const publishBlock = harnessPublishBlockReason(run, dataDir);
+    if (publishBlock) return c.json({ error: publishBlock }, 409);
     const worktree = worktreeOf(run);
     if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
     const result = await pushCurrentBranch(worktree);
@@ -3098,12 +3519,8 @@ export function createApp(deps: ServerDeps): Hono {
     const id = c.req.param('id');
     const run = store.getRun(id);
     if (!run) return c.json({ error: 'not found' }, 404);
-    if (harnessPublishBlocked(run)) {
-      return c.json(
-        { error: 'stage-only: this harness run has not reached its review gate — publishing stays yours after review' },
-        409,
-      );
-    }
+    const publishBlock = harnessPublishBlockReason(run, dataDir);
+    if (publishBlock) return c.json({ error: publishBlock }, 409);
     if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
     if (!run.worktreePath || !existsSync(run.worktreePath) || !run.branch) {
       return c.json(
@@ -3113,10 +3530,13 @@ export function createApp(deps: ServerDeps): Hono {
         400,
       );
     }
+    const harnessRead = run.harness ? readLedger(dataDir, id) : null;
+    const preparedHarnessBody =
+      harnessRead?.status === 'valid' ? harnessRead.ledger.stage.prBody : undefined;
     const outcome = await createDraftPr({
       repoRoot,
       run,
-      handoffText: readHandoff(dataDir, id),
+      handoffText: preparedHarnessBody ?? readHandoff(dataDir, id),
     });
     if (!outcome.ok) {
       return c.json({ error: outcome.error, manual: `git merge ${run.branch}` }, 409);

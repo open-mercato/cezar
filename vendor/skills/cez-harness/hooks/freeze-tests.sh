@@ -29,7 +29,7 @@ case "$fp" in
 esac
 
 # Only test files are ever frozen.
-printf '%s' "$fp" | grep -qE '(\.spec\.|\.test\.|/__tests__/|/__integration__/)' || exit 0
+printf '%s' "$fp" | grep -qE '(\.spec\.|\.test\.|/__tests__/|/__integration__/|/(test|tests|spec)/|/(test_[^/]+|[^/]+_test)\.[^/]+$)' || exit 0
 
 dir="$(dirname "$fp" 2>/dev/null || true)"
 [ -n "$dir" ] || exit 0

@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multi-model run — Review tab (proposed)</title>
+<link rel="stylesheet" href="_tokens.css">
+<style>
+  .shell { width: 100%; max-width: var(--shell); margin: 0 auto; padding: 0 20px; }
+
+  .runhead { position: sticky; top: 0; z-index: 20; background: rgba(13,13,13,.95); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  .titlerow { display: flex; align-items: center; gap: 10px; padding-top: 12px; }
+  .titlerow h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+  .metarow { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 12px; color: var(--muted-foreground); flex-wrap: wrap; }
+  .metarow .sep { color: var(--soft-foreground); }
+  .add { color: var(--success); } .del { color: var(--danger); }
+  .tabs { display: flex; align-items: flex-end; gap: 2px; margin-top: 10px; }
+  .tab { padding: 8px 12px 9px; font-size: 13px; font-weight: 550; color: var(--muted-foreground); border-bottom: 2px solid transparent; }
+  .tab.on { color: var(--foreground); font-weight: 650; border-bottom-color: var(--primary); }
+  .tab .cnt { margin-left: 6px; font-size: 10.5px; color: var(--soft-foreground); }
+  .tabs .acts { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-bottom: 5px; }
+  .statusbar { border-bottom: 1px solid var(--border); background: var(--card); }
+  .statusbar .inner { display: flex; align-items: center; gap: 10px; height: 42px; font-size: 12.5px; }
+  .statusbar .lnk { color: var(--muted-foreground); font-weight: 550; border-bottom: 1px dotted var(--soft-foreground); }
+
+  .body { display: grid; grid-template-columns: minmax(0,1fr) 336px; gap: 20px; align-items: start; padding: 18px 0 40px; }
+  @media (max-width: 1279px) { .body { grid-template-columns: minmax(0,1fr); } .rail { display: none; } }
+  .col { display: flex; flex-direction: column; gap: 14px; }
+
+  /* C1: the run outcome leads. The round verdict is subordinate to it. */
+  .verdict { border: 1px solid rgba(239,68,68,.45); background: rgba(239,68,68,.06); border-radius: var(--radius-lg); padding: 14px 16px; }
+  .verdict h2 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+  .verdict p { margin: 0; font-size: 13px; color: var(--muted-foreground); max-width: 76ch; line-height: 1.6; }
+  .verdict .row { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  .verdict textarea {
+    flex: 1; min-width: 260px; min-height: 34px; resize: vertical;
+    background: var(--background); border: 1px solid var(--input); border-radius: var(--radius);
+    color: var(--foreground); font: 400 12.5px var(--sans); padding: 8px 10px;
+  }
+  .verdict textarea::placeholder { color: var(--soft-foreground); }
+
+  /* C6: findings as severity-grouped cards, agreement as chips — no column per reviewer */
+  .grouphd { display: flex; align-items: center; gap: 9px; margin: 4px 0 -4px; }
+  .grouphd .eyebrow { letter-spacing: .07em; }
+  .sev { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 5px; font-size: 9.5px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+  .sev.major { background: rgba(239,68,68,.15); color: #fca5a5; }
+  .sev.minor { background: var(--muted); color: var(--muted-foreground); }
+  .sev.nit { background: var(--muted); color: var(--soft-foreground); }
+
+  .finding { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); align-items: start; }
+  .finding:last-child { border-bottom: 0; }
+  .finding .ttl { font-size: 13.5px; font-weight: 600; line-height: 1.45; }
+  .finding .loc { margin-top: 3px; font: 400 11px var(--mono); color: var(--soft-foreground); word-break: break-all; }
+  .finding .who { display: flex; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 10.5px; font-weight: 600; color: var(--soft-foreground); }
+  .chip.raised { border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.08); color: #fca5a5; }
+  .chip.raised.low { border-color: var(--border); background: var(--muted); color: var(--muted-foreground); }
+  .finding .go { font-size: 11.5px; color: var(--muted-foreground); white-space: nowrap; }
+
+  /* C3 + C4: council table = reviewers only, grouped by family, with cost */
+  table { width: 100%; border-collapse: collapse; }
+  thead th { text-align: left; font-size: 10px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--soft-foreground); background: var(--card-2); padding: 7px 14px; }
+  tbody td { padding: 11px 14px; font-size: 12.5px; border-top: 1px solid var(--border); vertical-align: middle; }
+  tbody tr:hover { background: var(--card-2); cursor: pointer; }
+  td .nm { font-weight: 650; }
+  td .bd { font: 400 10.5px var(--mono); color: var(--soft-foreground); }
+  .fampill { display: inline-flex; align-items: center; height: 19px; padding: 0 8px; border-radius: 999px; background: var(--muted); font-size: 10.5px; font-weight: 600; color: var(--muted-foreground); }
+  .r { text-align: right; }
+
+  /* C7: reviewer detail drawer */
+  #drw { display: none; }
+  .scrim, .drawer { display: none; }
+  #drw:checked ~ .scrim { display: block; }
+  #drw:checked ~ .drawer { display: flex; }
+  label[for='drw'] { cursor: pointer; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 520px; background: var(--card); border-left: 1px solid var(--border); box-shadow: var(--shadow-modal); z-index: 60; flex-direction: column; }
+  .drawer .dh { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .drawer .dh h2 { margin: 0; font-size: 14px; font-weight: 650; }
+  .drawer .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); }
+  .drawer .meta div { background: var(--card); padding: 9px 14px; }
+  .drawer .meta b { display: block; font-size: 13px; font-weight: 650; }
+  .drawer .meta small { font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--soft-foreground); }
+  .drawer .bd { padding: 14px 16px; overflow: auto; font-size: 13px; line-height: 1.62; color: var(--muted-foreground); }
+  .drawer .bd h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--soft-foreground); font-weight: 650; }
+  .drawer .bd p { margin: 0 0 12px; max-width: 64ch; }
+  .drawer .bd pre { background: var(--card-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; font: 400 11.5px/1.6 var(--mono); overflow-x: auto; color: var(--muted-foreground); }
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 50; }
+
+  .rail { position: sticky; top: 138px; display: flex; flex-direction: column; gap: 12px; }
+  .rail .sec { padding: 11px 13px; }
+  .rail .sech { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .rail .sech .eyebrow { flex: 1; }
+  .stat { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+  .stat:last-child { border-bottom: 0; }
+  .stat b { margin-left: auto; font-weight: 650; }
+</style>
+
+<input type="checkbox" id="drw">
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="logo"></span>cezar</div>
+    <div class="newtask"><span>＋</span>New task<kbd>C</kbd></div>
+    <div class="proj"><span>›</span>cezar<span class="branch">feat/multi-mo…</span></div>
+    <div class="proj active"><span>›</span>open-mercato<span class="branch">develop</span></div>
+  </aside>
+
+  <div>
+    <header class="runhead">
+      <div class="shell">
+        <div class="titlerow">
+          <h1>applying inbox ops ui fixes</h1>
+          <span class="pill warn" style="margin-left:auto"><span class="dot bad"></span>blocked · 5 major</span>
+          <button class="btn ghost">⋯</button>
+        </div>
+        <div class="metarow">
+          <span>harness-implement-feature</span><span class="sep">·</span>
+          <span class="mono" style="font-size:11px">cez/8ccba4ea</span><span class="sep">·</span>
+          <span style="color:var(--violet)">Issue #13386 ↗</span><span class="sep">·</span>
+          <span><b class="add">+1764</b> <b class="del">−340</b></span>
+          <span style="margin-left:auto" class="num">2h 58m · 66.1M tokens · $2.35</span>
+        </div>
+        <nav class="tabs">
+          <span class="tab">Session</span>
+          <span class="tab on">Review<span class="cnt">9</span></span>
+          <span class="tab">Changes<span class="cnt">23</span></span>
+          <span class="tab">Commits</span>
+          <span class="tab">Files</span>
+          <span class="acts">
+            <button class="btn">▷ Continue</button>
+            <button class="btn primary">✓ Finish</button>
+          </span>
+        </nav>
+      </div>
+    </header>
+
+    <div class="statusbar">
+      <div class="shell inner">
+        <span class="dot ok"></span><span style="font-weight:650">Stage</span>
+        <span class="soft">· phase 18 of 18</span>
+        <span class="mut">council round 3 · 2/2 approved</span>
+        <span style="margin-left:auto" class="lnk">Timeline</span>
+        <span class="lnk">Take over ⧉</span>
+      </div>
+    </div>
+
+    <div class="shell body">
+      <div class="col">
+        <!-- C1 -->
+        <section class="verdict">
+          <h2>Publishing is blocked — 5 major findings were never resolved</h2>
+          <p>The last council round approved the diff, but five major findings raised during the spec
+            council were carried forward without a resolution. Send the run back to fix them, or record
+            why publishing is safe anyway.</p>
+          <div class="row">
+            <textarea placeholder="Explain why publishing is safe despite the unresolved findings…"></textarea>
+            <button class="btn">↩ Send back</button>
+            <button class="btn">Accept risk</button>
+          </div>
+        </section>
+
+        <div class="fixnote">
+          <span>▲</span>
+          <span><b>Today:</b> this screen shows a green “approve” pill and a 6-column matrix of 4 NIT/MINOR
+            findings; the five blocking majors appear only as one semicolon-joined line inside the
+            contested box. The outcome now leads, and the blockers are cards.</span>
+        </div>
+
+        <!-- C6 -->
+        <div class="grouphd"><span class="sev major">major</span><span class="eyebrow">5 blocking findings</span><span class="soft" style="margin-left:auto;font-size:11.5px">raised in spec council · rounds 1–3</span></div>
+        <section class="card">
+          <div class="finding">
+            <span class="sev major">major</span>
+            <div>
+              <div class="ttl">Client validation imports a potentially server-bound validator module</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/components/proposals/EditActionDialog.tsx:31</div>
+              <div class="who"><span class="chip raised">● gpt-5.6-luna</span><span class="chip">mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+          <div class="finding">
+            <span class="sev major">major</span>
+            <div>
+              <div class="ttl">Email XSS mitigation is not sufficiently specified for existing HTML rendering</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/components/proposals/MessageBody.tsx</div>
+              <div class="who"><span class="chip raised">● gpt-5.6-luna</span><span class="chip">mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+          <div class="finding">
+            <span class="sev major">major</span>
+            <div>
+              <div class="ttl">Integration-test fixtures and cleanup are left unresolved</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/__tests__/</div>
+              <div class="who"><span class="chip raised">● gpt-5.6-luna</span><span class="chip">mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+          <div class="finding">
+            <span class="sev major">major</span>
+            <div>
+              <div class="ttl">Settings optimistic-lock behavior is assumed without establishing the endpoint contract</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/backend/inbox-ops/settings/page.tsx:29</div>
+              <div class="who"><span class="chip raised">● gpt-5.6-luna</span><span class="chip">mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+          <div class="finding">
+            <span class="sev major">major</span>
+            <div>
+              <div class="ttl">Visual-regression acceptance criteria conflict with the proposed test plan</div>
+              <div class="loc">.ai/specs/inbox-ops-ui.md</div>
+              <div class="who"><span class="chip raised">● gpt-5.6-luna</span><span class="chip">mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+        </section>
+
+        <div class="grouphd"><span class="sev minor">minor</span><span class="eyebrow">4 non-blocking findings</span></div>
+        <section class="card">
+          <div class="finding">
+            <span class="sev minor">minor</span>
+            <div>
+              <div class="ttl">CATEGORY_CONFIG retains deprecated <code>color</code> property alongside the new variant</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/components/proposals/CategoryBadge.tsx:22</div>
+              <!-- C2: "raised by" deduped — one chip per reviewer, once -->
+              <div class="who"><span class="chip">gpt-5.6-luna</span><span class="chip raised low">● mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+          <div class="finding">
+            <span class="sev minor">minor</span>
+            <div>
+              <div class="ttl">InboxSettings type defined locally in the settings page</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/backend/inbox-ops/settings/page.tsx:29</div>
+              <div class="who"><span class="chip">gpt-5.6-luna</span><span class="chip raised low">● mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+          <div class="finding">
+            <span class="sev nit">nit</span>
+            <div>
+              <div class="ttl">Utility functions <code>isRecord</code> and <code>clonePayload</code> could be shared</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/components/proposals/EditActionDialog.tsx:31</div>
+              <div class="who"><span class="chip">gpt-5.6-luna</span><span class="chip raised low">● mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+          <div class="finding">
+            <span class="sev nit">nit</span>
+            <div>
+              <div class="ttl">serializeAction defined at module scope</div>
+              <div class="loc">packages/core/src/modules/inbox_ops/api/proposals/[id]/route.ts:14</div>
+              <div class="who"><span class="chip">gpt-5.6-luna</span><span class="chip raised low">● mimo-v2.5-free</span></div>
+            </div>
+            <label for="drw" class="go">Open →</label>
+          </div>
+        </section>
+
+        <!-- C3 + C4 + C5 -->
+        <section class="card">
+          <div class="hd">
+            <h2>Council</h2>
+            <span class="soft" style="font-size:11.5px">2 reviewers · 2 families · round 3 of 3</span>
+            <span class="pill good" style="margin-left:auto">quorum held</span>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Reviewer</th><th>Family</th><th>Verdict</th><th>Findings</th><th class="r">Duration</th><th class="r">Cost</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="nm">gpt-5.6-luna</span><span class="bd">codex · gpt-5.6-luna</span></td>
+                <td><span class="fampill">openai</span></td>
+                <td><span class="pill"><span class="dot ok"></span>approve</span></td>
+                <td><span class="sev major">5 major</span></td>
+                <td class="r num">18m 04s</td>
+                <td class="r num">$0.81 <label for="drw" class="pill" style="margin-left:6px">review ↗</label></td>
+              </tr>
+              <tr>
+                <td><span class="nm">mimo-v2.5-free</span><span class="bd">opencode · opencode/mimo-v2.5-free</span></td>
+                <td><span class="fampill">mimo</span></td>
+                <td><span class="pill"><span class="dot ok"></span>approve</span></td>
+                <td><span class="sev minor">4 minor</span></td>
+                <td class="r num">7m 12s</td>
+                <td class="r num">$0.00 <label for="drw" class="pill" style="margin-left:6px">review ↗</label></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="fixnote" style="margin:11px 14px 12px">
+            <span>▲</span>
+            <span><b>Today:</b> this table is “Reviewer status” and lists the orchestrator too, with a
+              readiness value (<code>ready</code>) in the same Status column as a run value
+              (<code>completed</code>); Family renders “—” for every row. Orchestrator and implementer
+              move to the rail; Family becomes real data.</span>
+          </div>
+        </section>
+      </div>
+
+      <aside class="rail">
+        <div class="card sec">
+          <div class="sech"><span class="eyebrow">Outcome</span></div>
+          <div class="stat">Verdict<b style="color:#fca5a5">contested</b></div>
+          <div class="stat">Rounds<b class="num">3</b></div>
+          <div class="stat">Staged diff<b class="num">+1764 −340</b></div>
+          <div class="stat">Commits<b class="num">0 · stage-only</b></div>
+        </div>
+        <div class="card sec">
+          <div class="sech"><span class="eyebrow">Spend</span></div>
+          <div class="stat">Orchestrator<b class="num">$1.02</b></div>
+          <div class="stat">Implementer<b class="num">$1.33</b></div>
+          <div class="stat">Reviewers<b class="num">$0.81</b></div>
+          <div class="stat" style="border-top:1px solid var(--border);padding-top:8px">Total<b class="num">$2.35</b></div>
+        </div>
+        <div class="card sec">
+          <div class="sech"><span class="eyebrow">Models</span><span class="soft" style="font-size:11px">3</span></div>
+          <div class="stat"><span class="dot ok"></span>claude-haiku-4-5<b class="num soft" style="font-size:11px">6 · 19m</b></div>
+          <div class="stat"><span class="dot ok"></span>gpt-5.6-luna<b class="num soft" style="font-size:11px">15 · 81m</b></div>
+          <div class="stat"><span class="dot ok"></span>mimo-v2.5-free<b class="num soft" style="font-size:11px">10 · 22m</b></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<!-- C7: reviewer detail drawer, opened from any council row or finding -->
+<label class="scrim" for="drw"></label>
+<aside class="drawer">
+  <div class="dh">
+    <span class="dot ok"></span>
+    <h2>gpt-5.6-luna</h2>
+    <span class="fampill">openai</span>
+    <span class="pill" style="margin-left:auto"><span class="dot ok"></span>approve</span>
+    <label for="drw" class="btn ghost">✕</label>
+  </div>
+  <div class="meta">
+    <div><small>Attempts</small><b class="num">1</b></div>
+    <div><small>Duration</small><b class="num">18m 04s</b></div>
+    <div><small>Tokens</small><b class="num">4.2M</b></div>
+    <div><small>Cost</small><b class="num">$0.81</b></div>
+  </div>
+  <div class="bd">
+    <h3>Transport</h3>
+    <pre>codex exec · round-trip ok
+model  gpt-5.6-luna
+effort high
+retries 0</pre>
+    <h3 style="margin-top:16px">Review</h3>
+    <p><b style="color:var(--foreground)">Verdict: approve with 5 major findings.</b> The diff itself is
+      coherent and the locale changes are correct, but five issues carried over from the spec council
+      remain unaddressed in the implementation.</p>
+    <p><b style="color:#fca5a5">1. Client validation imports a potentially server-bound validator module.</b>
+      <code>EditActionDialog.tsx:31</code> imports <code>validateActionPayload</code> from a module that also
+      pulls the ORM entity manager. In a client bundle this either fails to build or ships server code…</p>
+    <p><b style="color:#fca5a5">2. Email XSS mitigation is not sufficiently specified.</b> The spec says
+      “sanitize before render” without naming the sanitizer or the allowed tag set, and the existing HTML
+      path renders through <code>dangerouslySetInnerHTML</code> unchanged…</p>
+    <p class="soft">…full review continues</p>
+  </div>
+</aside>
+
+<div class="note">Proposed · mockup 02 of 04 — Review tab</div>

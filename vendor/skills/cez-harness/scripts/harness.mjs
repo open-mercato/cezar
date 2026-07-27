@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, writeFileSync, mkdirSync, rmSync, unlinkSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -44,6 +44,7 @@ const VALID_PACKET_STATES = new Set(['planned', 'claimed', 'implementing', 'revi
 const PACKET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/
 const SECRET_ENV_PATTERN = /(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY|SESSION)/i
 const LEDGER_OUTPUT_LIMIT = 20000
+const MODEL_OUTPUT_LIMIT = 2_000_000
 
 function fail(message, code = 1) {
   process.stderr.write(`${message}\n`)
@@ -295,11 +296,28 @@ function expandCommand(command, values) {
   return command.map((part) => part.replace(/\{(model|reasoningEffort|promptFile|schemaFile|worktree|metadataFile)\}/g, (_, key) => values[key]))
 }
 
-function sanitizedCliEnvironment(additions) {
-  return { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !SECRET_ENV_PATTERN.test(key))), ...additions }
+const SAFE_CLI_ENV_NAMES = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'COLORTERM', 'NO_COLOR',
+  'FORCE_COLOR', 'CI', 'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'HTTP_PROXY', 'HTTPS_PROXY',
+  'NO_PROXY', 'ALL_PROXY', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE',
+  'SSL_CERT_DIR'
+])
+
+function sanitizedCliEnvironment(additions, trustedNames = []) {
+  const names = new Set([...SAFE_CLI_ENV_NAMES, ...trustedNames])
+  return {
+    ...Object.fromEntries(
+      [...names]
+        .filter((key) => /^[A-Z_][A-Z0-9_]*$/.test(key) && process.env[key] !== undefined)
+        .map((key) => [key, process.env[key]])
+    ),
+    ...additions
+  }
 }
 
-function workerEnvironment(additions) {
+function workerEnvironment(additions, trustedNames = []) {
   return sanitizedCliEnvironment({
     GIT_TERMINAL_PROMPT: '0',
     GIT_CONFIG_COUNT: '2',
@@ -308,7 +326,7 @@ function workerEnvironment(additions) {
     GIT_CONFIG_KEY_1: 'credential.helper',
     GIT_CONFIG_VALUE_1: '',
     ...additions
-  })
+  }, trustedNames)
 }
 
 function runProcess(command, { cwd, input = '', timeoutMs = 600000, env = {}, inheritEnv = true } = {}) {
@@ -316,6 +334,7 @@ function runProcess(command, { cwd, input = '', timeoutMs = 600000, env = {}, in
     const started = Date.now()
     let stdout = ''
     let stderr = ''
+    let outputOverflow = false
     let timedOut = false
     let settled = false
     const child = spawn(command[0], command.slice(1), {
@@ -329,8 +348,17 @@ function runProcess(command, { cwd, input = '', timeoutMs = 600000, env = {}, in
       child.kill('SIGTERM')
       setTimeout(() => child.kill('SIGKILL'), 1000).unref()
     }, timeoutMs)
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+    const collect = (target, chunk) => {
+      const current = target === 'stdout' ? stdout : stderr
+      const incoming = chunk.toString()
+      const remaining = MODEL_OUTPUT_LIMIT - current.length
+      if (remaining <= 0 || incoming.length > remaining) outputOverflow = true
+      const next = current + incoming.slice(0, Math.max(0, remaining))
+      if (target === 'stdout') stdout = next
+      else stderr = next
+    }
+    child.stdout.on('data', (chunk) => collect('stdout', chunk))
+    child.stderr.on('data', (chunk) => collect('stderr', chunk))
     // A child that exits without draining a large prompt raises EPIPE on this
     // stream; without a handler that is an uncaught exception for the whole process.
     child.stdin.on('error', () => {})
@@ -344,7 +372,14 @@ function runProcess(command, { cwd, input = '', timeoutMs = 600000, env = {}, in
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolvePromise({ code, stdout, stderr, error: null, timedOut, durationMs: Date.now() - started })
+      resolvePromise({
+        code,
+        stdout,
+        stderr,
+        error: outputOverflow ? new Error(`Model output exceeds ${MODEL_OUTPUT_LIMIT} bytes`) : null,
+        timedOut,
+        durationMs: Date.now() - started
+      })
     })
     child.stdin.end(input)
   })
@@ -352,11 +387,34 @@ function runProcess(command, { cwd, input = '', timeoutMs = 600000, env = {}, in
 
 function extractJson(text) {
   const trimmed = text.trim()
+  if (trimmed.length > MODEL_OUTPUT_LIMIT) throw new Error(`Model output exceeds ${MODEL_OUTPUT_LIMIT} bytes`)
   try { return JSON.parse(trimmed) } catch {}
-  for (let start = trimmed.indexOf('{'); start >= 0; start = trimmed.indexOf('{', start + 1)) {
-    for (let end = trimmed.lastIndexOf('}'); end > start; end = trimmed.lastIndexOf('}', end - 1)) {
-      try { return JSON.parse(trimmed.slice(start, end + 1)) } catch {}
+  let start = -1
+  let depth = 0
+  let quoted = false
+  let escaped = false
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') quoted = false
+      continue
     }
+    if (char === '"') {
+      quoted = true
+      continue
+    }
+    if (char === '{') {
+      if (depth === 0) start = index
+      depth += 1
+      continue
+    }
+    if (char !== '}' || depth === 0) continue
+    depth -= 1
+    if (depth !== 0 || start < 0) continue
+    try { return JSON.parse(trimmed.slice(start, index + 1)) } catch {}
+    start = -1
   }
   throw new Error('No valid JSON object in model output')
 }
@@ -607,7 +665,9 @@ async function runCommandAdapter(model, commandKey, { worktree, prompt = '', env
       cwd: worktree,
       input: prompt,
       timeoutMs: Number(timeoutMs ?? model.timeoutMs ?? 600000),
-      env: env === 'worker' ? workerEnvironment(additions) : sanitizedCliEnvironment(additions),
+      env: env === 'worker'
+        ? workerEnvironment(additions, [model.credentialEnv, model.binaryEnv].filter(Boolean))
+        : sanitizedCliEnvironment(additions, [model.credentialEnv, model.binaryEnv].filter(Boolean)),
       inheritEnv: false
     })
     return { result, provenance: readInvocationMetadata(metadataFile, model) }
@@ -616,12 +676,32 @@ async function runCommandAdapter(model, commandKey, { worktree, prompt = '', env
   }
 }
 
+function captureReviewerMutationState(worktree) {
+  return {
+    git: captureGitState(worktree),
+    cached: git(['diff', '--cached', '--binary', '--no-ext-diff', '--full-index', '--'], worktree),
+    unstaged: git(['diff', '--binary', '--no-ext-diff', '--full-index', '--'], worktree),
+    untracked: git(['ls-files', '--others', '--exclude-standard'], worktree).split(/\r?\n/).filter(Boolean).sort()
+      .map((path) => {
+        const absolute = resolve(worktree, path)
+        const stat = lstatSync(absolute)
+        if (stat.isSymbolicLink()) return [path, sha256(`symlink:${readlinkSync(absolute)}`)]
+        if (stat.isFile()) {
+          return [path, stat.size <= MODEL_OUTPUT_LIMIT
+            ? sha256(readFileSync(absolute))
+            : git(['hash-object', '--no-filters', '--', path], worktree).trim()]
+        }
+        return [path, sha256(`mode:${stat.mode}`)]
+      })
+  }
+}
+
 async function runCommandReviewer(id, model, prompt, worktree, timeoutMs = null) {
-  const before = captureGitState(worktree)
+  const before = captureReviewerMutationState(worktree)
   const { result, provenance } = await runCommandAdapter(model, 'review', { worktree, prompt, timeoutMs: timeoutMs ?? undefined })
-  const after = captureGitState(worktree)
+  const after = captureReviewerMutationState(worktree)
   if (JSON.stringify(before) !== JSON.stringify(after)) {
-    return { status: 'failed', durationMs: result.durationMs, error: 'reviewer changed Git refs or reflogs; reviewer commands must be read-only' }
+    return { status: 'failed', durationMs: result.durationMs, error: 'reviewer changed the worktree, index, refs, or reflogs; reviewer commands must be read-only' }
   }
   if (result.timedOut) return { status: 'timed_out', durationMs: result.durationMs, error: 'review timed out' }
   if (result.error) return { status: 'skipped', durationMs: result.durationMs, error: result.error.message }
@@ -1295,7 +1375,9 @@ function setPacketState(ledger, state, details = {}) {
 
 function savePacketLedger(ledgerPath, ledger) {
   mkdirSync(dirname(ledgerPath), { recursive: true })
-  writeFileSync(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`)
+  const temp = `${ledgerPath}.${process.pid}.${randomUUID()}.tmp`
+  writeFileSync(temp, `${JSON.stringify(ledger, null, 2)}\n`)
+  renameSync(temp, ledgerPath)
 }
 
 function selectPacketModels(profile, config, risk) {
@@ -1983,8 +2065,8 @@ function commandStage(args) {
   if (!staged) throw new Error('Staged diff is empty')
   git(['diff', '--cached', '--check'], worktree)
   const stagedPaths = git(['diff', '--cached', '--name-only'], worktree).trim().split(/\r?\n/).filter(Boolean)
-  const allow = new Set(paths)
-  const unexpected = stagedPaths.filter((entry) => !allow.has(entry))
+  const allowed = (entry) => paths.some((scope) => entry === scope || entry.startsWith(`${scope}/`))
+  const unexpected = stagedPaths.filter((entry) => !allowed(entry))
   if (unexpected.length) throw new Error(`Staged paths outside allowlist: ${unexpected.join(', ')}`)
   const status = git(['status', '--porcelain=v1', '--untracked-files=all'], worktree).split(/\r?\n/).filter(Boolean)
   const residual = status.filter((line) => {

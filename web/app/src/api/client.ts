@@ -29,6 +29,7 @@ import type {
   HarnessLedgerResponse,
   HarnessProbeResponse,
   HarnessProfile,
+  HarnessRoles,
   HarnessStatusResponse,
   HealthResponse,
   ImageInput,
@@ -339,13 +340,36 @@ export function getHarnessStatus(opts?: ReadOptions): Promise<HarnessStatusRespo
 }
 
 /** Readiness of one profile before starting a harness run. */
-export function probeHarness(profile: HarnessProfile): Promise<HarnessProbeResponse> {
-  return mutate<HarnessProbeResponse>('POST', '/api/harness/probe', { profile })
+export function probeHarness(
+  profile: HarnessProfile | undefined,
+  roles?: HarnessRoles,
+): Promise<HarnessProbeResponse> {
+  return mutate<HarnessProbeResponse>('POST', '/api/harness/probe', {
+    ...(profile ? { profile } : {}),
+    ...(roles ? { roles } : {}),
+  })
 }
 
 /** The run's harness ledger — 404s (throws) when the run has none. */
 export function getRunHarness(id: string, opts?: ReadOptions): Promise<HarnessLedgerResponse> {
   return get<HarnessLedgerResponse>(runPath(id, '/harness'), opts)
+}
+
+/** Explicitly accept a contested harness result before publishing it. The reason is retained
+ *  in the durable ledger; this is intentionally separate from commit/push/PR actions. */
+export function acceptContestedHarness(
+  id: string,
+  reason: string,
+): Promise<{
+  outcome: HarnessLedgerResponse['outcome']
+  /** The full decision log including the new `accept-contested` row. The publish
+   *  gate needs that row, not only the acceptance stamp on `outcome`. */
+  decisions?: HarnessLedgerResponse['decisions']
+}> {
+  return mutate<{
+    outcome: HarnessLedgerResponse['outcome']
+    decisions?: HarnessLedgerResponse['decisions']
+  }>('POST', runPath(id, '/harness/accept-contested'), { reason })
 }
 
 /** The selected project's agent-owned config catalog and current file state. */

@@ -189,7 +189,13 @@ export interface RunRecord {
    *  marks a harness-driven run; the ledger endpoint carries the full state.
    *  `roles` (2026-07-24) is the loose copy of the role-based selection that
    *  recovery re-queues conduct. */
-  harness?: { profile: string; workflow: string; issueId?: string; roles?: Record<string, unknown> }
+  harness?: {
+    profile: string
+    workflow: string
+    issueId?: string
+    roles?: Record<string, unknown>
+    baseAcknowledgement?: { configuredBase: string; remoteDefault: string; reason: string }
+  }
 }
 
 /** One aggregated sample of a run's live process tree (src/core/process-usage.ts). */
@@ -989,7 +995,12 @@ export interface CreateRunInput {
    *  built-in harness workflows; the server rejects it anywhere else. `roles` is the
    *  role-based selection (2026-07-24): who orchestrates, who implements, who reviews. The
    *  legacy `profile` remains accepted for scripted callers. */
-  harness?: { profile?: HarnessProfile; roles?: HarnessRoles; issueId?: string }
+  harness?: {
+    profile?: HarnessProfile
+    roles?: HarnessRoles
+    issueId?: string
+    baseAcknowledgement?: { configuredBase: string; remoteDefault: string; reason: string }
+  }
 }
 
 /** The neutral reasoning-effort tiers (2026-07-24), mapped per backend on the server's
@@ -1070,6 +1081,13 @@ export interface HarnessStatusResponse {
     source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'bundled' | null
     commit: string | null
   }
+  /** The exact branch comparison enforced again by POST /runs before worktree creation. */
+  base?: {
+    configured: string | null
+    remoteDefault: string | null
+    stale: boolean
+    note?: string
+  }
 }
 
 export interface HarnessProbeResponse {
@@ -1080,16 +1098,163 @@ export interface HarnessProbeResponse {
   models: HarnessModel[]
 }
 
-/** The harness run ledger (`GET /api/runs/:id/harness`) — kept loose: the server's versioned
- *  schema (`src/harness/types.ts`) is authoritative and the UI treats it as a snapshot. */
+export interface HarnessPhaseRecord {
+  id: string
+  name: string
+  kind: 'agent' | 'op'
+  skill?: string
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+  attempts: number
+  startedAt?: string
+  endedAt?: string
+  sessionId?: string
+  error?: string
+  artifacts: Record<string, string>
+  [key: string]: unknown
+}
+
+export interface HarnessModelRecord {
+  /** `runner/model` — the ledger's stable cross-record key. Never render it
+   *  whole: a gateway-qualified model reads as `opencode/opencode/mimo-v2.5-free`.
+   *  Use `runner`/`model` below, which the driver now carries explicitly. */
+  id: string
+  family?: string
+  runner?: string
+  model?: string
+  binding?: string
+  roles: string[]
+  readiness: 'ready' | 'missing' | 'failed' | 'unknown'
+  readinessDetail?: string
+  note?: string
+  invocations: number
+  totalDurationMs: number
+  [key: string]: unknown
+}
+
+export interface HarnessFindingRecord {
+  severity: 'blocker' | 'major' | 'minor' | 'nit'
+  title: string
+  location?: string
+  evidence?: string
+  by?: string
+  [key: string]: unknown
+}
+
+export interface HarnessReviewerRecord {
+  id: string
+  runner?: string
+  model?: string
+  family?: string
+  status?: string
+  freshContext?: boolean
+  verdict?: 'approve' | 'request_changes'
+  findings?: HarnessFindingRecord[]
+  reason?: string
+  error?: string
+  [key: string]: unknown
+}
+
+export interface HarnessCouncilRecord {
+  round: number
+  kind: string
+  reviewers?: HarnessReviewerRecord[]
+  verdict?: 'approve' | 'request_changes' | null
+  findings?: HarnessFindingRecord[]
+  [key: string]: unknown
+}
+
+export interface HarnessPacketRecord {
+  id: string
+  originalId?: string
+  effectiveId?: string
+  title?: string
+  risk?: string
+  state?: string
+  status?: string
+  paths?: string[]
+  dependsOn?: string[]
+  attempt?: number
+  error?: string
+  result?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface HarnessInvocationRecord {
+  id: string
+  phaseId: string
+  role: string
+  reviewerId?: string
+  binding: { runner: string; model?: string; effort?: string; family?: string; [key: string]: unknown }
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'interrupted'
+  attempt: number
+  inputSha256: string
+  artifactPath?: string
+  artifactSha256?: string
+  startedAt?: string
+  endedAt?: string
+  durationMs?: number
+  error?: string
+  [key: string]: unknown
+}
+
+export interface HarnessPendingMessageRecord {
+  id: string
+  text: string
+  createdAt: string
+  assignedToPhaseId?: string
+  consumedAt?: string
+  [key: string]: unknown
+}
+
+export interface HarnessDecisionRecord {
+  at: string
+  kind: string
+  by: string
+  detail?: string
+  [key: string]: unknown
+}
+
+export interface HarnessOutcomeRecord {
+  status: 'pending' | 'ready' | 'blocked' | 'contested' | 'no-action'
+  blockingReasons: string[]
+  acceptedAt?: string
+  acceptedBy?: 'user'
+  acceptanceReason?: string
+  [key: string]: unknown
+}
+
+export interface HarnessStageRecord {
+  status: 'pending' | 'staged' | 'failed'
+  startStatePath?: string
+  allowlistPath?: string
+  stagedPaths?: string[]
+  suggestedCommit?: string
+  prBody?: string
+  error?: string
+  [key: string]: unknown
+}
+
+/** The harness run ledger (`GET /api/runs/:id/harness`). The server's versioned schema remains
+ *  authoritative; typed stable fields keep the cockpit honest while passthrough fields preserve
+ *  forwards compatibility with additive ledger data. */
 export interface HarnessLedgerResponse {
   version: number
   workflow: string
   requestedProfile: string
   effectiveProfile: string
-  phases: Array<Record<string, unknown>>
-  models: Array<Record<string, unknown>>
-  stage: Record<string, unknown>
+  phases: HarnessPhaseRecord[]
+  models: HarnessModelRecord[]
+  councils: HarnessCouncilRecord[]
+  packets: HarnessPacketRecord[]
+  invocations: HarnessInvocationRecord[]
+  pendingMessages: HarnessPendingMessageRecord[]
+  decisions?: HarnessDecisionRecord[]
+  stage: HarnessStageRecord
+  outcome: HarnessOutcomeRecord
+  /** Highest persisted run-event seq included by this snapshot. Replayed SSE entities at or
+   *  below it must not overwrite the newer durable state after a reload. */
+  snapshotSeq?: number
+  loops?: { fixRounds: number; maxFixRounds: number }
   [key: string]: unknown
 }
 
@@ -1314,6 +1479,7 @@ export interface MessageResponse {
   delivered?: boolean
   queued?: boolean
   deferred?: boolean
+  queuedForPhase?: boolean
   message?: QueuedMessage
 }
 

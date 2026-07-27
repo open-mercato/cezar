@@ -1,5 +1,5 @@
 import { ChevronDownIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import type { PlanEntry, PlanStatus } from '@/protocol/ui-events'
 import { cn } from '@/lib/utils'
@@ -20,8 +20,12 @@ const openByRun = new Map<string, boolean>()
 
 /** Desktop starts expanded, phones collapsed (the mockup's mobile reflow keeps only the
  *  odometer). jsdom has no matchMedia — that environment counts as desktop. */
-function defaultOpen(): boolean {
-  return typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 768px)').matches
+function defaultOpen(entries: PlanEntry[]): boolean {
+  const desktop =
+    typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 768px)').matches
+  // A completed checklist is archival context, not the next thing the reader needs. Keep
+  // live/pending plans open on desktop; fold a finished plan to its N/N odometer.
+  return desktop && planActiveEntry(entries) !== undefined
 }
 
 /** The "N/M" odometer math: completed entries over all entries the agent still
@@ -44,7 +48,16 @@ export function planActiveEntry(entries: PlanEntry[]): PlanEntry | undefined {
 }
 
 export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry[] }) {
-  const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen())
+  const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen(entries))
+  const hasActiveEntry = planActiveEntry(entries) !== undefined
+  useEffect(() => {
+    // Collapse at the exact transition to an all-done plan. The effect does not re-run when
+    // the reader expands that finished plan manually.
+    if (!hasActiveEntry) {
+      openByRun.set(runId, false)
+      setOpen(false)
+    }
+  }, [hasActiveEntry, runId])
   if (entries.length === 0) return null // full-replacement can empty the plan — nothing to dock
 
   const { done, total } = planCounts(entries)

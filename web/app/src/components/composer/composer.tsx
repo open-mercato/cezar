@@ -71,6 +71,17 @@ export interface ComposerProps {
    *  reopen." */
   disabledReason?: string
   /**
+   * Blocks SENDING without blocking typing (2026-07-27).
+   *
+   * `disabled` puts its reason in the placeholder, which is right for "this
+   * session is closed" and wrong for a transient precondition: the multi-model
+   * composer disabled the whole box on every probe, so an error
+   * ("one or more required model bindings could not be verified") rendered where
+   * the prompt instructions belong, and changing a model wiped the affordance to
+   * type while the check re-ran. The reason belongs on the send button.
+   */
+  sendBlockedReason?: string
+  /**
    * Let the send button fire on an empty draft. Off by default (an empty message is not a
    * message); ON for the thread's closed-but-resumable state, where submitting IS "Continue"
    * and continuing with no prompt is the legacy one-click behavior.
@@ -115,6 +126,7 @@ export function Composer({
   sendAriaLabel = 'Send',
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
+  sendBlockedReason,
   allowEmptySubmit = false,
   placeholder = 'Reply — / for skills, @ for files…',
   ariaLabel = 'Reply to the agent',
@@ -517,8 +529,12 @@ export function Composer({
                   type="button"
                   size="icon-sm"
                   aria-label={sendAriaLabel}
+                  title={sendBlockedReason}
                   disabled={
-                    disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+                    disabled ||
+                    busy ||
+                    sendBlockedReason !== undefined ||
+                    (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
                   }
                   className="size-8"
                   onClick={submitDraft}

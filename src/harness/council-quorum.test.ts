@@ -24,17 +24,32 @@ const failed = (label: string, family: string, reason = 'timed out'): CouncilOut
 });
 
 describe('councilQuorum', () => {
-  it('proceeds, marked degraded, when a reviewer drops but the survivors still form a council', () => {
+  it('refuses a partial council by default because every selected reviewer is required', () => {
     const q = councilQuorum([
       done('claude/opus', 'claude'),
       done('codex/gpt-5.6-sol', 'codex'),
       failed('opencode/mimo-v2.5-free', 'opencode'),
     ]);
 
+    expect(q.ok).toBe(false);
+    if (q.ok) return;
+    expect(q.reason).toMatch(/required reviewers/i);
+    expect(q.reason).toContain('opencode/mimo-v2.5-free');
+  });
+
+  it('allows a degraded council only under an explicit quorum policy', () => {
+    const q = councilQuorum(
+      [
+        done('claude/opus', 'claude'),
+        done('codex/gpt-5.6-sol', 'codex'),
+        failed('opencode/mimo-v2.5-free', 'opencode'),
+      ],
+      { mode: 'quorum' },
+    );
+
     expect(q.ok).toBe(true);
     if (!q.ok) return;
     expect(q.degraded).toBe(true);
-    expect(q.failed.map((f) => f.label)).toEqual(['opencode/mimo-v2.5-free']);
   });
 
   it('is not degraded when everyone completed', () => {
@@ -46,7 +61,10 @@ describe('councilQuorum', () => {
   });
 
   it('refuses when only one reviewer survives — one voice is not a council', () => {
-    const q = councilQuorum([done('claude/opus', 'claude'), failed('codex/x', 'codex')]);
+    const q = councilQuorum(
+      [done('claude/opus', 'claude'), failed('codex/x', 'codex')],
+      { mode: 'quorum' },
+    );
     expect(q.ok).toBe(false);
     if (q.ok) return;
     expect(q.reason).toMatch(/1 of 2 reviewers/);
@@ -56,22 +74,28 @@ describe('councilQuorum', () => {
 
   it('refuses when the survivors collapse to a single family — independence is the point', () => {
     // Two completed, but both anthropic: no cross-family check happened.
-    const q = councilQuorum([
-      done('claude/opus', 'claude'),
-      done('claude/sonnet', 'claude'),
-      failed('codex/x', 'codex'),
-    ]);
+    const q = councilQuorum(
+      [
+        done('claude/opus', 'claude'),
+        done('claude/sonnet', 'claude'),
+        failed('codex/x', 'codex'),
+      ],
+      { mode: 'quorum' },
+    );
     expect(q.ok).toBe(false);
     if (q.ok) return;
     expect(q.reason).toMatch(/independent famil/i);
   });
 
   it('names every failure and its reason, so the operator can act', () => {
-    const q = councilQuorum([
-      done('claude/opus', 'claude'),
-      failed('codex/x', 'codex', 'exited 1'),
-      failed('opencode/mimo', 'opencode', 'timed out after 60m'),
-    ]);
+    const q = councilQuorum(
+      [
+        done('claude/opus', 'claude'),
+        failed('codex/x', 'codex', 'exited 1'),
+        failed('opencode/mimo', 'opencode', 'timed out after 60m'),
+      ],
+      { mode: 'quorum' },
+    );
     expect(q.ok).toBe(false);
     if (q.ok) return;
     expect(q.reason).toContain('exited 1');

@@ -23,6 +23,66 @@ export function providersRequiredByWorkflow(
   return ORDER.filter((provider) => required.has(provider));
 }
 
+interface HarnessProviderInput {
+  profile?: string;
+  roles?: {
+    orchestrator?: { runner?: string };
+    implementer?: { runner?: string };
+    reviewers?: Array<{ runner?: string }>;
+  };
+}
+
+/**
+ * Dynamic harness phases do not appear in workflow YAML, so the ordinary
+ * provider gate cannot see them. Collect runner-backed roles and configured
+ * command adapters before a run/worktree exists; HTTP advisors remain covered
+ * by the harness readiness probe because they are not cezar providers.
+ */
+export function providersRequiredByHarness(
+  harness: HarnessProviderInput | undefined,
+  agentHarness: Record<string, unknown> | undefined,
+): ProviderId[] {
+  const required = new Set<ProviderId>();
+  const add = (candidate: unknown) => {
+    if (candidate === 'claude' || candidate === 'codex' || candidate === 'opencode') {
+      required.add(candidate);
+    }
+  };
+
+  if (harness?.roles) {
+    add(harness.roles.orchestrator?.runner);
+    add(harness.roles.implementer?.runner);
+    for (const reviewer of harness.roles.reviewers ?? []) add(reviewer.runner);
+  } else {
+    // Every profile-only plan uses the Claude host for orchestration and its
+    // final fresh review, including optimized profiles whose worker is Codex.
+    add('claude');
+  }
+  if (!harness?.roles && harness?.profile && agentHarness) {
+    const profiles = agentHarness.profiles as Record<string, unknown> | undefined;
+    const profile = profiles?.[harness.profile] as
+      | { workers?: unknown; reviewers?: unknown }
+      | undefined;
+    const models = (agentHarness.models as Record<string, unknown> | undefined) ?? {};
+    const ids = [
+      ...(Array.isArray(profile?.workers) ? profile.workers : []),
+      ...(Array.isArray(profile?.reviewers) ? profile.reviewers : []),
+    ];
+    for (const id of ids) {
+      if (typeof id !== 'string') continue;
+      const model = models[id] as
+        | { adapter?: unknown; commands?: { worker?: unknown; review?: unknown } }
+        | undefined;
+      const command =
+        (Array.isArray(model?.commands?.worker) ? model?.commands?.worker : undefined) ??
+        (Array.isArray(model?.commands?.review) ? model?.commands?.review : undefined);
+      add(command?.[0]);
+    }
+  }
+
+  return ORDER.filter((provider) => required.has(provider));
+}
+
 export function providerForExistingRun(
   run: RunRecord,
   override?: ProviderId,

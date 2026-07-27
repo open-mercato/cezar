@@ -1,5 +1,5 @@
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -10,6 +10,7 @@ import {
   usePatchRun,
   useRemoveQueuedMessage,
   useRun,
+  useRunHarness,
   useRuns,
   useSendMessage,
 } from '@/api/queries'
@@ -59,6 +60,11 @@ import {
   type ThreadEntry,
   type ThreadState,
 } from './thread-state'
+import { HarnessModelsDock } from '../task-harness/harness-components'
+import { HarnessRail } from '../task-harness/harness-rail'
+import { HarnessStatusBar, HarnessTimeline } from '../task-harness/harness-status-bar'
+import { RUN_RAIL_GRID, runShellClass } from './run-shell'
+import { mergeHarnessLedger } from '../task-harness/harness-state'
 
 /**
  * `/tasks/:id` — the Session tab (spec, "Task thread"): the run header (title/meta/tabs/
@@ -74,8 +80,22 @@ import {
 export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
+  const harness = useRunHarness(id, Boolean(run.data?.harness))
   const events = useRunEvents(id)
+  const lastHarnessSeq = events.reduce(
+    (max, event) => (event.type.startsWith('harness.') ? Math.max(max, event.seq) : max),
+    0,
+  )
+  useEffect(() => {
+    // A queued harness has no ledger yet. Its first harness event is the live
+    // signal that startup created one — refetch once, without a polling loop.
+    if (lastHarnessSeq > 0 && harness.isError) void harness.refetch()
+  }, [lastHarnessSeq, harness.isError, harness.refetch])
   const thread = useMemo(() => reduceThread(events), [events])
+  const harnessLedger = useMemo(
+    () => mergeHarnessLedger(harness.data, events),
+    [harness.data, events],
+  )
   // The two feeds can drift: a record update lost on the workspace stream leaves the thread
   // showing Working… over a "run finished" transcript. The transcript is live here, so it
   // arbitrates — a session end with no session after it refetches a record still claiming one.
@@ -106,7 +126,7 @@ export function TaskThreadRoute() {
     )
   }
 
-  return <ThreadView run={run.data} thread={thread} />
+  return <ThreadView run={run.data} thread={thread} harnessLedger={harnessLedger} />
 }
 
 /**
@@ -184,7 +204,15 @@ export function buildThreadRows(
 
 /** The loaded thread. The header owns its own data hooks (mutations, the runs list); the
  *  thread body stays presentational — tests drive it with reduced fixture states directly. */
-export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }) {
+export function ThreadView({
+  run,
+  thread,
+  harnessLedger,
+}: {
+  run: ApiRun
+  thread: ThreadState
+  harnessLedger?: import('@/api/types').HarnessLedgerResponse
+}) {
   const footer = threadFooter(run.status, run.error)
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -273,17 +301,68 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   const { search } = useLocation()
   const mode = threadRenderMode(search, rows.length)
   const scroll = useThreadScroll(run.id)
+  const acceptedContested =
+    harnessLedger?.outcome.status === 'contested' &&
+    harnessLedger.outcome.acceptedAt !== undefined &&
+    harnessLedger.outcome.acceptedBy === 'user' &&
+    harnessLedger.outcome.acceptanceReason !== undefined &&
+    (harnessLedger.decisions ?? []).some(
+      (decision) =>
+        decision.kind === 'accept-contested' &&
+        decision.by === 'user' &&
+        decision.at === harnessLedger.outcome.acceptedAt &&
+        decision.detail === harnessLedger.outcome.acceptanceReason,
+    )
+  const harnessPublishBlocked =
+    !run.harness || !['review', 'done'].includes(run.status)
+      ? undefined
+      : !harnessLedger
+        ? 'Harness recovery snapshot is unavailable. Publishing stays blocked until it is restored.'
+        : harnessLedger.stage.status !== 'staged'
+          ? 'The harness has not produced a verified staged handoff.'
+          : harnessLedger.outcome.status === 'ready' || acceptedContested
+            ? undefined
+            : harnessLedger.outcome.status === 'contested'
+              ? 'Accept the unresolved harness risk in the Review tab before finishing or publishing.'
+              : `Harness outcome is ${harnessLedger.outcome.status}. Publishing requires a verified ready outcome.`
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
+  const [timelineOpen, setTimelineOpen] = useState(false)
 
   return (
     <div data-route="task-thread" className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} />
+      <RunHeader
+        run={run}
+        planTally={planTally}
+        publishBlockedReason={harnessPublishBlocked}
+      />
+      {/* ONE status line, and the timeline behind it (review 2026-07-27): the
+          horizontal phase rail could not be read — 18 phases, 2620px wide, inside
+          an 820px viewport, with the live phase always off-screen. */}
+      {harnessLedger ? (
+        <div className="border-b border-border bg-card px-4 md:px-6">
+          <div className={runShellClass(true)}>
+            <HarnessStatusBar
+              ledger={harnessLedger}
+              timelineOpen={timelineOpen}
+              onOpenTimeline={() => setTimelineOpen((open) => !open)}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
-      <div className="mx-auto flex w-full max-w-[820px] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
+      <div
+        className={cn(
+          'flex flex-1 flex-col gap-3.5 px-4 py-5 md:px-6',
+          runShellClass(Boolean(harnessLedger)),
+        )}
+      >
+        {harnessLedger && timelineOpen ? <HarnessTimeline ledger={harnessLedger} /> : null}
+        <div className={harnessLedger ? RUN_RAIL_GRID : undefined}>
+          <div className="flex min-w-0 flex-col gap-3.5">
         <ThreadCardCache runId={run.id}>
           <ThreadRows runId={run.id} rows={rows} mode={mode} controls={scroll} />
         </ThreadCardCache>
@@ -334,7 +413,15 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}
-        {run.status === 'review' ? <ReviewPanel run={run} /> : null}
+        {run.status === 'review' ? (
+          <ReviewPanel run={run} publishBlockedReason={harnessPublishBlocked} />
+        ) : null}
+          </div>
+
+          {/* Phase / council / models beside the transcript, so watching a run
+              never means leaving the tab you are watching it in. */}
+          {harnessLedger ? <HarnessRail ledger={harnessLedger} /> : null}
+        </div>
       </div>
 
       <AcceptCelebration status={run.status} />
@@ -364,10 +451,26 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
             <JumpToLatestPill onJump={scroll.jumpToLatest} />
           </div>
         ) : null}
-        <div className="mx-auto flex w-full max-w-[820px] flex-col gap-2.5">
+        {/* The dock tracks the SHELL, and inside it the transcript column — the
+            composer must sit under the messages, not under the run rail. */}
+        <div
+          className={cn(
+            runShellClass(Boolean(harnessLedger)),
+            harnessLedger ? RUN_RAIL_GRID : 'flex flex-col gap-2.5',
+          )}
+        >
+          <div className="flex min-w-0 flex-col gap-2.5">
           {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
+
+          {/* Below xl the rail is not rendered, so the dock keeps the roster.
+              At xl and up the rail owns it and this would be a duplicate. */}
+          {harnessLedger ? (
+            <div className="xl:hidden">
+              <HarnessModelsDock ledger={harnessLedger} />
+            </div>
+          ) : null}
 
           {plan !== undefined && plan.length > 0 ? (
             // Keyed by run id: the collapse default re-derives per task (see PlanDock).
@@ -391,6 +494,16 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
             >
               <StatusDot tone="pending" />
               Messages you add now are folded into the prompt before the run starts.
+            </div>
+          ) : null}
+
+          {run.harness && run.status === 'running' ? (
+            <div
+              data-slot="harness-message-hint"
+              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
+            >
+              <StatusDot tone="violet" pulse />
+              Messages are delivered to the active phase, or durably queued for the next phase boundary.
             </div>
           ) : null}
 
@@ -424,12 +537,15 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
               queued ? 'Add to the prompt — sent when the run starts…'
               : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
               : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
-              : 'Message the agent — / for skills, @ for files…'
+              : run.harness && run.status === 'running'
+                ? 'Message the harness — queued safely between phases…'
+                : 'Message the agent — / for skills, @ for files…'
             }
             autocompleteSkills
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
+          </div>
         </div>
       </div>
     </div>

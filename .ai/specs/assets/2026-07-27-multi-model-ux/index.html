@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multi-model harness UI/UX — mockups</title>
+<link rel="stylesheet" href="_tokens.css">
+<style>
+  .wrap { max-width: 800px; margin: 0 auto; padding: 44px 24px 70px; }
+  h1 { margin: 0 0 6px; font-size: 24px; font-weight: 650; letter-spacing: -.015em; }
+  .lead { margin: 0 0 26px; font-size: 14px; line-height: 1.65; color: var(--muted-foreground); max-width: 70ch; }
+  a.item { display: grid; grid-template-columns: 34px 1fr auto; gap: 14px; align-items: start;
+    padding: 15px 17px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--card); margin-bottom: 9px; text-decoration: none; color: inherit; }
+  a.item:hover { background: var(--card-2); border-color: #333; }
+  a.item .n { font: 650 15px var(--mono); color: var(--soft-foreground); }
+  a.item b { display: block; font-size: 14.5px; font-weight: 650; }
+  a.item small { display: block; margin-top: 3px; font-size: 12.5px; line-height: 1.55; color: var(--muted-foreground); }
+  a.item .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+  .go { color: var(--soft-foreground); font-size: 18px; }
+  .doc { margin-top: 24px; padding: 14px 17px; border: 1px dashed var(--border); border-radius: var(--radius-lg); font-size: 13px; color: var(--muted-foreground); }
+  .doc code { font-size: 12px; color: var(--foreground); }
+</style>
+
+<div class="wrap">
+  <h1>Multi-model harness — UI/UX proposals</h1>
+  <p class="lead">Four static mockups, built on the cockpit's own tokens
+    (<code style="font-size:12px">web/app/src/styles/index.css</code>). Each one annotates what it changes
+    against today's screen, keyed to the finding ids in the plan.</p>
+
+  <a class="item" href="mockup-01-run-shell.html">
+    <span class="n">01</span>
+    <span>
+      <b>Run shell — Session tab</b>
+      <small>One shell width, one status bar instead of four progress strips, and a persistent run rail
+        (Phase / Council / Models) so you never leave the tab you are watching.</small>
+      <span class="tags"><span class="pill">A1</span><span class="pill">A2</span><span class="pill">A3</span><span class="pill">A4</span><span class="pill">B1</span><span class="pill">B2</span><span class="pill">E1</span></span>
+    </span>
+    <span class="go">→</span>
+  </a>
+
+  <a class="item" href="mockup-02-review.html">
+    <span class="n">02</span>
+    <span>
+      <b>Review tab</b>
+      <small>The run outcome leads instead of a round verdict; blocking findings become cards; the council
+        table holds reviewers only, with family and cost; a drawer holds the actual review.</small>
+      <span class="tags"><span class="pill">C1</span><span class="pill">C2</span><span class="pill">C3</span><span class="pill">C4</span><span class="pill">C5</span><span class="pill">C6</span><span class="pill">C7</span></span>
+    </span>
+    <span class="go">→</span>
+  </a>
+
+  <a class="item" href="mockup-03-composer.html">
+    <span class="n">03</span>
+    <span>
+      <b>Multi-model composer</b>
+      <small>No execution-profile subtabs. Readiness on each model pill, a readable failure with a remedy,
+        a cost/duration estimate, preset previews, and a role grid instead of pills-of-pills.</small>
+      <span class="tags"><span class="pill">D1</span><span class="pill">D2</span><span class="pill">D3</span><span class="pill">D4</span><span class="pill">D5</span><span class="pill">D6</span><span class="pill">F1</span></span>
+    </span>
+    <span class="go">→</span>
+  </a>
+
+  <a class="item" href="mockup-04-phase-timeline.html">
+    <span class="n">04</span>
+    <span>
+      <b>Run timeline</b>
+      <small>Replaces the 2620px-wide horizontal phase rail: 18 phases grouped into four stages, with
+        retries, durations, cost and the reviewers of each council round.</small>
+      <span class="tags"><span class="pill">A5</span><span class="pill">A3</span></span>
+    </span>
+    <span class="go">→</span>
+  </a>
+
+  <div class="doc">
+    Written up in <code>.ai/specs/2026-07-27-multi-model-ux.md</code> — findings, severities, sequencing,
+    and the one open product decision (F1: where bounded work packets live now that the
+    “High assurance” profile is gone from the composer).
+  </div>
+</div>

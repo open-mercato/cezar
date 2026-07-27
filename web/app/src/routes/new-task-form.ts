@@ -245,10 +245,12 @@ export interface HarnessProfileOption {
 }
 
 /**
- * The five operating profiles, in escalation order — `standard` first (no provider config
- * needed at all). `id` is the om-config wire name and never changes; `label`/`desc` are the
- * human surface (user feedback 2026-07-23: people who never heard of the harness must be able
- * to read what a mode does — the protocol names describe the topology, not the value).
+ * The five operating profiles of the repo's `agentHarness.profiles`, in escalation order.
+ * `id` is the om-config wire name and never changes; `label`/`desc` are the human surface.
+ *
+ * DISPLAY ONLY since 2026-07-27 (user feedback): the composer no longer offers a profile —
+ * every Multi-model run is a custom lineup. This list survives as the label map for
+ * Settings → Harness, which reports which profiles the repo config declares.
  */
 export const HARNESS_PROFILE_OPTIONS: readonly HarnessProfileOption[] = [
   { id: 'standard', label: 'Claude solo', desc: 'Claude writes the code; a second, fresh Claude context reviews it. Works with zero setup.' },
@@ -296,20 +298,59 @@ export interface HarnessModelOption extends HarnessModelRef {
   family: string
 }
 
+/** Gateways that resell other vendors' weights: the `provider/` prefix of such an
+ *  id is a routing detail, never a family. */
+const GATEWAY_PREFIXES: ReadonlySet<string> = new Set(['opencode', 'openrouter', 'zen'])
+
+/** Weight lineage by model name — two models behind one gateway can be genuinely
+ *  different, and one vendor reached through two gateways is still one vendor. */
+const FAMILY_BY_NAME: ReadonlyArray<[RegExp, string]> = [
+  [/^glm/i, 'zhipu'],
+  [/^kimi/i, 'moonshot'],
+  [/^deepseek/i, 'deepseek'],
+  [/^mimo/i, 'xiaomi'],
+  [/^qwen/i, 'alibaba'],
+  [/^gpt|^o[0-9]|^codex/i, 'openai'],
+  [/^claude/i, 'anthropic'],
+  [/^gemini/i, 'google'],
+  [/^grok/i, 'xai'],
+  [/^llama/i, 'meta'],
+  [/^mistral|^magistral/i, 'mistral'],
+  [/^nemotron/i, 'nvidia'],
+  [/^ling|^ring/i, 'inclusionai'],
+]
+
 /**
  * The provider family a (runner, model) pair belongs to — the diversity axis of the
- * multi-model rule (mirrors the om harness's independent-family notion: claude IS anthropic,
- * codex IS openai, and opencode carries the provider in its `provider/model` ids).
+ * multi-model rule.
+ *
+ * BYTE-FAITHFUL MIRROR of `providerFamilyOf` in `src/harness/model-family.ts`
+ * (the browser cannot import server code). The two must change together: when
+ * they disagreed, the composer admitted a lineup the driver's quorum then counted
+ * differently — `claude/sonnet` + `opencode/claude-sonnet-4-5` passed as two
+ * families while being one vendor (review 2026-07-27).
  */
 export function modelFamilyOf(ref: HarnessModelRef): string {
   // Advisor refs (spec 2026-07-24-advisor-reviewers) carry their provider
-  // family from /harness/status — kimi→moonshot, glm→zhipu — instead of
-  // deriving it from a runner.
+  // family from /harness/status — kimi→moonshot, glm→zhipu.
   if (ref.runner === 'harness') return ref.family ?? 'harness'
-  if (ref.runner === 'claude') return 'anthropic'
-  if (ref.runner === 'codex') return 'openai'
+
   const slash = ref.model.indexOf('/')
-  return slash > 0 ? ref.model.slice(0, slash) : 'opencode'
+  const prefix = slash > 0 ? ref.model.slice(0, slash) : ''
+  const bare = slash > 0 ? ref.model.slice(slash + 1) : ref.model
+
+  // A non-gateway prefix IS the provider; trust it over the name table.
+  if (prefix && !GATEWAY_PREFIXES.has(prefix.toLowerCase())) return prefix.toLowerCase()
+
+  // The runner implies the vendor for the first-party CLIs — but only as a
+  // FALLBACK, so gateway-resold Anthropic still collapses into `anthropic`.
+  const runnerFallback =
+    ref.runner === 'claude' ? 'anthropic'
+    : ref.runner === 'codex' ? 'openai'
+    : prefix.toLowerCase() || ref.runner
+
+  for (const [pattern, family] of FAMILY_BY_NAME) if (pattern.test(bare)) return family
+  return runnerFallback
 }
 
 /** Reviewer options from the configured `agentHarness` bindings (`/harness/status`):
@@ -463,19 +504,40 @@ export function normalizeHarnessPresets(raw: unknown): HarnessPreset[] {
 
 const HARNESS_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'max']
 
-/** Copy a ref keeping only a VALID effort — stale/hand-edited values drop silently. */
+/** Copy a ref keeping only a VALID effort — stale/hand-edited values drop silently.
+ *  An advisor ref's `family` is preserved: it IS the ref's identity (the
+ *  diversity axis), and dropping it turned a saved advisor reviewer into an
+ *  unresolvable one. */
 function sanitizeRef(ref: HarnessModelRef): HarnessModelRef {
   const effort = typeof ref.effort === 'string' && HARNESS_EFFORTS.includes(ref.effort) ? ref.effort : undefined
-  return { runner: ref.runner, model: ref.model, ...(effort ? { effort } : {}) }
+  return {
+    runner: ref.runner,
+    model: ref.model,
+    ...(ref.runner === 'harness' && typeof ref.family === 'string' ? { family: ref.family } : {}),
+    ...(effort ? { effort } : {}),
+  }
 }
 
+/**
+ * Every runner a saved lineup may name — INCLUDING `harness`, the configured
+ * advisor reviewers (deepseek-api, kimi-subscription…).
+ *
+ * Omitting it silently destroyed data (review 2026-07-27): saving a preset whose
+ * council contained an advisor wrote it to ui-state, the refetch ran this
+ * normaliser, the whole preset failed the shape check, and the chip vanished a
+ * moment after the user named it — with no error, because the write path
+ * swallows failures. `new-task-draft.ts` already accepted all four runners, so
+ * the draft kept the very lineup the preset could not.
+ */
 function isModelRefShape(raw: unknown): raw is HarnessModelRef {
-  return (
-    !!raw &&
-    typeof raw === 'object' &&
-    ['claude', 'codex', 'opencode'].includes((raw as HarnessModelRef).runner) &&
-    typeof (raw as HarnessModelRef).model === 'string'
-  )
+  if (!raw || typeof raw !== 'object') return false
+  const ref = raw as HarnessModelRef
+  if (typeof ref.model !== 'string') return false
+  if (ref.runner === 'harness') {
+    // An advisor without its family cannot be resolved back to a binding.
+    return typeof ref.family === 'string' && ref.family !== ''
+  }
+  return ['claude', 'codex', 'opencode'].includes(ref.runner)
 }
 
 /**
@@ -528,11 +590,19 @@ export function defaultHarnessRoles(allOptions: readonly HarnessModelOption[]): 
 
 /**
  * Why the Start button must hold, from the profile's probe — or null to allow.
- * A missing probe (still loading / errored) never blocks: the server re-probes at run
- * start anyway and refuses honestly, so the button gating is UX, not the safety gate.
+ * Loading, errors, and missing evidence all block. The server repeats the exact
+ * probe before creating a worktree; this client gate keeps the start surface
+ * truthful while that fail-closed check is pending.
  */
-export function harnessStartBlock(probe: HarnessProbeResponse | undefined): string | null {
-  if (!probe || probe.ready) return null
+export function harnessStartBlock(
+  probe: HarnessProbeResponse | undefined,
+  pending = false,
+  failed = false,
+): string | null {
+  if (pending) return 'Checking every selected model binding…'
+  if (failed) return 'Model readiness could not be verified.'
+  if (!probe) return 'Model readiness has not been verified yet.'
+  if (probe.ready) return null
   return probe.reason ?? `profile "${probe.profile}" is not ready`
 }
 
@@ -565,11 +635,16 @@ export function buildCreateRunBody(opts: {
    *  Independent of `generateFollowups`: starting a task FROM a follow-up still marks that
    *  entry started, even when the new task itself won't generate follow-ups of its own. */
   todoId?: string
-  /** The harness profile the panel selected. Sent only when `source` IS a harness workflow —
-   *  the server 400s a `harness` field anywhere else, so the rule lives here, once. */
-  harnessProfile?: HarnessProfile
-  /** The role-based selection (2026-07-24) — wins over `harnessProfile` when both are set. */
+  /** The role lineup the panel composed. Sent only when `source` IS a harness workflow —
+   *  the server 400s a `harness` field anywhere else, so the rule lives here, once.
+   *  (The named `profile` alternative was dropped from the composer 2026-07-27; the server
+   *  still accepts it from scripted callers.) */
   harnessRoles?: HarnessRoles
+  harnessBaseAcknowledgement?: {
+    configuredBase: string
+    remoteDefault: string
+    reason: string
+  }
 }): CreateRunInput {
   const {
     task,
@@ -583,8 +658,8 @@ export function buildCreateRunBody(opts: {
     autonomous,
     generateFollowups,
     todoId,
-    harnessProfile,
     harnessRoles,
+    harnessBaseAcknowledgement,
   } = opts
   return {
     task,
@@ -602,11 +677,14 @@ export function buildCreateRunBody(opts: {
     todoId: todoId || undefined,
     harness:
       harnessWorkflowName(source) !== null
-        ? harnessRoles
-          ? { roles: harnessRoles }
-          : harnessProfile
-            ? { profile: harnessProfile }
-            : undefined
+        ? harnessRoles || harnessBaseAcknowledgement
+          ? {
+              ...(harnessRoles ? { roles: harnessRoles } : {}),
+              ...(harnessBaseAcknowledgement
+                ? { baseAcknowledgement: harnessBaseAcknowledgement }
+                : {}),
+            }
+          : undefined
         : undefined,
   }
 }

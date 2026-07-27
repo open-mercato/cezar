@@ -40,11 +40,14 @@ import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import { UiEventSink } from '../runs/ui-event-sink.js';
 import type { UiEvent } from '../core/ui-events.js';
 import { runHarnessDriver, type HarnessDriverHost, type HarnessRolesInput } from '../harness/driver.js';
+import { createLedger, readLedger, saveLedger } from '../harness/ledger.js';
 import { isHarnessWorkflow } from '../harness/workflows.js';
 import { HARNESS_PROFILES, type HarnessProfile } from '../harness/types.js';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
 
 const CHECK_OUTPUT_CAP = 20_000;
+const MAX_HARNESS_BOUNDARY_MESSAGES = 20;
+const MAX_HARNESS_BOUNDARY_MESSAGE_CHARS = 200_000;
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 /**
@@ -109,6 +112,13 @@ export function periodicAutosaveEnabled(env: NodeJS.ProcessEnv = process.env): b
 interface ActiveRun {
   cancelled: boolean;
   interrupt: () => void;
+  /** Interrupt handlers that are NOT the current agent session (2026-07-27):
+   *  the harness driver's runtime killer, chiefly. `state.interrupt` is a single
+   *  slot that every agent phase overwrites and clears on teardown, so a handler
+   *  registered through `onInterrupt` before the first phase used to be evicted
+   *  by it — Cancel then reached the phase session but never `harness.mjs` or the
+   *  reviewer CLIs under it. A set survives every phase, like `liveSessions`. */
+  interruptHandlers: Set<() => void>;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
   /** Live claude session of the currently running agent step, if any.
@@ -211,7 +221,16 @@ export interface StartRunInput {
    *  meaningful only with the built-in harness workflows. `roles` (2026-07-24)
    *  is the role-based selection and wins over `profile`; absent both means
    *  the `standard` graph. */
-  harness?: { profile?: HarnessProfile; roles?: HarnessRolesInput; issueId?: string };
+  harness?: {
+    profile?: HarnessProfile;
+    roles?: HarnessRolesInput;
+    issueId?: string;
+    baseAcknowledgement?: {
+      configuredBase: string;
+      remoteDefault: string;
+      reason: string;
+    };
+  };
 }
 
 /**
@@ -519,12 +538,22 @@ export class RunManager {
     // the publish guards, list surfaces, and ledger-based recovery. A harness
     // workflow started without explicit parameters runs `standard`.
     if (isHarnessWorkflow(workflow.name)) {
+      const inferredProfile =
+        input.harness?.profile ??
+        (input.harness?.roles
+          ? input.harness.roles.implementer.runner === 'claude'
+            ? 'multi'
+            : 'multi-optimized'
+          : 'standard');
       this.store.updateRun(run.id, {
         harness: {
-          profile: input.harness?.profile ?? 'standard',
+          profile: inferredProfile,
           workflow: workflow.name,
           ...(input.harness?.issueId ? { issueId: input.harness.issueId } : {}),
           ...(input.harness?.roles ? { roles: input.harness.roles as unknown as Record<string, unknown> } : {}),
+          ...(input.harness?.baseAcknowledgement
+            ? { baseAcknowledgement: input.harness.baseAcknowledgement }
+            : {}),
         },
       });
     }
@@ -942,7 +971,21 @@ export class RunManager {
     if (!state) return false;
     state.cancelled = true;
     this.clearIdleTimer(state);
-    state.interrupt();
+    try {
+      state.interrupt();
+    } catch {
+      // already gone — the handlers below still have to run
+    }
+    // Handlers that outlive any single phase (the harness driver's runtime
+    // killer): without these, cancelling a harness run stopped the current
+    // agent session and left harness.mjs and every reviewer CLI running.
+    for (const handler of state.interruptHandlers) {
+      try {
+        handler();
+      } catch {
+        // already gone — keep interrupting the rest
+      }
+    }
     // Reach every concurrent phase session too — `state.interrupt` only ever
     // points at one of them.
     for (const session of state.liveSessions) {
@@ -1303,6 +1346,134 @@ export class RunManager {
     if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
+    if (run.harness && run.status === 'failed') {
+      if (opts.images?.length) {
+        return {
+          ok: false,
+          error: 'harness resume accepts text only; add images while a model phase is live',
+        };
+      }
+      const workflowDef = run.workflowDef;
+      if (!workflowDef || !Array.isArray((workflowDef as { steps?: unknown }).steps)) {
+        return { ok: false, error: 'harness workflow definition is not recoverable' };
+      }
+      const profile = (HARNESS_PROFILES as readonly string[]).includes(run.harness.profile)
+        ? (run.harness.profile as HarnessProfile)
+        : null;
+      if (!profile) return { ok: false, error: 'harness recovery profile is invalid' };
+
+      const ledgerRead = readLedger(this.dataDir, runId);
+      if (ledgerRead.status === 'corrupt') {
+        return { ok: false, error: `harness ledger is corrupt: ${ledgerRead.error}` };
+      }
+      if (ledgerRead.status === 'unsupported') {
+        return {
+          ok: false,
+          error: `harness ledger version ${String(ledgerRead.version)} is not supported`,
+        };
+      }
+      const ledger =
+        ledgerRead.status === 'valid'
+          ? ledgerRead.ledger
+          : createLedger({
+              workflow: run.harness.workflow,
+              requestedProfile: profile,
+              subject: run.harness.issueId
+                ? { kind: 'issue', id: run.harness.issueId, text: run.task }
+                : { kind: 'brief', text: run.task },
+            });
+      const continuationText = opts.text?.trim();
+      let queuedBoundaryMessage:
+        | { id: string; text: string; createdAt: string }
+        | undefined;
+      if (continuationText) {
+        const pending = ledger.pendingMessages.filter((message) => !message.consumedAt);
+        if (pending.length >= MAX_HARNESS_BOUNDARY_MESSAGES) {
+          return {
+            ok: false,
+            error:
+              `too many pending harness messages — ` +
+              `${MAX_HARNESS_BOUNDARY_MESSAGES} message limit`,
+          };
+        }
+        const totalChars =
+          pending.reduce((sum, message) => sum + message.text.length, 0) +
+          continuationText.length;
+        if (totalChars > MAX_HARNESS_BOUNDARY_MESSAGE_CHARS) {
+          return {
+            ok: false,
+            error:
+              `pending harness messages exceed the ` +
+              `${MAX_HARNESS_BOUNDARY_MESSAGE_CHARS} character limit`,
+          };
+        }
+        queuedBoundaryMessage = {
+          id: randomUUID(),
+          text: continuationText,
+          createdAt: new Date().toISOString(),
+        };
+        ledger.pendingMessages.push(queuedBoundaryMessage);
+      }
+      try {
+        saveLedger(this.dataDir, runId, ledger);
+      } catch (error) {
+        return {
+          ok: false,
+          error: `could not persist harness resume: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        };
+      }
+      if (queuedBoundaryMessage) {
+        this.store.appendEvent(runId, {
+          type: 'user-message',
+          text: queuedBoundaryMessage.text,
+          imageCount: 0,
+          images: [],
+        });
+        this.store.appendEvent(runId, {
+          type: 'harness.message.queued',
+          message: {
+            id: queuedBoundaryMessage.id,
+            createdAt: queuedBoundaryMessage.createdAt,
+          },
+        });
+      }
+
+      const workflow = workflowDef as unknown as WorkflowDef;
+      for (const step of run.steps) {
+        if (step.status === 'failed' || step.status === 'running' || step.status === 'waiting') {
+          this.store.updateStep(runId, step.id, {
+            status: 'pending',
+            error: undefined,
+            finishedAt: undefined,
+          });
+        }
+      }
+      this.pendingJobs.set(runId, {
+        workflow,
+        input: this.hydrateQueuedInput(runId, {
+          task: run.task,
+          model: run.model,
+          runner: run.runner,
+          generateFollowups: followupsEnabled() ? run.generateFollowups : false,
+          autonomous: run.autonomous,
+        }),
+      });
+      this.store.updateRun(runId, {
+        status: 'queued',
+        error: undefined,
+        finishedAt: undefined,
+        currentStepId: undefined,
+      });
+      this.queue.push(runId);
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: 'harness resumed from its durable ledger — completed phases will be reused',
+      });
+      void this.pump();
+      return { ok: true };
+    }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
     if (!sessionStep?.sessionId) return { ok: false, error: 'no agent session to resume' };
     const targetRunner = opts.runner ?? run.runner ?? 'claude';
@@ -1397,7 +1568,13 @@ export class RunManager {
       record?.worktreePath && existsSync(record.worktreePath)
         ? record.worktreePath
         : this.repoRoot;
-    const state: ActiveRun = { cancelled: false, interrupt: () => undefined, cwd, liveSessions: new Set() };
+    const state: ActiveRun = {
+      cancelled: false,
+      interrupt: () => undefined,
+      interruptHandlers: new Set(),
+      cwd,
+      liveSessions: new Set(),
+    };
     this.active.set(runId, state);
     if (state.cwd === this.repoRoot) {
       this.store.appendEvent(runId, {
@@ -1646,7 +1823,9 @@ export class RunManager {
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
-      if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'turn end');
+      if (state.cwd !== this.repoRoot && !this.store.getRun(runId)?.harness) {
+        await autosaveCommit(state.cwd, 'turn end');
+      }
       this.dropActive(runId);
     }
   }
@@ -1657,6 +1836,7 @@ export class RunManager {
     const state: ActiveRun = {
       cancelled: false,
       interrupt: () => undefined,
+      interruptHandlers: new Set(),
       cwd: this.repoRoot,
       liveSessions: new Set(),
       autonomous: input.autonomous === true,
@@ -1748,7 +1928,7 @@ export class RunManager {
         if (seededConfig.length > 0) {
           emit({ type: 'note', message: `seeded personal agent config: ${seededConfig.join(', ')}` });
         }
-        this.armAutosave(state);
+        this.armAutosave(state, isHarnessWorkflow(workflow.name));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const error = `worktree creation failed: ${message}`;
@@ -1913,7 +2093,9 @@ export class RunManager {
 
     // Final autosave: the branch always ends holding the finished state.
     this.clearAutosaveTimer(state);
-    if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'run finalize');
+    if (state.cwd !== this.repoRoot && !isHarnessWorkflow(workflow.name)) {
+      await autosaveCommit(state.cwd, 'run finalize');
+    }
 
     const finishedAt = new Date().toISOString();
     if (state.cancelled) {
@@ -1957,20 +2139,26 @@ export class RunManager {
     // nothing about it), and the stub — persisted at startRun — is what
     // carries the requested profile across the gap.
     const recorded = this.store.getRun(runId)?.harness;
-    const requested = input.harness?.profile ?? recorded?.profile;
+    let requested = input.harness?.profile ?? recorded?.profile;
+    const roles =
+      input.harness?.roles ?? (recorded?.roles as unknown as HarnessRolesInput | undefined);
+    if ((!requested || requested === 'standard') && roles) {
+      requested = roles.implementer.runner === 'claude' ? 'multi' : 'multi-optimized';
+    }
     const profile: HarnessProfile =
       requested && (HARNESS_PROFILES as readonly string[]).includes(requested)
         ? (requested as HarnessProfile)
         : 'standard';
     const issueId = input.harness?.issueId ?? recorded?.issueId;
-    const roles =
-      input.harness?.roles ?? (recorded?.roles as unknown as HarnessRolesInput | undefined);
+    const baseAcknowledgement =
+      input.harness?.baseAcknowledgement ?? recorded?.baseAcknowledgement;
     this.store.updateRun(runId, {
       harness: {
         profile,
         workflow: workflow.name,
         ...(issueId ? { issueId } : {}),
         ...(roles ? { roles: roles as unknown as Record<string, unknown> } : {}),
+        ...(baseAcknowledgement ? { baseAcknowledgement } : {}),
       },
     });
     const host: HarnessDriverHost = {
@@ -2011,6 +2199,7 @@ export class RunManager {
             reasoningEffort: req.effort,
             resultPath: req.resultPath,
             concurrent: req.concurrent,
+            onSpawn: req.onSpawn,
           },
         );
       },
@@ -2032,13 +2221,12 @@ export class RunManager {
         });
       },
       onInterrupt: (fn) => {
-        const prev = state.interrupt;
-        state.interrupt = () => {
-          prev();
-          fn();
-        };
+        // Registered in the durable set, NOT chained onto `state.interrupt`:
+        // the next agent phase assigns that slot outright (and clears it on
+        // teardown), which used to silently drop the driver's runtime killer.
+        state.interruptHandlers.add(fn);
         return () => {
-          state.interrupt = prev;
+          state.interruptHandlers.delete(fn);
         };
       },
       ensureSkill: async (name) => {
@@ -2057,6 +2245,7 @@ export class RunManager {
       profile,
       issueId,
       roles,
+      baseAcknowledgement,
     });
   }
 
@@ -2099,6 +2288,9 @@ export class RunManager {
        *  assignment below. It is still tracked in `liveSessions`, so cancel
        *  reaches it. */
       concurrent?: boolean;
+      /** Harness invocation journal hook: persist the owned runner PID before
+       * waiting for any paid work to complete. */
+      onSpawn?: (pid: number, processGroup: boolean) => void;
     } = {},
   ): Promise<string | null> {
     const concurrentPhase = opts.concurrent === true;
@@ -2374,6 +2566,17 @@ export class RunManager {
       return err instanceof Error ? err.message : String(err);
     }
     liveSession = session;
+    if (session.pid !== undefined && opts.onSpawn) {
+      try {
+        opts.onSpawn(session.pid, session.processGroup === true);
+      } catch (error) {
+        session.interrupt();
+        void session.result.catch(() => undefined);
+        return `could not persist harness runner process identity: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+    }
     // Always tracked, so `cancel()` reaches this session no matter how many
     // others are in flight beside it.
     state.liveSessions.add(session);
@@ -2770,7 +2973,8 @@ export class RunManager {
 
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).
    *  Opt-in via CEZ_AUTOSAVE=1 (#471) — see periodicAutosaveEnabled. */
-  private armAutosave(state: ActiveRun): void {
+  private armAutosave(state: ActiveRun, stageOnlyHarness = false): void {
+    if (stageOnlyHarness) return;
     if (!periodicAutosaveEnabled()) return;
     if (state.cwd === this.repoRoot || state.autosaveTimer) return;
     state.autosaveTimer = setInterval(() => {
