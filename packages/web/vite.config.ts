@@ -13,6 +13,15 @@ const packagesDir = resolve(appDir, '..')
 // can never end up behind the proxy. Standalone `npm run dev:web` keeps the 4321 default.
 const API_TARGET = `http://127.0.0.1:${process.env.CEZ_API_PORT ?? 4321}`
 
+// React DOM is large enough to push the otherwise route-split entry chunk over Vite's 500 kB
+// warning threshold. Keep the tightly coupled React runtime in one stable, cacheable chunk
+// rather than silencing the warning: future growth in either the app or vendor chunk stays
+// visible. Module ids from Vite/Rolldown use forward slashes on every platform.
+export const reactRuntimeChunk = {
+  name: 'react-runtime',
+  test: /node_modules\/(?:react(?:-dom)?|scheduler)\//,
+}
+
 export default defineConfig({
   root: appDir,
   base: '/',
@@ -39,6 +48,13 @@ export default defineConfig({
     // an artifact of the service, not a separately shipped thing.
     outDir: resolve(packagesDir, 'cezar/web/dist'),
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [reactRuntimeChunk],
+        },
+      },
+    },
   },
   server: {
     proxy: {
