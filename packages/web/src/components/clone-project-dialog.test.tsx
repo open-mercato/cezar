@@ -63,11 +63,11 @@ function serve(checkout: () => Promise<Response> = async () => json({ project: P
   posted.length = 0
   fetchMock.mockImplementation(async (input, init) => {
     const url = new URL(String(input), 'http://localhost')
-    if (url.pathname === '/api/projects/checkout') {
+    if (url.pathname === '/api/v1/projects/checkout') {
       posted.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
       return checkout()
     }
-    if (url.pathname === '/api/projects') {
+    if (url.pathname === '/api/v1/projects') {
       return json({ projects: [], bootProject: 'cezar', projectsDir: '~/cezar/projects' })
     }
     return json({ error: `unexpected ${String(init?.method ?? 'GET')} ${url.pathname}` }, 404)

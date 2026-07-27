@@ -12,7 +12,7 @@ import {
   type GlobalEvent,
   type UsageStore,
 } from './events'
-import { getApiScope } from '@open-mercato/cezar-api-client'
+import { apiPath, getApiScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import type {
   ApiRun,
@@ -44,7 +44,9 @@ import type {
  * bypasses that project filter and patches only an already-fetched workspace cache.
  */
 
-const SSE_URL = '/api/workspace/events'
+// Route-relative: `apiPath` adds the version (and would add the project scope, though this
+// stream is workspace-level and never scoped).
+const SSE_URL = apiPath('/workspace/events')
 
 /** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */

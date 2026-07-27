@@ -22,7 +22,7 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  *  2. the #347 exemption survives the move: a `waiting` run holds no slot,
  *     and a message into it resumes it immediately even when OTHER projects
  *     saturate the cap — the resume must never hang on the workspace queue;
- *  3. `refresh()` (the cache hook boot and PUT /api/workspace/config call)
+ *  3. `refresh()` (the cache hook boot and PUT /api/v1/workspace/config call)
  *     applies a config change without a restart: raising the cap starts a
  *     queued run right away.
  */
@@ -353,7 +353,7 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(a.store.getRun(queued.id)?.status).toBe('queued');
 
-    // The workspace cache hook (boot / PUT /api/workspace/config, step 2.7):
+    // The workspace cache hook (boot / PUT /api/v1/workspace/config, step 2.7):
     // bump the config, refresh — the pump fires and the queued run proceeds
     // while the holder is still running. No process restart involved.
     limits = { maxParallel: 2, memoryLimitMb: null };

@@ -306,7 +306,7 @@ describe('fetchCommentCounts', () => {
 });
 
 /** Comment threads (#499 Phase 2): the pure normalize/merge seam behind
- *  `GET /api/github/comments/:kind/:number`. The `gh`-shelling in `fetchGithubComments` isn't
+ *  `GET /api/v1/github/comments/:kind/:number`. The `gh`-shelling in `fetchGithubComments` isn't
  *  unit-tested (it degrades on any failure and is covered by the route + component tests); the
  *  transforms below carry the real logic — review filtering, chronological merge, and caps. */
 
@@ -512,7 +512,7 @@ describe('fetchGithubComments per-project cache isolation (step 2.6)', () => {
   });
 });
 
-/** `detectGithubCached` backs `GET /api/health`'s `forge.available`, which gates the GitHub nav
+/** `detectGithubCached` backs `GET /api/v1/health`'s `forge.available`, which gates the GitHub nav
  *  item. The sidebar flicker bug was this returning `null` (→ item hidden) for one 5 s health poll
  *  every time the 60 s probe cache expired; the fix is stale-while-revalidate — keep serving the
  *  last-known answer while a background probe refreshes it, so the item never blinks out. */

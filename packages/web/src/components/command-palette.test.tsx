@@ -105,7 +105,7 @@ function renderPalette({
   uiState?: Record<string, unknown>
 } = {}) {
   if (theme) localStorage.setItem(THEME_STORAGE_KEY, theme)
-  serve({ '/api/runs': runs, '/api/skills': skills, '/api/health': health(forge), '/api/ui-state': uiState })
+  serve({ '/api/v1/runs': runs, '/api/v1/skills': skills, '/api/v1/health': health(forge), '/api/v1/ui-state': uiState })
   render(
     <QueryClientProvider client={createQueryClient()}>
       <ThemeProvider>
@@ -176,7 +176,7 @@ describe('opening and closing', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
     const paths = fetchMock.mock.calls.map((call) => String(call[0]))
-    expect(paths).toContain('/api/skills')
+    expect(paths).toContain('/api/v1/skills')
   })
 })
 

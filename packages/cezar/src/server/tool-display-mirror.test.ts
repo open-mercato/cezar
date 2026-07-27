@@ -8,7 +8,7 @@ import { toolDisplay, type ToolDisplay } from '../core/tool-display.js';
  *
  * `web/api-client/src/protocol/tool-display.ts` is a hand-mirrored copy of `src/core/tool-display.ts`
  * — the bundle cannot import the server's module graph (NodeNext vs bundler, see
- * `web/app/src/api/types.ts`), but the two implementations must keep SAYING the same thing, or
+ * `packages/api-client/src/dto/types.ts`), but the two implementations must keep SAYING the same thing, or
  * the thread would title a tool call differently from the server-side consumers. So this suite
  * runs BOTH over one representative table (a case per branch of the display model: every tool
  * family, the MCP naming schemes, the unknown-tool heuristic, normalization, and hostile wire

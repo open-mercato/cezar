@@ -29,7 +29,7 @@ describe('bookmarkletUrl (spec 011, protected /new deep-link contract)', () => {
     // GitHub's CSP blocks fetch/XHR to localhost, so the launcher must NAVIGATE, not probe.
     const code = program(bookmarkletUrl('om-fix', true, 'sekret', 'http://localhost:4327'))
     expect(code).toContain(`open('http://localhost:4327/new?'+q,'_blank')`)
-    expect(code).not.toContain('/api/health')
+    expect(code).not.toContain('/api/v1/health')
     expect(code).not.toContain('fetch(')
   })
 

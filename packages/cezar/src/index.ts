@@ -176,7 +176,7 @@ async function main(): Promise<void> {
  *
  * Returns the boot project's registry id when registration happened —
  * `serveCommand` plumbs it into the server (`ServerDeps.bootProjectId`) so
- * `/api/projects` and `/api/health` can name the boot project without a
+ * `/api/projects` and `/api/v1/health` can name the boot project without a
  * lookup. Undefined when registration was suppressed or the workspace is
  * unavailable; the server then derives a fallback on its own.
  */
@@ -249,7 +249,7 @@ async function serveCommand(
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
 
   // Update discovery (#368) — fire-and-forget; the banner prints whenever the
-  // registry answers and /api/health picks it up for the GUI chip.
+  // registry answers and /api/v1/health picks it up for the GUI chip.
   const pkgName = readOwnName();
   const update: { latest?: string } = {};
   void checkForUpdate(pkgName, version).then((latest) => {
@@ -307,7 +307,7 @@ async function serveCommand(
   // Open the browser only once the server actually answers, so the first
   // paint is the cockpit and never a connection error.
   if (openBrowser) {
-    const healthy = await waitForHealth(`${url}/api/health`, 5_000);
+    const healthy = await waitForHealth(`${url}/api/v1/health`, 5_000);
     if (healthy) openUrl(url);
   }
 }

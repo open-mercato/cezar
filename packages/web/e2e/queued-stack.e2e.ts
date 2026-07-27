@@ -44,7 +44,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -57,7 +57,7 @@ async function getRun(url: string, id: string): Promise<{ status: string; task: 
   let lastError: unknown
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      const response = await fetch(`${url}/api/runs/${id}`)
+      const response = await fetch(`${url}/api/v1/runs/${id}`)
       if (!response.ok) throw new Error(`GET run answered ${response.status}`)
       return (await response.json()) as {
         status: string
@@ -83,7 +83,7 @@ async function waitForStatus(url: string, id: string, wanted: string[], tries = 
 
 const startRun = async (url: string, task: string): Promise<string> => {
   const created = (await (
-    await fetch(`${url}/api/runs`, {
+    await fetch(`${url}/api/v1/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task, workflow: 'quick-task' }),
@@ -214,7 +214,7 @@ describe('a queued run’s prompt is amendable (#472)', () => {
    * prompt never absorbs its stack and cannot compound across restarts), and the thread
    * keeps showing exactly one bubble per authored message once the run is under way.
    *
-   * NB: never `await fetch(...).text()` on `/api/runs/:id/events` — it is an SSE stream, so
+   * NB: never `await fetch(...).text()` on `/api/v1/runs/:id/events` — it is an SSE stream, so
    * the promise never settles and the test dies on its timeout instead of failing.
    */
   it('keeps the amendment when the run finally starts, and goes read-only', async () => {

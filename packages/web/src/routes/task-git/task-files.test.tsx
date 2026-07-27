@@ -80,10 +80,10 @@ function stubFetch(overrides: Record<string, () => Response> = {}): string[] {
       sent.push(`${method} ${path}`)
       const override = overrides[`${method} ${path}`]
       if (override) return override()
-      if (method === 'GET' && path === '/api/runs/r1') return jsonResponse(RUN)
-      if (method === 'GET' && path === '/api/health') return jsonResponse(HEALTH)
-      if (method === 'GET' && path === '/api/runs/r1/files?path=') return jsonResponse(ROOT)
-      const filesMatch = /^\/api\/runs\/r1\/files\?path=(.+)$/.exec(path)
+      if (method === 'GET' && path === '/api/v1/runs/r1') return jsonResponse(RUN)
+      if (method === 'GET' && path === '/api/v1/health') return jsonResponse(HEALTH)
+      if (method === 'GET' && path === '/api/v1/runs/r1/files?path=') return jsonResponse(ROOT)
+      const filesMatch = /^\/api\/v1\/runs\/r1\/files\?path=(.+)$/.exec(path)
       if (method === 'GET' && filesMatch && FILES[filesMatch[1]!]) return jsonResponse(FILES[filesMatch[1]!])
       return jsonResponse({ error: `unstubbed: ${path}` }, 404)
     }),
@@ -142,7 +142,7 @@ describe('the Files tab route', () => {
 
     fireEvent.click(treeButton('files-dir', 'src')!)
     await waitFor(() => expect(treeButton('files-file', 'src/nested.md')).not.toBeNull())
-    expect(sent.some((r) => r === 'GET /api/runs/r1/files?path=src')).toBe(true)
+    expect(sent.some((r) => r === 'GET /api/v1/runs/r1/files?path=src')).toBe(true)
     expect(treeButton('files-dir', 'src')?.dataset.state).toBe('open')
 
     // Collapsing folds the rows again.
@@ -181,7 +181,7 @@ describe('the Files tab route', () => {
 
     await waitFor(() => expect(document.querySelector('[data-slot="file-preview-image"]')).not.toBeNull())
     const img = document.querySelector('[data-slot="file-preview-image"]') as HTMLImageElement
-    expect(img.getAttribute('src')).toBe('/api/runs/r1/files?path=logo.png&raw=1')
+    expect(img.getAttribute('src')).toBe('/api/v1/runs/r1/files?path=logo.png&raw=1')
     expect(img.getAttribute('alt')).toBe('logo.png')
   })
 
@@ -208,7 +208,7 @@ describe('the Files tab route', () => {
 
   it('a per-file 409 shows the server words as a refusal, not an outage', async () => {
     stubFetch({
-      'GET /api/runs/r1/files?path=hello.ts': () =>
+      'GET /api/v1/runs/r1/files?path=hello.ts': () =>
         jsonResponse({ error: 'symlinks are not served: hello.ts' }, 409),
     })
     renderFilesRoute()
@@ -222,7 +222,7 @@ describe('the Files tab route', () => {
 
   it('a root 409 ("no worktree") replaces the whole browser with the server reason', async () => {
     stubFetch({
-      'GET /api/runs/r1/files?path=': () =>
+      'GET /api/v1/runs/r1/files?path=': () =>
         jsonResponse({ error: 'no worktree — this task ran directly in the repo working tree' }, 409),
     })
     renderFilesRoute()
@@ -236,7 +236,7 @@ describe('the Files tab route', () => {
 
   it('a non-409 root failure is a danger state', async () => {
     stubFetch({
-      'GET /api/runs/r1/files?path=': () => jsonResponse({ error: 'boom' }, 500),
+      'GET /api/v1/runs/r1/files?path=': () => jsonResponse({ error: 'boom' }, 500),
     })
     renderFilesRoute()
 

@@ -106,7 +106,7 @@ describe('RunManager.recordTurnEnd', () => {
 
   it('never overwrites a user-edited title (PATCH sets titleSummary too)', async () => {
     const record = await makeWorktreeRun();
-    // What PATCH /api/runs/:id does on a rename:
+    // What PATCH /api/v1/runs/:id does on a rename:
     store.updateRun(record.id, { title: 'My name', titleSummary: 'My name', titleOrigin: 'user' });
     await manager.recordTurnEnd(record.id, TURN_TEXT);
     expect(store.getRun(record.id)?.titleSummary).toBe('My name');
@@ -845,7 +845,7 @@ describe('RunManager.persistImage without a session (#472)', () => {
     const second = persist('run-a', 'pasted');
     expect(first?.name).toBe('pasted-1.png');
     expect(second?.name).toBe('pasted-2.png');
-    expect(first?.url).toBe('/api/runs/run-a/images/pasted-1.png');
+    expect(first?.url).toBe('/api/v1/runs/run-a/images/pasted-1.png');
   });
 
   /** The count-based bug this replaces: one file on disk named `pasted-3.png` is a
@@ -940,7 +940,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
   it('persists attached images and records their URLs', () => {
     const r = seedQueued();
     const msg = manager.enqueueMessage(r.id, [image(), { type: 'text', text: 'like this' }]);
-    expect(msg?.images).toEqual([`/api/runs/${r.id}/images/pasted-1.png`]);
+    expect(msg?.images).toEqual([`/api/v1/runs/${r.id}/images/pasted-1.png`]);
     expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(true);
   });
 
@@ -1191,7 +1191,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pasted-1.png'), 'the-bytes');
-    stack(r.id, { text: 'see the mock', images: [`/api/runs/${r.id}/images/pasted-1.png`] });
+    stack(r.id, { text: 'see the mock', images: [`/api/v1/runs/${r.id}/images/pasted-1.png`] });
 
     const images = hydrate(r.id, r.task).stackedImages;
     expect(images).toHaveLength(1);
@@ -1206,7 +1206,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pasted-1.png'), 'the-task-bytes');
-    store.updateRun(r.id, { taskImages: [`/api/runs/${r.id}/images/pasted-1.png`] });
+    store.updateRun(r.id, { taskImages: [`/api/v1/runs/${r.id}/images/pasted-1.png`] });
 
     expect(hydrate(r.id, r.task).images).toEqual([
       {
@@ -1223,7 +1223,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
   /** Degrade, never fail the boot (AGENTS.md). */
   it('skips an unreadable attachment, notes it, and still starts', () => {
     const r = store.createRun({ title: 't', workflow: 'w', task: 'look at this', steps: [] });
-    stack(r.id, { text: 'see the mock', images: [`/api/runs/${r.id}/images/gone-1.png`] });
+    stack(r.id, { text: 'see the mock', images: [`/api/v1/runs/${r.id}/images/gone-1.png`] });
 
     const hydrated = hydrate(r.id, r.task);
     expect(hydrated.task).toBe('look at this\n\nsee the mock');

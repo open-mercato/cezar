@@ -20,7 +20,7 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
  *
  * So: a throwaway data dir, a fixture `runs.json`, one `node dist/index.js serve --repo <tmp>`.
  * The fixture is not invented data — `runs.json` is cezar's documented state contract (a
- * `RunRecord[]`, the exact shape `GET /api/runs` answers with and `src/runs/store.ts` parses with
+ * `RunRecord[]`, the exact shape `GET /api/v1/runs` answers with and `src/runs/store.ts` parses with
  * zod). If a record here were wrong, the store would drop it and these assertions would fail.
  *
  * Deliberate limitation: the statuses below are all terminal (`review`/`done`/`failed`). A serve
@@ -142,7 +142,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -206,14 +206,14 @@ afterAll(() => {
 describe('task quick-list', () => {
   beforeAll(() => {
     browser.goto(`${baseUrl}${scoped('/')}`)
-    // The list is async — it renders once `/api/runs` answers.
+    // The list is async — it renders once `/api/v1/runs` answers.
     browser.waitForFunction(`document.querySelector('[data-slot="quick-list"]') !== null`)
   })
 
   it('serves the fixture through the real API', async () => {
     // The store parsed and kept every record: if the shape were wrong, zod would have dropped the
     // index and the sidebar below would be asserting against an empty list that "passes" nothing.
-    const runs = (await fetch(`${baseUrl}/api/runs`).then((r) => r.json())) as Array<{ id: string }>
+    const runs = (await fetch(`${baseUrl}/api/v1/runs`).then((r) => r.json())) as Array<{ id: string }>
     expect(runs.map((r) => r.id).sort()).toEqual(
       ['fix-archived', 'fix-done', 'fix-failed', 'fix-review-pr', 'fix-var-a', 'fix-var-b'].sort()
     )
@@ -475,7 +475,7 @@ describe('tasks table overview', () => {
 
     // Then the record: the server stored the edit as BOTH title and the displayed summary
     // (an edit must beat any past or future auto-summary).
-    const runs = (await fetch(`${baseUrl}/api/runs`).then((r) => r.json())) as Array<{
+    const runs = (await fetch(`${baseUrl}/api/v1/runs`).then((r) => r.json())) as Array<{
       id: string
       title: string
       titleSummary?: string

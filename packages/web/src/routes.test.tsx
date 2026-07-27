@@ -12,7 +12,7 @@ import { ThemeProvider } from './components/theme-provider'
 import { AppRoutes, pageTitleContext } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
-// The `/` overview fetches `/api/runs` on mount. A never-answering fetch keeps every route
+// The `/` overview fetches `/api/v1/runs` on mount. A never-answering fetch keeps every route
 // honestly in its loading state — this file is about the URL map, not about data.
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
@@ -26,11 +26,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** The boot project (multi-project spec, step 3.2) — what `/api/health.bootProject` and
- *  `/api/projects.bootProject` name, and where every legacy flat URL redirects. */
+/** The boot project (multi-project spec, step 3.2) — what `/api/v1/health.bootProject` and
+ *  `/api/v1/projects.bootProject` name, and where every legacy flat URL redirects. */
 const BOOT = 'boot'
 
-/** A full-enough `/api/health` answer: the redirect gate reads `bootProject`, and the routes
+/** A full-enough `/api/v1/health` answer: the redirect gate reads `bootProject`, and the routes
  *  behind it (inbox, /new) read `capabilities` — a partial seed would crash what a real health
  *  payload never crashes. `followups: true` keeps the Inbox route's real heading. */
 const HEALTH = {
@@ -261,7 +261,7 @@ describe('scoped route map (/p/:projectId)', () => {
   it('remounts the same page and loads its new scope when the project param changes', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
-      if (path === '/api/runs' || path === '/api/p/other/runs') {
+      if (path === '/api/v1/runs' || path === '/api/v1/p/other/runs') {
         return new Response('[]', { headers: { 'content-type': 'application/json' } })
       }
       return new Promise<never>(() => {})
@@ -287,13 +287,13 @@ describe('scoped route map (/p/:projectId)', () => {
     )
 
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/runs')).toBe(true),
+      expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/v1/runs')).toBe(true),
     )
     fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'stale filter' } })
     fireEvent.click(screen.getByRole('button', { name: 'Switch project' }))
 
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/p/other/runs')).toBe(true),
+      expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/v1/p/other/runs')).toBe(true),
     )
     expect((screen.getByLabelText('Search tasks') as HTMLInputElement).value).toBe('')
   })
@@ -444,12 +444,12 @@ describe('the /p/default alias', () => {
   })
 
   it('a registry error still resolves the alias via health instead of loading forever', async () => {
-    // `/api/projects` down, `/api/health` already answered (it names the same boot slug): the
+    // `/api/v1/projects` down, `/api/v1/health` already answered (it names the same boot slug): the
     // alias must not park on the quiet resolving screen for good — health is the fallback.
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).startsWith('/api/projects')) {
+        if (String(input).startsWith('/api/v1/projects')) {
           return new Response(JSON.stringify({ error: 'down' }), {
             status: 500,
             headers: { 'content-type': 'application/json' },
@@ -481,12 +481,12 @@ describe('the /p/default alias', () => {
 
   it('with the registry errored and no health either, the alias mounts the scope rather than spin', async () => {
     // Nothing can name the real boot slug, but the server-side `default` alias answers every
-    // `/api/p/default/*` route as the boot project — mounting the routed view (whose own error
+    // `/api/v1/p/default/*` route as the boot project — mounting the routed view (whose own error
     // states are the honest surface) beats a permanent "Loading…".
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).startsWith('/api/projects')) {
+        if (String(input).startsWith('/api/v1/projects')) {
           return new Response(JSON.stringify({ error: 'down' }), {
             status: 500,
             headers: { 'content-type': 'application/json' },

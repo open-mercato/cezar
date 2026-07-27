@@ -1,7 +1,7 @@
 import { useEffect, useState, type ImgHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 
-import { scopeApiPath } from '@open-mercato/cezar-api-client'
+import { resolveApiUrl } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
 /**
@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
  * — `/api/runs/:id/images/…` — and `taskImages`/`runFileRawUrl` are the same origin), so the
  * project scope is applied HERE, at render time (multi-project spec, step 3.1): transcripts
  * store the unscoped legacy URL forever, and re-scoping on use keeps them valid under
- * `/api/p/<id>`. `scopeApiPath` is the identity unscoped and skips already-scoped paths.
+ * `/api/p/<id>`. `apiPath` is the identity unscoped and skips already-scoped paths.
  */
 export function ZoomableImage({
   src: rawSrc,
@@ -27,7 +27,7 @@ export function ZoomableImage({
   className?: string
 } & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'alt' | 'className' | 'onClick'>) {
   const [open, setOpen] = useState(false)
-  const src = scopeApiPath(rawSrc)
+  const src = resolveApiUrl(rawSrc)
 
   useEffect(() => {
     if (!open) return

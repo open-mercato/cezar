@@ -12,11 +12,11 @@ import { createApp, type WorkspaceConfigResponse } from './server.js';
 
 /**
  * The workspace settings API (multi-project spec, step 2.7):
- * `GET/PUT /api/workspace/config` — the settings slice of `~/.cezar/config.json`
+ * `GET/PUT /api/v1/workspace/config` — the settings slice of `~/.cezar/config.json`
  * with the `projectsDir` writability probe and the semaphore `refresh()` hook —
- * and `GET/PUT /api/workspace/ui-state`, the global GUI state with the same
+ * and `GET/PUT /api/v1/workspace/ui-state`, the global GUI state with the same
  * merge/key-cap semantics as the per-repo ui-state route. All workspace-level:
- * single-mount, never under `/api/p/`.
+ * single-mount, never under `/api/v1/p/`.
  */
 describe('the workspace settings API (step 2.7)', () => {
   const savedHome = process.env.CEZ_HOME;
@@ -74,15 +74,15 @@ describe('the workspace settings API (step 2.7)', () => {
 
   const rawConfig = () => JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as Record<string, unknown>;
 
-  const getConfig = () => apiRequest(app, '/api/workspace/config');
+  const getConfig = () => apiRequest(app, '/api/v1/workspace/config');
   const putConfig = (body: unknown) =>
-    apiRequest(app, '/api/workspace/config', {
+    apiRequest(app, '/api/v1/workspace/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
 
-  // ---- GET/PUT /api/workspace/config ---------------------------------------
+  // ---- GET/PUT /api/v1/workspace/config ---------------------------------------
 
   it('GET answers the zero-config defaults when no file exists — and never the registry', async () => {
     const res = await getConfig();
@@ -107,7 +107,7 @@ describe('the workspace settings API (step 2.7)', () => {
         worktreeRetentionDefault: 10,
       },
     });
-    // Absolute project roots belong on /api/projects; schemaVersion is a
+    // Absolute project roots belong on /api/v1/projects; schemaVersion is a
     // migration cursor, not a setting.
     expect(body.projects).toBeUndefined();
     expect(body.schemaVersion).toBeUndefined();
@@ -301,7 +301,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('a malformed body answers 400 {error}', async () => {
-    const res = await apiRequest(app, '/api/workspace/config', {
+    const res = await apiRequest(app, '/api/v1/workspace/config', {
       method: 'PUT',
       body: 'nonsense',
     });
@@ -309,11 +309,11 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await res.json()) as { error: string }).toHaveProperty('error');
   });
 
-  // ---- GET/PUT /api/workspace/ui-state -------------------------------------
+  // ---- GET/PUT /api/v1/workspace/ui-state -------------------------------------
 
-  const getUiState = () => apiRequest(app, '/api/workspace/ui-state');
+  const getUiState = () => apiRequest(app, '/api/v1/workspace/ui-state');
   const putUiState = (body: unknown) =>
-    apiRequest(app, '/api/workspace/ui-state', {
+    apiRequest(app, '/api/v1/workspace/ui-state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -339,7 +339,7 @@ describe('the workspace settings API (step 2.7)', () => {
       sidebar: { collapsed: { cezar: true } },
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
-    expect(await (await apiRequest(app, '/api/ui-state')).json()).toEqual({});
+    expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
   });
 
   it('accepts bounded provider auth failure dismissals', async () => {

@@ -40,14 +40,14 @@ const workspaceConfig = (disabledProviders: ProviderId[] = []) => {
 };
 
 /**
- * `POST /api/runs/:id/open-in` with a `cli:<runner>` target (#402 follow-up): picking the
+ * `POST /api/v1/runs/:id/open-in` with a `cli:<runner>` target (#402 follow-up): picking the
  * agent CLI that matches the run's own runner resumes THIS run's session — the same
  * `resumeCommand` mapping the client mirrors in run-actions.ts. Every other case (a foreign
  * runner, or no session yet) launches the CLI fresh rather than guessing at a cross-backend
  * resume: a Claude session id means nothing to `codex resume`, so cross-runner picks and
  * sessionless runs both degrade to a plain launch instead of erroring.
  */
-describe('POST /api/runs/:id/open-in — agent CLI resume vs fresh launch', () => {
+describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', () => {
   let repoRoot: string;
   let store: RunStore;
   const savedRemote = process.env.CEZ_REMOTE;
@@ -92,14 +92,14 @@ describe('POST /api/runs/:id/open-in — agent CLI resume vs fresh launch', () =
   };
 
   const openIn = (runId: string, target: string, options: { disabled?: ProviderId[]; disconnected?: ProviderId[] } = {}) =>
-    apiRequest(app(options), `/api/runs/${runId}/open-in`, {
+    apiRequest(app(options), `/api/v1/runs/${runId}/open-in`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target }),
     });
 
   const openInCli = (runId: string, options: { disabled?: ProviderId[]; disconnected?: ProviderId[] } = {}) =>
-    apiRequest(app(options), `/api/runs/${runId}/open-in-cli`, { method: 'POST' });
+    apiRequest(app(options), `/api/v1/runs/${runId}/open-in-cli`, { method: 'POST' });
 
   it.each([
     ['claude', 'cli:claude', 'claude --resume sess-1'],

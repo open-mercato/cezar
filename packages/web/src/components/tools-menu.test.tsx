@@ -26,7 +26,7 @@ beforeEach(() => {
   )
 })
 
-/** A `/api/health` answer with both kinds of row: present tools with versions, and a missing
+/** A `/api/v1/health` answer with both kinds of row: present tools with versions, and a missing
  *  one carrying the server's setup hint. The names/hints mirror `src/core/backend-detect.ts`. */
 const HEALTH: HealthResponse = {
   version: '0.1.3',

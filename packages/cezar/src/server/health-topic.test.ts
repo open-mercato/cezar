@@ -86,7 +86,7 @@ describe('health topic + cache (live-server path)', () => {
   };
   let currentApp: ReturnType<typeof createApp> | undefined;
   const runner = async (): Promise<string | undefined> => {
-    const res = await apiRequest(currentApp!, '/api/health');
+    const res = await apiRequest(currentApp!, '/api/v1/health');
     expect(res.status).toBe(200);
     return ((await res.json()) as { defaultRunner?: string }).defaultRunner;
   };
@@ -193,7 +193,7 @@ describe('health topic + cache (live-server path)', () => {
     expect(published).toHaveLength(0);
   });
 
-  it('the topic snapshot and GET /api/health serve the same payload', async () => {
+  it('the topic snapshot and GET /api/v1/health serve the same payload', async () => {
     setRunner('claude');
     const { app, topics } = build();
     currentApp = app;

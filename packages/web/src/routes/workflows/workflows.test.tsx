@@ -80,11 +80,11 @@ function stubFetch(
       const queue = overrides[`${method} ${path}`]
       const next = queue?.shift()
       if (next) return next()
-      if (method === 'GET' && path === '/api/workflows') {
+      if (method === 'GET' && path === '/api/v1/workflows') {
         return jsonResponse({ workflows, issues: [] } satisfies WorkflowsResponse)
       }
-      if (method === 'GET' && path === '/api/skills') return jsonResponse(SKILLS)
-      if (method === 'GET' && path === '/api/ui-state') return jsonResponse({})
+      if (method === 'GET' && path === '/api/v1/skills') return jsonResponse(SKILLS)
+      if (method === 'GET' && path === '/api/v1/ui-state') return jsonResponse({})
       return jsonResponse({ error: 'not found' }, 404)
     }),
   )
@@ -185,7 +185,7 @@ describe('palette add / remove / the 8-step limit', () => {
   // #374: the palette's empty state must mention the same discovery dirs as the Skills tab's,
   // not just `.ai/skills/`.
   it('an empty skill catalog explains every discovery dir, not just .ai/skills/', async () => {
-    stubFetch({ 'GET /api/skills': [() => jsonResponse([])] })
+    stubFetch({ 'GET /api/v1/skills': [() => jsonResponse([])] })
     renderAt('/workflows')
 
     const hint = await screen.findByText(/No skills yet/)
@@ -200,7 +200,7 @@ describe('palette add / remove / the 8-step limit', () => {
 describe('YAML import', () => {
   it('a valid paste replaces the canvas with the server-normalized steps', async () => {
     const sent = stubFetch({
-      'POST /api/workflows/parse': [
+      'POST /api/v1/workflows/parse': [
         () =>
           jsonResponse({
             name: 'imported-flow',
@@ -220,7 +220,7 @@ describe('YAML import', () => {
     await waitFor(() => expect(stepIds()).toEqual(['om-review']))
     expect(nameInput().value).toBe('imported-flow')
     // The server owns YAML parsing — the paste went to /parse verbatim.
-    expect(sent.find((r) => r.path === '/api/workflows/parse')?.body).toEqual({
+    expect(sent.find((r) => r.path === '/api/v1/workflows/parse')?.body).toEqual({
       yaml: 'name: imported-flow\nskills:\n  - om-review',
     })
     await screen.findByText('Imported "imported-flow" — review, then Save.')
@@ -228,7 +228,7 @@ describe('YAML import', () => {
 
   it('a bad paste surfaces the server’s own error and keeps the canvas', async () => {
     stubFetch({
-      'POST /api/workflows/parse': [
+      'POST /api/v1/workflows/parse': [
         () => jsonResponse({ error: 'a workflow lists either "steps" or "skills", not both' }, 400),
       ],
     })
@@ -253,7 +253,7 @@ describe('YAML import', () => {
 describe('auto chain creator', () => {
   it('a built plan lands its title + steps on the canvas', async () => {
     const sent = stubFetch({
-      'POST /api/plan': [
+      'POST /api/v1/plan': [
         () =>
           jsonResponse({
             name: 'fix-and-review',
@@ -277,13 +277,13 @@ describe('auto chain creator', () => {
 
     await waitFor(() => expect(stepIds()).toEqual(['implement', 'verify']))
     expect(nameInput().value).toBe('fix-and-review')
-    expect(sent.find((r) => r.path === '/api/plan')?.body).toEqual({ task: 'Fix the bug and review it' })
+    expect(sent.find((r) => r.path === '/api/v1/plan')?.body).toEqual({ task: 'Fix the bug and review it' })
     await screen.findByText('Built "fix-and-review" — review, tweak, then Save.')
   })
 
   it('a degraded (fallback) plan keeps the current name and warns', async () => {
     stubFetch({
-      'POST /api/plan': [
+      'POST /api/v1/plan': [
         () =>
           jsonResponse({
             steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
@@ -313,7 +313,7 @@ describe('auto chain creator', () => {
 describe('save', () => {
   it('a pure stack saves in the portable compact form', async () => {
     const sent = stubFetch({
-      'POST /api/workflows': [
+      'POST /api/v1/workflows': [
         () => jsonResponse({ path: '.ai/cezar/workflows/ship-it.yaml', name: 'ship-it' }, 201),
       ],
     })
@@ -322,7 +322,7 @@ describe('save', () => {
 
     fireEvent.click(document.querySelector('[data-slot="wb-save"]')!)
     await screen.findByText('Saved — ship-it.yaml')
-    expect(sent.find((r) => r.method === 'POST' && r.path === '/api/workflows')?.body).toEqual({
+    expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/workflows')?.body).toEqual({
       name: 'ship-it',
       description: 'Fix then review.',
       skills: ['om-fix', 'om-review'],
@@ -331,7 +331,7 @@ describe('save', () => {
 
   it('a 409 opens the overwrite confirm; confirming retries with overwrite: true', async () => {
     const sent = stubFetch({
-      'POST /api/workflows': [
+      'POST /api/v1/workflows': [
         () => jsonResponse({ error: 'workflow file already exists', exists: true }, 409),
         () => jsonResponse({ path: '.ai/cezar/workflows/ship-it.yaml', name: 'ship-it' }, 201),
       ],
@@ -344,7 +344,7 @@ describe('save', () => {
     fireEvent.click(document.querySelector('[data-slot="wb-overwrite-confirm"]')!)
 
     await screen.findByText('Saved — ship-it.yaml')
-    const posts = sent.filter((r) => r.method === 'POST' && r.path === '/api/workflows')
+    const posts = sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/workflows')
     expect(posts).toHaveLength(2)
     expect(posts[0]!.body).not.toHaveProperty('overwrite')
     expect(posts[1]!.body).toMatchObject({ name: 'ship-it', overwrite: true })
@@ -366,7 +366,7 @@ describe('save', () => {
 describe('delete and “+ new”', () => {
   it('Delete exists only for saved files, confirms, DELETEs and resets the canvas', async () => {
     const sent = stubFetch({
-      'DELETE /api/workflows/ship-it': [
+      'DELETE /api/v1/workflows/ship-it': [
         () => jsonResponse({ ok: true, path: '.ai/cezar/workflows/ship-it.yaml' }),
       ],
     })
@@ -378,7 +378,7 @@ describe('delete and “+ new”', () => {
     fireEvent.click(document.querySelector('[data-slot="wb-delete-confirm"]')!)
 
     await screen.findByText('Deleted "ship-it".')
-    expect(sent.some((r) => r.method === 'DELETE' && r.path === '/api/workflows/ship-it')).toBe(true)
+    expect(sent.some((r) => r.method === 'DELETE' && r.path === '/api/v1/workflows/ship-it')).toBe(true)
     await waitFor(() => expect(stepCards()).toHaveLength(0))
     expect(nameInput().value).toBe('my-workflow')
   })

@@ -408,7 +408,7 @@ export function useHealthSubscription(): void {
  *
  * A pure read: the HTTP query is the authoritative bootstrap and the reconcile target
  * (global-events.tsx invalidates it on reconnect/visibility), and live updates arrive by the
- * one local-only `useHealthSubscription` at the root folding pushed `/api/ws` frames into this same cache
+ * one local-only `useHealthSubscription` at the root folding pushed `/api/v1/ws` frames into this same cache
  * (#369 — this replaced the old 5 s `refetchInterval` per tab). Safe to call from as many
  * components as need health; they all read one cache and none of them touches the socket. */
 export function useHealth() {

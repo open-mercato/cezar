@@ -1,3 +1,17 @@
+# Unreleased
+
+## ⚠️ Breaking
+- 💥 **The HTTP API moved to `/api/v1`; the unversioned `/api/*` surface was removed.** Every
+  route now answers only under `/api/v1/…` (project-scoped: `/api/v1/p/<projectId>/…`), and the
+  WebSocket bus moved to `/api/v1/ws`. The bundled cockpit ships in lockstep and needs nothing
+  from you; **a script or integration that calls `localhost:4321/api/…` must add the `/v1`
+  segment**. `GET /api/v1/health` remains the CORS-open discovery endpoint. Saved bookmarklets
+  are unaffected — they open a page URL and have not called the API since the GitHub-CSP change.
+  Historical run transcripts keep working: image URLs recorded under the old paths are upgraded
+  to `/api/v1` when rendered. Versioning the surface is what lets the typed client
+  (`@open-mercato/cezar-api-client`) describe the whole API, and what makes a future `v2` an
+  additive mount rather than an edit to every route.
+
 # 0.9.1 (2026-07-24)
 
 ## Highlights

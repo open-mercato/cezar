@@ -11,7 +11,7 @@ import { createApp } from './server.js';
 import type { FsBrowseResponse } from './fs-browse.js';
 
 /**
- * `GET /api/fs/browse` (multi-project spec, step 4.1) — the directory picker
+ * `GET /api/v1/fs/browse` (multi-project spec, step 4.1) — the directory picker
  * behind "Add project → open local folder".
  *
  * The escape cases below are built out of REAL temp directories and REAL
@@ -21,7 +21,7 @@ import type { FsBrowseResponse } from './fs-browse.js';
  * Every test therefore proves containment against a directory that genuinely
  * exists outside the browse root.
  */
-describe('GET /api/fs/browse (step 4.1)', () => {
+describe('GET /api/v1/fs/browse (step 4.1)', () => {
   const savedHome = process.env.HOME;
   const savedCezHome = process.env.CEZ_HOME;
   const savedRemote = process.env.CEZ_REMOTE;
@@ -75,7 +75,7 @@ describe('GET /api/fs/browse (step 4.1)', () => {
     for (const dir of [home, outside]) rmSync(dir, { recursive: true, force: true });
   });
 
-  const browse = (query = '') => apiRequest(app, `/api/fs/browse${query}`);
+  const browse = (query = '') => apiRequest(app, `/api/v1/fs/browse${query}`);
   const body = async (res: Response) => (await res.json()) as FsBrowseResponse;
   const error = async (res: Response) => ((await res.json()) as { error: string }).error;
   const names = (payload: FsBrowseResponse) => payload.dirs.map((d) => d.name);
@@ -177,7 +177,7 @@ describe('GET /api/fs/browse (step 4.1)', () => {
 
   describe('an independent browseRoot', () => {
     beforeEach(() => {
-      // Stored with a literal `~`, exactly as PUT /api/workspace/config keeps
+      // Stored with a literal `~`, exactly as PUT /api/v1/workspace/config keeps
       // it — so this also proves the hosted root expands the tilde.
       mkdirSync(join(home, '.cezar'), { recursive: true });
       writeFileSync(
@@ -220,7 +220,7 @@ describe('GET /api/fs/browse (step 4.1)', () => {
 
   // ---- mounting ------------------------------------------------------------
 
-  it('is workspace-level: never mirrored under /api/p/', async () => {
-    expect((await apiRequest(app, '/api/p/default/fs/browse')).status).toBe(404);
+  it('is workspace-level: never mirrored under /api/v1/p/', async () => {
+    expect((await apiRequest(app, '/api/v1/p/default/fs/browse')).status).toBe(404);
   });
 });

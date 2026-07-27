@@ -356,11 +356,12 @@ Settings split along the same line: **Agents**, **Worktrees**, **Bookmarklets**,
 **Projects** and **Keyboard** are yours or the machine's and live at
 `/settings/global`.
 
-**Old URLs keep working.** Every unprefixed path — `/`, `/tasks/<id>`,
-`/settings`, and the whole `/api/…` surface — still answers exactly as before,
-bound to the project cezar was started in; the cockpit redirects flat paths to
-their `/p/<boot>/…` twin. Existing bookmarks, bookmarklets and scripts need no
-change.
+**Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
+`/settings` — still answers, bound to the project cezar was started in; the
+cockpit redirects flat paths to their `/p/<boot>/…` twin, so existing bookmarks
+and bookmarklets need no change. The HTTP API is the exception: it moved to
+`/api/v1/…` (see the CHANGELOG), so a script that calls it needs the extra
+segment.
 
 > **Hosted cockpit?** The folder picker is confined to the independent browse
 > root. Set `CEZ_BROWSE_ROOT` narrowly before first boot (or save it in

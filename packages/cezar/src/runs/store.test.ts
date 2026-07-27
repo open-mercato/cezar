@@ -994,7 +994,7 @@ describe('RunStore — queuedMessages (#472)', () => {
         {
           id: 'm2',
           text: 'see this mock',
-          images: [`/api/runs/${run.id}/images/pasted-1.png`],
+          images: [`/api/v1/runs/${run.id}/images/pasted-1.png`],
           createdAt: '2026-07-21T10:01:00.000Z',
         },
       ],
@@ -1009,7 +1009,7 @@ describe('RunStore — queuedMessages (#472)', () => {
       text: 'and update the changelog',
       createdAt: '2026-07-21T10:00:00.000Z',
     });
-    expect(stack?.[1]?.images).toEqual([`/api/runs/${run.id}/images/pasted-1.png`]);
+    expect(stack?.[1]?.images).toEqual([`/api/v1/runs/${run.id}/images/pasted-1.png`]);
   });
 
   /** The `task` rule (above) extended to the stack: these strings are replayed

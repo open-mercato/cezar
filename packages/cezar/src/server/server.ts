@@ -170,7 +170,7 @@ export interface ServerDeps {
   /** Process-wide Open Mercato skills update detector. Injected in tests and
    * shared by every workspace route/project; createApp owns the default. */
   skillsUpdate?: SkillsUpdateService;
-  /** WebSocket subscription hub (`/api/ws`, src/server/ws.ts). `createApp`
+  /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
    *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
@@ -206,42 +206,33 @@ export interface ProjectRouteInfo {
   path: string;
 }
 
-const SCOPED_PREFIX = '/api/p/:projectId';
-
 /**
- * The versioned public surface (spec 2026-07-23-independent-server-web-packages).
+ * The public API surface (spec 2026-07-23-independent-server-web-packages).
  *
- * `/api/*` is the legacy surface: frozen by BACKWARD_COMPATIBILITY.md §2, registered as loose
- * statements, and therefore invisible to Hono's RPC type inference. `/api/v1/*` is the same
- * routes re-mounted from **chained** sub-apps, which is what makes `AppType` (and with it the
- * typed client in `@open-mercato/cezar-api-client`) know they exist. A family lands here the
- * moment it is chained; until then it is reachable only under the legacy spelling.
- *
- * The two are byte-identical twins today — `v1-parity.test.ts` asserts it. They exist
- * separately so the legacy surface can stay frozen while `v1` is free to evolve under an
- * explicit version bump.
+ * Every route lives under this one prefix. The unversioned `/api/*` spelling the cockpit used
+ * to speak was removed once the whole API was reachable here — carrying two spellings meant two
+ * surfaces to keep working, and only one of them could be the typed contract. Bumping to `v2`
+ * means mounting a second table beside this one, not editing route paths.
  */
 const V1_PREFIX = '/api/v1';
 
-/** Project scoping inside the versioned surface. Same shape as the legacy `SCOPED_PREFIX`:
- *  the version is the OUTER dimension, so a consumer picks its API version once and then
- *  addresses projects inside it. */
+/** Project scoping inside the versioned surface. The version is the OUTER dimension, so a
+ *  consumer picks its API version once and then addresses projects inside it. */
 const V1_SCOPED_PREFIX = `${V1_PREFIX}/p/:projectId`;
 
 /**
- * The project-scoped route table of a `createApp()` app, derived from its
- * actual registrations (so it can never drift from the code): every
- * method+path mounted under `/api/p/:projectId/…`, minus the scope-resolver
- * middleware (method ALL), deduped. The alias-parity suite iterates this to
- * assert unprefixed `/api/<path>` ≡ `/api/p/<boot>/<path>` ≡
- * `/api/p/default/<path>`.
+ * The project-scoped route table of a `createApp()` app, derived from its actual registrations
+ * (so it can never drift from the code): every method+path mounted under
+ * `/api/v1/p/:projectId/…`, minus the scope-resolver middleware (method ALL), deduped. The
+ * alias-parity suite iterates this to assert `/api/v1/<path>` ≡ `/api/v1/p/<boot>/<path>` ≡
+ * `/api/v1/p/default/<path>`.
  */
 export function projectRouteManifest(app: Hono): ProjectRouteInfo[] {
   const seen = new Set<string>();
   const manifest: ProjectRouteInfo[] = [];
   for (const route of app.routes) {
-    if (route.method === 'ALL' || !route.path.startsWith(`${SCOPED_PREFIX}/`)) continue;
-    const path = route.path.slice(SCOPED_PREFIX.length);
+    if (route.method === 'ALL' || !route.path.startsWith(`${V1_SCOPED_PREFIX}/`)) continue;
+    const path = route.path.slice(V1_SCOPED_PREFIX.length);
     const key = `${route.method} ${path}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1068,9 +1059,6 @@ export function createApp(deps: ServerDeps) {
     return next();
   };
 
-  const api = new Hono<ProjectApiEnv>();
-  api.use('*', resolveProjectScope);
-
   // ---- static GUI ----------------------------------------------------------
   const webDir = resolveWebDir();
   const distDir = join(webDir, 'dist');
@@ -1150,13 +1138,9 @@ export function createApp(deps: ServerDeps) {
     }
     await next();
   };
-  app.use('/api/health', healthCors);
-  // …and on the versioned twin, which is the same endpoint under a different
-  // spelling: a bookmarklet discovering cockpits over `/api/v1/health` must get
-  // the same cross-origin answer as one using the legacy path.
   app.use(`${V1_PREFIX}/health`, healthCors);
   // One builder for both transports: `GET /api/health` (the authoritative,
-  // CORS-open discovery endpoint) and the `health` topic on `/api/ws` below
+  // CORS-open discovery endpoint) and the `health` topic on `/api/v1/ws` below
   // push the byte-identical shape, so the two can never drift.
   const healthSnapshot = async (): Promise<Record<string, unknown>> => {
     const [checks, repo, config, workspace] = await Promise.all([
@@ -3727,70 +3711,16 @@ export function createApp(deps: ServerDeps) {
     from: z.string().trim().min(1).max(200).optional(),
   });
   // ---- assemble the chained families --------------------------------------
-  // Every chained family is registered ONCE and mounted into both tables: the
-  // legacy `api` (frozen `/api/*` + `/api/p/:projectId/*`) and the versioned
-  // `v1`. Handlers are shared, so the two spellings can never drift —
-  // `v1-parity.test.ts` asserts they answer byte-identically.
+  // Every chained family is registered ONCE and mounted into the versioned table. There is no
+  // second, unversioned spelling: `/api/*` was removed once the whole API was reachable under
+  // `/api/v1` (BACKWARD_COMPATIBILITY.md §2). One surface means one thing to keep working, and
+  // it is the one the typed client describes.
   //
-  // MOUNT ORDER IS THE OLD REGISTRATION ORDER. Hono matches in registration order, so this
-  // list is the one thing that has to stay faithful to what the loose statements used to do:
-  // each family keeps its internal order, and the families keep theirs relative to each other.
-  const projectFamilies = [
-    launchKeyRoutes,
-    skillsRoutes,
-    uiStateRoutes,
-    workflowsRoutes,
-    planRoutes,
-    runsRoutes,
-    groupsRoutes,
-    openTargetsRoutes,
-    worktreesRoutes,
-    todosRoutes,
-    sseRoutes,
-    githubRoutes,
-    repoRoutes,
-    configRoutes,
-    agentConfigRoutes,
-  ] as const;
-
-  // The legacy table stays a loose `for` rather than a chain: its type is not used for
-  // anything (the frozen `/api/*` surface is documented in BACKWARD_COMPATIBILITY.md §2, not
-  // inferred), and a chain here would only make the diff bigger.
-  for (const family of projectFamilies) api.route('/', family);
-
-  // Workspace-level families answer for the whole workspace, so they are single-mount: `/api`
-  // and `/api/v1`, never a project-scoped spelling (BACKWARD_COMPATIBILITY.md §2).
+  // MOUNT ORDER IS REGISTRATION ORDER. Hono matches in the order routes were added, so each
+  // family keeps its internal order and the families keep theirs relative to each other.
   //
-  // Same legacy/versioned split as the project tables, and for the same reason: the legacy
-  // holder is deliberately NOT chained, so its routes stay out of `AppType`. `/api/v1` is the
-  // typed contract; `/api/*` is the frozen surface existing callers already have, and typing it
-  // would advertise it to new ones.
-  // Spelled out rather than looped: these builders do not share one env type (health needs no
-  // project context), and a homogeneous array would mean giving one of them an env it does not
-  // use just to satisfy the loop.
-  const workspaceLegacy = new Hono();
-  workspaceLegacy.route('/', healthRoutes);
-  workspaceLegacy.route('/', modelsRoutes);
-  workspaceLegacy.route('/', providersRoutes);
-  workspaceLegacy.route('/', projectsRoutes);
-  workspaceLegacy.route('/', skillsUpdateRoutes);
-  workspaceLegacy.route('/', workspaceConfigRoutes);
-  workspaceLegacy.route('/', fsBrowseRoutes);
-  workspaceLegacy.route('/', workspaceEventsRoutes);
-
-  const workspaceV1 = new Hono()
-    .route('/', healthRoutes)
-    .route('/', modelsRoutes)
-    .route('/', providersRoutes)
-    .route('/', projectsRoutes)
-    .route('/', skillsUpdateRoutes)
-    .route('/', workspaceConfigRoutes)
-    .route('/', fsBrowseRoutes)
-    .route('/', workspaceEventsRoutes);
-
-  // The versioned twin (`/api/v1`, `/api/v1/p/:projectId`). Written as ONE chained expression
-  // because that is the only shape Hono can infer route types from — it is what puts these
-  // routes in `AppType`, and so in the typed client.
+  // Written as ONE chained expression because that is the only shape Hono can infer route types
+  // from — it is what puts these routes in `AppType`, and so in the typed client.
   const v1 = new Hono<ProjectApiEnv>()
     .use('*', resolveProjectScope)
     .route('/', launchKeyRoutes)
@@ -3809,33 +3739,29 @@ export function createApp(deps: ServerDeps) {
     .route('/', configRoutes)
     .route('/', agentConfigRoutes);
 
-  // ---- mount the mirrored table (multi-project spec, step 2.2) -------------
-  // Scoped first, then the legacy aliases. The paths are disjoint (no legacy
-  // route starts with `/p/`), so order between the two mounts never decides a
-  // match — but the catch-all below must still come last. `route()` re-registers
-  // the sub-app's routes under each prefix, handlers shared, internal order
-  // (e.g. `/runs/archive-finished` before `/runs/:id/archive`) preserved.
+  // Workspace-level families answer for the whole workspace, so they are single-mount: never a
+  // project-scoped spelling, which would be a second surface to protect with no consumer.
+  const workspaceV1 = new Hono()
+    .route('/', healthRoutes)
+    .route('/', modelsRoutes)
+    .route('/', providersRoutes)
+    .route('/', projectsRoutes)
+    .route('/', skillsUpdateRoutes)
+    .route('/', workspaceConfigRoutes)
+    .route('/', fsBrowseRoutes)
+    .route('/', workspaceEventsRoutes);
+
+  // ---- mount ---------------------------------------------------------------
+  // Scoped first, then the unscoped alias bound to the boot project. The paths are disjoint (no
+  // route starts with `/p/`), so order between the two never decides a match — but the SPA
+  // catch-all below must still come last. `route()` re-registers the sub-app's routes under
+  // each prefix, handlers shared, internal order preserved.
   //
-  // The chain is what `AppType` is made of: each `.route()` returns an app type
-  // that has accumulated the mounted routes, so the value this expression
-  // produces — unlike the `app` the statements above built — carries the
-  // versioned surface in its type. It is the SAME object at runtime (Hono's
-  // builders return `this`); only the static type differs.
-  // Health mounts FIRST, and that is load-bearing rather than cosmetic. Mounting the project
-  // table at `/api` also mounts its `use('*')` scope resolver over `/api/*`, and Hono runs
-  // matched middleware in registration order — so mounting health afterwards would quietly put
-  // the project resolver in front of the one endpoint that must answer for the whole workspace,
-  // has no project to resolve, and is the CORS-open discovery route saved bookmarklets depend
-  // on. Before the families were chained, `app.get('/api/health', …)` sat above these mounts and
-  // got that ordering for free; this keeps its middleware chain byte-identical.
-  //
-  // Workspace-level families mount at `/api` and `/api/v1` only: they answer for the whole
-  // workspace, so a project-scoped spelling would be a second surface to protect with no
-  // consumer (BACKWARD_COMPATIBILITY.md §2). Project families mount under all four prefixes.
+  // Workspace families mount LAST and that is load-bearing: mounting the project table also
+  // mounts its `use('*')` scope resolver over the whole prefix, and Hono runs matched middleware
+  // in registration order. `/health` in particular answers for the workspace, has no project to
+  // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
   const routed = app
-    .route('/api', workspaceLegacy)
-    .route(SCOPED_PREFIX, api)
-    .route('/api', api)
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
@@ -3897,8 +3823,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
 
 /**
  * The WebSocket twin of the `/api/*` request-origin guard (#426), applied
- * before the `/api/ws` handshake. WebSocket is NOT subject to CORS — any web
- * page may open `ws://127.0.0.1:<port>/api/ws` and, unlike a forced HTTP GET,
+ * before the `/api/v1/ws` handshake. WebSocket is NOT subject to CORS — any web
+ * page may open `ws://127.0.0.1:<port>/api/v1/ws` and, unlike a forced HTTP GET,
  * would get to READ what comes back — so this guard is load-bearing:
  *
  *   1. Host allowlist (local mode): a non-loopback Host is a DNS-rebound

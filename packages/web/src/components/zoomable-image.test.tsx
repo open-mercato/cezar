@@ -7,7 +7,7 @@ afterEach(cleanup)
 
 describe('ZoomableImage', () => {
   it('opens a lightbox on click and closes on backdrop click', () => {
-    render(<ZoomableImage src="/api/runs/r1/images/shot.png" alt="shot" data-slot="thread-image" />)
+    render(<ZoomableImage src="/api/v1/runs/r1/images/shot.png" alt="shot" data-slot="thread-image" />)
     // The thumbnail forwards data-slot and is zoom-in cursored.
     const thumb = document.querySelector('[data-slot="thread-image"]') as HTMLImageElement
     expect(thumb).toBeTruthy()

@@ -32,7 +32,7 @@ function renderView(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const body =
-        String(input) === '/api/providers/status'
+        String(input) === '/api/v1/providers/status'
           ? providerStatus
           : []
       return Promise.resolve(
@@ -262,7 +262,7 @@ describe('ThreadView', () => {
             {
               id: 'm2',
               text: 'and bump the version',
-              images: ['/api/runs/r1/images/pasted-1.png'],
+              images: ['/api/v1/runs/r1/images/pasted-1.png'],
               createdAt: '2026-07-21T10:01:00.000Z',
             },
           ],
@@ -277,7 +277,7 @@ describe('ThreadView', () => {
     expect(bubbles[1]).toContain('also update the changelog')
     expect(bubbles[2]).toContain('and bump the version')
     expect(
-      document.querySelector('img[src="/api/runs/r1/images/pasted-1.png"]'),
+      document.querySelector('img[src="/api/v1/runs/r1/images/pasted-1.png"]'),
     ).not.toBeNull()
   })
 
@@ -648,7 +648,7 @@ function renderRoute(id: string) {
 }
 
 describe('TaskThreadRoute', () => {
-  it('is honestly loading while /api/runs/:id has not answered', () => {
+  it('is honestly loading while /api/v1/runs/:id has not answered', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
     renderRoute('r1')
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Loading task…')

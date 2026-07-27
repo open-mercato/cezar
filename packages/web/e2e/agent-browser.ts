@@ -62,10 +62,10 @@ export function fixtureServeEnv(
  * the slug is allocated by the registry (lowercased, deduplicated), so only the server knows it.
  */
 export async function bootProjectId(baseUrl: string): Promise<string> {
-  const { bootProject } = (await (await fetch(`${baseUrl}/api/projects`)).json()) as {
+  const { bootProject } = (await (await fetch(`${baseUrl}/api/v1/projects`)).json()) as {
     bootProject: string
   }
-  if (!bootProject) throw new Error(`cezar e2e: ${baseUrl}/api/projects named no boot project`)
+  if (!bootProject) throw new Error(`cezar e2e: ${baseUrl}/api/v1/projects named no boot project`)
   return bootProject
 }
 

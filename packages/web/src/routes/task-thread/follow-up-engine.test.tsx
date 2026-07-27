@@ -91,10 +91,10 @@ function serve(
       const method = init.method ?? 'GET'
       const body = init.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/health') return json(health)
-      if (url === '/api/providers/status') return json(providerStatus, providerStatusCode)
-      if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (url === '/api/config' && method === 'GET')
+      if (url === '/api/v1/health') return json(health)
+      if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
+      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/config' && method === 'GET')
         return json({
           baseBranch: null,
           defaultRunner: 'claude',
@@ -103,7 +103,7 @@ function serve(
           maxParallel: 1,
           memoryLimitMb: null,
         })
-      if (url === '/api/runs' && method === 'GET') return json([])
+      if (url === '/api/v1/runs' && method === 'GET') return json([])
       if (url.endsWith('/continue') && method === 'POST') return json({ continued: true })
       return json({}, 200)
     }),

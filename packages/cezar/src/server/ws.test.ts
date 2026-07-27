@@ -199,7 +199,7 @@ describe('createSocketHub', () => {
     const { publisher } = makeTopic();
     const { base } = await boot(publisher);
 
-    const ws = new WebSocket(`${base}/api/other`);
+    const ws = new WebSocket(`${base}/api/v1/other`);
     await new Promise<void>((resolve, reject) => {
       ws.on('error', () => resolve());
       ws.on('open', () => reject(new Error('handshake must not succeed')));

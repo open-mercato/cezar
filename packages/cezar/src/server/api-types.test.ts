@@ -94,7 +94,7 @@ import type { LogEntry, RepoInfo, StatusEntry } from './git.js';
 import type { GroupResponse, GroupVariant, PickVariantResponse } from './server.js';
 
 /**
- * The drift guard for `web/app/src/api/types.ts`.
+ * The drift guard for `packages/api-client/src/dto/types.ts`.
  *
  * The cockpit bundle cannot import the server's modules (Node built-ins, NodeNext specifiers,
  * zod at runtime), so its API types are hand-mirrored. This file is what keeps "hand-mirrored"
@@ -157,7 +157,7 @@ const guards = {
   workflowStepDef: true satisfies Exact<WorkflowStepDef, WebWorkflowStepDef>,
   workflowDef: true satisfies Exact<WorkflowDef, WebWorkflowDef>,
   workflowLoadIssue: true satisfies Exact<WorkflowLoadIssue, WebWorkflowLoadIssue>,
-  // `GET /api/workflows` returns loadWorkflows()'s resolved value verbatim.
+  // `GET /api/v1/workflows` returns loadWorkflows()'s resolved value verbatim.
   workflowsResponse: true satisfies Exact<
     Awaited<ReturnType<typeof loadWorkflows>>,
     WebWorkflowsResponse
@@ -171,7 +171,7 @@ const guards = {
   githubPrMergeStateKeys: true satisfies ExactKeys<ForgePrMergeState, WebGithubPrMergeState>,
   // The comment-thread payload (#499) and its timeline events (#525). ForgeComment was left
   // unpinned when #499 landed, which is exactly the drift this closes: `GET
-  // /api/github/comments/:kind/:number` is a second consumer contract on the protected /api/github
+  // /api/v1/github/comments/:kind/:number` is a second consumer contract on the protected /api/v1/github
   // family, and nothing was checking that its two type declarations stayed in step.
   //
   // Known limit of the `Exact<>` mechanism, verified rather than assumed and true of EVERY pin
@@ -196,7 +196,7 @@ const guards = {
   capabilities: true satisfies Exact<Capabilities, WebCapabilities>,
   forgeInfo: true satisfies Exact<{ kind: ForgeKind } & ForgeAvailability, WebForgeInfo>,
   // Repo view (R5 Step 1.7): the structured commit diff and the branch action's answer
-  // (the `/api/repo/branch` route serializes the ok-arm of BranchResult minus its `ok`).
+  // (the `/api/v1/repo/branch` route serializes the ok-arm of BranchResult minus its `ok`).
   repoCommitPayload: true satisfies Exact<CommitPayload, WebRepoCommitPayload>,
   repoBranchResponse: true satisfies Exact<
     Omit<Extract<BranchResult, { ok: true }>, 'ok'>,

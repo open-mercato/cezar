@@ -51,11 +51,12 @@ is internal for now — installable by others once its surface settles.
 - [ ] 5. Migrate the other mirrored logic (model presets, skills ordering, skills banner) into the api-client.
 - [ ] 6. **Delete `dto/types.ts` (43 KB) + `api-types.test.ts`** once `AppType` demonstrably covers the surface. Neither can go until step 3 is finished.
 
-### Phase 4 — Base URL + one-command build/run — **half**
+### Phase 4 — Base URL + one-command build/run — **mostly done**
 - [x] 1. Workspace-aware `dev`/`build`: `scripts/dev.mjs` delegates to workspace scripts, keeps the free-port probe, `CEZ_API_PORT` and either-dies-kills-both. Root build order is api-client → server → web → `check:pack`.
 - [x] 2. `createCezarClient({ baseUrl })` exists and defaults to `''` (same-origin).
-- [ ] 3. **The web app does not use it.** `packages/web/src/api/client.ts:158` still calls `fetch(scopeApiPath(path))` — hardwired same-origin, with no `VITE_CEZ_API_BASE`, no runtime `<meta>`/`window.__CEZ_API_BASE__`, and no base URL on `runFileRawUrl` or either `EventSource`.
-- [ ] 4. The cockpit still talks to the server through the hand-written client, so nothing in the browser exercises the typed path yet.
+- [x] 3. **The cockpit moved to `/api/v1`** (amended decision 8). Call sites pass ROUTES (`/runs`), and `apiPath` owns the version + project scope — so the version is one fact, not sixty literals. A second helper, `resolveApiUrl`, upgrades server-minted URLs stored in old transcripts. Both EventSources, `runFileRawUrl` and the WebSocket path moved too.
+- [ ] 4. The cockpit still talks through the HAND-WRITTEN client, not `createCezarClient`. Nothing in the browser exercises the typed path yet — blocked on the pre-computed client type (blocker 1), not on the version.
+- [ ] 5. Configurable base URL (`VITE_CEZ_API_BASE`, runtime `<meta>`/`window.__CEZ_API_BASE__`) for cross-origin consumers — still same-origin only.
 
 ### Phase 5 — Opt-in remote-access auth — **not started**
 - [ ] 1. `auth.ts` (jwt verify middleware, `POST /api/auth/login`, scrypt verify) + `~/.cezar/` account and secret storage.

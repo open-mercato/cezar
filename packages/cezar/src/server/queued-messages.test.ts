@@ -11,8 +11,8 @@ import { createApp } from './server.js';
 
 /**
  * #472 — the queued prompt stack over HTTP: the three-rung delivery ladder on
- * `POST /api/runs/:id/messages`, the edit/remove routes, the `task` field on
- * `PATCH /api/runs/:id`, and the bounds (per-message, per-stack, and the folded
+ * `POST /api/v1/runs/:id/messages`, the edit/remove routes, the `task` field on
+ * `PATCH /api/v1/runs/:id`, and the bounds (per-message, per-stack, and the folded
  * total that actually matters).
  *
  * The manager is faked so each rung can be selected deterministically — the real
@@ -96,7 +96,7 @@ describe('queued prompt stack routes (#472)', () => {
       headers: { 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-  const post = (body: unknown) => send(`/api/runs/${record.id}/messages`, 'POST', body);
+  const post = (body: unknown) => send(`/api/v1/runs/${record.id}/messages`, 'POST', body);
   const seed = (...texts: string[]) =>
     store.updateRun(record.id, {
       queuedMessages: texts.map((text, i) => ({ id: `msg-${i + 1}`, text, createdAt: '2026-07-21T10:00:00.000Z' })),
@@ -162,7 +162,7 @@ describe('queued prompt stack routes (#472)', () => {
   });
 
   it('404s for an unknown run', async () => {
-    const res = await send('/api/runs/nope/messages', 'POST', { text: 'hi' });
+    const res = await send('/api/v1/runs/nope/messages', 'POST', { text: 'hi' });
     expect(res.status).toBe(404);
   });
 
@@ -237,8 +237,8 @@ describe('queued prompt stack routes (#472)', () => {
   // ---- PATCH / DELETE a stacked message -------------------------------------
 
   const patchMsg = (msgId: string, body: unknown) =>
-    send(`/api/runs/${record.id}/queued-messages/${msgId}`, 'PATCH', body);
-  const deleteMsg = (msgId: string) => send(`/api/runs/${record.id}/queued-messages/${msgId}`, 'DELETE');
+    send(`/api/v1/runs/${record.id}/queued-messages/${msgId}`, 'PATCH', body);
+  const deleteMsg = (msgId: string) => send(`/api/v1/runs/${record.id}/queued-messages/${msgId}`, 'DELETE');
 
   it('edits a stacked message', async () => {
     seed('typo here');
@@ -253,7 +253,7 @@ describe('queued prompt stack routes (#472)', () => {
       queuedMessages: [{
         id: 'msg-1',
         text: 'typo',
-        images: [`/api/runs/${record.id}/images/pasted-1.png`],
+        images: [`/api/v1/runs/${record.id}/images/pasted-1.png`],
         createdAt: '2026-07-21T10:00:00.000Z',
       }],
     });
@@ -263,7 +263,7 @@ describe('queued prompt stack routes (#472)', () => {
     expect(res.status).toBe(200);
     expect(store.getRun(record.id)?.queuedMessages?.[0]).toMatchObject({
       text: 'fixed',
-      images: [`/api/runs/${record.id}/images/pasted-1.png`],
+      images: [`/api/v1/runs/${record.id}/images/pasted-1.png`],
     });
   });
 
@@ -282,8 +282,8 @@ describe('queued prompt stack routes (#472)', () => {
   });
 
   it('404s on an unknown run', async () => {
-    expect((await send('/api/runs/nope/queued-messages/m1', 'PATCH', { text: 'x' })).status).toBe(404);
-    expect((await send('/api/runs/nope/queued-messages/m1', 'DELETE')).status).toBe(404);
+    expect((await send('/api/v1/runs/nope/queued-messages/m1', 'PATCH', { text: 'x' })).status).toBe(404);
+    expect((await send('/api/v1/runs/nope/queued-messages/m1', 'DELETE')).status).toBe(404);
   });
 
   it('409s once the run has started', async () => {
@@ -305,9 +305,9 @@ describe('queued prompt stack routes (#472)', () => {
     expect(((await res.json()) as { error: string }).error).toContain('200000 character limit');
   });
 
-  // ---- PATCH /api/runs/:id { task } -----------------------------------------
+  // ---- PATCH /api/v1/runs/:id { task } -----------------------------------------
 
-  const patchRun = (body: unknown) => send(`/api/runs/${record.id}`, 'PATCH', body);
+  const patchRun = (body: unknown) => send(`/api/v1/runs/${record.id}`, 'PATCH', body);
 
   it('edits the initial prompt while queued', async () => {
     const res = await patchRun({ task: 'a better prompt' });

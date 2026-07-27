@@ -30,8 +30,8 @@ describe('the GitHub PR changes API', () => {
 
   it('serves deterministic bounded structured changes through both route mounts', async () => {
     const app = createApp({ repoRoot, store, manager: {} as RunManager, version: 'test' });
-    const legacy = await apiRequest(app, '/api/github/prs/128/changes');
-    const scoped = await apiRequest(app, '/api/p/default/github/prs/128/changes');
+    const legacy = await apiRequest(app, '/api/v1/github/prs/128/changes');
+    const scoped = await apiRequest(app, '/api/v1/p/default/github/prs/128/changes');
     expect(legacy.status).toBe(200);
     expect(await scoped.json()).toEqual(await legacy.clone().json());
     const body = (await legacy.json()) as ForgePrDiffResult;
@@ -45,9 +45,9 @@ describe('the GitHub PR changes API', () => {
 
   it('validates the number and exact refresh flag', async () => {
     const app = createApp({ repoRoot, store, manager: {} as RunManager, version: 'test' });
-    expect((await apiRequest(app, '/api/github/prs/0/changes')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/prs/abc/changes')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/prs/1/changes?refresh=true')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/prs/1/changes?refresh=1')).status).toBe(200);
+    expect((await apiRequest(app, '/api/v1/github/prs/0/changes')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/prs/abc/changes')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/prs/1/changes?refresh=true')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/prs/1/changes?refresh=1')).status).toBe(200);
   });
 });

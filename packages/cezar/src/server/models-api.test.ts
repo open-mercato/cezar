@@ -38,7 +38,7 @@ describe('workspace model catalog API', () => {
       return [{ id: 'gpt-future', label: 'GPT Future', description: 'Newly available' }];
     });
     for (let i = 0; i < 2; i += 1) {
-      const response = await apiRequest(server, '/api/models?runner=codex');
+      const response = await apiRequest(server, '/api/v1/models?runner=codex');
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
         runner: 'codex',
@@ -51,7 +51,7 @@ describe('workspace model catalog API', () => {
   });
 
   it('degrades discovery failures to an unavailable 200 response', async () => {
-    const response = await apiRequest(app(async () => { throw new Error('secret detail'); }), '/api/models?runner=codex');
+    const response = await apiRequest(app(async () => { throw new Error('secret detail'); }), '/api/v1/models?runner=codex');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       runner: 'codex', models: [], source: 'unavailable', stale: false,
@@ -59,14 +59,14 @@ describe('workspace model catalog API', () => {
     });
   });
 
-  it.each(['/api/models', '/api/models?runner=claude'])('rejects invalid query %s', async (path) => {
+  it.each(['/api/v1/models', '/api/v1/models?runner=claude'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'runner must be codex' });
   });
 
   it('is workspace-level rather than project-scoped', async () => {
-    const response = await apiRequest(app(async () => []), '/api/p/default/models?runner=codex');
+    const response = await apiRequest(app(async () => []), '/api/v1/p/default/models?runner=codex');
     expect(response.status).toBe(404);
   });
 });

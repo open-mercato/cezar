@@ -13,7 +13,7 @@ import { createApp } from './server.js';
 /**
  * The typed client, end to end (spec 2026-07-23-independent-server-web-packages, Phase 1).
  *
- * This is the test the hand-written mirror (`web/app/src/api/types.ts`) and its drift guard
+ * This is the test the hand-written mirror (`packages/api-client/src/dto/types.ts`) and its drift guard
  * exist to replace. It proves the two halves of the claim "the routes ARE the contract":
  *
  *   1. RUNTIME — a client built from `AppType` reaches the real handlers and gets the real
@@ -78,7 +78,7 @@ describe('createCezarClient<AppType>', () => {
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
 
-  // The generous timeout is `/api/health`'s: a cold read shells out to detect the installed
+  // The generous timeout is `/api/v1/health`'s: a cold read shells out to detect the installed
   // agent CLIs and read git state, which is seconds of real work on a busy machine.
   it(
     'reaches a workspace-level route and infers its response',

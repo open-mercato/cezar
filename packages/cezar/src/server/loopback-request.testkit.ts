@@ -3,7 +3,7 @@ import type { Hono } from 'hono';
 /**
  * `app.request()` with the `Host` header that every real client sends.
  *
- * The `/api/*` request-origin guard (#426) rejects a request with no `Host`,
+ * The `/api/v1/*` request-origin guard (#426) rejects a request with no `Host`,
  * because at that trust boundary "absent" must mean "unproven", not "probably
  * local" — see `isLoopbackHostHeader`. Production never produces a Host-less
  * request (HTTP/1.1 requires the header and Node's parser enforces it), but

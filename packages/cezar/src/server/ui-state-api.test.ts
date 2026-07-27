@@ -9,7 +9,7 @@ import { createApp } from './server.js';
 import { apiRequest } from './loopback-request.testkit.js';
 
 /**
- * `GET/PUT /api/ui-state` (#408 — the `skillUsage` addition). The contract under test: the
+ * `GET/PUT /api/v1/ui-state` (#408 — the `skillUsage` addition). The contract under test: the
  * schema is `.passthrough()` so unrelated keys survive a PUT untouched (BACKWARD_COMPATIBILITY.md
  * §3 — additive only); `skillUsage` is a plain `name -> count` map with no shape surprises; and
  * because the top-level merge is SHALLOW, a PUT of `skillUsage` replaces the whole map rather
@@ -37,9 +37,9 @@ describe('the ui-state API — skillUsage (#408)', () => {
   const uiStatePath = () => join(repoRoot, '.ai/cezar', 'ui-state.json');
   const rawFile = () => JSON.parse(readFileSync(uiStatePath(), 'utf8')) as Record<string, unknown>;
 
-  const get = () => apiRequest(app, '/api/ui-state');
+  const get = () => apiRequest(app, '/api/v1/ui-state');
   const put = (body: unknown) =>
-    apiRequest(app, '/api/ui-state', {
+    apiRequest(app, '/api/v1/ui-state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
