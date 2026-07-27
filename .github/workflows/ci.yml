@@ -52,8 +52,15 @@ jobs:
       - name: Run packaged CLI E2E tests
         run: npm run test:package
 
-      - name: Verify release package
-        run: npm pack --dry-run --ignore-scripts
+      # Every package the release publishes must be packable — the workspace root is `private`
+      # and publishes nothing, so packing THERE just errors ("must have name and version").
+      # Named explicitly rather than with `--workspaces`, which would also pack the packages
+      # marked private (the cockpit SPA and, for now, the api-client) and vouch for tarballs
+      # nobody publishes. `alias-cezar` is not a workspace, so it packs from its own directory.
+      - name: Verify release packages
+        run: |
+          npm pack --dry-run --ignore-scripts -w @open-mercato/cezar
+          (cd alias-cezar && npm pack --dry-run --ignore-scripts)
 
   # npm preview publishing (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
   # Publishes a snapshot of both packages after a fully green verify run:
@@ -116,7 +123,7 @@ jobs:
           console.log('');
           console.log(`- Version: \`${r.version}\``);
           console.log(`- Dist-tag: \`${r.distTag}\``);
-          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\``);
+          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
           console.log('');
           console.log('```bash');
           for (const line of r.installLines) console.log(line);
@@ -145,7 +152,7 @@ jobs:
               lines,
               '',
               `Also tagged: \`npm install -g ${r.aliasName}@${r.distTag}\` (moving tag for this PR).`,
-              `Packages: \`${r.aliasName}@${r.version}\` → \`${r.rootName}@${r.version}\`${r.dryRun ? '' : ' (provenance attested)'}.`,
+              `Packages: \`${r.aliasName}@${r.version}\` → \`${r.rootName}@${r.version}\` → \`${r.apiClientName}@${r.version}\`${r.dryRun ? '' : ' (provenance attested)'}.`,
             ].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               ...context.repo,
