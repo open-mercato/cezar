@@ -114,6 +114,8 @@ pending ask card — and runs in the task's worktree.
 
 ## Progress
 
+PR: #709
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: The delivery seam
