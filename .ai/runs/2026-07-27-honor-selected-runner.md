@@ -50,13 +50,13 @@ Ensure every task-start and continuation surface honors the runner shown or expl
 
 ### Phase 1: Correct runner resolution
 
-- [ ] 1.1 Make shared start-surface engine resolution use the active project's config and preserve explicit runner intent.
-- [ ] 1.2 Apply the same scoped-default and explicit-intent rules to New Task, planned starts, and bookmarklet starts.
-- [ ] 1.3 Audit continuation and queued-run display paths, correcting any remaining boot-health dependency without changing session-affinity semantics.
+- [x] 1.1 Make shared start-surface engine resolution use the active project's config and preserve explicit runner intent. — 4182b046
+- [x] 1.2 Apply the same scoped-default and explicit-intent rules to New Task, planned starts, and bookmarklet starts. — 4182b046
+- [x] 1.3 Audit continuation and queued-run display paths, correcting any remaining boot-health dependency without changing session-affinity semantics. — 4182b046
 
 ### Phase 2: Lock behavior with regressions
 
-- [ ] 2.1 Add pure and component tests for mismatched boot/project defaults across New Task, GitHub, Inbox, plans, bookmarklets, and continuations.
+- [x] 2.1 Add pure and component tests for mismatched boot/project defaults across New Task, GitHub, Inbox, plans, bookmarklets, and continuations. — 4182b046
 - [ ] 2.2 Run focused cockpit tests and manually verify the effective request/runner behavior for the cross-project scenario.
 
 ### Phase 3: Validate and review
