@@ -104,6 +104,9 @@ pending ask card — and runs in the task's worktree.
 
 ### Phase 3: Docs and validation
 
+- 3.3 Pin, in the thread reducer's own tests, that a continuation step's `user-message`
+  resolves an ask left pending when the session ended — the cross-session half of the
+  feature, previously unpinned.
 - 3.1 Update `.ai/specs/2026-07-18-askuser-across-runners.md` (the finished-run edge
   case) and add the `CHANGELOG.md` entry.
 - 3.2 Run the full validation gate: `npm run typecheck`, `npm test`,
@@ -127,4 +130,5 @@ pending ask card — and runs in the task's worktree.
 ### Phase 3: Docs and validation
 
 - [x] 3.1 Update the AskUser spec (no changelog entry — it is assembled per release) — 1de87482
-- [ ] 3.2 Run the full validation gate
+- [x] 3.2 Run the full validation gate — typecheck ✅, `npm test` 4660 ✅, `npm run test:unit` 36 ✅, `npm run build` ✅, `npm run test:package` 9 ✅
+- [x] 3.3 Pin the cross-session resolution in the reducer and verify the loop in a real cockpit
