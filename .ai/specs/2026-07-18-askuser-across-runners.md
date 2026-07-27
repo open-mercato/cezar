@@ -112,7 +112,12 @@ A cezar-owned marker protocol, uniform across backends:
    (`<header>: <label>`, comma-joined for multi-select) to the existing
    `POST /api/runs/:id/messages`; `sendMessage` persists the user-message event,
    flips `waiting`→`running`, and resumes the session. The ask card resolves the
-   moment that user message lands.
+   moment that user message lands. Once the session has CLOSED with the question
+   still unanswered, the same answer travels the second half of that seam instead
+   — `POST /api/runs/:id/continue`, which reopens the last recorded session on the
+   run's own engine and appends the answer as its opening `user-message`. Same
+   answer text, same resolution rule, one routing decision in `useAskAnswer`
+   (see the session-ends edge case below).
 
 Precedence on one turn: `CEZ:DONE` wins (goal done); else a valid `CEZ:ASK`
 (attention — the user is genuinely blocked); else `CEZ:MONITORING`
@@ -219,8 +224,17 @@ are real buttons (keyboard/enter, focus ring `--ring`), the card has
   composer works.
 - **User types instead of clicking** → normal message; card resolves.
 - **`CEZ:DONE` and `CEZ:ASK` both present** → `DONE` wins (no dangling card).
-- **Run cancelled / finished while waiting on an ask** → the existing cancel/finish
-  paths clear the in-memory `pendingAskId`; the card renders resolved/closed.
+- **Session ends while the ask is still unanswered** (idle timeout, a cezar restart,
+  Finish, or a cancel) → the question outlives its session, so the card stays
+  answerable: `useAskAnswer` (`ask-answer.ts`) routes the answer by run state —
+  `POST /messages` while the engine still owns a session, `POST /continue` once it
+  has closed, with the answer as the reopened session's opening prompt. The
+  continuation appends it as a `user-message`, which is what resolves the card, so
+  the resumed and live paths agree. A closed run that never recorded a session has
+  nothing to reopen and says so; a `409` from the live path (a cockpit whose record
+  is stale) is retried as a resume rather than dropped. The original design
+  ("the card renders resolved/closed") left a card whose chips silently failed —
+  every tap posted to `POST /messages` and died on its `409 session closed`.
 - **Reload / resume of a run parked on an ask** → the card is reconstructed from
   the persisted `ask.requested` (last one with no following user message);
   answering resolves it. Recovery re-opens the session (existing behavior).
