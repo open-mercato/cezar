@@ -90,14 +90,14 @@ bar, and group the remaining controls into a single aligned row.
 
 ### Phase 1: Restructure the footer into two intentional rows
 
-- [ ] 1.1 Footer container becomes a two-row flex column
-- [ ] 1.2 Promote CommandPaletteHint into a full-width search bar
-- [ ] 1.3 Group Tools, version, settings and theme into one controls row
+- [x] 1.1 Footer container becomes a two-row flex column — cbb0fe0d
+- [x] 1.2 Promote CommandPaletteHint into a full-width search bar — cbb0fe0d
+- [x] 1.3 Group Tools, version, settings and theme into one controls row — cbb0fe0d
 
 ### Phase 2: Tests
 
-- [ ] 2.1 Unit assertions for the two-row footer structure
-- [ ] 2.2 Browser assertion that the footer occupies exactly two rows
+- [x] 2.1 Unit assertions for the two-row footer structure — 59994942
+- [x] 2.2 Browser assertion that the footer occupies exactly two rows — 59994942
 
 ### Phase 3: Validation, QA evidence and review
 
