@@ -1400,6 +1400,7 @@ export class RunManager {
         : this.repoRoot;
     const state: ActiveRun = { cancelled: false, interrupt: () => undefined, cwd };
     this.active.set(runId, state);
+    this.starting.delete(runId);
     if (state.cwd === this.repoRoot) {
       this.store.appendEvent(runId, {
         type: 'note',
