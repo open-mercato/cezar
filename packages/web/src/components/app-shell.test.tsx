@@ -190,11 +190,13 @@ describe('AppShell', () => {
 
     it('renders search as a full-width launcher that still opens the palette', () => {
       renderShell()
-      const search = within(footer()).getByRole('button', { name: 'Search' })
+      // Named by its own visible label, not by an aria-label that would diverge from it
+      // (WCAG 2.5.3) — jsdom reports no `navigator.platform`, so the chord reads Ctrl+K.
+      const search = within(footer()).getByRole('button', { name: 'Search…' })
       expect(search.dataset.slot).toBe('command-palette-hint')
       expect(search.className).toContain('w-full')
       expect(search.textContent).toContain('Search…')
-      expect(search.textContent).toContain('⌘K')
+      expect(search.querySelector('kbd')?.textContent).toBe('Ctrl+K')
 
       const opened = vi.fn()
       window.addEventListener('cezar:open-command-palette', opened)

@@ -15,6 +15,7 @@ import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
+import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -553,6 +554,11 @@ function AddProjectMenu() {
  *
  * Still a button, not an input: there is no search *here*: clicking opens the palette through
  * the same programmatic seam anything else would, and the palette owns the real input.
+ *
+ * No `aria-label`: the visible `Search…` already names it, and an override that merely drops
+ * the ellipsis would make the accessible name diverge from the label a speech user reads
+ * aloud (WCAG 2.5.3). The chord rides `commandShortcutHint` so the kbd shows Ctrl+K off Apple
+ * hardware, per the spec's platform-symbol rule.
  */
 function CommandPaletteHint() {
   return (
@@ -560,7 +566,6 @@ function CommandPaletteHint() {
       type="button"
       data-slot="command-palette-hint"
       title="Search — command palette (⌘K / Ctrl+K)"
-      aria-label="Search"
       onClick={() => openCommandPalette()}
       className="flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-xs font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
@@ -570,7 +575,7 @@ function CommandPaletteHint() {
         aria-hidden="true"
         className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
       >
-        ⌘K
+        {commandShortcutHint('k')}
       </kbd>
     </button>
   )

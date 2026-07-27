@@ -138,17 +138,24 @@ describe('cockpit app shell', () => {
       const footer = document.querySelector('[data-slot="sidebar-footer"]')
       // Centers, not tops: the gear (28px) and the toggle (30px) are different heights, and
       // 'items-center' aligns them by center — comparing tops would fail a correct layout.
-      const center = (sel) => {
-        const rect = footer.querySelector(sel).getBoundingClientRect()
+      const centerOf = (el) => {
+        const rect = el.getBoundingClientRect()
         return rect.top + rect.height / 2
       }
+      const center = (sel) => centerOf(footer.querySelector(sel))
+      const controls = [
+        '[data-slot="command-palette-hint"]',
+        '[data-slot="tools-menu-trigger"]',
+        '[data-slot="version-chip"]',
+        '[data-slot="global-settings-link"]',
+        '[data-slot="theme-toggle"]',
+      ]
       return {
         search: center('[data-slot="command-palette-hint"]'),
         gear: center('[data-slot="global-settings-link"]'),
         theme: center('[data-slot="theme-toggle"]'),
         rowCount: new Set(
-          [...footer.querySelectorAll('[data-slot="command-palette-hint"],[data-slot="tools-menu-trigger"],[data-slot="version-chip"],[data-slot="global-settings-link"],[data-slot="theme-toggle"]')]
-            .map((el) => Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2))
+          [...footer.querySelectorAll(controls.join(','))].map((el) => Math.round(centerOf(el)))
         ).size,
       }
     })()`) as { search: number; gear: number; theme: number; rowCount: number }
