@@ -30,6 +30,9 @@ import { SettingsField } from './settings-field'
 
 const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
+const MAX_MONITORING_MAX = 16
+const WAKE_INTERVAL_MIN = 1
+const WAKE_INTERVAL_MAX = 60
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
 const MEMORY_MIN_MB = 256
 
@@ -70,6 +73,18 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const [memory, setMemory] = useState(
     config.resources.memoryLimitMb ? String(config.resources.memoryLimitMb) : '',
   )
+  const configuredWake = config.resources.monitoringWakeIntervalMinutes ?? null
+  const [wakeMode, setWakeMode] = useState<'park' | 'interval'>(configuredWake === null ? 'park' : 'interval')
+  const [wakeInterval, setWakeInterval] = useState(String(configuredWake ?? 5))
+  const wakeNum = Number(wakeInterval)
+  const wakeInvalid = !Number.isInteger(wakeNum) || wakeNum < WAKE_INTERVAL_MIN || wakeNum > WAKE_INTERVAL_MAX
+  const wakeSaved = wakeMode === 'park'
+    ? configuredWake === null
+    : !wakeInvalid && configuredWake === wakeNum
+  const saveWake = () => save.mutate(
+    { resources: { monitoringWakeIntervalMinutes: wakeMode === 'park' ? null : wakeNum } },
+    { onSuccess: () => toast(wakeMode === 'park' ? 'Monitoring will stay parked' : `Monitoring will re-check every ${wakeNum} minutes`) },
+  )
   const memoryNum = memory.trim() === '' ? 0 : Number(memory)
   const memoryInvalid =
     memory.trim() !== '' && (!Number.isInteger(memoryNum) || memoryNum < MEMORY_MIN_MB)
@@ -85,6 +100,18 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           toast(memoryNum === 0 ? 'Memory limit cleared' : `Memory limit set to ${memoryNum} MiB`),
       },
     )
+  const composerDefaults = config.composerDefaults ?? {
+    autonomous: null,
+    worktree: null,
+    inheritedAutonomous: 'source-dependent' as const,
+    inheritedWorktree: true,
+  }
+  const saveComposerDefault = (
+    key: 'autonomous' | 'worktree',
+    value: string,
+  ) => save.mutate({
+    composerDefaults: { [key]: value === 'inherit' ? null : value === 'on' },
+  })
 
   return (
     <div
@@ -125,6 +152,68 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
       </SettingsField>
 
       <SettingsField
+        title="Extra monitoring sessions"
+        hint="How many agent sessions may wait on CI, sub-agents, or monitored commands without using an active task slot. Extra sessions stay alive but pause the queue."
+      >
+        <select
+          aria-label="Extra monitoring sessions"
+          data-slot="resources-max-monitoring"
+          value={config.resources.maxMonitoringSessions ?? 2}
+          disabled={save.isPending}
+          onChange={(event) => save.mutate({ resources: { maxMonitoringSessions: Number(event.target.value) } })}
+          className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+        >
+          {Array.from({ length: MAX_MONITORING_MAX + 1 }, (_, n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <p className="text-[11px] text-soft-foreground">
+          Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
+        </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Monitoring wake-up"
+        hint="Park uses no model turns. Re-check sends the same agent a follow-up on this cadence until work completes or the 40-wakeup safety cap is reached."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Monitoring wake-up"
+            data-slot="resources-monitoring-wake-mode"
+            value={wakeMode}
+            disabled={save.isPending}
+            onChange={(event) => setWakeMode(event.target.value as 'park' | 'interval')}
+            className="rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            <option value="park">Park until resumed</option>
+            <option value="interval">Re-check on an interval</option>
+          </select>
+          {wakeMode === 'interval' ? (
+            <>
+              <input
+                type="number"
+                min={WAKE_INTERVAL_MIN}
+                max={WAKE_INTERVAL_MAX}
+                aria-label="Wake interval in minutes"
+                data-slot="resources-monitoring-wake-interval"
+                value={wakeInterval}
+                disabled={save.isPending}
+                onChange={(event) => setWakeInterval(event.target.value)}
+                className="block w-24 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+              />
+              <span className="text-xs text-soft-foreground">minutes</span>
+            </>
+          ) : null}
+          <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
+        </div>
+        {wakeMode === 'interval' && wakeInvalid ? (
+          <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
+        ) : (
+          <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
+        )}
+      </SettingsField>
+
+      <SettingsField
         title="Per-task memory limit"
         hint="When a task's whole process tree crosses this, the engine pauses it with a warning and starts the next queued task. Leave empty for no limit."
       >
@@ -161,6 +250,53 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         ) : (
           <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
         )}
+      </SettingsField>
+
+      <SettingsField
+        title="New task defaults"
+        hint="Set stable composer defaults across projects. Explicit choices and run-shape constraints still win."
+      >
+        <div className="grid gap-4 sm:grid-cols-2" data-slot="resources-composer-defaults">
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Autonomous by default</span>
+            <select
+              aria-label="Autonomous by default"
+              value={composerDefaults.autonomous === null ? 'inherit' : composerDefaults.autonomous ? 'on' : 'off'}
+              disabled={save.isPending}
+              onChange={(event) => saveComposerDefault('autonomous', event.target.value)}
+              className="rounded-md border border-input bg-card px-3 py-1.5 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <option value="inherit">Inherit environment</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+            <span className="text-[11px] text-soft-foreground">
+              Inherited: {composerDefaults.inheritedAutonomous === 'source-dependent'
+                ? 'Source-dependent — skills on, workflows off'
+                : composerDefaults.inheritedAutonomous ? 'On' : 'Off'}
+            </span>
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Use a worktree by default</span>
+            <select
+              aria-label="Use a worktree by default"
+              value={composerDefaults.worktree === null ? 'inherit' : composerDefaults.worktree ? 'on' : 'off'}
+              disabled={save.isPending}
+              onChange={(event) => saveComposerDefault('worktree', event.target.value)}
+              className="rounded-md border border-input bg-card px-3 py-1.5 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <option value="inherit">Inherit environment</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+            <span className="text-[11px] text-soft-foreground">
+              Inherited: {composerDefaults.inheritedWorktree ? 'On' : 'Off'}
+            </span>
+          </label>
+        </div>
+        <p className="text-[11px] text-soft-foreground">
+          Interactive skills may recommend both off. Multi-step and parallel runs remain isolated.
+        </p>
       </SettingsField>
     </div>
   )

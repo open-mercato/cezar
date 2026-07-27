@@ -102,6 +102,27 @@ describe('filterImportedTeamSkills', () => {
 });
 
 describe('discoverSkills local entrypoints', () => {
+  it('recognizes only scalar true as the interactive composer hint', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+    const skillsDir = join(repoRoot, '.ai/cezar/skills');
+    await mkdir(skillsDir, { recursive: true });
+    await writeFile(join(skillsDir, 'true.md'), '---\r\ninteractive: "true"\r\n---\r\nBody');
+    await writeFile(join(skillsDir, 'false.md'), '---\ninteractive: false\n---\nBody');
+    await writeFile(join(skillsDir, 'array.md'), '---\ninteractive: [true]\n---\nBody');
+    await writeFile(join(skillsDir, 'yes.md'), '---\ninteractive: yes\n---\nBody');
+    await writeFile(join(skillsDir, 'missing.md'), 'Body');
+
+    const skills = (await discoverSkills(repoRoot)).filter((skill) => skill.source === 'cezar');
+    expect(skills.find((skill) => skill.name === 'true')).toMatchObject({
+      interactive: true,
+      body: 'Body',
+    });
+    for (const name of ['false', 'array', 'yes', 'missing']) {
+      expect(skills.find((skill) => skill.name === name)?.interactive).toBeUndefined();
+    }
+  });
+
   it('keeps flat and SKILL.md skills while excluding nested reference files', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
     tempDirs.push(repoRoot);

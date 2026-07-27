@@ -42,6 +42,31 @@ export type StepStatus =
  *  choice and are Claude by definition (see `resumeCommand` in the server). */
 export type Runner = 'claude' | 'codex' | 'opencode'
 
+/** Coarse host authentication state from `/api/providers/status`. Credentials, account
+ *  identity, and raw CLI output never cross this boundary. */
+export type ProviderId = Runner
+export type ProviderConnectionState =
+  | 'connected'
+  | 'disconnected'
+  | 'not-installed'
+  | 'unknown'
+
+export interface ProviderStatus {
+  provider: ProviderId
+  status: ProviderConnectionState
+  enabled: boolean
+  hint?: string
+  authFailureId?: string
+}
+
+export interface ProviderStatusResponse {
+  providers: ProviderStatus[]
+}
+
+export type ProviderConnectResponse =
+  | { opened: true; command: string }
+  | { opened: false; connected: true; command: string }
+
 export interface RunnerModelOption {
   id: string
   label: string
@@ -108,6 +133,10 @@ export interface RunRecord {
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work
    *  (spec 2026-07-18-subagent-monitoring-status, #490). Absent on old runs; cleared on resume/end. */
   activity?: RunActivity
+  /** Exact ISO-8601 deadline for the next automatic monitoring check. */
+  monitoringWakeAt?: string
+  /** The current live monitoring epoch exhausted its 40 automatic checks. */
+  monitoringWakeCapReached?: boolean
   createdAt: string
   startedAt?: string
   finishedAt?: string
@@ -388,6 +417,10 @@ export interface FsBrowseResponse {
  *  the top level server-side, so a writer must send the whole `sidebar` object, not a leaf. */
 export interface WorkspaceUiState {
   sidebar?: { collapsed?: Record<string, boolean> } & Record<string, unknown>
+  /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until
+   *  the provider reports a different incident, so this stays workspace-global with the
+   *  browser rather than one project checkout. */
+  dismissedProviderAuthFailures?: Partial<Record<ProviderId, string>>
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at
    *  the keyboard, not a repo, so they live in `~/.cezar/ui-state.json` and follow the user
    *  across every project. Same shape as the per-repo `UiState.appearance` it superseded
@@ -416,8 +449,16 @@ export interface WorkspaceConfigResponse {
   projectsDir: string
   skillsAutoUpdate: boolean | null
   effectiveSkillsAutoUpdate: boolean
+  composerDefaults?: {
+    autonomous: boolean | null
+    worktree: boolean | null
+    inheritedAutonomous: boolean | 'source-dependent'
+    inheritedWorktree: boolean
+  }
   resources: {
     maxParallel: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
     memoryLimitMb: number | null
     worktreeRetentionDefault: number
   }
@@ -430,8 +471,14 @@ export interface SetWorkspaceConfigInput {
   browseRoot?: string
   projectsDir?: string
   skillsAutoUpdate?: boolean | null
+  composerDefaults?: {
+    autonomous?: boolean | null
+    worktree?: boolean | null
+  }
   resources?: {
     maxParallel?: number
+    maxMonitoringSessions?: number
+    monitoringWakeIntervalMinutes?: number | null
     memoryLimitMb?: number | null
     worktreeRetentionDefault?: number
   }
@@ -639,6 +686,8 @@ export interface DeleteWorkflowResponse {
 export interface Skill {
   name: string
   description?: string
+  /** Advisory hint for untouched composer run-mode choices. */
+  interactive?: true
   body: string
   path: string
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team'
@@ -718,6 +767,52 @@ export interface GithubData {
   labelColors?: Record<string, string>
 }
 
+/** `GET /api/github/checks?prs=…` (#664) — lazy PR checks glyphs, `number → glyph`. The list call
+ *  no longer ships `statusCheckRollup`, so a row's glyph is hydrated through this endpoint for the
+ *  on-screen rows only. Degrades to `{ available: false, reason }`; an absent number means "no
+ *  checks / not found". */
+export type GithubChecksData =
+  | { available: true; checks: Record<number, 'passing' | 'failing' | 'pending' | null> }
+  | { available: false; reason: string }
+
+export type GithubMergeMethod = 'merge' | 'squash' | 'rebase'
+
+export interface GithubPrMergeState {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | 'merged'
+  isDraft: boolean
+  headRef: string
+  baseRef: string
+  headSha: string
+  mergeable: 'mergeable' | 'conflicting' | 'unknown'
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown'
+  checks: Array<{
+    name: string
+    state: 'passing' | 'failing' | 'pending' | 'unknown'
+    required: boolean | null
+    url?: string
+  }>
+  methods: GithubMergeMethod[]
+  defaultMethod: GithubMergeMethod | null
+  eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown'
+  blockers: Array<{ code: string; message: string }>
+  canMerge: boolean
+}
+
+export type GithubPrMergeStateResponse =
+  | { available: true; mergeState: GithubPrMergeState }
+  | { available: false; reason: string }
+
+export interface GithubMergeResponse {
+  merged: true
+  number: number
+  url: string
+  method: GithubMergeMethod
+  mergeCommitSha?: string
+}
+
 /** One comment or PR review summary in an issue/PR thread (`GET /api/github/comments/…`, #499). */
 export interface GithubComment {
   id: number
@@ -785,6 +880,21 @@ export interface GithubCommentsData {
    *  legacy comments-only fetch. Capped independently of `comments`. */
   events?: GithubTimelineEvent[]
 }
+
+export interface GithubPrChange {
+  path: string
+  previousPath?: string
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed'
+  additions: number
+  deletions: number
+  patch?: string
+  patchUnavailableReason?: 'binary' | 'too-large' | 'not-provided'
+  truncated?: boolean
+}
+
+export type GithubPrChangesData =
+  | { available: true; number: number; headSha: string; files: GithubPrChange[]; additions: number; deletions: number; truncated: boolean; reason?: string }
+  | { available: false; reason: string }
 
 // ---- GUI prefs (`PUT /api/ui-state`) -----------------------------------------------------------
 
@@ -911,7 +1021,7 @@ export interface ConfigResponse {
 }
 
 /** `PUT /api/config` (Settings → Agents; the Repo tab's base-branch picker). `baseBranch: null`
- *  clears the setting back to "current checkout"; `systemPrompt` and per-runner `defaultModels`
+ *  clears the setting back to "follow checked-out branch"; `systemPrompt` and per-runner `defaultModels`
  *  entries clear on `null` (or `''`) too. Merged into the raw config.json server-side —
  *  `defaultModels` merges per runner, so one write never clobbers another runner's preset. */
 export interface SetConfigInput {

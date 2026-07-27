@@ -257,3 +257,30 @@ describe('groupThreadItems — blank reasoning items (#528)', () => {
     expect(blocks[0]).toMatchObject({ kind: 'entry', entry: { id: 'r2', text: 'Real thinking.' } })
   })
 })
+
+describe('groupThreadItems — provider authorization recovery', () => {
+  it('keeps the recovery callout as an ordinary top-level entry at the failure location', () => {
+    const { turns } = reduceThread([
+      { seq: 1, ts: '2026-07-22T12:00:00.000Z', type: 'note', message: 'starting work' } as RunEvent,
+      {
+        seq: 2,
+        ts: '2026-07-22T12:00:00.000Z',
+        type: 'provider-auth-required',
+        provider: 'opencode',
+        authFailureId: 'incident-3',
+      } as RunEvent,
+      { seq: 3, ts: '2026-07-22T12:00:00.000Z', type: 'note', message: 'run stopped' } as RunEvent,
+    ])
+
+    expect(groupThreadItems(turns[0]?.items ?? [])).toEqual([
+      expect.objectContaining({ kind: 'entry', id: 'v1:1' }),
+      expect.objectContaining({ kind: 'entry', id: 'v1:2', entry: {
+        kind: 'provider-auth-required',
+        id: 'v1:2',
+        provider: 'opencode',
+        authFailureId: 'incident-3',
+      } }),
+      expect.objectContaining({ kind: 'entry', id: 'v1:3' }),
+    ])
+  })
+})

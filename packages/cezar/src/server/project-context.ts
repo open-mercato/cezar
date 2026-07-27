@@ -86,6 +86,8 @@ export class ProjectContextError extends Error {
 export class ProjectContexts {
   private readonly contexts = new Map<string, ProjectContext>();
   private readonly building = new Map<string, Promise<ProjectContext>>();
+  /** Live store-created subscribers; invoked before RunManager recovery. */
+  private readonly storeListeners = new Set<(store: RunStore) => void>();
   /** Live `onContextBuilt` subscribers (workspace SSE, step 2.8). */
   private readonly builtListeners = new Set<(ctx: ProjectContext) => void>();
   /** One semaphore for every manager this map builds — injected by boot,
@@ -125,6 +127,28 @@ export class ProjectContexts {
   onContextBuilt(listener: (ctx: ProjectContext) => void): () => void {
     this.builtListeners.add(listener);
     return () => this.builtListeners.delete(listener);
+  }
+
+  /**
+   * Subscribe at the earliest RunStore lifecycle point: immediately after a
+   * lazy project's store opens and before its manager can recover runs. This
+   * stays generic so backend-specific observers do not leak into the context
+   * map. Returns an unsubscribe.
+   */
+  onStoreCreated(listener: (store: RunStore) => void): () => void {
+    this.storeListeners.add(listener);
+    return () => this.storeListeners.delete(listener);
+  }
+
+  /** A listener throwing must never fail the build (its store is usable). */
+  private notifyStoreCreated(store: RunStore): void {
+    for (const listener of [...this.storeListeners]) {
+      try {
+        listener(store);
+      } catch {
+        // subscriber's problem — context construction can continue
+      }
+    }
   }
 
   /** A listener throwing must never fail the build (its context is fine). */
@@ -178,6 +202,7 @@ export class ProjectContexts {
     // keepLive + recover() (#367), same as serveCommand: runs that were live
     // when this project's context last existed are re-queued or resumed.
     const store = RunStore.open(dataDir, { keepLive: true });
+    this.notifyStoreCreated(store);
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore });
     try {
       const launchKey = ensureLaunchKey(dataDir);

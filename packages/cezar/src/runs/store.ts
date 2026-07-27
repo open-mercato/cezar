@@ -106,6 +106,10 @@ const runRecordSchema = z.object({
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
   activity: z.enum(['monitoring']).optional(),
+  /** Exact server-computed deadline for the next automatic monitoring check. */
+  monitoringWakeAt: z.string().datetime().optional().catch(undefined),
+  /** True only for the live epoch that exhausted all automatic monitoring checks. */
+  monitoringWakeCapReached: z.boolean().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -350,6 +354,13 @@ export class RunStore extends EventEmitter {
                 if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
               }
             }
+            if (!['running', 'waiting', 'queued'].includes(run.status)) {
+              run.activity = undefined;
+              run.monitoringWakeAt = undefined;
+            }
+            // The wake counter is intentionally process-local, so a restarted
+            // process starts a fresh epoch instead of displaying a stale cap.
+            run.monitoringWakeCapReached = undefined;
             store.runs.set(run.id, run);
           }
         }
@@ -425,7 +436,13 @@ export class RunStore extends EventEmitter {
     if (Object.prototype.hasOwnProperty.call(patch, 'issueNumber')) {
       delete run.referencedIssueNumberSeeded;
     }
-    Object.assign(run, this.redactPatch(patch));
+    const normalized = { ...patch };
+    if (normalized.status && !['running', 'waiting', 'queued'].includes(normalized.status)) {
+      normalized.activity = undefined;
+      normalized.monitoringWakeAt = undefined;
+      normalized.monitoringWakeCapReached = undefined;
+    }
+    Object.assign(run, this.redactPatch(normalized));
     this.touch(run);
     return run;
   }

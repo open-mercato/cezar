@@ -38,8 +38,8 @@ export interface RunnerOption {
   desc: string
 }
 
-/** The selectable agent backends (legacy `RUNNERS`). Only those detected on the host via
- *  /api/health checks are offered. */
+/** The agent-backend catalog (legacy `RUNNERS`). Installation-only compatibility surfaces use
+ *  `availableRunners`; the new-task composer filters this catalog by connected provider status. */
 export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
@@ -174,8 +174,7 @@ export function sourceExists(
 
 /**
  * The effective source: the first candidate that still exists (the draft pick, then the
- * persisted `lastTask`), else the legacy default — skills first (feedback 2026-07-11: the
- * natural default is a skill, not a chain), else the first workflow, else quick-task.
+ * persisted `lastTask`), else the zero-config cold default: built-in quick-task.
  */
 export function resolveSource(
   candidates: ReadonlyArray<TaskSource | null | undefined>,
@@ -184,6 +183,9 @@ export function resolveSource(
 ): TaskSource {
   for (const candidate of candidates) {
     if (candidate && sourceExists(candidate, skills, workflows)) return candidate
+  }
+  if (workflows.some((workflow) => workflow.name === 'quick-task')) {
+    return { source: 'workflow', ref: 'quick-task' }
   }
   const firstSkill = skills[0]
   if (firstSkill) return { source: 'skill', ref: firstSkill.name }
@@ -195,7 +197,8 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
- *  - `runner` only when it differs from what the server would choose by default;
+ *  - `runner` omitted only when it equals a known server default (unknown defaults and connected
+ *    fallbacks stay explicit);
  *  - `model`/`variants`/`images` only when they say something (`''`/1/empty mean "default").
  */
 export function buildCreateRunBody(opts: {
@@ -203,8 +206,6 @@ export function buildCreateRunBody(opts: {
   source: TaskSource
   model: string
   runner: Runner
-  runnerCount: number
-  /** What an omitted runner resolves to on the server. */
   defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
@@ -226,7 +227,7 @@ export function buildCreateRunBody(opts: {
     source,
     model,
     runner,
-    defaultRunner = runner,
+    defaultRunner,
     variants,
     images,
     worktree,

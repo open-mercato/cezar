@@ -106,7 +106,7 @@ describe('buildPlannedRunBody — the POST /api/runs wire contract for approved 
     steps: STEPS,
     model: '',
     runner: 'claude' as const,
-    runnerCount: 1,
+    defaultRunner: 'claude' as const,
     variants: 1,
     images: [],
   }
@@ -129,7 +129,7 @@ describe('buildPlannedRunBody — the POST /api/runs wire contract for approved 
 
   it.each([
     { name: 'model rides when chosen', patch: { model: 'sonnet' }, key: 'model', expected: 'sonnet' },
-    { name: 'runner rides when it differs from the server default', patch: { defaultRunner: 'codex' as const }, key: 'runner', expected: 'claude' },
+    { name: 'connected fallback rides when it differs from the default', patch: { runner: 'codex' as const }, key: 'runner', expected: 'codex' },
     { name: 'variants ride above ×1', patch: { variants: 3 }, key: 'variants', expected: 3 },
   ])('$name', ({ patch, key, expected }) => {
     const body = buildPlannedRunBody({ ...base, ...patch }) as unknown as Record<string, unknown>

@@ -178,9 +178,12 @@ export function HandToAgent({
   }, [autoText, base])
 
   const start = useMutation({
-    mutationFn: () =>
-      createRun(githubRunBody(item, workflow, validSkills, prompt, engineBody(resolved))),
+    mutationFn: async () => {
+      if (!resolved.canRun) return null
+      return createRun(githubRunBody(item, workflow, validSkills, prompt, engineBody(resolved)))
+    },
     onSuccess: (created) => {
+      if (created === null) return
       // The GitHub tab never starts variants, so the answer is a single record.
       const run = 'runs' in created ? created.runs[0] : created
       if (run) onQueued(item.url, run.id)
@@ -230,7 +233,7 @@ export function HandToAgent({
       }) && (event.metaKey || event.ctrlKey) // multi-line box: bare Enter inserts a newline
     if (!shouldSubmit) return
     event.preventDefault()
-    if (!start.isPending) start.mutate()
+    if (!start.isPending && resolved.canRun) start.mutate()
   }
 
   const toggleSkill = (name: string) =>
@@ -255,7 +258,27 @@ export function HandToAgent({
           selected={validSkills}
           onToggle={toggleSkill}
         />
-        <EnginePills pick={engine} onChange={onEngineChange} disabled={start.isPending} />
+        <EnginePills
+          pick={engine}
+          onChange={onEngineChange}
+          disabled={start.isPending || !resolved.canRun}
+        />
+        {!resolved.providerPending && !resolved.canRun ? (
+          <span
+            data-slot="gh-provider-gate"
+            className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+          >
+            {resolved.providerError
+              ? 'Provider authentication could not be verified.'
+              : 'Connect an agent provider to run this item.'}
+            <Link
+              to="/settings/agents#providers"
+              className="font-medium text-foreground underline underline-offset-4"
+            >
+              Configure providers
+            </Link>
+          </span>
+        ) : null}
         <PromptTemplateMenu templates={templates} onInsert={insertPromptTemplate} />
       </div>
 
@@ -297,7 +320,7 @@ export function HandToAgent({
         <Button
           variant="contrast"
           data-action="gh-run"
-          disabled={start.isPending}
+          disabled={start.isPending || !resolved.canRun}
           onClick={() => start.mutate()}
         >
           <PlayIcon aria-hidden="true" className="size-3.5" />

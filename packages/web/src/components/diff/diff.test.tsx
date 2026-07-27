@@ -80,6 +80,14 @@ describe('Diff facade', () => {
     expect(pair.querySelector('[data-line="add"]')).not.toBeNull()
   })
 
+  it('contains unwrapped lines within each split pane', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} mode="split" />)
+
+    const cells = document.querySelectorAll('[data-slot="diff-cell"]')
+    expect(cells.length).toBeGreaterThan(0)
+    for (const cell of cells) expect(cell.className).toContain('overflow-x-auto')
+  })
+
   it('marks the word-level change on both sides of a paired edit', async () => {
     await renderDiff(<Diff files={[MODIFIED]} />)
 

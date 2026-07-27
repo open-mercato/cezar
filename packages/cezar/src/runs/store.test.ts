@@ -84,12 +84,46 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     store.updateRun(run.id, { status: 'running', activity: 'monitoring' });
     store.flush();
 
-    const reopened = RunStore.open(dataDir);
+    const reopened = RunStore.open(dataDir, { keepLive: true });
     expect(reopened.getRun(run.id)?.activity).toBe('monitoring');
     // Resume/terminal transitions clear it back to a plain running/other state.
     reopened.updateRun(run.id, { status: 'running', activity: undefined });
     reopened.flush();
-    expect(RunStore.open(dataDir).getRun(run.id)?.activity).toBeUndefined();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(run.id)?.activity).toBeUndefined();
+  });
+
+  it('round-trips the monitoring deadline and clears monitoring state on terminal writes', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    const deadline = '2026-07-25T10:15:00.000Z';
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeAt: deadline });
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBe(deadline);
+    store.updateRun(run.id, { status: 'done' });
+    expect(store.getRun(run.id)).toMatchObject({ status: 'done' });
+    expect(store.getRun(run.id)?.activity).toBeUndefined();
+    expect(store.getRun(run.id)?.monitoringWakeAt).toBeUndefined();
+  });
+
+  it('clears process-local wake-cap display state when records reopen', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'monitor', task: 'monitor', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'running', activity: 'monitoring', monitoringWakeCapReached: true });
+    store.flush();
+    const reopened = RunStore.open(dataDir, { keepLive: true }).getRun(run.id);
+    expect(reopened?.activity).toBe('monitoring');
+    expect(reopened?.monitoringWakeCapReached).toBeUndefined();
+  });
+
+  it('salvages a malformed wake deadline and stale terminal monitoring activity', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([{
+      ...LEGACY_RUN,
+      activity: 'monitoring',
+      monitoringWakeAt: 'not-a-date',
+    }]), 'utf8');
+    const loaded = RunStore.open(dataDir).getRun(LEGACY_RUN.id);
+    expect(loaded?.status).toBe('done');
+    expect(loaded?.activity).toBeUndefined();
+    expect(loaded?.monitoringWakeAt).toBeUndefined();
   });
 
   it('still loads an old runs.json that predates activity (#490)', () => {
@@ -891,6 +925,39 @@ describe('RunStore — seq survives a restart (#424 symptom class)', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
     expect(store.appendEvent(run.id, { type: 'note', message: 'first' }).seq).toBe(1);
+  });
+});
+
+describe('RunStore — provider authorization callouts', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-provider-auth-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('persists the structured provider-auth-required event without vendor error text', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+
+    store.appendEvent(run.id, {
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    });
+
+    expect(store.readEvents(run.id)).toEqual([expect.objectContaining({
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'auth-incident-1',
+      stepId: 'implementation',
+    })]);
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('OAuth');
+    expect(JSON.stringify(store.readEvents(run.id))).not.toContain('token');
   });
 });
 

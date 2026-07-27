@@ -6,7 +6,7 @@ import {
   PlayIcon,
   XIcon,
 } from 'lucide-react'
-import { useState, type DragEvent } from 'react'
+import { useState, type DragEvent, type ReactNode } from 'react'
 
 import { ApiError, createWorkflow } from '@/api/client'
 import { queryKeys } from '@/api/queries'
@@ -53,13 +53,26 @@ export interface PlanReviewProps {
   plan: PendingPlan
   /** True while ▶ Start's POST is in flight. */
   starting: boolean
+  /** Provider status has confirmed at least one backend can start the reviewed plan. */
+  startAvailable: boolean
+  startUnavailableReason?: string
+  startUnavailableAction?: ReactNode
   onStepsChange: (steps: WorkflowStepDef[]) => void
   onStart: () => void
   /** Also fired by Escape and the ×. The parent keeps the draft — discard loses nothing. */
   onDiscard: () => void
 }
 
-export function PlanReview({ plan, starting, onStepsChange, onStart, onDiscard }: PlanReviewProps) {
+export function PlanReview({
+  plan,
+  starting,
+  startAvailable,
+  startUnavailableReason,
+  startUnavailableAction,
+  onStepsChange,
+  onStart,
+  onDiscard,
+}: PlanReviewProps) {
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [overIndex, setOverIndex] = useState<number | null>(null)
 
@@ -219,11 +232,24 @@ export function PlanReview({ plan, starting, onStepsChange, onStart, onDiscard }
           )}
         </ol>
 
-        <div className="flex items-center gap-2 border-t border-border px-5 py-3.5 pb-[max(14px,env(safe-area-inset-bottom))]">
+        {!startAvailable && startUnavailableReason ? (
+          <p
+            id="plan-start-guidance"
+            className="flex flex-wrap items-center gap-1.5 border-t border-border px-5 pt-3 text-xs text-muted-foreground"
+          >
+            <span>{startUnavailableReason}</span>
+            {startUnavailableAction}
+          </p>
+        ) : null}
+        <div className="flex items-center gap-2 px-5 py-3.5 pb-[max(14px,env(safe-area-inset-bottom))]">
           <Button
             type="button"
             data-slot="plan-start"
-            disabled={empty || starting}
+            disabled={empty || starting || !startAvailable}
+            title={!startAvailable ? startUnavailableReason : undefined}
+            aria-describedby={
+              !startAvailable && startUnavailableReason ? 'plan-start-guidance' : undefined
+            }
             onClick={onStart}
           >
             <PlayIcon aria-hidden="true" className="size-3.5" />

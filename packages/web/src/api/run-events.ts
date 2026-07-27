@@ -116,7 +116,9 @@ export function useRunEvents(runId: string | undefined): RunEvent[] {
       // Scoped per project like every client.ts path (spec 3.1) — unscoped this is the
       // byte-identical legacy URL. Read per (re)open, but the scope only changes with the
       // route, which unmounts this hook first.
-      source = new Source(scopeApiPath(`/api/runs/${encodeURIComponent(runId)}/events`))
+      source = new Source(scopeApiPath(`/api/runs/${encodeURIComponent(runId)}/events`), {
+        withCredentials: true,
+      })
       for (const name of RUN_EVENT_NAMES) source.addEventListener(name, onFrame)
       source.addEventListener('ping', onPing)
       source.addEventListener('error', () => {

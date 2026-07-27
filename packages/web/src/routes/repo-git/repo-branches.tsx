@@ -56,7 +56,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
       toast(
         result.baseBranch
           ? `Agents now branch from ${result.baseBranch}`
-          : 'Agents now branch from the current checkout',
+          : 'Agents now fork from the checked-out branch',
       )
       void queryClient.invalidateQueries({ queryKey: queryKeys.repo })
     },
@@ -161,7 +161,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
           onChange={(event) => setBase.mutate(event.target.value === '' ? null : event.target.value)}
           className="mt-1.5 block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
         >
-          <option value="">current checkout (default)</option>
+          <option value="">follow checked-out branch (default)</option>
           {repo.branches.map((name) => (
             <option key={name} value={name}>
               {name}

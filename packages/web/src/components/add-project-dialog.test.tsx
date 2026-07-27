@@ -198,6 +198,8 @@ describe('AddProjectDialog', () => {
     )
     expect(screen.getByTestId('location').textContent).toBe('/p/cezar/')
     expect(onOpenChange).not.toHaveBeenCalled()
+    // Server messages quote unbreakable paths — they must wrap, not widen the grid column.
+    expect(document.querySelector('[data-slot="add-project-error"]')?.className).toContain('break-words')
   })
 
   it('shows a browse failure instead of an empty listing', async () => {
@@ -209,12 +211,34 @@ describe('AddProjectDialog', () => {
       ),
     )
     expect(document.querySelector('[data-slot="fs-listing"]')).toBeNull()
+    // Same wrap-don't-widen contract as the register error.
+    expect(document.querySelector('[data-slot="fs-error"]')?.className).toContain('break-words')
   })
 
   it('surfaces the truncated flag rather than showing a silently short list', async () => {
     serve({ browse: { '': json({ ...PROJECTS, truncated: true }) } })
     renderDialog()
     await waitFor(() => expect(document.querySelector('[data-slot="fs-truncated"]')).toBeTruthy())
+  })
+
+  it('keeps a long target path from widening the dialog (grid-blowout regression)', async () => {
+    const DEEP: FsBrowseResponse = {
+      path: '/home/me/projects/workspace/whisper/whisper-admin-with-a-very-long-name',
+      parent: '/home/me',
+      dirs: [{ name: 'docs', path: '/home/me/projects/workspace/whisper/whisper-admin-with-a-very-long-name/docs', isRepo: false }],
+      truncated: false,
+    }
+    serve({ browse: { '': json(DEEP) } })
+    renderDialog()
+    await waitFor(() => expect(target().textContent).toBe(DEEP.path))
+    // jsdom does no layout, so the guard is the class contract. DialogContent is a CSS grid,
+    // and a grid item with visible overflow cannot shrink below its min-content: without
+    // min-w-0 on the footer, the unbreakable mono path forces the grid column wider than the
+    // card, and every row — the folder list included — renders past the dialog's right edge.
+    const footer = document.querySelector('[data-slot="dialog-footer"]') as HTMLElement
+    expect(footer.className).toContain('min-w-0')
+    // …and the path itself must be the thing that gives way, by truncating.
+    expect(target().className).toContain('truncate')
   })
 
   it('refetches the project registry after a successful add so the sidebar picks it up', async () => {

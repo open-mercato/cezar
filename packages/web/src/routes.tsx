@@ -405,6 +405,14 @@ export function AppRoutes() {
             </Suspense>
           }
         />
+        <Route
+          path="github/prs/:n/changes"
+          element={
+            <Suspense fallback={<GithubLoading />}>
+              <GithubRoute view="prs" changes />
+            </Suspense>
+          }
+        />
 
         {/* The skills catalog (R6 Step 1.4) — its own top-level surface, no settings sub-nav.
             `/settings/skills` redirects here (below) so pasted links keep working. */}

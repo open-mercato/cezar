@@ -381,7 +381,7 @@ describe('the repo view Branches segment', () => {
     })
     renderAt('/git/branches')
     const picker = (await screen.findByLabelText('Agents’ base branch')) as HTMLSelectElement
-    expect(picker.value).toBe('') // baseBranch: null = current checkout
+    expect(picker.value).toBe('') // baseBranch: null = follow checked-out branch
 
     fireEvent.change(picker, { target: { value: 'feature' } })
     await waitFor(() => {

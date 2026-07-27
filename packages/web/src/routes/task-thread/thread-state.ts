@@ -65,7 +65,15 @@ export interface ThreadAsk {
   answer?: string
 }
 
-export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk
+/** A persisted, cezar-owned recovery marker for a provider's runtime authentication failure. */
+export interface ThreadProviderAuthRequired {
+  kind: 'provider-auth-required'
+  id: string
+  provider: 'claude' | 'codex' | 'opencode'
+  authFailureId: string
+}
+
+export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk | ThreadProviderAuthRequired
 
 export interface ThreadTurn {
   /** Stable render key, assigned in arrival order (`turn-1`, `turn-2`, …). Not the protocol
@@ -177,17 +185,27 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
+  return value === 'claude' || value === 'codex' || value === 'opencode' ? value : undefined
+}
+
 /** The engine's turn-end markers (`CEZ:DONE`, `CEZ:MONITORING` from #490) plus the in-band
  *  task-reference marker lines (`CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`, spec
  *  2026-07-18-task-ref-markers). v1 `text` lines arrive pre-stripped by the server; v2 message
  *  items carry the raw text, so display strips them here. Named `stripDoneMarker` for
  *  continuity — it now strips every protocol marker. Mirrors `stripTaskMarkers` in
- *  `src/runs/task-markers.ts`. */
-function stripDoneMarker(text: string): string {
-  const trailing = text
+ *  `src/runs/task-markers.ts`.
+ *
+ *  `stripAsk` gates the `CEZ:ASK` strip on the turn actually holding an ask card (#473): the
+ *  card is the only other place the questions exist, so a marker whose card never materialized
+ *  (invalid payload, or the session died before turn-end) must stay visible as raw text — the
+ *  user can still read the question and answer via the composer. Hiding it would delete the
+ *  question from the thread entirely. */
+function stripDoneMarker(text: string, stripAsk: boolean): string {
+  let trailing = text
     .replace(/\s*CEZ:DONE\s*$/, '')
     .replace(/\s*CEZ:MONITORING\s*$/, '')
-    .replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '')
+  if (stripAsk) trailing = trailing.replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '')
   if (!trailing.includes('CEZ:')) return trailing
   return trailing
     .split('\n')
@@ -208,7 +226,9 @@ function stripDoneMarker(text: string): string {
  * which per-event stripping let through. A run that reassembles nothing is kept untouched.
  */
 function dropLegacyDeltaRuns(draft: DraftTurn): void {
-  const norm = (text: string) => stripDoneMarker(text).replace(/\s+/g, '')
+  // Marker-insensitive comparison (stripAsk: true): the v1 side may or may not carry the
+  // marker depending on server-side validation, so equality must ignore it either way.
+  const norm = (text: string) => stripDoneMarker(text, true).replace(/\s+/g, '')
   const v2Norms = new Set<string>()
   const inOrder: string[] = []
   for (const { origin, entry } of draft.entries) {
@@ -537,6 +557,18 @@ export function reduceThread(events: RunEvent[]): ThreadState {
         currentTurn().entries.push({ origin: 'meta', entry: item })
         break
       }
+      case 'provider-auth-required': {
+        // Cezar-owned persisted metadata: accept only the closed provider set and an opaque,
+        // bounded incident id. A malformed historical/future line costs itself, never a turn.
+        const provider = providerId(event.provider)
+        const authFailureId = str(event.authFailureId)
+        if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
+        currentTurn().entries.push({
+          origin: 'meta',
+          entry: { kind: 'provider-auth-required', id: `v1:${event.seq}`, provider, authFailureId },
+        })
+        break
+      }
       case 'image': {
         // Only the v1 line carries a served URL; the v2 twin is raw base64 and is dropped by
         // the sink before persistence anyway. No URL → nothing honest to render.
@@ -618,29 +650,34 @@ export function reduceThread(events: RunEvent[]): ThreadState {
     if (!draft.v2Items) continue
     const v2Texts = new Set<string>()
     for (const { origin, entry } of draft.entries) {
-      if (origin === 'v2' && entry.kind === 'message') v2Texts.add(stripDoneMarker(entry.text).trim())
+      // stripAsk: true — dedup equality must ignore the marker on both sides (see norm()).
+      if (origin === 'v2' && entry.kind === 'message') v2Texts.add(stripDoneMarker(entry.text, true).trim())
     }
     if (v2Texts.size === 0) continue
     draft.entries = draft.entries.filter(
       (e) =>
-        !(e.origin === 'v1' && e.entry.kind === 'message' && v2Texts.has(stripDoneMarker(e.entry.text).trim())),
+        !(e.origin === 'v1' && e.entry.kind === 'message' && v2Texts.has(stripDoneMarker(e.entry.text, true).trim())),
     )
     dropLegacyDeltaRuns(draft)
   }
 
   return {
-    turns: turns.map((draft) => ({
-      id: draft.id,
-      ...(draft.turnId !== undefined ? { turnId: draft.turnId } : {}),
-      ...(draft.userMessage !== undefined ? { userMessage: draft.userMessage } : {}),
-      ...(draft.planEntries !== undefined ? { planEntries: draft.planEntries } : {}),
-      ...(draft.completed !== undefined ? { completed: draft.completed } : {}),
-      items: draft.entries.map(({ entry }) =>
-        entry.kind === 'message' && entry.role === 'assistant'
-          ? { ...entry, text: stripDoneMarker(entry.text) }
-          : entry,
-      ),
-    })),
+    turns: turns.map((draft) => {
+      // The ask card renders the questions, so only then is the marker redundant (#473).
+      const hasAskCard = draft.entries.some(({ entry }) => entry.kind === 'ask')
+      return {
+        id: draft.id,
+        ...(draft.turnId !== undefined ? { turnId: draft.turnId } : {}),
+        ...(draft.userMessage !== undefined ? { userMessage: draft.userMessage } : {}),
+        ...(draft.planEntries !== undefined ? { planEntries: draft.planEntries } : {}),
+        ...(draft.completed !== undefined ? { completed: draft.completed } : {}),
+        items: draft.entries.map(({ entry }) =>
+          entry.kind === 'message' && entry.role === 'assistant'
+            ? { ...entry, text: stripDoneMarker(entry.text, hasAskCard) }
+            : entry,
+        ),
+      }
+    }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
   }
 }

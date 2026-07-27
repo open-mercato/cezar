@@ -5,13 +5,16 @@ import {
   archiveFinished,
   archiveRun,
   cancelRun,
+  connectProvider,
   continueRun,
   createRun,
   deleteRun,
   finishRun,
   getGithub,
+  getGithubChecks,
   getGroup,
   getHealth,
+  getProviderStatus,
   getRepo,
   getRunnerModels,
   getRun,
@@ -31,7 +34,9 @@ import {
   removeTodo,
   runFileRawUrl,
   sendMessage,
+  setProviderEnabled,
   startTodo,
+  retryProviderAuth,
 } from './client'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 
@@ -57,8 +62,16 @@ function reply(body: unknown, init: ResponseInit = {}): void {
   )
 }
 
+const VALID_PROVIDER_STATUS = {
+  providers: [
+    { provider: 'claude', status: 'connected', enabled: true },
+    { provider: 'codex', status: 'disconnected', enabled: true },
+    { provider: 'opencode', status: 'not-installed', enabled: true },
+  ],
+}
+
 /** The (path, init) the client actually asked for. */
-function lastCall(): { path: string; method: string; body: unknown; headers: Headers } {
+function lastCall(): { path: string; method: string; body: unknown; headers: Headers; credentials: RequestCredentials | undefined } {
   const call = fetchMock.mock.calls.at(-1)
   if (!call) throw new Error('fetch was never called')
   const [path, init = {}] = call as [string, RequestInit]
@@ -67,6 +80,7 @@ function lastCall(): { path: string; method: string; body: unknown; headers: Hea
     method: String(init.method),
     body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
     headers: new Headers(init.headers),
+    credentials: init.credentials,
   }
 }
 
@@ -79,6 +93,39 @@ describe('request shapes', () => {
     body?: unknown
   }> = [
     { name: 'getHealth', call: () => getHealth(), path: '/api/health', method: 'GET' },
+    {
+      name: 'getProviderStatus',
+      call: () => getProviderStatus(),
+      path: '/api/providers/status',
+      method: 'GET',
+    },
+    {
+      name: 'getProviderStatus (refresh)',
+      call: () => getProviderStatus(true),
+      path: '/api/providers/status?refresh=1',
+      method: 'GET',
+    },
+    {
+      name: 'connectProvider',
+      call: () => connectProvider('codex'),
+      path: '/api/providers/connect',
+      method: 'POST',
+      body: { provider: 'codex' },
+    },
+    {
+      name: 'setProviderEnabled',
+      call: () => setProviderEnabled('codex', false),
+      path: '/api/providers/codex/enabled',
+      method: 'PUT',
+      body: { enabled: false },
+    },
+    {
+      name: 'retryProviderAuth',
+      call: () => retryProviderAuth('claude', 'incident-1'),
+      path: '/api/providers/claude/retry',
+      method: 'POST',
+      body: { authFailureId: 'incident-1' },
+    },
     { name: 'getRunnerModels', call: () => getRunnerModels(), path: '/api/models?runner=codex', method: 'GET' },
     { name: 'getRuns', call: () => getRuns(), path: '/api/runs', method: 'GET' },
     { name: 'getRun', call: () => getRun('run-1'), path: '/api/runs/run-1', method: 'GET' },
@@ -114,6 +161,12 @@ describe('request shapes', () => {
     // `refresh: false` must not become `refresh=0` — the server tests `=== '1'`, but sending a
     // parameter we do not mean is how a "false" ends up read as truthy somewhere downstream.
     { name: 'getGithub (refresh false)', call: () => getGithub({ refresh: false }), path: '/api/github', method: 'GET' },
+    {
+      name: 'getGithubChecks (#664)',
+      call: () => getGithubChecks([7, 12]),
+      path: '/api/github/checks?prs=7%2C12',
+      method: 'GET',
+    },
     {
       name: 'putUiState',
       call: () => putUiState({ runsView: 'table' }),
@@ -233,13 +286,14 @@ describe('request shapes', () => {
   ]
 
   it.each(cases)('$name hits $method $path', async ({ call, path, method, body }) => {
-    reply({ ok: true })
+    reply(path.startsWith('/api/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
     await call()
 
     const sent = lastCall()
     expect(sent.path).toBe(path)
     expect(sent.method).toBe(method)
     expect(sent.body).toEqual(body)
+    expect(sent.credentials).toBe('include')
     if (body !== undefined) expect(sent.headers.get('content-type')).toBe('application/json')
   })
 
@@ -300,6 +354,64 @@ describe('project scope (multi-project spec, step 3.1)', () => {
 })
 
 describe('response parsing', () => {
+  it('normalizes provider status into canonical order without unexpected fields', async () => {
+    reply({
+      ignored: 'top-level raw value',
+      providers: [
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true, raw: 'private' },
+        { provider: 'claude', status: 'connected', enabled: false, account: 'private@example.test' },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1', raw: 'private' },
+      ],
+    })
+
+    await expect(getProviderStatus()).resolves.toEqual({
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: false },
+        { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
+        { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true },
+      ],
+    })
+  })
+
+  it.each([
+    ['an empty object', {}],
+    ['null providers', { providers: null }],
+    ['a null row', { providers: [null] }],
+    [
+      'an unknown state',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'future-state' },
+          { provider: 'opencode', status: 'connected' },
+        ],
+      },
+    ],
+    [
+      'a duplicate provider',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'claude', status: 'disconnected' },
+          { provider: 'opencode', status: 'connected' },
+        ],
+      },
+    ],
+    [
+      'a missing provider',
+      {
+        providers: [
+          { provider: 'claude', status: 'connected' },
+          { provider: 'codex', status: 'connected' },
+        ],
+      },
+    ],
+  ])('rejects a successful provider response containing %s', async (_case, body) => {
+    reply(body)
+
+    await expect(getProviderStatus()).rejects.toThrow('Invalid provider status response')
+  })
+
   it('returns the health payload as-is', async () => {
     const health = {
       version: '0.1.3',

@@ -74,6 +74,15 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (override) return override()
       if (method === 'GET' && path === '/api/runs/r1/diff') return new Response(DIFF, { status: 200 })
       if (method === 'GET' && path === '/api/runs') return jsonResponse([])
+      if (method === 'GET' && path === '/api/providers/status') {
+        return jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'connected', enabled: true },
+            { provider: 'codex', status: 'not-installed', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        })
+      }
       return jsonResponse({})
     }),
   )
@@ -195,7 +204,9 @@ describe('the review gate on the thread', () => {
 
     const notes = screen.getByLabelText('Notes for the agent') as HTMLTextAreaElement
     fireEvent.change(notes, { target: { value: 'fix the port handling' } })
-    fireEvent.click(screen.getByRole('button', { name: /Send back/ }))
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
 
     await waitFor(() => {
       expect(sent.find((r) => r.method === 'POST' && r.path === '/api/runs/r1/continue')).toMatchObject({
@@ -210,6 +221,8 @@ describe('the review gate on the thread', () => {
     renderWithProviders(<ReviewPanel run={run('review')} />)
 
     const notes = screen.getByLabelText('Notes for the agent') as HTMLTextAreaElement
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
     fireEvent.change(notes, { target: { value: 'more tests' } })
     fireEvent.keyDown(notes, { key: 'Enter' })
     expect(sent.filter((r) => r.path === '/api/runs/r1/continue')).toHaveLength(0)
@@ -220,11 +233,66 @@ describe('the review gate on the thread', () => {
     })
   })
 
-  it('empty notes: no POST, the legacy nudge as a toast, focus back on the box', () => {
+  it('provider loss disables Send back and blocks forced click and keyboard submissions', async () => {
+    const sent = stubFetch({
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'unknown', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        }),
+    })
+    renderWithProviders(<ReviewPanel run={run('review', { runner: 'claude' })} />)
+
+    const notes = screen.getByLabelText('Notes for the agent') as HTMLTextAreaElement
+    fireEvent.change(notes, { target: { value: 'more tests' } })
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(true))
+    expect(await screen.findByRole('link', { name: 'Configure providers' })).toBeTruthy()
+
+    sendBack.removeAttribute('disabled')
+    fireEvent.click(sendBack)
+    fireEvent.keyDown(notes, { key: 'Enter', ctrlKey: true })
+    await act(() => Promise.resolve())
+    expect(sent.filter((request) => request.path === '/api/runs/r1/continue')).toHaveLength(0)
+  })
+
+  it('Send back explicitly selects a connected fallback for a disconnected run provider', async () => {
+    const sent = stubFetch({
+      'GET /api/providers/status': () =>
+        jsonResponse({
+          providers: [
+            { provider: 'claude', status: 'disconnected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'not-installed', enabled: true },
+          ],
+        }),
+    })
+    renderWithProviders(<ReviewPanel run={run('review', { runner: 'claude' })} />)
+
+    const notes = screen.getByLabelText('Notes for the agent')
+    fireEvent.change(notes, { target: { value: 'use the available provider' } })
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await waitFor(() =>
+      expect(sent.find((request) => request.path === '/api/runs/r1/continue')?.body).toEqual({
+        text: 'Review feedback:\nuse the available provider',
+        runner: 'codex',
+      }),
+    )
+  })
+
+  it('empty notes: no POST, the legacy nudge as a toast, focus back on the box', async () => {
     const sent = stubFetch()
     renderWithProviders(<ReviewPanel run={run('review')} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Send back/ }))
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
     expect(sent.filter((r) => r.method === 'POST')).toHaveLength(0)
     expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe('Write what to change first.')
     expect(document.activeElement).toBe(screen.getByLabelText('Notes for the agent'))

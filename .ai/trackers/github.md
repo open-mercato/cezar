@@ -130,6 +130,12 @@ gh issue close {issueId} --repo {owner}/{repo} --reason completed --comment "<co
 gh issue comment {issueId} --repo {owner}/{repo} --body "<body>"
 ```
 
+#### update-issue
+`{issueId}`, new title and/or body (use a body-file for multi-line bodies). Edits the issue's own fields; does not touch labels or assignees (those have their own operations).
+```bash
+gh issue edit {issueId} --repo {owner}/{repo} --title "<title>" --body-file <file>
+```
+
 #### assign-issue / unassign-issue
 ```bash
 gh issue edit {issueId} --repo {owner}/{repo} --add-assignee "<login>"

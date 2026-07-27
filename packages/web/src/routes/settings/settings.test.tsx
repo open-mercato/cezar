@@ -47,6 +47,14 @@ function serve(uiState: Record<string, unknown> = {}) {
       if (url === '/api/ui-state' && method === 'PUT')
         return json({ ...projectUiState, ...(body as Record<string, unknown>) })
       if (url === '/api/config') return json(AGENTS_CONFIG)
+      if (url === '/api/providers/status')
+        return json({
+          providers: [
+            { provider: 'claude', status: 'connected', enabled: true },
+            { provider: 'codex', status: 'connected', enabled: true },
+            { provider: 'opencode', status: 'connected', enabled: true },
+          ],
+        })
       if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [], source: 'unavailable', stale: false })
       return new Promise<never>(() => {})
     }),

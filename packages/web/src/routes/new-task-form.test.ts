@@ -105,7 +105,7 @@ describe('model option resolution', () => {
   })
 })
 
-describe('resolveSource (legacy lastTask validation + defaultTaskSource)', () => {
+describe('resolveSource (candidate validation + cold quick-task default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
 
@@ -119,8 +119,9 @@ describe('resolveSource (legacy lastTask validation + defaultTaskSource)', () =>
     ).toEqual({ source: 'workflow', ref: 'fix-and-verify' })
   })
 
-  it('defaults to the FIRST SKILL (skills-first, feedback 2026-07-11), then first workflow, then quick-task', () => {
-    expect(resolveSource([], skills, workflows)).toEqual({ source: 'skill', ref: 'om-fix' })
+  it('defaults cold to quick-task, then first skill when quick-task is unavailable', () => {
+    expect(resolveSource([], skills, workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
+    expect(resolveSource([], skills, [workflow('fix-and-verify')])).toEqual({ source: 'skill', ref: 'om-fix' })
     expect(resolveSource([], [], workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
     expect(resolveSource([], [], [])).toEqual({ source: 'workflow', ref: 'quick-task' })
   })
@@ -139,7 +140,7 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
       source: { source: 'workflow', ref: 'quick-task' },
       model: '',
       runner: 'claude',
-      runnerCount: 1,
+      defaultRunner: 'claude',
       variants: 1,
       images: [],
     })
@@ -161,7 +162,6 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
       source: { source: 'skill', ref: 'om-fix' },
       model: 'sonnet',
       runner: 'claude',
-      runnerCount: 2,
       defaultRunner: 'codex',
       variants: 1,
       images: [],
@@ -174,38 +174,38 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
     })
   })
 
-  it('sends the only available runner when it differs from the unavailable server default', () => {
-    const single = buildCreateRunBody({
-      task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
-      runner: 'claude', runnerCount: 1, defaultRunner: 'codex', variants: 1, images: [],
-    })
-    expect(single.runner).toBe('claude')
-  })
-
-  it('still omits the runner when it matches the server default', () => {
+  it('omits runner when the chosen connected runner equals the server default', () => {
     const body = buildCreateRunBody({
       task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
-      runner: 'claude', runnerCount: 2, defaultRunner: 'claude', variants: 1, images: [],
+      runner: 'codex', defaultRunner: 'codex', variants: 1, images: [],
     })
     expect(body.runner).toBeUndefined()
+  })
+
+  it('sends a connected fallback that differs from the server default, even when it is the only choice', () => {
+    const body = buildCreateRunBody({
+      task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
+      runner: 'codex', defaultRunner: 'claude', variants: 1, images: [],
+    })
+    expect(body.runner).toBe('codex')
   })
 
   it('worktree=false is sent only for a single run; on/variants keep it implicit', () => {
     const off = buildCreateRunBody({
       task: 't', source: { source: 'skill', ref: 'om-review' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 1, images: [], worktree: false,
+      runner: 'claude', defaultRunner: 'claude', variants: 1, images: [], worktree: false,
     })
     expect(off.worktree).toBe(false)
     // Default (on) never sends the flag.
     const on = buildCreateRunBody({
       task: 't', source: { source: 'skill', ref: 'om-review' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 1, images: [], worktree: true,
+      runner: 'claude', defaultRunner: 'claude', variants: 1, images: [], worktree: true,
     })
     expect(on.worktree).toBeUndefined()
     // Variants always isolate — worktree=false is ignored.
     const variant = buildCreateRunBody({
       task: 't', source: { source: 'skill', ref: 'om-review' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 2, images: [], worktree: false,
+      runner: 'claude', defaultRunner: 'claude', variants: 2, images: [], worktree: false,
     })
     expect(variant.worktree).toBeUndefined()
   })
@@ -213,7 +213,7 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
   it('generateFollowups=false is sent only when follow-up generation is disabled', () => {
     const base = {
       task: 't', source: { source: 'skill' as const, ref: 'om-review' }, model: '',
-      runner: 'claude' as const, runnerCount: 1, variants: 1, images: [],
+      runner: 'claude' as const, defaultRunner: 'claude' as const, variants: 1, images: [],
     }
     expect(buildCreateRunBody({ ...base, generateFollowups: false }).generateFollowups).toBe(false)
     expect(buildCreateRunBody({ ...base, generateFollowups: true }).generateFollowups).toBeUndefined()
@@ -223,7 +223,7 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
   it('variants > 1 and images ride along; ×1 and no images are omitted', () => {
     const body = buildCreateRunBody({
       task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
-      runner: 'claude', runnerCount: 1, variants: 3,
+      runner: 'claude', defaultRunner: 'claude', variants: 3,
       images: [{ mediaType: 'image/png', data: 'aGk=' }],
     })
     expect(body.variants).toBe(3)

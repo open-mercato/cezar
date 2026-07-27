@@ -46,13 +46,22 @@ describe('bookmarkletRunBody', () => {
   ]
   for (const [name, input, body] of cases) {
     it(name, () => {
-      expect(bookmarkletRunBody(input)).toEqual(body)
+      expect(bookmarkletRunBody(input, 'claude', 'claude')).toEqual(body)
     })
   }
 
-  it('never puts model/runner/variants on the wire (JSON drops the undefineds)', () => {
-    const sent = JSON.parse(JSON.stringify(bookmarkletRunBody(params({ ref: 'x' })))) as object
+  it('keeps the protected body byte-identical when the connected runner is the server default', () => {
+    const sent = JSON.parse(
+      JSON.stringify(bookmarkletRunBody(params({ ref: 'x' }), 'claude', 'claude')),
+    ) as object
     expect(Object.keys(sent).sort()).toEqual(['task', 'workflow'])
+  })
+
+  it('sends an explicit connected fallback when the server default is disconnected', () => {
+    const sent = JSON.parse(
+      JSON.stringify(bookmarkletRunBody(params({ ref: 'x' }), 'codex', 'claude')),
+    ) as CreateRunInput
+    expect(sent).toEqual({ task: 'x', workflow: 'quick-task', runner: 'codex' })
   })
 })
 
