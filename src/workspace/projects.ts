@@ -1,6 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
+import { forgeKindOfRemote, type ForgeKind } from '../server/forge/index.js';
 import { getRepoInfo } from '../server/git.js';
 import {
   mergeWriteWorkspaceConfig,
@@ -157,11 +158,17 @@ export interface ProjectListEntry extends WorkspaceProject {
   status: ProjectStatus;
   /** Current branch when cheaply available (omitted e.g. on an unborn HEAD). */
   branch?: string;
+  /** Which forge the root's remote belongs to (#698) — classified from the
+   *  remote URL alone, no `gh` probe. Omitted when there is no forge remote.
+   *  The sidebar gates each project group's GitHub tab on this, instead of on
+   *  the boot folder's health-level forge answer. */
+  forge?: ForgeKind;
 }
 
 interface RootProbe {
   status: ProjectStatus;
   branch?: string;
+  forge?: ForgeKind;
 }
 
 /** Probe TTL — long enough to coalesce a burst of sidebar renders, short
@@ -187,10 +194,15 @@ async function computeProbe(root: string): Promise<RootProbe> {
   } catch {
     return { status: 'not-git' };
   }
-  // Branch is best-effort garnish: getRepoInfo never throws (null on e.g. an
-  // unborn HEAD), and a repo without a readable branch is still status ok.
+  // Branch and forge are best-effort garnish: getRepoInfo never throws (null
+  // on e.g. an unborn HEAD), and a repo without either is still status ok.
   const info = await getRepoInfo(root);
-  return info?.branch ? { status: 'ok', branch: info.branch } : { status: 'ok' };
+  const forge = forgeKindOfRemote(info?.remote);
+  return {
+    status: 'ok',
+    ...(info?.branch ? { branch: info.branch } : {}),
+    ...(forge ? { forge } : {}),
+  };
 }
 
 async function probeRoot(root: string): Promise<RootProbe> {
@@ -210,7 +222,7 @@ async function probeRoot(root: string): Promise<RootProbe> {
  */
 export async function probeProjectStatus(
   root: string,
-): Promise<Pick<ProjectListEntry, 'status' | 'branch'>> {
+): Promise<Pick<ProjectListEntry, 'status' | 'branch' | 'forge'>> {
   return probeRoot(root);
 }
 

@@ -130,11 +130,9 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
             <ProjectGroups
               projects={projects.projects}
               bootProjectId={projects.bootProject}
-              // The workspace's forge answer, applied to every group. `GET /api/projects`
-              // carries no per-project forge field, and probing one health endpoint per group
-              // would be exactly the N-shells-per-render cost the registry's cached probes
-              // exist to avoid. Per-project gating waits for the registry to carry the fact.
-              forgeAvailable={health.data?.forge?.available === true}
+              // No forge prop: each group gates its own GitHub tab on its registry entry's
+              // `forge` field (#698) — the boot folder's health-level answer says nothing
+              // about the other projects in the workspace.
               inboxAvailable={inboxAvailable}
               inboxCount={todos.data?.length ?? null}
               skillsUpdateAvailable={skillsUpdateAvailable}

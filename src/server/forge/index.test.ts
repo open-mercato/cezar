@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RepoInfo } from '../git.js';
-import { parseRemote, resolveForge } from './index.js';
+import { forgeKindOfRemote, parseRemote, resolveForge } from './index.js';
 
 /** Forge resolution (spec §"Forge-driver seam"): remote host → driver | null. */
 
@@ -29,6 +29,21 @@ describe('parseRemote', () => {
     [''],
   ])('rejects %s', (remote) => {
     expect(parseRemote(remote)).toBeNull();
+  });
+});
+
+describe('forgeKindOfRemote', () => {
+  // The registry probe's classification (#698) — same host table as resolveForge,
+  // but string-only: no driver, no repo root, no `gh`.
+  it.each([
+    ['https://github.com/acme/demo.git', 'github'],
+    ['git@github.com:acme/demo.git', 'github'],
+    ['git@gitlab.com:acme/demo.git', null],
+    ['https://git.example.com/acme/demo.git', null],
+    ['/srv/git/demo.git', null],
+    [undefined, null],
+  ])('classifies %s as %s', (remote, expected) => {
+    expect(forgeKindOfRemote(remote)).toBe(expected);
   });
 });
 

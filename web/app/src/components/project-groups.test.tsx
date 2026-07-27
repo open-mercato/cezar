@@ -30,6 +30,7 @@ function project(over: Partial<ProjectListEntry> = {}): ProjectListEntry {
     source: 'local',
     status: 'ok',
     branch: 'main',
+    forge: 'github',
     ...over,
   }
 }
@@ -83,7 +84,7 @@ function renderGroups(projects: ProjectListEntry[], entry = '/p/cezar/') {
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
         <ListViewProvider>
-          <ProjectGroups projects={projects} bootProjectId="cezar" forgeAvailable />
+          <ProjectGroups projects={projects} bootProjectId="cezar" />
         </ListViewProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -172,6 +173,27 @@ describe('ProjectGroups', () => {
     expect(within(cezarNav).getByRole('link', { current: 'page' }).textContent).toBe('Tasks')
   })
 
+  it("gates each group's GitHub tab on that project's own forge (#698)", async () => {
+    // Two expanded groups, one with a GitHub remote and one without: the GitHub nav item must
+    // follow each entry's own `forge` field, not one workspace-wide answer — the exact failure
+    // was every group hiding (or showing) GitHub based on the folder cezar was LAUNCHED in.
+    serve({
+      '/api/workspace/ui-state': { sidebar: { collapsed: { plain: false } } },
+      '/api/p/cezar/runs': [],
+      '/api/p/plain/runs': [],
+    })
+    renderGroups([
+      project(),
+      project({ id: 'plain', name: 'plain', forge: undefined, lastOpenedAt: '2026-07-19T00:00:00.000Z' }),
+    ])
+
+    await waitFor(() => expect(header('plain').getAttribute('aria-expanded')).toBe('true'))
+    const cezarNav = within(group('cezar')).getByRole('navigation', { name: 'cezar navigation' })
+    expect(within(cezarNav).getByRole('link', { name: 'GitHub' }).getAttribute('href')).toBe('/p/cezar/github')
+    const plainNav = within(group('plain')).getByRole('navigation', { name: 'plain navigation' })
+    expect(within(plainNav).queryByRole('link', { name: 'GitHub' })).toBeNull()
+  })
+
   it('round-trips a collapse through the workspace ui-state', async () => {
     serve({ '/api/workspace/ui-state': {}, '/api/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
@@ -238,7 +260,7 @@ describe('ProjectGroups', () => {
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/p/cezar/']}>
           <ListViewProvider>
-            <ProjectGroups projects={[project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })]} bootProjectId="cezar" forgeAvailable />
+            <ProjectGroups projects={[project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })]} bootProjectId="cezar" />
           </ListViewProvider>
         </MemoryRouter>
       </QueryClientProvider>,
