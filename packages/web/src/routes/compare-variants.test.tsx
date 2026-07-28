@@ -151,6 +151,27 @@ describe('the compare columns', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).not.toContain('(A)')
   })
 
+  it('removes token and cost metadata when health disables it', async () => {
+    stubFetch(group(variant('A', 'review'), variant('B', 'done')), {
+      'GET /api/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true,
+            followups: false,
+            singleProject: false,
+            tokenMetrics: false,
+          },
+        }),
+    })
+    renderCompare()
+    await waitForColumns(2)
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="variant-token-metrics"]')).toBeNull()
+    })
+    expect(columns()[0]?.textContent).not.toContain('96.2k')
+    expect(columns()[0]?.textContent).not.toContain('$0.31')
+  })
+
   it('says "(no changes)" and "(no progress notes)" instead of empty blocks', async () => {
     stubFetch(group(variant('A', 'done', { diffStat: '', handoffExcerpt: '' }), variant('B', 'done')))
     renderCompare()
