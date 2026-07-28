@@ -2467,8 +2467,15 @@ export function createApp(deps: ServerDeps) {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
-    const blocked = await providerActionError([providerForActiveRun(run)]);
-    if (blocked) return c.json({ error: blocked }, 409);
+    // Stacking onto a queued prompt mutates an existing task and invokes no provider.
+    // Provider availability still gates live delivery after the record leaves `queued`, but
+    // must not strand prompt authoring just because an unrelated fallback provider is
+    // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
+    // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
+    if (run.status !== 'queued') {
+      const blocked = await providerActionError([providerForActiveRun(run)]);
+      if (blocked) return c.json({ error: blocked }, 409);
+    }
     const content: ContentBlock[] = [
       ...parsed.data.images.map((img): ContentBlock => ({
         type: 'image',
