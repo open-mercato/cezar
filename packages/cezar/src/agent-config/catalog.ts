@@ -54,6 +54,8 @@ export interface ConfigFileDef {
   holdsMcp?: boolean;
   /** Top-level native setting that supplies the agent's new-session model, when present. */
   modelKey?: string;
+  /** Native model keys checked in precedence order, including nested `env.*` settings. */
+  modelKeys?: readonly string[];
   /** Higher values win when resolving a native default model across config scopes. */
   modelPriority?: number;
   /** VERBATIM from the vendor docs. Never computed, never generic. */
@@ -87,6 +89,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'json',
     tracked: 'outside-repo',
     modelKey: 'model',
+    modelKeys: ['env.ANTHROPIC_MODEL', 'model'],
     modelPriority: 1,
     precedence:
       'Lowest priority. Project and local settings override it key by key — except permission rules, which merge across all scopes.',
@@ -103,6 +106,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'json',
     tracked: 'tracked',
     modelKey: 'model',
+    modelKeys: ['env.ANTHROPIC_MODEL', 'model'],
     modelPriority: 2,
     precedence:
       'Overrides user settings key by key (permission rules merge). Local settings override this.',
@@ -120,6 +124,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     tracked: 'gitignored',
     seeded: true,
     modelKey: 'model',
+    modelKeys: ['env.ANTHROPIC_MODEL', 'model'],
     modelPriority: 3,
     precedence:
       'Highest of the file scopes — overrides project and user (permission rules merge). Git-ignored; copied into each run’s worktree so it takes effect immediately.',

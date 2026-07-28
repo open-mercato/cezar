@@ -61,6 +61,8 @@ interface BackendModelMap {
    * It also selects the wire form in {@link toBackendModel}.
    */
   readonly defaultProvider?: string;
+  /** Whether explicit foreign provider/model ids are valid backend-native ids. */
+  readonly allowExplicitProvider?: boolean;
   /**
    * Bare model id → provider override, for the rare backend whose bare ids
    * span providers. Checked before `defaultProvider`; empty for today's set.
@@ -74,8 +76,10 @@ interface BackendModelMap {
  * to `claude`.
  */
 export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> = {
-  claude: { defaultProvider: 'anthropic' },
-  'claude-cli': { defaultProvider: 'anthropic' },
+  // Claude Code supports custom/gateway model ids such as DeepSeek via an
+  // Anthropic-compatible endpoint, so preserve an explicit provider/model.
+  claude: { defaultProvider: 'anthropic', allowExplicitProvider: true },
+  'claude-cli': { defaultProvider: 'anthropic', allowExplicitProvider: true },
   codex: { defaultProvider: 'openai' },
   // opencode selects across providers, so a bare model is ambiguous: reject it
   // loudly rather than let the server pick a default the user never asked for.
@@ -113,9 +117,8 @@ export function parseModelIdentity(raw: string | undefined | null): ModelIdentit
  *    explicit choice, not a silent fallback);
  *  - an explicit `provider/model` → that identity, for a multi-provider backend
  *    or when the provider is the single-provider backend's own;
- *  - an explicit `provider/model` naming a FOREIGN provider on a single-provider
- *    backend → throws {@link ModelIdentityError} (it would be dropped on the wire
- *    yet persisted, asserting a provider that never ran — #405 review M2);
+ *  - an explicit `provider/model` naming a FOREIGN provider is preserved when
+ *    the backend supports custom/gateway model ids;
  *  - a bare id → the backend's default provider;
  *  - a bare id on a backend with no default provider → throws
  *    {@link ModelIdentityError}.
@@ -128,12 +131,14 @@ export function resolveModelIdentity(
   const map = BACKEND_MODEL_MAP[backend] ?? {};
   const explicit = parseModelIdentity(raw);
   if (explicit) {
-    // A single-provider backend (claude/codex) can only serve its own provider. An explicit
-    // foreign provider would be silently dropped on the wire — `toBackendModel` hands the CLI
-    // the bare model id — while the record persists the foreign provider, asserting one that
-    // never served the run (#405 review M2). Reject it, the same fail-loud contract a bare id
-    // gets on a multi-provider backend.
-    if (map.defaultProvider !== undefined && explicit.provider !== map.defaultProvider) {
+    // Most single-provider backends need their bare wire form, but Claude Code
+    // also accepts explicit gateway/custom provider ids. Keep rejecting foreign
+    // providers for backends that do not advertise that capability.
+    if (
+      map.defaultProvider !== undefined &&
+      explicit.provider !== map.defaultProvider &&
+      !map.allowExplicitProvider
+    ) {
       throw new ModelIdentityError(
         `provider "${explicit.provider}" can't be served by the ${backend} runner (serves ${map.defaultProvider}) — use "${map.defaultProvider}/${explicit.model}" or a bare model id`,
       );
@@ -159,7 +164,9 @@ export function resolveModelIdentity(
  */
 export function toBackendModel(backend: AgentBackend, id: ModelIdentity): string {
   const map = BACKEND_MODEL_MAP[backend] ?? {};
-  return map.defaultProvider === undefined ? formatModelIdentity(id) : id.model;
+  if (map.defaultProvider === undefined) return formatModelIdentity(id);
+  if (map.allowExplicitProvider && id.provider !== map.defaultProvider) return formatModelIdentity(id);
+  return id.model;
 }
 
 /**

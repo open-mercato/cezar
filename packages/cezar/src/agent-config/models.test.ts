@@ -47,4 +47,22 @@ describe('readAgentModelDefaults', () => {
 
     await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ claude: 'user-claude' });
   });
+
+  it('reads Claude custom models from settings env and host ANTHROPIC_MODEL', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({ env: { ANTHROPIC_MODEL: 'deepseek/deepseek-v4-flash' } }),
+    );
+
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({
+      claude: 'deepseek/deepseek-v4-flash',
+    });
+    await expect(
+      readAgentModelDefaults(repo, { HOME: home, ANTHROPIC_MODEL: 'deepseek' }),
+    ).resolves.toEqual({ claude: 'deepseek' });
+  });
 });

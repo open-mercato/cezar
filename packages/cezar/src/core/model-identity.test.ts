@@ -113,16 +113,17 @@ describe('resolveModelIdentity — bare ids per backend', () => {
     });
   });
 
-  it('a FOREIGN explicit provider on a single-provider backend is rejected (#405 review M2)', () => {
-    // claude serves anthropic only: it would drop `openrouter` on the wire yet persist it,
-    // asserting a provider that never ran. Fail loud instead.
-    expect(() => resolveModelIdentity('claude', 'openrouter/some-model')).toThrow(ModelIdentityError);
-    try {
-      resolveModelIdentity('claude', 'openrouter/some-model');
-    } catch (err) {
-      expect((err as Error).message).toContain('openrouter');
-      expect((err as Error).message).toContain('anthropic');
-    }
+  it('Claude preserves an explicit foreign provider for custom gateways', () => {
+    expect(resolveModelIdentity('claude', 'deepseek/deepseek-v4-flash')).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+    });
+    expect(toBackendModel('claude', { provider: 'deepseek', model: 'deepseek-v4-flash' })).toBe(
+      'deepseek/deepseek-v4-flash',
+    );
+  });
+
+  it('Codex still rejects a foreign provider on its single-provider backend', () => {
     expect(() => resolveModelIdentity('codex', 'anthropic/claude-opus-4-8')).toThrow(ModelIdentityError);
   });
 });

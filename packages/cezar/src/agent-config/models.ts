@@ -42,7 +42,14 @@ function stripJsonTrailingCommas(input: string): string {
   return out;
 }
 
-function modelFromContent(content: string, format: ConfigFormat, key: string): string | undefined {
+function valueAtPath(value: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, segment) => {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    return (current as Record<string, unknown>)[segment];
+  }, value);
+}
+
+function modelFromContent(content: string, format: ConfigFormat, keys: readonly string[]): string | undefined {
   try {
     const parsed =
       format === 'toml'
@@ -51,8 +58,11 @@ function modelFromContent(content: string, format: ConfigFormat, key: string): s
             format === 'jsonc' ? stripJsonTrailingCommas(stripJsonComments(content)) : content,
           );
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    const model = (parsed as Record<string, unknown>)[key];
-    return typeof model === 'string' && model.trim() ? model.trim() : undefined;
+    for (const key of keys) {
+      const model = valueAtPath(parsed, key);
+      if (typeof model === 'string' && model.trim()) return model.trim();
+    }
+    return undefined;
   } catch {
     // A malformed higher-precedence file must not prevent a usable lower-level
     // default from appearing in the cockpit.
@@ -65,6 +75,10 @@ async function readRunnerModel(
   repoRoot: string,
   env: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
+  // Claude Code gives ANTHROPIC_MODEL higher priority than settings-file values.
+  // The terminal and cezar must therefore agree when the model is configured in
+  // the shell that launched the server.
+  if (runner === 'claude' && env.ANTHROPIC_MODEL?.trim()) return env.ANTHROPIC_MODEL.trim();
   const modelFiles = CONFIG_FILES.filter(
     (def) =>
       def.kind === 'settings' &&
@@ -75,7 +89,7 @@ async function readRunnerModel(
   for (const def of modelFiles) {
     const file = await readConfigFile(def.id, repoRoot, env);
     if (!file || 'error' in file || !file.exists) continue;
-    const model = modelFromContent(file.content, def.format, def.modelKey!);
+    const model = modelFromContent(file.content, def.format, def.modelKeys ?? [def.modelKey!]);
     if (model) return model;
   }
   return undefined;
