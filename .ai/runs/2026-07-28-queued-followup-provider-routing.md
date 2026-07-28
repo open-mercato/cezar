@@ -38,6 +38,8 @@ Source doc: `.ai/specs/2026-07-22-provider-authentication.md`
 
 ## Progress
 
+PR: #712
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Correct queued-message gating
@@ -48,4 +50,4 @@ Source doc: `.ai/specs/2026-07-22-provider-authentication.md`
 ### Phase 2: Verify and finalize
 
 - [x] 2.1 Run focused server and cockpit tests, then the configured validation commands in order. — ce7a5a55
-- [ ] 2.2 Run the authoritative PR review/autofix pass, capture verification evidence on the PR, and finalize the PR for review.
+- [x] 2.2 Run the authoritative PR review/autofix pass, capture verification evidence on the PR, and finalize the PR for review. — 5588b878
