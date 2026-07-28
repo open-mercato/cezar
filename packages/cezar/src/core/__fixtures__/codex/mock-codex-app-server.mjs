@@ -58,6 +58,13 @@ rl.on('line', (line) => {
     emit({ id: msg.id, result: { turn: { id: 'turn_mock_1' } } });
     emit({ method: 'turn/started', params: { turn: { id: 'turn_mock_1', status: 'inProgress', items: [] } } });
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
+    if (turnText.includes('mock:turn-failed')) {
+      emit({ method: 'turn/failed', params: {
+        turn: { id: 'turn_mock_1', status: 'failed' },
+        error: { message: 'model unavailable' },
+      } });
+      return;
+    }
     if (turnText.includes('mock:subagent-activity')) {
       emit({ method: 'item/started', params: { item: { type: 'subAgentActivity', id: 'activity_1', kind: 'started', agentThreadId: 'th_child', agentPath: '/root/scope_review' } } });
       emit({ method: 'item/completed', params: { item: { type: 'subAgentActivity', id: 'activity_1', kind: 'started', agentThreadId: 'th_child', agentPath: '/root/scope_review' } } });

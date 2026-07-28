@@ -43,4 +43,19 @@ describe('a teardown cezar initiated (codex app-server)', () => {
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
   }, 15_000);
+
+  it('surfaces a failed turn as an AgentEvent error', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:turn-failed', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
 });

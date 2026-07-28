@@ -1524,6 +1524,7 @@ export class RunManager {
 
     let stepCost = 0;
     let turnText = '';
+    let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, stepId);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
@@ -1538,6 +1539,14 @@ export class RunManager {
         return;
       }
       this.store.appendEvent(runId, { ...event, stepId });
+      if (event.type === 'error') {
+        // A failed continuation must not be converted into a waiting session
+        // by the turn-end event some backends emit after the error.
+        sessionError ??= event.message;
+        state.session?.interrupt();
+        return;
+      }
+      if (sessionError) return;
       if (event.type === 'session') {
         this.store.updateStep(runId, stepId, { sessionId: event.sessionId, backend });
       }
@@ -1693,6 +1702,7 @@ export class RunManager {
     const finishedAt = () => new Date().toISOString();
     try {
       await session.result;
+      if (sessionError) throw new Error(sessionError);
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       if (state.cancelled) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
@@ -2066,6 +2076,7 @@ export class RunManager {
     const startTokens = stepRecord?.tokensUsed ?? 0;
     let stepCost = stepRecord?.costUsd ?? 0;
     let turnText = '';
+    let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
@@ -2080,6 +2091,14 @@ export class RunManager {
         return;
       }
       emit({ ...event, stepId: step.id });
+      if (event.type === 'error') {
+        // Runner errors are fatal for the current step. Do not let the
+        // following turn-end event park a broken session as waiting/running.
+        sessionError ??= event.message;
+        state.session?.interrupt();
+        return;
+      }
+      if (sessionError) return;
       if (event.type === 'session') {
         // Codex/OpenCode mint their own session id — persist it so resume works.
         this.store.updateStep(runId, step.id, { sessionId: event.sessionId, backend });
@@ -2218,6 +2237,10 @@ export class RunManager {
 
     try {
       const result = await session.result;
+      if (sessionError) {
+        sink.sessionEnded('error', sessionError);
+        return sessionError;
+      }
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
       // events to the RunManager — only it knows how the session settled).
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
