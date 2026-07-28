@@ -78,11 +78,25 @@ describe('health topic + cache (live-server path)', () => {
     return { app: createApp(deps), topics };
   };
 
+  /** One health snapshot spawns the CLI/forge probes and shells out to git, which costs
+   *  ~1 s on a warm dev box and several seconds on a loaded CI runner. `vi.waitFor` defaults
+   *  to a 1 s budget and a test to 5 s, so both had to be beaten by a probe sweep to pass —
+   *  that is the whole flake (#701 class): these assertions are about cache POLICY, never
+   *  about how fast a probe answers. The budget is generous on purpose; a genuinely broken
+   *  pre-warm never resolves and still fails, just later. */
+  const PROBE_BUDGET_MS = 30_000;
+  /** Per-test ceiling: a case may need a pre-warm sweep plus a couple of recomputes, and
+   *  vitest's 5 s default cuts that off long before the policy under test has a verdict. */
+  const TEST_BUDGET_MS = 60_000;
+
   /** The boot pre-warm is fire-and-forget; wait for it to land before asserting on the cache. */
   const settle = async (): Promise<void> => {
-    await vi.waitFor(async () => {
-      expect(await runner()).toBeDefined();
-    });
+    await vi.waitFor(
+      async () => {
+        expect(await runner()).toBeDefined();
+      },
+      { timeout: PROBE_BUDGET_MS, interval: 50 },
+    );
   };
   let currentApp: ReturnType<typeof createApp> | undefined;
   const runner = async (): Promise<string | undefined> => {
@@ -102,7 +116,7 @@ describe('health topic + cache (live-server path)', () => {
     currentApp = app;
     await settle();
     expect(await runner()).toBe('claude');
-  });
+  }, TEST_BUDGET_MS);
 
   // The regression this file exists for: the 5 s TTL says how often a revalidation is KICKED
   // OFF, not how old the served value may be — the revalidation is fire-and-forget. With no
@@ -120,7 +134,7 @@ describe('health topic + cache (live-server path)', () => {
 
     // Waits for the recompute rather than answering from a two-hour-old cache.
     expect(await runner()).toBe('codex');
-  });
+  }, TEST_BUDGET_MS);
 
   it('still answers instantly from cache inside the TTL', async () => {
     setRunner('claude');
@@ -131,7 +145,7 @@ describe('health topic + cache (live-server path)', () => {
     setRunner('codex');
     // Within the 5 s TTL the cached value is the point — no recompute, no wait.
     expect(await runner()).toBe('claude');
-  });
+  }, TEST_BUDGET_MS);
 
   it('serves the cached value while revalidating in the stale-but-not-expired window', async () => {
     setRunner('claude');
@@ -145,8 +159,12 @@ describe('health topic + cache (live-server path)', () => {
 
     expect(await runner()).toBe('claude'); // stale served immediately…
     clock.mockReturnValue(realNow + 10_001);
-    await vi.waitFor(async () => expect(await runner()).toBe('codex')); // …and the refresh lands behind it
-  });
+    // …and the refresh lands behind it — within a probe sweep, not within the 1 s default.
+    await vi.waitFor(async () => expect(await runner()).toBe('codex'), {
+      timeout: PROBE_BUDGET_MS,
+      interval: 50,
+    });
+  }, TEST_BUDGET_MS);
 
   it('publishes to subscribers only when the payload actually changed', async () => {
     setRunner('claude');
@@ -173,7 +191,7 @@ describe('health topic + cache (live-server path)', () => {
     } finally {
       stop();
     }
-  });
+  }, TEST_BUDGET_MS);
 
   it('stops publishing once the last subscriber leaves', async () => {
     setRunner('claude');
@@ -191,7 +209,7 @@ describe('health topic + cache (live-server path)', () => {
     vi.spyOn(Date, 'now').mockReturnValue(realNow + 2 * 60 * 60 * 1_000);
     await runner();
     expect(published).toHaveLength(0);
-  });
+  }, TEST_BUDGET_MS);
 
   it('the topic snapshot and GET /api/v1/health serve the same payload', async () => {
     setRunner('claude');
@@ -203,7 +221,7 @@ describe('health topic + cache (live-server path)', () => {
     if (!health) throw new Error('no health topic registered');
     const viaSocket = (await health.snapshot()) as { defaultRunner?: string };
     expect(viaSocket.defaultRunner).toBe(await runner());
-  });
+  }, TEST_BUDGET_MS);
 
   it('shares one compute between concurrent reads (in-flight dedupe)', async () => {
     setRunner('claude');
@@ -219,7 +237,7 @@ describe('health topic + cache (live-server path)', () => {
     // resolve from ONE snapshot rather than racing two sets of CLI spawns.
     const [a, b] = await Promise.all([health.snapshot(), health.snapshot()]);
     expect(a).toBe(b); // the very same object — one compute
-  });
+  }, TEST_BUDGET_MS);
 
   it('a hub-less app is unchanged: no cache, every request computes fresh', async () => {
     setRunner('claude');
@@ -228,5 +246,5 @@ describe('health topic + cache (live-server path)', () => {
     expect(await runner()).toBe('claude');
     setRunner('codex');
     expect(await runner()).toBe('codex'); // no cache in the way
-  });
+  }, TEST_BUDGET_MS);
 });
