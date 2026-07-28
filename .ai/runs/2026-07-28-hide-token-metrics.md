@@ -65,4 +65,4 @@ Add the strict opt-in `CEZ_HIDE_TOKEN_METRICS=1` presentation policy so embedded
 
 ### Phase 3: End-to-end verification
 
-- [ ] 3.1 Run the complete validation gate and browser smoke checks with metrics visible by default and hidden under `CEZ_HIDE_TOKEN_METRICS=1`.
+- [x] 3.1 Run the complete validation gate and browser smoke checks with metrics visible by default and hidden under `CEZ_HIDE_TOKEN_METRICS=1`. — af5759e9
