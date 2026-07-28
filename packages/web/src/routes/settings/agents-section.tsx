@@ -165,7 +165,11 @@ function AgentsForm({
 
       <Field
         title="Default models"
-        hint="The model preselected in the composer for each runner. Auto lets the runner decide per task."
+        hint={
+          config.modelsLocked
+            ? 'Models are locked to the defaults configured in the native coding-agent settings.'
+            : 'The model preselected in the composer for each runner. Auto lets the runner decide per task.'
+        }
       >
         <div className="flex max-w-md flex-col gap-2">
           {RUNNERS.map((runner) => {
@@ -193,7 +197,7 @@ function AgentsForm({
                   data-runner={runner.id}
                   value={config.defaultModels[runner.id] ?? ''}
                   title={providerReason ?? runner.desc}
-                  disabled={save.isPending || !providerConnected}
+                  disabled={save.isPending || !providerConnected || config.modelsLocked === true}
                   onChange={(event) =>
                     save.mutate({
                       defaultModels: { [runner.id]: event.target.value || null } as Partial<

@@ -190,6 +190,10 @@ describe('engineBody', () => {
     expect(engineBody(resolved({ model: 'opus' })).model).toBe('opus')
   })
 
+  it('omits a resolved native model when model selection is locked', () => {
+    expect(engineBody(resolved({ model: 'opus', modelsLocked: true })).model).toBeUndefined()
+  })
+
   it('omits the runner when it is already what the server would choose', () => {
     const body = engineBody(resolved({ runner: 'claude', defaultRunner: 'claude' }))
     expect(body.runner).toBeUndefined()

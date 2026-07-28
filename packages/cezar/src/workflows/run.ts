@@ -8,6 +8,7 @@ import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } 
 import { createRunner } from '../core/runner-factory.js';
 import type { RunnerId } from '../core/agent-runner.js';
 import { modelConflictsWithRunner } from '../core/model-presets.js';
+import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.js';
 import {
   ModelIdentityError,
   formatModelIdentity,
@@ -474,11 +475,15 @@ export class RunManager {
     input: StartRunInput,
     group?: { groupId: string; variant: string },
   ): RunRecord {
+    // Native coding-agent settings are authoritative when the operator opts
+    // into the lock. Sanitize at the manager boundary so CLI, workflows,
+    // variants and direct callers cannot bypass the HTTP policy.
+    const effectiveInput = agentModelsLocked() ? { ...input, model: undefined } : input;
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
-      model: input.model,
+      model: effectiveInput.model,
       runner: input.runner,
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
@@ -523,7 +528,7 @@ export class RunManager {
     // above shows instantly; the namer's short title replaces it when (and if)
     // the model answers. Never awaited, never fails the run.
     void this.autoNameRun(run.id, skillHint, input.task);
-    this.pendingJobs.set(run.id, { workflow, input });
+    this.pendingJobs.set(run.id, { workflow, input: effectiveInput });
     this.queue.push(run.id);
     void this.pump();
     return run;
@@ -1333,6 +1338,9 @@ export class RunManager {
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
+    if (agentModelsLocked() && opts.model?.trim()) {
+      return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
+    }
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
@@ -1621,7 +1629,10 @@ export class RunManager {
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
     try {
-      const normalized = normalizeModelForBackend(continueBackend, record?.model);
+      const normalized = normalizeModelForBackend(
+        continueBackend,
+        agentModelsLocked() ? undefined : record?.model,
+      );
       continueModel = normalized?.backendModel;
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
@@ -1743,7 +1754,7 @@ export class RunManager {
     // can still override below); the authoritative fail-loud gate is at spawn.
     let modelIdentity: string | undefined;
     try {
-      const normalized = normalizeModelForBackend(taskBackend, input.model);
+      const normalized = normalizeModelForBackend(taskBackend, agentModelsLocked() ? undefined : input.model);
       modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
     } catch {
       // An unresolvable task-level model surfaces loudly at the step below; the
@@ -2148,7 +2159,8 @@ export class RunManager {
     // instead of letting the backend silently substitute its default.
     let backendModel: string | undefined;
     try {
-      const normalized = normalizeModelForBackend(stepBackend, step.model ?? input.model);
+      const requestedModel = agentModelsLocked() ? undefined : step.model ?? input.model;
+      const normalized = normalizeModelForBackend(stepBackend, requestedModel);
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
       // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`

@@ -1013,6 +1013,8 @@ export interface ConfigResponse {
   defaultRunner: Runner
   systemPrompt: string | null
   defaultModels: RunnerModels
+  /** True when native coding-agent settings are authoritative and model picks are locked. */
+  modelsLocked?: boolean
   /** How many tasks run at once (1–16). */
   maxParallel: number
   /** Per-task memory ceiling in MiB (whole process tree); null = no limit. */

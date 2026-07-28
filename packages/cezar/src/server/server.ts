@@ -13,6 +13,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import { detectEnvironment } from '../core/backend-detect.js';
 import type { ContentBlock } from '../core/agent-runner.js';
+import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.js';
 import { discoverCodexModels } from '../core/codex-model-catalog.js';
 import {
   PROVIDER_IDS,
@@ -60,6 +61,7 @@ import {
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.js';
 import { findConfigFile } from '../agent-config/catalog.js';
 import { readConfigFile, writeConfigFile } from '../agent-config/files.js';
+import { readAgentModelDefaults } from '../agent-config/models.js';
 import { listAgentConfig } from '../agent-config/service.js';
 import {
   PROJECT_ID_RE,
@@ -2254,6 +2256,9 @@ export function createApp(deps: ServerDeps) {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    if (agentModelsLocked() && parsed.data?.model?.trim()) {
+      return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+    }
     let workflow: WorkflowDef | undefined;
     if (parsed.data.steps) {
       // Inline chain (spec 008): an approved plan runs as an ad-hoc workflow.
@@ -2618,6 +2623,9 @@ export function createApp(deps: ServerDeps) {
     const parsed = continueSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
+    }
+    if (agentModelsLocked() && parsed.data?.model?.trim()) {
+      return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
     }
     const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
     if (blocked) return c.json({ error: blocked }, 409);
@@ -3101,6 +3109,9 @@ export function createApp(deps: ServerDeps) {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
+    if (agentModelsLocked() && parsed.data?.model?.trim()) {
+      return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+    }
     if (todo.startedTaskId) return c.json({ error: 'already started' }, 409);
 
     let task = todoTaskText(todo);
@@ -3505,24 +3516,35 @@ export function createApp(deps: ServerDeps) {
 
   // The Settings → Agents knobs in one read (R6 Step 1.5) — an ADDITIVE
   // sibling of PUT /api/config below; /api/health keeps its protected shape.
-  const configAnswer = (config: CezConfig) => ({
-    baseBranch: config.baseBranch ?? null,
-    defaultRunner: config.defaultRunner,
-    systemPrompt: config.systemPrompt ?? null,
-    defaultModels: config.defaultModels ?? {},
-    maxParallel: config.maxParallel,
-    memoryLimitMb: config.memoryLimitMb ?? null,
-    // Count-based worktree retention (#483): keep the last N finished worktrees
-    // on disk. 0 = unlimited. Always materialized (schema default 10).
-    worktreeRetention: config.worktreeRetention,
-    // Live title updates (task auto-naming spec): tri-state — null means "no
-    // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
-    liveTitleUpdates: config.liveTitleUpdates ?? null,
-    // Optional review gate (#489): tri-state — null means "no config key, the
-    // CEZ_REVIEW_GATE env default (OFF) decides".
-    reviewGate: config.reviewGate ?? null,
+  const configAnswer = async (repoRoot: string, config: CezConfig) => {
+    const nativeModels = await readAgentModelDefaults(repoRoot);
+    return {
+      baseBranch: config.baseBranch ?? null,
+      defaultRunner: config.defaultRunner,
+      systemPrompt: config.systemPrompt ?? null,
+      // Native settings are the initial/default source. In locked mode they are
+      // authoritative; otherwise a Cezar preset remains an explicit override.
+      defaultModels: agentModelsLocked()
+        ? nativeModels
+        : { ...nativeModels, ...(config.defaultModels ?? {}) },
+      modelsLocked: agentModelsLocked(),
+      maxParallel: config.maxParallel,
+      memoryLimitMb: config.memoryLimitMb ?? null,
+      // Count-based worktree retention (#483): keep the last N finished worktrees
+      // on disk. 0 = unlimited. Always materialized (schema default 10).
+      worktreeRetention: config.worktreeRetention,
+      // Live title updates (task auto-naming spec): tri-state — null means "no
+      // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
+      liveTitleUpdates: config.liveTitleUpdates ?? null,
+      // Optional review gate (#489): tri-state — null means "no config key, the
+      // CEZ_REVIEW_GATE env default (OFF) decides".
+      reviewGate: config.reviewGate ?? null,
+    };
+  };
+  api.get('/config', async (c) => {
+    const repoRoot = c.get('project').root;
+    return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
   });
-  api.get('/config', async (c) => c.json(configAnswer(await loadConfig(c.get('project').root))));
 
   // Set/clear the agents' config knobs (Settings → Agents; the Repo tab's
   // base-branch picker). Merges into the RAW config.json so user keys
@@ -3561,6 +3583,9 @@ export function createApp(deps: ServerDeps) {
     const parsed = setConfigSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
+    }
+    if (agentModelsLocked() && parsed.data.defaultModels !== undefined) {
+      return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
     }
     const configPath = join(dataDir, 'config.json');
     let raw: Record<string, unknown> = {};
@@ -3627,7 +3652,7 @@ export function createApp(deps: ServerDeps) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
     // Pre-R6 answer shape ({baseBranch, defaultRunner}) + additive R6 fields.
-    return c.json(configAnswer(await loadConfig(repoRoot)));
+    return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
   });
 
   const setAgentConfigSchema = z.object({

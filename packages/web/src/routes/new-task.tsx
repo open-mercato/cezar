@@ -593,7 +593,12 @@ export function NewTaskRoute() {
                 ariaLabel="Model"
                 label={models.find((m) => m.id === model)?.label ?? 'auto'}
                 value={model}
-                disabled={!providersReady}
+                disabled={!providersReady || config.data?.modelsLocked === true}
+                disabledHint={
+                  config.data?.modelsLocked
+                    ? 'Model selection is locked to native coding-agent settings.'
+                    : undefined
+                }
                 onPick={(next) => update({ model: next })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
                 status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}

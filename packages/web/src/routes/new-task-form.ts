@@ -95,13 +95,17 @@ export function modelsForRunner(
   customIds: readonly (string | null | undefined)[] = [],
 ): readonly ModelPreset[] {
   const base = [...(MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude)]
-  if (runner !== 'codex') return base
   const seen = new Set(base.map((model) => model.id))
-  for (const model of catalog?.models ?? []) {
-    if (!model.id || seen.has(model.id)) continue
-    seen.add(model.id)
-    base.push({ id: model.id, label: model.label || model.id, desc: model.description })
+  if (runner === 'codex') {
+    for (const model of catalog?.models ?? []) {
+      if (!model.id || seen.has(model.id)) continue
+      seen.add(model.id)
+      base.push({ id: model.id, label: model.label || model.id, desc: model.description })
+    }
   }
+  // Native settings may contain a provider-specific/custom id that is not in
+  // cezar's static catalog. Keep it representable so the initial selection
+  // matches the agent's own configured default on every backend.
   for (const id of customIds) {
     if (!id || seen.has(id) || modelConflictsWithRunner(id, runner)) continue
     seen.add(id)
