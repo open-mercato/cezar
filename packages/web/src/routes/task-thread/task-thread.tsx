@@ -241,7 +241,10 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   )
   const sendMessage = useSendMessage(run.id)
   const activeProvider = useActiveProviderAvailability(run)
-  const activeProviderBlocked = (sessionOpen || queued) && !activeProvider.usable
+  // A queued send only amends the persisted prompt; it invokes no provider and therefore
+  // remains available even when provider discovery cannot authorize a live session. Once the
+  // session is open, mirror the server's active-backend gate as before.
+  const activeProviderBlocked = sessionOpen && !activeProvider.usable
   const continuationProviderBlocked = hasContinuation && !continueAction.canContinue
   const providerBlocked = activeProviderBlocked || continuationProviderBlocked
   const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason

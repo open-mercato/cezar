@@ -175,11 +175,14 @@ describe('ThreadView', () => {
   })
 
   it.each([
-    ['disabled', { provider: 'claude', status: 'connected', enabled: false }, 'Claude Code is disabled. Enable it in Settings → Agents → Providers.'],
-    ['disconnected', { provider: 'claude', status: 'disconnected', enabled: true }, 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.'],
-  ] as const)('disables a queued composer when its active provider is %s', async (_case, claude, reason) => {
+    ['disabled', { provider: 'claude', status: 'connected', enabled: false }],
+    ['disconnected', { provider: 'claude', status: 'disconnected', enabled: true }],
+  ] as const)('keeps a queued Codex prompt authorable when fallback Claude is %s', async (_case, claude) => {
     renderView(
-      <ThreadView run={run('queued', { runner: 'claude' })} thread={reduceThread([])} />,
+      // Before the run starts, an omitted runner means the server will use its configured
+      // default (Codex in the reported case). The active-provider helper used to guess Claude
+      // here and block a mutation that invokes no provider at all.
+      <ThreadView run={run('queued', { runner: undefined })} thread={reduceThread([])} />,
       {
         providers: [
           claude,
@@ -190,11 +193,9 @@ describe('ThreadView', () => {
     )
 
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
-    await waitFor(() => expect(textarea.disabled).toBe(true))
-    expect(textarea.placeholder).toBe(reason)
-    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
-    )
+    await waitFor(() => expect(textarea.disabled).toBe(false))
+    expect(textarea.placeholder).toBe('Add to the prompt — sent when the run starts…')
+    expect(screen.queryByRole('link', { name: 'Configure providers' })).toBeNull()
   })
 
   it('keeps a waiting composer enabled when a retrying current step uses a usable provider', async () => {
