@@ -61,7 +61,7 @@ Add the strict opt-in `CEZ_HIDE_TOKEN_METRICS=1` presentation policy so embedded
 
 - [x] 2.1 Add the shared visibility resolver and gate the quick list and task-thread header with focused tests. — b911d2cd
 - [x] 2.2 Gate both tasks-overview layouts, including structural headers/cells and queue-row spans, with focused tests. — 76db7cc3
-- [ ] 2.3 Gate variant comparison and add enabled/disabled coverage.
+- [x] 2.3 Gate variant comparison and add enabled/disabled coverage. — af5759e9
 
 ### Phase 3: End-to-end verification
 
