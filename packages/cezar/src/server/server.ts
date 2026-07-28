@@ -5,15 +5,11 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context } from 'hono';
-// Type-only: erased at build, so the published CLI gains no runtime dependency on the
-// api-client. Naming the response here is what lets the route INFER it — the typed client
-// reads the handler, so a loose `Record<string, unknown>` would hand every consumer a shape
-// weaker than the DTO it is meant to retire.
-import type { HealthResponse } from '@open-mercato/cezar-api-client';
 import type { Next } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
+import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import { detectEnvironment } from '../core/backend-detect.js';
@@ -399,7 +395,7 @@ const startRunSchema = z
     // other prompt fields (`systemPrompt` 20k, message `text` 100k) so an
     // unbounded body can't be piped into a spawned process (#429). 100k chars
     // (~25k tokens) is well past any hand-written task.
-    task: z.string().min(1).max(100_000, 'task must be at most 100000 characters'),
+    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
     runner: z.enum(['claude', 'codex', 'opencode']).optional(),
@@ -424,7 +420,7 @@ const startRunSchema = z
     systemPrompt: z
       .string()
       .trim()
-      .max(20_000, 'systemPrompt must be at most 20000 characters')
+      .max(20_000, 'must be at most 20000 characters')
       .optional()
       .transform((s) => (s ? s : undefined)),
     // Screenshots pasted into the new-task form — same shape and limits as a
@@ -444,7 +440,7 @@ const startRunSchema = z
     // started — the same bookkeeping POST /api/todos/:id/start does, so the
     // audit trail survives the composer detour. Bounded like every other
     // string here; a todo id is a short generated key.
-    todoId: z.string().min(1).max(200, 'todoId must be at most 200 characters').optional(),
+    todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -456,7 +452,7 @@ const pickSchema = z.object({
 
 const planSchema = z.object({
   // Same bound as `startRunSchema.task` — this flows into `planChain` (#429).
-  task: z.string().trim().min(1).max(100_000, 'task must be at most 100000 characters'),
+  task: z.string().trim().min(1).max(100_000, 'must be at most 100000 characters'),
 });
 
 // A saved workflow carries full `steps` OR the builder's `skills` stack
@@ -467,7 +463,7 @@ const saveWorkflowSchema = z
     name: z.string().trim().min(1).max(80),
     // Written into a YAML file on disk (#429) — a workflow description is a
     // short blurb, so a 2k cap is generous without allowing a file-bloat write.
-    description: z.string().max(2_000, 'description must be at most 2000 characters').optional(),
+    description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
     steps: z.array(workflowStepSchema).min(1).max(8).optional(),
     skills: z.array(z.string().trim().min(1)).min(1).max(8).optional(),
     overwrite: z.boolean().optional(),
@@ -636,7 +632,7 @@ const patchRunSchema = z.object({
 
 // Session commit (redesign R5 — §"Git/session API additions").
 const gitCommitSchema = z.object({
-  message: z.string().trim().min(1, 'commit message must not be empty').max(5_000),
+  message: z.string().trim().min(1, 'must not be empty').max(5_000),
 });
 
 // "Open in…" (#open-in / #365): `target` selects the app; `path` (optional, worktree-relative)
@@ -700,7 +696,7 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 // follow-up composer is a full composer, so a screenshot pasted into it must reach the reopened
 // session rather than being silently dropped.
 const continueSchema = z.object({
-  text: z.string().max(100_000, 'text must be at most 100000 characters').optional(),
+  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: z.array(imageInputSchema).max(4).optional(),
   runner: z.enum(['claude', 'codex', 'opencode']).optional(),
   model: z.string().max(200).optional(),
@@ -720,7 +716,7 @@ const startTodoSchema = z
     prompt: z
       .string()
       .trim()
-      .max(20_000, 'prompt must be at most 20000 characters')
+      .max(20_000, 'must be at most 20000 characters')
       .optional()
       .transform((s) => (s ? s : undefined)),
   })
@@ -749,20 +745,51 @@ function stripHostPort(host: string): string {
   return host.replace(/:\d+$/, '');
 }
 
-/** The shared write-side half of BOTH ui-state routes (per-repo `/api/ui-state`
- *  and workspace `/api/workspace/ui-state`) — the factored split the
- *  multi-project spec calls for instead of a copy: parse with the route's own
- *  schema, then cap the top-level key count so a `.passthrough()` schema can't
- *  accumulate an unbounded key set (#429). The merge-on-write stays with each
- *  route (they write different files) but is shallow in both. */
-function parseUiStateBody<S extends z.ZodTypeAny>(schema: S, body: unknown): { data: z.infer<S> } | { error: string } {
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) return { error: parsed.error.issues.map((i) => i.message).join('; ') };
-  if (Object.keys(parsed.data as Record<string, unknown>).length > UI_STATE_MAX_KEYS) {
-    return { error: `ui-state has too many keys (max ${UI_STATE_MAX_KEYS})` };
+/** The shared write-side half of BOTH ui-state routes (per-repo `/api/v1/ui-state`
+ *  and workspace `/api/v1/workspace/ui-state`) — the factored split the
+ *  multi-project spec calls for instead of a copy: the route's own schema, plus a
+ *  cap on the top-level key count so a `.passthrough()` schema can't accumulate an
+ *  unbounded key set (#429). The cap rides as a refinement so the whole thing is one
+ *  schema and can go through `jsonBody` like every other mutating route. The
+ *  merge-on-write stays with each route (they write different files) but is shallow
+ *  in both. */
+function capUiStateKeys(data: unknown, ctx: z.RefinementCtx): void {
+  if (Object.keys(data as Record<string, unknown>).length > UI_STATE_MAX_KEYS) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `ui-state has too many keys (max ${UI_STATE_MAX_KEYS})` });
   }
-  return { data: parsed.data as z.infer<S> };
 }
+
+// Derived once per route instead of by a generic `wrap(schema)` helper called at the route: a
+// generic wrapper leaves the schema type unresolved where `jsonBody` needs it, and Hono answers
+// that by dropping the whole PUT from the route schema rather than erroring — both ui-state PUTs
+// silently vanished from `AppType`. Concrete consts keep them visible to `hc`.
+const workspaceUiStateBody = workspaceUiStateSchema.superRefine(capUiStateKeys);
+const uiStateBody = uiStateSchema.superRefine(capUiStateKeys);
+
+/**
+ * Query schemas for the READ routes — deliberately permissive.
+ *
+ * These exist to make a query key VISIBLE to the route type (`hc` refuses a `query` argument for
+ * a key no validator declares), NOT to narrow what the route accepts. Every one of these handlers
+ * compares `=== '1'` and treats everything else as false, so `?refresh=0` is a successful request
+ * today; a literal schema would silently turn it into a 400. The comparison stays in the handler
+ * and the validator stays out of its way.
+ *
+ * The one route that really is strict on the wire — `GET /github/prs/:number/changes`, which 400s
+ * on `?refresh=true` — keeps its own `z.enum(['1'])` schema next to the route.
+ */
+/**
+ * One query value, matching what `c.req.query('k')` did before these routes were validated.
+ *
+ * Hono's query validator hands a REPEATED key as an array (`?wait=1&wait=1` → `['1','1']`), where
+ * `c.req.query()` silently took the first. A plain `z.string()` therefore turns a request that
+ * used to answer 200 into a 400 — a wire change no caller asked for. Collapsing to the first
+ * value keeps the old behaviour, and the client still sees a plain `key?: string`.
+ */
+const queryValue = z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).optional();
+
+const refreshQuery = z.object({ refresh: queryValue });
+const waitQuery = z.object({ wait: queryValue });
 
 /** Workspace-root writability probe (multi-project spec, "API Contracts"):
  *  optional `mkdir -p`, `access W_OK`, then a real create/delete round-trip — W_OK alone
@@ -1147,7 +1174,12 @@ export function createApp(deps: ServerDeps) {
   // One builder for both transports: `GET /api/health` (the authoritative,
   // CORS-open discovery endpoint) and the `health` topic on `/api/v1/ws` below
   // push the byte-identical shape, so the two can never drift.
-  const healthSnapshot = async (): Promise<HealthResponse> => {
+  // Deliberately UNANNOTATED: this literal is the source of the `/health` shape. Annotating it
+  // with the api-client's `HealthResponse` made the contract circular — the DTO was declared by
+  // hand, the handler was checked against it, and `AppType` then reported the hand-written type
+  // back as if the server had proven it. Inferring here means the route says what it actually
+  // sends, which is what lets the DTO be derived instead of maintained.
+  const healthSnapshot = async () => {
     const [checks, repo, config, workspace] = await Promise.all([
       detectEnvironment(),
       getRepoInfo(bootRoot),
@@ -1210,13 +1242,15 @@ export function createApp(deps: ServerDeps) {
   // literally #369, so past this age correctness beats the latency win and the
   // read waits for the compute. `refreshHealth` dedupes, so waiting costs one.
   const HEALTH_MAX_STALE_MS = 60_000;
-  let healthCache: { at: number; payload: HealthResponse; body: string } | undefined;
-  let healthInFlight: Promise<HealthResponse> | undefined;
+  /** Whatever `healthSnapshot` actually returns — see the note there. */
+  type HealthPayload = Awaited<ReturnType<typeof healthSnapshot>>;
+  let healthCache: { at: number; payload: HealthPayload; body: string } | undefined;
+  let healthInFlight: Promise<HealthPayload> | undefined;
   // Set while the topic has a subscriber; a change a refresh detects is pushed
   // here (a noop when nobody is listening).
   let publishHealth: (data: unknown) => void = () => {};
 
-  const refreshHealth = (): Promise<HealthResponse> => {
+  const refreshHealth = (): Promise<HealthPayload> => {
     // Dedupe: a GET's background revalidation and the topic's interval tick
     // share ONE compute (and one set of CLI spawns) rather than racing two.
     if (healthInFlight) return healthInFlight;
@@ -1239,7 +1273,7 @@ export function createApp(deps: ServerDeps) {
   // injected) it answers from cache instantly and revalidates behind the
   // response; without a hub — a bare app in tests — there is no refresher
   // keeping a cache coherent, so it computes fresh, exactly as before.
-  const readHealth = async (): Promise<HealthResponse> => {
+  const readHealth = async (): Promise<HealthPayload> => {
     if (!deps.socketHub) return healthSnapshot();
     if (!healthCache) return refreshHealth(); // first ever: nothing to serve yet
     const age = Date.now() - healthCache.at;
@@ -1292,64 +1326,69 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
-    .get('/models', async (c) => {
-      const query = z.object({ runner: z.literal('codex') }).safeParse(c.req.query());
-      if (!query.success) return c.json({ error: 'runner must be codex' }, 400);
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(z.literal('codex')) }), { message: 'runner must be codex' }), async (c) => {
+      const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
 
   // ---- chained family: agent providers (workspace-level) ----
   const providersRoutes = new Hono<ProjectApiEnv>()
-    .get('/providers/status', async (c) => {
-      const query = z.object({ refresh: z.literal('1').optional() }).safeParse(c.req.query());
-      if (!query.success) return c.json({ error: 'refresh must be 1 when provided' }, 400);
-      return c.json(await providerStatus({ refresh: query.data.refresh === '1' }));
-    })
+    .get(
+      '/providers/status',
+      queryZodValidator(z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') }), { message: 'refresh must be 1 when provided' }),
+      async (c) => {
+        const query = { data: c.req.valid('query') };
+        return c.json(await providerStatus({ refresh: query.data.refresh === '1' }));
+      },
+    )
 
-    .put('/providers/:provider/enabled', async (c) => {
-      const provider = providerParamSchema.safeParse(c.req.param('provider'));
-      const body = providerEnabledSchema.safeParse(await c.req.json().catch(() => null));
-      if (!provider.success || !body.success) {
-        return c.json({ error: 'provider and enabled boolean are required' }, 400);
-      }
-      let workspace: WorkspaceConfig;
-      try {
-        workspace = await workspaceConfig.mergeWrite((config) => {
-          const disabled = new Set(config.disabledProviders);
-          if (body.data.enabled) disabled.delete(provider.data);
-          else disabled.add(provider.data);
-          config.disabledProviders = PROVIDER_IDS.filter((id) => disabled.has(id));
-        });
-      } catch {
-        return c.json({ error: 'Provider preference could not be saved.' }, 500);
-      }
-      const result = applyProviderEnablement(
-        await providerAuth.status(),
-        workspace.disabledProviders,
-      );
-      const row = result.providers.find(({ provider: id }) => id === provider.data);
-      if (row) workspaceEvents.emit('provider-status', row);
-      return c.json(result);
-    })
+    .put(
+      '/providers/:provider/enabled',
+      paramZodValidator(z.object({ provider: providerParamSchema }), { message: 'provider and enabled boolean are required' }),
+      jsonZodValidator(providerEnabledSchema, { message: 'provider and enabled boolean are required' }),
+      async (c) => {
+        const provider = { data: c.req.valid('param').provider };
+        const body = { data: c.req.valid('json') };
+        let workspace: WorkspaceConfig;
+        try {
+          workspace = await workspaceConfig.mergeWrite((config) => {
+            const disabled = new Set(config.disabledProviders);
+            if (body.data.enabled) disabled.delete(provider.data);
+            else disabled.add(provider.data);
+            config.disabledProviders = PROVIDER_IDS.filter((id) => disabled.has(id));
+          });
+        } catch {
+          return c.json({ error: 'Provider preference could not be saved.' }, 500);
+        }
+        const result = applyProviderEnablement(
+          await providerAuth.status(),
+          workspace.disabledProviders,
+        );
+        const row = result.providers.find(({ provider: id }) => id === provider.data);
+        if (row) workspaceEvents.emit('provider-status', row);
+        return c.json(result);
+      },
+    )
 
-    .post('/providers/:provider/retry', async (c) => {
-      const provider = providerParamSchema.safeParse(c.req.param('provider'));
-      const body = providerRetrySchema.safeParse(await c.req.json().catch(() => null));
-      if (!provider.success || !body.success) {
-        return c.json({ error: 'provider and current authFailureId are required' }, 400);
-      }
-      if (!providerAuth.clearRuntimeAuthFailure(provider.data, body.data.authFailureId)) {
-        return c.json({ error: 'Authentication incident changed. Refresh and try again.' }, 409);
-      }
-      const result = await providerStatus({ refresh: true });
-      const row = result.providers.find(({ provider: id }) => id === provider.data);
-      if (row) workspaceEvents.emit('provider-status', row);
-      return c.json(result);
-    })
+    .post(
+      '/providers/:provider/retry',
+      paramZodValidator(z.object({ provider: providerParamSchema }), { message: 'provider and current authFailureId are required' }),
+      jsonZodValidator(providerRetrySchema, { message: 'provider and current authFailureId are required' }),
+      async (c) => {
+        const provider = { data: c.req.valid('param').provider };
+        const body = { data: c.req.valid('json') };
+        if (!providerAuth.clearRuntimeAuthFailure(provider.data, body.data.authFailureId)) {
+          return c.json({ error: 'Authentication incident changed. Refresh and try again.' }, 409);
+        }
+        const result = await providerStatus({ refresh: true });
+        const row = result.providers.find(({ provider: id }) => id === provider.data);
+        if (row) workspaceEvents.emit('provider-status', row);
+        return c.json(result);
+      },
+    )
 
-    .post('/providers/connect', async (c) => {
-      const body = providerConnectSchema.safeParse(await c.req.json().catch(() => null));
-      if (!body.success) return c.json({ error: 'provider must be claude, codex, or opencode' }, 400);
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, or opencode' }), async (c) => {
+      const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
       const command = providerAuth.loginCommand(provider);
@@ -1431,9 +1470,8 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     })
 
-    .post('/projects', async (c) => {
-      const parsed = registerProjectSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) return c.json({ error: 'root must be a non-empty path' }, 400);
+    .post('/projects', jsonZodValidator(() => registerProjectSchema, { message: 'root must be a non-empty path' }), async (c) => {
+      const parsed = { data: c.req.valid('json') };
       const { status, body } = await registerFolder(parsed.data.root, 'local');
       return c.json(body, status);
     })
@@ -1504,7 +1542,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     })
 
-    .patch('/projects/:projectId', async (c) => {
+    .patch('/projects/:projectId', jsonZodValidator(() => updateProjectSchema), async (c) => {
       if (capabilities().singleProject) {
         return c.json(singleProjectRefusal('editing projects'), 409);
       }
@@ -1513,10 +1551,7 @@ export function createApp(deps: ServerDeps) {
       if (!projectIdSchema.safeParse(raw).success) {
         return c.json({ error: `unknown project: ${raw}` }, 404);
       }
-      const parsed = updateProjectSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       // `default` is the boot alias the cockpit is allowed to use everywhere else.
       const id = raw === 'default' ? await resolveBootProject() : raw;
       const { maxParallel } = parsed.data;
@@ -1562,12 +1597,11 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     })
 
-    .post('/projects/checkout', async (c) => {
+    .post('/projects/checkout', jsonZodValidator(() => checkoutSchema, { message: 'url must be a GitHub repository' }), async (c) => {
       if (capabilities().singleProject) {
         return c.json(singleProjectRefusal('adding projects'), 409);
       }
-      const parsed = checkoutSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) return c.json({ error: 'url must be a GitHub repository' }, 400);
+      const parsed = { data: c.req.valid('json') };
       const { url, name, checkoutId } = parsed.data;
       const result = await checkoutRepo({
         url,
@@ -1784,9 +1818,8 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: skills updates (workspace-level) ----
   const skillsUpdateRoutes = new Hono<ProjectApiEnv>()
-    .get('/workspace/skills-update', async (c) => {
-      const parsed = skillsUpdateInputSchema.safeParse({ projectId: c.req.query('projectId') });
-      if (!parsed.success) return c.json({ error: 'projectId is required' }, 400);
+    .get('/workspace/skills-update', queryZodValidator(skillsUpdateInputSchema, { message: 'projectId is required' }), async (c) => {
+      const parsed = { data: c.req.valid('query') };
       const resolved = await resolveSkillsUpdateRoot(parsed.data.projectId);
       if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status);
       const state: SkillsUpdateState = skillsUpdate.snapshot(resolved.root);
@@ -1794,17 +1827,15 @@ export function createApp(deps: ServerDeps) {
       return c.json(await skillsUpdateResponse(state));
     })
 
-    .post('/workspace/skills-update/check', async (c) => {
-      const parsed = skillsUpdateInputSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) return c.json({ error: 'body must contain only projectId' }, 400);
+    .post('/workspace/skills-update/check', jsonZodValidator(skillsUpdateInputSchema, { message: 'body must contain only projectId' }), async (c) => {
+      const parsed = { data: c.req.valid('json') };
       const resolved = await resolveSkillsUpdateRoot(parsed.data.projectId);
       if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status);
       return c.json(await skillsUpdateResponse(await skillsUpdate.check(resolved.root, true)));
     })
 
-    .post('/workspace/skills-update/apply', async (c) => {
-      const parsed = skillsUpdateInputSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) return c.json({ error: 'body must contain only projectId' }, 400);
+    .post('/workspace/skills-update/apply', jsonZodValidator(skillsUpdateInputSchema, { message: 'body must contain only projectId' }), async (c) => {
+      const parsed = { data: c.req.valid('json') };
       const resolved = await resolveSkillsUpdateRoot(parsed.data.projectId);
       if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status);
       try {
@@ -1882,11 +1913,8 @@ export function createApp(deps: ServerDeps) {
   const workspaceConfigRoutes = new Hono<ProjectApiEnv>()
     .get('/workspace/config', async (c) => c.json(workspaceConfigBody(await loadWorkspaceConfig())))
 
-    .put('/workspace/config', async (c) => {
-      const parsed = workspaceConfigUpdateSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+    .put('/workspace/config', jsonZodValidator(() => workspaceConfigUpdateSchema), async (c) => {
+      const parsed = { data: c.req.valid('json') };
       const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources } = parsed.data;
       for (const [configuredRoot, create] of [
         [browseRoot, false],
@@ -1954,13 +1982,19 @@ export function createApp(deps: ServerDeps) {
     })
 
     // Global GUI state (`~/.cezar/ui-state.json`) — same parse/key-cap/shallow-
-    // merge semantics as the per-repo /api/ui-state route below (the shared half
-    // is `parseUiStateBody`), but backed by the workspace file.
+    // merge semantics as the per-repo /api/v1/ui-state route below (the shared half
+    // is `uiStateBodySchema`), but backed by the workspace file.
     .get('/workspace/ui-state', async (c) => c.json(await readWorkspaceUiState()))
 
-    .put('/workspace/ui-state', bodyLimit({ maxSize: UI_STATE_BODY_LIMIT }), async (c) => {
-      const parsed = parseUiStateBody(workspaceUiStateSchema, await c.req.json().catch(() => null));
-      if ('error' in parsed) return c.json({ error: parsed.error }, 400);
+    // The tighter body cap rides on `use` rather than inline on the route: `bodyLimit` is typed
+    // as a bare MiddlewareHandler, and passing one to `.put()` collapses the route's schema, so
+    // the PUT went missing from `AppType` and `hc` could not see its body at all. `use` runs at
+    // the same point (before the handler, so the cap still precedes any read) and leaves the
+    // chain's type accumulation alone. Method-agnostic here, which the GET does not mind.
+    .use('/workspace/ui-state', bodyLimit({ maxSize: UI_STATE_BODY_LIMIT }))
+
+    .put('/workspace/ui-state', jsonZodValidator(workspaceUiStateBody), async (c) => {
+      const parsed = { data: c.req.valid('json') };
       try {
         return c.json(
           await mergeWriteWorkspaceUiState((state) => ({
@@ -1999,19 +2033,24 @@ export function createApp(deps: ServerDeps) {
   });
   // ---- chained family: filesystem browse (workspace-level) ----
   const fsBrowseRoutes = new Hono<ProjectApiEnv>()
-    .get('/fs/browse', async (c) => {
-      if (capabilities().singleProject) {
-        return c.json(singleProjectRefusal('folder browsing'), 409);
-      }
-      const root = resolveBrowseRoot(await workspaceBrowseRoot());
-      const result = await browseDirectory({
-        root,
-        path: c.req.query('path'),
-        showHidden: c.req.query('showHidden') === '1',
-      });
-      if (!result.ok) return c.json({ error: result.error }, result.status);
-      return c.json(result.body);
-    });
+    .get(
+      '/fs/browse',
+      queryZodValidator(z.object({ path: queryValue, showHidden: queryValue })),
+      async (c) => {
+        if (capabilities().singleProject) {
+          return c.json(singleProjectRefusal('folder browsing'), 409);
+        }
+        const query = c.req.valid('query');
+        const root = resolveBrowseRoot(await workspaceBrowseRoot());
+        const result = await browseDirectory({
+          root,
+          path: query.path,
+          showHidden: query.showHidden === '1',
+        });
+        if (!result.ok) return c.json({ error: result.error }, result.status);
+        return c.json(result.body);
+      },
+    );
 
   // ---- chained family: launch-key (project-scoped) ----
   const launchKeyRoutes = new Hono<ProjectApiEnv>()
@@ -2019,12 +2058,12 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: skills (project-scoped) ----
   const skillsRoutes = new Hono<ProjectApiEnv>()
-    .get('/skills', async (c) => {
+    .get('/skills', queryZodValidator(waitQuery), async (c) => {
       const repoRoot = c.get('project').root;
       // The default read stays fast and starts the team load in the background.
       // The cockpit follows it with `wait=1`, off the render path, so a cold
       // cache converges without polling or a manual reload (spec 005 / #555).
-      if (c.req.query('wait') === '1') await waitForTeamSkills(repoRoot);
+      if (c.req.valid('query').wait === '1') await waitForTeamSkills(repoRoot);
       return c.json(await discoverSkills(repoRoot));
     })
 
@@ -2033,11 +2072,11 @@ export function createApp(deps: ServerDeps) {
     // so the panel can present them all with a per-skill toggle. Empty once a repo
     // configures its own `skillsRepos` (nothing is gated then). `wait=1` lets the
     // panel wait out a cold team-skill cache, same as `GET /skills` (spec 005).
-    .get('/skills/importable', async (c) => {
+    .get('/skills/importable', queryZodValidator(waitQuery), async (c) => {
       const repoRoot = c.get('project').root;
       const gated = await gatedSkillsRepos(repoRoot);
       if (gated.size === 0) return c.json([]);
-      if (c.req.query('wait') === '1') await waitForTeamSkills(repoRoot);
+      if (c.req.valid('query').wait === '1') await waitForTeamSkills(repoRoot);
       const importable = getTeamSkillsCached(repoRoot)
         .filter((skill) => skill.team && gated.has(skill.team.repo))
         .map((skill) => ({ name: skill.name, description: skill.description }));
@@ -2057,13 +2096,15 @@ export function createApp(deps: ServerDeps) {
   const uiStateRoutes = new Hono<ProjectApiEnv>()
     .get('/ui-state', async (c) => c.json(await readUiState(c.get('project').root)))
 
-    .put('/ui-state', bodyLimit({ maxSize: UI_STATE_BODY_LIMIT }), async (c) => {
+    // On `use`, not inline on the route — see the workspace ui-state PUT above.
+    .use('/ui-state', bodyLimit({ maxSize: UI_STATE_BODY_LIMIT }))
+
+    .put('/ui-state', jsonZodValidator(uiStateBody), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       // `.passthrough()` keeps unknown prefs (BACKWARD_COMPATIBILITY §3), but a
       // single request may not stuff an unbounded key set (#429) — the shared
-      // parse+cap half of both ui-state routes lives in parseUiStateBody.
-      const parsed = parseUiStateBody(uiStateSchema, await c.req.json().catch(() => null));
-      if ('error' in parsed) return c.json({ error: parsed.error }, 400);
+      // schema+cap half of both ui-state routes lives in `uiStateBody`.
+      const parsed = { data: c.req.valid('json') };
       const merged = { ...(await readUiState(repoRoot)), ...parsed.data };
       try {
         await mkdir(dataDir, { recursive: true });
@@ -2084,12 +2125,9 @@ export function createApp(deps: ServerDeps) {
     // Save an approved plan as a reusable chain (spec 008): YAML in
     // `.ai/cezar/workflows/<slug>.yaml` — from then on it's in the dropdown
     // like any other workflow.
-    .post('/workflows', async (c) => {
+    .post('/workflows', jsonZodValidator(saveWorkflowSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
-      const parsed = saveWorkflowSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const steps = parsed.data.steps ?? skillsToSteps(parsed.data.skills ?? []);
       const issue = stepsIssue(steps);
       if (issue) return c.json({ error: issue }, 400);
@@ -2148,11 +2186,8 @@ export function createApp(deps: ServerDeps) {
     // Import support for the builder (spec 012): parse + validate a pasted
     // workflow YAML (either form) and hand back the normalized definition. The
     // server owns YAML parsing — the GUI stays dependency-free.
-    .post('/workflows/parse', async (c) => {
-      const parsed = parseWorkflowSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+    .post('/workflows/parse', jsonZodValidator(parseWorkflowSchema), async (c) => {
+      const parsed = { data: c.req.valid('json') };
       let raw: unknown;
       try {
         raw = parseYaml(parsed.data.yaml);
@@ -2172,12 +2207,9 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: plan (project-scoped) ----
   const planRoutes = new Hono<ProjectApiEnv>()
-    .post('/plan', async (c) => {
+    .post('/plan', jsonZodValidator(planSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
-      const parsed = planSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
       if (blocked) return c.json({ error: blocked }, 409);
       return c.json(await planChain(repoRoot, parsed.data.task));
@@ -2221,25 +2253,19 @@ export function createApp(deps: ServerDeps) {
     // matches as a run id.
     .post('/runs/archive-finished', (c) => c.json({ archived: c.get('project').store.archiveFinished() }))
 
-    .post('/runs/:id/archive', async (c) => {
+    .post('/runs/:id/archive', jsonZodValidator(archiveSchema, { absent: ({}) }), async (c) => {
       const { store } = c.get('project');
       const id = c.req.param('id');
       // An empty/absent body archives (the common case); a malformed body degrades
       // to `{}` just as before, but a wrong-typed `archived` is now a 400 (#429).
-      const parsed = archiveSchema.safeParse(await c.req.json().catch(() => ({})));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
-    .post('/runs', async (c) => {
+    .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
       const { root: repoRoot, dataDir, manager } = c.get('project');
-      const parsed = startRunSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       let workflow: WorkflowDef | undefined;
       if (parsed.data.steps) {
         // Inline chain (spec 008): an approved plan runs as an ad-hoc workflow.
@@ -2315,14 +2341,11 @@ export function createApp(deps: ServerDeps) {
     // actually displays). The auto-summarizer only ever fills an *unset*
     // titleSummary (RunManager.recordTurnEnd), so an edit wins over any past or
     // future auto-summary. Answers the updated record.
-    .patch('/runs/:id', async (c) => {
+    .patch('/runs/:id', jsonZodValidator(patchRunSchema), async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      const parsed = patchRunSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       // The prompt is editable only while the run is still queued (#472). Checked
       // BEFORE the title write so a rejected PATCH is a no-op rather than a partial
       // one. `title` itself keeps working on any status — no regression to #389.
@@ -2362,15 +2385,12 @@ export function createApp(deps: ServerDeps) {
 
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
-    .post('/runs/:id/messages', async (c) => {
+    .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
-      const parsed = messageSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const blocked = await providerActionError([providerForActiveRun(run)]);
       if (blocked) return c.json({ error: blocked }, 409);
       const content: ContentBlock[] = [
@@ -2421,15 +2441,12 @@ export function createApp(deps: ServerDeps) {
 
     // Edit / remove a stacked message (#472). Registered before any conflicting
     // `/:id` route so `queued-messages` never matches as a run id.
-    .patch('/runs/:id/queued-messages/:msgId', async (c) => {
+    .patch('/runs/:id/queued-messages/:msgId', jsonZodValidator(queuedMessagePatchSchema), async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
-      const parsed = queuedMessagePatchSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const msgId = c.req.param('msgId');
       const stack = run.queuedMessages ?? [];
       const existing = stack.find((m) => m.id === msgId);
@@ -2494,17 +2511,14 @@ export function createApp(deps: ServerDeps) {
     })
 
     // "Continue" (spec 003): reopen a finished run's session in-process.
-    .post('/runs/:id/continue', async (c) => {
+    .post('/runs/:id/continue', jsonZodValidator(continueSchema, { absent: ({}) }), async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       // Bounded resume text (#429); an empty/absent body still just re-runs on the
       // run's current backend, and a runner/model override reopens on that engine (#401).
-      const parsed = continueSchema.safeParse(await c.req.json().catch(() => ({})));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
       if (blocked) return c.json({ error: blocked }, 409);
       const result = manager.continueRun(id, {
@@ -2560,7 +2574,7 @@ export function createApp(deps: ServerDeps) {
     })
 
     // Open a run's worktree (or the repo root) in the chosen local app.
-    .post('/runs/:id/open-in', async (c) => {
+    .post('/runs/:id/open-in', jsonZodValidator(openInSchema), async (c) => {
       const { root: repoRoot, store } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
@@ -2575,10 +2589,7 @@ export function createApp(deps: ServerDeps) {
       }
       // Follows the safeParse convention (#429); the downstream allowlist match is the real
       // injection guard, this just validates the shape.
-      const parsedBody = openInSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsedBody.success) {
-        return c.json({ error: parsedBody.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsedBody = { data: c.req.valid('json') };
       const { target, path: relPath } = parsedBody.data;
       const dir = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
 
@@ -2747,13 +2758,14 @@ export function createApp(deps: ServerDeps) {
     // image files only, for the preview's inline <img> — never HTML/JS/etc., so
     // no worktree file can become a same-origin document, and never past the
     // size cap. The no-script CSP neutralizes SVG opened as a top-level URL.
-    .get('/runs/:id/files', async (c) => {
+    .get('/runs/:id/files', queryZodValidator(z.object({ path: queryValue, raw: queryValue })), async (c) => {
       const { store } = c.get('project');
+      const query = c.req.valid('query');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
-      const result = await readWorktreePath(worktree, c.req.query('path') ?? '');
+      const result = await readWorktreePath(worktree, query.path ?? '');
       if (result.kind === 'invalid' || result.kind === 'missing') {
         return c.json({ error: result.error }, 409);
       }
@@ -2764,7 +2776,7 @@ export function createApp(deps: ServerDeps) {
           entries: result.entries,
         });
       }
-      if (c.req.query('raw') === '1') {
+      if (query.raw === '1') {
         const mime = imageMimeType(result.path);
         if (!mime) return c.json({ error: `raw serving is limited to images: ${result.path}` }, 409);
         if (result.tooLarge) {
@@ -2792,16 +2804,13 @@ export function createApp(deps: ServerDeps) {
       });
     })
 
-    .post('/runs/:id/git/commit', async (c) => {
+    .post('/runs/:id/git/commit', jsonZodValidator(gitCommitSchema), async (c) => {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
-      const parsed = gitCommitSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const result = await commitAll(worktree, parsed.data.message);
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ committed: true, sha: result.sha });
@@ -2924,14 +2933,11 @@ export function createApp(deps: ServerDeps) {
     // "Pick this one": the winner rests at `review` (spec 009 takes it from
     // there — send back / draft PR / finish); the losers are cancelled if
     // alive, archived, and their worktrees + branches removed.
-    .post('/groups/:groupId/pick', async (c) => {
+    .post('/groups/:groupId/pick', jsonZodValidator(pickSchema), async (c) => {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const runs = groupRuns(store, c.req.param('groupId'));
       if (runs.length === 0) return c.json({ error: 'not found' }, 404);
-      const parsed = pickSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const winner = runs.find((r) => r.id === parsed.data.runId);
       if (!winner) return c.json({ error: 'runId is not part of this group' }, 404);
       if (manager.isActive(winner.id)) {
@@ -3024,11 +3030,10 @@ export function createApp(deps: ServerDeps) {
       return c.json({ worktrees, totalBytes, keep });
     })
 
-    .post('/worktrees/reclaim', async (c) => {
+    .post('/worktrees/reclaim', jsonZodValidator(() => reclaimBodySchema, { absent: ({}), message: 'invalid body' }), async (c) => {
       const { root: repoRoot, store } = c.get('project');
-      // Accept an empty or `{}` body; retention is best-effort, so 200 always.
-      const parsed = reclaimBodySchema.safeParse(await c.req.json().catch(() => ({})));
-      if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+      // The body is validated (an empty or `{}` one is accepted) but carries nothing this
+      // handler reads; retention is best-effort, so 200 always.
       const reclaimed = await reclaimWorktrees(repoRoot, store, await resolveWorktreeRetention(repoRoot));
       return c.json({ reclaimed });
     });
@@ -3048,18 +3053,23 @@ export function createApp(deps: ServerDeps) {
 
     // "▶ Run": turn an inbox entry into a task — a one-off single-step workflow
     // around the suggested skill when it exists, plain quick-task otherwise.
+    // The ONE mutating route that still parses its body in the handler, deliberately. Body
+    // validation as middleware necessarily runs BEFORE the handler, and this route's contract
+    // (pinned by todos-start.test.ts) is that an unknown id answers 404 *before* the body is
+    // looked at. A validator cannot express "404 first", so `hc` does not see this body — the
+    // cost of keeping the documented status order.
     .post('/todos/:id/start', async (c) => {
-      const { root: repoRoot, dataDir, manager } = c.get('project');
-      if (!capabilities().followups) return c.json({ error: FOLLOWUPS_OFF }, 409);
-      const id = c.req.param('id');
-      const todo = (await readTodos(dataDir)).find((t) => t.id === id);
-      if (!todo) return c.json({ error: 'not found' }, 404);
+        const { root: repoRoot, dataDir, manager } = c.get('project');
+        if (!capabilities().followups) return c.json({ error: FOLLOWUPS_OFF }, 409);
+        const id = c.req.param('id');
+        const todo = (await readTodos(dataDir)).find((t) => t.id === id);
+        if (!todo) return c.json({ error: 'not found' }, 404);
 
-      // Body is optional and read exactly once (runner/model #401 + prompt #413 share it). A
+        // Body is optional and read exactly once (runner/model #401 + prompt #413 share it). A
       // request with none at all (the pre-pills/pre-composer client) stays `undefined`, same as an
       // empty `{}`. A body that IS present but is not valid JSON becomes `null`, which the schema
-      // rejects → 400 (the `.catch(() => null)` pattern every other mutating route uses); mapping
-      // it to `undefined` too would let a broken payload pass as "no body" and silently 201.
+      // rejects → 400; mapping it to `undefined` too would let a broken payload pass as "no body"
+      // and silently 201.
       const rawBody = await c.req.text().catch(() => '');
       let body: unknown;
       if (rawBody.trim().length > 0) {
@@ -3073,47 +3083,48 @@ export function createApp(deps: ServerDeps) {
       if (!parsed.success) {
         return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
       }
-      if (todo.startedTaskId) return c.json({ error: 'already started' }, 409);
+        if (todo.startedTaskId) return c.json({ error: 'already started' }, 409);
 
-      let task = todoTaskText(todo);
-      if (parsed.data?.prompt) task += `\n\n${parsed.data.prompt}`;
+        let task = todoTaskText(todo);
+        if (parsed.data?.prompt) task += `\n\n${parsed.data.prompt}`;
 
-      let workflow: WorkflowDef | undefined;
-      if (todo.suggestedSkill) {
-        const skills = await discoverSkills(repoRoot);
-        if (skills.some((s) => s.name === todo.suggestedSkill)) {
-          workflow = {
-            name: '(inbox)',
-            description: `Follow-up from the inbox — skill "${todo.suggestedSkill}"`,
-            source: 'built-in',
-            steps: [
-              {
-                id: 'task',
-                name: 'Do the task',
-                skill: todo.suggestedSkill,
-                prompt: '{{task}}',
-              },
-            ],
-          };
+        let workflow: WorkflowDef | undefined;
+        if (todo.suggestedSkill) {
+          const skills = await discoverSkills(repoRoot);
+          if (skills.some((s) => s.name === todo.suggestedSkill)) {
+            workflow = {
+              name: '(inbox)',
+              description: `Follow-up from the inbox — skill "${todo.suggestedSkill}"`,
+              source: 'built-in',
+              steps: [
+                {
+                  id: 'task',
+                  name: 'Do the task',
+                  skill: todo.suggestedSkill,
+                  prompt: '{{task}}',
+                },
+              ],
+            };
+          }
         }
-      }
-      if (!workflow) {
-        const { workflows } = await loadWorkflows(repoRoot);
-        workflow = workflows.find((w) => w.name === 'quick-task') ?? QUICK_TASK_WORKFLOW;
-      }
+        if (!workflow) {
+          const { workflows } = await loadWorkflows(repoRoot);
+          workflow = workflows.find((w) => w.name === 'quick-task') ?? QUICK_TASK_WORKFLOW;
+        }
 
-      const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
-      if (blocked) return c.json({ error: blocked }, 409);
+        const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+        if (blocked) return c.json({ error: blocked }, 409);
 
-      const run = manager.startRun(workflow, {
-        task,
-        runner: parsed.data?.runner,
-        model: parsed.data?.model,
-      });
-      await markStarted(dataDir, id, run.id);
-      return c.json({ run }, 201);
-    });
+        const run = manager.startRun(workflow, {
+          task,
+          runner: parsed.data?.runner,
+          model: parsed.data?.model,
+        });
+        await markStarted(dataDir, id, run.id);
+        return c.json({ run }, 201);
+      },
+    );
 
   // ---- chained family: SSE streams (project-scoped) ----
   const sseRoutes = new Hono<ProjectApiEnv>()
@@ -3332,14 +3343,28 @@ export function createApp(deps: ServerDeps) {
     });
 
   // ---- chained family: GitHub (project-scoped) ----
+  // These sit ABOVE the routes rather than with the family's other schemas below it, because a
+  // validator argument is evaluated when the route is REGISTERED — a schema declared further down
+  // would be in its temporal dead zone. (The schemas below are all read inside a handler, or
+  // passed as a thunk, which defers them past that point.)
+  const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });
+  const prChangesParams = z.object({ number: z.coerce.number().int().positive().safe() });
+  const prChangesQuery = z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') });
   const githubRoutes = new Hono<ProjectApiEnv>()
-    .get('/github', async (c) => {
-      const { root: repoRoot } = c.get('project');
-      const limit = Number.parseInt(c.req.query('limit') ?? '', 10);
-      return c.json(await fetchGithub(repoRoot, c.req.query('refresh') === '1', Number.isFinite(limit) ? limit : 30));
-    })
+    .get(
+      '/github',
+      // `limit` stays a bare string: the handler's `Number.parseInt`/`Number.isFinite` fallback to
+      // 30 already accepts `?limit=banana`, and a numeric schema would 400 it instead.
+      queryZodValidator(z.object({ limit: queryValue, refresh: queryValue })),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const query = c.req.valid('query');
+        const limit = Number.parseInt(query.limit ?? '', 10);
+        return c.json(await fetchGithub(repoRoot, query.refresh === '1', Number.isFinite(limit) ? limit : 30));
+      },
+    )
 
-    .get('/github/comments/:kind/:number', async (c) => {
+    .get('/github/comments/:kind/:number', queryZodValidator(refreshQuery), async (c) => {
       const { root: repoRoot } = c.get('project');
       const parsed = commentsParams.safeParse({
         kind: c.req.param('kind'),
@@ -3347,7 +3372,7 @@ export function createApp(deps: ServerDeps) {
       });
       if (!parsed.success) return c.json({ error: 'invalid kind or number' }, 400);
       return c.json(
-        await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.query('refresh') === '1'),
+        await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.valid('query').refresh === '1'),
       );
     })
 
@@ -3355,10 +3380,12 @@ export function createApp(deps: ServerDeps) {
     // call dropped `statusCheckRollup` (the dominant cost), so the glyph is hydrated here per
     // visible row. `prs` is a comma-separated list of positive integers, capped at GH_CHECKS_MAX;
     // anything malformed is a 400. Same in-payload availability degrade as the list (never a 5xx).
-    .get('/github/checks', async (c) => {
+    // `prs` is the one genuinely REQUIRED query key on this server, so it is the one validated
+    // strictly — `.min(1)` because `?prs=` answered `missing prs query` before it answered
+    // `invalid prs query`, and both spellings must keep their own words.
+    .get('/github/checks', queryZodValidator(z.object({ prs: z.string().min(1) }), { message: 'missing prs query' }), async (c) => {
       const { root: repoRoot } = c.get('project');
-      const raw = c.req.query('prs');
-      if (!raw) return c.json({ error: 'missing prs query' }, 400);
+      const raw = c.req.valid('query').prs;
       const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
       if (parts.length === 0 || parts.length > GH_CHECKS_MAX) return c.json({ error: 'invalid prs query' }, 400);
       const numbers: number[] = [];
@@ -3370,49 +3397,63 @@ export function createApp(deps: ServerDeps) {
       return c.json(await fetchGithubChecks(repoRoot, numbers));
     })
 
-    .get('/github/prs/:number/merge-state', async (c) => {
-      const { root: repoRoot } = c.get('project');
-      const parsed = mergeNumberParams.safeParse({ number: c.req.param('number') });
-      if (!parsed.success) return c.json({ error: 'invalid pull request number' }, 400);
-      const forge = resolveForge(await getRepoInfo(repoRoot));
-      if (!forge?.prMergeState) return c.json({ available: false, reason: 'GitHub merge state is unavailable' });
-      return c.json(await forge.prMergeState(parsed.data.number, { refresh: c.req.query('refresh') === '1' }));
-    })
+    .get(
+      '/github/prs/:number/merge-state',
+      paramZodValidator(mergeNumberParams, { message: 'invalid pull request number' }),
+      queryZodValidator(refreshQuery),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const parsed = { data: c.req.valid('param') };
+        const forge = resolveForge(await getRepoInfo(repoRoot));
+        if (!forge?.prMergeState) return c.json({ available: false, reason: 'GitHub merge state is unavailable' });
+        return c.json(await forge.prMergeState(parsed.data.number, { refresh: c.req.valid('query').refresh === '1' }));
+      },
+    )
 
-    .post('/github/prs/:number/merge', async (c) => {
-      const { root: repoRoot } = c.get('project');
-      const parsedNumber = mergeNumberParams.safeParse({ number: c.req.param('number') });
-      if (!parsedNumber.success) return c.json({ error: 'invalid pull request number' }, 400);
-      const body = mergeBodySchema.safeParse(await c.req.json().catch(() => null));
-      if (!body.success) return c.json({ error: 'invalid merge request' }, 400);
-      const forge = resolveForge(await getRepoInfo(repoRoot));
-      if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
-      const result = await forge.mergePR(parsedNumber.data.number, body.data);
-      if (result.merged) return c.json(result);
-      return c.json(
-        {
-          error: result.error,
-          ...(result.code ? { code: result.code } : {}),
-          ...(result.current ? { current: result.current } : {}),
-        },
-        result.status,
-      );
-    })
+    .post(
+      '/github/prs/:number/merge',
+      paramZodValidator(mergeNumberParams, { message: 'invalid pull request number' }),
+      jsonZodValidator(() => mergeBodySchema, { message: 'invalid merge request' }),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const parsedNumber = { data: c.req.valid('param') };
+        const body = { data: c.req.valid('json') };
+        const forge = resolveForge(await getRepoInfo(repoRoot));
+        if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
+        const result = await forge.mergePR(parsedNumber.data.number, body.data);
+        if (result.merged) return c.json(result);
+        return c.json(
+          {
+            error: result.error,
+            ...(result.code ? { code: result.code } : {}),
+            ...(result.current ? { current: result.current } : {}),
+          },
+          result.status,
+        );
+      },
+    )
 
-    .get('/github/prs/:number/changes', async (c) => {
-      const { root: repoRoot } = c.get('project');
-      const parsed = prChangesParams.safeParse({
-        number: c.req.param('number'),
-        refresh: c.req.query('refresh'),
-      });
-      if (!parsed.success) return c.json({ error: 'invalid pull request number or refresh flag' }, 400);
-      try {
-        return c.json(await fetchGithubPrDiff(repoRoot, parsed.data.number, parsed.data.refresh === '1'));
-      } catch (err) {
-        if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
-        throw err;
-      }
-    });
+    .get(
+      '/github/prs/:number/changes',
+      // Split out of one `safeParse` over both inputs, because a path param and the query string
+      // are separate validation targets to Hono and only a split makes each visible to the route
+      // type. Both keep the single 400 sentence the combined parse answered. `refresh` stays
+      // STRICT here (`?refresh=true` is a 400 today, unlike everywhere else on this server).
+      paramZodValidator(prChangesParams, { message: 'invalid pull request number or refresh flag' }),
+      queryZodValidator(prChangesQuery, { message: 'invalid pull request number or refresh flag' }),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const parsed = { data: c.req.valid('param') };
+        try {
+          return c.json(
+            await fetchGithubPrDiff(repoRoot, parsed.data.number, c.req.valid('query').refresh === '1'),
+          );
+        } catch (err) {
+          if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
+          throw err;
+        }
+      },
+    );
 
   // The full comment thread for one issue/PR (#499). Additive sibling of /api/github — lazy
   // (fetched only while a detail view is open), zod-validated params, 400 on garbage, and the
@@ -3421,17 +3462,12 @@ export function createApp(deps: ServerDeps) {
     kind: z.enum(['issue', 'pr']),
     number: z.coerce.number().int().positive(),
   });
-  const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });
   const mergeBodySchema = z.object({
     method: z.enum(['merge', 'squash', 'rebase']),
     expectedHeadSha: z.string().regex(/^[0-9a-f]{40}$/),
     overrideRules: z.boolean().optional().default(false),
   }).strict();
 
-  const prChangesParams = z.object({
-    number: z.coerce.number().int().positive().safe(),
-    refresh: z.enum(['1']).optional(),
-  });
   // ---- chained family: repo / git (project-scoped) ----
   const repoRoutes = new Hono<ProjectApiEnv>()
     .get('/repo', async (c) => {
@@ -3472,10 +3508,10 @@ export function createApp(deps: ServerDeps) {
     // shape `{sha, subject, author, when, files, stat}` with 409 + reason on failure. The
     // legacy text answer below is a protected surface (BACKWARD_COMPATIBILITY.md §2) — its
     // shape, including the in-band failure sentences, stays exactly as it was.
-    .get('/repo/commit/:sha', async (c) => {
+    .get('/repo/commit/:sha', queryZodValidator(z.object({ structured: queryValue })), async (c) => {
       const { root: repoRoot } = c.get('project');
       const info = await getRepoInfo(repoRoot);
-      if (c.req.query('structured') === '1') {
+      if (c.req.valid('query').structured === '1') {
         if (!info) return c.json({ error: 'not a git repository' }, 409);
         const result = await collectCommitChanges(info.root, c.req.param('sha'));
         if (!result.ok) return c.json({ error: result.error }, 409);
@@ -3505,14 +3541,11 @@ export function createApp(deps: ServerDeps) {
       return c.json(result.changes);
     })
 
-    .post('/repo/branch', async (c) => {
+    .post('/repo/branch', jsonZodValidator(() => repoBranchSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
       const info = await getRepoInfo(repoRoot);
       if (!info) return c.json({ error: 'not a git repository' }, 409);
-      const parsed = repoBranchSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const result = await createOrSwitchBranch(info.root, parsed.data.name, parsed.data.from);
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ branch: result.branch, created: result.created });
@@ -3541,12 +3574,9 @@ export function createApp(deps: ServerDeps) {
   const configRoutes = new Hono<ProjectApiEnv>()
     .get('/config', async (c) => c.json(configAnswer(await loadConfig(c.get('project').root))))
 
-    .put('/config', async (c) => {
+    .put('/config', jsonZodValidator(() => setConfigSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
-      const parsed = setConfigSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const configPath = join(dataDir, 'config.json');
       let raw: Record<string, unknown> = {};
       try {
@@ -3624,7 +3654,7 @@ export function createApp(deps: ServerDeps) {
   const setConfigSchema = z.object({
     baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
     defaultRunner: z.enum(['claude', 'codex', 'opencode']).optional(),
-    systemPrompt: z.string().trim().max(20_000, 'systemPrompt must be at most 20000 characters').nullable().optional(),
+    systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
     defaultModels: z
       .object({
         claude: modelPresetSchema,
@@ -3681,7 +3711,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(read);
     })
 
-    .put('/agent-config/:id', async (c) => {
+    .put('/agent-config/:id', jsonZodValidator(setAgentConfigSchema), async (c) => {
       // Config files may define hooks and MCP commands, so writes remain a
       // local-machine capability and are re-gated on every request.
       if (!capabilities().localHandoff) {
@@ -3693,10 +3723,7 @@ export function createApp(deps: ServerDeps) {
           409,
         );
       }
-      const parsed = setAgentConfigSchema.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
-      }
+      const parsed = { data: c.req.valid('json') };
       const out = await writeConfigFile(
         c.req.param('id'),
         parsed.data.content,

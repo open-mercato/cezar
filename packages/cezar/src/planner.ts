@@ -125,7 +125,7 @@ function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: strin
  */
 async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
   const out: string[] = [];
-  const pkgSchema = z.object({ scripts: z.record(z.string()).default({}) });
+  const pkgSchema = z.object({ scripts: z.record(z.string(), z.string()).default({}) });
   try {
     const raw: unknown = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
     const pkg = pkgSchema.safeParse(raw);
@@ -216,7 +216,7 @@ function uniqueId(base: string, used: Set<string>): string {
  * then scan for balanced top-level `{...}` blocks and return the first that
  * validates. Null when nothing does — the caller decides how to recover.
  */
-export function parseStructured<T>(raw: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): T | null {
+export function parseStructured<T>(raw: string, schema: z.ZodType<T, unknown>): T | null {
   const cleaned = raw
     .replace(/^```(?:json|javascript|js|jsonl)?\s*\n?/im, '')
     .replace(/\n?```\s*$/m, '')

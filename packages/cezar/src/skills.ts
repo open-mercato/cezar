@@ -40,7 +40,7 @@ export interface Skill {
 
    Exported for the drift guard in `test/unit/skill-dirs.test.ts` (#374): the
    cockpit's empty-state hint hand-copies this list into the bundle
-   (`web/app/src/components/skill-empty-hint.tsx`) because it runs in another
+   (`packages/web/src/components/skill-empty-hint.tsx`) because it runs in another
    process, so adding a dir here without updating the hint makes the hint lie.
    That test pins this list and says where to go. */
 export const SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [

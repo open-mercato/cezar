@@ -1,6 +1,7 @@
 import { hc } from 'hono/client'
 import type { Hono } from 'hono'
 import type { ClientRequestOptions, ClientResponse } from 'hono/client'
+import type { SuccessStatusCode } from 'hono/utils/http-status'
 
 /**
  * The typed HTTP client for a cezar service.
@@ -75,11 +76,17 @@ export function createCezarClient<
  * wire, but a caller that treats a non-2xx as a thrown error (as cezar's client does) only ever
  * holds the success shape, and forcing it to narrow a union it can never see would be noise.
  *
- * Selecting the 200 branch is what makes an inferred type a drop-in replacement for the
+ * Selecting the success branch is what makes an inferred type a drop-in replacement for the
  * hand-written DTO it retires.
+ *
+ * EVERY 2xx, not just 200: a handler answering `c.json(x, 201)` — `POST /runs`, `/workflows`,
+ * `/runs/:id/pr`, `/todos/:id/start` — has no 200 branch at all, so keying on 200 inferred
+ * `never`. That stayed invisible while a hand-written DTO still annotated the call site (`never`
+ * is assignable to anything) and would have surfaced as a broken caller at the exact moment
+ * those DTOs were deleted.
  */
 export type Ok<R> = R extends ClientResponse<infer T, infer S, 'json'>
-  ? S extends 200
+  ? S extends SuccessStatusCode
     ? T
     : never
   : never

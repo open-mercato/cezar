@@ -75,7 +75,14 @@ import type {
   SkillsUpdateState,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
-import { apiPath, createCezarClient, getApiBaseUrl } from '@open-mercato/cezar-api-client'
+import {
+  API_PREFIX,
+  apiPath,
+  createCezarClient,
+  getApiBaseUrl,
+  getApiScope,
+  queryScope,
+} from '@open-mercato/cezar-api-client'
 import type { Ok } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { AppType } from '@open-mercato/cezar/app-type'
@@ -195,9 +202,40 @@ const cez = createCezarClient<AppType>({
     fetchOrThrow(withApiBase(String(input)), init),
 })
 
-/** Prefix a root-relative URL the typed client built with the configured service origin. */
+/**
+ * Prefix a root-relative URL the typed client built with the configured service origin.
+ *
+ * Also the one place the two request paths are reconciled on the wire. `hc` appends a `?` for
+ * any `query` argument it is given, even one whose every value was optional and absent — an
+ * equivalent URL, but not the one `apiPath` writes, and the stubs in this app's tests match on
+ * the path they see.
+ */
 function withApiBase(url: string): string {
-  return url.startsWith('/') ? `${getApiBaseUrl()}${url}` : url
+  const path = unscoped(url.endsWith('?') ? url.slice(0, -1) : url)
+  return path.startsWith('/') ? `${getApiBaseUrl()}${path}` : path
+}
+
+/** The scoped spelling `hc` always builds for a project-scoped route, with no project mounted. */
+const DEFAULT_SCOPE = `${API_PREFIX}/p/default`
+
+/**
+ * Drop the `/p/default` segment when no project scope is active.
+ *
+ * `hc` paths are static: a project-scoped route is spelled `p[':projectId']` at every call site
+ * and the active scope goes in as `queryScope()`, which answers `'default'` when there is none.
+ * That keeps ONE code path per call (the alternative was a branch per call), and the server
+ * reserves `default` as the alias for the boot project, so both spellings reach the same handler.
+ *
+ * They are not the same URL, though, and this module's other half (`apiPath`) emits the
+ * unprefixed one when unscoped. Normalising here — the single point every typed-client request
+ * passes through — is what keeps an unscoped request byte-identical whichever half sent it, so
+ * migrating a route never moves it on the wire.
+ */
+function unscoped(url: string): string {
+  if (getApiScope() !== null || !url.startsWith(DEFAULT_SCOPE)) return url
+  const rest = url.slice(DEFAULT_SCOPE.length)
+  // Only a whole segment: a project genuinely called `default-ish` must keep its own prefix.
+  return rest === '' || rest.startsWith('/') || rest.startsWith('?') ? `${API_PREFIX}${rest}` : url
 }
 
 /**
@@ -294,25 +332,36 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
 }
 
 /** Host-local Codex catalog. Workspace-level: one CLI/account serves every project. */
-export function getRunnerModels(opts?: ReadOptions): Promise<RunnerModelCatalogResponse> {
-  return get<RunnerModelCatalogResponse>('/models?runner=codex', opts)
+export async function getRunnerModels(opts?: ReadOptions): Promise<RunnerModelCatalogResponse> {
+  return unwrap(await cez.api.v1.models.$get({ query: { runner: 'codex' } }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
-export function getProviderStatus(
+export async function getProviderStatus(
   refresh = false,
   opts?: ReadOptions,
 ): Promise<ProviderStatusResponse> {
-  return get<unknown>(
-    `/providers/status${refresh ? '?refresh=1' : ''}`,
-    opts,
-  ).then(parseProviderStatusResponse)
+  return parseProviderStatusResponse(
+    await unwrap(
+      await cez.api.v1.providers.status.$get(
+        { query: refresh ? { refresh: '1' } : {} },
+        init(opts),
+      ),
+      '/providers/status',
+    ),
+  )
 }
 
 /** The bookmarklet auto-start secret (spec 011). Fetched to compare against `/new?key=` —
  *  never rendered, never logged, never put back into a URL. */
-export function getLaunchKey(opts?: ReadOptions): Promise<LaunchKeyResponse> {
-  return get<LaunchKeyResponse>('/launch-key', opts)
+export async function getLaunchKey(opts?: ReadOptions): Promise<LaunchKeyResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['launch-key'].$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/launch-key',
+  )
 }
 
 /** The workspace project registry (multi-project spec). Workspace-level — one registry no
@@ -328,164 +377,306 @@ export async function getProjects(opts?: ReadOptions): Promise<ProjectsResponse>
 /** One directory listing for the folder picker (`GET /api/fs/browse`, step 4.1). `path`
  *  omitted means the independently configured browse root, so the dialog never has to know
  *  or duplicate that workspace setting. */
-export function browseFs(path?: string, opts?: ReadOptions): Promise<FsBrowseResponse> {
-  const query = path === undefined || path === '' ? '' : `?path=${encodeURIComponent(path)}`
-  return get<FsBrowseResponse>(`/fs/browse${query}`, opts)
+export async function browseFs(path?: string, opts?: ReadOptions): Promise<FsBrowseResponse> {
+  return unwrap(
+    // An absent `path` stays absent rather than becoming `?path=`: the server distinguishes
+    // "no path" (the configured browse root) from an empty one only by `?? ''`, but `hc` drops
+    // an `undefined` value entirely, which keeps the URL the one this call always sent.
+    await cez.api.v1.fs.browse.$get({ query: { path: path === '' ? undefined : path } }, init(opts)),
+    '/fs/browse',
+  )
 }
 
 /** The authoritative run list — sorted newest-first by the server. */
-export function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
-  return get<ApiRun[]>('/runs', opts)
+export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/runs',
+  )
 }
 
 /** One project's run list by EXPLICIT id (`GET /api/p/:projectId/runs`, step 3.3): the sidebar
  *  reads non-active projects' tasks, which the active-scope `send()` prefix cannot reach. An
  *  already-`/api/p/`-prefixed path passes through `apiPath` untouched, so this stays
  *  correct whatever scope is mounted. */
-export function getProjectRuns(projectId: string, opts?: ReadOptions): Promise<ApiRun[]> {
-  return get<ApiRun[]>(`/p/${encodeURIComponent(projectId)}/runs`, opts)
+export async function getProjectRuns(projectId: string, opts?: ReadOptions): Promise<ApiRun[]> {
+  return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId } }, init(opts)), '/runs')
 }
 
-export function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
-  return get<ApiRun>(runPath(id), opts)
+export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id),
+  )
 }
 
-export function getUiState(opts?: ReadOptions): Promise<UiState> {
-  return get<UiState>('/ui-state', opts)
+export async function getUiState(opts?: ReadOptions): Promise<UiState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['ui-state'].$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/ui-state',
+  )
 }
 
-export function getWorkflows(opts?: ReadOptions): Promise<WorkflowsResponse> {
-  return get<WorkflowsResponse>('/workflows', opts)
+export async function getWorkflows(opts?: ReadOptions): Promise<WorkflowsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].workflows.$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/workflows',
+  )
 }
 
-export function getSkills(opts?: ReadOptions): Promise<Skill[]> {
-  return get<Skill[]>('/skills', opts)
+export async function getSkills(opts?: ReadOptions): Promise<Skill[]> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].skills.$get(
+      // `query` is required once the route declares one, even when every key in it is optional
+      // — `hc` drops the empty search string, so the URL is the one this call always sent.
+      { param: { projectId: queryScope() }, query: {} },
+      init(opts),
+    ),
+    '/skills',
+  )
 }
 
 /** Wait for the server's already-started team-skill load. Used only after the fast catalog
  * read has rendered, so a cold clone never delays opening a skill picker. */
-export function getSkillsWhenReady(opts?: ReadOptions): Promise<Skill[]> {
-  return get<Skill[]>('/skills?wait=1', opts)
+export async function getSkillsWhenReady(opts?: ReadOptions): Promise<Skill[]> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].skills.$get(
+      { param: { projectId: queryScope() }, query: { wait: '1' } },
+      init(opts),
+    ),
+    '/skills',
+  )
 }
 
 /** Refresh the team skills repos (spec 005: clone/fetch, degrade quietly offline) and answer
  *  the merged catalog — the Settings → Skills "Refresh" button. */
-export function refreshSkills(): Promise<Skill[]> {
-  return mutate<Skill[]>('POST', '/skills/refresh')
+export async function refreshSkills(): Promise<Skill[]> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].skills.refresh.$post({ param: { projectId: queryScope() } }),
+    '/skills/refresh',
+  )
 }
 
 /** The default (vendor) repo's full skill list — every skill the "Import skills" panel can
  *  offer, regardless of import state. Empty once a repo configures its own `skillsRepos`. */
-export function getImportableSkills(opts?: ReadOptions): Promise<ImportableSkill[]> {
-  return get<ImportableSkill[]>('/skills/importable', opts)
+export async function getImportableSkills(opts?: ReadOptions): Promise<ImportableSkill[]> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].skills.importable.$get(
+      { param: { projectId: queryScope() }, query: {} },
+      init(opts),
+    ),
+    '/skills/importable',
+  )
 }
 
 /** Wait for the server's already-started team-skill load before listing importable skills —
  *  the same cold-cache convergence as `getSkillsWhenReady`, off the panel's first render. */
-export function getImportableSkillsWhenReady(opts?: ReadOptions): Promise<ImportableSkill[]> {
-  return get<ImportableSkill[]>('/skills/importable?wait=1', opts)
+export async function getImportableSkillsWhenReady(opts?: ReadOptions): Promise<ImportableSkill[]> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].skills.importable.$get(
+      { param: { projectId: queryScope() }, query: { wait: '1' } },
+      init(opts),
+    ),
+    '/skills/importable',
+  )
 }
 
-export function getTodos(opts?: ReadOptions): Promise<TodoItem[]> {
-  return get<TodoItem[]>('/todos', opts)
+export async function getTodos(opts?: ReadOptions): Promise<TodoItem[]> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].todos.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/todos',
+  )
 }
 
-export function getRepo(opts?: ReadOptions): Promise<RepoResponse> {
-  return get<RepoResponse>('/repo', opts)
+export async function getRepo(opts?: ReadOptions): Promise<RepoResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/repo',
+  )
 }
 
 /** The Settings → Agents knobs in one read (`GET /api/config`, additive R6 route). */
-export function getConfig(opts?: ReadOptions): Promise<ConfigResponse> {
-  return get<ConfigResponse>('/config', opts)
+export async function getConfig(opts?: ReadOptions): Promise<ConfigResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].config.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/config',
+  )
 }
 
 /** The selected project's agent-owned config catalog and current file state. */
-export function getAgentConfig(opts: ReadOptions = {}): Promise<AgentConfigListing> {
-  return get<AgentConfigListing>('/agent-config', opts)
+export async function getAgentConfig(opts: ReadOptions = {}): Promise<AgentConfigListing> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['agent-config'].$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/agent-config',
+  )
 }
 
 /** One selected-project config file's raw contents and optimistic version. */
-export function getAgentConfigFile(id: string, opts: ReadOptions = {}): Promise<AgentConfigFileContent> {
-  return get<AgentConfigFileContent>(`/agent-config/${encodeURIComponent(id)}`, opts)
+export async function getAgentConfigFile(
+  id: string,
+  opts: ReadOptions = {},
+): Promise<AgentConfigFileContent> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['agent-config'][':id'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `/agent-config/${encodeURIComponent(id)}`,
+  )
 }
 
 /** Save inside the selected project scope; send() adds /api/p/:projectId. */
-export function putAgentConfigFile(
+export async function putAgentConfigFile(
   id: string,
   body: SetAgentConfigInput,
 ): Promise<AgentConfigFileContent> {
-  return mutate<AgentConfigFileContent>('PUT', `/agent-config/${encodeURIComponent(id)}`, body)
+  return unwrap(
+    await cez.api.v1.p[':projectId']['agent-config'][':id'].$put({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: body,
+    }),
+    `/agent-config/${encodeURIComponent(id)}`,
+  )
 }
 
 /** The main working tree's structured uncommitted diff vs HEAD (R5 repo view). 409 (as an
  *  ApiError with the reason) when the server runs outside a git repository. */
-export function getRepoChanges(opts?: ReadOptions): Promise<ChangesPayload> {
-  return get<ChangesPayload>('/repo/changes', opts)
+export async function getRepoChanges(opts?: ReadOptions): Promise<ChangesPayload> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.changes.$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/repo/changes',
+  )
 }
 
 /** One commit's structured diff (R5 repo view): `?structured=1` on the legacy commit route —
  *  additive, the text-blob answer stays for the legacy UI. 409 + reason for unknown shas. */
+/*  NOT on the typed client, and it is the route that cannot be: the same handler answers the
+ *  legacy `text/plain` blob when `?structured=1` is absent (a protected surface —
+ *  BACKWARD_COMPATIBILITY.md §2), so `hc` infers a `ClientResponse<string, …, 'text'>` member
+ *  alongside the JSON ones. `unwrap` requires every member to be `'json'`, and relaxing that
+ *  would let a genuinely text-only route through as `never`. The `?structured=1` key IS validated
+ *  server-side now, so this is the only thing left in the way. */
 export function getRepoCommit(sha: string, opts?: ReadOptions): Promise<RepoCommitPayload> {
   return get<RepoCommitPayload>(`/repo/commit/${encodeURIComponent(sha)}?structured=1`, opts)
 }
 
 /** A run's own commits (`<base>..HEAD`, newest first) for the task's Commits tab. */
-export function getRunCommits(id: string, opts?: ReadOptions): Promise<RunCommitsResponse> {
-  return get<RunCommitsResponse>(runPath(id, '/commits'), opts)
+export async function getRunCommits(id: string, opts?: ReadOptions): Promise<RunCommitsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].commits.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/commits'),
+  )
 }
 
 /** One of a run's commits, structured like the Changes tab. 409 for unknown shas. */
-export function getRunCommit(id: string, sha: string, opts?: ReadOptions): Promise<RepoCommitPayload> {
-  return get<RepoCommitPayload>(runPath(id, `/commit/${encodeURIComponent(sha)}`), opts)
+export async function getRunCommit(
+  id: string,
+  sha: string,
+  opts?: ReadOptions,
+): Promise<RepoCommitPayload> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].commit[':sha'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id), sha: encodeURIComponent(sha) } },
+      init(opts),
+    ),
+    runPath(id, `/commit/${encodeURIComponent(sha)}`),
+  )
 }
 
 /** Issues + PRs via the logged-in `gh`. Degrades to `{ available: false, reason }` server-side —
  *  an unreachable forge is a hint in the tab, not an ApiError. */
-export function getGithub(
+export async function getGithub(
   params: { limit?: number; refresh?: boolean } = {},
   opts?: ReadOptions,
 ): Promise<GithubData> {
-  const query = new URLSearchParams()
-  if (params.limit !== undefined) query.set('limit', String(params.limit))
-  if (params.refresh) query.set('refresh', '1')
-  const search = query.toString()
-  return get<GithubData>(`/github${search ? `?${search}` : ''}`, opts)
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.$get(
+      {
+        param: { projectId: queryScope() },
+        // `refresh: false` sends nothing at all — the server tests `=== '1'`, and a parameter we
+        // do not mean is how a "false" ends up read as truthy somewhere downstream.
+        query: {
+          limit: params.limit === undefined ? undefined : String(params.limit),
+          refresh: params.refresh ? '1' : undefined,
+        },
+      },
+      init(opts),
+    ),
+    '/github',
+  )
 }
 
 /** Lazy PR checks glyphs for on-screen rows (#664). The list call no longer ships
  *  `statusCheckRollup`; this fills the glyph in per visible PR. Degrades to
  *  `{ available: false, reason }` server-side — a missing glyph, never an ApiError. */
-export function getGithubChecks(
+export async function getGithubChecks(
   prNumbers: number[],
   opts?: ReadOptions,
 ): Promise<GithubChecksData> {
-  const search = new URLSearchParams({ prs: prNumbers.join(',') }).toString()
-  return get<GithubChecksData>(`/github/checks?${search}`, opts)
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.checks.$get(
+      { param: { projectId: queryScope() }, query: { prs: prNumbers.join(',') } },
+      init(opts),
+    ),
+    '/github/checks',
+  )
 }
 
 /** The full comment thread for one issue/PR (#499). Degrades to `{ available: false, reason }`
  *  server-side — an unreachable thread is a one-line hint in the detail view, not an ApiError. */
-export function getGithubComments(
+export async function getGithubComments(
   kind: 'issue' | 'pr',
   number: number,
   params: { refresh?: boolean } = {},
   opts?: ReadOptions,
 ): Promise<GithubCommentsData> {
-  // `refresh=1` is what busts the route's 60 s `commentsCache` (server.ts). Without it a manual
-  // refresh re-requests and is handed the same cached object — the caller must be able to say
-  // "actually go and ask gh", exactly as `getGithub` can.
-  const search = params.refresh ? '?refresh=1' : ''
-  return get<GithubCommentsData>(`/github/comments/${kind}/${number}${search}`, opts)
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.comments[':kind'][':number'].$get(
+      {
+        param: { projectId: queryScope(), kind, number: String(number) },
+        // `refresh=1` is what busts the route's 60 s `commentsCache` (server.ts). Without it a
+        // manual refresh re-requests and is handed the same cached object — the caller must be
+        // able to say "actually go and ask gh", exactly as `getGithub` can.
+        query: { refresh: params.refresh ? '1' : undefined },
+      },
+      init(opts),
+    ),
+    `/github/comments/${kind}/${number}`,
+  )
 }
 
-export function getGithubPrMergeState(
+export async function getGithubPrMergeState(
   number: number,
   params: { refresh?: boolean } = {},
   opts?: ReadOptions,
 ): Promise<GithubPrMergeStateResponse> {
-  return get<GithubPrMergeStateResponse>(
-    `/github/prs/${number}/merge-state${params.refresh ? '?refresh=1' : ''}`,
-    opts,
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.prs[':number']['merge-state'].$get(
+      {
+        param: { projectId: queryScope(), number: String(number) },
+        query: { refresh: params.refresh ? '1' : undefined },
+      },
+      init(opts),
+    ),
+    `/github/prs/${number}/merge-state`,
   )
 }
 
@@ -496,12 +687,21 @@ export function mergeGithubPr(
   return mutate<GithubMergeResponse>('POST', `/github/prs/${number}/merge`, input)
 }
 
-export function getGithubPrChanges(
+export async function getGithubPrChanges(
   number: number,
   params: { refresh?: boolean } = {},
   opts?: ReadOptions,
 ): Promise<GithubPrChangesData> {
-  return get<GithubPrChangesData>(`/github/prs/${number}/changes${params.refresh ? '?refresh=1' : ''}`, opts)
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.prs[':number'].changes.$get(
+      {
+        param: { projectId: queryScope(), number: String(number) },
+        query: { refresh: params.refresh ? '1' : undefined },
+      },
+      init(opts),
+    ),
+    `/github/prs/${number}/changes`,
+  )
 }
 
 /** The run's worktree diff against its base, as unified-diff text. Also the plain-text
@@ -518,12 +718,22 @@ export function getRunHandoff(id: string, opts?: ReadOptions): Promise<string> {
 
 /** The run's structured worktree-vs-base diff (R5): per-file status/±/patch + the aggregate
  *  stat. 409 (as an ApiError with the server's reason) when the run has no worktree. */
-export function getRunChanges(id: string, opts?: ReadOptions): Promise<ChangesPayload> {
-  return get<ChangesPayload>(runPath(id, '/changes'), opts)
+export async function getRunChanges(id: string, opts?: ReadOptions): Promise<ChangesPayload> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].changes.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/changes'),
+  )
 }
 
 /** One worktree path (R5 Files tab; also the Changes tab's expandable-context source):
  *  a directory listing, or a file with content unless binary/too large. */
+/*  Blocked on the same thing `getRepoCommit` is, for a different reason: `?raw=1` serves image
+ *  BYTES from this route (`c.body(...)`), so `hc` infers a `ClientResponse<ArrayBuffer, 200,
+ *  'body'>` member that `unwrap`'s all-JSON constraint rejects — even though this call never
+ *  sends `raw`. `?path=` is validated server-side now; only the mixed-format union remains. */
 export function getRunFile(id: string, path: string, opts?: ReadOptions): Promise<WorktreeEntry> {
   return get<WorktreeEntry>(runPath(id, `/files?path=${encodeURIComponent(path)}`), opts)
 }
@@ -537,36 +747,50 @@ export function runFileRawUrl(id: string, path: string): string {
 
 /** The variant-compare data (spec 010): one entry per variant of the group, with the legacy
  *  `git diff --stat` text and the handoff Progress excerpt. 404 for an unknown group. */
-export function getGroup(groupId: string, opts?: ReadOptions): Promise<GroupResponse> {
-  return get<GroupResponse>(`/groups/${encodeURIComponent(groupId)}`, opts)
+export async function getGroup(groupId: string, opts?: ReadOptions): Promise<GroupResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].groups[':groupId'].$get(
+      { param: { projectId: queryScope(), groupId: encodeURIComponent(groupId) } },
+      init(opts),
+    ),
+    `/groups/${encodeURIComponent(groupId)}`,
+  )
 }
 
 // ---- workspace mutations ------------------------------------------------------------------
 
-export function connectProvider(provider: ProviderId): Promise<ProviderConnectResponse> {
-  return mutate<ProviderConnectResponse>('POST', '/providers/connect', { provider })
+export async function connectProvider(provider: ProviderId): Promise<ProviderConnectResponse> {
+  return unwrap(await cez.api.v1.providers.connect.$post({ json: { provider } }), '/providers/connect')
 }
 
-export function setProviderEnabled(
+export async function setProviderEnabled(
   provider: ProviderId,
   enabled: boolean,
 ): Promise<ProviderStatusResponse> {
-  return mutate<unknown>(
-    'PUT',
-    `/providers/${encodeURIComponent(provider)}/enabled`,
-    { enabled },
-  ).then(parseProviderStatusResponse)
+  return parseProviderStatusResponse(
+    await unwrap(
+      await cez.api.v1.providers[':provider'].enabled.$put({
+        param: { provider },
+        json: { enabled },
+      }),
+      `/providers/${encodeURIComponent(provider)}/enabled`,
+    ),
+  )
 }
 
-export function retryProviderAuth(
+export async function retryProviderAuth(
   provider: ProviderId,
   authFailureId: string,
 ): Promise<ProviderStatusResponse> {
-  return mutate<unknown>(
-    'POST',
-    `/providers/${encodeURIComponent(provider)}/retry`,
-    { authFailureId },
-  ).then(parseProviderStatusResponse)
+  return parseProviderStatusResponse(
+    await unwrap(
+      await cez.api.v1.providers[':provider'].retry.$post({
+        param: { provider },
+        json: { authFailureId },
+      }),
+      `/providers/${encodeURIComponent(provider)}/retry`,
+    ),
+  )
 }
 
 /**
@@ -619,8 +843,11 @@ export function checkoutProject(input: CheckoutProjectInput): Promise<RegisterPr
  * Ordinary `mutate()`: the 409s (running tasks, the boot project) are real failures whose
  * `{ error }` message is what the pane shows, and `errorFor` already surfaces it.
  */
-export function removeProject(projectId: string): Promise<RemoveProjectResponse> {
-  return mutate<RemoveProjectResponse>('DELETE', `/projects/${encodeURIComponent(projectId)}`)
+export async function removeProject(projectId: string): Promise<RemoveProjectResponse> {
+  return unwrap(
+    await cez.api.v1.projects[':projectId'].$delete({ param: { projectId: encodeURIComponent(projectId) } }),
+    `/projects/${encodeURIComponent(projectId)}`,
+  )
 }
 
 /**
@@ -630,8 +857,17 @@ export function removeProject(projectId: string): Promise<RemoveProjectResponse>
  * The server applies the new ceiling live (semaphore refresh), so the answer is
  * the updated entry the pane swaps into its list.
  */
-export function updateProject(projectId: string, input: UpdateProjectInput): Promise<UpdateProjectResponse> {
-  return mutate<UpdateProjectResponse>('PATCH', `/projects/${encodeURIComponent(projectId)}`, input)
+export async function updateProject(
+  projectId: string,
+  input: UpdateProjectInput,
+): Promise<UpdateProjectResponse> {
+  return unwrap(
+    await cez.api.v1.projects[':projectId'].$patch({
+      param: { projectId: encodeURIComponent(projectId) },
+      json: input,
+    }),
+    `/projects/${encodeURIComponent(projectId)}`,
+  )
 }
 
 // ---- run mutations ------------------------------------------------------------------------
@@ -641,24 +877,45 @@ export function createRun(input: CreateRunInput): Promise<CreateRunResponse> {
   return mutate<CreateRunResponse>('POST', '/runs', input)
 }
 
-export function cancelRun(id: string): Promise<CancelResponse> {
-  return mutate<CancelResponse>('POST', runPath(id, '/cancel'))
+export async function cancelRun(id: string): Promise<CancelResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].cancel.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/cancel'),
+  )
 }
 
 /** Archives by default; pass `false` to bring a run back into the live list. */
-export function archiveRun(id: string, archived = true): Promise<RunRecord> {
-  return mutate<RunRecord>('POST', runPath(id, '/archive'), { archived })
+export async function archiveRun(id: string, archived = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { archived },
+    }),
+    runPath(id, '/archive'),
+  )
 }
 
 /** Sweep every finished (done/failed/cancelled) active run into the archive in one call —
  *  the Tasks header's "Archive finished" button. */
-export function archiveFinished(): Promise<ArchiveFinishedResponse> {
-  return mutate<ArchiveFinishedResponse>('POST', '/runs/archive-finished')
+export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs['archive-finished'].$post({
+      param: { projectId: queryScope() },
+    }),
+    '/runs/archive-finished',
+  )
 }
 
 /** Close a waiting session gracefully — the run completes as done. 409 when nothing is open. */
-export function finishRun(id: string): Promise<FinishResponse> {
-  return mutate<FinishResponse>('POST', runPath(id, '/finish'))
+export async function finishRun(id: string): Promise<FinishResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].finish.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/finish'),
+  )
 }
 
 /** The follow-up composer's optional overrides for a Continue (#401): pick which backend and
@@ -675,35 +932,63 @@ export interface ContinueOptions {
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
  *  runner/model override lets the follow-up choose the engine; omitted keeps the run's current
  *  backend (backward compat). */
-export function continueRun(id: string, opts: ContinueOptions = {}): Promise<ContinueResponse> {
-  const body: Record<string, unknown> = {}
-  if (opts.text !== undefined) body.text = opts.text
-  if (opts.images !== undefined) body.images = opts.images
-  if (opts.runner !== undefined) body.runner = opts.runner
-  if (opts.model !== undefined) body.model = opts.model
-  return mutate<ContinueResponse>('POST', runPath(id, '/continue'), body)
+export async function continueRun(id: string, opts: ContinueOptions = {}): Promise<ContinueResponse> {
+  const body = {
+    ...(opts.text !== undefined ? { text: opts.text } : {}),
+    ...(opts.images !== undefined ? { images: opts.images } : {}),
+    ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+    ...(opts.model !== undefined ? { model: opts.model } : {}),
+  }
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: body,
+    }),
+    runPath(id, '/continue'),
+  )
 }
 
 /** Draft PR from the review gate (spec 009): push the branch, `gh pr create --draft`; the run
  *  completes as done with the PR badge. On 409 the ApiError's `manual` carries the
  *  `git merge <branch>` fallback to show copyable. */
-export function createRunPr(id: string): Promise<CreatePrResponse> {
-  return mutate<CreatePrResponse>('POST', runPath(id, '/pr'))
+export async function createRunPr(id: string): Promise<CreatePrResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pr.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/pr'),
+  )
 }
 
 /** Rename a run (#389): the edit becomes the display title and wins over any auto-summary. */
-export function patchRun(id: string, patch: PatchRunInput): Promise<RunRecord> {
-  return mutate<RunRecord>('PATCH', runPath(id), patch)
+export async function patchRun(id: string, patch: PatchRunInput): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$patch({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: patch,
+    }),
+    runPath(id),
+  )
 }
 
 /** Deletes the run, its transcript, its worktree and its branch. 409 while it is still active. */
-export function deleteRun(id: string): Promise<DeleteRunResponse> {
-  return mutate<DeleteRunResponse>('DELETE', runPath(id))
+export async function deleteRun(id: string): Promise<DeleteRunResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id),
+  )
 }
 
 /** Inbox "Dismiss" (spec 007): check the follow-up off — the server deletes the entry. */
-export function removeTodo(id: string): Promise<RemoveTodoResponse> {
-  return mutate<RemoveTodoResponse>('DELETE', `/todos/${encodeURIComponent(id)}`)
+export async function removeTodo(id: string): Promise<RemoveTodoResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].todos[':id'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    `/todos/${encodeURIComponent(id)}`,
+  )
 }
 
 /** The Inbox card's optional backend choice + extra instructions for a Run. Unlike
@@ -738,72 +1023,128 @@ export function startTodo(id: string, opts: StartTodoOptions = {}): Promise<Star
 /** "Pick this one" (spec 010): the winner rests at `review` for the gate; the losers are
  *  cancelled if alive, archived, and their worktrees + branches removed. 409 while the picked
  *  variant is still active — the server's words come back verbatim in the ApiError. */
-export function pickVariant(groupId: string, runId: string): Promise<PickVariantResponse> {
-  return mutate<PickVariantResponse>('POST', `/groups/${encodeURIComponent(groupId)}/pick`, { runId })
+export async function pickVariant(groupId: string, runId: string): Promise<PickVariantResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].groups[':groupId'].pick.$post({
+      param: { projectId: queryScope(), groupId: encodeURIComponent(groupId) },
+      json: { runId },
+    }),
+    `/groups/${encodeURIComponent(groupId)}/pick`,
+  )
 }
 
 /** Hand the session off to a real terminal (spec 003), in the run's worktree when it still
  *  exists. On 409 the ApiError's `command` carries the manual `cd … && <resume>` to copy. */
-export function openRunInCli(id: string): Promise<OpenInCliResponse> {
-  return mutate<OpenInCliResponse>('POST', runPath(id, '/open-in-cli'))
+export async function openRunInCli(id: string): Promise<OpenInCliResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['open-in-cli'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/open-in-cli'),
+  )
 }
 
 /** The local editors / file-manager / terminal this machine can open a worktree in (#open-in).
  *  Empty in hosted mode (CEZ_REMOTE). */
-export function getOpenTargets(opts?: ReadOptions): Promise<OpenTargetsResponse> {
-  return get<OpenTargetsResponse>('/open-targets', opts)
+export async function getOpenTargets(opts?: ReadOptions): Promise<OpenTargetsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['open-targets'].$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/open-targets',
+  )
 }
 
 /** Open the run's worktree in the chosen local app. 409 with `path` when it could not launch. */
-export function openRunIn(id: string, target: string): Promise<{ opened: boolean; path: string }> {
-  return mutate<{ opened: boolean; path: string }>('POST', runPath(id, '/open-in'), { target })
+export async function openRunIn(
+  id: string,
+  target: string,
+): Promise<{ opened: boolean; path: string }> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['open-in'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { target },
+    }),
+    runPath(id, '/open-in'),
+  )
 }
 
 /** Diff pane "open in default app" (#365, LOCAL MODE ONLY): opens one worktree file with the
  *  OS's default handler for its type — not the file manager, a specific file. 409 (server's own
  *  words) in hosted mode, for a path outside the worktree, or when no app could be launched. */
-export function openRunFileInApp(id: string, path: string): Promise<{ opened: boolean; path: string }> {
-  return mutate<{ opened: boolean; path: string }>('POST', runPath(id, '/open-in'), { target: 'default', path })
+export async function openRunFileInApp(
+  id: string,
+  path: string,
+): Promise<{ opened: boolean; path: string }> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['open-in'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { target: 'default', path },
+    }),
+    runPath(id, '/open-in'),
+  )
 }
 
 /** `git add -A && git commit` in the run's worktree (R5). Every predictable git failure —
  *  clean tree, failing hook, missing identity — is a 409 whose ApiError speaks git's words. */
-export function commitRun(id: string, message: string): Promise<GitCommitResponse> {
-  return mutate<GitCommitResponse>('POST', runPath(id, '/git/commit'), { message })
+export async function commitRun(id: string, message: string): Promise<GitCommitResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].git.commit.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { message },
+    }),
+    runPath(id, '/git/commit'),
+  )
 }
 
 /** Push the worktree's branch, setting upstream when it has none (R5). No remote, detached
  *  HEAD and rejected pushes all come back as 409 + reason. */
-export function pushRun(id: string): Promise<GitPushResponse> {
-  return mutate<GitPushResponse>('POST', runPath(id, '/git/push'))
+export async function pushRun(id: string): Promise<GitPushResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].git.push.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/git/push'),
+  )
 }
 
 /** Deliver text and/or pasted screenshots into a run's live session. 409 once it has closed. */
-export function sendMessage(id: string, message: MessageInput): Promise<MessageResponse> {
-  return mutate<MessageResponse>('POST', runPath(id, '/messages'), {
-    text: message.text ?? '',
-    images: message.images ?? [],
-  })
+export async function sendMessage(id: string, message: MessageInput): Promise<MessageResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { text: message.text ?? '', images: message.images ?? [] },
+    }),
+    runPath(id, '/messages'),
+  )
 }
 
 /** Replace a stacked message on a still-queued run (#472). 404 unknown run/message,
  *  409 once the run has started. */
-export function editQueuedMessage(
+export async function editQueuedMessage(
   id: string,
   msgId: string,
   message: MessageInput,
 ): Promise<EditQueuedMessageResponse> {
-  return mutate<EditQueuedMessageResponse>(
-    'PATCH',
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['queued-messages'][':msgId'].$patch({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), msgId: encodeURIComponent(msgId) },
+      json: message,
+    }),
     runPath(id, `/queued-messages/${encodeURIComponent(msgId)}`),
-    message,
   )
 }
 
 /** Drop a stacked message from a still-queued run (#472). */
-export function removeQueuedMessage(id: string, msgId: string): Promise<RemoveQueuedMessageResponse> {
-  return mutate<RemoveQueuedMessageResponse>(
-    'DELETE',
+export async function removeQueuedMessage(
+  id: string,
+  msgId: string,
+): Promise<RemoveQueuedMessageResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['queued-messages'][':msgId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), msgId: encodeURIComponent(msgId) },
+    }),
     runPath(id, `/queued-messages/${encodeURIComponent(msgId)}`),
   )
 }
@@ -811,41 +1152,76 @@ export function removeQueuedMessage(id: string, msgId: string): Promise<RemoveQu
 /** Repo-view branch action (R5): switch to an existing branch, or create one (from `from` or
  *  HEAD) and switch. Invalid names, unknown start points and dirty-tree checkout conflicts
  *  all come back as 409 whose ApiError carries git's own reason. */
-export function createRepoBranch(input: { name: string; from?: string }): Promise<RepoBranchResponse> {
-  return mutate<RepoBranchResponse>('POST', '/repo/branch', input)
+export async function createRepoBranch(input: { name: string; from?: string }): Promise<RepoBranchResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.branch.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/repo/branch',
+  )
 }
 
 // ---- plan mode (spec 008) -------------------------------------------------------------------
 
 /** Chain-from-prompt: the planner proposes 1–5 steps for the task. Degraded answers come back
  *  as a one-step plan with `fallback: true`, never as an error — only transport/validation fail. */
-export function postPlan(task: string): Promise<PlanResponse> {
-  return mutate<PlanResponse>('POST', '/plan', { task })
+export async function postPlan(task: string): Promise<PlanResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].plan.$post({
+      param: { projectId: queryScope() },
+      json: { task },
+    }),
+    '/plan',
+  )
 }
 
 /** Save an approved plan as a reusable chain. A 409 carries `exists: true` on the ApiError —
  *  ask the user, then retry with `overwrite: true`. */
-export function createWorkflow(input: SaveWorkflowInput): Promise<SaveWorkflowResponse> {
-  return mutate<SaveWorkflowResponse>('POST', '/workflows', input)
+export async function createWorkflow(input: SaveWorkflowInput): Promise<SaveWorkflowResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].workflows.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/workflows',
+  )
 }
 
 /** Import support for the builder (spec 012): the server parses + validates pasted workflow
  *  YAML (either form) and answers the normalized definition. */
-export function parseWorkflow(yaml: string): Promise<ParsedWorkflow> {
-  return mutate<ParsedWorkflow>('POST', '/workflows/parse', { yaml })
+export async function parseWorkflow(yaml: string): Promise<ParsedWorkflow> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].workflows.parse.$post({
+      param: { projectId: queryScope() },
+      json: { yaml },
+    }),
+    '/workflows/parse',
+  )
 }
 
 /** Delete a saved workflow file (spec 012 follow-up). Built-ins answer 400 — they have no
  *  file and always come back. */
-export function deleteWorkflow(name: string): Promise<DeleteWorkflowResponse> {
-  return mutate<DeleteWorkflowResponse>('DELETE', `/workflows/${encodeURIComponent(name)}`)
+export async function deleteWorkflow(name: string): Promise<DeleteWorkflowResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].workflows[':name'].$delete({
+      param: { projectId: queryScope(), name: encodeURIComponent(name) },
+    }),
+    `/workflows/${encodeURIComponent(name)}`,
+  )
 }
 
 // ---- prefs ---------------------------------------------------------------------------------
 
 /** Merges server-side (the stored object spread under the patch) and answers the merged state. */
-export function putUiState(patch: UiState): Promise<UiState> {
-  return mutate<UiState>('PUT', '/ui-state', patch)
+export async function putUiState(patch: UiState): Promise<UiState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['ui-state'].$put({
+      param: { projectId: queryScope() },
+      json: patch,
+    }),
+    '/ui-state',
+  )
 }
 
 /** The cross-project GUI state (`~/.cezar/ui-state.json`, step 2.7). Workspace-level:
@@ -856,8 +1232,11 @@ export async function getWorkspaceUiState(opts?: ReadOptions): Promise<Workspace
 
 /** Shallow top-level merge server-side, same as its per-repo twin — send whole top-level
  *  objects (`{ sidebar: {...} }`), never a nested leaf alone. Answers the merged state. */
-export function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceUiState> {
-  return mutate<WorkspaceUiState>('PUT', '/workspace/ui-state', patch)
+export async function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceUiState> {
+  return unwrap(
+    await cez.api.v1.workspace['ui-state'].$put({ json: patch }),
+    '/workspace/ui-state',
+  )
 }
 
 /** The global settings slice of `~/.cezar/config.json` (step 2.7) — Settings → Resources and
@@ -868,48 +1247,85 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
 
 /** Cached Open Mercato update state for one registered project. The GET is immediate; the
  * server may start a stale detection-only refresh after taking its snapshot. */
-export function getSkillsUpdate(projectId: string, opts?: ReadOptions): Promise<SkillsUpdateState> {
-  return get<SkillsUpdateState>(`/workspace/skills-update?projectId=${encodeURIComponent(projectId)}`, opts)
+export async function getSkillsUpdate(
+  projectId: string,
+  opts?: ReadOptions,
+): Promise<SkillsUpdateState> {
+  return unwrap(
+    await cez.api.v1.workspace['skills-update'].$get({ query: { projectId } }, init(opts)),
+    `/workspace/skills-update?projectId=${encodeURIComponent(projectId)}`,
+  )
 }
 
 /** Force a bounded detection pass. The browser supplies identity only, never executable input. */
-export function checkSkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
-  return mutate<SkillsUpdateState>('POST', '/workspace/skills-update/check', { projectId })
+export async function checkSkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
+  return unwrap(
+    await cez.api.v1.workspace['skills-update'].check.$post({ json: { projectId } }),
+    '/workspace/skills-update/check',
+  )
 }
 
 /** Apply the server-owned, lock-authorized update set. Identity is the only browser input. */
-export function applySkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
-  return mutate<SkillsUpdateState>('POST', '/workspace/skills-update/apply', { projectId })
+export async function applySkillsUpdate(projectId: string): Promise<SkillsUpdateState> {
+  return unwrap(
+    await cez.api.v1.workspace['skills-update'].apply.$post({ json: { projectId } }),
+    '/workspace/skills-update/apply',
+  )
 }
 
 /** Partial update — absent keys stay untouched; answers the merged config. A `projectsDir`
  *  the server cannot write to comes back as a 400 `ApiError` whose message is the reason,
  *  which is exactly what the Projects pane renders inline (step 4.4). */
-export function putWorkspaceConfig(patch: SetWorkspaceConfigInput): Promise<WorkspaceConfigResponse> {
-  return mutate<WorkspaceConfigResponse>('PUT', '/workspace/config', patch)
+export async function putWorkspaceConfig(
+  patch: SetWorkspaceConfigInput,
+): Promise<WorkspaceConfigResponse> {
+  return unwrap(await cez.api.v1.workspace.config.$put({ json: patch }), '/workspace/config')
 }
 
 /** Set/clear the agents' config knobs — base branch, default runner, system prompt, per-runner
  *  model presets (Settings → Agents, R6 1.5). Merged into the raw config.json server-side so
  *  unrelated user keys survive; `null` clears a knob back to its default. */
-export function putConfig(patch: SetConfigInput): Promise<SetConfigResponse> {
-  return mutate<SetConfigResponse>('PUT', '/config', patch)
+export async function putConfig(patch: SetConfigInput): Promise<SetConfigResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].config.$put({
+      param: { projectId: queryScope() },
+      json: patch,
+    }),
+    '/config',
+  )
 }
 
 /** The worktree management panel (#483): every materialized task worktree with disk usage,
  *  retention state, the total, and the current keep-limit. */
-export function getWorktrees(opts?: ReadOptions): Promise<WorktreesResponse> {
-  return get<WorktreesResponse>('/worktrees', opts)
+export async function getWorktrees(opts?: ReadOptions): Promise<WorktreesResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].worktrees.$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/worktrees',
+  )
 }
 
 /** "Reclaim now": force the retention enforcer to reclaim over-limit finished worktrees
  *  (directory only — branch kept). Returns the reclaimed run ids. Always 200. */
-export function reclaimWorktrees(): Promise<ReclaimWorktreesResponse> {
-  return mutate<ReclaimWorktreesResponse>('POST', '/worktrees/reclaim', {})
+export async function reclaimWorktrees(): Promise<ReclaimWorktreesResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].worktrees.reclaim.$post({
+      param: { projectId: queryScope() },
+      json: {},
+    }),
+    '/worktrees/reclaim',
+  )
 }
 
 /** Per-row "Delete" in the worktrees panel: reclaim one run's worktree AND its branch
  *  (the existing spec-006 route). 409 while the run is active. */
-export function removeRunWorktree(id: string): Promise<RemoveWorktreeResponse> {
-  return mutate<RemoveWorktreeResponse>('POST', runPath(id, '/remove-worktree'))
+export async function removeRunWorktree(id: string): Promise<RemoveWorktreeResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['remove-worktree'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/remove-worktree'),
+  )
 }

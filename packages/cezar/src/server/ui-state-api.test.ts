@@ -13,7 +13,7 @@ import { apiRequest } from './loopback-request.testkit.js';
  * schema is `.passthrough()` so unrelated keys survive a PUT untouched (BACKWARD_COMPATIBILITY.md
  * §3 — additive only); `skillUsage` is a plain `name -> count` map with no shape surprises; and
  * because the top-level merge is SHALLOW, a PUT of `skillUsage` replaces the whole map rather
- * than merging entry-by-entry — exactly what the client's `bumpSkillUsage` (web/app/src/lib/
+ * than merging entry-by-entry — exactly what the client's `bumpSkillUsage` (packages/web/src/lib/
  * skills.ts) is written to expect (it always sends the full updated map back).
  */
 describe('the ui-state API — skillUsage (#408)', () => {

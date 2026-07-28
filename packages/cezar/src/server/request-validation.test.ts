@@ -185,4 +185,54 @@ describe('request validation bounds (#429)', () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { runsView: string }).runsView).toBe('table');
   });
+
+  // ---- how the body is parsed, not just what the schema says ----------------
+  /**
+   * These routes moved from parsing inline (`await c.req.json().catch(() => …)`) to Hono's
+   * `validator('json')`, so that `hc` can typecheck request bodies. Hono's validator is stricter
+   * than the old code in two ways that reach the wire: it answers a PLAIN-TEXT 400 for malformed
+   * JSON, and it ignores a body sent without a JSON content-type. `jsonBody` exists to paper over
+   * exactly that — the first two cases below fail against a bare `validator('json')`. The other
+   * two pin the `absent` fallback, which a bare validator happens to satisfy today only because
+   * Hono's stand-in `{}` agrees with these two schemas; they are here so a change to either one
+   * is a deliberate act.
+   */
+  describe('body parsing stays as tolerant as the inline parse it replaced', () => {
+    it('answers malformed JSON with the {error} shape, not Hono plain text', async () => {
+      const res = await apiRequest(app, '/api/v1/runs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{ this is not json',
+      });
+      expect(res.status).toBe(400);
+      expect(res.headers.get('content-type')).toContain('application/json');
+      // The schema's own complaint about the fallback — the same text as before the move.
+      expect(await res.json()).toHaveProperty('error');
+      expect(captured).toBeUndefined();
+    });
+
+    it('still reads a body sent without a JSON content-type', async () => {
+      const res = await apiRequest(app, '/api/v1/runs', {
+        method: 'POST',
+        body: JSON.stringify({ ...stepsBody, task: 'no content-type here' }),
+      });
+      expect(res.status).toBe(201);
+      expect(captured?.task).toBe('no content-type here');
+    });
+
+    it('treats a body-less request as the route’s own fallback, not as {}', async () => {
+      // `POST /runs` required a body before; a bodyless request must still 400 rather than
+      // sail through on the `{}` Hono hands a validator when there is nothing to parse.
+      const res = await apiRequest(app, '/api/v1/runs', { method: 'POST' });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toHaveProperty('error');
+      expect(captured).toBeUndefined();
+    });
+
+    it('lets a body-less request through where the route tolerated one (archive)', async () => {
+      const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/archive`, { method: 'POST' });
+      expect(res.status).toBe(200);
+    });
+  });
 });

@@ -113,7 +113,7 @@ const workspaceConfigSchema = z
     skillsAutoUpdate: z.boolean().optional().catch(undefined),
     // Function-form default/catch: mutators (step 1.3's registerProject) edit
     // these objects in place, so parses must never share one reference.
-    resources: resourcesSchema.default(() => ({})).catch(() => resourcesSchema.parse({})),
+    resources: resourcesSchema.prefault(() => ({})).catch(() => resourcesSchema.parse({})),
     /** Optional New Task policy. Missing keys inherit exact 0/1 environment seeds. */
     composerDefaults: composerDefaultsSchema.default(() => ({})).catch(() => ({})),
     /** Host-wide provider preferences; absent means every provider is enabled. */

@@ -12,6 +12,22 @@
   (`@open-mercato/cezar-api-client`) describe the whole API, and what makes a future `v2` an
   additive mount rather than an edit to every route.
 
+## 🔧 Changed
+- **Validation errors (`400 {error}`) are worded differently and now name the field.** Two causes:
+  zod 4 rewrote its default messages (`Required` → `Invalid input: expected string, received
+  undefined`), and each issue is now prefixed with its path — `task: must be at most 100000
+  characters` where it used to be `task must be at most 100000 characters` for a handful of fields
+  and an unattributed sentence for the rest. **The `{ error: string }` shape and the 400 status are
+  unchanged**, and the message was never a pinned contract (BACKWARD_COMPATIBILITY.md §2 pins the
+  shape, not the text) — but a script matching on the exact wording will need updating, and the
+  cockpit shows the new text verbatim in its toasts.
+- Every mutating route now validates its body as route middleware rather than inside the handler,
+  and the query string / path params of 17 more routes are validated too. Behaviour is unchanged
+  by design, including the tolerant cases (a body sent without a JSON content-type, a malformed
+  body, and a repeated query key such as `?refresh=1&refresh=1`, which still takes the first
+  value). The point is that the typed client can now check request bodies, params and queries at
+  compile time.
+
 # 0.9.1 (2026-07-24)
 
 ## Highlights
