@@ -22,7 +22,7 @@ interface HealthBody {
   checks: unknown[];
   defaultRunner?: string;
   forge: { kind: string; available: boolean; reason?: string } | null;
-  capabilities: { localHandoff: boolean; followups: boolean; singleProject: boolean };
+  capabilities: { localHandoff: boolean; followups: boolean; singleProject: boolean; tokenMetrics: boolean };
 }
 
 describe('GET /api/health — forge + capabilities', () => {
@@ -31,6 +31,7 @@ describe('GET /api/health — forge + capabilities', () => {
   const savedRemote = process.env.CEZ_REMOTE;
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
   const savedSingleProject = process.env.CEZ_SINGLE_PROJECT;
+  const savedHideTokenMetrics = process.env.CEZ_HIDE_TOKEN_METRICS;
   const savedDryRun = process.env.CEZ_DRY_RUN;
 
   beforeEach(() => {
@@ -41,6 +42,7 @@ describe('GET /api/health — forge + capabilities', () => {
     // must not decide what these assertions see.
     delete process.env.CEZ_FOLLOWUPS;
     delete process.env.CEZ_SINGLE_PROJECT;
+    delete process.env.CEZ_HIDE_TOKEN_METRICS;
     // Dry-run keeps the forge probe (and the claude check) off the network,
     // so the assertions are deterministic on any machine.
     process.env.CEZ_DRY_RUN = '1';
@@ -55,6 +57,8 @@ describe('GET /api/health — forge + capabilities', () => {
     else process.env.CEZ_FOLLOWUPS = savedFollowups;
     if (savedSingleProject === undefined) delete process.env.CEZ_SINGLE_PROJECT;
     else process.env.CEZ_SINGLE_PROJECT = savedSingleProject;
+    if (savedHideTokenMetrics === undefined) delete process.env.CEZ_HIDE_TOKEN_METRICS;
+    else process.env.CEZ_HIDE_TOKEN_METRICS = savedHideTokenMetrics;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
@@ -78,7 +82,12 @@ describe('GET /api/health — forge + capabilities', () => {
     expect(body).toHaveProperty('defaultRunner');
     // New additive fields.
     expect(body.forge).toBeNull(); // tmp dir — not a git repo, no remote
-    expect(body.capabilities).toEqual({ localHandoff: true, followups: false, singleProject: false });
+    expect(body.capabilities).toEqual({
+      localHandoff: true,
+      followups: false,
+      singleProject: false,
+      tokenMetrics: true,
+    });
   });
 
   // getRepoInfo needs a resolvable HEAD — an empty commit is enough.
@@ -119,7 +128,12 @@ describe('GET /api/health — forge + capabilities', () => {
   it('hosted mode via CEZ_REMOTE=1: localHandoff:false', async () => {
     process.env.CEZ_REMOTE = '1';
     const body = await health();
-    expect(body.capabilities).toEqual({ localHandoff: false, followups: false, singleProject: false });
+    expect(body.capabilities).toEqual({
+      localHandoff: false,
+      followups: false,
+      singleProject: false,
+      tokenMetrics: true,
+    });
   });
 
   it('hosted mode trims repoRoot to a basename — no absolute path/username leak (#431)', async () => {
@@ -139,12 +153,22 @@ describe('GET /api/health — forge + capabilities', () => {
 
   it('hosted mode via a non-loopback bind host: localHandoff:false', async () => {
     const body = await health({ bindHost: '0.0.0.0' });
-    expect(body.capabilities).toEqual({ localHandoff: false, followups: false, singleProject: false });
+    expect(body.capabilities).toEqual({
+      localHandoff: false,
+      followups: false,
+      singleProject: false,
+      tokenMetrics: true,
+    });
   });
 
   it('a loopback bind host stays local', async () => {
     const body = await health({ bindHost: '127.0.0.1' });
-    expect(body.capabilities).toEqual({ localHandoff: true, followups: false, singleProject: false });
+    expect(body.capabilities).toEqual({
+      localHandoff: true,
+      followups: false,
+      singleProject: false,
+      tokenMetrics: true,
+    });
   });
 
   // #471 — the inbox capability rides the same payload the UI already reads.
@@ -158,6 +182,17 @@ describe('GET /api/health — forge + capabilities', () => {
       localHandoff: true,
       followups: true,
       singleProject: false,
+      tokenMetrics: true,
+    });
+  });
+
+  it('reports tokenMetrics:false with CEZ_HIDE_TOKEN_METRICS=1', async () => {
+    process.env.CEZ_HIDE_TOKEN_METRICS = '1';
+    expect((await health()).capabilities).toEqual({
+      localHandoff: true,
+      followups: false,
+      singleProject: false,
+      tokenMetrics: false,
     });
   });
 });

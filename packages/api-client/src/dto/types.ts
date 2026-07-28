@@ -282,11 +282,15 @@ export interface ForgeInfo {
  *  this server has no follow-up inbox: the Inbox nav item and the composer's follow-up
  *  toggle disappear the same way. The per-task handoff journal is unrelated and always on.
  *  `singleProject: true` means `CEZ_SINGLE_PROJECT=1` constrained the workspace to its
- *  launch project and all multi-project affordances must be omitted. */
+ *  launch project and all multi-project affordances must be omitted.
+ *  `tokenMetrics: false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token
+ *  counts and monetary cost. The telemetry still exists in run/event payloads. Optional so a
+ *  newer cockpit preserves the legacy visible default when reading an older health response. */
 export interface Capabilities {
   localHandoff: boolean
   followups: boolean
   singleProject: boolean
+  tokenMetrics?: boolean
 }
 
 export interface HealthResponse {
