@@ -63,6 +63,8 @@ interface BackendModelMap {
   readonly defaultProvider?: string;
   /** Whether explicit foreign provider/model ids are valid backend-native ids. */
   readonly allowExplicitProvider?: boolean;
+  /** Whether the backend wire model keeps the explicit provider prefix. */
+  readonly wireProviderQualified?: boolean;
   /**
    * Bare model id → provider override, for the rare backend whose bare ids
    * span providers. Checked before `defaultProvider`; empty for today's set.
@@ -78,9 +80,11 @@ interface BackendModelMap {
 export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> = {
   // Claude Code supports custom/gateway model ids such as DeepSeek via an
   // Anthropic-compatible endpoint, so preserve an explicit provider/model.
-  claude: { defaultProvider: 'anthropic', allowExplicitProvider: true },
-  'claude-cli': { defaultProvider: 'anthropic', allowExplicitProvider: true },
-  codex: { defaultProvider: 'openai' },
+  claude: { defaultProvider: 'anthropic', allowExplicitProvider: true, wireProviderQualified: true },
+  'claude-cli': { defaultProvider: 'anthropic', allowExplicitProvider: true, wireProviderQualified: true },
+  // Codex selects the provider from model_provider in config.toml, so the
+  // explicit provider is accepted for identity but stripped from the wire id.
+  codex: { defaultProvider: 'openai', allowExplicitProvider: true },
   // opencode selects across providers, so a bare model is ambiguous: reject it
   // loudly rather than let the server pick a default the user never asked for.
   opencode: {},
@@ -165,7 +169,13 @@ export function resolveModelIdentity(
 export function toBackendModel(backend: AgentBackend, id: ModelIdentity): string {
   const map = BACKEND_MODEL_MAP[backend] ?? {};
   if (map.defaultProvider === undefined) return formatModelIdentity(id);
-  if (map.allowExplicitProvider && id.provider !== map.defaultProvider) return formatModelIdentity(id);
+  if (
+    map.allowExplicitProvider &&
+    map.wireProviderQualified &&
+    id.provider !== map.defaultProvider
+  ) {
+    return formatModelIdentity(id);
+  }
   return id.model;
 }
 

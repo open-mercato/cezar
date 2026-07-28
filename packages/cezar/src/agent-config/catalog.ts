@@ -56,6 +56,8 @@ export interface ConfigFileDef {
   modelKey?: string;
   /** Native model keys checked in precedence order, including nested `env.*` settings. */
   modelKeys?: readonly string[];
+  /** Native provider key paired with the model, when the vendor separates the two. */
+  modelProviderKey?: string;
   /** Higher values win when resolving a native default model across config scopes. */
   modelPriority?: number;
   /** VERBATIM from the vendor docs. Never computed, never generic. */
@@ -197,6 +199,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     tracked: 'outside-repo',
     holdsMcp: true,
     modelKey: 'model',
+    modelProviderKey: 'model_provider',
     modelPriority: 1,
     precedence:
       'User-level defaults. A trusted project’s .codex/config.toml overrides these; some keys (provider, auth, telemetry) cannot be overridden at project scope. MCP servers live here under [mcp_servers.<id>].',

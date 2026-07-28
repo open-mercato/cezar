@@ -65,4 +65,19 @@ describe('readAgentModelDefaults', () => {
       readAgentModelDefaults(repo, { HOME: home, ANTHROPIC_MODEL: 'deepseek' }),
     ).resolves.toEqual({ claude: 'deepseek' });
   });
+
+  it('pairs a Codex custom provider with its configured model', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    writeFileSync(
+      join(home, '.codex', 'config.toml'),
+      'model = "deepseek-chat"\nmodel_provider = "deepseek"\n',
+    );
+
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({
+      codex: 'deepseek/deepseek-chat',
+    });
+  });
 });

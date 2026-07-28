@@ -123,8 +123,12 @@ describe('resolveModelIdentity — bare ids per backend', () => {
     );
   });
 
-  it('Codex still rejects a foreign provider on its single-provider backend', () => {
-    expect(() => resolveModelIdentity('codex', 'anthropic/claude-opus-4-8')).toThrow(ModelIdentityError);
+  it('Codex accepts a foreign provider for a configured custom provider', () => {
+    expect(resolveModelIdentity('codex', 'deepseek/deepseek-chat')).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    });
+    expect(toBackendModel('codex', { provider: 'deepseek', model: 'deepseek-chat' })).toBe('deepseek-chat');
   });
 });
 

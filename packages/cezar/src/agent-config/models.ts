@@ -49,14 +49,15 @@ function valueAtPath(value: unknown, path: string): unknown {
   }, value);
 }
 
+function parseConfigContent(content: string, format: ConfigFormat): unknown {
+  return format === 'toml'
+    ? parseToml(content)
+    : JSON.parse(format === 'jsonc' ? stripJsonTrailingCommas(stripJsonComments(content)) : content);
+}
+
 function modelFromContent(content: string, format: ConfigFormat, keys: readonly string[]): string | undefined {
   try {
-    const parsed =
-      format === 'toml'
-        ? parseToml(content)
-        : JSON.parse(
-            format === 'jsonc' ? stripJsonTrailingCommas(stripJsonComments(content)) : content,
-          );
+    const parsed = parseConfigContent(content, format);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     for (const key of keys) {
       const model = valueAtPath(parsed, key);
@@ -66,6 +67,15 @@ function modelFromContent(content: string, format: ConfigFormat, keys: readonly 
   } catch {
     // A malformed higher-precedence file must not prevent a usable lower-level
     // default from appearing in the cockpit.
+    return undefined;
+  }
+}
+
+function providerFromContent(content: string, format: ConfigFormat, key: string): string | undefined {
+  try {
+    const provider = valueAtPath(parseConfigContent(content, format), key);
+    return typeof provider === 'string' && provider.trim() ? provider.trim() : undefined;
+  } catch {
     return undefined;
   }
 }
@@ -86,11 +96,28 @@ async function readRunnerModel(
       def.modelKey !== undefined &&
       def.modelPriority !== undefined,
   ).sort((a, b) => (b.modelPriority ?? 0) - (a.modelPriority ?? 0));
+  const files: Array<{ def: (typeof modelFiles)[number]; content: string }> = [];
   for (const def of modelFiles) {
     const file = await readConfigFile(def.id, repoRoot, env);
     if (!file || 'error' in file || !file.exists) continue;
-    const model = modelFromContent(file.content, def.format, def.modelKeys ?? [def.modelKey!]);
-    if (model) return model;
+    files.push({ def, content: file.content });
+  }
+  const provider =
+    runner === 'codex'
+      ? files
+          .map(({ def, content }) =>
+            def.modelProviderKey ? providerFromContent(content, def.format, def.modelProviderKey) : undefined,
+          )
+          .find((value): value is string => value !== undefined)
+      : undefined;
+  for (const { def, content } of files) {
+    const model = modelFromContent(content, def.format, def.modelKeys ?? [def.modelKey!]);
+    if (model) {
+      if (runner === 'codex' && provider && provider !== 'openai' && !model.includes('/')) {
+        return `${provider}/${model}`;
+      }
+      return model;
+    }
   }
   return undefined;
 }
