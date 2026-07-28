@@ -497,7 +497,7 @@ Parallel variants (×2/×3) of one task share that task's backend — mixing
 happens per task and per step, not inside a variant group.
 
 The seam is deliberately small: a backend is one class implementing the
-`AgentRunner` interface (`src/core/agent-runner.ts`) that turns a prompt into
+`AgentRunner` interface (`packages/cezar/src/core/agent-runner.ts`) that turns a prompt into
 a stream of normalized events. Other CLIs — pi, aider, whatever ships next —
 can slot in the same way.
 
@@ -613,8 +613,8 @@ cd cezar
 npm install
 ```
 
-**3. Build** — compiles the server (`tsc → dist/`) and the cockpit
-(`vite build → web/dist/`), then runs the pack gate:
+**3. Build** — compiles the api-client and the server (`tsc → packages/cezar/dist/`) and the cockpit
+(`vite build → packages/cezar/web/dist/`), then runs the pack gate:
 
 ```bash
 npm run build
@@ -666,9 +666,9 @@ npm run uninstall-as-command    # removes cezar / cez / cezar-cli (either flavor
 
 ```bash
 npm run dev          # server (API :4321) + Vite dev server, opens the cockpit in the browser
-npm run dev:server   # tsx src/index.ts — the API server alone
+npm run dev:server   # tsx packages/cezar/src/index.ts — the API server alone
 npm run dev:web      # Vite dev server alone (proxies /api to :4321)
-npm run build        # tsc → dist/, vite build → web/dist/, then the pack gate
+npm run build        # tsc → packages/cezar/dist/, vite build → packages/cezar/web/dist/, then the pack gate
 npm run typecheck    # server + web (tsc --noEmit)
 npm test             # vitest — server + cockpit unit suites
 npm run test:unit    # node:test — fast core-module tests
@@ -678,7 +678,7 @@ npm run test:e2e     # real-browser cockpit suite (agent-browser)
 
 The stack is deliberately small: **TypeScript** (strict, ESM), **Hono** + SSE for
 the server, **Zod** at every boundary, **YAML** for workflows, and a **React 19 +
-Vite + Tailwind v4 + shadcn/ui** cockpit shipped pre-built in `web/dist/` — the
+Vite + Tailwind v4 + shadcn/ui** cockpit shipped pre-built in `packages/cezar/web/dist/` — the
 published package carries the built app, so `npx` users never run a bundler.
 Every module is meant to be read in one sitting.
 

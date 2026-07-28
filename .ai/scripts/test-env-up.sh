@@ -30,13 +30,16 @@ HEALTH_PATH="/api/health"
 HEALTH_TIMEOUT=60
 TEST_ENV_CACHE_TTL_SECONDS=${TEST_ENV_CACHE_TTL_SECONDS:-600}
 
-# The preparation chain: `tsc` → dist/, `vite build` → web/dist/. Both are required —
-# the server serves the React cockpit from web/dist and falls back to the legacy UI
-# without it, so a missing web build would silently test the wrong page.
+# The preparation chain: api-client `tsc` → packages/api-client/dist, server `tsc` → packages/cezar/dist/,
+# `vite build` → packages/cezar/web/dist/. All three are required — the server serves the React cockpit
+# from packages/cezar/web/dist and falls back to the legacy UI without it, so a missing web build would
+# silently test the wrong page.
 BUILD_COMMAND="npm run build"
-BUILD_ARTIFACTS="dist/index.js web/dist/index.html"
-# Fingerprint inputs — a change to any of these invalidates the cached build.
-BUILD_INPUT_PATHS="src web/app/src web/app/index.html web/app/vite.config.ts package.json package-lock.json tsconfig.json"
+BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/web/dist/index.html packages/api-client/dist/index.js"
+# Fingerprint inputs — a change to any of these invalidates the cached build. Each workspace
+# contributes its own sources AND its own manifest: a dependency moved between packages
+# changes what gets bundled without touching a single source file.
+BUILD_INPUT_PATHS="packages/cezar/src packages/cezar/package.json packages/cezar/tsconfig.json packages/api-client/src packages/api-client/package.json packages/web/src packages/web/index.html packages/web/vite.config.ts packages/web/package.json package.json package-lock.json"
 
 # CEZ_DRY_RUN=1 swaps the agent CLIs for the bundled mock, so booting needs no
 # `claude` login and reaches no network — the whole point for CI/e2e.
@@ -99,7 +102,7 @@ json_get() { node -e '
 
 # ---- 2. lock — one bootstrap at a time --------------------------------------
 # Released when the bootstrap finishes rather than held for the environment's lifetime:
-# the server `readFileSync`s dist/ and web/dist/ per request, so a later rebuild under a
+# the server `readFileSync`s packages/cezar/dist/ and packages/cezar/web/dist/ per request, so a later rebuild under a
 # running app is picked up on the next reload instead of corrupting it. The reuse check's
 # "source newer than startedAt" test is what keeps a stale build from being tested.
 LOCK_HELD=0
@@ -313,10 +316,10 @@ start_app() {
   log "starting cezar on $BASE_URL (CEZ_DRY_RUN=1)"
   # --no-open: a test boot must never hijack the operator's browser.
   if command -v setsid >/dev/null 2>&1; then
-    (cd "$REPO_ROOT" && exec setsid nohup node dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
+    (cd "$REPO_ROOT" && exec setsid nohup node packages/cezar/dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
       >"$APP_LOG" 2>&1 </dev/null) &
   else
-    (cd "$REPO_ROOT" && exec nohup node dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
+    (cd "$REPO_ROOT" && exec nohup node packages/cezar/dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
       >"$APP_LOG" 2>&1 </dev/null) &
   fi
   APP_PID=$!
@@ -368,13 +371,13 @@ write_descriptor() {
         descriptor: desc,
         notes: bNotes,
       },
-      testRunner: { name: "other", config: "web/app/e2e/vitest.config.ts" },
+      testRunner: { name: "other", config: "packages/web/e2e/vitest.config.ts" },
       platform: "wsl2",
       startedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
       notes: "Booted from a production build with CEZ_DRY_RUN=1, so the agent CLIs are mocked and no login/network is needed. No backing services. Stop with .ai/scripts/test-env-down.sh. App log: .ai/qa/test-env-app.log.",
     }, null, 2) + "\n");
   ' "$ENV_DESCRIPTOR" "$BASE_URL" "$PORT" "$APP_PID" \
-    "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node dist/index.js --port $PORT --no-open" \
+    "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node packages/cezar/dist/index.js --port $PORT --no-open" \
     "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR" \
     "$SINGLE_PROJECT"
 }

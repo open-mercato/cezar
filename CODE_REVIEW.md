@@ -20,16 +20,16 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 
 ### Zod at every boundary
 
-- Every mutating API route parses its body with `schema.safeParse(await c.req.json().catch(() => null))` and returns `{ error: issues.join('; ') }` with 400 on failure — the established pattern in `src/server/server.ts`. New routes must follow it; a route that trusts `c.req.json()` raw is a blocker.
-- External process output crossing into the app (`gh … --json` in `src/server/github.ts`, agent CLI streams) is zod-validated at the boundary, extras stripped.
+- Every mutating API route parses its body with `schema.safeParse(await c.req.json().catch(() => null))` and returns `{ error: issues.join('; ') }` with 400 on failure — the established pattern in `packages/cezar/src/server/server.ts`. New routes must follow it; a route that trusts `c.req.json()` raw is a blocker.
+- External process output crossing into the app (`gh … --json` in `packages/cezar/src/server/github.ts`, agent CLI streams) is zod-validated at the boundary, extras stripped.
 - Persisted files read back in (`runs.json`, `config.json`, workflow YAML) go through their schema; parse failure degrades to a sane default, never a crash.
 - Schemas carry the limits (`.max()` on strings/arrays, image size caps, `variants` 1–3, steps ≤ 8). New inputs need explicit bounds — unbounded user input into a file write or a spawned process is a blocker.
 
 ### Graceful degradation
 
 - Missing `gh` / no remote / offline: GitHub reads return `{ available: false, reason }`, PR creation returns `{ ok: false, error }` — never a throw, never a 500 for an expected absence.
-- Missing or malformed `.ai/cezar/config.json` behaves exactly like the defaults and never blocks startup (`src/config.ts`).
-- git helpers in `src/git-worktree.ts` never throw (except `createWorktree`); check the diff keeps that contract.
+- Missing or malformed `.ai/cezar/config.json` behaves exactly like the defaults and never blocks startup (`packages/cezar/src/config.ts`).
+- git helpers in `packages/cezar/src/git-worktree.ts` never throw (except `createWorktree`); check the diff keeps that contract.
 - `CEZ_DRY_RUN=1` paths must still work after the change — that is the offline demo and the de-facto integration test.
 
 ### Security
@@ -50,7 +50,7 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 
 - Comments cite the spec or issue that motivated the code (`spec 006`, `#348`); non-obvious behavior in the diff should too.
 - No new **server runtime** dependencies without strong justification — that dependency budget is hono, @hono/node-server, yaml, zod, smol-toml and ws, and nothing else. The list is exhaustive on purpose: adding to it is a review decision, so the commit that widens it updates this line and says why. (`ws` earned its place because Node ships a WebSocket *client* but no server and `@hono/node-server` provides none, so the `/api/ws` subscription bus had no in-tree option — spec `.ai/specs/2026-07-23-websocket-subscriptions.md`.) Browser packages are build-time dependencies and must remain locked, bundle-measured, and absent from the installed CLI's runtime dependency graph.
-- Web UI changes belong under `web/app/` and follow the accepted React 19 + Vite + Tailwind v4 + shadcn/ui architecture. Keep `web/dist` reproducible from source, preserve light/dark/system themes and mobile/accessibility behavior, and add unit/component tests for changed behavior. (The legacy vanilla UI was retired in R7; the React cockpit is the only UI, and `/new` is the React composer.)
+- Web UI changes belong under `packages/web/` and follow the accepted React 19 + Vite + Tailwind v4 + shadcn/ui architecture. Keep `packages/cezar/web/dist` reproducible from source, preserve light/dark/system themes and mobile/accessibility behavior, and add unit/component tests for changed behavior. (The legacy vanilla UI was retired in R7; the React cockpit is the only UI, and `/new` is the React composer.)
 - User-facing errors are one human-readable line (the `createDraftPr` pattern), not stack traces.
 
 ## Severity guidance
