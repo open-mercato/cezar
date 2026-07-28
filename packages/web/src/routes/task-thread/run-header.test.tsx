@@ -622,6 +622,28 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
+  it('omits token and cost text when health disables token metrics', async () => {
+    stubFetch({
+      '/api/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true,
+            followups: false,
+            singleProject: false,
+            tokenMetrics: false,
+          },
+        }),
+    })
+    renderHeader(run('done', { costUsd: 0.04 }))
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() => {
+      expect(meta.textContent).not.toContain('27.0k tokens')
+      expect(meta.textContent).not.toContain('$0.04')
+    })
+    expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
+  })
+
   it.each([
     {
       name: 'both',

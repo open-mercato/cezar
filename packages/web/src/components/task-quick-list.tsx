@@ -1,6 +1,6 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useRuns } from '@/api/queries'
+import { useHealth, useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -18,6 +18,7 @@ import {
   type QuickListRow,
 } from '@/lib/task-groups'
 import { prNumber, taskPrUrl } from '@/lib/tasks-table'
+import { tokenMetricsVisible } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn, isHttpUrl } from '@/lib/utils'
 
@@ -35,6 +36,7 @@ export function TaskQuickList({
   onViewChange,
   currentRunId = null,
   now = Date.now(),
+  showTokenMetrics = true,
 }: {
   runs: RunRecord[]
   view: ListView
@@ -43,6 +45,8 @@ export function TaskQuickList({
   currentRunId?: string | null
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
+  /** Presentation capability; defaults visible for older health responses and direct renders. */
+  showTokenMetrics?: boolean
 }) {
   const counts = listCounts(runs)
   const buckets = groupRuns(runs, view)
@@ -71,7 +75,12 @@ export function TaskQuickList({
           {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
         </p>
       ) : (
-        <QuickListBuckets buckets={buckets} currentRunId={currentRunId} now={now} />
+        <QuickListBuckets
+          buckets={buckets}
+          currentRunId={currentRunId}
+          now={now}
+          showTokenMetrics={showTokenMetrics}
+        />
       )}
     </div>
   )
@@ -89,11 +98,13 @@ export function QuickListBuckets({
   currentRunId = null,
   now = Date.now(),
   scope = null,
+  showTokenMetrics = true,
 }: {
   buckets: QuickListBucket[]
   currentRunId?: string | null
   now?: number
   scope?: string | null
+  showTokenMetrics?: boolean
 }) {
   // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -118,6 +129,7 @@ export function QuickListBuckets({
               currentRunId={currentRunId}
               now={now}
               scope={scope}
+              showTokenMetrics={showTokenMetrics}
               expanded={row.kind === 'group' && expanded.has(row.groupId)}
               onToggle={toggleGroup}
             />
@@ -170,6 +182,7 @@ function Row({
   scope,
   expanded,
   onToggle,
+  showTokenMetrics,
 }: {
   row: QuickListRow
   currentRunId: string | null
@@ -177,6 +190,7 @@ function Row({
   scope: string | null
   expanded: boolean
   onToggle: (groupId: string) => void
+  showTokenMetrics: boolean
 }) {
   if (row.kind === 'run') {
     return (
@@ -186,6 +200,7 @@ function Row({
         currentRunId={currentRunId}
         now={now}
         scope={scope}
+        showTokenMetrics={showTokenMetrics}
       />
     )
   }
@@ -231,6 +246,7 @@ function Row({
               now={now}
               scope={scope}
               variant
+              showTokenMetrics={showTokenMetrics}
             />
           ))
         : null}
@@ -251,6 +267,7 @@ function RunRow({
   now,
   scope,
   variant = false,
+  showTokenMetrics,
 }: {
   run: RunRecord
   queuePosition: number | null
@@ -261,6 +278,7 @@ function RunRow({
   /** A member row under an expanded group tile: indented, letter-chipped, and labelled with what
    *  actually distinguishes the variants (runner and spend) rather than the shared title. */
   variant?: boolean
+  showTokenMetrics: boolean
 }) {
   const attention = deriveAttention(run)
   const isActive = run.id === currentRunId
@@ -301,7 +319,7 @@ function RunRow({
         ) : null}
         <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-          {variant ? variantLabel(run) : runTitle(run)}
+          {variant ? variantLabel(run, showTokenMetrics) : runTitle(run)}
         </span>
         {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
             sidebar row has no column to hold an em dash open for. */}
@@ -330,9 +348,9 @@ function RunRow({
 
 /** A variant row's subtitle: what differs between A and B — the backend and what it has spent.
  *  `runner` is absent on records predating the choice; those are Claude by definition. */
-function variantLabel(run: RunRecord): string {
+function variantLabel(run: RunRecord, showTokenMetrics: boolean): string {
   const parts: string[] = [run.runner ?? 'claude']
-  if (run.tokensUsed > 0) parts.push(compactTokens(run.tokensUsed))
+  if (showTokenMetrics && run.tokensUsed > 0) parts.push(compactTokens(run.tokensUsed))
   return parts.join(' · ')
 }
 
@@ -343,6 +361,7 @@ function variantLabel(run: RunRecord): string {
  */
 export function TaskQuickListContainer() {
   const runs = useRuns()
+  const health = useHealth()
   const [view, setView] = useListView()
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
   const match = useProjectMatch('/tasks/:id/*')
@@ -361,6 +380,7 @@ export function TaskQuickListContainer() {
       // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
       currentRunId={match?.params.id ?? exact?.params.id ?? null}
       now={now}
+      showTokenMetrics={tokenMetricsVisible(health.data)}
     />
   )
 }

@@ -37,7 +37,7 @@ import { Fragment, useState, type ReactNode } from 'react'
 import { useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
-import { queryKeys, useConfig, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
+import { queryKeys, useConfig, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -69,6 +69,7 @@ import { compactTokens } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import { tokenMetricsVisible } from '@/lib/token-metrics'
 import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
@@ -113,6 +114,7 @@ export function RunHeader({
   // query — already warm from the sidebar quick-list — because position is a property of the
   // whole queue, not of this record.
   const runs = useRuns()
+  const health = useHealth()
   const queuePosition =
     run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
@@ -140,7 +142,7 @@ export function RunHeader({
           </span>
         </div>
 
-        <MetaRow run={run} />
+        <MetaRow run={run} showTokenMetrics={tokenMetricsVisible(health.data)} />
         <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
@@ -470,7 +472,7 @@ function EditableTitle({ run }: { run: ApiRun }) {
  *  not a placeholder. Runner and model no longer sit in the loose dot-list (#416): they read as
  *  a status for the *active* session, so they move into the agent badge next to the token
  *  count, revealed on hover/focus rather than always-on text. */
-function MetaRow({ run }: { run: ApiRun }) {
+function MetaRow({ run, showTokenMetrics }: { run: ApiRun; showTokenMetrics: boolean }) {
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -512,7 +514,7 @@ function MetaRow({ run }: { run: ApiRun }) {
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
 
   const usage: ReactNode[] = []
-  if (run.tokensUsed > 0) {
+  if (showTokenMetrics && run.tokensUsed > 0) {
     // Tokens WITHOUT the mockup's context gauge, on purpose: the gauge needs "used / window",
     // and RunRecord carries only the lifetime `tokensUsed` — no context-window size, no
     // per-session usage. When the protocol starts persisting one, the bar goes here.
@@ -522,7 +524,7 @@ function MetaRow({ run }: { run: ApiRun }) {
       </span>,
     )
   }
-  if (run.costUsd) {
+  if (showTokenMetrics && run.costUsd) {
     usage.push(
       <span key="cost" className="tabular-nums">
         {formatCost(run.costUsd)}
