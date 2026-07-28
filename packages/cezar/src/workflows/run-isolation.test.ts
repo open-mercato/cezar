@@ -60,6 +60,8 @@ describe('RunManager repository-root isolation', () => {
     expect(store.getRun(record.id)?.error).toContain('worktree creation failed');
     expect(existsSync(join(root, 'root-was-touched'))).toBe(false);
     const notes = store.readEvents(record.id).filter((event) => event.type === 'note');
+    expect(notes.some((event) => String(event.message).includes('worktree on'))).toBe(true);
+    expect(notes.some((event) => String(event.message).includes('(default)'))).toBe(true);
     expect(notes.some((event) => String(event.message).includes('stopped before workflow execution'))).toBe(true);
     expect(notes.some((event) => String(event.message).includes('exclusive access'))).toBe(false);
   });

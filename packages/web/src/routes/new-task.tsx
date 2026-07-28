@@ -177,9 +177,6 @@ export function NewTaskRoute() {
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, workflowList)
-  const selectedWorkflow = source.source === 'workflow'
-    ? workflowList.find((workflow) => workflow.name === source.ref)
-    : undefined
   const selectedSkill = source.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
@@ -241,14 +238,11 @@ export function NewTaskRoute() {
   const hasGit = health.data === undefined || health.data.repo !== null
   const variants = hasGit ? draft.variants : 1
 
-  // Worktree opt-out (#worktree-toggle): only offered for a single skill run in a git repo —
-  // workflows and variants always isolate, and a non-git repo already runs in place. The choice
-  // is remembered (draft → last-used → default on).
-  const singleStepSource = source.source === 'skill'
-    || source.ref === 'quick-task'
-    || selectedWorkflow?.steps.length === 1
+  // Worktree opt-out (#worktree-toggle): any ordinary run in a git repo may use the current
+  // checkout. Parallel variants are the one hard constraint because each competing run needs
+  // its own tree; a non-git repo already runs in place.
   const worktreeToggleShown = hasGit
-  const worktreeForced = !singleStepSource || variants > 1
+  const worktreeForced = variants > 1
 
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
   // wins; then an interactive skill recommends handing the ball back; otherwise the configured
@@ -258,7 +252,6 @@ export function NewTaskRoute() {
   const runMode = resolveComposerRunMode({
     hasGit,
     variants,
-    forceWorktree: !singleStepSource,
     planFirst: draft.planFirst,
     explicitAutonomous: draft.autonomous,
     explicitWorktree: draft.worktree,
@@ -624,9 +617,7 @@ export function NewTaskRoute() {
                 <WorktreeToggle
                   on={worktreeOn}
                   disabled={worktreeForced}
-                  disabledReason={variants > 1
-                    ? 'Parallel variants always use isolated worktrees'
-                    : 'Multi-step workflows require an isolated worktree'}
+                  disabledReason="Parallel variants always use isolated worktrees"
                   onChange={(on) => update({ worktree: on })}
                 />
               ) : null}
@@ -703,7 +694,7 @@ export function NewTaskRoute() {
   )
 }
 
-/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for single skill runs.
+/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for ordinary runs.
  *  Checked = isolated worktree (the default); unchecked = run in the repo working tree. */
 function WorktreeToggle({
   on,

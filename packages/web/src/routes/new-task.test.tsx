@@ -11,6 +11,7 @@ import type {
   ProviderStatusResponse,
   RepoResponse,
   Skill,
+  WorkspaceConfigResponse,
   WorkflowsResponse,
 } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
@@ -147,6 +148,24 @@ const CONFIG: ConfigResponse = {
   reviewGate: null,
 }
 
+const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
+  browseRoot: '~/',
+  projectsDir: '~/cezar/projects',
+  skillsAutoUpdate: null,
+  effectiveSkillsAutoUpdate: true,
+  composerDefaults: {
+    autonomous: null,
+    worktree: null,
+    inheritedAutonomous: 'source-dependent',
+    inheritedWorktree: true,
+  },
+  resources: {
+    maxParallel: 2,
+    memoryLimitMb: null,
+    worktreeRetentionDefault: 10,
+  },
+}
+
 /** The shape `POST /api/plan` answers (spec 008) — three steps so reorder/remove are provable. */
 const PLAN = {
   steps: [
@@ -187,6 +206,7 @@ function serve(overrides: {
   health?: HealthResponse | (() => Promise<Response>)
   /** Active project's scoped config; health may describe a different boot project. */
   config?: Partial<ConfigResponse> | (() => Promise<Response>)
+  workspaceConfig?: WorkspaceConfigResponse
   /** Host authentication state, or a delayed answer for pending/refresh tests. */
   providerStatus?: ProviderStatusResponse | (() => Promise<Response>)
   providerStatusStatus?: number
@@ -209,6 +229,7 @@ function serve(overrides: {
   const data = {
     health: HEALTH,
     config: CONFIG,
+    workspaceConfig: WORKSPACE_CONFIG,
     providerStatus: PROVIDERS_CONNECTED,
     providerStatusStatus: 200,
     skills: SKILLS,
@@ -264,6 +285,7 @@ function serve(overrides: {
           : json({ ...CONFIG, ...data.config })
       if (url === '/api/config' && method === 'PUT')
         return json({ baseBranch: (body as { baseBranch: string | null }).baseBranch, defaultRunner: 'claude' })
+      if (url === '/api/workspace/config' && method === 'GET') return json(data.workspaceConfig)
       return json({ error: `unmocked ${method} ${url}` }, 404)
     }),
   )
@@ -735,6 +757,72 @@ describe('submit', () => {
     expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'quick-task' })
   })
 
+  it('posts worktree:false after opt-out for every single-step source shape', async () => {
+    const cases: Array<{
+      label: string
+      overrides: NonNullable<Parameters<typeof serve>[0]>
+      expected: Record<string, unknown>
+    }> = [
+      {
+        label: 'quick-task',
+        overrides: {},
+        expected: { workflow: 'quick-task' },
+      },
+      {
+        label: 'om-fix',
+        overrides: { uiState: { lastTask: { source: 'skill', ref: 'om-fix' } } },
+        expected: { steps: [{ id: 'task', name: 'om-fix', skill: 'om-fix', prompt: '{{task}}' }] },
+      },
+      {
+        label: 'one-step',
+        overrides: {
+          workflows: {
+            workflows: [
+              ...WORKFLOWS.workflows,
+              { name: 'one-step', source: 'file', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
+            ],
+            issues: [],
+          },
+          uiState: { lastTask: { source: 'workflow', ref: 'one-step' } },
+        },
+        expected: { workflow: 'one-step' },
+      },
+    ]
+
+    for (const testCase of cases) {
+      cleanup()
+      resetDraft()
+      serve(testCase.overrides)
+      renderNewTask()
+      await pillReady(testCase.label)
+      const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+      fireEvent.click(worktree)
+      expect(worktree.getAttribute('aria-checked')).toBe('false')
+      fireEvent.change(textarea(), { target: { value: `Run ${testCase.label} in place` } })
+      await startTask()
+      expect(postedBody()).toMatchObject({ ...testCase.expected, worktree: false })
+    }
+  })
+
+  it('carries an inherited Worktree-off policy into the submitted payload', async () => {
+    serve({
+      workspaceConfig: {
+        ...WORKSPACE_CONFIG,
+        composerDefaults: {
+          ...WORKSPACE_CONFIG.composerDefaults!,
+          inheritedWorktree: false,
+        },
+      },
+    })
+    renderNewTask()
+    await pillReady()
+    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    fireEvent.change(textarea(), { target: { value: 'Use the environment seed' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ workflow: 'quick-task', worktree: false })
+  })
+
   it('picking a model and ×2 variants rides along; {runs} answer navigates to the FIRST variant', async () => {
     serve({ createRun: { runs: [{ id: 'v-a' }, { id: 'v-b' }] } })
     renderNewTask()
@@ -855,7 +943,7 @@ describe('submit', () => {
     expect(worktree.getAttribute('aria-checked')).toBe('true')
   })
 
-  it('forces and disables Worktree for a multi-step workflow', async () => {
+  it('lets a multi-step workflow opt out and submits worktree:false', async () => {
     serve({
       workflows: {
         workflows: [
@@ -873,17 +961,16 @@ describe('submit', () => {
       },
       uiState: { lastTask: { source: 'workflow', ref: 'fix-and-verify' } },
     })
-    writeDraft({
-      ...readDraft(),
-      worktree: false,
-    })
     renderNewTask()
     await pillReady('fix-and-verify')
 
     const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(worktree.getAttribute('aria-checked')).toBe('true')
-    expect(worktree.disabled).toBe(true)
-    expect(worktree.title).toBe('Multi-step workflows require an isolated worktree')
+    expect(worktree.disabled).toBe(false)
+    fireEvent.click(worktree)
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    fireEvent.change(textarea(), { target: { value: 'Run the whole workflow in place' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ workflow: 'fix-and-verify', worktree: false })
   })
 
   // #471 — the composer must not offer a switch the server overrides anyway.

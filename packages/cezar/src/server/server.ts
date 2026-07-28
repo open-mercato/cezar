@@ -411,7 +411,7 @@ const startRunSchema = z
     // agents in separate worktrees; the user compares diffs and picks one.
     variants: z.number().int().min(1).max(3).optional(),
     // Composer worktree opt-out (#worktree-toggle): false runs in the repo
-    // working tree (read-only skills). Ignored when variants > 1.
+    // working tree. Ignored when variants > 1.
     worktree: z.boolean().optional(),
     // Autonomous mode (#autonomous): the run never parks at `waiting` — it
     // auto-continues until the agent signals done. No "needs you" is raised.

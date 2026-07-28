@@ -155,9 +155,8 @@ export interface StartRunInput {
    *  `resolveExtraSystemPrompt` for the precedence contract. */
   systemPrompt?: string;
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
-   *  working tree instead of an isolated worktree — for read-only skills that
-   *  don't need a branch. Undefined/`true` keeps the default per-task worktree.
-   *  Ignored for variants (they always isolate). */
+   *  working tree instead of an isolated worktree. Undefined/`true` keeps the
+   *  default per-task worktree. Ignored for variants (they always isolate). */
   worktree?: boolean;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
@@ -1605,10 +1604,14 @@ export class RunManager {
     // established; only explicit opt-out and non-Git modes run in place.
     const repo = await getRepoInfo(this.repoRoot);
     if (repo && input.worktree === false) {
-      // Composer opt-out: run in the repo working tree, no branch/worktree
-      // (read-only skills — review, summarize — that never need isolation).
+      // Composer opt-out: run in the repo working tree, no branch/worktree. The
+      // repository-root lease serializes these runs so workflows cannot overlap.
       emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
     } else if (repo) {
+      emit({
+        type: 'note',
+        message: `worktree on — using an isolated task worktree (${input.worktree === true ? 'explicit request' : 'default'})`,
+      });
       // Fork from the configured base branch (config.json `baseBranch`, e.g.
       // `develop`) — also the target of the eventual draft PR. Unresolvable
       // (typo, not fetched) → note + the currently checked-out branch.
