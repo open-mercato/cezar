@@ -16,7 +16,13 @@
  *    becomes a drawer and this collapses back to the reading measure on its own.
  */
 
-export const RUN_SHELL_NARROW = 'mx-auto w-full max-w-[920px]'
+/**
+ * The reading measure is the USER'S, not a constant (#711): `--measure` is the
+ * token the appearance setting flips (820px default, 1180px wide), and every
+ * other task column already caps on it. Hard-coding 920px here would have made
+ * the run view the one surface that ignored the setting.
+ */
+export const RUN_SHELL_NARROW = 'mx-auto w-full max-w-[var(--measure)]'
 /**
  * FLUID, not a fixed 1240px (user feedback 2026-07-27: "huge margins on both
  * sides ... stretch it a bit"). A harness run has more to show than a chat does

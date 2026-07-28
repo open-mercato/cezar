@@ -97,7 +97,13 @@ function renderHeader(record: ApiRun) {
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
 
 describe('workflow step density', () => {
-  it('folds terminal workflow history into one summary line', () => {
+  // The header used to expand a short LIVE workflow automatically and fold long
+  // ones, inferring intent from step count and status. #711 replaced that with
+  // one rule plus memory: always start folded, remember what the user opened for
+  // this run. A session's chrome should not resize itself out from under you as
+  // steps complete, and a heuristic could never be right for both a 2-step fix
+  // and a 17-phase harness run.
+  it('folds every workflow into one summary line by default', () => {
     stubFetch()
     renderHeader(
       run('review', {
@@ -106,19 +112,15 @@ describe('workflow step density', () => {
         ),
       }),
     )
-
-    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
-      'collapsed',
-    )
-    expect(document.querySelector('[data-slot="step-summary-position"]')?.textContent).toBe(
-      '· 18 of 18 finished',
+    expect(document.querySelector('[data-slot="workflow-steps"]')?.getAttribute('data-state')).toBe(
+      'closed',
     )
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 
-  it('keeps short live workflows open but folds long live workflows', () => {
+  it('folds a short live workflow too, rather than guessing from step count', () => {
     stubFetch()
-    const short = renderHeader(
+    renderHeader(
       run('running', {
         steps: [
           step({ id: 'implement', status: 'running' }),
@@ -126,26 +128,11 @@ describe('workflow step density', () => {
         ],
       }),
     )
-    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
-      'open',
+    expect(document.querySelector('[data-slot="workflow-steps"]')?.getAttribute('data-state')).toBe(
+      'closed',
     )
-    short.unmount()
-
-    renderHeader(
-      run('running', {
-        steps: Array.from({ length: 7 }, (_, index) =>
-          step({
-            id: `step-${index + 1}`,
-            name: `Step ${index + 1}`,
-            status: index === 3 ? 'running' : index < 3 ? 'done' : 'pending',
-          }),
-        ),
-      }),
-    )
-    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
-      'collapsed',
-    )
-    expect(document.querySelector('[data-slot="step-summary"]')?.textContent).toBe('Step 4')
+    // The summary still names the live step, so folding costs no information.
+    expect(document.body.textContent).toContain('step 1 of 2')
   })
 })
 

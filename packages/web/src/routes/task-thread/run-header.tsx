@@ -74,7 +74,7 @@ import { isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { StepRail } from './step-rail'
+import { WorkflowSteps } from './step-rail'
 import { HScroller } from '@/components/h-scroller'
 import { runShellClass } from './run-shell'
 import { useFinishRun } from './use-finish-run'
@@ -282,15 +282,8 @@ export function RunHeader({
         </div>
 
         {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-2.5 pb-1">
-            <StepRail
-              steps={run.steps}
-              // Conversation-first, like a desktop coding chat: terminal histories and long
-              // workflows start as a compact status line instead of consuming the viewport.
-              defaultExpanded={
-                ['running', 'waiting'].includes(run.status) && run.steps.length <= 6
-              }
-            />
+          <div className="border-t border-border pt-2 pb-1">
+            <WorkflowSteps runId={run.id} steps={run.steps} />
           </div>
         ) : null}
 

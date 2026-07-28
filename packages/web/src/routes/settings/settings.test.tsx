@@ -113,6 +113,7 @@ afterEach(() => {
   localStorage.clear()
   delete document.documentElement.dataset.accent
   delete document.documentElement.dataset.density
+  delete document.documentElement.dataset.width
   document.documentElement.classList.remove('light')
 })
 
@@ -258,7 +259,7 @@ describe('the appearance section (global scope)', () => {
     // `{ accent }` would silently drop the stored density.
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'violet', density: 'compact' },
+        appearance: { accent: 'violet', density: 'compact', width: 'narrow' },
       })
     })
     expect(localStorage.getItem('cez-accent')).toBe('violet')
@@ -275,8 +276,34 @@ describe('the appearance section (global scope)', () => {
     expect(document.documentElement.hasAttribute('data-density')).toBe(false)
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'lime', density: 'comfortable' },
+        appearance: { accent: 'lime', density: 'comfortable', width: 'narrow' },
       })
+    })
+  })
+
+  it('reading width round-trip: Wide stamps the root and PUTs the full object; back to Narrow clears it', async () => {
+    serve({ appearance: { accent: 'violet' } })
+    renderAt('/settings/global/appearance')
+    // Wait for the server value to settle (Violet is server-provided; Narrow is the default and
+    // would report "checked" from the mirror before the GET even lands), so the pending load
+    // can't clobber the width write we're about to make.
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'Violet' }).getAttribute('aria-checked')).toBe('true')
+    })
+    expect(screen.getByRole('radio', { name: 'Narrow' }).getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Wide' }))
+    expect(document.documentElement.dataset.width).toBe('wide')
+    await waitFor(() => {
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/workspace/ui-state')?.body).toEqual({
+        appearance: { accent: 'violet', density: 'comfortable', width: 'wide' },
+      })
+    })
+
+    // Narrow is the default — the attribute must come OFF the root, not be written as data-width="narrow".
+    fireEvent.click(screen.getByRole('radio', { name: 'Narrow' }))
+    await waitFor(() => {
+      expect(document.documentElement.hasAttribute('data-width')).toBe(false)
     })
   })
 
@@ -317,7 +344,7 @@ describe('the settings split writes the right store', () => {
 
     await waitFor(() => expect(putsTo('/api/workspace/ui-state')).toHaveLength(1))
     expect(putsTo('/api/workspace/ui-state')[0]?.body).toEqual({
-      appearance: { accent: 'violet', density: 'comfortable' },
+      appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
     })
     expect(putsTo('/api/ui-state')).toHaveLength(0)
   })

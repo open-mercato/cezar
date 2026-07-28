@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
 
-import { railProgress, railVisual, StepRail, type RailVisual } from './step-rail'
+import { activeStepIndex, railProgress, railVisual, StepRail, WorkflowSteps, type RailVisual } from './step-rail'
 
 afterEach(cleanup)
 
@@ -95,73 +95,71 @@ describe('StepRail', () => {
     const bar = document.querySelector<HTMLElement>('[data-slot="step-progress"] > div')!
     expect(bar.style.width).toBe('37.5%') // (1 + 0.5) / 4
   })
+})
 
-  it('starts compact on request, names the active step, and expands the full history on demand', () => {
-    render(
-      <StepRail
-        defaultExpanded={false}
-        steps={[
-          step('capture', 'done', { name: 'Capture' }),
-          step('implement', 'running', { name: 'Implement' }),
-          step('review', 'pending', { name: 'Review' }),
-        ]}
-      />,
-    )
+describe('activeStepIndex — who the summary speaks for', () => {
+  it('points at the first in-flight step, else the last (a finished run reads "N of N")', () => {
+    expect(activeStepIndex([step('a', 'done'), step('b', 'running'), step('c', 'pending')])).toBe(1)
+    expect(activeStepIndex([step('a', 'done'), step('b', 'done')])).toBe(1)
+    expect(activeStepIndex([step('a', 'pending'), step('b', 'pending')])).toBe(0)
+    // An empty list has no index to point at; 0 keeps `steps[index]` undefined rather than
+    // handing back a -1 that would silently address the wrong element.
+    expect(activeStepIndex([])).toBe(0)
+  })
+})
 
-    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
-      'collapsed',
-    )
-    expect(document.querySelector('[data-slot="step-summary"]')?.textContent).toBe('Implement')
-    expect(document.querySelector('[data-slot="step-summary-position"]')?.textContent).toBe(
-      '· Step 2 of 3',
-    )
+describe('WorkflowSteps — the collapsible header summary', () => {
+  const steps = [
+    step('implement', 'done', { name: 'Do the task' }),
+    step('verify', 'running', { name: 'Verify', kind: 'check' }),
+    step('review', 'pending', { name: 'Review' }),
+  ]
+  /** Unique per test — the expand memory below is module-level and keyed by run id. */
+  let seq = 0
+  const freshRun = () => `run-steps-${(seq += 1)}`
+
+  it('renders nothing without steps', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={[]} />)
+    expect(document.querySelector('[data-slot="workflow-steps"]')).toBeNull()
+  })
+
+  it('collapsed by default: names the active step, one dot per step, and hides the full rows', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    const summary = document.querySelector('[data-slot="workflow-steps"]')!
+    expect(summary.textContent).toContain('Verify')
+    expect(summary.textContent).toContain('step 2 of 3')
+    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
+    expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
+    // The full rows are not mounted until the user expands.
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: /show steps/i }))
-    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
-      'open',
-    )
-    expect(document.querySelectorAll('[data-slot="step-row"]')).toHaveLength(3)
-    expect(screen.getByRole('button', { name: /hide steps/i }).getAttribute('aria-expanded')).toBe(
-      'true',
-    )
   })
 
-  it('keeps a terminal failure visible in the compact summary', () => {
-    render(
-      <StepRail
-        defaultExpanded={false}
-        steps={[
-          step('implement', 'done', { name: 'Implement' }),
-          step('fix', 'failed', { name: 'Fix (round 3)' }),
-        ]}
-      />,
-    )
-    expect(document.querySelector('[data-slot="step-summary"]')?.textContent).toBe(
-      'Fix (round 3) failed',
-    )
-    expect(document.querySelector('[data-slot="step-summary-position"]')?.textContent).toBe(
-      '· Step 2 of 2',
-    )
+  it('expands to the full rail on click', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    fireEvent.click(screen.getByRole('button'))
+    const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
+    expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
+    expect(rows[1]!.textContent).toContain('check · step 2 of 3')
   })
 
-  it('automatically folds a short workflow when its session closes', () => {
-    const steps = [
-      step('implement', 'running', { name: 'Implement' }),
-      step('validate', 'pending', { name: 'Validate' }),
-    ]
-    const view = render(<StepRail defaultExpanded steps={steps} />)
+  it('remembers an explicit expand per run across remounts — a tab switch must not collapse it', () => {
+    const runId = freshRun()
+    const first = render(<WorkflowSteps runId={runId} steps={steps} />)
+    fireEvent.click(screen.getByRole('button'))
     expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+    first.unmount()
 
-    view.rerender(
-      <StepRail
-        defaultExpanded={false}
-        steps={steps.map((entry) => ({ ...entry, status: 'done' }))}
-      />,
-    )
-    expect(document.querySelector('[data-slot="step-rail"]')?.getAttribute('data-state')).toBe(
-      'collapsed',
-    )
+    // Same run, remounted by another task route's RunHeader: still expanded.
+    render(<WorkflowSteps runId={runId} steps={steps} />)
+    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+  })
+
+  it('does not leak that choice to a different run — a fresh run opens collapsed', () => {
+    const first = render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    fireEvent.click(screen.getByRole('button'))
+    first.unmount()
+
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 })

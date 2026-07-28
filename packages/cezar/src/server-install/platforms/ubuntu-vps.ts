@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -655,6 +655,86 @@ async function resolveExecStart(ctx: InstallContext): Promise<string> {
   return serviceExecStart({ node, pkgRoot, entry, entryExists: existsSync(entry), npxPath, globalBin });
 }
 
+/** The npx package cache root for the user the service runs as (this is the
+ *  same user that runs `server-deploy`). Honors an `npm_config_cache` override,
+ *  else npm's default `~/.npm`. */
+function npxCacheDir(): string {
+  const base = process.env.npm_config_cache?.trim() || join(homedir(), '.npm');
+  return join(base, '_npx');
+}
+
+/** True when a systemd `ExecStart` string launches cezar via npx (the unpinned
+ *  `npx --yes cezar-cli` form) rather than a checkout (`<node> …/dist/index.js`)
+ *  or a global bin. */
+export function isNpxExecStart(execStart: string): boolean {
+  return /\bnpx\b/.test(execStart) && execStart.includes(OFFICIAL_CLI_PKG);
+}
+
+/**
+ * The npx trap (#696): `npx --yes cezar-cli` caches the resolved package under
+ * `~/.npm/_npx/<hash>` and reuses it forever — a service restart re-execs the
+ * SAME cached build, so `server-deploy` would never actually update. Before
+ * restarting an npx-based unit we delete the cache entries that contain
+ * `cezar-cli`, so the next launch re-resolves `latest`. Surgical: other npx
+ * packages' caches are left untouched. A checkout / global-bin unit has no
+ * npx cache to clear and is skipped (its restart picks up the new build/global
+ * directly).
+ */
+export function refreshNpxCacheForRedeploy(ctx: InstallContext, execStart: string): void {
+  if (!isNpxExecStart(execStart)) return;
+  const dir = npxCacheDir();
+  if (ctx.dryRun) {
+    ctx.ui.info(`DRY RUN — would clear cached ${OFFICIAL_CLI_PKG} builds under ${dir} so npx refetches the latest.`);
+    return;
+  }
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      ctx.ui.info(`No cached ${OFFICIAL_CLI_PKG} npx build found — the restart will fetch the latest published version.`);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new StepAborted(`cannot inspect the npx cache at ${dir}: ${message} — the service was not restarted`);
+  }
+
+  let cleared = 0;
+  for (const entry of entries) {
+    const pkgDir = join(dir, entry);
+    const packageDir = join(pkgDir, 'node_modules', OFFICIAL_CLI_PKG);
+    try {
+      statSync(packageDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new StepAborted(`cannot inspect the npx cache entry at ${packageDir}: ${message} — the service was not restarted`);
+    }
+    try {
+      rmSync(pkgDir, { recursive: true, force: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new StepAborted(`cannot remove the cached ${OFFICIAL_CLI_PKG} build at ${pkgDir}: ${message} — the service was not restarted`);
+    }
+    cleared++;
+  }
+  ctx.ui.info(
+    cleared > 0
+      ? `Cleared ${cleared} cached ${OFFICIAL_CLI_PKG} npx build(s) — the restart will fetch the latest published version.`
+      : `No cached ${OFFICIAL_CLI_PKG} npx build found — the restart will fetch the latest published version.`,
+  );
+}
+
+/** Read the unit's live `ExecStart` (read-only query; no sudo needed even for a
+ *  system unit). Empty string when it can't be read — callers then skip the
+ *  npx-cache refresh rather than guessing. */
+async function readExecStart(ctx: InstallContext, scope: 'user' | 'system', unit: string): Promise<string> {
+  const args = [...(scope === 'user' ? ['--user'] : []), 'show', unit, '-p', 'ExecStart'];
+  const { stdout } = await ctx.runner.capture('systemctl', args);
+  return stdout;
+}
+
 const autostartStep: InstallStep = {
   id: 'autostart',
   // Required: after install the cockpit must actually be serving, so cezar runs
@@ -967,6 +1047,11 @@ export const ubuntuVps: PlatformStrategy = {
     const userUnitExists = existsSync(join(homedir(), '.config', 'systemd', 'user', UNIT_NAME));
     const scope: 'user' | 'system' =
       svc?.scope === 'user' || svc?.scope === 'system' ? svc.scope : userUnitExists ? 'user' : 'system';
+    // #696: an npx-launched unit re-execs its cached build on restart, so a
+    // deploy that doesn't invalidate the npx cache never actually updates.
+    // Clear the cezar-cli cache first (read the live ExecStart to know the
+    // launch form); a checkout / global unit is left alone.
+    refreshNpxCacheForRedeploy(ctx, await readExecStart(ctx, scope, UNIT_NAME));
     if (ctx.dryRun) {
       ctx.ui.info(`DRY RUN — would reload+restart the cezar ${scope} service and re-verify the cockpit.`);
       return;

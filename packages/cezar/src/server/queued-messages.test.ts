@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ProviderAuthService } from '../core/provider-auth.js';
 import { RunStore, type QueuedMessage, type RunRecord } from '../runs/store.js';
 import type { RunManager } from '../workflows/run.js';
 import { apiRequest } from './loopback-request.testkit.js';
@@ -22,6 +23,7 @@ describe('queued prompt stack routes (#472)', () => {
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
+  let manager: RunManager;
   let record: RunRecord;
   /** Which rung the fake engine answers on. */
   let rung: 'live' | 'queued' | 'starting' | 'closed';
@@ -35,7 +37,7 @@ describe('queued prompt stack routes (#472)', () => {
     store.updateRun(record.id, { status: 'queued' });
     rung = 'queued';
 
-    const manager = {
+    manager = {
       sendMessage: () => rung === 'live',
       enqueueMessage: (id: string, content: Array<{ type: string; text?: string }>): QueuedMessage | null => {
         if (rung !== 'queued') return null;
@@ -120,6 +122,23 @@ describe('queued prompt stack routes (#472)', () => {
     expect(body.queued).toBe(true);
     expect(body.message.text).toBe('stack me');
     expect(store.getRun(record.id)?.queuedMessages?.map((m) => m.text)).toEqual(['stack me']);
+  });
+
+  it('does not probe or require provider credentials to amend a queued prompt', async () => {
+    const status = vi.fn(() => Promise.reject(new Error('provider status must not be read')));
+    app = createApp({
+      repoRoot,
+      store,
+      manager,
+      version: '0.0.0-test',
+      providerAuth: { status } as unknown as ProviderAuthService,
+    });
+
+    const res = await post({ text: 'keep this queued Codex task moving' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ queued: true });
+    expect(status).not.toHaveBeenCalled();
   });
 
   /** The rung that exists so a message in the dequeue → session-open gap is
