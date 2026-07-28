@@ -5,16 +5,18 @@
 // .ai/specs/2026-07-18-npm-preview-publish.md, #482).
 //
 // Reads the CI facts from GitHub Actions' env, decides via computeSnapshot,
-// stamps both manifests (alias dependency pinned exact), publishes the scoped
-// package FIRST and the alias second (the alias depends on it), always with an
-// explicit --tag so a snapshot can never move `latest`, then emits a one-line
-// JSON result to $GITHUB_OUTPUT for the PR-comment and summary steps.
+// stamps every manifest in the release set (intra-release dependencies pinned
+// exact), publishes the non-`private` ones in DEPENDENCY ORDER — api-client,
+// then the service, then the alias — always with an explicit --tag so a snapshot can never move
+// `latest`, then emits a one-line JSON result to $GITHUB_OUTPUT for the
+// PR-comment and summary steps.
 //
-// If the run is cancelled between the two publishes (ci.yml's workflow-level
-// concurrency can still cancel a superseded PR run), the damage is benign: the
-// scoped package's pr-tag runs briefly ahead of the alias's, the exact-version
-// comment is never posted, and the next green run re-aligns both tags. Users
-// install through the alias, whose tag only ever moves on a complete publish.
+// If the run is cancelled part-way through the publishes (ci.yml's workflow-level
+// concurrency can still cancel a superseded PR run), the damage is benign: an
+// earlier package's pr-tag runs briefly ahead of a later one's, the exact-version
+// comment is never posted, and the next green run re-aligns every tag. Users
+// install through the alias, which is published LAST, so its tag only ever moves
+// once everything it depends on is already on the registry.
 //
 // Publishes with --ignore-scripts: the tarball-integrity gate (check:pack) has
 // already run as the last leg of the `npm run build` this job just executed,
@@ -32,12 +34,22 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildInstallLines, computeSnapshot, stampManifests } from '../dist/release/snapshot.js';
+import { isPublishable } from '../packages/cezar/dist/release/manifests.js';
+import {
+  buildInstallLines,
+  computeSnapshot,
+  stampManifests,
+} from '../packages/cezar/dist/release/snapshot.js';
 
 const repoRoot = process.env.CEZ_SNAPSHOT_ROOT
   ? path.resolve(process.env.CEZ_SNAPSHOT_ROOT)
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const aliasDir = path.join(repoRoot, 'alias-cezar');
+// The workspace root publishes nothing; every publishable manifest is named here explicitly.
+const dirs = {
+  apiClient: path.join(repoRoot, 'packages/api-client'),
+  cezar: path.join(repoRoot, 'packages/cezar'),
+  alias: path.join(repoRoot, 'alias-cezar'),
+};
 
 const readManifest = (dir) => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
 const writeManifest = (dir, pkg) =>
@@ -55,8 +67,11 @@ const emitOutput = (result) => {
   }
 };
 
-const rootPkg = readManifest(repoRoot);
-const aliasPkg = readManifest(aliasDir);
+const manifests = {
+  apiClient: readManifest(dirs.apiClient),
+  cezar: readManifest(dirs.cezar),
+  alias: readManifest(dirs.alias),
+};
 
 const prNumberRaw = process.env.PR_NUMBER ?? '';
 const plan = computeSnapshot({
@@ -65,7 +80,7 @@ const plan = computeSnapshot({
   prNumber: /^\d+$/.test(prNumberRaw) ? Number(prNumberRaw) : undefined,
   headRepo: process.env.PR_HEAD_REPO || undefined,
   repo: process.env.GITHUB_REPOSITORY || undefined,
-  baseVersion: rootPkg.version,
+  baseVersion: manifests.cezar.version,
   runNumber: Number(process.env.GITHUB_RUN_NUMBER ?? '0'),
   runAttempt: /^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? '') ? Number(process.env.GITHUB_RUN_ATTEMPT) : undefined,
 });
@@ -84,10 +99,12 @@ if (!dryRun && !token) {
   dryRun = true;
 }
 
-const stamped = stampManifests(rootPkg, aliasPkg, plan.version);
-writeManifest(repoRoot, stamped.root);
-writeManifest(aliasDir, stamped.alias);
-console.log(`release-snapshot: stamped ${stamped.root.name} + ${stamped.alias.name} to ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`);
+const stamped = stampManifests(manifests, plan.version);
+const order = ['apiClient', 'cezar', 'alias'];
+for (const key of order) writeManifest(dirs[key], stamped[key]);
+console.log(
+  `release-snapshot: stamped ${order.map((key) => stamped[key].name).join(' + ')} to ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,
+);
 
 // Provenance needs the job's OIDC token (permissions: id-token: write); only
 // meaningful for a real publish from Actions.
@@ -116,15 +133,26 @@ const publish = (dir, label) => {
   runNpm(args, dir);
 };
 
-publish(repoRoot, stamped.root.name);
-publish(aliasDir, stamped.alias.name);
+// A `private` manifest is stamped above but never published — part of the release without
+// being on the registry.
+const published = [];
+for (const key of order) {
+  if (!isPublishable(stamped[key])) {
+    console.log(`release-snapshot: ${stamped[key].name} is private — stamped, not published.`);
+    continue;
+  }
+  publish(dirs[key], stamped[key].name);
+  published.push(stamped[key].name);
+}
 
 emitOutput({
   attempted: true,
   dryRun,
-  rootName: stamped.root.name,
+  rootName: stamped.cezar.name,
+  apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,
   version: plan.version,
   distTag: plan.distTag,
+  publishedNames: published.join(','),
   installLines: buildInstallLines(stamped.alias.name, plan.version),
 });
