@@ -42,7 +42,7 @@ Source doc: `.ai/specs/2026-07-22-provider-authentication.md`
 
 ### Phase 1: Correct queued-message gating
 
-- [ ] 1.1 Update the message API to skip provider authorization only while the run record is queued, and add a regression test proving prompt stacking does not probe or require provider credentials.
+- [x] 1.1 Update the message API to skip provider authorization only while the run record is queued, and add a regression test proving prompt stacking does not probe or require provider credentials. — 6c4b91c0
 - [ ] 1.2 Update the task-thread composer to keep queued prompt authoring enabled regardless of provider state, with a regression test matching a Codex-capable host where Claude is disconnected.
 
 ### Phase 2: Verify and finalize
