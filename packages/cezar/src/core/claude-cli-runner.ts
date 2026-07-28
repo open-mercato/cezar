@@ -228,11 +228,17 @@ export class ClaudeCliRunner implements AgentRunner {
             continue;
           }
 
-          emitUi((state) => mapClaudeMessage(msg, state));
+          // Claude reports `error_during_execution` while reacting to our
+          // teardown signal. Once cezar has signalled the child, that frame
+          // describes the intentional stop rather than an agent failure.
+          // Normalize only this precise wire shape so genuine result errors
+          // (authentication, limits, malformed sessions) stay authoritative.
+          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
+          emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
           let delta = 0;
           try {
-            delta = handleClaudeMessage(msg, { toolCalls, textChunks, onEvent });
+            delta = handleClaudeMessage(mappedMessage, { toolCalls, textChunks, onEvent });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             onEvent?.({ type: 'note', message: `claude: skipped malformed event (${msg.type ?? 'unknown'}): ${message}` });
@@ -416,6 +422,21 @@ interface ClaudeStreamMessage {
   usage?: RawUsage;
   is_error?: boolean;
   total_cost_usd?: number;
+}
+
+function normalizeIntentionalTeardownResult(
+  msg: ClaudeStreamMessage,
+  terminatedByCezar: boolean,
+): ClaudeStreamMessage {
+  if (
+    terminatedByCezar
+    && msg.type === 'result'
+    && msg.is_error === true
+    && msg.subtype === 'error_during_execution'
+  ) {
+    return { ...msg, subtype: 'success', is_error: false };
+  }
+  return msg;
 }
 
 function handleClaudeMessage(

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.js';
 import { buildClaudeArgs, ClaudeCliRunner } from './claude-cli-runner.js';
+import type { UiEvent } from './ui-events.js';
 
 /**
  * The per-backend system-prompt delivery mechanism (spec §protocol v2
@@ -72,14 +73,19 @@ describe('a teardown cezar initiated', () => {
   it('settles the session instead of failing it when the CLI exits 143', async () => {
     const runner = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 });
     const events: AgentEvent[] = [];
+    const uiEvents: UiEvent[] = [];
     let sawText: () => void = () => {};
     const firstText = new Promise<void>((resolve) => {
       sawText = resolve;
     });
-    const session = runner.startSession({ userPrompt: 'do it', cwd: process.cwd() }, (event) => {
-      events.push(event);
-      if (event.type === 'text') sawText();
-    });
+    const session = runner.startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => {
+        events.push(event);
+        if (event.type === 'text') sawText();
+      },
+      { onUiEvent: (event) => uiEvents.push(event) },
+    );
     await firstText;
 
     // The cancel path; the EOF watchdog reaches the same `signalChild`.
@@ -88,6 +94,14 @@ describe('a teardown cezar initiated', () => {
 
     expect(result.text).toBe('work done');
     expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(
+      uiEvents.some((event) => event.type === 'turn.completed' && event.stopReason === 'error'),
+    ).toBe(false);
+    expect(uiEvents).toContainEqual({
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+    });
     expect(events.at(-1)).toEqual({ type: 'done' });
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),

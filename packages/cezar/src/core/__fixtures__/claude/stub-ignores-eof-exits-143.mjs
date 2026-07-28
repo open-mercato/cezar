@@ -4,7 +4,19 @@
 // janitor-confirmed CLI hang the EOF watchdog exists for) and handles SIGTERM
 // itself, exiting 143 instead of dying from the signal.
 
-process.on('SIGTERM', () => process.exit(143));
+process.on('SIGTERM', () => {
+  // Claude reports this final frame while reacting to cezar's teardown
+  // signal. It describes our interruption, not an agent failure.
+  process.stdout.write(
+    `${JSON.stringify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      result: 'Interrupted by user',
+    })}\n`,
+    () => process.exit(143),
+  );
+});
 
 process.stdout.write(
   `${JSON.stringify({
