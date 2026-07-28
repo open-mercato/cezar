@@ -21,6 +21,8 @@ describe('the config API', () => {
   let repoRoot: string;
   let homeRoot: string;
   const savedHome = process.env.HOME;
+  const savedCodexHome = process.env.CODEX_HOME;
+  const savedXdgConfigHome = process.env.XDG_CONFIG_HOME;
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   let store: RunStore;
   let app: Hono;
@@ -29,6 +31,8 @@ describe('the config API', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-'));
     homeRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-home-'));
     process.env.HOME = homeRoot;
+    process.env.CODEX_HOME = join(homeRoot, '.codex');
+    process.env.XDG_CONFIG_HOME = join(homeRoot, '.config');
     delete process.env.CEZ_AGENT_MODELS_LOCKED;
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -42,6 +46,10 @@ describe('the config API', () => {
     rmSync(homeRoot, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.HOME;
     else process.env.HOME = savedHome;
+    if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = savedCodexHome;
+    if (savedXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdgConfigHome;
     if (savedModelsLocked === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
     else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
   });
