@@ -25,10 +25,10 @@ import { activeSubagent, subagentActivityText, subagentCounts, type SubagentSumm
  *  the choice survives route changes for the session without inventing server persistence. */
 const openByRun = new Map<string, boolean>()
 
-/** Desktop starts expanded, phones collapsed. jsdom has no matchMedia — that counts as desktop. */
-function defaultOpen(): boolean {
-  return typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 768px)').matches
-}
+/** Collapsed by default (redesign): the slim one-line head already answers "what's running now?"
+ *  — `Agents · 1/3 — Reviewing store layer…` — so the dock stays out of the thread's way until
+ *  the reader wants the per-agent breakdown. Their explicit expand is remembered per run. */
+const DEFAULT_OPEN = false
 
 export function AgentsDock({
   runId,
@@ -40,7 +40,7 @@ export function AgentsDock({
   /** Phase 2: opens the drill-down sheet. Absent ⇒ rows are static display. */
   onSelect?: (id: string) => void
 }) {
-  const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen())
+  const [open, setOpen] = useState(() => openByRun.get(runId) ?? DEFAULT_OPEN)
   // No fan-out to show — the overwhelming majority of runs never mount this at all.
   if (agents.length === 0) return null
 

@@ -675,7 +675,8 @@ export function useRepoCommit(sha: string | undefined) {
 }
 
 /** The Settings → Agents knobs (R6 1.5): base branch, default runner, system prompt, per-runner
- *  model presets. The composer reads it too — `defaultModels` preselects its Model pill. */
+ *  model presets. Task-start surfaces read this project-scoped query for both runner and model
+ *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo. */
 export function useConfig() {
   return useQuery({
     queryKey: queryKeys.config,

@@ -499,13 +499,24 @@ const SKILL_USAGE_MAX_ENTRIES = 200;
 // BOTH ui-state routes (per-repo and workspace) via `parseUiStateBody`.
 const UI_STATE_MAX_KEYS = 200;
 
-/** Settings → Appearance (redesign R6): accent + density. ONE schema for both
- *  ui-state files — per-repo (the legacy home, kept so an older cezar in the
- *  same repo still honours it) and workspace (`~/.cezar/ui-state.json`, its
- *  post-migration home — multi-project spec, Data Model). */
+/** Settings → Appearance (redesign R6): accent + density + reading width. ONE
+ *  schema for both ui-state files — per-repo (the legacy home, kept so an older
+ *  cezar in the same repo still honours it) and workspace
+ *  (`~/.cezar/ui-state.json`, its post-migration home — multi-project spec,
+ *  Data Model).
+ *
+ *  Every key is `.optional()` so an older ui-state.json parses unchanged, but
+ *  each one must be listed HERE: the enclosing `workspaceUiStateSchema` is
+ *  `.passthrough()` at the top level only, so an unlisted key inside
+ *  `appearance` is stripped by zod and then wiped from the file by the shallow
+ *  merge-on-write. The cockpit adopts the PUT response as authoritative, so a
+ *  stripped key does not merely fail to persist — it visibly reverts the
+ *  control the user just touched. Adding an appearance preference means adding
+ *  it here in the same change. */
 const appearanceSchema = z.object({
   accent: z.enum(['lime', 'violet']).optional(),
   density: z.enum(['comfortable', 'compact', 'ultra']).optional(),
+  width: z.enum(['narrow', 'wide']).optional(),
 });
 
 const providerAuthDismissalsSchema = z
@@ -2467,8 +2478,15 @@ export function createApp(deps: ServerDeps) {
     if (!parsed.success) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
-    const blocked = await providerActionError([providerForActiveRun(run)]);
-    if (blocked) return c.json({ error: blocked }, 409);
+    // Stacking onto a queued prompt mutates an existing task and invokes no provider.
+    // Provider availability still gates live delivery after the record leaves `queued`, but
+    // must not strand prompt authoring just because an unrelated fallback provider is
+    // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
+    // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
+    if (run.status !== 'queued') {
+      const blocked = await providerActionError([providerForActiveRun(run)]);
+      if (blocked) return c.json({ error: blocked }, 409);
+    }
     const content: ContentBlock[] = [
       ...parsed.data.images.map((img): ContentBlock => ({
         type: 'image',

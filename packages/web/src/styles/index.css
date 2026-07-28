@@ -122,6 +122,12 @@
   --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
 
+  /* reading measure — the max width of the task view's column (header, thread, changes,
+   * commits). The default is the shipped 820px reading column; Settings → Appearance → Reading
+   * width flips it to `wide` (see the `:root[data-width]` block). Consumed as
+   * `max-w-[var(--measure)]` so one token moves every column together. */
+  --measure: 820px;
+
   /* shiki syntax highlighting (dark) */
   --syn-key: #c4b5fd;
   --syn-str: #86efac;
@@ -207,6 +213,13 @@
  * lever as compact, just smaller; the type scale still stays untouched. */
 :root[data-density='ultra'] {
   --spacing: 0.1875rem;
+}
+
+/* Wide reading width (Settings → Appearance → Reading width): open the task-view column from the
+ * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
+ * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
+:root[data-width='wide'] {
+  --measure: 1180px;
 }
 
 /* ---------- tokens: radius + shadow ----------

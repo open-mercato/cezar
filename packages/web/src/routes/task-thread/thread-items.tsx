@@ -468,11 +468,12 @@ function DiffLine({ text }: { text: string }) {
   )
 }
 
-/** Default-open policy (opencode research §4): failed opens itself; a running command opens
- *  to show its live tail; everything else — including edits and finished commands — starts
- *  closed but prominent. The user's own toggle always wins once they touch the card. */
+/** Default-open policy: a running command opens to show its live tail; everything else —
+ *  including edits, finished commands AND failures — starts closed but prominent. A failed step
+ *  no longer springs its red error body open on its own (it reads as calmer that way, and a
+ *  recovered failure is not an emergency); its collapsed row still carries the `failed` label and
+ *  exit code. The user's own toggle always wins once they touch the card. */
 function defaultOpen(item: UiToolItem): boolean {
-  if (item.status === 'failed') return true
   return item.toolKind === 'execute' && item.status === 'running' && item.output !== undefined
 }
 
@@ -520,8 +521,10 @@ export function ToolCard({
       open={open}
       onOpenChange={setUserOpen}
       className={cn(
+        // A failed card wears a FAINT danger tint so it reads at a glance, not the loud outline it
+        // used to — the exit code and `failed` label carry the signal, the red stays in the body.
         'min-w-0 overflow-hidden rounded-md border bg-card',
-        item.status === 'failed' ? 'border-danger/40' : 'border-border',
+        item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
       <CollapsibleTrigger
@@ -535,12 +538,11 @@ export function ToolCard({
             !hasDetail && 'invisible',
           )}
         />
-        <Icon aria-hidden className={cn('size-3.5 shrink-0', item.status === 'failed' ? 'text-danger' : 'text-muted-foreground')} />
+        <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
         <span
           className={cn(
             'shrink-0 font-semibold',
             busy && 'shimmer',
-            item.status === 'failed' && 'text-danger',
             item.status === 'declined' && 'text-muted-foreground',
           )}
         >
@@ -553,7 +555,7 @@ export function ToolCard({
           {busy ? (
             <LoaderCircleIcon role="status" aria-label="Running" className="size-3.5 animate-spin text-soft-foreground" />
           ) : null}
-          {item.status === 'failed' ? <span className="text-xs text-danger">failed</span> : null}
+          {item.status === 'failed' ? <span className="text-xs text-muted-foreground">failed</span> : null}
           {item.status === 'declined' ? <span className="text-xs text-soft-foreground">declined</span> : null}
           {item.toolKind === 'execute' && typeof item.exitCode === 'number' ? (
             <span

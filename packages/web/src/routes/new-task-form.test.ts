@@ -182,6 +182,14 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
     expect(body.runner).toBeUndefined()
   })
 
+  it('keeps an explicit runner pick even when it equals the default snapshot', () => {
+    const body = buildCreateRunBody({
+      task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
+      runner: 'codex', runnerExplicit: true, defaultRunner: 'codex', variants: 1, images: [],
+    })
+    expect(body.runner).toBe('codex')
+  })
+
   it('sends a connected fallback that differs from the server default, even when it is the only choice', () => {
     const body = buildCreateRunBody({
       task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',

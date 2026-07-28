@@ -321,6 +321,9 @@ export interface ProjectListEntry {
   status: 'ok' | 'missing' | 'not-git'
   /** Current branch when cheaply available (omitted e.g. on an unborn HEAD). */
   branch?: string
+  /** Which forge this project's remote belongs to (#698) — classified server-side from the
+   *  remote URL alone. Gates the project group's GitHub nav item; omitted = no forge remote. */
+  forge?: 'github'
   /** Per-project cap on concurrently running tasks (spec 2026-07-22). Omitted =
    *  inherit the workspace `resources.maxParallel`; a number pins this project. */
   maxParallel?: number
