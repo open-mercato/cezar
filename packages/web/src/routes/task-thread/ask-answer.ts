@@ -4,8 +4,10 @@ import { ApiError } from '@/api/client'
 import { useContinueRun, useSendMessage } from '@/api/queries'
 import type { ApiRun, RunRecord } from '@open-mercato/cezar-api-client'
 
-import { useActiveProviderAvailability } from './active-provider'
-import { useContinuationProvider } from './continuation-provider'
+import {
+  useActiveProviderAvailability,
+  useExistingProviderAvailability,
+} from './active-provider'
 import { isRunActive, lastSessionId, runActionFlags } from './run-actions'
 
 /**
@@ -57,9 +59,9 @@ export interface AskAnswerDelivery {
  * reopens the session with the answers as its prompt.
  *
  * The provider gate follows the seam: a live message is gated on the provider the
- * server would use for `POST /messages` (`useActiveProviderAvailability`), a resume on
- * the same continuation gate the composer's Continue uses, including its fallback to a
- * connected runner when the run's own backend disconnected.
+ * server would use for `POST /messages` (`useActiveProviderAvailability`), while a
+ * resume is gated on the run's recorded provider. Unlike the composer's explicit
+ * runner picker, an Ask answer never falls back to another connected engine silently.
  *
  * A `409` from the live path is not a dead end but a stale cache: the record claimed a
  * session the server no longer has (a dropped SSE frame, a long-open tab). When the run
@@ -71,12 +73,12 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
   const sendMessage = useSendMessage(run.id)
   const resume = useContinueRun(run.id)
   const activeProvider = useActiveProviderAvailability(run)
-  const continuation = useContinuationProvider(run)
+  const existingProvider = useExistingProviderAvailability(run)
   const [error, setError] = useState<string | undefined>(undefined)
 
   const mode = askDeliveryMode(run)
   const providerBlocked =
-    mode === 'resume' ? !continuation.canContinue
+    mode === 'resume' ? !existingProvider.usable
     : mode === 'live' ? !activeProvider.usable
     : false
   const blockedBy: AskBlockedReason | undefined =
@@ -87,16 +89,17 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
     blockedBy === 'no-session'
       ? 'This session has ended and no agent session was recorded, so the answer cannot be delivered.'
       : blockedBy === 'provider'
-        ? (mode === 'resume' ? continuation.reason : activeProvider.reason)
+        ? (mode === 'resume' ? existingProvider.reason : activeProvider.reason)
         : undefined
 
-  const resumeWith = (text: string) =>
-    resume.mutateAsync({
-      text,
-      // Only an explicit override — omitted, the server keeps the run's own backend and
-      // model, so answering a question never silently switches engines.
-      runner: continuation.runnerOverride,
-    })
+  const resumeWith = (text: string) => {
+    if (!existingProvider.usable) {
+      return Promise.reject(new Error(existingProvider.reason ?? 'The run provider is unavailable.'))
+    }
+    // No runner override: the server keeps the run's own backend and model, so answering a
+    // question cannot silently switch engines when another provider happens to be connected.
+    return resume.mutateAsync({ text })
+  }
 
   const send = async (text: string): Promise<void> => {
     // Defense in depth — every entry point is already disabled while blocked, and the card

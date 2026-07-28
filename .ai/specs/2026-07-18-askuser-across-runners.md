@@ -32,9 +32,10 @@ mechanism, identical behavior on claude, codex and opencode.
   a **future enhancement**, not this spec.
 - **Q2 — Answer channel & free-text.** → **DEFAULT: clickable option chips AND
   the normal composer stays enabled.** The user clicks an option or types a
-  free-form reply; either way the answer rides the existing
-  `POST /api/runs/:id/messages` → `sendMessage` seam as a normal user message
-  (no `tool_result` / endpoint changes). `multiSelect` questions collect several
+  free-form reply. A chip answer rides `POST /api/runs/:id/messages` while the
+  session is live, or the existing `POST /api/runs/:id/continue` seam once the
+  session has closed; both append the answer as a normal user message (no
+  `tool_result` / endpoint changes). `multiSelect` questions collect several
   picks confirmed with Send; an implicit free-text "Other" is always available
   via the composer (matching `AskUserQuestion` semantics).
 - **Q3 — Event model.** → **DEFAULT: one additive `ask.requested` `UiEvent`.**
@@ -152,9 +153,12 @@ the existing sink, so no per-backend mapper work is required.
   `UiEventType`; mirror in `web/app/src/protocol/ui-events.ts`; held type-exact
   by `src/server/api-types.test.ts`. `UiEventSink` persists it via its existing
   pass-through `default` branch (no sink change beyond the union).
-- **Answer path** — unchanged server routes. `web/app/src/routes/task-thread`:
-  the ask card's chip click calls the existing `useSendMessage(run.id)` with the
-  formatted answer text; free-text uses the normal composer.
+- **Answer path** — unchanged server routes. `packages/web/src/routes/task-thread`:
+  the ask card's chip click uses `useAskAnswer(run)`, which sends the formatted
+  answer through `useSendMessage(run.id)` while the session is live or through
+  an override-free `useContinueRun(run.id)` after it closes. The latter stays
+  gated on the run's recorded provider and never silently switches engines;
+  free-text uses the normal composer.
 - **UI** — `thread-state.ts` gains an `ask.requested` case producing an ask row;
   a new `AskCard` component renders it; the row is marked resolved when a later
   user-message row for the run appears (client-side lifecycle). No attention
@@ -182,8 +186,9 @@ interface AskRequest { questions: AskQuestion[] }   // 1..4
 
 ## API Contracts
 
-- **No new endpoints.** Answers reuse `POST /api/runs/:id/messages`
-  (`{ text, images? }`) — chip clicks send formatted text, free-text sends raw.
+- **No new endpoints.** Chip answers reuse `POST /api/runs/:id/messages`
+  (`{ text, images? }`) while live and `POST /api/runs/:id/continue` (`{ text }`)
+  after closure; free-text continues through the normal composer.
 - **New UiEvent** (additive, SSE `ui-event` transport unchanged):
   `{ type: 'ask.requested', requestId: string, questions: AskQuestion[] }`.
 - **New system-prompt marker** (agent → cezar): a trailing line

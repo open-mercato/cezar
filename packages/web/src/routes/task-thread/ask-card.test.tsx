@@ -194,7 +194,7 @@ describe('AskCard — answering after the session has ended', () => {
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
     // No runner override: answering a question must not silently switch the run's engine.
-    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', runner: undefined })
+    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
     expect(mutateAsync).not.toHaveBeenCalled()
   })
 
@@ -228,7 +228,6 @@ describe('AskCard — answering after the session has ended', () => {
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
     expect(continueAsync).toHaveBeenCalledWith({
       text: 'Library: date-fns\nStyle: Relative',
-      runner: undefined,
     })
   })
 
@@ -238,8 +237,28 @@ describe('AskCard — answering after the session has ended', () => {
     renderAsk(singleAsk, { ...activeRun, steps: [step({ sessionId: 'sess-1' })] })
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
-    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', runner: undefined })
+    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('does not silently switch to another connected provider when the run provider is unavailable', () => {
+    providerStatus = {
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    }
+
+    renderAsk(singleAsk, closedRun)
+
+    expect((screen.getByRole('button', { name: /date-fns/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      screen.getByText(
+        'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+      ),
+    ).toBeTruthy()
+    expect(continueAsync).not.toHaveBeenCalled()
   })
 
   it('a refused delivery is shown on the card instead of being dropped', async () => {
