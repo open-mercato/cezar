@@ -414,7 +414,12 @@ function handleClaudeMessage(
         ctx.onEvent?.({ type: 'tool-call', id: b.id, tool: b.name, input: b.input });
       }
     }
-    return costWeightedTokens(msg.message.usage);
+    // Assistant-frame usage belongs to the individual API calls inside this
+    // agentic turn. Claude's terminal result frame already aggregates those
+    // calls, so adding both sources inflates the run total (#716). Keep these
+    // frames presentation-only; the result branch below is authoritative,
+    // matching the v2 `usage.updated` mapping in AGENT_PROTOCOL.md.
+    return 0;
   }
 
   if (msg.type === 'user' && msg.message?.content) {
