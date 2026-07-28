@@ -1,7 +1,6 @@
 import { z } from 'zod';
-// TEMPORARY, same note as in `./workflows.ts`: `StartTodoResponse` embeds a whole run record,
-// which belongs to the run slice of the contract. At merge, import it from there instead.
-import { runRecordSchema } from './workflows.ts';
+// `StartTodoResponse` embeds a whole run record, which belongs to the runs slice.
+import { runRecordSchema } from './runs.ts';
 
 // ---- skills (`GET /skills`, `POST /skills/refresh`) ---------------------------------------
 

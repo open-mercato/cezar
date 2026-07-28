@@ -20,8 +20,16 @@ function serve(
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    composerDefaults: {
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: 'source-dependent',
+      inheritedWorktree: false,
+    },
     resources: {
       maxParallel: 2,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: null,
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
     },

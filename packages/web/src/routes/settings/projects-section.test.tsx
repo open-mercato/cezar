@@ -76,7 +76,19 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
-    resources: { maxParallel: 2, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+    composerDefaults: {
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: 'source-dependent',
+      inheritedWorktree: false,
+    },
+    resources: {
+      maxParallel: 2,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: null,
+      memoryLimitMb: null,
+      worktreeRetentionDefault: 10,
+    },
   }
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })

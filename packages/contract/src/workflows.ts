@@ -1,4 +1,7 @@
 import { z } from 'zod';
+// The run shapes belong to the runs family; this file consumes them rather than redeclaring.
+import { queuedMessageSchema, runRecordSchema, runStatusSchema, stepStateSchema } from './runs.ts';
+export type { QueuedMessage, RunRecord, RunStatus, StepState } from './runs.ts';
 import { runnerSchema } from './health.ts';
 
 // ---- TEMPORARY: the run-record shapes this family embeds ---------------------------------
@@ -11,104 +14,6 @@ import { runnerSchema } from './health.ts';
 //
 // AT MERGE: delete this block and import `runStatusSchema` / `runRecordSchema` from the run
 // contract module instead. Nothing else in this file changes.
-
-/** The lifecycle states a run moves through. */
-export const runStatusSchema = z.enum([
-  'queued',
-  'running',
-  'waiting',
-  'review',
-  'done',
-  'failed',
-  'cancelled',
-]);
-export type RunStatus = z.infer<typeof runStatusSchema>;
-
-export const stepStateSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  kind: z.enum(['agent', 'check']),
-  status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
-  iterations: z.number(),
-  tokensUsed: z.number(),
-  startedAt: z.string().optional(),
-  finishedAt: z.string().optional(),
-  error: z.string().optional(),
-  sessionId: z.string().optional(),
-  backend: runnerSchema.optional(),
-  costUsd: z.number().optional(),
-});
-export type StepState = z.infer<typeof stepStateSchema>;
-
-/** One prompt message stacked onto a run while it waits for a free agent slot (#472). */
-export const queuedMessageSchema = z.object({
-  id: z.string(),
-  text: z.string(),
-  images: z.array(z.string()).optional(),
-  createdAt: z.string(),
-});
-export type QueuedMessage = z.infer<typeof queuedMessageSchema>;
-
-export const runRecordSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  titleSummary: z.string().optional(),
-  diffStat: z.object({ adds: z.number(), dels: z.number(), files: z.number() }).optional(),
-  workflow: z.string(),
-  task: z.string(),
-  queuedMessages: z.array(queuedMessageSchema).optional(),
-  taskImages: z.array(z.string()).optional(),
-  model: z.string().optional(),
-  modelIdentity: z.string().optional(),
-  runner: runnerSchema.optional(),
-  systemPrompt: z.string().optional(),
-  generateFollowups: z.boolean().optional(),
-  autonomous: z.boolean().optional(),
-  status: runStatusSchema,
-  activity: z.enum(['monitoring']).optional(),
-  monitoringWakeAt: z.string().optional().catch(undefined),
-  monitoringWakeCapReached: z.boolean().optional(),
-  createdAt: z.string(),
-  startedAt: z.string().optional(),
-  finishedAt: z.string().optional(),
-  tokensUsed: z.number(),
-  costUsd: z.number().optional(),
-  pullRequestUrl: z.string().optional(),
-  referencedPullRequestUrl: z.string().optional(),
-  prNumber: z.number().optional(),
-  issueNumber: z.number().optional(),
-  referencedIssueNumberSeeded: z.boolean().optional(),
-  titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
-  markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
-  referencedPrCandidates: z.array(z.string()).optional(),
-  referencedIssueUrl: z.string().optional(),
-  referencedIssueCandidates: z.array(z.string()).optional(),
-  worktreePath: z.string().optional(),
-  branch: z.string().optional(),
-  baseBranch: z.string().optional(),
-  worktreeReclaimedAt: z.string().optional(),
-  groupId: z.string().optional(),
-  variant: z.string().optional(),
-  peakRssBytes: z.number().optional(),
-  peakProcCount: z.number().optional(),
-  archived: z.boolean().default(false),
-  archivedAt: z.string().optional(),
-  currentStepId: z.string().optional(),
-  error: z.string().optional(),
-  steps: z.array(stepStateSchema),
-  /**
-   * The persisted workflow definition. `src/runs/store.ts` types it `Record<string, unknown>`;
-   * on the wire it is arbitrary JSON, which is what `z.json()` says.
-   *
-   * This field CANNOT be made mutually assignable with the route: Hono's `JSONParsed` maps
-   * `unknown` to its own `JSONValue`, whose object case admits `object | undefined | symbol |
-   * Function`, and no zod schema infers that. `z.json()` is a strict subtype of it; a
-   * `z.unknown()` would be a strict supertype. See the report in
-   * `contract-parity.workflows.test.ts`.
-   */
-  workflowDef: z.record(z.string(), z.json()).optional(),
-});
-export type RunRecord = z.infer<typeof runRecordSchema>;
 
 // ---- workflows (`GET/POST /workflows`, `DELETE /workflows/:name`, `POST /workflows/parse`) ----
 

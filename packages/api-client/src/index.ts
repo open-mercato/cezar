@@ -23,7 +23,7 @@
  */
 
 export * from './client.ts'
-export * from './contract/index.ts'
+export * from '@open-mercato/cezar-contract'
 export * from './dto/types.ts'
 export * from './protocol/ui-events.ts'
 export * from './protocol/tool-display.ts'

@@ -43,6 +43,13 @@ export function isPublishable(pkg: ManifestLike): boolean {
  * dependency that does not exist on the registry yet.
  */
 export interface ReleaseManifests {
+  /**
+   * The API contract (zod schemas + inferred types). FIRST in the publish order: both the
+   * api-client and the service depend on it at runtime, so a consumer that resolves either one
+   * must be able to resolve this. It is published even though the api-client is not — the
+   * SERVICE depends on it, and the service is public.
+   */
+  contract: ManifestLike;
   /** The contract package a consumer installs to talk to a cezar service. */
   apiClient: ManifestLike;
   /** The published service + CLI. */
@@ -90,7 +97,7 @@ export function stampManifestSet(
   version: string,
   pin: PinStyle,
 ): ReleaseManifests {
-  const { apiClient, cezar, alias } = manifests;
+  const { contract, apiClient, cezar, alias } = manifests;
   const range = pin(version);
 
   const inherited: Partial<ManifestLike> = {};
@@ -99,8 +106,13 @@ export function stampManifestSet(
   }
 
   return {
-    apiClient: { ...apiClient, version },
-    cezar: pinDependency({ ...cezar, version }, apiClient.name, range),
+    contract: { ...contract, version },
+    apiClient: pinDependency({ ...apiClient, version }, contract.name, range),
+    cezar: pinDependency(
+      pinDependency({ ...cezar, version }, apiClient.name, range),
+      contract.name,
+      range,
+    ),
     alias: {
       ...pinDependency({ ...alias, ...inherited, version }, cezar.name, range),
       // The alias exists only to depend on the service — an unpinned or missing entry would

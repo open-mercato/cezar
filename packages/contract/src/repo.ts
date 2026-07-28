@@ -126,20 +126,18 @@ export type WorktreeDirEntry = z.infer<typeof worktreeDirEntrySchema>;
  * `GET /api/v1/runs/:id/files?path=` — a directory listing or one file (size-capped, binary
  * flagged). `content` is absent exactly when `binary` or `tooLarge`.
  *
- * `type` is `string`, not the `'dir'`/`'file'` literals the wire actually carries: both handlers
- * build a fresh object literal (`server.ts:2778`, `server.ts:2802`) whose string property widens
- * during Hono's route-type inference, so the ROUTE has already lost the discriminant. Narrowing
- * on `type` therefore does not work for a consumer — see the report note; the fix belongs at the
- * source (`type: 'dir' as const`), not in a schema that would then be narrower than the route.
+ * A discriminated union on `type`. Both handlers now build their literal with `as const`; without
+ * it the property widened to `string` during Hono's route-type inference and the route lost the
+ * discriminant, so a consumer narrowing on `entry.type === 'dir'` was left with `never`.
  */
-export const worktreeEntrySchema = z.union([
+export const worktreeEntrySchema = z.discriminatedUnion('type', [
   z.object({
-    type: z.string(),
+    type: z.literal('dir'),
     path: z.string(),
     entries: z.array(worktreeDirEntrySchema),
   }),
   z.object({
-    type: z.string(),
+    type: z.literal('file'),
     path: z.string(),
     size: z.number(),
     binary: z.boolean(),

@@ -5,14 +5,14 @@ import type { z } from 'zod';
 import type {
   agentConfigFileContentSchema,
   agentConfigListingSchema,
-} from '../contract/agent-config.ts';
+} from '@open-mercato/cezar-contract';
 import type {
   importableSkillSchema,
   removeTodoResponseSchema,
   skillSchema,
   startTodoResponseSchema,
   todoItemSchema,
-} from '../contract/skills.ts';
+} from '@open-mercato/cezar-contract';
 import type {
   deleteWorkflowResponseSchema,
   groupResponseSchema,
@@ -21,7 +21,7 @@ import type {
   planResponseSchema,
   saveWorkflowResponseSchema,
   workflowsResponseSchema,
-} from '../contract/workflows.ts';
+} from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
 /**

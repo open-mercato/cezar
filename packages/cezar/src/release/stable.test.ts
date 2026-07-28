@@ -37,6 +37,7 @@ describe('isReleaseBump', () => {
 
 describe('stampStableManifests', () => {
   const set = (): ReleaseManifests => ({
+    contract: { name: '@scope/contract', version: '0.1.5' },
     apiClient: { name: '@scope/client', version: '0.1.5' },
     cezar: {
       name: '@scope/impl',

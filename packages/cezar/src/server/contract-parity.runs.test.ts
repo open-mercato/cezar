@@ -20,7 +20,7 @@ import type {
   removeWorktreeResponseSchema,
   runCommitsResponseSchema,
   runRecordSchema,
-} from '../contract/runs.ts';
+} from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
 /**

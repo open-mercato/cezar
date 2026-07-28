@@ -1,0 +1,22 @@
+{
+  "name": "@open-mercato/cezar-contract",
+  "version": "0.9.1",
+  "description": "The cezar HTTP API contract: zod schemas and the types inferred from them.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

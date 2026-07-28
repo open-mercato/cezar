@@ -193,7 +193,7 @@ export const runRecordSchema = z.object({
    * the server can serialize, and it is what makes the route type unrepresentable here — see the
    * note on `NormalizeWorkflowDef` in `src/server/contract-parity.runs.test.ts`.
    */
-  workflowDef: z.record(z.string(), z.json()).optional(),
+  workflowDef: z.record(z.string(), z.unknown()).optional(),
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 

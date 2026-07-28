@@ -9,7 +9,7 @@ import type {
   githubMergeResponseSchema,
   githubPrChangesDataSchema,
   githubPrMergeStateResponseSchema,
-} from '../contract/github.ts';
+} from '@open-mercato/cezar-contract';
 import type {
   changesPayloadSchema,
   reclaimWorktreesResponseSchema,
@@ -18,7 +18,7 @@ import type {
   repoResponseSchema,
   worktreeEntrySchema,
   worktreesResponseSchema,
-} from '../contract/repo.ts';
+} from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
 /**

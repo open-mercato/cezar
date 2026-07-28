@@ -2782,7 +2782,10 @@ export function createApp(deps: ServerDeps) {
       }
       if (result.kind === 'dir') {
         return c.json({
-          type: 'dir',
+          // `as const` or the literal widens to `string` during Hono's route-type inference,
+          // which erases the discriminant a consumer narrows on — `entry.type === 'dir'` then
+          // leaves `never` and every field access on it fails. The wire was always 'dir'.
+          type: 'dir' as const,
           path: result.path,
           entries: result.entries,
         });
@@ -2806,7 +2809,7 @@ export function createApp(deps: ServerDeps) {
         });
       }
       return c.json({
-        type: 'file',
+        type: 'file' as const,
         path: result.path,
         size: result.size,
         binary: result.binary,

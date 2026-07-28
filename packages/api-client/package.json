@@ -23,11 +23,10 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.test.json",
-    "prebuild": "node ../cezar/scripts/sync-contract.mjs",
-    "pretypecheck": "node ../cezar/scripts/sync-contract.mjs"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@open-mercato/cezar-contract": "^0.9.1",
     "hono": "^4.6.0"
   },
   "devDependencies": {

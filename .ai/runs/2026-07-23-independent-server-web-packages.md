@@ -101,7 +101,14 @@ Supersedes 6b's "derive the aliases" plan. Every DTO becomes a **zod definition*
 type inferred from it, and the same definitions are usable by the server (validation), the web
 (client-side validation) and the typed client.
 
-**Packaging — settled by the `sync-readme` precedent.** Canonical source is
+**Packaging — settled: `packages/contract` (`@open-mercato/cezar-contract`), a real workspace
+package.** An earlier pass copied the directory into the api-client at prebuild; review rejected
+that ("copying like this is not nice", "needs a separate shared package"), and the objection was
+right — a build-time copy hides a dependency the package graph should state. Both the service and
+the api-client now depend on it normally. It publishes FIRST, because the SERVICE depends on it at
+runtime and the service is public; the api-client staying private does not change that.
+
+Superseded reasoning, kept because the alternatives are non-obvious: Canonical source is
 `packages/cezar/src/contract/*.ts` (Node-free). A `sync-contract` prebuild copies those files into
 `packages/api-client/src/contract/` (gitignored, `GENERATED` header) so tsc compiles them into the
 api-client's own `dist`. Copying needs only the `.ts` source, so this has **no runtime dependency
