@@ -8,7 +8,7 @@ import {
   resolveIndexHtml,
   type GetTarget,
   type IndexTarget,
-} from './static-ui.js';
+} from './static-ui.ts';
 
 describe('resolveIndexHtml', () => {
   const cases: Array<{ name: string; distExists: boolean; target: IndexTarget }> = [

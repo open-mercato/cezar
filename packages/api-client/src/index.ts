@@ -23,6 +23,7 @@
  */
 
 export * from './client.ts'
+export * from './contract/index.ts'
 export * from './dto/types.ts'
 export * from './protocol/ui-events.ts'
 export * from './protocol/tool-display.ts'

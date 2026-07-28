@@ -12,15 +12,15 @@ import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.js';
-import { workspaceConfigPath } from '../paths.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import type { CloneRunner } from './checkout.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { workspaceConfigPath } from '../paths.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import type { CloneRunner } from './checkout.ts';
 import {
   WorkspaceEventBus,
   createApp,
@@ -28,7 +28,7 @@ import {
   type RegisterProjectResponse,
   type ServerDeps,
   type UpdateProjectResponse,
-} from './server.js';
+} from './server.ts';
 
 /**
  * Multi-project workspace API (spec 2026-07-20-multi-project-workspace, step

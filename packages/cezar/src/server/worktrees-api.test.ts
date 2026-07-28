@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWorktree } from '../git-worktree.js';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { createWorktree } from '../git-worktree.ts';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

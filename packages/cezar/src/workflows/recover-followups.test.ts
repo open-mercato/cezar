@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { RunManager } from './run.js';
+import { RunStore } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { RunManager } from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

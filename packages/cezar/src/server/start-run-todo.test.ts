@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { TodoItem } from '../todos.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
-import type { RunRecord } from '../runs/store.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { connectedProviderAuth } from './provider-auth.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { TodoItem } from '../todos.ts';
+import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import type { RunRecord } from '../runs/store.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { connectedProviderAuth } from './provider-auth.testkit.ts';
 
 /**
  * `POST /api/v1/runs` `todoId` (#374) — the audit trail across the composer detour.

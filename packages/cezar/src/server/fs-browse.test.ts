@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { workspaceConfigPath } from '../paths.js';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
-import type { FsBrowseResponse } from './fs-browse.js';
+import { workspaceConfigPath } from '../paths.ts';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
+import type { FsBrowseResponse } from './fs-browse.ts';
 
 /**
  * `GET /api/v1/fs/browse` (multi-project spec, step 4.1) — the directory picker

@@ -9,22 +9,22 @@ import type { Next } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
-import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.js';
+import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
-import { detectEnvironment } from '../core/backend-detect.js';
-import type { ContentBlock } from '../core/agent-runner.js';
-import { discoverCodexModels } from '../core/codex-model-catalog.js';
+import { detectEnvironment } from '../core/backend-detect.ts';
+import type { ContentBlock } from '../core/agent-runner.ts';
+import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
   type ProviderId,
   type ProviderStatusResponse,
-} from '../core/provider-auth.js';
-import { applyProviderEnablement } from '../core/provider-availability.js';
-import { RunnerModelCatalog } from '../core/runner-model-catalog.js';
-import { currentUsage, onUsage } from '../core/process-usage.js';
-import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.js';
+} from '../core/provider-auth.ts';
+import { applyProviderEnablement } from '../core/provider-availability.ts';
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { currentUsage, onUsage } from '../core/process-usage.ts';
+import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import {
   QUICK_TASK_WORKFLOW,
   normalizeWorkflowDoc,
@@ -34,19 +34,19 @@ import {
   workflowFileSchema,
   workflowStepSchema,
   type WorkflowDef,
-} from '../workflows/types.js';
-import { planChain, slugify } from '../planner.js';
-import { discoverSkills } from '../skills.js';
-import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.js';
-import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.js';
-import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.js';
-import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.js';
-import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.js';
-import { isV2WireEventType } from '../runs/ui-event-sink.js';
-import type { RunManager } from '../workflows/run.js';
-import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.js';
-import { isReclaimable, reclaimWorktrees } from '../runs/retention.js';
-import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.js';
+} from '../workflows/types.ts';
+import { planChain, slugify } from '../planner.ts';
+import { discoverSkills } from '../skills.ts';
+import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
+import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
+import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
+import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
+import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { isV2WireEventType } from '../runs/ui-event-sink.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
+import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
 import {
   collectChanges,
   collectCommitChanges,
@@ -57,11 +57,11 @@ import {
   isOsOpenableImage,
   pushCurrentBranch,
   readWorktreePath,
-} from './git-changes.js';
-import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.js';
-import { findConfigFile } from '../agent-config/catalog.js';
-import { readConfigFile, writeConfigFile } from '../agent-config/files.js';
-import { listAgentConfig } from '../agent-config/service.js';
+} from './git-changes.ts';
+import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { findConfigFile } from '../agent-config/catalog.ts';
+import { readConfigFile, writeConfigFile } from '../agent-config/files.ts';
+import { listAgentConfig } from '../agent-config/service.ts';
 import {
   PROJECT_ID_RE,
   defaultWorkspaceConfig,
@@ -71,7 +71,7 @@ import {
   effectiveComposerDefault,
   type WorkspaceConfig,
   type WorkspaceProject,
-} from '../workspace/config.js';
+} from '../workspace/config.ts';
 import {
   allocateProjectSlug,
   listProjects,
@@ -80,37 +80,37 @@ import {
   removeProject,
   shouldRegisterProject,
   type ProjectListEntry,
-} from '../workspace/projects.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.js';
-import { checkoutRepo, type CloneRunner } from './checkout.js';
-import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.js';
-import { reviewGateEnabled } from '../runs/review-gate.js';
-import { readUiState, uiStatePath } from '../ui-state.js';
-import { expandTilde } from '../paths.js';
-import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.js';
-import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.js';
-import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.js';
-import { resolveForge } from './forge/index.js';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.js';
-import { ensureLaunchKey } from './launch-key.js';
-import { openInTerminal } from './open-in-terminal.js';
-import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.js';
-import { createDraftPr } from './pr.js';
-import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.js';
+} from '../workspace/projects.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
+import { checkoutRepo, type CloneRunner } from './checkout.ts';
+import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
+import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { readUiState, uiStatePath } from '../ui-state.ts';
+import { expandTilde } from '../paths.ts';
+import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
+import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
+import { resolveForge } from './forge/index.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.ts';
+import { ensureLaunchKey } from './launch-key.ts';
+import { openInTerminal } from './open-in-terminal.ts';
+import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
+import { createDraftPr } from './pr.ts';
+import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
   providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
   unavailableProviderMessage,
-} from './provider-action-gate.js';
+} from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
   resolveGetRequest,
-} from './static-ui.js';
+} from './static-ui.ts';
 
 export interface ServerDeps {
   repoRoot: string;
@@ -1192,7 +1192,11 @@ export function createApp(deps: ServerDeps) {
     const caps = capabilities();
     return {
       version,
-      latestVersion: update?.latest,
+      // Spread rather than `latestVersion: update?.latest`: an `undefined` VALUE is dropped by
+      // JSON.stringify, so the key is absent on the wire — but writing it unconditionally types
+      // the key as always-present, which is a shape no client ever receives. The contract schema
+      // says `.optional()`, and contract-parity.test.ts holds the two together.
+      ...(update?.latest !== undefined ? { latestVersion: update.latest } : {}),
       // Health is CORS-open and, in hosted mode, reachable off the loopback —
       // so any site/host that reads it would learn the developer's absolute
       // checkout path and username (#431). Local mode keeps the full path (the
@@ -2079,7 +2083,14 @@ export function createApp(deps: ServerDeps) {
       if (c.req.valid('query').wait === '1') await waitForTeamSkills(repoRoot);
       const importable = getTeamSkillsCached(repoRoot)
         .filter((skill) => skill.team && gated.has(skill.team.repo))
-        .map((skill) => ({ name: skill.name, description: skill.description }));
+        // Spread `description` rather than writing it unconditionally: an undefined VALUE is
+        // dropped by JSON.stringify, so the key is absent on the wire, and writing it always
+        // typed the route as sending a key it does not. contract/skills.ts says `.optional()`,
+        // which is what the client actually receives.
+        .map((skill) => ({
+          name: skill.name,
+          ...(skill.description !== undefined ? { description: skill.description } : {}),
+        }));
       return c.json(importable);
     })
 
@@ -2978,9 +2989,11 @@ export function createApp(deps: ServerDeps) {
           message: `variant ${winner.variant ?? '?'} was picked — this variant is archived, its worktree removed`,
         });
       }
-      return c.json({
-        winner: store.getRun(winner.id),
-      } satisfies PickVariantResponse);
+      // Spread: `getRun` may answer undefined, and an undefined VALUE is dropped by
+      // JSON.stringify — so writing the key unconditionally typed the route as sending a key it
+      // does not. contract/workflows.ts says `.optional()`, which is what a client receives.
+      const picked = store.getRun(winner.id);
+      return c.json({ ...(picked !== undefined ? { winner: picked } : {}) });
     });
 
   // ---- chained family: open-targets (project-scoped) ----

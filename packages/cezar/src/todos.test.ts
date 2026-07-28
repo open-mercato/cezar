@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { onTodosChanged, todosPath, todosWatchActive } from './todos.js';
+import { onTodosChanged, todosPath, todosWatchActive } from './todos.ts';
 
 /**
  * Per-dataDir todos watch (multi-project spec, step 2.3): each project's

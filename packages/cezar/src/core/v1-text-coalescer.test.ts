@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { V1TextCoalescer } from './v1-text-coalescer.js';
+import { V1TextCoalescer } from './v1-text-coalescer.ts';
 
 const collect = () => {
   const texts: string[] = [];

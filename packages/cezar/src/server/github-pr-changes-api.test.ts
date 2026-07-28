@@ -2,11 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import type { ForgePrDiffResult } from './github.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import type { ForgePrDiffResult } from './github.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 describe('the GitHub PR changes API', () => {
   let repoRoot: string;

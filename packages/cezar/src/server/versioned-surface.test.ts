@@ -2,12 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 /**
  * The versioned surface is the ONLY surface (spec 2026-07-23-independent-server-web-packages).

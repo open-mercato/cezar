@@ -1,3 +1,11 @@
+import type {
+  BackendCheck,
+  Capabilities,
+  ForgeInfo,
+  HealthResponse,
+  RepoInfo,
+  Runner,
+} from '../contract/index.ts'
 /**
  * The shape of the cockpit's HTTP surface (`packages/cezar/src/server/server.ts`), hand-written
  * for the families that are not chained yet.
@@ -37,10 +45,6 @@ export type StepStatus =
   | 'failed'
   | 'cancelled'
   | 'skipped'
-
-/** The agent backends a run can use. `runner` is optional on old records — they predate the
- *  choice and are Claude by definition (see `resumeCommand` in the server). */
-export type Runner = 'claude' | 'codex' | 'opencode'
 
 /** Coarse host authentication state from `/api/providers/status`. Credentials, account
  *  identity, and raw CLI output never cross this boundary. */
@@ -251,69 +255,6 @@ export interface PickVariantResponse {
 }
 
 // ---- health / environment (src/core/backend-detect.ts, src/server/git.ts) -----------------
-
-export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'gh' | 'git'
-  available: boolean
-  version?: string
-  /** Human setup hint — shown verbatim; the server writes these for people, not for parsing. */
-  hint?: string
-}
-
-export interface RepoInfo {
-  root: string
-  branch: string
-  remote?: string
-}
-
-/** How `/api/health` serializes the resolved forge driver (R5, src/server/forge/):
- *  `{ kind, ...detect() }`. Null means plain-git features only — no PR/issue surfaces. */
-export interface ForgeInfo {
-  kind: 'github'
-  /**
-   * Whether the forge is reachable — **absent until the availability probe has warmed**.
-   *
-   * Health must never pay a `gh` shell-out, so it serves whatever the cache holds and `null`
-   * before the first probe lands. Absent therefore means "not determined yet", which is not the
-   * same as `false` ("we checked, it is down") — read it as `forge?.available === true`.
-   */
-  available?: boolean
-  /** Human-readable hint when unavailable (`gh` missing, offline…). */
-  reason?: string
-}
-
-/** Server capabilities (src/server/capabilities.ts). `localHandoff: false` means
- *  hosted mode (`CEZ_REMOTE` / non-loopback bind) — every open-on-my-machine affordance
- *  (Terminal, editor, `cd …` hints) must disappear, not disable.
- *  `followups: false` (the default — the inbox is opt-in via `CEZ_FOLLOWUPS=1`, #471) means
- *  this server has no follow-up inbox: the Inbox nav item and the composer's follow-up
- *  toggle disappear the same way. The per-task handoff journal is unrelated and always on.
- *  `singleProject: true` means `CEZ_SINGLE_PROJECT=1` constrained the workspace to its
- *  launch project and all multi-project affordances must be omitted. */
-export interface Capabilities {
-  localHandoff: boolean
-  followups: boolean
-  singleProject: boolean
-}
-
-export interface HealthResponse {
-  version: string
-  /** Only once the npm-registry check answers with something newer (#368). */
-  latestVersion?: string
-  repoRoot: string
-  /** Null when cezar was started outside a git repository. */
-  repo: RepoInfo | null
-  checks: BackendCheck[]
-  defaultRunner: Runner
-  /** R5 additive fields (BACKWARD_COMPATIBILITY.md §2 keeps the pre-forge shape intact). */
-  forge: ForgeInfo | null
-  capabilities: Capabilities
-  /** Multi-project additive fields (step 1.6): the registered projects — id + name ONLY, never
-   *  roots (health is the one CORS-open route) — and the id of the project cezar booted in.
-   *  `bootProject` is what the workspace-events filter compares stamps against when unscoped. */
-  projects?: { id: string; name: string }[]
-  bootProject?: string
-}
 
 /** One `GET /api/projects` registry entry (multi-project spec, step 1.6). Unlike health's
  *  id+name pairs this carries absolute `root`s — same-origin only, never the CORS-open route. */

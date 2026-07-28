@@ -1,14 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { cezarHomeDir, workspaceConfigPath } from '../paths.js';
-import { readUiState } from '../ui-state.js';
-import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.js';
-import { mergeWriteWorkspaceUiState } from './ui-state.js';
+import { cezarHomeDir, workspaceConfigPath } from '../paths.ts';
+import { readUiState } from '../ui-state.ts';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
+import { mergeWriteWorkspaceUiState } from './ui-state.ts';
 
 // Step 1.4 exported the global ui-state merge-write from here; step 2.7 moved
 // it to its cleaner home (src/workspace/ui-state.ts, next to the read path the
 // workspace routes share). Re-exported so existing importers keep working.
-export { mergeWriteWorkspaceUiState } from './ui-state.js';
+export { mergeWriteWorkspaceUiState } from './ui-state.ts';
 
 /**
  * Workspace config migrations (spec 2026-07-20-multi-project-workspace,

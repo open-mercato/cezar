@@ -1,4 +1,4 @@
-import type { RunnerId } from './agent-runner.js';
+import type { RunnerId } from './agent-runner.ts';
 
 export interface ModelOption {
   id: string;

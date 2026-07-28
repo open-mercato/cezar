@@ -1,4 +1,4 @@
-import type { RunnerId } from './agent-runner.js';
+import type { RunnerId } from './agent-runner.ts';
 
 /**
  * The model-preset ids each runner's picker offers — the ids of the web composer's

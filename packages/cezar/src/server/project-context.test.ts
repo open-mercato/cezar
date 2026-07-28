@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { emitUsageForTest } from '../core/process-usage.js';
-import { ProjectContextError, ProjectContexts, type ProjectContextSource } from './project-context.js';
+import { emitUsageForTest } from '../core/process-usage.ts';
+import { ProjectContextError, ProjectContexts, type ProjectContextSource } from './project-context.ts';
 
 /**
  * Lazy per-project context map (spec 2026-07-20-multi-project-workspace,

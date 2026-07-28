@@ -3,8 +3,8 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.js';
-import { workspaceConfigPath } from '../paths.js';
+import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
+import { workspaceConfigPath } from '../paths.ts';
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry

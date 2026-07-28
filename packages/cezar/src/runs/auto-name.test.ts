@@ -7,7 +7,7 @@ import {
   liveTitleUpdatesEnabled,
   postValidateTitle,
   TITLE_MAX,
-} from './auto-name.js';
+} from './auto-name.ts';
 
 /** The namer's pure half (spec 2026-07-17-task-auto-naming): prompt, cross-check, post-validation. */
 
@@ -120,7 +120,7 @@ describe('generateRunName (dry run)', () => {
       const { join } = await import('node:path');
       const root = mkdtempSync(join(tmpdir(), 'cez-namer-'));
       try {
-        const { generateRunName } = await import('./auto-name.js');
+        const { generateRunName } = await import('./auto-name.ts');
         const result = await generateRunName(root, { task: '437', skillName: 'om-auto-review-pr' });
         expect(result).toEqual({ titleSummary: '437: implementing cr fixes', prNumber: 437 });
       } finally {

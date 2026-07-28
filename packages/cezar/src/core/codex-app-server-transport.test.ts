@@ -5,7 +5,7 @@ import {
   buildCodexAppServerEnv,
   CodexAppServerRpc,
   resolveCodexExecutable,
-} from './codex-app-server-transport.js';
+} from './codex-app-server-transport.ts';
 
 const originalBin = process.env.CEZ_CODEX_BIN;
 

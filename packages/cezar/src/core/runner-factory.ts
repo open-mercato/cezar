@@ -1,7 +1,7 @@
-import type { AgentBackend, AgentRunner, RunnerId } from './agent-runner.js';
-import { ClaudeCliRunner } from './claude-cli-runner.js';
-import { CodexAppServerRunner } from './codex-app-server-runner.js';
-import { OpencodeServerRunner } from './opencode-server-runner.js';
+import type { AgentBackend, AgentRunner, RunnerId } from './agent-runner.ts';
+import { ClaudeCliRunner } from './claude-cli-runner.ts';
+import { CodexAppServerRunner } from './codex-app-server-runner.ts';
+import { OpencodeServerRunner } from './opencode-server-runner.ts';
 
 /**
  * The single place that maps a backend id onto a concrete runner. Everything

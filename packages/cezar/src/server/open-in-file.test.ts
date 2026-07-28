@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp, type ServerDeps } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp, type ServerDeps } from './server.ts';
 
 /**
  * `POST /api/v1/runs/:id/open-in` with `target: 'default'` (#365): the diff pane's "open in OS
@@ -14,12 +14,12 @@ import { createApp, type ServerDeps } from './server.js';
  * is mocked so the suite never actually spawns a real GUI app.
  */
 vi.mock('./open-in-app.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./open-in-app.js')>();
+  const actual = await importOriginal<typeof import('./open-in-app.ts')>();
   return { ...actual, openFileInDefaultApp: vi.fn().mockResolvedValue(true) };
 });
 
-import { openFileInDefaultApp } from './open-in-app.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { openFileInDefaultApp } from './open-in-app.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 describe("POST /api/v1/runs/:id/open-in — target 'default' (local-mode file open, #365)", () => {
   let repoRoot: string;

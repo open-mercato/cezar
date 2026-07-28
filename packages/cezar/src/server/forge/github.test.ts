@@ -39,8 +39,8 @@ import {
   THREAD_ENTRY_CAP,
   TIMELINE_EVENT_CAP,
   TIMELINE_EVENT_KINDS,
-} from './github.js';
-import type { ForgeComment } from './types.js';
+} from './github.ts';
+import type { ForgeComment } from './types.ts';
 
 /** `rollupToChecks` collapses a `gh … --json statusCheckRollup` array — already zod-validated
  *  via `ghCheckRunSchema` at the call site — down to the single enum the GitHub tab renders,

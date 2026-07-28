@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore, type QueuedMessage, type RunRecord } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { connectedProviderAuth } from './provider-auth.testkit.js';
-import { createApp } from './server.js';
+import { RunStore, type QueuedMessage, type RunRecord } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { connectedProviderAuth } from './provider-auth.testkit.ts';
+import { createApp } from './server.ts';
 
 /**
  * #472 — the queued prompt stack over HTTP: the three-rung delivery ladder on

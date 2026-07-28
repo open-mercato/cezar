@@ -48,6 +48,8 @@ afterEach(() => {
 
 const HEALTH_MULTI: HealthResponse = {
   version: '0.1.5',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   defaultRunner: 'claude',

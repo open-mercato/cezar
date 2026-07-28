@@ -34,6 +34,8 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/home/me/Projects/cezar',
   repo: { root: '/home/me/Projects/cezar', branch: 'feat/cockpit', remote: 'origin' },
   checks: [],

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore, type RunRecord } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
 import {
   FILE_CONTENT_CAP,
   assemblePayload,
@@ -20,9 +20,9 @@ import {
   readWorktreePath,
   splitPatch,
   type ChangesPayload,
-} from './git-changes.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+} from './git-changes.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
  * Session git API (redesign R5 Step 1.2 — spec §"Git/session API additions"):

@@ -35,8 +35,8 @@ import type {
   UiMessageItem,
   UiReasoningItem,
   UiToolItem,
-} from './ui-events.js';
-import { toolDisplay } from './tool-display.js';
+} from './ui-events.ts';
+import { toolDisplay } from './tool-display.ts';
 
 /** The two reasoning delta channels, accumulated separately — see
  *  `CodexUiMapperState.reasonings`. */

@@ -4,8 +4,8 @@ import {
   isReleaseBump,
   stampStableManifests,
   type ReleaseManifests,
-} from './stable.js';
-import { isPublishable } from './manifests.js';
+} from './stable.ts';
+import { isPublishable } from './manifests.ts';
 
 describe('computeStableVersion', () => {
   it('increments each semver component the way npm version does', () => {

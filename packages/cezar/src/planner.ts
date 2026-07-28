@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { createRunner } from './core/runner-factory.js';
-import { loadConfig } from './config.js';
-import { discoverSkills, type Skill } from './skills.js';
-import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.js';
+import { createRunner } from './core/runner-factory.ts';
+import { loadConfig } from './config.ts';
+import { discoverSkills, type Skill } from './skills.ts';
+import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.ts';
 
 /**
  * Chain-from-prompt (spec 008): one cheap `claude` call turns the user's task

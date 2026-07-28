@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import { connectedProviderAuth } from './provider-auth.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import { connectedProviderAuth } from './provider-auth.testkit.ts';
+import { createApp } from './server.ts';
 
 /**
  * Request-origin guard (#426). The server executes agents with shell access,

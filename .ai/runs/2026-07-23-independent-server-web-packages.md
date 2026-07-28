@@ -118,6 +118,33 @@ sank the alternatives:
 Free structural guard: api-client's tsconfig sets `types: []`, so a `node:` import in a contract
 file **fails api-client's build**. The Node-free invariant stops being a comment.
 
+**Progress 2026-07-28.** Pipeline is BUILT and proven end to end on the health family:
+`sync-contract.mjs` copies `src/contract/` into the api-client at prebuild, tsc compiles it into
+that package's dist, the barrel re-exports it, and `packages/web/src/api/contract-pipeline.test.ts`
+proves the cockpit receives the zod SCHEMA (runtime value) and not merely the inferred type.
+`packages/cezar/tsconfig.json` gained `allowImportingTsExtensions` + `rewriteRelativeImportExtensions`
+(owner call), and all 673 relative specifiers across 198 files moved from `.js` to `.ts`; emitted JS
+still rewrites to `.js`, so `dist` stays plain resolvable ESM.
+
+The guard paid for itself on the first family — it rejected the hand-written health schema as WIDER
+than the route, exposing two real defects: `latestVersion: update?.latest` typed a key as always
+present that `JSON.stringify` drops, and `projects`/`bootProject` were optional in the DTO although
+`workspaceSummary()` always returns them. Same `key: maybeUndefined` pattern then found and fixed at
+`/skills/importable` and `/groups/:groupId/pick`. **This is the dominant defect class — expect it in
+every remaining family.**
+
+Schema drafts exist for runs, github, repo, projects, workspace, workflows, skills and agent-config
+(written by a parallel pass that hit an API session limit before finishing). runs and github parity
+assertions PASS. Two in `contract-parity.workflows.test.ts` are removed and named under KNOWN GAPS
+rather than weakened: `pickVariantResponse` and `startTodoResponse` both embed `runRecordSchema`,
+which is still narrower than the routes in a field type. **Finish `contract/runs.ts` first — it
+unblocks those two and is the only thing standing between the drafts and being merged.**
+
+Still to do centrally (deliberately not delegated — `server.ts`, `contract/index.ts` and
+`dto/types.ts` are shared files that concurrent agents would corrupt): export each family from
+`contract/index.ts`, delete its hand-written declarations from `dto/types.ts` (only the 6 health
+types are gone so far, of 118), and apply the remaining handler fixes.
+
 - [ ] 1. Extract the ~29 existing request schemas out of `server.ts` into `src/contract/`.
 - [ ] 2. Write the ~105 response schemas — the bulk of the work. None exist today; every response
        shape is currently inferred from the handler's object literal.

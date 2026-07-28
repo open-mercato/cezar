@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { prependSystemPrompt } from './agent-runner.js';
-import { buildClaudeArgs } from './claude-cli-runner.js';
+import { prependSystemPrompt } from './agent-runner.ts';
+import { buildClaudeArgs } from './claude-cli-runner.ts';
 
 /**
  * The per-backend system-prompt delivery mechanism (spec §protocol v2

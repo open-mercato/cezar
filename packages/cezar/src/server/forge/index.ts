@@ -1,6 +1,6 @@
-import type { RepoInfo } from '../git.js';
-import { createGithubDriver } from './github.js';
-import type { ForgeDriver } from './types.js';
+import type { RepoInfo } from '../git.ts';
+import { createGithubDriver } from './github.ts';
+import type { ForgeDriver } from './types.ts';
 
 /**
  * Forge resolution (cockpit-ui redesign spec §"Forge-driver seam"): map the
@@ -55,4 +55,4 @@ export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   return null;
 }
 
-export type { ForgeDriver, ForgeAvailability, ForgeItem, ForgeKind, ForgePrStatus, ForgeRefKind } from './types.js';
+export type { ForgeDriver, ForgeAvailability, ForgeItem, ForgeKind, ForgePrStatus, ForgeRefKind } from './types.ts';

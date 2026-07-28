@@ -2,17 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.js';
-import { type AgentSession } from '../core/claude-cli-runner.js';
-import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.js';
-import { createRunner } from '../core/runner-factory.js';
-import type { RunnerId } from '../core/agent-runner.js';
-import { modelConflictsWithRunner } from '../core/model-presets.js';
+import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.ts';
+import { type AgentSession } from '../core/claude-cli-runner.ts';
+import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { createRunner } from '../core/runner-factory.ts';
+import type { RunnerId } from '../core/agent-runner.ts';
+import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import {
   ModelIdentityError,
   formatModelIdentity,
   normalizeModelForBackend,
-} from '../core/model-identity.js';
+} from '../core/model-identity.ts';
 import {
   HANDOFF_ONLY_INSTRUCTIONS,
   HANDOFF_INSTRUCTIONS,
@@ -20,26 +20,26 @@ import {
   followupsEnabled,
   handoffPath,
   seedHandoffFile,
-} from '../handoff.js';
-import { todosPath } from '../todos.js';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.js';
-import { discoverSkills, type Skill } from '../skills.js';
-import { materializeSkillDir } from '../skills-remote.js';
-import { seedAgentConfigLocalLayer } from '../agent-config/seed.js';
-import { loadConfig, resolveWorktreeRetention } from '../config.js';
-import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.js';
-import { getRepoInfo } from '../server/git.js';
-import { loadWorkflows } from './load.js';
-import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.js';
-import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.js';
-import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.js';
-import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.js';
-import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.js';
-import { reviewGateEnabled } from '../runs/review-gate.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { UiEventSink } from '../runs/ui-event-sink.js';
-import type { UiEvent } from '../core/ui-events.js';
-import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
+} from '../handoff.ts';
+import { todosPath } from '../todos.ts';
+import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+import { discoverSkills, type Skill } from '../skills.ts';
+import { materializeSkillDir } from '../skills-remote.ts';
+import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+import { loadConfig, resolveWorktreeRetention } from '../config.ts';
+import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
+import { getRepoInfo } from '../server/git.ts';
+import { loadWorkflows } from './load.ts';
+import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.ts';
+import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
+import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
+import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
+import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { UiEventSink } from '../runs/ui-event-sink.ts';
+import type { UiEvent } from '../core/ui-events.ts';
+import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 /** An interactive session that hears nothing from the user closes itself. */

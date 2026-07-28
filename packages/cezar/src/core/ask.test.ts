@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseAskMarker, parseAskRequest, stripAskMarker, type AskRequest } from './ask.js';
+import { parseAskMarker, parseAskRequest, stripAskMarker, type AskRequest } from './ask.ts';
 
 const valid: AskRequest = {
   questions: [

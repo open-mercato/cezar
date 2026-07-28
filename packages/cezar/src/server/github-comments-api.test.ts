@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import type { ForgeCommentsData } from './github.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import type { ForgeCommentsData } from './github.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
  * `GET /api/v1/github/comments/:kind/:number` (#499 Phase 2). The contract under test: zod-validated

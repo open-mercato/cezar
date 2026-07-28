@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from './agent-runner.js';
-import type { UiEvent } from './ui-events.js';
+import type { AgentEvent } from './agent-runner.ts';
+import type { UiEvent } from './ui-events.ts';
 import {
   createOpencodeUiState,
   mapOpencodeEvent,
@@ -22,8 +22,8 @@ import {
   opencodeTurnStarted,
   type OpencodeUiMapperState,
   type OpencodeUiMapping,
-} from './opencode-ui-mapper.js';
-import { OpencodeServerRunner } from './opencode-server-runner.js';
+} from './opencode-ui-mapper.ts';
+import { OpencodeServerRunner } from './opencode-server-runner.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, '__fixtures__', 'opencode');

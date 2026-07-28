@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderAuthService, type ProviderId } from '../core/provider-auth.js';
-import { RunStore } from '../runs/store.js';
-import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
-import type { RunManager } from '../workflows/run.js';
-import { openInTerminal } from './open-in-terminal.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
+import { RunStore } from '../runs/store.ts';
+import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { openInTerminal } from './open-in-terminal.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 // The terminal launcher actually spawns a process (osascript/cmd/x-terminal-emulator) — mocked
 // so this suite exercises only the command construction, never a real terminal window.
@@ -15,7 +15,7 @@ vi.mock('./open-in-terminal.js', () => ({ openInTerminal: vi.fn(async () => true
 
 const mockOpenInTerminal = vi.mocked(openInTerminal);
 
-const { createApp } = await import('./server.js');
+const { createApp } = await import('./server.ts');
 
 const providerAuth = (disconnected: ProviderId[] = []) => new ProviderAuthService({
   platform: 'linux',

@@ -1,7 +1,7 @@
 {
   "name": "@open-mercato/cezar",
   "version": "0.9.1",
-  "description": "Local cockpit for running and tracking AI agent tasks in your repo. Uses your logged-in `claude` CLI and `gh` — zero config, zero database.",
+  "description": "Local cockpit for running and tracking AI agent tasks in your repo. Uses your logged-in `claude` CLI and `gh` \u2014 zero config, zero database.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -38,7 +38,8 @@
     "test:watch": "vitest",
     "test:unit": "node --import tsx --test test/unit/*.test.ts",
     "test:package": "node --import tsx --test test/e2e/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "sync-contract": "node scripts/sync-contract.mjs"
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",

@@ -28,3 +28,7 @@ skills-lock.json
 
 # mock-agent output from dry-run e2e (scripts/mock-claude.mjs appends here)
 /notes.md
+
+# Build artifact: the contract lives in packages/cezar/src/contract and is copied into the
+# api-client at prebuild (scripts/sync-contract.mjs) so it ships self-contained.
+/packages/api-client/src/contract/

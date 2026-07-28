@@ -42,8 +42,8 @@ import type {
   UiReasoningItem,
   UiToolItem,
   UiUsageUpdatedEvent,
-} from './ui-events.js';
-import { toolDisplay } from './tool-display.js';
+} from './ui-events.ts';
+import { toolDisplay } from './tool-display.ts';
 
 /** Per-message telemetry: `message.updated` snapshots (cumulative per
  *  message) and summed `step-finish` increments are tracked separately —

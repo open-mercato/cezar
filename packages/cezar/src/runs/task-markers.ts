@@ -1,4 +1,4 @@
-import { MAX_REF } from './task-refs.js';
+import { MAX_REF } from './task-refs.ts';
 
 /**
  * In-band task-reference markers (spec 2026-07-18-task-ref-markers): the main

@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { verifyWsUpgrade } from './server.js';
+import { verifyWsUpgrade } from './server.ts';
 import {
   createSocketHub,
   WS_PATH,
@@ -11,7 +11,7 @@ import {
   type TopicOptions,
   type TopicPublisher,
   type WsUpgradeVerdict,
-} from './ws.js';
+} from './ws.ts';
 
 /**
  * The hub is exercised over REAL sockets — a Node http server plus the `ws`

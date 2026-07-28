@@ -21,7 +21,7 @@
  *  - opencode: bash, edit, write, read, grep, glob, webfetch, task, todowrite
  */
 
-import type { ToolKind } from './ui-events.js';
+import type { ToolKind } from './ui-events.ts';
 
 export interface ToolDisplay {
   toolKind: ToolKind;

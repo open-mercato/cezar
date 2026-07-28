@@ -31,6 +31,8 @@ const REPO: RepoResponse = {
 
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main', remote: 'git@github.com:acme/demo.git' },
   checks: [],

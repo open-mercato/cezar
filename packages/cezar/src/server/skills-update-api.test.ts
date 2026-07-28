@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import { SkillsUpdateConflictError, SkillsUpdateService } from '../skills-update.js';
-import { mergeWriteWorkspaceConfig } from '../workspace/config.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import { SkillsUpdateConflictError, SkillsUpdateService } from '../skills-update.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 describe('workspace skills update API', () => {
   const savedHome = process.env.CEZ_HOME;

@@ -12,6 +12,12 @@
     "noImplicitOverride": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    // Imports name the real `.ts` file; `rewriteRelativeImportExtensions` emits `.js` into
+    // `dist` (and into the `.d.ts`), so the published package is still plain resolvable ESM.
+    // Same pair the api-client already uses — and what lets `src/contract/` be copied between
+    // the two packages without rewriting a single specifier.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "sourceMap": true,
     "outDir": "dist",

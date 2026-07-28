@@ -12,19 +12,19 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { mergeWriteWorkspaceConfig } from '../workspace/config.js';
-import { clearProjectProbeCache, registerProject } from '../workspace/projects.js';
-import { checkoutRepo, cleanupCheckout, isValidCheckoutName, parseRepoRef, type CloneRunner } from './checkout.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { clearProjectProbeCache, registerProject } from '../workspace/projects.ts';
+import { checkoutRepo, cleanupCheckout, isValidCheckoutName, parseRepoRef, type CloneRunner } from './checkout.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 import {
   WorkspaceEventBus,
   createApp,
   type ProjectsResponse,
   type RegisterProjectResponse,
   type ServerDeps,
-} from './server.js';
+} from './server.ts';
 
 /**
  * GUI clone (spec 2026-07-20-multi-project-workspace, step 4.3):

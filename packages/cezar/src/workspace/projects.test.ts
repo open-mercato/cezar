@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync,
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadWorkspaceConfig } from './config.js';
+import { loadWorkspaceConfig } from './config.ts';
 import {
   allocateProjectSlug,
   clearProjectProbeCache,
@@ -11,7 +11,7 @@ import {
   registerProject,
   removeProject,
   shouldRegisterProject,
-} from './projects.js';
+} from './projects.ts';
 
 /**
  * Project registry ops (spec 2026-07-20-multi-project-workspace, step 1.3):

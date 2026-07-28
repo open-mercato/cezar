@@ -53,10 +53,10 @@ import type {
   UiEventType as WebUiEventType,
   UiItem as WebUiItem,
 } from '@open-mercato/cezar-api-client';
-import type { BackendCheck } from '../core/backend-detect.js';
-import type { ProcessUsage } from '../core/process-usage.js';
-import type { ProviderStatus, ProviderStatusResponse } from '../core/provider-auth.js';
-import type { ToolDisplay } from '../core/tool-display.js';
+import type { BackendCheck } from '../core/backend-detect.ts';
+import type { ProcessUsage } from '../core/process-usage.ts';
+import type { ProviderStatus, ProviderStatusResponse } from '../core/provider-auth.ts';
+import type { ToolDisplay } from '../core/tool-display.ts';
 import type {
   FileDiff,
   PermissionOption,
@@ -72,16 +72,16 @@ import type {
   UiEvent,
   UiEventType,
   UiItem,
-} from '../core/ui-events.js';
-import type { QueuedMessage, RunEvent, RunRecord, RunStatus, StepState, StepStatus } from '../runs/store.js';
-import type { Skill } from '../skills.js';
-import type { TodoItem } from '../todos.js';
-import type { WorkflowLoadIssue, loadWorkflows } from '../workflows/load.js';
-import type { WorkflowDef, WorkflowStepDef } from '../workflows/types.js';
-import type { Capabilities } from './capabilities.js';
-import type { ForgeAvailability, ForgeKind } from './forge/index.js';
-import type { ForgeMergeMethod, ForgePrMergeState } from './forge/types.js';
-import type { BranchResult, ChangedFile, ChangesPayload, CommitPayload, DirEntry } from './git-changes.js';
+} from '../core/ui-events.ts';
+import type { QueuedMessage, RunEvent, RunRecord, RunStatus, StepState, StepStatus } from '../runs/store.ts';
+import type { Skill } from '../skills.ts';
+import type { TodoItem } from '../todos.ts';
+import type { WorkflowLoadIssue, loadWorkflows } from '../workflows/load.ts';
+import type { WorkflowDef, WorkflowStepDef } from '../workflows/types.ts';
+import type { Capabilities } from './capabilities.ts';
+import type { ForgeAvailability, ForgeKind } from './forge/index.ts';
+import type { ForgeMergeMethod, ForgePrMergeState } from './forge/types.ts';
+import type { BranchResult, ChangedFile, ChangesPayload, CommitPayload, DirEntry } from './git-changes.ts';
 import type {
   ForgeComment,
   ForgeCommentsData,
@@ -89,9 +89,9 @@ import type {
   ForgeTimelineEventKind,
   GithubData,
   GithubItem,
-} from './github.js';
-import type { LogEntry, RepoInfo, StatusEntry } from './git.js';
-import type { GroupResponse, GroupVariant, PickVariantResponse } from './server.js';
+} from './github.ts';
+import type { LogEntry, RepoInfo, StatusEntry } from './git.ts';
+import type { GroupResponse, GroupVariant, PickVariantResponse } from './server.ts';
 
 /**
  * The drift guard for `packages/api-client/src/dto/types.ts`.

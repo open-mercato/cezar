@@ -12,8 +12,8 @@ export {
   GithubPrNotFoundError,
   GH_MAX_LIMIT,
   GH_CHECKS_MAX,
-} from './forge/github.js';
-export type { GithubData, GithubItem, GithubChecksData } from './forge/github.js';
+} from './forge/github.ts';
+export type { GithubData, GithubItem, GithubChecksData } from './forge/github.ts';
 export type {
   ForgeComment,
   ForgeCommentsData,
@@ -21,4 +21,4 @@ export type {
   ForgeTimelineEventKind,
   ForgePrDiffResult,
   ForgePrChange,
-} from './forge/types.js';
+} from './forge/types.ts';

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { workspaceUiStatePath } from '../paths.js';
-import { atomicWriteJsonSync } from './config.js';
+import { workspaceUiStatePath } from '../paths.ts';
+import { atomicWriteJsonSync } from './config.ts';
 
 /**
  * `~/.cezar/ui-state.json` — global GUI state, the workspace twin of the

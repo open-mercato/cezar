@@ -65,6 +65,8 @@ function skill(overrides: Partial<Skill> & { name: string; source: Skill['source
 function health(forgeAvailable: boolean): HealthResponse {
   return {
     version: '0.0.0-test',
+    projects: [],
+    bootProject: 'default',
     repoRoot: '/repo',
     repo: { root: '/repo', branch: 'main' },
     checks: [],

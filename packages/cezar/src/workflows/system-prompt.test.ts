@@ -4,17 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.js';
-import { RunStore } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import type { WorkflowDef } from './types.js';
+import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
+import { RunStore } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
   composeSystemPrompt,
   makeRunTitle,
   resolveExtraSystemPrompt,
   skillSystemPrompt,
-} from './run.js';
+} from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

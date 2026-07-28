@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderAuthService, type ProviderId } from '../core/provider-auth.js';
-import { RunStore, type RunRecord } from '../runs/store.js';
-import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
-import { RunManager, type StartRunInput } from '../workflows/run.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
+import { RunManager, type StartRunInput } from '../workflows/run.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
 

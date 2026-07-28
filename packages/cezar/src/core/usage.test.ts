@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CACHE_CREATION_WEIGHT, CACHE_READ_WEIGHT, costWeightedTokens, type RawUsage } from './usage.js';
+import { CACHE_CREATION_WEIGHT, CACHE_READ_WEIGHT, costWeightedTokens, type RawUsage } from './usage.ts';
 
 describe('costWeightedTokens', () => {
   describe('absent or empty usage', () => {

@@ -19,7 +19,7 @@
  * Deliberately imports no backend-specific wire type: the canonical identity
  * never leaks a runner's request shape past the `AgentRunner` seam.
  */
-import type { AgentBackend } from './agent-runner.js';
+import type { AgentBackend } from './agent-runner.ts';
 
 /**
  * A backend-agnostic model identity. Serialized as `provider/model` (see

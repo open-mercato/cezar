@@ -5,7 +5,7 @@ import {
   stampManifests,
   type ReleaseManifests,
   type SnapshotContext,
-} from './snapshot.js';
+} from './snapshot.ts';
 
 const base: SnapshotContext = {
   eventName: 'pull_request',

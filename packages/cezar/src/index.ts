@@ -5,32 +5,32 @@ import { createServer } from 'node:net';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectEnvironment } from './core/backend-detect.js';
-import { ProviderAuthService } from './core/provider-auth.js';
-import { applyProviderEnablement } from './core/provider-availability.js';
-import { pruneOrphans } from './git-worktree.js';
-import { getRepoInfo } from './server/git.js';
-import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.js';
-import { reclaimWorktrees } from './runs/retention.js';
-import { RunStore } from './runs/store.js';
-import { RunManager } from './workflows/run.js';
-import { loadWorkflows } from './workflows/load.js';
-import { startServer, WorkspaceEventBus } from './server/server.js';
+import { detectEnvironment } from './core/backend-detect.ts';
+import { ProviderAuthService } from './core/provider-auth.ts';
+import { applyProviderEnablement } from './core/provider-availability.ts';
+import { pruneOrphans } from './git-worktree.ts';
+import { getRepoInfo } from './server/git.ts';
+import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
+import { reclaimWorktrees } from './runs/retention.ts';
+import { RunStore } from './runs/store.ts';
+import { RunManager } from './workflows/run.ts';
+import { loadWorkflows } from './workflows/load.ts';
+import { startServer, WorkspaceEventBus } from './server/server.ts';
 import {
   ProviderRuntimeAuthObserver,
   recoverWithProviderRuntimeAuthObservation,
-} from './server/provider-auth-runtime.js';
+} from './server/provider-auth-runtime.ts';
 import {
   providersRequiredByWorkflow,
   unavailableProviderMessage,
-} from './server/provider-action-gate.js';
-import { checkForUpdate } from './update-check.js';
-import { printSkillsBanner } from './skills-banner.js';
-import { loadWorkspaceConfig } from './workspace/config.js';
-import { runMigrations } from './workspace/migrations.js';
-import { registerProject, shouldRegisterProject } from './workspace/projects.js';
-import { runProjectsCommand } from './workspace/projects-cli.js';
-import { WorkspaceSemaphore } from './workspace/semaphore.js';
+} from './server/provider-action-gate.ts';
+import { checkForUpdate } from './update-check.ts';
+import { printSkillsBanner } from './skills-banner.ts';
+import { loadWorkspaceConfig } from './workspace/config.ts';
+import { runMigrations } from './workspace/migrations.ts';
+import { registerProject, shouldRegisterProject } from './workspace/projects.ts';
+import { runProjectsCommand } from './workspace/projects-cli.ts';
+import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -489,10 +489,10 @@ async function serverCommand(
   // the login shell's PATH first so we see exactly what the operator sees.
   augmentPathFromLoginShell();
 
-  const { getStrategy, availablePlatformIds } = await import('./server-install/strategies.js');
-  const { runInstall, runUninstall, runDeploy } = await import('./server-install/engine.js');
-  const { loadServerState, listServerInstances, nextFreeInstancePort } = await import('./server-install/state.js');
-  const { instanceSlug, DEFAULT_SERVER_INSTANCE } = await import('./paths.js');
+  const { getStrategy, availablePlatformIds } = await import('./server-install/strategies.ts');
+  const { runInstall, runUninstall, runDeploy } = await import('./server-install/engine.ts');
+  const { loadServerState, listServerInstances, nextFreeInstancePort } = await import('./server-install/state.ts');
+  const { instanceSlug, DEFAULT_SERVER_INSTANCE } = await import('./paths.ts');
 
   const ids = availablePlatformIds();
 
@@ -502,7 +502,7 @@ async function serverCommand(
   let domain = (flags.domain ?? '').trim() || undefined;
   if (mode === 'install' && !domain && !flags.yes && process.stdin.isTTY && loadServerState(DEFAULT_SERVER_INSTANCE).installed) {
     try {
-      const { createClackUi } = await import('./server-install/ui.js');
+      const { createClackUi } = await import('./server-install/ui.ts');
       const answer = await createClackUi().text({
         message:
           'This host already runs a cezar cockpit. Enter a NEW domain to host a second, independent instance — ' +

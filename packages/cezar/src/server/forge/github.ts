@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { autosaveCommit } from '../../git-worktree.js';
+import { autosaveCommit } from '../../git-worktree.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -21,7 +21,7 @@ import type {
   ForgeRefKind,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,
-} from './types.js';
+} from './types.ts';
 
 /**
  * The GitHub forge driver — all `gh`-CLI logic in one place, moved here from

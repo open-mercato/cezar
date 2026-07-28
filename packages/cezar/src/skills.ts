@@ -1,9 +1,9 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
-import { gatedSkillsRepos } from './config.js';
-import { getTeamSkillsCached } from './skills-remote.js';
-import { readWorkspaceUiState } from './workspace/ui-state.js';
+import { gatedSkillsRepos } from './config.ts';
+import { getTeamSkillsCached } from './skills-remote.ts';
+import { readWorkspaceUiState } from './workspace/ui-state.ts';
 
 /**
  * A skill is a Markdown file with optional YAML-ish frontmatter (`name`,

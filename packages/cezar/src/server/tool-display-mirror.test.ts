@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { toolDisplay as webToolDisplay } from '@open-mercato/cezar-api-client';
-import { toolDisplay, type ToolDisplay } from '../core/tool-display.js';
+import { toolDisplay, type ToolDisplay } from '../core/tool-display.ts';
 
 /**
  * The behavior half of the protocol-v2 mirror guard (`api-types.test.ts` is the shape half).

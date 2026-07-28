@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { branchFor, createWorktree } from '../git-worktree.js';
-import { reclaimWorktrees, type RetentionStore } from './retention.js';
-import type { RunRecord } from './store.js';
+import { branchFor, createWorktree } from '../git-worktree.ts';
+import { reclaimWorktrees, type RetentionStore } from './retention.ts';
+import type { RunRecord } from './store.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

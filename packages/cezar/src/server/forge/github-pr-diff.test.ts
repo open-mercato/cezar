@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchPrFilePages, GH_PR_DIFF_FILE_CAP } from './github.js';
+import { fetchPrFilePages, GH_PR_DIFF_FILE_CAP } from './github.ts';
 
 const row = (n: number) => ({
   filename: `src/file-${n}.ts`,

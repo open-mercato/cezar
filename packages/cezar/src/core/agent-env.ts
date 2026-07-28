@@ -16,8 +16,8 @@
  *   - `CEZ_AGENT_ENV_FULL=1` restores the legacy full-`process.env` behavior.
  */
 
-import type { AgentBackend } from './agent-runner.js';
-import { SECRET_NAME_RE } from './secret-redaction.js';
+import type { AgentBackend } from './agent-runner.ts';
+import { SECRET_NAME_RE } from './secret-redaction.ts';
 
 /**
  * Env var names are matched case-INSENSITIVELY (#427 review). Windows spells

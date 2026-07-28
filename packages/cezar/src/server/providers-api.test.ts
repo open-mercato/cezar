@@ -7,13 +7,13 @@ import {
   type ProviderConnectionState,
   type ProviderId,
   type RunProviderCommand,
-} from '../core/provider-auth.js';
-import { RunStore } from '../runs/store.js';
-import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
-import { RunManager } from '../workflows/run.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { WorkspaceEventBus, createApp } from './server.js';
+} from '../core/provider-auth.ts';
+import { RunStore } from '../runs/store.ts';
+import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
+import { RunManager } from '../workflows/run.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { WorkspaceEventBus, createApp } from './server.ts';
 
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getRepoInfo } from './git.js';
+import { getRepoInfo } from './git.ts';
 
 /**
  * getRepoInfo remote discovery: the forge seam (and so the GitHub tab) hangs

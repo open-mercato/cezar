@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { RunnerId } from '../core/agent-runner.js';
+import type { RunnerId } from '../core/agent-runner.ts';
 
 /**
  * The catalog of coding-agent config files cezar can surface and edit (spec

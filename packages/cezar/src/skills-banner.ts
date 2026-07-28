@@ -1,4 +1,4 @@
-import { readUiState } from './ui-state.js';
+import { readUiState } from './ui-state.ts';
 
 /**
  * Promotes `open-mercato/skills` (#391) — cezar's built-in default skills source

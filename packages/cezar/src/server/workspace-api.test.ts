@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { workspaceConfigPath, workspaceUiStatePath } from '../paths.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp, type WorkspaceConfigResponse } from './server.js';
+import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp, type WorkspaceConfigResponse } from './server.ts';
 
 /**
  * The workspace settings API (multi-project spec, step 2.7):

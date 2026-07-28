@@ -1,4 +1,4 @@
-import type { createApp } from './server.js';
+import type { createApp } from './server.ts';
 
 /**
  * The service's HTTP contract, as a type.
