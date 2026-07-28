@@ -55,7 +55,7 @@ Add the strict opt-in `CEZ_HIDE_TOKEN_METRICS=1` presentation policy so embedded
 ### Phase 1: Runtime contract and documentation
 
 - [x] 1.1 Add the strict `tokenMetrics` health capability to server and shared DTOs with unit/parity coverage. — b90d877e
-- [ ] 1.2 Document `CEZ_HIDE_TOKEN_METRICS=1` in `.env.example`, README, and `BACKWARD_COMPATIBILITY.md`.
+- [x] 1.2 Document `CEZ_HIDE_TOKEN_METRICS=1` in `.env.example`, README, and `BACKWARD_COMPATIBILITY.md`. — 0bc2b306
 
 ### Phase 2: Complete cockpit suppression
 
