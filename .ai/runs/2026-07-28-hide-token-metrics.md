@@ -50,6 +50,8 @@ Add the strict opt-in `CEZ_HIDE_TOKEN_METRICS=1` presentation policy so embedded
 
 ## Progress
 
+Implementation PR: #724 (https://github.com/open-mercato/cezar/pull/724)
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Runtime contract and documentation
