@@ -1147,7 +1147,9 @@ describe('the hand-to-agent backend pills (#401)', () => {
 
   it('a runner + model pick rides the POST alongside the workflow routing', async () => {
     const sent = stubFetch({
-      'GET /api/health': MULTI_BACKEND,
+      // Health describes the boot project; config describes the scoped GitHub project.
+      'GET /api/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
+      'GET /api/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
       'GET /api/providers/status': () => jsonResponse(PROVIDERS_MULTI),
     })
     await openDetail()

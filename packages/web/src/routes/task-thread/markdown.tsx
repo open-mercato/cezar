@@ -1,7 +1,14 @@
 import { memo } from 'react'
-import { Streamdown, defaultRemarkPlugins, type CodeHighlighterPlugin } from 'streamdown'
+import {
+  Streamdown,
+  defaultRemarkPlugins,
+  type CodeHighlighterPlugin,
+  type LinkSafetyConfig,
+} from 'streamdown'
 
 import { SYN_THEME, highlight, highlightSync, supportedLanguages } from '@/lib/highlighter'
+
+import { LinkSafetyDialog } from './link-safety-dialog'
 
 /**
  * Assistant markdown for the thread — Streamdown (spec tech pick: stable-block memoization,
@@ -93,6 +100,17 @@ const INLINE_ELEMENTS = ['p', 'strong', 'em', 'del', 'code', 'a'] as const
 const INLINE_COMPONENTS = { p: 'span', a: 'span' } as const
 
 /**
+ * Streamdown's link confirm, rendered by US so it portals out of the thread's contained rows —
+ * see link-safety-dialog.tsx for the whole story. Module-level, not built per render: Streamdown
+ * memoizes on `linkSafety` by identity, so a fresh object here would re-render every message on
+ * every parent render.
+ */
+const LINK_SAFETY: LinkSafetyConfig = {
+  enabled: true,
+  renderModal: (props) => <LinkSafetyDialog {...props} />,
+}
+
+/**
  * Memoized per message (Streamdown additionally memoizes per block): during streaming only the
  * message whose `children` string actually grew re-renders — the research doc's one hard rule
  * for markdown in chat threads.
@@ -118,6 +136,7 @@ export const Markdown = memo(function Markdown({
       allowedElements={inline ? INLINE_ELEMENTS : undefined}
       unwrapDisallowed={inline || undefined}
       components={inline ? INLINE_COMPONENTS : undefined}
+      linkSafety={LINK_SAFETY}
       // Copy + language chip on every fence (the deliverable); download is file-manager noise
       // in a chat, and table export dropdowns are R5-territory chrome.
       controls={{ code: { copy: true, download: false }, table: false, mermaid: false }}

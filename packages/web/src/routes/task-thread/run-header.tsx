@@ -37,7 +37,7 @@ import { Fragment, useState, type ReactNode } from 'react'
 import { useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
-import { queryKeys, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
+import { queryKeys, useConfig, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -74,7 +74,7 @@ import { isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { StepRail } from './step-rail'
+import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -121,7 +121,7 @@ export function RunHeader({
       data-slot="run-header"
       className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
     >
-      <div className="mx-auto w-full max-w-[820px]">
+      <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
@@ -210,8 +210,8 @@ export function RunHeader({
         </div>
 
         {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-2.5 pb-1">
-            <StepRail steps={run.steps} />
+          <div className="border-t border-border pt-2 pb-1">
+            <WorkflowSteps runId={run.id} steps={run.steps} />
           </div>
         ) : null}
 
@@ -605,10 +605,10 @@ function AgentBadge({ run }: { run: ApiRun }) {
   // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
   // hardcoding 'claude' would name the wrong agent on a repo whose `defaultRunner` is
   // codex/opencode, and "which agent produced this?" is the one question #416 exists to answer.
-  // 'claude' stays the last resort only while health is in flight (it is `config.defaultRunner`'s
-  // own default).
-  const health = useHealth()
-  const runner = run.runner ?? health.data?.defaultRunner ?? 'claude'
+  // 'claude' stays the last resort only while the active project's config is in flight.
+  // `/api/health` describes the boot project and can name the wrong runner on scoped routes.
+  const config = useConfig()
+  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
   const model = run.model ?? 'auto'
   return (
     <DropdownMenu>

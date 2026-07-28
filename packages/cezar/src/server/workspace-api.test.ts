@@ -342,6 +342,29 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(await (await apiRequest(app, '/api/ui-state')).json()).toEqual({});
   });
 
+  // Every Settings → Appearance preference has to be listed in `appearanceSchema`: the top-level
+  // `.passthrough()` does NOT reach inside `appearance`, so an unlisted key is stripped here and
+  // then wiped from the file by the shallow merge. The cockpit adopts this response as
+  // authoritative, so a stripped key visibly reverts the control the user just touched — which is
+  // exactly what happened to `width` before it was added. The client-side settings test stubs
+  // `fetch` with an echo, so this route-level round-trip is the only place that can catch it.
+  it('round-trips every appearance preference — accent, density AND reading width', async () => {
+    const res = await putUiState({ appearance: { accent: 'violet', density: 'compact', width: 'wide' } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      appearance: { accent: 'violet', density: 'compact', width: 'wide' },
+    });
+    expect(rawUiState()).toEqual({
+      appearance: { accent: 'violet', density: 'compact', width: 'wide' },
+    });
+  });
+
+  it('rejects an out-of-enum reading width instead of silently dropping it', async () => {
+    const res = await putUiState({ appearance: { width: 'ultrawide' } });
+    expect(res.status).toBe(400);
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
+  });
+
   it('accepts bounded provider auth failure dismissals', async () => {
     const response = await putUiState({
       dismissedProviderAuthFailures: {
