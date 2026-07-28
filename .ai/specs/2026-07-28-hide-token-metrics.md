@@ -75,7 +75,7 @@ The existing `healthSnapshot()` in `packages/cezar/src/server/server.ts` already
 
 ### Shared contract
 
-Add the same required field to `Capabilities` in `packages/api-client/src/dto/types.ts`, with documentation that `false` is a presentation policy and does not imply telemetry was discarded. This is an additive field on the protected health response; update `BACKWARD_COMPATIBILITY.md` to inventory it.
+Add `tokenMetrics` to `Capabilities` in `packages/api-client/src/dto/types.ts`, with documentation that `false` is a presentation policy and does not imply telemetry was discarded. Current servers always emit the field, while the shared browser-facing type keeps it optional so a newer cockpit can still consume an older health response. This is an additive field on the protected health response; update `BACKWARD_COMPATIBILITY.md` to inventory it.
 
 ### Cockpit
 
