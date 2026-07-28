@@ -105,12 +105,16 @@ describe('ToolCard — states', () => {
     expect(document.querySelector('[data-slot="tool-output"] pre')?.textContent).toContain('npm warn deprecated')
   })
 
-  it('failed: open by default, danger tint, the error string rendered in danger tone', () => {
+  it('failed: closed by default with a faint tint; expands to the danger-toned error', () => {
     const item = goldenItem(failedAndDenied, 'toolu_fail_01', 'failed')
     render(<ToolCard item={item} />)
     expect(card().getAttribute('data-status')).toBe('failed')
+    // A faint danger tint still identifies it, but the loud outline and auto-open are gone.
     expect(card().className).toContain('border-danger')
     expect(screen.getByText('failed')).toBeTruthy()
+    // Calm by default: the red error body only appears once the reader opens the card.
+    expect(document.querySelector('[data-slot="tool-error"]')).toBeNull()
+    fireEvent.click(trigger(/failed/))
     const error = document.querySelector('[data-slot="tool-error"]')
     expect(error?.textContent).toContain('npm ERR! Missing script: "lint"')
     expect(error?.className).toContain('text-danger')

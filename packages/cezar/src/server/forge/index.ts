@@ -1,6 +1,6 @@
 import type { RepoInfo } from '../git.js';
 import { createGithubDriver } from './github.js';
-import type { ForgeDriver } from './types.js';
+import type { ForgeDriver, ForgeKind } from './types.js';
 
 /**
  * Forge resolution (cockpit-ui redesign spec §"Forge-driver seam"): map the
@@ -44,12 +44,27 @@ export function parseRemote(remote: string): ParsedRemote | null {
   return { host: host.toLowerCase(), owner, repo };
 }
 
+/** Remote host → forge kind. The one host table both `resolveForge` and the
+ *  registry probe read; GitLab lands here later as one more row. */
+const FORGE_HOSTS: Record<string, ForgeKind> = { 'github.com': 'github' };
+
+/**
+ * Which forge a remote URL belongs to, without building a driver (#698): the
+ * registry's per-project probe classifies each root from its remote alone —
+ * plain string parsing, no `gh` shell-out — so the sidebar can gate each
+ * project's GitHub tab on the project's own remote.
+ */
+export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null {
+  const parsed = remote ? parseRemote(remote) : null;
+  return parsed ? (FORGE_HOSTS[parsed.host] ?? null) : null;
+}
+
 /** Remote host → driver | null. GitLab lands here later as one more case. */
 export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   if (!repoInfo?.remote) return null;
   const parsed = parseRemote(repoInfo.remote);
   if (!parsed) return null;
-  if (parsed.host === 'github.com') {
+  if (FORGE_HOSTS[parsed.host] === 'github') {
     return createGithubDriver(repoInfo.root, { owner: parsed.owner, repo: parsed.repo });
   }
   return null;

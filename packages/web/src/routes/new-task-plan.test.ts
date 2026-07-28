@@ -127,6 +127,10 @@ describe('buildPlannedRunBody — the POST /api/runs wire contract for approved 
     expect('workflow' in buildPlannedRunBody(base)).toBe(false)
   })
 
+  it('keeps an explicit runner pick even when it equals the project default', () => {
+    expect(buildPlannedRunBody({ ...base, runnerExplicit: true }).runner).toBe('claude')
+  })
+
   it.each([
     { name: 'model rides when chosen', patch: { model: 'sonnet' }, key: 'model', expected: 'sonnet' },
     { name: 'connected fallback rides when it differs from the default', patch: { runner: 'codex' as const }, key: 'runner', expected: 'codex' },

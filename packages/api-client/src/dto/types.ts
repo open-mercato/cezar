@@ -282,11 +282,15 @@ export interface ForgeInfo {
  *  this server has no follow-up inbox: the Inbox nav item and the composer's follow-up
  *  toggle disappear the same way. The per-task handoff journal is unrelated and always on.
  *  `singleProject: true` means `CEZ_SINGLE_PROJECT=1` constrained the workspace to its
- *  launch project and all multi-project affordances must be omitted. */
+ *  launch project and all multi-project affordances must be omitted.
+ *  `tokenMetrics: false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token
+ *  counts and monetary cost. The telemetry still exists in run/event payloads. Optional so a
+ *  newer cockpit preserves the legacy visible default when reading an older health response. */
 export interface Capabilities {
   localHandoff: boolean
   followups: boolean
   singleProject: boolean
+  tokenMetrics?: boolean
 }
 
 export interface HealthResponse {
@@ -321,6 +325,9 @@ export interface ProjectListEntry {
   status: 'ok' | 'missing' | 'not-git'
   /** Current branch when cheaply available (omitted e.g. on an unborn HEAD). */
   branch?: string
+  /** Which forge this project's remote belongs to (#698) — classified server-side from the
+   *  remote URL alone. Gates the project group's GitHub nav item; omitted = no forge remote. */
+  forge?: 'github'
   /** Per-project cap on concurrently running tasks (spec 2026-07-22). Omitted =
    *  inherit the workspace `resources.maxParallel`; a number pins this project. */
   maxParallel?: number
@@ -964,7 +971,7 @@ export interface CreateRunInput {
   /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
   variants?: number
   images?: ImageInput[]
-  /** false → run in the repo working tree instead of an isolated worktree (read-only skills).
+  /** false → run in the repo working tree instead of an isolated worktree.
    *  Omit for the default. Ignored server-side when variants > 1. */
   worktree?: boolean
   /** true → autonomous run: never parks at "waiting" for the user; auto-continues until done. */

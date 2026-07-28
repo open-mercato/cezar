@@ -36,6 +36,8 @@
           var density = localStorage.getItem('cez-density')
           if (density === 'compact' || density === 'ultra')
             document.documentElement.dataset.density = density
+          if (localStorage.getItem('cez-width') === 'wide')
+            document.documentElement.dataset.width = 'wide'
         } catch (e) {
           // Storage unavailable — lime/comfortable defaults already apply.
         }

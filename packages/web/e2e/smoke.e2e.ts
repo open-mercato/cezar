@@ -130,6 +130,41 @@ describe('cockpit app shell', () => {
 
     // The theme toggle lives in the footer.
     expect(browser.isVisible('[data-slot="sidebar-footer"] [data-slot="theme-toggle"]')).toBe(true)
+
+    // …on the footer's SECOND row, beside the gear — never stranded on a third line of its own
+    // (#702). Only a real layout engine can answer this: jsdom measures nothing, so the unit
+    // suite can pin the structure but not the geometry the 264px column actually produces.
+    const footerRows = browser.evaluate(`(() => {
+      const footer = document.querySelector('[data-slot="sidebar-footer"]')
+      // Centers, not tops: the gear (28px) and the toggle (30px) are different heights, and
+      // 'items-center' aligns them by center — comparing tops would fail a correct layout.
+      const centerOf = (el) => {
+        const rect = el.getBoundingClientRect()
+        return rect.top + rect.height / 2
+      }
+      const center = (sel) => centerOf(footer.querySelector(sel))
+      const controls = [
+        '[data-slot="command-palette-hint"]',
+        '[data-slot="tools-menu-trigger"]',
+        '[data-slot="version-chip"]',
+        '[data-slot="global-settings-link"]',
+        '[data-slot="theme-toggle"]',
+      ]
+      return {
+        search: center('[data-slot="command-palette-hint"]'),
+        gear: center('[data-slot="global-settings-link"]'),
+        theme: center('[data-slot="theme-toggle"]'),
+        rowCount: new Set(
+          [...footer.querySelectorAll(controls.join(','))].map((el) => Math.round(centerOf(el)))
+        ).size,
+      }
+    })()`) as { search: number; gear: number; theme: number; rowCount: number }
+
+    // Row 1 is the search bar; row 2 carries the gear and the toggle on one shared centerline.
+    expect(footerRows.search).toBeLessThan(footerRows.gear)
+    expect(Math.abs(footerRows.theme - footerRows.gear)).toBeLessThanOrEqual(1)
+    // Exactly two rows — every other footer control shares the controls row's centerline.
+    expect(footerRows.rowCount).toBe(2)
   })
 
   it('fills the repo and version chips from the live /api/health', async () => {

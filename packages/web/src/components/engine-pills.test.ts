@@ -16,6 +16,7 @@ import { engineBody, type ResolvedEngine, useResolvedEngine } from './engine-pil
 
 const resolved = (over: Partial<ResolvedEngine> = {}): ResolvedEngine => ({
   runner: 'claude',
+  runnerExplicit: false,
   model: '',
   runners: ['claude'],
   defaultRunner: 'claude',
@@ -40,10 +41,14 @@ function stubResolverFetch({
   providers,
   providerStatus = 200,
   providerPending = false,
+  bootDefault = 'claude',
+  projectDefault = 'claude',
 }: {
   providers: unknown
   providerStatus?: number
   providerPending?: boolean
+  bootDefault?: Runner
+  projectDefault?: Runner
 }) {
   vi.stubGlobal(
     'fetch',
@@ -55,11 +60,11 @@ function stubResolverFetch({
       }
       if (path === '/api/health') {
         return jsonResponse({
-          defaultRunner: 'claude',
+          defaultRunner: bootDefault,
           checks: [{ name: 'claude', available: true }],
         })
       }
-      if (path === '/api/config') return jsonResponse({ defaultModels: {} })
+      if (path === '/api/config') return jsonResponse({ defaultRunner: projectDefault, defaultModels: {} })
       if (path === '/api/models?runner=codex') {
         return jsonResponse({ runner: 'codex', models: [], source: 'live', stale: false })
       }
@@ -154,6 +159,26 @@ describe('useResolvedEngine provider status', () => {
     expect(result.current.runners).toEqual(['codex'])
     expect(result.current.runner).toBe('codex')
   })
+
+  it('resolves an untouched pick from project config, never the boot health default', async () => {
+    stubResolverFetch({
+      bootDefault: 'codex',
+      projectDefault: 'claude',
+      providers: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+        ],
+      },
+    })
+
+    const { result } = renderResolved()
+    await waitFor(() => expect(result.current.canRun).toBe(true))
+
+    expect(result.current.runner).toBe('claude')
+    expect(result.current.defaultRunner).toBe('claude')
+  })
 })
 
 describe('engineBody', () => {
@@ -177,11 +202,18 @@ describe('engineBody', () => {
     expect(body.runner).toBe('codex')
   })
 
+  it('always sends an explicit pick even when it equals the reported default', () => {
+    const body = engineBody(
+      resolved({ runner: 'codex', runnerExplicit: true, defaultRunner: 'codex' }),
+    )
+    expect(body.runner).toBe('codex')
+  })
+
   /**
    * The case the composer's count rule gets wrong (#401 review). The host prefers codex, but
    * provider status says only claude is connected. `runnerCount` is 1, so the count rule would
    * omit the runner; the server would then resolve the omitted field straight back to codex.
-   * Comparing against the authoritative health default sends `claude` and settles it.
+   * Comparing against the authoritative project config default sends `claude` and settles it.
    */
   it('sends the runner when the host default is unavailable, even with one backend left', () => {
     const body = engineBody(

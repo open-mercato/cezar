@@ -19,6 +19,11 @@
  * deliberately constrained to the launch project when `CEZ_SINGLE_PROJECT=1`.
  * Like the other opt-in capabilities, activation is strict: no other spelling
  * enables it.
+ *
+ * `tokenMetrics` (#481): token counts and monetary cost stay visible by
+ * default. `CEZ_HIDE_TOKEN_METRICS=1` is an embedded-cockpit presentation
+ * policy: it hides those values in the browser without changing collection,
+ * persistence, events, or API run records.
  */
 
 import { followupsEnabled } from '../handoff.js';
@@ -27,6 +32,7 @@ export interface Capabilities {
   localHandoff: boolean;
   followups: boolean;
   singleProject: boolean;
+  tokenMetrics: boolean;
 }
 
 /** Every IPv4 address in 127.0.0.0/8, anchored. Anchoring is load-bearing: a
@@ -131,5 +137,6 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
+    tokenMetrics: env.CEZ_HIDE_TOKEN_METRICS !== '1',
   };
 }

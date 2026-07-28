@@ -12,13 +12,16 @@ import {
   type Accent,
   type Appearance,
   type Density,
+  type Width,
 } from '@/lib/appearance'
 
 type AppearanceContextValue = {
   accent: Accent
   density: Density
+  width: Width
   setAccent: (accent: Accent) => void
   setDensity: (density: Density) => void
+  setWidth: (width: Width) => void
 }
 
 const AppearanceContext = React.createContext<AppearanceContextValue | null>(null)
@@ -79,17 +82,28 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   )
 
   const setAccent = React.useCallback(
-    (accent: Accent) => save({ accent, density: appearance.density }),
-    [save, appearance.density],
+    (accent: Accent) => save({ ...appearance, accent }),
+    [save, appearance],
   )
   const setDensity = React.useCallback(
-    (density: Density) => save({ accent: appearance.accent, density }),
-    [save, appearance.accent],
+    (density: Density) => save({ ...appearance, density }),
+    [save, appearance],
+  )
+  const setWidth = React.useCallback(
+    (width: Width) => save({ ...appearance, width }),
+    [save, appearance],
   )
 
   const value = React.useMemo<AppearanceContextValue>(
-    () => ({ accent: appearance.accent, density: appearance.density, setAccent, setDensity }),
-    [appearance, setAccent, setDensity],
+    () => ({
+      accent: appearance.accent,
+      density: appearance.density,
+      width: appearance.width,
+      setAccent,
+      setDensity,
+      setWidth,
+    }),
+    [appearance, setAccent, setDensity, setWidth],
   )
 
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>

@@ -193,7 +193,11 @@ const guards = {
   changedFile: true satisfies Exact<ChangedFile, WebChangedFile>,
   changesPayload: true satisfies Exact<ChangesPayload, WebChangesPayload>,
   worktreeDirEntry: true satisfies Exact<DirEntry, WebWorktreeDirEntry>,
-  capabilities: true satisfies Exact<Capabilities, WebCapabilities>,
+  // `tokenMetrics` is required on the current server snapshot but optional in the browser
+  // contract so a newer cockpit can read an older server and preserve the legacy visible
+  // default. `Required<>` keeps the current-server key set exact without erasing that wire-
+  // compatibility choice from the shared DTO.
+  capabilities: true satisfies Exact<Capabilities, Required<WebCapabilities>>,
   forgeInfo: true satisfies Exact<{ kind: ForgeKind } & ForgeAvailability, WebForgeInfo>,
   // Repo view (R5 Step 1.7): the structured commit diff and the branch action's answer
   // (the `/api/repo/branch` route serializes the ok-arm of BranchResult minus its `ok`).

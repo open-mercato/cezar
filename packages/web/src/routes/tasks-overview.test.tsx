@@ -170,6 +170,38 @@ describe('TasksOverview — the table', () => {
     expect(diff?.getAttribute('title')).toBe('+128 −14 across 6 files')
   })
 
+  it('removes token/cost headers and cells while preserving table and queue semantics', () => {
+    renderOverview({
+      showTokenMetrics: false,
+      runs: [
+        run({ id: 'hidden', title: 'Hidden metrics', tokensUsed: 184_700, costUsd: 0.31 }),
+        run({ id: 'queued-hidden', status: 'queued', tokensUsed: 12_000, costUsd: 0.02 }),
+      ],
+    })
+
+    const headers = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
+      (cell) => cell.textContent,
+    )
+    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Started'])
+    expect(cellsOf('hidden')).toEqual([
+      'done',
+      'Hidden metrics',
+      'default',
+      '—',
+      '—',
+      '—',
+      '—',
+      '—',
+      '1m',
+    ])
+
+    const queued = tableRow('queued-hidden') as HTMLElement
+    expect(queued.querySelectorAll('td')).toHaveLength(8)
+    expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
+    expect(queued.textContent).not.toContain('12.0k')
+    expect(queued.textContent).not.toContain('$0.02')
+  })
+
   it('shows the auto-summary title once a turn produced one, falling back to the raw title', () => {
     renderOverview({
       runs: [
@@ -561,6 +593,24 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(c.textContent).toContain('184.7k')
     expect(c.textContent).toContain('12m')
     expect(c.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/r/pull/402')
+  })
+
+  it('removes token text and its separator from cards when metrics are hidden', () => {
+    renderOverview({
+      showTokenMetrics: false,
+      runs: [
+        run({
+          id: 'hidden-card',
+          branch: 'cez/hidden',
+          diffStat: { adds: 2, dels: 1, files: 1 },
+          tokensUsed: 184_700,
+        }),
+      ],
+    })
+    const hidden = card('hidden-card') as HTMLElement
+    expect(hidden.textContent).not.toContain('184.7k')
+    expect(hidden.textContent).toContain('cez/hidden')
+    expect(hidden.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+2 −1')
   })
 
   it('shows no diff pair on a card whose run recorded none', () => {

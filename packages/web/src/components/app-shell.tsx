@@ -15,6 +15,7 @@ import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
+import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -439,16 +440,24 @@ function SidebarContent({
         </>
       )}
 
+      {/* Two deliberate rows, never a wrap (#702): the search bar owns line 1, the chrome controls
+       *  line 2. `flex-col` rather than `flex-wrap` on purpose — the previous single wrapping row
+       *  overflowed the 264px column and silently stranded the theme toggle on a line of its own,
+       *  and a column cannot regress into that no matter what a future control's width is. */}
       <div
         data-slot="sidebar-footer"
-        className="flex flex-wrap items-center gap-2 gap-y-1.5 border-t border-border px-3.5 py-2.5"
+        className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
-        {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
-        <div data-slot="tools-menu">{toolsMenu}</div>
-        {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
         <CommandPaletteHint />
-        <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
-        <ThemeToggle />
+        <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
+          {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
+          <div data-slot="tools-menu" className="shrink-0">
+            {toolsMenu}
+          </div>
+          {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
+          <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
+          <ThemeToggle />
+        </div>
       </div>
     </div>
   )
@@ -537,22 +546,37 @@ function AddProjectMenu() {
 }
 
 /**
- * The ⌘K discoverability affordance (Step 4.3): a quiet chip-shaped button in the footer, cut
- * from the same cloth as the version chip — the palette is chrome, not a feature to shout
- * about. Clicking it opens the palette through the same programmatic seam anything else would.
+ * The ⌘K discoverability affordance (Step 4.3): the footer's first row, shaped like a search
+ * input — magnifier, a muted `Search…` label, the chord parked on the right. It was a chip
+ * cut from the version chip's cloth until #702, where the footer's five chips overflowed the
+ * 264px column; giving search the whole line is what makes the remaining controls fit on one
+ * row, and it reads as the launcher it is rather than as a keyboard-shortcut footnote.
+ *
+ * Still a button, not an input: there is no search *here*: clicking opens the palette through
+ * the same programmatic seam anything else would, and the palette owns the real input.
+ *
+ * No `aria-label`: the visible `Search…` already names it, and an override that merely drops
+ * the ellipsis would make the accessible name diverge from the label a speech user reads
+ * aloud (WCAG 2.5.3). The chord rides `commandShortcutHint` so the kbd shows Ctrl+K off Apple
+ * hardware, per the spec's platform-symbol rule.
  */
 function CommandPaletteHint() {
   return (
     <button
       type="button"
       data-slot="command-palette-hint"
-      title="Command palette (⌘K / Ctrl+K)"
-      aria-label="Open the command palette"
+      title="Search — command palette (⌘K / Ctrl+K)"
       onClick={() => openCommandPalette()}
-      className="flex items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-xs font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
-      <SearchIcon className="size-[9px]" aria-hidden="true" />
-      ⌘K
+      <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">Search…</span>
+      <kbd
+        aria-hidden="true"
+        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
+      >
+        {commandShortcutHint('k')}
+      </kbd>
     </button>
   )
 }
@@ -569,7 +593,7 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
       data-slot="version-chip"
       data-update-available={updateAvailable ? 'true' : undefined}
       title={updateAvailable ? `update available: v${latestVersion}` : undefined}
-      className="flex items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground"
+      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground"
     >
       {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px]" /> : null}
       v{version}

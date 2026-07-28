@@ -7,6 +7,7 @@ import {
   ApiError,
   browseFs,
   checkoutProject,
+  continueRun,
   getAgentConfig,
   getAgentConfigFile,
   getConfig,
@@ -57,6 +58,7 @@ import {
   retryProviderAuth,
 } from './client'
 import { queryScope } from '@open-mercato/cezar-api-client'
+import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
   HealthResponse,
@@ -675,7 +677,8 @@ export function useRepoCommit(sha: string | undefined) {
 }
 
 /** The Settings → Agents knobs (R6 1.5): base branch, default runner, system prompt, per-runner
- *  model presets. The composer reads it too — `defaultModels` preselects its Model pill. */
+ *  model presets. Task-start surfaces read this project-scoped query for both runner and model
+ *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo. */
 export function useConfig() {
   return useQuery({
     queryKey: queryKeys.config,
@@ -810,6 +813,20 @@ export function useSendMessage(id: string) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       }
     },
+  })
+}
+
+/** Reopen a closed run's last agent session (`POST /api/runs/:id/continue`), starting it on an
+ *  opening prompt. The sibling of `useSendMessage` for a run whose session has already ended:
+ *  same invalidation (the record flips to `running`, the transcript grows over SSE) and the
+ *  same contract that errors belong to the CALLER, so a refusal can be shown where the user
+ *  acted. The thread composer keeps its own mutation (`useContinueAction`) because it also owns
+ *  the runner/model pills; this hook is the plain "resume on the run's own engine" path. */
+export function useContinueRun(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (opts: ContinueOptions = {}) => continueRun(id, opts),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }
 

@@ -764,6 +764,21 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
   })
 
+  // The card outlives its session: the run closed with the question unanswered, and the
+  // answer arrives as the opening `user-message` of a CONTINUATION step (`POST /continue`,
+  // `runContinuation`). Nothing about resolution is session-scoped, and this pins that —
+  // it is what makes answering a closed run's question read the same as answering a live one.
+  it('a continuation step resolves an ask left pending when the session ended', () => {
+    const ask = allItems([
+      line(1, 'text', { text: 'options', stepId: 'task' }),
+      line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
+      line(3, 'lifecycle', { message: 'session closed by user' }),
+      line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
+      line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+    ]).find((i) => i.kind === 'ask')
+    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+  })
+
   it('drops an ask.requested with no valid questions', () => {
     expect(
       allItems([line(1, 'ask.requested', { requestId: 'x', questions: [] })]).some(

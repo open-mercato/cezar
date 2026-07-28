@@ -13,6 +13,7 @@
 
 export const ACCENT_STORAGE_KEY = 'cez-accent'
 export const DENSITY_STORAGE_KEY = 'cez-density'
+export const WIDTH_STORAGE_KEY = 'cez-width'
 
 /** The two accents the token sheet can express today: `lime` is `--primary` as shipped;
  *  `violet` swaps the `--primary` family onto the existing `--violet` tokens (index.css
@@ -24,12 +25,19 @@ export type Accent = 'lime' | 'violet'
  *  `ultra` ("Compact for real") → 3px (~25%). See the `:root[data-density]` blocks in index.css. */
 export type Density = 'comfortable' | 'compact' | 'ultra'
 
+/** Reading width flips the one `--measure` token that caps the task-view column (index.css
+ *  `:root[data-width="wide"]`): `narrow` is the shipped 820px reading column; `wide` opens it
+ *  to 1180px so long transcripts use more of the screen. Type size and spacing stay untouched. */
+export type Width = 'narrow' | 'wide'
+
 export const DEFAULT_ACCENT: Accent = 'lime'
 export const DEFAULT_DENSITY: Density = 'comfortable'
+export const DEFAULT_WIDTH: Width = 'narrow'
 
 export interface Appearance {
   accent: Accent
   density: Density
+  width: Width
 }
 
 /** Coerce anything (missing key, a future value, garbage) into an Accent. */
@@ -41,11 +49,19 @@ export function normalizeDensity(raw: unknown): Density {
   return raw === 'comfortable' || raw === 'compact' || raw === 'ultra' ? raw : DEFAULT_DENSITY
 }
 
+export function normalizeWidth(raw: unknown): Width {
+  return raw === 'narrow' || raw === 'wide' ? raw : DEFAULT_WIDTH
+}
+
 /** The `appearance` key of a ui-state payload, defaults filled in. Defensive about shape —
  *  the server passes unknown keys through, so this can meet anything. */
 export function normalizeAppearance(raw: unknown): Appearance {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
-  return { accent: normalizeAccent(obj.accent), density: normalizeDensity(obj.density) }
+  return {
+    accent: normalizeAccent(obj.accent),
+    density: normalizeDensity(obj.density),
+    width: normalizeWidth(obj.width),
+  }
 }
 
 /** The mirrored preference, or the default when storage is empty/unreadable (private mode). */
@@ -54,9 +70,10 @@ export function readStoredAppearance(): Appearance {
     return {
       accent: normalizeAccent(localStorage.getItem(ACCENT_STORAGE_KEY)),
       density: normalizeDensity(localStorage.getItem(DENSITY_STORAGE_KEY)),
+      width: normalizeWidth(localStorage.getItem(WIDTH_STORAGE_KEY)),
     }
   } catch {
-    return { accent: DEFAULT_ACCENT, density: DEFAULT_DENSITY }
+    return { accent: DEFAULT_ACCENT, density: DEFAULT_DENSITY, width: DEFAULT_WIDTH }
   }
 }
 
@@ -64,6 +81,7 @@ export function writeStoredAppearance(appearance: Appearance): void {
   try {
     localStorage.setItem(ACCENT_STORAGE_KEY, appearance.accent)
     localStorage.setItem(DENSITY_STORAGE_KEY, appearance.density)
+    localStorage.setItem(WIDTH_STORAGE_KEY, appearance.width)
   } catch {
     // Private mode / storage disabled — the appearance still applies for this page.
   }
@@ -76,4 +94,6 @@ export function applyAppearance(root: HTMLElement, appearance: Appearance): void
   else root.dataset.accent = appearance.accent
   if (appearance.density === DEFAULT_DENSITY) delete root.dataset.density
   else root.dataset.density = appearance.density
+  if (appearance.width === DEFAULT_WIDTH) delete root.dataset.width
+  else root.dataset.width = appearance.width
 }
