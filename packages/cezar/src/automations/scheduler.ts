@@ -48,7 +48,16 @@ export class ProjectAutomationScheduler {
       if (state.backoffUntil && Date.parse(state.backoffUntil) > Date.now()) {
         throw new Error(`automation is backed off until ${state.backoffUntil}`);
       }
-      const result = await githubRequests.run(() => this.handle.poller.poll(this.handle.owner, this.handle.repo, definition));
+      const since = state.cursor?.timestamp ?? state.baselineAt;
+      const overlapSince = since
+        ? new Date(Date.parse(since) - 120_000).toISOString()
+        : undefined;
+      const result = await githubRequests.run(() => this.handle.poller.poll(
+        this.handle.owner,
+        this.handle.repo,
+        definition,
+        { since: overlapSince },
+      ));
       const eligible = result.candidates.filter((candidate) => {
         if (state.baselineAt && candidate.timestamp <= state.baselineAt) return false;
         if (!state.cursor) return true;
@@ -59,13 +68,15 @@ export class ProjectAutomationScheduler {
         for (const candidate of eligible) await this.launch(definition, candidate);
       }
       if (mode === 'execute') {
-        const last = eligible.at(-1);
         const now = new Date().toISOString();
+        const cursor = laterCursor(state.cursor, result.cursor);
         store.setState(definition.id, {
           ...state,
           revision: definition.revision,
-          cursor: last ? { timestamp: last.timestamp, tieBreaker: last.tieBreaker } : state.cursor,
-          frozenHighWatermark: result.truncated && last ? { timestamp: last.timestamp, tieBreaker: last.tieBreaker } : undefined,
+          cursor,
+          frozenHighWatermark: result.truncated && cursor?.tieBreaker
+            ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
+            : undefined,
           lastSuccessAt: now,
           nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
           consecutiveFailures: 0,
@@ -123,6 +134,17 @@ export class ProjectAutomationScheduler {
     this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason: error instanceof Error ? error.message : String(error) });
     this.handle.onChange?.(definition.id, definition.revision);
   }
+}
+
+function laterCursor(
+  current: { timestamp: string; tieBreaker?: string } | undefined,
+  observed: { timestamp: string; tieBreaker: string } | undefined,
+): { timestamp: string; tieBreaker?: string } | undefined {
+  if (!observed) return current;
+  if (!current) return observed;
+  const order = observed.timestamp.localeCompare(current.timestamp)
+    || observed.tieBreaker.localeCompare(current.tieBreaker ?? '');
+  return order > 0 ? observed : current;
 }
 
 export interface WorkspaceAutomationSchedulerOptions {

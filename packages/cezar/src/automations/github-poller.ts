@@ -5,6 +5,7 @@ import type { AutomationDefinition, AutomationEvent } from './types.js';
 
 const execFileAsync = promisify(execFile);
 const HARD_CANDIDATE_CAP = 100;
+const GITHUB_COMMAND_TIMEOUT_MS = 30_000;
 
 const githubItemSchema = z.object({
   id: z.number().int().positive().optional(),
@@ -50,52 +51,149 @@ export interface GithubPollResult {
   candidates: GithubCandidate[];
   truncated: boolean;
   pages: number;
+  cursor?: { timestamp: string; tieBreaker: string };
 }
 
 export interface GithubPollerOptions {
   run?: (executable: string, args: readonly string[]) => Promise<string>;
 }
 
+export interface GithubPollOptions {
+  since?: string;
+}
+
 export class GithubPoller {
   private readonly run: NonNullable<GithubPollerOptions['run']>;
 
   constructor(options: GithubPollerOptions = {}) {
-    this.run = options.run ?? (async (executable, args) => (await execFileAsync(executable, [...args], { maxBuffer: 4 * 1024 * 1024 })).stdout);
+    this.run = options.run ?? (async (executable, args) => (await execFileAsync(executable, [...args], {
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: GITHUB_COMMAND_TIMEOUT_MS,
+    })).stdout);
   }
 
-  async poll(owner: string, repo: string, definition: AutomationDefinition): Promise<GithubPollResult> {
-    const family = definition.events.some((event) => event === 'issue.labeled' || event === 'issue.unlabeled')
-      ? 'issues'
-      : definition.events.every((event) => event === 'pull_request.opened') ? 'prs' : 'mixed';
-    const query = buildSearchQuery(owner, repo, definition, family);
-    const perPage = Math.min(definition.filters.maxRecords, HARD_CANDIDATE_CAP);
-    const args = ['api', '--method', 'GET', '/search/issues', '-f', `q=${query}`, '-f', `per_page=${perPage}`, '-f', 'sort=created', '-f', 'order=desc'];
-    const raw = await this.run('gh', args);
-    const response = searchResponseSchema.parse(JSON.parse(raw));
-    const expectedRepoUrl = `https://api.github.com/repos/${owner}/${repo}`.toLowerCase();
-    const candidates: GithubCandidate[] = [];
-    for (const item of response.items.slice(0, HARD_CANDIDATE_CAP)) {
-      if (item.repository_url.toLowerCase() !== expectedRepoUrl) continue;
-      if (item.pull_request && definition.events.includes('pull_request.opened')) {
-        const candidate = normalizeOpened(owner, repo, item, 'pull_request.opened');
-        if (matchesFilters(candidate, definition)) candidates.push(candidate);
-      } else if (!item.pull_request && definition.events.includes('issue.opened')) {
-        const candidate = normalizeOpened(owner, repo, item, 'issue.opened');
-        if (matchesFilters(candidate, definition)) candidates.push(candidate);
-      }
-      if (!item.pull_request && definition.events.some((event) => event === 'issue.labeled' || event === 'issue.unlabeled')) {
-        const timeline = await this.timeline(owner, repo, item.number);
-        for (const event of reconstructLabelEvents(owner, repo, item, timeline)) {
-          if (definition.events.includes(event.event) && matchesFilters(event, definition)) candidates.push(event);
-        }
-      }
-      if (candidates.length >= definition.filters.maxRecords) break;
+  async poll(
+    owner: string,
+    repo: string,
+    definition: AutomationDefinition,
+    options: GithubPollOptions = {},
+  ): Promise<GithubPollResult> {
+    const openedEvents = definition.events.filter(
+      (event) => event === 'pull_request.opened' || event === 'issue.opened',
+    );
+    const labelEvents = definition.events.filter(
+      (event) => event === 'issue.labeled' || event === 'issue.unlabeled',
+    );
+    const sources: Array<{
+      family: 'issues' | 'prs' | 'mixed';
+      activity: 'created' | 'updated';
+      opened: boolean;
+      labels: boolean;
+    }> = [];
+    if (openedEvents.length) {
+      sources.push({
+        family: openedEvents.every((event) => event === 'pull_request.opened')
+          ? 'prs'
+          : openedEvents.every((event) => event === 'issue.opened') ? 'issues' : 'mixed',
+        activity: 'created',
+        opened: true,
+        labels: false,
+      });
     }
-    candidates.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.tieBreaker.localeCompare(b.tieBreaker));
+    if (labelEvents.length) {
+      sources.push({ family: 'issues', activity: 'updated', opened: false, labels: true });
+    }
+
+    const perPage = Math.min(definition.filters.maxRecords, HARD_CANDIDATE_CAP);
+    const expectedRepoUrl = `https://api.github.com/repos/${owner}/${repo}`.toLowerCase();
+    const observations: Array<{
+      timestamp: string;
+      tieBreaker: string;
+      candidate?: GithubCandidate;
+    }> = [];
+    let truncated = false;
+    for (const source of sources) {
+      const query = buildSearchQuery(
+        owner,
+        repo,
+        definition,
+        source.family,
+        source.activity,
+        options.since,
+      );
+      const args = [
+        'api', '--method', 'GET', '/search/issues',
+        '-f', `q=${query}`,
+        '-f', `per_page=${perPage}`,
+        '-f', `sort=${source.activity}`,
+        '-f', 'order=asc',
+      ];
+      const raw = await this.run('gh', args);
+      const response = searchResponseSchema.parse(JSON.parse(raw));
+      const sourceObservations: typeof observations = [];
+      truncated ||= response.items.length >= perPage;
+      for (const item of response.items.slice(0, HARD_CANDIDATE_CAP)) {
+        if (item.repository_url.toLowerCase() !== expectedRepoUrl) continue;
+        if (source.opened && item.pull_request && definition.events.includes('pull_request.opened')) {
+          const candidate = normalizeOpened(owner, repo, item, 'pull_request.opened');
+          if (atOrAfter(candidate.timestamp, options.since)) {
+            sourceObservations.push({
+              timestamp: candidate.timestamp,
+              tieBreaker: candidate.tieBreaker,
+              candidate: matchesFilters(candidate, definition) ? candidate : undefined,
+            });
+          }
+        } else if (source.opened && !item.pull_request && definition.events.includes('issue.opened')) {
+          const candidate = normalizeOpened(owner, repo, item, 'issue.opened');
+          if (atOrAfter(candidate.timestamp, options.since)) {
+            sourceObservations.push({
+              timestamp: candidate.timestamp,
+              tieBreaker: candidate.tieBreaker,
+              candidate: matchesFilters(candidate, definition) ? candidate : undefined,
+            });
+          }
+        }
+        if (source.labels && !item.pull_request) {
+          const timeline = await this.timeline(owner, repo, item.number);
+          const events = reconstructLabelEvents(owner, repo, item, timeline);
+          for (const event of events) {
+            if (!atOrAfter(event.timestamp, options.since)) continue;
+            sourceObservations.push({
+              timestamp: event.timestamp,
+              tieBreaker: event.tieBreaker,
+              candidate: definition.events.includes(event.event) && matchesFilters(event, definition)
+                ? event
+                : undefined,
+            });
+            if (sourceObservations.length >= perPage) break;
+          }
+          const lastEventAt = events.at(-1)?.timestamp;
+          if (
+            sourceObservations.length < perPage
+            && item.updated_at
+            && atOrAfter(item.updated_at, options.since)
+            && (!lastEventAt || item.updated_at > lastEventAt)
+          ) {
+            sourceObservations.push({
+              timestamp: item.updated_at,
+              tieBreaker: `activity:${item.node_id}`,
+            });
+          }
+        }
+        if (sourceObservations.length >= perPage) break;
+      }
+      sourceObservations.sort(compareObservation);
+      truncated ||= sourceObservations.length >= perPage;
+      observations.push(...sourceObservations.slice(0, perPage));
+    }
+    observations.sort(compareObservation);
+    const evaluated = observations.slice(0, definition.filters.maxRecords);
+    const cursor = evaluated.at(-1);
     return {
-      candidates: candidates.slice(0, definition.filters.maxRecords),
-      truncated: response.items.length >= perPage || candidates.length > definition.filters.maxRecords,
-      pages: 1,
+      candidates: evaluated.flatMap((observation) => observation.candidate ? [observation.candidate] : []),
+      truncated: truncated || observations.length > definition.filters.maxRecords,
+      pages: sources.length,
+      cursor: cursor ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker } : undefined,
     };
   }
 
@@ -113,9 +211,16 @@ export function buildSearchQuery(
   repo: string,
   definition: AutomationDefinition,
   family: 'issues' | 'prs' | 'mixed' = 'mixed',
+  activity: 'created' | 'updated' = 'created',
+  since?: string,
 ): string {
-  const start = new Date(Date.now() - definition.filters.lookbackDays * 86_400_000).toISOString().slice(0, 10);
-  const terms = [`repo:${owner}/${repo}`, family === 'prs' ? 'is:pr' : family === 'issues' ? 'is:issue' : '', `created:>=${start}`];
+  const start = since
+    ?? new Date(Date.now() - definition.filters.lookbackDays * 86_400_000).toISOString().slice(0, 10);
+  const terms = [
+    `repo:${owner}/${repo}`,
+    family === 'prs' ? 'is:pr' : family === 'issues' ? 'is:issue' : '',
+    `${activity}:>=${start}`,
+  ];
   for (const author of definition.filters.authors ?? []) terms.push(`author:${safeQualifier(author)}`);
   for (const assignee of definition.filters.assignees ?? []) terms.push(`assignee:${safeQualifier(assignee)}`);
   for (const label of definition.filters.allLabels ?? []) terms.push(`label:${JSON.stringify(label)}`);
@@ -170,7 +275,7 @@ export function reconstructLabelEvents(
       changedLabel: entry.label.name,
     });
   }
-  return rows;
+  return rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.tieBreaker.localeCompare(b.tieBreaker));
 }
 
 export function matchesFilters(candidate: GithubCandidate, definition: AutomationDefinition): boolean {
@@ -188,4 +293,15 @@ export function matchesFilters(candidate: GithubCandidate, definition: Automatio
 
 function sanitize(value: string, max: number): string {
   return value.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
+}
+
+function compareObservation(
+  a: { timestamp: string; tieBreaker: string },
+  b: { timestamp: string; tieBreaker: string },
+): number {
+  return a.timestamp.localeCompare(b.timestamp) || a.tieBreaker.localeCompare(b.tieBreaker);
+}
+
+function atOrAfter(timestamp: string, since: string | undefined): boolean {
+  return !since || timestamp >= since;
 }

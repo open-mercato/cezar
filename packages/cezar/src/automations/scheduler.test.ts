@@ -48,6 +48,53 @@ describe('ProjectAutomationScheduler', () => {
     expect(store.state(definition.id)?.cursor?.timestamp).toBe('2026-07-26T01:00:00.000Z');
     expect(store.state(definition.id)).toMatchObject({ consecutiveFailures: 1, backoffUntil: expect.any(String) });
   });
+
+  it('starts provider discovery from the durable cursor overlap', async () => {
+    const { store, definition } = await setup();
+    store.setState(definition.id, {
+      cursor: { timestamp: '2026-07-26T01:00:00.000Z' },
+    });
+    const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
+    const scheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      owner: 'acme',
+      repo: 'demo',
+      store,
+      poller: { poll } as never,
+      launch: async () => ({ runId: 'unused' }),
+    });
+    await scheduler.check(definition);
+    expect(poll).toHaveBeenCalledWith('acme', 'demo', definition, {
+      since: '2026-07-26T00:58:00.000Z',
+    });
+  });
+
+  it('advances through scanned non-matches without moving a cursor backwards', async () => {
+    const { store, definition } = await setup();
+    store.setState(definition.id, {
+      cursor: { timestamp: '2026-07-26T01:00:00.000Z', tieBreaker: 'current' },
+    });
+    const scheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      owner: 'acme',
+      repo: 'demo',
+      store,
+      poller: {
+        poll: async () => ({
+          candidates: [],
+          truncated: false,
+          pages: 1,
+          cursor: { timestamp: '2026-07-26T02:00:00.000Z', tieBreaker: 'scanned' },
+        }),
+      } as never,
+      launch: async () => ({ runId: 'unused' }),
+    });
+    await scheduler.check(definition);
+    expect(store.state(definition.id)?.cursor).toEqual({
+      timestamp: '2026-07-26T02:00:00.000Z',
+      tieBreaker: 'scanned',
+    });
+  });
 });
 
 describe('WorkspaceAutomationScheduler', () => {
