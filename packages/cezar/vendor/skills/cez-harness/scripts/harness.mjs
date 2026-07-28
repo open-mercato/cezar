@@ -948,7 +948,12 @@ async function invokeReviewerWithRetries(id, model, prompt, worktree, retry) {
   return { ...outcome, durationMs: totalDurationMs, attempts: attempt }
 }
 
-async function runReviewer(id, model, criteria, subject, worktree, workerFamilies, maxInputBytes, lens = null, reviewContract = null, retry = null) {
+/** Safe, recognizable filename component for a model id like `opencode/deepseek/v4`. */
+function fileToken(value) {
+  return String(value).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'reviewer'
+}
+
+async function runReviewer(id, model, criteria, subject, worktree, workerFamilies, maxInputBytes, lens = null, reviewContract = null, retry = null, promptDir = null) {
   const built = buildReviewerPrompts(model, criteria, subject, maxInputBytes, lens)
   const envelope = {
     id,
@@ -961,6 +966,24 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
     freshContext: true,
     reviewContract: reviewContract || { name: 'cez-code-review', version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256, subjectSha256: sha256(subject) },
     parts: built.prompts.length
+  }
+  // Persist what the model was ACTUALLY sent. The caller only ever sees the
+  // criteria it passed in, which is the `<review_packet>` section — a handful
+  // of lines — while `buildReviewPrompt` also wraps in the review subject, the
+  // whole cez-code-review rubric and the output contract. A host that showed
+  // the caller's fragment as "the prompt" made a rubric-backed review look like
+  // it had been asked for an opinion with no criteria at all.
+  if (promptDir) {
+    try {
+      mkdirSync(promptDir, { recursive: true })
+      const promptPath = join(promptDir, `reviewer-prompt-${fileToken(id)}.txt`)
+      writeFileSync(promptPath, built.prompts.length === 1
+        ? built.prompts[0]
+        : built.prompts.map((prompt, index) => `=== part ${index + 1} of ${built.prompts.length} ===\n${prompt}`).join('\n\n'))
+      envelope.promptPath = promptPath
+    } catch {
+      // Diagnostics only — never fail a paid review over a transcript file.
+    }
   }
   const invocations = await pool(built.prompts, 2, (prompt) => invokeReviewerWithRetries(id, model, prompt, worktree, retry))
   const durationMs = invocations.reduce((total, invocation) => total + (invocation.durationMs || 0), 0)
@@ -1880,7 +1903,8 @@ async function commandReview(args, config) {
   } else if (args['host-review'] && args['host-review'] !== true) {
     throw new Error('--host-review requires --review-packet')
   }
-  const providerReviewers = await pool(profile.reviewers, profile.maxParallel, (id) => runReviewer(id, config.agentHarness.models[id], criteria, subject, worktree, profile.workerFamilies, profile.maxInputBytes, null, reviewContract, profile.retry))
+  const promptDir = args['prompt-dir'] && args['prompt-dir'] !== true ? resolve(String(args['prompt-dir'])) : null
+  const providerReviewers = await pool(profile.reviewers, profile.maxParallel, (id) => runReviewer(id, config.agentHarness.models[id], criteria, subject, worktree, profile.workerFamilies, profile.maxInputBytes, null, reviewContract, profile.retry, promptDir))
   let hostReviewer = null
   if (hostReviewPath) {
     try {
@@ -2015,16 +2039,117 @@ async function commandWorker(args, config) {
   if (invocation.status !== 'completed') process.exitCode = 2
 }
 
-function captureGitState(worktree) {
-  // Remote-tracking refs are excluded: concurrent fetches by other processes
-  // legitimately move them, and they publish nothing. Local heads, tags,
-  // stash, HEAD, and their reflogs are the mutation surface that matters.
-  return {
-    head: git(['rev-parse', 'HEAD'], worktree).trim(),
-    refs: git(['for-each-ref', '--format=%(refname)%09%(objectname)', 'refs/heads', 'refs/tags', 'refs/stash'], worktree).trim().split(/\r?\n/).filter(Boolean).sort(),
-    reflogs: git(['reflog', 'show', '--all', '--format=%H%x09%gD'], worktree).trim().split(/\r?\n/).filter(Boolean)
-      .filter((line) => !(line.split('\t')[1] || '').startsWith('refs/remotes/')).sort()
+/** Bumped whenever the snapshot's shape or scope changes, so a `stage` can tell
+ *  a start-state it can compare field-by-field from one it can only trust for
+ *  `head`. */
+const GIT_STATE_VERSION = 2
+
+/** `<refname>\t<sha>` for one ref, or `[]` when it does not exist. */
+function refLines(worktree, ref) {
+  return git(['for-each-ref', '--format=%(refname)%09%(objectname)', ref], worktree).trim().split(/\r?\n/).filter(Boolean)
+}
+
+/**
+ * One ref's reflog, newest first, each entry as `<sha>\t<subject>`.
+ *
+ * `%gs` (the subject) replaces `%gD` (the `name@{N}` selector) deliberately.
+ * Selectors are positional, so a single new entry renumbers every older one:
+ * under the previous format one stray operation changed every line of the
+ * snapshot permanently, and even a `reset --hard` back to the exact starting
+ * commit could not restore it. The guard became unpassable for the rest of the
+ * run rather than reporting a recoverable state.
+ */
+function reflogLines(worktree, ref) {
+  let out = ''
+  try {
+    out = git(['reflog', 'show', '--format=%H%x09%gs', ref], worktree)
+  } catch {
+    return [] // no reflog for this ref (or reflogs disabled) — same on both sides
   }
+  return out.trim().split(/\r?\n/).filter(Boolean)
+}
+
+/**
+ * The staged-only integrity snapshot, scoped to THIS run's worktree.
+ *
+ * Breadth was the bug. This used to snapshot every local head, every tag, the
+ * stash and `reflog --all`. Under one session driving one worktree that is
+ * harmless; under cezar it is fatal. cezar runs N task worktrees off a single
+ * object store while the human keeps working in the main checkout, and all of
+ * that churn is globally visible from inside a linked worktree: a sibling
+ * session starting appears as `refs/heads/cez/<id>` plus
+ * `worktrees/<id>/HEAD@{n}`, and `reflog --all` additionally reports
+ * `main-worktree/HEAD` — the user's own checkout. One ordinary commit by the
+ * user on an unrelated branch was enough to make the final `stage` refuse a
+ * correct diff after hours of council spend.
+ *
+ * What the contract actually protects is narrow: this run must not have
+ * committed, reset, or re-pointed *its own* branch. HEAD, this worktree's own
+ * branch ref, and this worktree's own reflogs say exactly that. Nothing outside
+ * the worktree can say anything about it.
+ */
+function captureGitState(worktree) {
+  const branch = git(['branch', '--show-current'], worktree).trim()
+  const branchRef = branch ? `refs/heads/${branch}` : null
+  return {
+    version: GIT_STATE_VERSION,
+    head: git(['rev-parse', 'HEAD'], worktree).trim(),
+    branch,
+    refs: branchRef ? refLines(worktree, branchRef) : [],
+    reflogs: {
+      HEAD: reflogLines(worktree, 'HEAD'),
+      ...(branchRef ? { [branchRef]: reflogLines(worktree, branchRef) } : {})
+    }
+  }
+}
+
+/**
+ * Why the worktree no longer matches its captured start state — one readable
+ * reason per drift, empty when clean. The old guard reported only that
+ * *something* somewhere had changed, which told an operator nothing about
+ * whether their own commit or the run itself was responsible.
+ *
+ * Only reflog *additions* count. A vanished old entry is `git gc` expiring
+ * history, not a mutation by this run, and the branch's own entries are minutes
+ * old so they are never the ones expired. The mutation this protects against —
+ * a commit — always shows up in `head`/`refs` anyway.
+ */
+function gitStateDrift(startState, currentState) {
+  const drift = []
+  if (startState.head !== currentState.head) {
+    drift.push(`HEAD moved ${String(startState.head).slice(0, 12)} → ${String(currentState.head).slice(0, 12)} — this run created or reset a commit`)
+  }
+  // A start-state written by an older runtime snapshotted the whole repository.
+  // Comparing it field-by-field against a worktree-scoped capture would report
+  // drift that never happened, so trust only `head` — the field that carries
+  // the contract — and let a resumed run finish.
+  if (Number(startState.version) !== GIT_STATE_VERSION) return drift
+  if (startState.branch !== currentState.branch) {
+    drift.push(`checked-out branch changed ${startState.branch || '(detached)'} → ${currentState.branch || '(detached)'}`)
+  }
+  const startRefs = new Set(startState.refs || [])
+  const currentRefs = new Set(currentState.refs || [])
+  for (const line of currentRefs) if (!startRefs.has(line)) drift.push(`ref now at ${line.replace('\t', ' → ')}`)
+  for (const line of startRefs) if (!currentRefs.has(line)) drift.push(`ref no longer at ${line.replace('\t', ' → ')}`)
+  const startLogs = startState.reflogs || {}
+  for (const [ref, current] of Object.entries(currentState.reflogs || {})) {
+    const before = Array.isArray(startLogs[ref]) ? startLogs[ref] : []
+    const addedCount = current.length - before.length
+    if (addedCount <= 0) continue
+    // Newest first, so the captured list must still be the tail. When it is
+    // not, the log was rewritten rather than appended to and per-entry blame
+    // would be a guess.
+    const tail = current.slice(addedCount)
+    if (tail.join('\n') !== before.join('\n')) {
+      drift.push(`${ref} reflog was rewritten during the run`)
+      continue
+    }
+    for (const entry of current.slice(0, Math.min(addedCount, 5))) {
+      drift.push(`${ref} reflog entry added: ${entry.split('\t').slice(1).join(' ')}`)
+    }
+    if (addedCount > 5) drift.push(`…and ${addedCount - 5} more ${ref} reflog entries`)
+  }
+  return drift
 }
 
 function commandCapture(args) {
@@ -2035,6 +2160,27 @@ function commandCapture(args) {
   const state = captureGitState(worktree)
   writeFileSync(output, `${JSON.stringify(state, null, 2)}\n`)
   process.stdout.write(`${JSON.stringify({ status: 'captured', output, head: state.head }, null, 2)}\n`)
+}
+
+/**
+ * The same check `stage` makes, cheap and on demand, so a caller can run it
+ * between phases instead of discovering at handoff that hour one invalidated
+ * hours two through six. Exits 2 on drift; the drift list is the whole point of
+ * the output.
+ */
+function commandVerify(args) {
+  const worktree = resolve(String(args.worktree || process.cwd()))
+  if (!args['start-state'] || args['start-state'] === true) throw new Error('--start-state <path> is required')
+  const startState = readJson(resolve(String(args['start-state'])))
+  const drift = gitStateDrift(startState, captureGitState(worktree))
+  const result = { status: drift.length ? 'drifted' : 'clean', worktree, drift }
+  if (args.output && args.output !== true) {
+    const output = resolve(String(args.output))
+    mkdirSync(dirname(output), { recursive: true })
+    writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`)
+  }
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+  if (drift.length) process.exitCode = 2
 }
 
 function validateStagePath(worktree, entry) {
@@ -2059,7 +2205,8 @@ function commandStage(args) {
   const paths = readFileSync(resolve(String(args['paths-file'])), 'utf8').split(/\r?\n/).map((entry) => validateStagePath(worktree, entry)).filter(Boolean)
   if (!paths.length) throw new Error('Stage allowlist is empty')
   const currentHead = currentState.head
-  if (JSON.stringify(currentState) !== JSON.stringify(startState)) throw new Error('Git refs or reflogs changed during staged-only run')
+  const drift = gitStateDrift(startState, currentState)
+  if (drift.length) throw new Error(`Git refs or reflogs changed during staged-only run:\n- ${drift.join('\n- ')}`)
   git(['add', '--', ...paths.map((path) => `:(literal)${path}`)], worktree)
   const staged = git(['diff', '--cached', '--name-status'], worktree).trim()
   if (!staged) throw new Error('Staged diff is empty')
@@ -2102,6 +2249,7 @@ async function main() {
   try {
     if (command === 'configure') return commandConfigure(args)
     if (command === 'capture') return commandCapture(args)
+    if (command === 'verify') return commandVerify(args)
     if (command === 'stage') return commandStage(args)
     if (command === 'packet-gate') return commandPacketGate(args)
     if (command === 'packet-status') return commandPacketStatus(args)
@@ -2117,7 +2265,7 @@ async function main() {
     if (command === 'prepare-review') return commandPrepareReview(args, config)
     if (command === 'review') return await commandReview(args, config)
     if (command === 'packet-run') return await commandPacketRun(args, config)
-    throw new Error('Usage: harness.mjs <configure|validate-config|resolve-profile|probe|capture|worker|prepare-review|review|packet-run|packet-gate|packet-status|packet-release|stage> [options]')
+    throw new Error('Usage: harness.mjs <configure|validate-config|resolve-profile|probe|capture|verify|worker|prepare-review|review|packet-run|packet-gate|packet-status|packet-release|stage> [options]')
   } catch (error) {
     fail(error.message)
   }

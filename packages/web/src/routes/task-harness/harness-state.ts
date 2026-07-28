@@ -164,6 +164,29 @@ export function currentImplementationCouncil(
     .sort((a, b) => b.round - a.round)[0]
 }
 
+/** Newest council of any kind — the fallback when no implementation round has
+ *  started yet (a spec council is still a council worth showing). */
+export function latestCouncil(ledger: HarnessLedgerResponse): HarnessCouncilRecord | undefined {
+  return [...ledger.councils].sort((a, b) => b.round - a.round)[0]
+}
+
+/**
+ * The council every reviewer surface reads.
+ *
+ * Shared so the rail, the Review table and the drawer cannot disagree about
+ * WHICH council they are showing: the rail row you click has to resolve to a
+ * reviewer the drawer can find, or clicking it silently does nothing.
+ */
+export function displayedCouncil(ledger: HarnessLedgerResponse): HarnessCouncilRecord | undefined {
+  return currentImplementationCouncil(ledger) ?? latestCouncil(ledger)
+}
+
+/** `runner/model` — show the model, which is the part that identifies it. */
+export function shortModelName(id: string): string {
+  const slash = id.indexOf('/')
+  return slash > 0 ? id.slice(slash + 1) : id
+}
+
 
 /**
  * The blocking reasons as a LIST.

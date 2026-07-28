@@ -63,6 +63,7 @@ import {
 import { HarnessModelsDock } from '../task-harness/harness-components'
 import { HarnessRail } from '../task-harness/harness-rail'
 import { HarnessStatusBar, HarnessTimeline } from '../task-harness/harness-status-bar'
+import { ReviewerDrawer } from '../task-harness/reviewer-drawer'
 import { RUN_RAIL_GRID, runShellClass } from './run-shell'
 import { mergeHarnessLedger } from '../task-harness/harness-state'
 
@@ -250,6 +251,9 @@ export function ThreadView({
   // The drill-down's whole state: which agent is open. Ephemeral by design (spec Q2/Q5) —
   // sub-agents have no stable identity outside their run, so there is nothing to persist.
   const [openAgentId, setOpenAgentId] = useState<string | undefined>(undefined)
+  // The rail lists the council reviewers next to the transcript; opening one
+  // should not mean leaving the run you are watching for the Review tab.
+  const [openReviewer, setOpenReviewer] = useState<string | null>(null)
   // Item ids repeat across runs (codex mints `item_1`, `item_rv_1` per session), so a
   // selection carried across a route change could pop the sheet open on an unrelated item.
   const [selectionRunId, setSelectionRunId] = useState(run.id)
@@ -424,6 +428,7 @@ export function ThreadView({
             <HarnessRail
               ledger={harnessLedger}
               onOpenTimeline={() => setTimelineOpen((open) => !open)}
+              onOpenReviewer={setOpenReviewer}
             />
           ) : null}
         </div>
@@ -442,6 +447,17 @@ export function ThreadView({
           onClose={() => setOpenAgentId(undefined)}
         />
       </ThreadCardCache>
+
+      {/* Same reasoning as the subagent sheet above: rendered outside the rail,
+          which is `hidden` below `xl` and would take an open drawer with it. */}
+      {harnessLedger ? (
+        <ReviewerDrawer
+          runId={run.id}
+          ledger={harnessLedger}
+          reviewerId={openReviewer}
+          onClose={() => setOpenReviewer(null)}
+        />
+      ) : null}
 
       {/* The dock region (mockup `.dock`): plan dock, paused hint, then the composer.
           `bottom: var(--kb)` is the iOS keyboard lift — 0 until the visualViewport watcher

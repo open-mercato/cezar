@@ -2040,6 +2040,10 @@ export async function runHarnessDriver(
           criteriaPath,
           '--output-dir',
           outputDir,
+          // Into the run's artifact dir, not the council's output dir under the
+          // worktree: the invocation endpoint only reads artifacts from there.
+          '--prompt-dir',
+          artifactDir,
         ],
         {
           timeoutMs,
@@ -2109,6 +2113,14 @@ export async function runHarnessDriver(
               : {}),
           });
           const invocation = running.get(member.label)!;
+          // Replace the criteria file recorded at spawn time with the prompt the
+          // runtime actually sent. The criteria are only its `<review_packet>`
+          // section; the rubric, the subject and the output contract are added
+          // by the runtime, and showing the fragment made a rubric-backed
+          // review look like it had been given no criteria at all. Older
+          // runtimes write no path — those keep the criteria file.
+          const promptPath = typeof row?.promptPath === 'string' ? row.promptPath : null;
+          if (promptPath && existsSync(promptPath)) invocation.promptPath = promptPath;
           if (completed) {
             const meta = invocationMeta.get(member.label)!;
             writeJsonAtomic(meta.artifactPath, row.review);
@@ -2792,6 +2804,49 @@ export async function runHarnessDriver(
     if (captureError === 'cancelled') return null;
     if (captureError) return captureError;
 
+    /**
+     * The staged-only guard, run between phases instead of only at handoff.
+     *
+     * `stage` is the last step of the workflow, so a commit made during round
+     * one used to surface only after every remaining fix round and council had
+     * been paid for — the most expensive possible moment to learn the run was
+     * void. The check is one short-lived git process, so it runs as soon as a
+     * phase that can write to git finishes.
+     *
+     * It fails open on anything it cannot read as a drift verdict. This is an
+     * early warning, not a new authority: `stage` still makes the same check
+     * and remains the one that decides. A runtime hiccup here must not be able
+     * to void a run that the handoff would have accepted.
+     */
+    const gitDriftError = async (phaseId: string): Promise<string | null> => {
+      if (!existsSync(startStatePath)) return null;
+      const result = await runtime.run('verify', [
+        '--worktree',
+        host.cwd,
+        '--start-state',
+        startStatePath,
+      ]);
+      if (result.ok) return null;
+      let drift: string[] = [];
+      try {
+        const parsed = JSON.parse(result.stdout) as { status?: unknown; drift?: unknown };
+        if (parsed.status === 'drifted' && Array.isArray(parsed.drift)) {
+          drift = parsed.drift.filter((entry): entry is string => typeof entry === 'string');
+        }
+      } catch {
+        return null; // unreadable verdict — leave it to `stage`
+      }
+      if (drift.length === 0) return null;
+      host.emit({
+        type: 'note',
+        stepId: phaseId,
+        message: `git state drifted during "${phaseId}" — stopping now rather than at handoff:\n- ${drift.join('\n- ')}`,
+      });
+      return `git state changed during "${phaseId}", so this run can no longer produce a staged-only handoff:\n- ${drift.join(
+        '\n- ',
+      )}`;
+    };
+
     /* ---------------- judgment phases ---------------- */
 
     const allowlist = new Set<string>();
@@ -3352,6 +3407,12 @@ export async function runHarnessDriver(
         suggestedCommit = implementResult.suggestedCommit ?? suggestedCommit;
         implementSummary = implementResult.summary ?? implementSummary;
       }
+
+      // The implementer is the phase with both the means and the motive to
+      // commit — checking here is what keeps a stray commit from costing a
+      // validation gate and a full council before anyone notices.
+      const implementDrift = await gitDriftError(implementId);
+      if (implementDrift) return implementDrift;
 
       /* validate */
       const validateId = isFirst ? 'validate' : `validate-${round}`;

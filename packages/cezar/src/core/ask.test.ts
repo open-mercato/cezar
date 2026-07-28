@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseAskMarker, parseAskRequest, stripAskMarker, type AskRequest } from './ask.js';
+import {
+  parseAskMarker,
+  parseAskRequest,
+  repairAskRequest,
+  stripAskMarker,
+  type AskRequest,
+} from './ask.js';
 
 const valid: AskRequest = {
   questions: [
@@ -169,8 +175,14 @@ describe('stripAskMarker', () => {
     expect(stripAskMarker(invalid)).toBe(invalid);
   });
 
-  it('keeps a marker with an over-length header — the schema-invalid shape agents actually produce', () => {
-    const invalid =
+  // This case used to be pinned the other way: an over-length header left the
+  // marker in place as raw JSON. That is the rule as written, but in the thread
+  // it reads as a wall of braces where a question should be, and it fires on
+  // the single most common thing agents get wrong. The blank-question bug the
+  // original rule protected against is still covered — the question is now
+  // REPLACED (by a card here, by prose above) rather than deleted.
+  it('renders a card for an over-length header — the schema-invalid shape agents actually produce', () => {
+    const repairable =
       'Zanim pójdziemy dalej:\nCEZ:ASK ' +
       JSON.stringify({
         questions: [
@@ -181,7 +193,8 @@ describe('stripAskMarker', () => {
           },
         ],
       });
-    expect(stripAskMarker(invalid)).toBe(invalid);
+    expect(parseAskMarker(repairable)?.questions[0]?.header).toBe('thirteen ch…');
+    expect(stripAskMarker(repairable)).toBe('Zanim pójdziemy dalej:');
   });
 
   it('keeps a marker whose payload is not valid JSON at all', () => {
@@ -206,5 +219,108 @@ describe('parseAskMarker — backend-agnostic assembly (codex/opencode delta str
     const assembled = chunks.join('');
     expect(chunks.length).toBeGreaterThan(1);
     expect(parseAskMarker(assembled)).toEqual(valid);
+  });
+});
+
+// The payload from the session that prompted this: two headers were 15
+// characters against a 12-character contract, and one over-length chip label
+// was enough to lose the whole card and dump ~1.5 KB of JSON into the thread.
+const OVER_LENGTH_HEADERS = {
+  questions: [
+    {
+      header: 'Scope',
+      question: 'Should this focus on component compliance only, or also workflow enhancements?',
+      multiSelect: false,
+      options: [
+        { label: 'Component-only (Phase 1-2 focus)', description: 'Prioritize DS token compliance.' },
+        { label: 'Component + workflow', description: 'Include bulk actions and filtering.' },
+        { label: 'Workflow-first (skip components)', description: 'Operator productivity first.' },
+      ],
+    },
+    {
+      header: 'List UI density',
+      question: 'Consolidate the badge columns into one summary card, or polish them in place?',
+      multiSelect: false,
+      options: [
+        { label: 'Consolidate (fewer columns)', description: 'Reduce visual noise.' },
+        { label: 'Polish in-place (preserve layout)', description: 'Keep the column structure.' },
+      ],
+    },
+    {
+      header: 'Email rendering',
+      question: 'How should email content be formatted?',
+      multiSelect: false,
+      options: [
+        { label: 'Plaintext only (current)', description: 'Add quoted-text detection.' },
+        { label: 'HTML+plaintext (risky)', description: 'Sanitize; adds XSS risk.' },
+      ],
+    },
+  ],
+};
+
+describe('repairAskRequest', () => {
+  it('recovers a card from over-length headers instead of losing the whole payload', () => {
+    expect(parseAskRequest(OVER_LENGTH_HEADERS)).toBeNull(); // the schema, unchanged
+    const repaired = repairAskRequest(OVER_LENGTH_HEADERS);
+    expect(repaired).not.toBeNull();
+    expect(repaired!.questions.map((q) => q.header)).toEqual(['Scope', 'List UI den…', 'Email rende…']);
+    // Only the chip label is shortened; the question and every option survive.
+    expect(repaired!.questions[1]!.question).toBe(OVER_LENGTH_HEADERS.questions[1]!.question);
+    expect(repaired!.questions[0]!.options).toHaveLength(3);
+  });
+
+  it('disambiguates option labels that collide only after truncation', () => {
+    const shared = `${'x'.repeat(58)}`;
+    const repaired = repairAskRequest({
+      questions: [
+        {
+          header: 'H',
+          question: 'Q?',
+          options: [{ label: `${shared}-alpha` }, { label: `${shared}-beta` }],
+        },
+      ],
+    });
+    const labels = repaired!.questions[0]!.options.map((o) => o.label);
+    expect(new Set(labels).size).toBe(2);
+  });
+
+  it('refuses to repair structural damage rather than silently dropping choices', () => {
+    // One option is not a choice, and trimming five questions to four would
+    // discard something the agent meant to ask.
+    expect(repairAskRequest({ questions: [{ header: 'H', question: 'Q?', options: [{ label: 'only' }] }] })).toBeNull();
+    expect(
+      repairAskRequest({
+        questions: Array.from({ length: 5 }, (_, i) => ({
+          header: `H${i}`,
+          question: `Q${i}?`,
+          options: [{ label: 'a' }, { label: 'b' }],
+        })),
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('stripAskMarker — unrenderable payloads', () => {
+  it('renders an over-length-header payload as a card, so nothing is left in the text', () => {
+    const turn = `Next step: please answer these.\n\nCEZ:ASK ${JSON.stringify(OVER_LENGTH_HEADERS)}`;
+    expect(stripAskMarker(turn)).toBe('Next step: please answer these.');
+  });
+
+  it('rewrites an unrepairable payload as prose instead of leaving raw JSON', () => {
+    const payload = {
+      questions: [
+        { header: 'Scope', question: 'Which scope?', options: [{ label: 'only one' }] },
+      ],
+    };
+    const turn = `Before I continue:\n\nCEZ:ASK ${JSON.stringify(payload)}`;
+    const out = stripAskMarker(turn);
+    expect(out).not.toContain('CEZ:ASK');
+    expect(out).not.toContain('{"questions"');
+    expect(out).toBe('Before I continue:\n\n**Scope** — Which scope?\n- only one');
+  });
+
+  it('leaves a marker alone when the payload is not ask-shaped at all', () => {
+    const turn = 'Done.\nCEZ:ASK {"totally":"unrelated"}';
+    expect(stripAskMarker(turn)).toBe(turn);
   });
 });

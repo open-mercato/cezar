@@ -121,3 +121,45 @@ describe('HarnessRail phase tile', () => {
     }
   })
 })
+
+/**
+ * Reading what a reviewer was actually asked used to mean leaving the tab you
+ * were watching the run in, opening Review, and scrolling past the findings to
+ * the council table at the bottom — while the same reviewers were listed in the
+ * rail the whole time (user feedback 2026-07-27).
+ */
+describe('HarnessRail council tile', () => {
+  const withCouncil = () =>
+    ledger({
+      councils: [
+        {
+          round: 1,
+          kind: 'implementation',
+          verdict: 'request_changes',
+          reviewers: [
+            { id: 'codex/gpt-5.6-luna', status: 'completed', findings: [{ severity: 'major' }] },
+            { id: 'opencode/deepseek/deepseek-v4-flash', status: 'completed', findings: [] },
+          ],
+        },
+      ],
+      models: [{ id: 'codex/gpt-5.6-luna', family: 'openai' }],
+    } as unknown as Partial<HarnessLedgerResponse>)
+
+  it('opens the reviewer drill-down straight from the rail', async () => {
+    const opened: string[] = []
+    render(<HarnessRail ledger={withCouncil()} onOpenReviewer={(id) => opened.push(id)} />)
+    const rows = screen.getAllByRole('button', { name: /gpt-5\.6-luna|deepseek-v4-flash/ })
+    expect(rows).toHaveLength(2)
+    rows[0]!.click()
+    expect(opened).toEqual(['codex/gpt-5.6-luna'])
+  })
+
+  it('stays inert where no handler is wired, rather than rendering dead buttons', () => {
+    render(<HarnessRail ledger={withCouncil()} />)
+    expect(
+      document.querySelectorAll('[data-slot="harness-rail-reviewer"]'),
+    ).toHaveLength(0)
+    // The reviewers are still listed — only the affordance is absent.
+    expect(screen.getAllByText('gpt-5.6-luna').length).toBeGreaterThan(0)
+  })
+})

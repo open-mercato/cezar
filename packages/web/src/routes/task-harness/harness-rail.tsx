@@ -6,7 +6,7 @@ import { StatusDot } from '@/components/status-dot'
 import { cn } from '@/lib/utils'
 
 import { elapsed, phaseLabel, toneOf } from './harness-components'
-import { activeHarnessPhase, blockingReasonList, currentImplementationCouncil } from './harness-state'
+import { activeHarnessPhase, blockingReasonList, displayedCouncil } from './harness-state'
 
 /**
  * The run rail (review 2026-07-27, findings A2 + B1).
@@ -23,10 +23,15 @@ import { activeHarnessPhase, blockingReasonList, currentImplementationCouncil } 
 export function HarnessRail({
   ledger,
   onOpenTimeline,
+  onOpenReviewer,
 }: {
   ledger: HarnessLedgerResponse
   /** Opens the full run timeline — the rail shows only the tail. */
   onOpenTimeline?: () => void
+  /** Opens the reviewer drill-down. Reading what a reviewer was actually asked
+   *  used to mean leaving for the Review tab and scrolling past the findings to
+   *  the council table, even though the same reviewers are listed right here. */
+  onOpenReviewer?: (id: string) => void
 }) {
   if (ledger.phases.length === 0 && ledger.models.length === 0) return null
   return (
@@ -36,7 +41,7 @@ export function HarnessRail({
       className="sticky hidden flex-col gap-3 self-start overflow-y-auto xl:flex top-[calc(var(--run-header-h,0px)+0.75rem)] max-h-[calc(100dvh-var(--run-header-h,0px)-1.5rem)] [scrollbar-width:thin]"
     >
       <PhaseSection ledger={ledger} onOpenTimeline={onOpenTimeline} />
-      <CouncilSection ledger={ledger} />
+      <CouncilSection ledger={ledger} onOpenReviewer={onOpenReviewer} />
       <ModelsSection ledger={ledger} />
     </aside>
   )
@@ -163,9 +168,16 @@ function PhaseSection({
   )
 }
 
-function CouncilSection({ ledger }: { ledger: HarnessLedgerResponse }) {
-  const council = currentImplementationCouncil(ledger) ??
-    [...ledger.councils].sort((a, b) => b.round - a.round)[0]
+function CouncilSection({
+  ledger,
+  onOpenReviewer,
+}: {
+  ledger: HarnessLedgerResponse
+  onOpenReviewer?: (id: string) => void
+}) {
+  // The same resolver the drawer uses: a row here must name a reviewer the
+  // drawer can find, or clicking it would silently do nothing.
+  const council = displayedCouncil(ledger)
   if (!council) return null
   const reviewers = council.reviewers ?? []
   const blocked = ledger.outcome.status === 'contested' || ledger.outcome.status === 'blocked'
@@ -186,13 +198,10 @@ function CouncilSection({ ledger }: { ledger: HarnessLedgerResponse }) {
           const blocking = findings.filter(
             (finding) => finding.severity === 'blocker' || finding.severity === 'major',
           ).length
-          return (
-            <li
-              key={reviewer.id}
-              className="flex items-center gap-2 border-b border-border py-1.5 text-[12.5px] last:border-0"
-            >
+          const body = (
+            <>
               <StatusDot tone={toneOf(reviewer.status)} pulse={reviewer.status === 'running'} />
-              <span className="min-w-0 flex-1">
+              <span className="min-w-0 flex-1 text-left">
                 <span className="block truncate font-medium text-foreground">
                   {reviewerName(reviewer.id)}
                 </span>
@@ -210,6 +219,23 @@ function CouncilSection({ ledger }: { ledger: HarnessLedgerResponse }) {
                   {blocking > 0 ? `${blocking} major` : `${findings.length} minor`}
                 </span>
               ) : null}
+            </>
+          )
+          return (
+            <li key={reviewer.id} className="border-b border-border last:border-0">
+              {onOpenReviewer ? (
+                <button
+                  type="button"
+                  data-slot="harness-rail-reviewer"
+                  onClick={() => onOpenReviewer(reviewer.id)}
+                  title={`Open ${reviewerName(reviewer.id)} — prompt, response and findings`}
+                  className="-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-2 rounded-md px-1 py-1.5 text-[12.5px] hover:bg-muted"
+                >
+                  {body}
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 py-1.5 text-[12.5px]">{body}</div>
+              )}
             </li>
           )
         })}

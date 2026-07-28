@@ -141,3 +141,26 @@ export function HarnessModelsDock({ ledger }: { ledger: HarnessLedgerResponse })
 }
 
 export { elapsed, phaseLabel, toneOf }
+
+const SEVERITY_CLASS: Record<string, string> = {
+  blocker: 'bg-danger/15 text-danger',
+  major: 'bg-danger/15 text-danger',
+  minor: 'bg-muted text-muted-foreground',
+  nit: 'bg-muted text-soft-foreground',
+}
+
+/** Shared by the Review tab's finding cards and the reviewer drawer, so one
+ *  severity never reads as two different weights depending on where you opened
+ *  it. */
+export function SeverityTag({ severity }: { severity: string }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex h-[18px] shrink-0 items-center rounded px-1.5 text-[9.5px] font-bold tracking-[0.05em] uppercase',
+        SEVERITY_CLASS[severity] ?? 'bg-muted text-muted-foreground',
+      )}
+    >
+      {severity}
+    </span>
+  )
+}

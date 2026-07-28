@@ -380,7 +380,7 @@ describe('finding attribution', () => {
  */
 describe('formatReviewResponse', () => {
   it('renders a verdict and its findings in readable form', async () => {
-    const { formatReviewResponse } = await import('./task-harness')
+    const { formatReviewResponse } = await import('./reviewer-drawer')
 
     const out = formatReviewResponse(
       JSON.stringify({
@@ -408,7 +408,7 @@ describe('formatReviewResponse', () => {
   })
 
   it('passes anything that is not a review result through untouched', async () => {
-    const { formatReviewResponse } = await import('./task-harness')
+    const { formatReviewResponse } = await import('./reviewer-drawer')
 
     expect(formatReviewResponse('not json at all')).toBe('not json at all')
     expect(formatReviewResponse('{"unrelated":1}')).toBe('{"unrelated":1}')
@@ -416,13 +416,13 @@ describe('formatReviewResponse', () => {
   })
 
   it('has nothing to say about a missing response', async () => {
-    const { formatReviewResponse } = await import('./task-harness')
+    const { formatReviewResponse } = await import('./reviewer-drawer')
 
     expect(formatReviewResponse(null)).toBeNull()
   })
 
   it('handles a clean approval without inventing findings', async () => {
-    const { formatReviewResponse } = await import('./task-harness')
+    const { formatReviewResponse } = await import('./reviewer-drawer')
 
     const out = formatReviewResponse(JSON.stringify({ verdict: 'approve', findings: [] }))!
 
