@@ -277,6 +277,19 @@ const VARIANT_HINTS: Record<string, string | undefined> = {
 const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 
+interface PendingContinuation {
+  stepId: string;
+  sessionId: string | undefined;
+  backend: RunnerId;
+  prompt: string;
+  images: ContentBlock[];
+}
+
+interface PersistedImages {
+  blocks: ContentBlock[];
+  attachments: PersistedAttachment[];
+}
+
 /**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
  * at a time, persisting every event to the RunStore (which the SSE endpoints
@@ -310,16 +323,7 @@ export class RunManager {
   /** Interrupted agent turns recovered after a process restart. Unlike an
    *  explicit user Continue, these are bulk scheduler work and must re-enter
    *  through `pump()` so both workspace and per-project caps are honored. */
-  private readonly pendingContinuations = new Map<
-    string,
-    {
-      stepId: string;
-      sessionId: string | undefined;
-      backend: RunnerId;
-      prompt: string;
-      images: ContentBlock[];
-    }
-  >();
+  private readonly pendingContinuations = new Map<string, PendingContinuation>();
   /** Per-run image counter behind `pasted-<n>` / `screenshot-<n>` (#472). Lives on
    *  the manager rather than the `ActiveRun` so a *queued* run — which has no
    *  `ActiveRun` at all — can persist attachments. Seeded lazily from disk. */
@@ -630,13 +634,16 @@ export class RunManager {
           if (!job && !continuation) continue;
           this.starting.add(runId);
           if (continuation) {
+            const hydrated = this.hydrateQueuedContinuation(runId, continuation);
             void this.runContinuation(
               runId,
-              continuation.stepId,
-              continuation.sessionId,
-              continuation.backend,
-              continuation.prompt,
-              continuation.images,
+              hydrated.stepId,
+              hydrated.sessionId,
+              hydrated.backend,
+              hydrated.prompt,
+              hydrated.images,
+              hydrated.persistedImages,
+              hydrated.persistedAttachments,
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.store.updateRun(runId, {
@@ -964,34 +971,17 @@ export class RunManager {
       .filter((part) => part.length > 0)
       .join('\n\n');
 
-    const readImages = (urls: string[], kind: 'task' | 'queued'): ContentBlock[] => {
-      const images: ContentBlock[] = [];
-      for (const url of urls) {
-        const name = url.split('/').pop();
-        if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
-        try {
-          const data = readFileSync(join(this.dataDir, 'runs', `${runId}-images`, name));
-          images.push({
-            type: 'image',
-            source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
-          });
-        } catch {
-          // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
-          // or the file is unreadable — start with the text and say which image went.
-          this.store.appendEvent(runId, {
-            type: 'note',
-            message: `${kind} attachment ${name} could not be read — starting without it`,
-          });
-        }
-      }
-      return images;
-    };
-
     // Keep the original in-memory blocks for a live process (including the
     // best-effort case where persistence failed). Recovery has no such copy,
     // so rebuild it from the durable task-image URLs.
-    const images = input.images?.length ? input.images : readImages(run.taskImages ?? [], 'task');
-    const stackedImages = readImages(stack.flatMap((m) => m.images ?? []), 'queued');
+    const images = input.images?.length
+      ? input.images
+      : this.readPersistedImages(runId, run.taskImages ?? [], 'task').blocks;
+    const stackedImages = this.readPersistedImages(
+      runId,
+      stack.flatMap((m) => m.images ?? []),
+      'queued',
+    ).blocks;
 
     return {
       ...input,
@@ -1001,15 +991,81 @@ export class RunManager {
     };
   }
 
+  /** Apply edits and messages made while a restart continuation waits for
+   * capacity. The durable record remains the source of truth, just as it is for
+   * an ordinary queued workflow (#472), so a second restart reconstructs and
+   * hydrates the same amendments instead of dropping them. */
+  private hydrateQueuedContinuation(
+    runId: string,
+    continuation: PendingContinuation,
+  ): PendingContinuation & {
+    persistedImages: ContentBlock[];
+    persistedAttachments: PersistedAttachment[];
+  } {
+    const run = this.store.getRun(runId);
+    if (!run) {
+      return { ...continuation, persistedImages: [], persistedAttachments: [] };
+    }
+    const stack = run.queuedMessages ?? [];
+    const amendedTask = [run.task, ...stack.map((message) => message.text)]
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join('\n\n');
+    const prompt = amendedTask
+      ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
+      : continuation.prompt;
+    const persisted = this.readPersistedImages(
+      runId,
+      stack.flatMap((message) => message.images ?? []),
+      'queued',
+    );
+    return {
+      ...continuation,
+      prompt,
+      persistedImages: persisted.blocks,
+      persistedAttachments: persisted.attachments,
+    };
+  }
+
+  private readPersistedImages(
+    runId: string,
+    urls: string[],
+    kind: 'task' | 'queued',
+  ): PersistedImages {
+    const blocks: ContentBlock[] = [];
+    const attachments: PersistedAttachment[] = [];
+    for (const url of urls) {
+      const name = url.split('/').pop();
+      if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
+      const path = join(this.dataDir, 'runs', `${runId}-images`, name);
+      try {
+        const data = readFileSync(path);
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
+        });
+        attachments.push({ name, url, path });
+      } catch {
+        // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
+        // or the file is unreadable — start with the text and say which image went.
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `${kind} attachment ${name} could not be read — starting without it`,
+        });
+      }
+    }
+    return { blocks, attachments };
+  }
+
   /**
    * Still waiting for a slot? Checked against the engine's own queue rather than
    * the record's `status` (#472): the record is written by `execute()` a tick
    * after `pump()` dequeues, so a status read can see `queued` for a run that has
-   * already started. `pendingJobs` is deleted synchronously at dequeue, so it is
-   * the authoritative answer for "can this prompt still be amended".
+   * already started. The pending maps are deleted synchronously at dequeue, so
+   * they are the authoritative answer for "can this prompt still be amended".
    */
   private isQueued(runId: string): boolean {
-    return this.pendingJobs.has(runId);
+    return this.pendingJobs.has(runId) || this.pendingContinuations.has(runId);
   }
 
   /** Split `ContentBlock[]` into the persisted shape a stacked message holds. */
@@ -1381,6 +1437,11 @@ export class RunManager {
      *  reopened session's opening message, exactly like a live-session
      *  message's attachments. */
     images: ContentBlock[] = [],
+    /** Queued-message screenshots were persisted when they were enqueued and
+     *  reconstructed at dequeue. Keep them separate from fresh `images` so
+     *  opening a recovered continuation does not persist duplicate files. */
+    persistedImages: ContentBlock[] = [],
+    persistedAttachments: PersistedAttachment[] = [],
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -1440,15 +1501,17 @@ export class RunManager {
     // images rather than a bare count, and handed to the agent BOTH as base64 blocks (so it can
     // view them) and as absolute paths appended to the prompt (so it can operate on them — and
     // because codex/opencode drop image blocks before they reach the model).
-    const attachments = images
+    const freshAttachments = images
       .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
       .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
       .filter((saved): saved is PersistedAttachment => saved !== null);
+    const openingImages = [...images, ...persistedImages];
+    const attachments = [...freshAttachments, ...persistedAttachments];
     this.store.appendEvent(runId, {
       type: 'user-message',
       stepId,
       text: prompt,
-      imageCount: images.filter((b) => b.type === 'image').length,
+      imageCount: openingImages.filter((b) => b.type === 'image').length,
       ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
     });
 
@@ -1597,7 +1660,7 @@ export class RunManager {
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length ? `${prompt}\n\n${pastedAttachmentsText(attachments)}` : prompt,
-        ...(images.length ? { images } : {}),
+        ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
         additionalDirectories: [join(this.dataDir, 'runs')],

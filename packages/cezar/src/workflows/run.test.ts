@@ -1,5 +1,13 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -942,6 +950,91 @@ describe('RunManager queued-stack mutators (#472)', () => {
     const msg = manager.enqueueMessage(r.id, [image(), { type: 'text', text: 'like this' }]);
     expect(msg?.images).toEqual([`/api/runs/${r.id}/images/pasted-1.png`]);
     expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(true);
+  });
+
+  it('hydrates edits and stacked messages into a queued restart continuation', async () => {
+    const r = store.createRun({
+      title: 'interrupted task',
+      workflow: 'quick-task',
+      task: 'original recovery goal',
+      steps: [],
+    });
+    store.updateRun(r.id, { status: 'queued' });
+
+    type PendingContinuation = {
+      stepId: string;
+      sessionId: string | undefined;
+      backend: 'claude';
+      prompt: string;
+      images: ContentBlock[];
+    };
+    const internals = manager as unknown as {
+      pendingContinuations: Map<string, PendingContinuation>;
+      queue: string[];
+      pump(): Promise<void>;
+      runContinuation(
+        runId: string,
+        stepId: string,
+        sessionId: string | undefined,
+        backend: 'claude',
+        prompt: string,
+        images: ContentBlock[],
+        persistedImages: ContentBlock[],
+        persistedAttachments: Array<{ name: string; url: string; path: string }>,
+      ): Promise<void>;
+    };
+    internals.pendingContinuations.set(r.id, {
+      stepId: 'continue-1',
+      sessionId: 'session-interrupted',
+      backend: 'claude',
+      prompt: 'restart recovery',
+      images: [],
+    });
+    internals.queue.push(r.id);
+
+    expect(manager.editTask(r.id, 'amended recovery goal')).toBe(true);
+    expect(
+      manager.enqueueMessage(r.id, [image(), { type: 'text', text: 'also verify the queue' }]),
+    ).not.toBeNull();
+
+    let delivered:
+      | {
+          prompt: string;
+          images: ContentBlock[];
+          persistedImages: ContentBlock[];
+          persistedAttachments: Array<{ name: string; url: string; path: string }>;
+        }
+      | undefined;
+    internals.runContinuation = async (
+      _runId,
+      _stepId,
+      _sessionId,
+      _backend,
+      prompt,
+      images,
+      persistedImages,
+      persistedAttachments,
+    ) => {
+      delivered = { prompt, images, persistedImages, persistedAttachments };
+    };
+    await internals.pump();
+
+    expect(delivered?.prompt).toBe(
+      'restart recovery\n\nCurrent task and queued updates:\n\n' +
+        'amended recovery goal\n\nalso verify the queue',
+    );
+    expect(delivered?.images).toEqual([]);
+    expect(delivered?.persistedImages).toEqual([image()]);
+    expect(delivered?.persistedAttachments).toEqual([
+      {
+        name: 'pasted-1.png',
+        url: `/api/runs/${r.id}/images/pasted-1.png`,
+        path: join(imagesDir(r.id), 'pasted-1.png'),
+      },
+    ]);
+    expect(readdirSync(imagesDir(r.id))).toEqual(['pasted-1.png']);
+    expect(internals.pendingContinuations.has(r.id)).toBe(false);
+    expect(manager.editTask(r.id, 'too late')).toBe(false);
   });
 
   it('refuses every mutation once the run has been dequeued', () => {
