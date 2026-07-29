@@ -174,6 +174,24 @@ describe('workspace projects', () => {
       expect(entry).toMatchObject({ id: 'gitful', status: 'ok', branch: 'main' });
     });
 
+    it('classifies a github.com remote as the github forge (#698)', async () => {
+      const root = makeRepo('forged');
+      execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/forged.git'], { cwd: root });
+      await registerProject(root);
+      const [entry] = await listProjects();
+      expect(entry).toMatchObject({ status: 'ok', forge: 'github' });
+    });
+
+    it('omits forge for a non-github remote and for a remote-less repo', async () => {
+      const gitlab = makeRepo('lab');
+      execFileSync('git', ['remote', 'add', 'origin', 'git@gitlab.com:acme/lab.git'], { cwd: gitlab });
+      const bare = makeRepo('loner');
+      await registerProject(gitlab);
+      await registerProject(bare);
+      const entries = await listProjects();
+      expect(entries.every((entry) => entry.forge === undefined)).toBe(true);
+    });
+
     it('reports a deleted root as missing (after the probe TTL cache is cleared)', async () => {
       const root = makeDir('doomed');
       await registerProject(root);

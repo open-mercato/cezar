@@ -6,7 +6,7 @@ import { useParams } from 'react-router'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, pickVariant } from '@/api/client'
-import { queryKeys, useGroup, useRuns } from '@/api/queries'
+import { queryKeys, useGroup, useHealth, useRuns } from '@/api/queries'
 import type { GroupVariant } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Pill } from '@/components/pill'
@@ -28,6 +28,7 @@ import { deriveAttention } from '@/lib/attention'
 import { compactTokens } from '@/lib/format'
 import { groupTitle } from '@/lib/task-groups'
 import { TERMINAL_STATUSES, formatCost } from '@/lib/tasks-table'
+import { tokenMetricsVisible } from '@/lib/token-metrics'
 import { cn } from '@/lib/utils'
 
 import { Markdown } from './task-thread/markdown'
@@ -49,6 +50,7 @@ import { CompareLoading } from './compare-loading'
 export function CompareVariantsRoute() {
   const { groupId } = useParams<{ groupId: string }>()
   const group = useGroup(groupId)
+  const health = useHealth()
   const queryClient = useQueryClient()
 
   // Freshness without polling (the sync doctrine): the group endpoint is not on the SSE stream,
@@ -91,10 +93,24 @@ export function CompareVariantsRoute() {
     )
   }
 
-  return <CompareView groupId={groupId as string} variants={group.data.runs} />
+  return (
+    <CompareView
+      groupId={groupId as string}
+      variants={group.data.runs}
+      showTokenMetrics={tokenMetricsVisible(health.data)}
+    />
+  )
 }
 
-function CompareView({ groupId, variants }: { groupId: string; variants: GroupVariant[] }) {
+function CompareView({
+  groupId,
+  variants,
+  showTokenMetrics,
+}: {
+  groupId: string
+  variants: GroupVariant[]
+  showTokenMetrics: boolean
+}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [confirming, setConfirming] = useState<GroupVariant | null>(null)
@@ -145,6 +161,7 @@ function CompareView({ groupId, variants }: { groupId: string; variants: GroupVa
             allTerminal={allTerminal}
             pickPending={pick.isPending}
             onPick={() => setConfirming(variant)}
+            showTokenMetrics={showTokenMetrics}
           />
         ))}
       </div>
@@ -192,11 +209,13 @@ function VariantColumn({
   allTerminal,
   pickPending,
   onPick,
+  showTokenMetrics,
 }: {
   variant: GroupVariant
   allTerminal: boolean
   pickPending: boolean
   onPick: () => void
+  showTokenMetrics: boolean
 }) {
   const attention = deriveAttention(variant)
   const cost = formatCost(variant.costUsd)
@@ -217,10 +236,15 @@ function VariantColumn({
         <Pill dot={attention.tone} pulse={attention.pulse}>
           {attention.label}
         </Pill>
-        <span className="ml-auto shrink-0 font-mono text-[11px] text-soft-foreground tabular-nums">
-          {compactTokens(variant.tokensUsed)}
-          {cost ? ` · ${cost}` : ''}
-        </span>
+        {showTokenMetrics ? (
+          <span
+            data-slot="variant-token-metrics"
+            className="ml-auto shrink-0 font-mono text-[11px] text-soft-foreground tabular-nums"
+          >
+            {compactTokens(variant.tokensUsed)}
+            {cost ? ` · ${cost}` : ''}
+          </span>
+        ) : null}
       </div>
 
       {/* Honestly labeled: this block is git's own `git diff --stat` output from the variant's

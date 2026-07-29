@@ -6,10 +6,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
 import type {
+  ConfigResponse,
   HealthResponse,
   ProviderStatusResponse,
   RepoResponse,
   Skill,
+  WorkspaceConfigResponse,
   WorkflowsResponse,
 } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
@@ -61,7 +63,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -136,6 +138,38 @@ const REPO: RepoResponse = {
 
 const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], baseBranch: null }
 
+const CONFIG: ConfigResponse = {
+  baseBranch: null,
+  defaultRunner: 'claude',
+  systemPrompt: null,
+  defaultModels: {},
+  maxParallel: 2,
+  memoryLimitMb: null,
+  worktreeRetention: 10,
+  liveTitleUpdates: null,
+  reviewGate: null,
+}
+
+const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
+  browseRoot: '~/',
+  projectsDir: '~/cezar/projects',
+  skillsAutoUpdate: null,
+  effectiveSkillsAutoUpdate: true,
+  composerDefaults: {
+    autonomous: null,
+    worktree: null,
+    inheritedAutonomous: 'source-dependent',
+    inheritedWorktree: true,
+  },
+  resources: {
+    maxParallel: 2,
+    maxMonitoringSessions: 2,
+    monitoringWakeIntervalMinutes: null,
+    memoryLimitMb: null,
+    worktreeRetentionDefault: 10,
+  },
+}
+
 /** The shape `POST /api/v1/plan` answers (spec 008) — three steps so reorder/remove are provable. */
 const PLAN = {
   steps: [
@@ -174,6 +208,9 @@ function deferredJson<T>() {
 
 function serve(overrides: {
   health?: HealthResponse | (() => Promise<Response>)
+  /** Active project's scoped config; health may describe a different boot project. */
+  config?: Partial<ConfigResponse> | (() => Promise<Response>)
+  workspaceConfig?: WorkspaceConfigResponse
   /** Host authentication state, or a delayed answer for pending/refresh tests. */
   providerStatus?: ProviderStatusResponse | (() => Promise<Response>)
   providerStatusStatus?: number
@@ -195,6 +232,8 @@ function serve(overrides: {
 } = {}) {
   const data = {
     health: HEALTH,
+    config: CONFIG,
+    workspaceConfig: WORKSPACE_CONFIG,
     providerStatus: PROVIDERS_CONNECTED,
     providerStatusStatus: 200,
     skills: SKILLS,
@@ -245,9 +284,12 @@ function serve(overrides: {
       if (url === '/api/v1/ui-state' && method === 'PUT') return json(body ?? {})
       if (url === '/api/v1/runs' && method === 'POST') return json(data.createRun, data.createRunStatus)
       if (url === '/api/v1/config' && method === 'GET')
-        return json({ baseBranch: null, defaultRunner: 'claude', systemPrompt: null, defaultModels: {} })
+        return typeof data.config === 'function'
+          ? data.config()
+          : json({ ...CONFIG, ...data.config })
       if (url === '/api/v1/config' && method === 'PUT')
         return json({ baseBranch: (body as { baseBranch: string | null }).baseBranch, defaultRunner: 'claude' })
+      if (url === '/api/v1/workspace/config' && method === 'GET') return json(data.workspaceConfig)
       return json({ error: `unmocked ${method} ${url}` }, 404)
     }),
   )
@@ -583,7 +625,7 @@ describe('provider authentication gate', () => {
     expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('sends the connected runner explicitly when health has not revealed the server default yet', async () => {
+  it('can safely omit the runner while boot health is pending because project config is authoritative', async () => {
     const delayedHealth = deferredJson<HealthResponse>()
     serve({ health: delayedHealth.fetch })
     renderNewTask()
@@ -592,7 +634,7 @@ describe('provider authentication gate', () => {
     fireEvent.change(textarea(), { target: { value: 'Start before health resolves' } })
     await startTask()
 
-    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
     delayedHealth.release(HEALTH)
   })
 
@@ -719,6 +761,72 @@ describe('submit', () => {
     expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'quick-task' })
   })
 
+  it('posts worktree:false after opt-out for every single-step source shape', async () => {
+    const cases: Array<{
+      label: string
+      overrides: NonNullable<Parameters<typeof serve>[0]>
+      expected: Record<string, unknown>
+    }> = [
+      {
+        label: 'quick-task',
+        overrides: {},
+        expected: { workflow: 'quick-task' },
+      },
+      {
+        label: 'om-fix',
+        overrides: { uiState: { lastTask: { source: 'skill', ref: 'om-fix' } } },
+        expected: { steps: [{ id: 'task', name: 'om-fix', skill: 'om-fix', prompt: '{{task}}' }] },
+      },
+      {
+        label: 'one-step',
+        overrides: {
+          workflows: {
+            workflows: [
+              ...WORKFLOWS.workflows,
+              { name: 'one-step', source: 'file', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
+            ],
+            issues: [],
+          },
+          uiState: { lastTask: { source: 'workflow', ref: 'one-step' } },
+        },
+        expected: { workflow: 'one-step' },
+      },
+    ]
+
+    for (const testCase of cases) {
+      cleanup()
+      resetDraft()
+      serve(testCase.overrides)
+      renderNewTask()
+      await pillReady(testCase.label)
+      const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+      fireEvent.click(worktree)
+      expect(worktree.getAttribute('aria-checked')).toBe('false')
+      fireEvent.change(textarea(), { target: { value: `Run ${testCase.label} in place` } })
+      await startTask()
+      expect(postedBody()).toMatchObject({ ...testCase.expected, worktree: false })
+    }
+  })
+
+  it('carries an inherited Worktree-off policy into the submitted payload', async () => {
+    serve({
+      workspaceConfig: {
+        ...WORKSPACE_CONFIG,
+        composerDefaults: {
+          ...WORKSPACE_CONFIG.composerDefaults!,
+          inheritedWorktree: false,
+        },
+      },
+    })
+    renderNewTask()
+    await pillReady()
+    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    fireEvent.change(textarea(), { target: { value: 'Use the environment seed' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ workflow: 'quick-task', worktree: false })
+  })
+
   it('picking a model and ×2 variants rides along; {runs} answer navigates to the FIRST variant', async () => {
     serve({ createRun: { runs: [{ id: 'v-a' }, { id: 'v-b' }] } })
     renderNewTask()
@@ -757,13 +865,29 @@ describe('submit', () => {
     expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
   })
 
-  it('sends the fallback runner when the configured default is temporarily unavailable', async () => {
-    serve({ health: { ...HEALTH, defaultRunner: 'codex' } })
+  it('uses the active project default rather than the boot project health default', async () => {
+    serve({ health: { ...HEALTH, defaultRunner: 'codex' }, config: { defaultRunner: 'claude' } })
     renderNewTask()
     await pillReady()
-    fireEvent.change(textarea(), { target: { value: 'pin the healthy backend' } })
+    fireEvent.change(textarea(), { target: { value: 'follow the project default' } })
     await startTask()
-    expect(postedBody()).toMatchObject({ runner: 'claude' })
+    expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
+  })
+
+  it('sends an explicit runner pick when boot health claims that runner is the default', async () => {
+    serve({
+      health: { ...HEALTH_MULTI, defaultRunner: 'codex' },
+      config: { defaultRunner: 'claude' },
+      providerStatus: PROVIDERS_MULTI,
+    })
+    renderNewTask()
+    await pillReady()
+    fireEvent.pointerDown(document.querySelector('[data-slot="runner-pill"]') as HTMLElement)
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('codex')) as HTMLElement)
+    fireEvent.change(textarea(), { target: { value: 'pin codex' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'codex' })
   })
 
   it('defaults follow-up generation on, but posts and remembers an explicit opt-out', async () => {
@@ -823,7 +947,7 @@ describe('submit', () => {
     expect(worktree.getAttribute('aria-checked')).toBe('true')
   })
 
-  it('forces and disables Worktree for a multi-step workflow', async () => {
+  it('lets a multi-step workflow opt out and submits worktree:false', async () => {
     serve({
       workflows: {
         workflows: [
@@ -841,23 +965,22 @@ describe('submit', () => {
       },
       uiState: { lastTask: { source: 'workflow', ref: 'fix-and-verify' } },
     })
-    writeDraft({
-      ...readDraft(),
-      worktree: false,
-    })
     renderNewTask()
     await pillReady('fix-and-verify')
 
     const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(worktree.getAttribute('aria-checked')).toBe('true')
-    expect(worktree.disabled).toBe(true)
-    expect(worktree.title).toBe('Multi-step workflows require an isolated worktree')
+    expect(worktree.disabled).toBe(false)
+    fireEvent.click(worktree)
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    fireEvent.change(textarea(), { target: { value: 'Run the whole workflow in place' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ workflow: 'fix-and-verify', worktree: false })
   })
 
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, followups: false, singleProject: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, followups: false, singleProject: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -1020,14 +1143,18 @@ describe('bookmarklet auto-start', () => {
     expect(runsPosted()).toHaveLength(1)
   })
 
-  it('waits for health and sends Claude explicitly when the eventual server default is Codex', async () => {
-    const delayedHealth = deferredJson<HealthResponse>()
+  it('waits for project config, then keeps an untouched project-default runner implicit', async () => {
+    const delayedConfig = deferredJson<ConfigResponse>()
     const delayedProviders = deferredJson<ProviderStatusResponse>()
-    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
+    serve({
+      health: { ...HEALTH, defaultRunner: 'codex' },
+      config: delayedConfig.fetch,
+      providerStatus: delayedProviders.fetch,
+    })
     const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
 
     await waitFor(() => {
-      expect(requests.some((request) => request.url === '/api/v1/health')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/config')).toBe(true)
       expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true)
     })
     await act(async () => {
@@ -1040,43 +1167,43 @@ describe('bookmarklet auto-start', () => {
     expect(keyFetched()).toBe(false)
     expect(runsPosted()).toHaveLength(0)
 
-    delayedHealth.release({ ...HEALTH, defaultRunner: 'codex' })
+    delayedConfig.release(CONFIG)
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    expect(runsPosted().map((request) => request.body)).toEqual([
+      {
+        task: 'hello',
+        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
+      },
+    ])
+  })
+
+  it('waits for project config and sends a connected fallback when that default is unavailable', async () => {
+    const delayedConfig = deferredJson<ConfigResponse>()
+    const delayedProviders = deferredJson<ProviderStatusResponse>()
+    serve({ config: delayedConfig.fetch, providerStatus: delayedProviders.fetch })
+    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.url === '/api/v1/config')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true)
+    })
+    await act(async () => {
+      delayedProviders.release(PROVIDERS_CONNECTED)
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
+    )
+    expect(keyFetched()).toBe(false)
+    expect(runsPosted()).toHaveLength(0)
+
+    delayedConfig.release({ ...CONFIG, defaultRunner: 'codex' })
     await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
     expect(runsPosted().map((request) => request.body)).toEqual([
       {
         task: 'hello',
         steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
         runner: 'claude',
-      },
-    ])
-  })
-
-  it('waits for health and keeps the protected body implicit when the eventual default is Claude', async () => {
-    const delayedHealth = deferredJson<HealthResponse>()
-    const delayedProviders = deferredJson<ProviderStatusResponse>()
-    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
-    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
-
-    await waitFor(() => {
-      expect(requests.some((request) => request.url === '/api/v1/health')).toBe(true)
-      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true)
-    })
-    await act(async () => {
-      delayedProviders.release(PROVIDERS_CONNECTED)
-      await Promise.resolve()
-    })
-    await waitFor(() =>
-      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
-    )
-    expect(keyFetched()).toBe(false)
-    expect(runsPosted()).toHaveLength(0)
-
-    delayedHealth.release(HEALTH)
-    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
-    expect(runsPosted().map((request) => request.body)).toEqual([
-      {
-        task: 'hello',
-        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
       },
     ])
   })
@@ -1412,7 +1539,7 @@ describe('the plan flow', () => {
     await waitFor(() => expect(location()).toBe('/tasks/planned-1'))
   })
 
-  it('▶ Start sends the connected runner explicitly when health is still pending', async () => {
+  it('▶ Start uses project config while boot health is still pending', async () => {
     const delayedHealth = deferredJson<HealthResponse>()
     serve({ health: delayedHealth.fetch, createRun: { id: 'planned-before-health' } })
     renderNewTask()
@@ -1421,7 +1548,7 @@ describe('the plan flow', () => {
     fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
     await waitFor(() => expect(postedBody()).toBeDefined())
 
-    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
     delayedHealth.release(HEALTH)
   })
 

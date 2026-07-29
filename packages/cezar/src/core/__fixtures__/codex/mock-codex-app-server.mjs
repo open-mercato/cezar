@@ -4,10 +4,21 @@
 // `codex-ui-mapper.test.ts`: initialize/thread/turn handshake, one scripted
 // turn with an agentMessage + a commandExecution (with live outputDelta),
 // cumulative token usage, then exits on stdin EOF like the real server.
+//
+// `MOCK_CODEX_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
+// server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
+// and handles SIGTERM itself, exiting 143 rather than dying from the signal.
 import { createInterface } from 'node:readline';
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
+
+const ignoreEof = process.env.MOCK_CODEX_IGNORE_EOF === '1';
+if (ignoreEof) {
+  process.on('SIGTERM', () => process.exit(143));
+  // Keep the event loop alive so EOF alone can never end the process.
+  setInterval(() => {}, 60_000);
+}
 
 rl.on('line', (line) => {
   let msg;
@@ -81,4 +92,6 @@ rl.on('line', (line) => {
   }
 });
 
-rl.on('close', () => process.exit(0));
+rl.on('close', () => {
+  if (!ignoreEof) process.exit(0);
+});

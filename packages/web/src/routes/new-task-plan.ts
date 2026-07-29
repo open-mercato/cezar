@@ -6,6 +6,8 @@ import type {
   WorkflowStepDef,
 } from '@open-mercato/cezar-api-client'
 
+import { runnerOverride } from './new-task-form'
+
 /**
  * Plan-mode logic (spec 008 / Implementation Plan step 14), kept pure so every rule is
  * table-testable: the pending-plan shape the /new route holds while the review overlay is up,
@@ -78,7 +80,8 @@ export function planTaskLine(task: string, max = 120): string {
  * The exact `POST /api/runs` body for an approved plan: the edited steps INLINE (never a
  * workflow name — the chain may be unsaved), plus the composer's current picker choices under
  * the same rules as `buildCreateRunBody`: `model`/`variants`/`images` only when they say
- * something, `runner` omitted only when it equals a known server default, `generateFollowups`
+ * something, explicit/sticky `runner` choices always sent (untouched defaults may be omitted),
+ * `generateFollowups`
  * only when off (#444), and `todoId` only when the composer was prefilled from an inbox entry (#374 —
  * planning the follow-up first still starts it, so the entry must still be marked started).
  */
@@ -87,19 +90,21 @@ export function buildPlannedRunBody(opts: {
   steps: readonly WorkflowStepDef[]
   model: string
   runner: Runner
+  /** True when the draft contains a sticky/user runner choice rather than an untouched default. */
+  runnerExplicit?: boolean
   defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
   generateFollowups?: boolean
   todoId?: string
 }): CreateRunInput {
-  const { task, steps, model, runner, defaultRunner, variants, images, generateFollowups, todoId } =
+  const { task, steps, model, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
     opts
   return {
     task,
     steps: [...steps],
     model: model || undefined,
-    runner: runner === defaultRunner ? undefined : runner,
+    runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,

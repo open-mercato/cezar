@@ -143,6 +143,16 @@ export function resolveRunner(
   return available[0] ?? 'claude'
 }
 
+/** The runner field shared by every NEW-run surface. Explicit/sticky intent always rides the
+ * request; only an untouched pick matching the active project's known default may be omitted. */
+export function runnerOverride(
+  runner: Runner,
+  defaultRunner: Runner | undefined,
+  explicit = false,
+): Runner | undefined {
+  return !explicit && runner === defaultRunner ? undefined : runner
+}
+
 /** The effective model: the user's pick when it exists in the selected runner's presets, else
  *  the configured per-runner default (Settings → Agents `defaultModels`, R6 1.5) when IT is a
  *  known preset, else auto (`''`). An explicit pick — including picking auto — always beats
@@ -197,8 +207,9 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
- *  - `runner` omitted only when it equals a known server default (unknown defaults and connected
- *    fallbacks stay explicit);
+ *  - an explicit/sticky `runner` always rides the request; an untouched runner is omitted only
+ *    when it equals the active project's known default (unknown defaults and connected fallbacks
+ *    stay explicit);
  *  - `model`/`variants`/`images` only when they say something (`''`/1/empty mean "default").
  */
 export function buildCreateRunBody(opts: {
@@ -206,6 +217,8 @@ export function buildCreateRunBody(opts: {
   source: TaskSource
   model: string
   runner: Runner
+  /** True when the draft contains a sticky/user runner choice rather than an untouched default. */
+  runnerExplicit?: boolean
   defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
@@ -227,6 +240,7 @@ export function buildCreateRunBody(opts: {
     source,
     model,
     runner,
+    runnerExplicit,
     defaultRunner,
     variants,
     images,
@@ -241,7 +255,7 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source.ref }),
     model: model || undefined,
-    runner: runner === defaultRunner ? undefined : runner,
+    runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
     // Off only matters for a single run — variants always isolate.

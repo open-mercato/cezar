@@ -35,7 +35,6 @@ export interface NewTaskDraft {
 export interface ComposerRunModeInput {
   hasGit: boolean
   variants: number
-  forceWorktree?: boolean
   planFirst: boolean
   explicitAutonomous: boolean | null
   explicitWorktree: boolean | null
@@ -47,8 +46,10 @@ export interface ComposerRunModeInput {
 
 /** Resolve run-mode values once, in precedence order: hard constraints, explicit draft
  * choices, an interactive-skill recommendation, then the configured (or source-dependent)
- * default. `configuredAutonomous`/`configuredWorktree` carry the workspace run defaults;
- * `'source-dependent'` autonomy means skills default on and everything else off. */
+ * default. Parallel variants are the only hard Worktree constraint; ordinary workflows can
+ * run in place when the user or workspace policy opts out. `configuredAutonomous`/
+ * `configuredWorktree` carry the workspace run defaults; `'source-dependent'` autonomy means
+ * skills default on and everything else off. */
 export function resolveComposerRunMode(input: ComposerRunModeInput): {
   autonomous: boolean
   worktree: boolean
@@ -62,7 +63,7 @@ export function resolveComposerRunMode(input: ComposerRunModeInput): {
     : (input.explicitAutonomous ?? recommended ?? autonomousFallback)
   const worktree = !input.hasGit
     ? false
-    : input.variants > 1 || input.forceWorktree === true
+    : input.variants > 1
       ? true
       : (input.explicitWorktree ?? recommended ?? input.configuredWorktree)
   return { autonomous, worktree }

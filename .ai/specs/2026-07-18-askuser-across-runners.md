@@ -32,9 +32,10 @@ mechanism, identical behavior on claude, codex and opencode.
   a **future enhancement**, not this spec.
 - **Q2 — Answer channel & free-text.** → **DEFAULT: clickable option chips AND
   the normal composer stays enabled.** The user clicks an option or types a
-  free-form reply; either way the answer rides the existing
-  `POST /api/runs/:id/messages` → `sendMessage` seam as a normal user message
-  (no `tool_result` / endpoint changes). `multiSelect` questions collect several
+  free-form reply. A chip answer rides `POST /api/runs/:id/messages` while the
+  session is live, or the existing `POST /api/runs/:id/continue` seam once the
+  session has closed; both append the answer as a normal user message (no
+  `tool_result` / endpoint changes). `multiSelect` questions collect several
   picks confirmed with Send; an implicit free-text "Other" is always available
   via the composer (matching `AskUserQuestion` semantics).
 - **Q3 — Event model.** → **DEFAULT: one additive `ask.requested` `UiEvent`.**
@@ -112,7 +113,12 @@ A cezar-owned marker protocol, uniform across backends:
    (`<header>: <label>`, comma-joined for multi-select) to the existing
    `POST /api/runs/:id/messages`; `sendMessage` persists the user-message event,
    flips `waiting`→`running`, and resumes the session. The ask card resolves the
-   moment that user message lands.
+   moment that user message lands. Once the session has CLOSED with the question
+   still unanswered, the same answer travels the second half of that seam instead
+   — `POST /api/runs/:id/continue`, which reopens the last recorded session on the
+   run's own engine and appends the answer as its opening `user-message`. Same
+   answer text, same resolution rule, one routing decision in `useAskAnswer`
+   (see the session-ends edge case below).
 
 Precedence on one turn: `CEZ:DONE` wins (goal done); else a valid `CEZ:ASK`
 (attention — the user is genuinely blocked); else `CEZ:MONITORING`
@@ -147,9 +153,12 @@ the existing sink, so no per-backend mapper work is required.
   `UiEventType`; mirror in `web/app/src/protocol/ui-events.ts`; held type-exact
   by `src/server/api-types.test.ts`. `UiEventSink` persists it via its existing
   pass-through `default` branch (no sink change beyond the union).
-- **Answer path** — unchanged server routes. `web/app/src/routes/task-thread`:
-  the ask card's chip click calls the existing `useSendMessage(run.id)` with the
-  formatted answer text; free-text uses the normal composer.
+- **Answer path** — unchanged server routes. `packages/web/src/routes/task-thread`:
+  the ask card's chip click uses `useAskAnswer(run)`, which sends the formatted
+  answer through `useSendMessage(run.id)` while the session is live or through
+  an override-free `useContinueRun(run.id)` after it closes. The latter stays
+  gated on the run's recorded provider and never silently switches engines;
+  free-text uses the normal composer.
 - **UI** — `thread-state.ts` gains an `ask.requested` case producing an ask row;
   a new `AskCard` component renders it; the row is marked resolved when a later
   user-message row for the run appears (client-side lifecycle). No attention
@@ -177,8 +186,9 @@ interface AskRequest { questions: AskQuestion[] }   // 1..4
 
 ## API Contracts
 
-- **No new endpoints.** Answers reuse `POST /api/runs/:id/messages`
-  (`{ text, images? }`) — chip clicks send formatted text, free-text sends raw.
+- **No new endpoints.** Chip answers reuse `POST /api/runs/:id/messages`
+  (`{ text, images? }`) while live and `POST /api/runs/:id/continue` (`{ text }`)
+  after closure; free-text continues through the normal composer.
 - **New UiEvent** (additive, SSE `ui-event` transport unchanged):
   `{ type: 'ask.requested', requestId: string, questions: AskQuestion[] }`.
 - **New system-prompt marker** (agent → cezar): a trailing line
@@ -219,8 +229,17 @@ are real buttons (keyboard/enter, focus ring `--ring`), the card has
   composer works.
 - **User types instead of clicking** → normal message; card resolves.
 - **`CEZ:DONE` and `CEZ:ASK` both present** → `DONE` wins (no dangling card).
-- **Run cancelled / finished while waiting on an ask** → the existing cancel/finish
-  paths clear the in-memory `pendingAskId`; the card renders resolved/closed.
+- **Session ends while the ask is still unanswered** (idle timeout, a cezar restart,
+  Finish, or a cancel) → the question outlives its session, so the card stays
+  answerable: `useAskAnswer` (`ask-answer.ts`) routes the answer by run state —
+  `POST /messages` while the engine still owns a session, `POST /continue` once it
+  has closed, with the answer as the reopened session's opening prompt. The
+  continuation appends it as a `user-message`, which is what resolves the card, so
+  the resumed and live paths agree. A closed run that never recorded a session has
+  nothing to reopen and says so; a `409` from the live path (a cockpit whose record
+  is stale) is retried as a resume rather than dropped. The original design
+  ("the card renders resolved/closed") left a card whose chips silently failed —
+  every tap posted to `POST /messages` and died on its `409 session closed`.
 - **Reload / resume of a run parked on an ask** → the card is reconstructed from
   the persisted `ask.requested` (last one with no following user message);
   answering resolves it. Recovery re-opens the session (existing behavior).

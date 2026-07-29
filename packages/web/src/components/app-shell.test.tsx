@@ -152,6 +152,67 @@ describe('AppShell', () => {
     expect(within(footer()).getByRole('button', { name: /^Theme:/ })).toBeTruthy()
   })
 
+  /* The footer used to be one wrapping row that overflowed the 264px column, so the theme toggle
+   * silently fell onto a line of its own (#702). jsdom cannot measure that — but it can pin the
+   * structure that makes the wrap impossible: two rows, by construction, not by luck. */
+  describe('sidebar footer is two intentional rows (#702)', () => {
+    const controls = () =>
+      document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
+
+    it('lays the footer out as a column, never a wrapping row', () => {
+      renderShell()
+      expect(footer().className).toContain('flex-col')
+      expect(footer().className).not.toContain('flex-wrap')
+    })
+
+    it('has exactly two children: the search bar, then the controls row', () => {
+      renderShell('/', { version: '1.2.3' })
+      const children = Array.from(footer().children) as HTMLElement[]
+      expect(children.map((child) => child.dataset.slot)).toEqual([
+        'command-palette-hint',
+        'sidebar-footer-controls',
+      ])
+    })
+
+    it('keeps every control a sibling inside the one controls row', () => {
+      renderShell('/', { version: '1.2.3', toolsMenu: <button type="button">Tools</button> })
+      // The gear and the toggle are the pair that came apart in #702 — assert they share a parent,
+      // and that the row is the whole of the footer's chrome rather than a subset of it.
+      const row = controls()
+      expect(row.querySelector('[data-slot="global-settings-link"]')).not.toBeNull()
+      expect(row.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
+      expect(row.querySelector('[data-slot="tools-menu"]')).not.toBeNull()
+      expect(row.querySelector('[data-slot="version-chip"]')).not.toBeNull()
+      // The gear pushes itself right; the toggle rides along at the end of the same row.
+      const gear = row.querySelector('[data-slot="global-settings-link"]') as HTMLElement
+      expect(gear.closest('a,button')?.parentElement).toBe(row)
+    })
+
+    it('renders search as a full-width launcher that still opens the palette', () => {
+      renderShell()
+      // Named by its own visible label, not by an aria-label that would diverge from it
+      // (WCAG 2.5.3) — jsdom reports no `navigator.platform`, so the chord reads Ctrl+K.
+      const search = within(footer()).getByRole('button', { name: 'Search…' })
+      expect(search.dataset.slot).toBe('command-palette-hint')
+      expect(search.className).toContain('w-full')
+      expect(search.textContent).toContain('Search…')
+      expect(search.querySelector('kbd')?.textContent).toBe('Ctrl+K')
+
+      const opened = vi.fn()
+      window.addEventListener('cezar:open-command-palette', opened)
+      fireEvent.click(search)
+      window.removeEventListener('cezar:open-command-palette', opened)
+      expect(opened).toHaveBeenCalledTimes(1)
+    })
+
+    it('still shows the version chip update affordance (#368) in the narrower row', () => {
+      renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
+      const chip = controls().querySelector('[data-slot="version-chip"]') as HTMLElement
+      expect(chip.getAttribute('data-update-available')).toBe('true')
+      expect(chip.querySelector('[data-slot="status-dot"]')).not.toBeNull()
+    })
+  })
+
   describe('data slots stay empty rather than showing invented data', () => {
     it('renders no repo chip, badge or version chip when unfed', () => {
       renderShell()

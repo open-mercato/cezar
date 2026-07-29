@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import type { ApiRun, ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 
-import { activeProviderAvailability, providerForActiveRun } from './active-provider'
+import {
+  activeProviderAvailability,
+  existingProviderAvailability,
+  providerForActiveRun,
+  providerForExistingRun,
+} from './active-provider'
 
 const run = (overrides: Partial<ApiRun> = {}): ApiRun => ({
   id: 'r1',
@@ -55,6 +60,37 @@ describe('active task provider availability', () => {
       provider: 'claude',
       usable: false,
       reason,
+    })
+  })
+
+  it('gates an override-free continuation on the run provider, not a connected fallback', () => {
+    const closed = run({
+      status: 'done',
+      runner: 'claude',
+      steps: [{
+        id: 'continue-1',
+        name: 'Continue',
+        kind: 'agent',
+        status: 'done',
+        iterations: 1,
+        tokensUsed: 0,
+        backend: 'codex',
+        sessionId: 'session-1',
+      }],
+    })
+    const status = providers({
+      providers: [
+        { provider: 'claude', status: 'disconnected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'not-installed', enabled: true },
+      ],
+    })
+
+    expect(providerForExistingRun(closed)).toBe('claude')
+    expect(existingProviderAvailability(closed, status)).toEqual({
+      provider: 'claude',
+      usable: false,
+      reason: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
     })
   })
 })

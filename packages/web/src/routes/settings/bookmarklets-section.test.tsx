@@ -28,7 +28,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: false, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: false, singleProject: false },
 }
 
 const SKILLS: Skill[] = [

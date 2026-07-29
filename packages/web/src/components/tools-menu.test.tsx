@@ -46,7 +46,7 @@ const HEALTH: HealthResponse = {
     },
   ],
   forge: null,
-  capabilities: { localHandoff: true, followups: false, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: false, singleProject: false },
 }
 
 const ALL_GOOD: HealthResponse = {

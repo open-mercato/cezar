@@ -65,7 +65,10 @@ describe('provider action gating', () => {
       steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
     });
     if (backend) {
-      store.updateRun(run.id, { currentStepId: 'task' });
+      // A persisted active backend belongs to a live run. Keeping the record queued would
+      // model the prompt-authoring window, where provider availability deliberately does not
+      // gate mutations of the existing task.
+      store.updateRun(run.id, { status: 'running', currentStepId: 'task' });
       store.updateStep(run.id, 'task', { backend, status: 'running' });
     }
     return run;

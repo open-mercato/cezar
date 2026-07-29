@@ -100,9 +100,15 @@ export class CodexAppServerRpc {
   }
 }
 
+/**
+ * Close stdin, then escalate SIGTERM→SIGKILL for a server that ignores EOF.
+ * `onSignal` fires when the watchdog actually signals: the caller needs to
+ * know a non-zero exit was its own doing, not a codex failure (#703).
+ */
 export function endCodexAppServer(
   child: ChildProcessWithoutNullStreams,
   onTimers?: (term: NodeJS.Timeout, kill: NodeJS.Timeout | undefined) => void,
+  onSignal?: () => void,
 ): void {
   try {
     child.stdin.end();
@@ -111,9 +117,15 @@ export function endCodexAppServer(
   }
   let killTimer: NodeJS.Timeout | undefined;
   const termTimer = setTimeout(() => {
-    if (child.exitCode == null && !child.killed) child.kill('SIGTERM');
+    if (child.exitCode == null && !child.killed) {
+      onSignal?.();
+      child.kill('SIGTERM');
+    }
     killTimer = setTimeout(() => {
-      if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
+      if (child.exitCode == null && !child.killed) {
+        onSignal?.();
+        child.kill('SIGKILL');
+      }
     }, EOF_KILL_GRACE_MS);
     killTimer.unref?.();
     onTimers?.(termTimer, killTimer);

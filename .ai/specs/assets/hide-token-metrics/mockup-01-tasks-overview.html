@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Illustrative mockup — hidden token metrics</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d0d0e;
+      color: #f4f4f5;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 1180px; background: #0d0d0e; }
+    .app { min-height: 900px; display: grid; grid-template-columns: 264px 1fr; }
+    .sidebar {
+      position: relative;
+      border-right: 1px solid #29292c;
+      background: #181819;
+      padding: 14px 10px 18px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px 14px; font-weight: 700; }
+    .logo {
+      width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+      background: #d9ff62; color: #151515; font-weight: 900; transform: rotate(-4deg);
+    }
+    .project { margin-left: auto; max-width: 128px; overflow: hidden; color: #8c8c90; font: 11px ui-monospace, monospace; }
+    .new {
+      height: 38px; display: grid; place-items: center; margin-bottom: 14px; border-radius: 9px;
+      background: #f2f2f3; color: #171719; font-size: 14px; font-weight: 600;
+    }
+    nav { display: grid; gap: 3px; }
+    nav div { padding: 9px 12px; border-radius: 8px; color: #a7a7aa; font-size: 14px; }
+    nav .active { background: #29292b; color: #f4f4f5; font-weight: 600; }
+    .tabs { margin-top: 22px; padding: 3px; display: grid; grid-template-columns: 1fr 1fr; background: #29292b; border-radius: 9px; font-size: 12px; }
+    .tabs span { text-align: center; padding: 7px; color: #a0a0a4; }
+    .tabs .active { background: #171718; border-radius: 7px; color: #f4f4f5; }
+    .side-title { margin: 18px 12px 10px; color: #85858a; font-size: 10px; letter-spacing: .09em; }
+    .side-task { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #dedee1; font-size: 12px; }
+    .side-task .dot { width: 6px; height: 6px; border-radius: 50%; background: #ffbd21; }
+    .side-task .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sidebar-footer { position: absolute; left: 10px; right: 10px; bottom: 16px; color: #8c8c90; }
+    .search-small { padding: 8px 12px; border: 1px solid #303034; border-radius: 9px; font-size: 11px; }
+    main { position: relative; padding: 44px 56px; background: #0d0d0e; }
+    .annotation {
+      position: absolute; top: 18px; right: 24px; border: 1px solid #51601f; border-radius: 999px;
+      padding: 5px 10px; background: #1b2010; color: #d9ff62; font: 10px ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    h1 { margin: 0; font-size: 25px; letter-spacing: -.03em; }
+    .subtitle { margin: 6px 0 26px; color: #8d8d92; font-size: 13px; }
+    .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .switch { display: flex; gap: 6px; padding: 3px; border-radius: 8px; background: #1a1a1c; }
+    .switch span { padding: 7px 13px; color: #85858a; font-size: 12px; }
+    .switch .selected { border-radius: 6px; background: #2a2a2d; color: #f4f4f5; }
+    .filter { margin-left: auto; width: 260px; border: 1px solid #303034; border-radius: 8px; padding: 9px 12px; color: #77777c; font-size: 12px; }
+    table { width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid #29292d; border-radius: 10px; overflow: hidden; background: #131315; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid #29292d; text-align: left; white-space: nowrap; }
+    th { background: #18181a; color: #77777c; font-size: 10px; letter-spacing: .08em; font-weight: 600; }
+    td { color: #c9c9cd; font-size: 12px; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: #18181a; }
+    .status { display: inline-flex; align-items: center; gap: 7px; }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #ffbd21; }
+    .task { min-width: 280px; color: #f1f1f2; font-weight: 500; }
+    .mono { color: #96969b; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .diff { color: #aee867; font: 11px ui-monospace, monospace; }
+    .ref { color: #b7a7ff; font: 11px ui-monospace, monospace; }
+    .empty { color: #56565b; text-align: center; }
+    .callout {
+      margin-top: 18px; max-width: 650px; border-left: 2px solid #d9ff62; padding-left: 12px;
+      color: #8f8f94; font-size: 12px; line-height: 1.55;
+    }
+    .callout strong { color: #d9ff62; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">C</span>
+        <span>cezar</span>
+        <span class="project">sandbox / main</span>
+      </div>
+      <div class="new">＋ New task</div>
+      <nav aria-label="Main">
+        <div class="active">☷ &nbsp; Tasks</div>
+        <div>⌁ &nbsp; Git</div>
+        <div>◉ &nbsp; GitHub</div>
+        <div>⌘ &nbsp; Skills</div>
+        <div>⌘ &nbsp; Workflows</div>
+        <div>⚙ &nbsp; Settings</div>
+      </nav>
+      <div class="tabs"><span class="active">Active 3</span><span>Archived</span></div>
+      <div class="side-title">NEEDS YOU</div>
+      <div class="side-task"><span class="dot"></span><span class="name">Compare two implementation approaches</span></div>
+      <div class="side-task"><span class="dot"></span><span class="name">Summarize the workspace architecture</span></div>
+      <div class="sidebar-footer"><div class="search-small">⌕ &nbsp; Search…</div></div>
+    </aside>
+    <main>
+      <div class="annotation">SPEC MOCKUP · CEZ_HIDE_TOKEN_METRICS=1</div>
+      <h1>Tasks</h1>
+      <p class="subtitle">Run and review coding-agent work in this repository.</p>
+      <div class="toolbar">
+        <div class="switch"><span class="selected">Active 3</span><span>Archived</span></div>
+        <div class="filter">⌕ &nbsp; Search tasks</div>
+      </div>
+      <table aria-label="Tasks with token metrics hidden">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Task</th>
+            <th>Workflow</th>
+            <th>Branch</th>
+            <th>±</th>
+            <th>Ref</th>
+            <th>CPU</th>
+            <th>Mem</th>
+            <th>Started</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="status">needs you</span></td>
+            <td class="task">Compare two implementation approaches (B)</td>
+            <td>quick-task</td>
+            <td class="mono">cez/e2b75611</td>
+            <td class="diff">+0 −0</td>
+            <td class="ref">#123</td>
+            <td class="empty">—</td>
+            <td class="empty">—</td>
+            <td>1m</td>
+          </tr>
+          <tr>
+            <td><span class="status">needs you</span></td>
+            <td class="task">Compare two implementation approaches (A)</td>
+            <td>quick-task</td>
+            <td class="mono">cez/6001b39c</td>
+            <td class="diff">+0 −0</td>
+            <td class="ref">#123</td>
+            <td class="empty">—</td>
+            <td class="empty">—</td>
+            <td>1m</td>
+          </tr>
+          <tr>
+            <td><span class="status">needs you</span></td>
+            <td class="task">Summarize the workspace architecture</td>
+            <td>quick-task</td>
+            <td class="mono">cez/67f6b7af</td>
+            <td class="diff">+0 −0</td>
+            <td class="ref">#123</td>
+            <td class="empty">—</td>
+            <td class="empty">—</td>
+            <td>1m</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="callout"><strong>Proposed state:</strong> the Tokens and Cost columns are omitted structurally. The remaining headers and cells stay aligned, and no blank metric columns or screen-reader text remain.</p>
+    </main>
+  </div>
+</body>
+</html>

@@ -1085,7 +1085,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -1149,7 +1149,9 @@ describe('the hand-to-agent backend pills (#401)', () => {
 
   it('a runner + model pick rides the POST alongside the workflow routing', async () => {
     const sent = stubFetch({
-      'GET /api/v1/health': MULTI_BACKEND,
+      // Health describes the boot project; config describes the scoped GitHub project.
+      'GET /api/v1/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
       'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_MULTI),
     })
     await openDetail()

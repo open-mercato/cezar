@@ -622,6 +622,28 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
+  it('omits token and cost text when health disables token metrics', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true,
+            followups: false,
+            singleProject: false,
+            tokenMetrics: false,
+          },
+        }),
+    })
+    renderHeader(run('done', { costUsd: 0.04 }))
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() => {
+      expect(meta.textContent).not.toContain('27.0k tokens')
+      expect(meta.textContent).not.toContain('$0.04')
+    })
+    expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
+  })
+
   it.each([
     {
       name: 'both',
@@ -681,8 +703,11 @@ describe('meta line, tabs, pill and resume hint', () => {
   // record without a runner must name the repo's DEFAULT agent — hardcoding 'claude' here would
   // confidently name the wrong agent on a codex/opencode repo, which is the exact question the
   // badge exists to answer.
-  it('a run with no explicit runner names the repo default from health, not a hardcoded claude', async () => {
-    stubFetch({ '/api/v1/health': () => jsonResponse({ defaultRunner: 'codex' }) })
+  it('a run with no explicit runner names the active project config default, not boot health', async () => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ defaultRunner: 'claude' }),
+      '/api/v1/config': () => jsonResponse({ defaultRunner: 'codex', defaultModels: {} }),
+    })
     renderHeader(run('done', { runner: undefined }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     const badge = await within(meta).findByRole('button', { name: /Agent: codex, model auto/ })

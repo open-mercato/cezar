@@ -32,6 +32,9 @@ export const projectListEntrySchema = z.object({
   status: z.enum(['ok', 'missing', 'not-git']),
   /** Current branch when cheaply available (omitted e.g. on an unborn HEAD). */
   branch: z.string().optional(),
+  /** Which forge this project's remote belongs to (#698) — classified server-side from the
+   *  remote URL alone. Gates the project group's GitHub nav item; omitted = no forge remote. */
+  forge: z.literal('github').optional(),
   /** Per-project cap on concurrently running tasks (spec 2026-07-22). Omitted = inherit the
    *  workspace `resources.maxParallel`; a number pins this project. */
   maxParallel: z.number().optional(),

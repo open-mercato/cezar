@@ -19,7 +19,9 @@ skills-lock.json
 .ai/qa/artifacts_*/
 .ai/qa/test-env.json
 .ai/qa/test-env.lock/
-.ai/qa/test-env-*.log
+# Any app log an agent parks here, not just the generated test-env ones — a narrower
+# `test-env-*.log` let a hand-named boot log get swept into a commit by the autosave.
+.ai/qa/*.log
 .ai/qa/.build-cache
 .ai/qa/cez-home/
 

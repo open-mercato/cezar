@@ -69,7 +69,7 @@ function CommitsView({ run }: { run: ApiRun }) {
       ) : (
         <CommitList
           slot="task-commits"
-          className="mx-auto w-full max-w-[820px]"
+          className="mx-auto w-full max-w-[var(--measure)]"
           commits={commits.data.commits.map((commit: RunCommit) => ({
             ...commit,
             shaLabel: commit.sha.slice(0, 8),
@@ -92,7 +92,7 @@ function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
   const effectiveWrap = desktop ? wrap : true
 
   return (
-    <section data-slot="task-commit" data-sha={sha} className="mx-auto flex min-h-0 w-full max-w-[820px] flex-1 flex-col">
+    <section data-slot="task-commit" data-sha={sha} className="mx-auto flex min-h-0 w-full max-w-[var(--measure)] flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border px-4 py-2 md:px-6">
         <Button asChild variant="ghost" size="sm" data-slot="commit-back">
           <Link to={`/tasks/${runId}/commits`}>

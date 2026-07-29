@@ -310,6 +310,13 @@ describe('TaskQuickList', () => {
       fireEvent.click(screen.getByRole('button', { expanded: false }))
       expect(row('va')?.textContent).toBe('Aclaude')
     })
+
+    it('omits every variant token count when the health capability disables metrics', () => {
+      renderList({ runs: variants(), showTokenMetrics: false })
+      fireEvent.click(screen.getByRole('button', { expanded: false }))
+      expect(row('va')?.textContent).toBe('Aclaude')
+      expect(row('vb')?.textContent).toBe('Bcodex')
+    })
   })
 
   describe('the Active/Archived tabs', () => {

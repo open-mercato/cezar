@@ -40,6 +40,19 @@ export const capabilitiesSchema = z.object({
   localHandoff: z.boolean(),
   followups: z.boolean(),
   singleProject: z.boolean(),
+  /**
+   * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
+   * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation
+   * only.
+   *
+   * REQUIRED, because this server always sends it (`capabilities.ts` computes it from the env on
+   * every read) and this contract describes THIS server's wire. The DTO it replaces declared it
+   * optional so a newer cockpit could read an OLDER server, which is version skew a contract
+   * versioned in lockstep with the server cannot model. That tolerance lives where it belongs, in
+   * `web/src/lib/token-metrics.ts`, whose `!== false` read still treats an absent field as
+   * visible.
+   */
+  tokenMetrics: z.boolean(),
 });
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
 
