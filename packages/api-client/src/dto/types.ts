@@ -424,6 +424,15 @@ export interface FsBrowseResponse {
   truncated: boolean
 }
 
+/** The last settled project-scoped cockpit URL, persisted workspace-wide so the bare
+ *  root can reopen it after a restart. Empty query/hash components are omitted. */
+export interface WorkspaceLastLocation {
+  projectId: string
+  pathname: string
+  search?: string
+  hash?: string
+}
+
 /** `GET/PUT /api/workspace/ui-state` — cross-project GUI prefs in `~/.cezar/ui-state.json`
  *  (multi-project spec, step 2.7). Passthrough like its per-repo twin (`UiState` below):
  *  unknown keys round-trip untouched. `sidebar.collapsed` is the sidebar's per-project
@@ -432,6 +441,9 @@ export interface FsBrowseResponse {
  *  the top level server-side, so a writer must send the whole `sidebar` object, not a leaf. */
 export interface WorkspaceUiState {
   sidebar?: { collapsed?: Record<string, boolean> } & Record<string, unknown>
+  /** Last settled project-scoped page. Used only when entering at the exact bare root;
+   *  explicit deep links always win. */
+  lastLocation?: WorkspaceLastLocation
   /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until
    *  the provider reports a different incident, so this stays workspace-global with the
    *  browser rather than one project checkout. */
