@@ -82,9 +82,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // Anthropic-compatible endpoint, so preserve an explicit provider/model.
   claude: { defaultProvider: 'anthropic', allowExplicitProvider: true, wireProviderQualified: true },
   'claude-cli': { defaultProvider: 'anthropic', allowExplicitProvider: true, wireProviderQualified: true },
-  // Codex selects the provider from model_provider in config.toml, so the
-  // explicit provider is accepted for identity but stripped from the wire id.
-  codex: { defaultProvider: 'openai', allowExplicitProvider: true },
+  // Codex selects the provider from model_provider in config.toml. A foreign
+  // explicit prefix is accepted only when the caller proves it matches that
+  // effective setting; the provider is then stripped from the wire model id.
+  codex: { defaultProvider: 'openai' },
   // opencode selects across providers, so a bare model is ambiguous: reject it
   // loudly rather than let the server pick a default the user never asked for.
   opencode: {},
@@ -130,9 +131,12 @@ export function parseModelIdentity(raw: string | undefined | null): ModelIdentit
 export function resolveModelIdentity(
   backend: AgentBackend,
   raw: string | undefined,
+  options: { configuredProvider?: string } = {},
 ): ModelIdentity | undefined {
   if (!raw || !raw.trim()) return undefined;
   const map = BACKEND_MODEL_MAP[backend] ?? {};
+  const configuredProvider = options.configuredProvider?.trim().toLowerCase() || undefined;
+  const effectiveProvider = configuredProvider ?? map.defaultProvider;
   const explicit = parseModelIdentity(raw);
   if (explicit) {
     // Most single-provider backends need their bare wire form, but Claude Code
@@ -140,17 +144,19 @@ export function resolveModelIdentity(
     // providers for backends that do not advertise that capability.
     if (
       map.defaultProvider !== undefined &&
-      explicit.provider !== map.defaultProvider &&
+      explicit.provider !== effectiveProvider &&
       !map.allowExplicitProvider
     ) {
       throw new ModelIdentityError(
-        `provider "${explicit.provider}" can't be served by the ${backend} runner (serves ${map.defaultProvider}) — use "${map.defaultProvider}/${explicit.model}" or a bare model id`,
+        configuredProvider
+          ? `provider "${explicit.provider}" doesn't match the ${backend} runner's configured provider "${configuredProvider}" — use "${configuredProvider}/${explicit.model}" or a bare model id`
+          : `provider "${explicit.provider}" can't be verified for the ${backend} runner (serves ${map.defaultProvider}) — use "${map.defaultProvider}/${explicit.model}" or a bare model id`,
       );
     }
     return explicit;
   }
   const model = raw.trim();
-  const provider = map.providerByModel?.[model] ?? map.defaultProvider;
+  const provider = map.providerByModel?.[model] ?? effectiveProvider;
   if (!provider) {
     throw new ModelIdentityError(
       `model "${model}" is ambiguous for the ${backend} runner — name the provider as "provider/model" (e.g. anthropic/${model})`,
@@ -188,8 +194,9 @@ export function toBackendModel(backend: AgentBackend, id: ModelIdentity): string
 export function normalizeModelForBackend(
   backend: AgentBackend,
   raw: string | undefined,
+  options: { configuredProvider?: string } = {},
 ): { backendModel: string; identity: ModelIdentity } | undefined {
-  const identity = resolveModelIdentity(backend, raw);
+  const identity = resolveModelIdentity(backend, raw, options);
   if (!identity) return undefined;
   return { backendModel: toBackendModel(backend, identity), identity };
 }

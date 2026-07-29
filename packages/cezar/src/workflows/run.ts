@@ -27,6 +27,7 @@ import type { AgentEvent, ContentBlock } from '../core/agent-runner.js';
 import { discoverSkills, type Skill } from '../skills.js';
 import { materializeSkillDir } from '../skills-remote.js';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.js';
+import { readAgentModelProvider } from '../agent-config/models.js';
 import { loadConfig, resolveWorktreeRetention } from '../config.js';
 import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.js';
 import { getRepoInfo } from '../server/git.js';
@@ -43,6 +44,14 @@ import type { UiEvent } from '../core/ui-events.js';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
 
 const CHECK_OUTPUT_CAP = 20_000;
+
+async function configuredModelProvider(
+  backend: RunnerId,
+  repoRoot: string,
+): Promise<string | undefined> {
+  if (backend !== 'codex') return undefined;
+  return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
+}
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 /**
@@ -1641,6 +1650,7 @@ export class RunManager {
       const normalized = normalizeModelForBackend(
         continueBackend,
         agentModelsLocked() ? undefined : record?.model,
+        { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
       continueModel = normalized?.backendModel;
       this.store.updateRun(runId, {
@@ -1764,7 +1774,11 @@ export class RunManager {
     // can still override below); the authoritative fail-loud gate is at spawn.
     let modelIdentity: string | undefined;
     try {
-      const normalized = normalizeModelForBackend(taskBackend, agentModelsLocked() ? undefined : input.model);
+      const normalized = normalizeModelForBackend(
+        taskBackend,
+        agentModelsLocked() ? undefined : input.model,
+        { configuredProvider: await configuredModelProvider(taskBackend, this.repoRoot) },
+      );
       modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
     } catch {
       // An unresolvable task-level model surfaces loudly at the step below; the
@@ -2179,7 +2193,9 @@ export class RunManager {
     let backendModel: string | undefined;
     try {
       const requestedModel = agentModelsLocked() ? undefined : step.model ?? input.model;
-      const normalized = normalizeModelForBackend(stepBackend, requestedModel);
+      const normalized = normalizeModelForBackend(stepBackend, requestedModel, {
+        configuredProvider: await configuredModelProvider(stepBackend, state.cwd),
+      });
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
       // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`

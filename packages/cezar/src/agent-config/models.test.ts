@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readAgentModelDefaults } from './models.js';
+import { readAgentModelDefaults, readAgentModelProvider } from './models.js';
 
 describe('readAgentModelDefaults', () => {
   const roots: string[] = [];
@@ -79,5 +79,17 @@ describe('readAgentModelDefaults', () => {
     await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({
       codex: 'deepseek/deepseek-chat',
     });
+    await expect(readAgentModelProvider('codex', repo, { HOME: home })).resolves.toBe('deepseek');
+  });
+
+  it('reads the effective Codex provider even when no native model is pinned', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    writeFileSync(join(home, '.codex', 'config.toml'), 'model_provider = "deepseek"\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({});
+    await expect(readAgentModelProvider('codex', repo, { HOME: home })).resolves.toBe('deepseek');
   });
 });

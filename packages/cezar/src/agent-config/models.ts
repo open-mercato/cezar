@@ -80,15 +80,22 @@ function providerFromContent(content: string, format: ConfigFormat, key: string)
   }
 }
 
-async function readRunnerModel(
+interface AgentModelSettings {
+  model?: string;
+  provider?: string;
+}
+
+async function readRunnerModelSettings(
   runner: RunnerId,
   repoRoot: string,
   env: NodeJS.ProcessEnv,
-): Promise<string | undefined> {
+): Promise<AgentModelSettings> {
   // Claude Code gives ANTHROPIC_MODEL higher priority than settings-file values.
   // The terminal and cezar must therefore agree when the model is configured in
   // the shell that launched the server.
-  if (runner === 'claude' && env.ANTHROPIC_MODEL?.trim()) return env.ANTHROPIC_MODEL.trim();
+  if (runner === 'claude' && env.ANTHROPIC_MODEL?.trim()) {
+    return { model: env.ANTHROPIC_MODEL.trim() };
+  }
   const modelFiles = CONFIG_FILES.filter(
     (def) =>
       def.kind === 'settings' &&
@@ -114,12 +121,12 @@ async function readRunnerModel(
     const model = modelFromContent(content, def.format, def.modelKeys ?? [def.modelKey!]);
     if (model) {
       if (runner === 'codex' && provider && provider !== 'openai' && !model.includes('/')) {
-        return `${provider}/${model}`;
+        return { model: `${provider}/${model}`, provider };
       }
-      return model;
+      return { model, provider };
     }
   }
-  return undefined;
+  return { provider };
 }
 
 /** Read the current default model for each installed/configured coding agent. */
@@ -128,7 +135,19 @@ export async function readAgentModelDefaults(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<AgentModelDefaults> {
   const entries = await Promise.all(
-    (['claude', 'codex', 'opencode'] as const).map(async (runner) => [runner, await readRunnerModel(runner, repoRoot, env)] as const),
+    (['claude', 'codex', 'opencode'] as const).map(async (runner) => [
+      runner,
+      (await readRunnerModelSettings(runner, repoRoot, env)).model,
+    ] as const),
   );
   return Object.fromEntries(entries.filter((entry): entry is readonly [RunnerId, string] => entry[1] !== undefined));
+}
+
+/** Read the provider that the agent itself will use for a bare model id. */
+export async function readAgentModelProvider(
+  runner: RunnerId,
+  repoRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  return (await readRunnerModelSettings(runner, repoRoot, env)).provider;
 }
