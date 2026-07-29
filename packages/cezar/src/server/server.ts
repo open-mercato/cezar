@@ -754,6 +754,11 @@ const acceptContestedHarnessSchema = z
   .object({ reason: z.string().trim().min(3).max(2_000) })
   .strict();
 
+/** Council quorum decision (council resilience 2026-07-29). */
+const councilDecisionSchema = z
+  .object({ action: z.enum(['retry', 'proceed']) })
+  .strict();
+
 // "Open in…" (#open-in / #365): `target` selects the app; `path` (optional, worktree-relative)
 // narrows the target's own worktree/repo-root default to one file — used by the diff pane's
 // "open in default app" action for images. Containment is re-checked server-side via
@@ -3560,6 +3565,68 @@ export function createApp(deps: ServerDeps) {
     // client's cached ledger without that row, so the panel said "accepted"
     // while Finish and Draft PR stayed disabled (review 2026-07-27).
     return c.json({ outcome: read.ledger.outcome, decisions: read.ledger.decisions });
+  });
+
+  /**
+   * Resolve a council paused below quorum (spec 2026-07-23-harness-orchestration,
+   * council resilience 2026-07-29): `retry` grants the failed reviewers one more
+   * paid attempt, `proceed` continues with the survivors — either way the
+   * decision is a ledger row and the run resumes through the ordinary
+   * hash-bound recovery path, so completed reviews are never re-paid.
+   */
+  api.post('/runs/:id/harness/council-decision', async (c) => {
+    const { dataDir, store, manager } = c.get('project');
+    const id = c.req.param('id');
+    const run = store.getRun(id);
+    if (!run) return c.json({ error: 'not found' }, 404);
+    if (!run.harness) return c.json({ error: 'run is not a harness run' }, 409);
+    const parsed = councilDecisionSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') }, 400);
+    }
+    const read = readLedger(dataDir, id);
+    if (read.status !== 'valid') {
+      return c.json(
+        {
+          error:
+            read.status === 'missing'
+              ? 'no harness ledger for this run'
+              : read.status === 'corrupt'
+                ? `harness ledger is corrupt: ${read.error}`
+                : `harness ledger version ${String(read.version)} is not supported`,
+        },
+        409,
+      );
+    }
+    const pending = read.ledger.outcome.pendingDecision;
+    if (read.ledger.outcome.status !== 'blocked' || pending?.kind !== 'council') {
+      return c.json({ error: 'this run has no council decision to make' }, 409);
+    }
+    if (parsed.data.action === 'proceed' && !pending.canProceed) {
+      return c.json(
+        { error: 'every reviewer failed — there is nothing to proceed with; retry instead' },
+        409,
+      );
+    }
+    read.ledger.decisions.push({
+      at: new Date().toISOString(),
+      kind: `council.${parsed.data.action}`,
+      by: 'user',
+      detail: `${pending.council}:${pending.round}`,
+    });
+    saveLedger(dataDir, id, read.ledger);
+    const resumed = manager.continueRun(id);
+    if (!resumed.ok) {
+      return c.json({ error: `decision recorded but the run could not resume: ${resumed.error}` }, 409);
+    }
+    store.appendEvent(id, {
+      type: 'note',
+      message:
+        parsed.data.action === 'retry'
+          ? `council decision: retry the failed reviewer(s) — ${pending.failed.map((f) => f.label).join(', ')}`
+          : `council decision: proceed with the ${pending.completedCount} completed reviewer(s), ignoring ${pending.failed.map((f) => f.label).join(', ')}`,
+    });
+    return c.json({ resumed: true, decisions: read.ledger.decisions });
   });
 
   api.post('/runs/:id/git/commit', async (c) => {

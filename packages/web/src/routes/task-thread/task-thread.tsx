@@ -63,7 +63,7 @@ import {
 import { HarnessModelsDock } from '../task-harness/harness-components'
 import { HarnessRail } from '../task-harness/harness-rail'
 import { HarnessStatusBar, HarnessTimeline } from '../task-harness/harness-status-bar'
-import { ReviewerDrawer } from '../task-harness/reviewer-drawer'
+import { ReviewerModal } from '../task-harness/reviewer-modal'
 import { RUN_RAIL_GRID, runShellClass } from './run-shell'
 import { mergeHarnessLedger } from '../task-harness/harness-state'
 
@@ -424,6 +424,7 @@ export function ThreadView({
           {harnessLedger ? (
             <HarnessRail
               ledger={harnessLedger}
+              runId={run.id}
               onOpenTimeline={() => setTimelineOpen((open) => !open)}
               onOpenReviewer={setOpenReviewer}
             />
@@ -446,7 +447,7 @@ export function ThreadView({
       </ThreadCardCache>
 
       {harnessLedger ? (
-        <ReviewerDrawer
+        <ReviewerModal
           runId={run.id}
           ledger={harnessLedger}
           reviewerId={openReviewer}

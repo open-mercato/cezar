@@ -44,7 +44,10 @@ function makeHarness(dir: string) {
   const events: Array<{ type: string; [k: string]: unknown }> = [];
   const steps = new Map<string, string>();
 
-  const agentBehavior = new Map<string, (req: HarnessAgentPhaseRequest) => string | null>();
+  const agentBehavior = new Map<
+    string,
+    (req: HarnessAgentPhaseRequest) => string | null | Promise<string | null>
+  >();
   const defaultResults: Record<string, unknown> = {
     qualify: { outcome: 'work_needed', evidence: 'bug reproduced on main' },
     diagnose: { summary: 'race in flushQueued', files: ['src/runs/store.ts'], regressionTest: 'store.replay-race' },
@@ -1997,6 +2000,164 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       ),
     ).toHaveLength(3);
   });
+
+  /* ---- council decisions (2026-07-29): quorum failures the user resolves ---- */
+
+  /** Advisors permanently down (an `opencode serve` outage): every council op
+   *  answers with both advisor members failed. */
+  const advisorsAlwaysFail = (h: ReturnType<typeof makeHarness>) => {
+    const councilCalls: string[][] = [];
+    h.setCouncilBehavior((ids) => {
+      councilCalls.push(ids);
+      return {
+        ok: true,
+        result: {
+          verdict: 'approve',
+          reviewers: ids.map((id) => ({ id, status: 'failed' })),
+        },
+      };
+    });
+    return councilCalls;
+  };
+
+  it('pauses below quorum with a decision instead of just dying', async () => {
+    const h = makeHarness(dir);
+    advisorsAlwaysFail(h);
+
+    const error = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
+
+    expect(error).toMatch(/did not reach quorum/);
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.outcome.status).toBe('blocked');
+    // The survivor (the claude session reviewer) makes "proceed" a real option.
+    expect(ledger?.outcome.pendingDecision).toMatchObject({
+      kind: 'council',
+      council: 'implementation',
+      round: 1,
+      completedCount: 1,
+      canProceed: true,
+    });
+    expect(ledger?.outcome.pendingDecision?.failed).toHaveLength(2);
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('paused for your decision'))).toBe(true);
+  });
+
+  it('a recorded proceed decision continues with the survivors, loudly', async () => {
+    const h = makeHarness(dir);
+    const councilCalls = advisorsAlwaysFail(h);
+    expect(await runHarnessDriver(h.host, threeReviewerInput, h.deps)).toMatch(/quorum/);
+    // Advisors auto-spend their second attempt on the next resume and fail
+    // again — exhausting the automatic budget before the decision applies.
+    expect(await runHarnessDriver(h.host, threeReviewerInput, h.deps)).toMatch(/quorum/);
+
+    const decided = loadLedger(h.host.dataDir, h.host.runId)!;
+    decided.decisions.push({
+      at: new Date().toISOString(),
+      kind: 'council.proceed',
+      by: 'user',
+      detail: 'implementation:1',
+    });
+    saveLedger(h.host.dataDir, h.host.runId, decided);
+
+    const resumed = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
+
+    expect(resumed).toBeNull();
+    expect(h.calls.map((c) => c.id)).toContain('stage');
+    // The decision never buys another advisor attempt — budget stayed at 2.
+    expect(councilCalls).toHaveLength(2);
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.outcome.status).toBe('ready');
+    expect(ledger?.outcome.pendingDecision).toBeUndefined();
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('proceeds WITHOUT quorum'))).toBe(true);
+  });
+
+  it('a recorded retry decision buys the failed reviewers one more attempt', async () => {
+    const h = makeHarness(dir);
+    const councilCalls: string[][] = [];
+    h.setCouncilBehavior((ids) => {
+      councilCalls.push(ids);
+      const succeed = councilCalls.length >= 3;
+      return {
+        ok: true,
+        result: {
+          verdict: 'approve',
+          reviewers: ids.map((id) => ({
+            id,
+            status: succeed ? 'completed' : 'failed',
+            ...(succeed ? { review: { verdict: 'approve', findings: [] } } : {}),
+          })),
+        },
+      };
+    });
+
+    expect(await runHarnessDriver(h.host, threeReviewerInput, h.deps)).toMatch(/quorum/);
+    expect(await runHarnessDriver(h.host, threeReviewerInput, h.deps)).toMatch(/quorum/);
+    // Budget of 2 spent: a plain resume must NOT pay for a third attempt.
+    expect(await runHarnessDriver(h.host, threeReviewerInput, h.deps)).toMatch(/quorum/);
+    expect(councilCalls).toHaveLength(2);
+
+    const decided = loadLedger(h.host.dataDir, h.host.runId)!;
+    decided.decisions.push({
+      at: new Date().toISOString(),
+      kind: 'council.retry',
+      by: 'user',
+      detail: 'implementation:1',
+    });
+    saveLedger(h.host.dataDir, h.host.runId, decided);
+
+    const resumed = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
+
+    expect(resumed).toBeNull();
+    expect(councilCalls).toHaveLength(3);
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.outcome.status).toBe('ready');
+  });
+
+  it('offers only retry when every reviewer failed', async () => {
+    const h = makeHarness(dir);
+    advisorsAlwaysFail(h);
+    h.agentBehavior.set('review', (req) => {
+      writeFileSync(req.resultPath, 'prose, not the contract', 'utf8');
+      return null;
+    });
+
+    const error = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
+
+    expect(error).toMatch(/did not reach quorum/);
+    const pending = loadLedger(h.host.dataDir, h.host.runId)?.outcome.pendingDecision;
+    expect(pending).toMatchObject({ kind: 'council', completedCount: 0, canProceed: false });
+    expect(pending?.failed).toHaveLength(3);
+  });
+
+  /** The runner-session pool and the advisor council must run CONCURRENTLY
+   *  (2026-07-29): the session reviewer here refuses to finish until the
+   *  advisor op has been observed starting. Under the old sequential order
+   *  that observation never happens and the flag stays false. */
+  it('launches the advisor council alongside the runner reviewers', async () => {
+    const h = makeHarness(dir);
+    let advisorStartedDuringSessionReview = false;
+    h.agentBehavior.set('review', async (req) => {
+      const deadline = Date.now() + 4_000;
+      while (Date.now() < deadline) {
+        if (h.ops.some((op) => op.id === 'review')) {
+          advisorStartedDuringSessionReview = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({ verdict: 'approve', findings: [] }),
+        'utf8',
+      );
+      return null;
+    });
+
+    const error = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
+
+    expect(error).toBeNull();
+    expect(advisorStartedDuringSessionReview).toBe(true);
+  }, 20_000);
 
   it('recovers a valid council result rejected by a shared subject-change false positive', async () => {
     const h = makeHarness(dir);

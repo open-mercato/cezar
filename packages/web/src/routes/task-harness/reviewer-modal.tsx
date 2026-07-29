@@ -1,19 +1,21 @@
-import { ChevronDownIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react'
+import { useState } from 'react'
 
-import { useHarnessInvocation } from '@/api/queries'
+import { useCouncilDecision, useHarnessInvocation } from '@/api/queries'
 import type {
   HarnessInvocationRecord,
   HarnessLedgerResponse,
 } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 
 import { elapsed, SeverityTag, toneOf } from './harness-components'
@@ -168,7 +170,7 @@ export function formatReviewResponse(raw: string | null): string | null {
   return out.join('\n')
 }
 
-export function ReviewerDrawer({
+export function ReviewerModal({
   runId,
   ledger,
   reviewerId,
@@ -187,21 +189,46 @@ export function ReviewerDrawer({
   )
   const open = reviewerId !== null && reviewer !== undefined
 
+  // A failed reviewer inside a paused council is actionable right here: the
+  // same decision endpoint the rail's banner uses, one click from the failure.
+  const pendingDecision = ledger.outcome.pendingDecision
+  const decision = useCouncilDecision(runId)
+  const retryable =
+    reviewer?.status === 'failed' &&
+    ledger.outcome.status === 'blocked' &&
+    pendingDecision?.kind === 'council'
+  const act = (action: 'retry' | 'proceed', done: string) => {
+    decision.mutate(action, {
+      onSuccess: () => {
+        toast(done)
+        onClose()
+      },
+      onError: (error) =>
+        toast(error instanceof Error ? error.message : 'could not resume the run', { tone: 'danger' }),
+    })
+  }
+  const retry = () => act('retry', 'Retrying the failed reviewer(s) — the run resumed')
+  const proceed = () =>
+    act('proceed', 'Proceeding with the completed reviewers — the run resumed')
+
   return (
-    <Sheet open={open} onOpenChange={(next: boolean) => (next ? undefined : onClose())}>
-      <SheetContent side="right" className="w-[min(560px,92vw)] gap-0 p-0" data-slot="harness-reviewer-drawer">
-        <SheetHeader className="border-b border-border px-4 py-3">
-          <SheetTitle className="flex items-center gap-2 text-sm">
+    <Dialog open={open} onOpenChange={(next: boolean) => (next ? undefined : onClose())}>
+      <DialogContent
+        className="flex max-h-[85vh] w-[min(760px,94vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[760px]"
+        data-slot="harness-reviewer-modal"
+      >
+        <DialogHeader className="border-b border-border px-5 py-4">
+          <DialogTitle className="flex items-center gap-2 text-sm">
             <StatusDot tone={toneOf(reviewer?.status)} />
             {model?.model || shortModelName(reviewerId ?? '')}
             <span className="inline-flex h-[19px] items-center rounded-full bg-muted px-2 text-[10.5px] font-semibold text-muted-foreground">
               {model?.family ?? 'unknown'}
             </span>
-          </SheetTitle>
-          <SheetDescription className="font-mono text-[11px]">
+          </DialogTitle>
+          <DialogDescription className="font-mono text-[11px]">
             {model?.binding ?? reviewer?.model ?? reviewerId}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="grid grid-cols-3 gap-px border-b border-border bg-border">
           {[
@@ -209,7 +236,7 @@ export function ReviewerDrawer({
             ['Invocations', String(model?.invocations ?? invocations.length)],
             ['Duration', model && model.totalDurationMs > 0 ? elapsed(model.totalDurationMs) : '—'],
           ].map(([label, value]) => (
-            <div key={label} className="bg-card px-4 py-2.5">
+            <div key={label} className="bg-card px-5 py-2.5">
               <span className="block text-[10px] tracking-[0.05em] text-soft-foreground uppercase">
                 {label}
               </span>
@@ -218,11 +245,38 @@ export function ReviewerDrawer({
           ))}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {reviewer?.reason ? (
-            <p className="mb-3 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
-              {reviewer.reason}
-            </p>
+            <div className="mb-3 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2.5">
+              <p className="text-xs leading-relaxed text-danger">{reviewer.reason}</p>
+              {retryable ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 text-xs"
+                    disabled={decision.isPending}
+                    onClick={retry}
+                    data-slot="reviewer-retry"
+                  >
+                    <RotateCcwIcon aria-hidden="true" className="size-3.5" />
+                    {decision.isPending ? 'Resuming…' : 'Retry the failed reviewer(s)'}
+                  </Button>
+                  {pendingDecision?.canProceed ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-muted-foreground"
+                      disabled={decision.isPending}
+                      onClick={proceed}
+                      data-slot="reviewer-proceed"
+                    >
+                      Continue without this reviewer
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
           <ReviewerConversation runId={runId} invocations={invocations} />
@@ -281,7 +335,7 @@ export function ReviewerDrawer({
             </>
           ) : null}
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   )
 }

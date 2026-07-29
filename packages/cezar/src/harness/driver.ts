@@ -1890,6 +1890,108 @@ export async function runHarnessDriver(
     return { mode: mode === 'all-required' ? 'all-required' : 'quorum' };
   };
 
+  /* ---- council decisions (user-resolvable quorum failures) ---------------- */
+
+  type CouncilKind = 'spec' | 'implementation';
+  const councilDecisionKey = (council: CouncilKind, round: number) => `${council}:${round}`;
+  /** Each explicit user retry grants every failed reviewer of that round ONE
+   *  more attempt beyond the automatic budget of 2 — recorded as a ledger
+   *  decision, so a resumed process reaches the same bound deterministically. */
+  const councilRetryAllowance = (council: CouncilKind, round: number): number =>
+    ledger.decisions.filter(
+      (d) => d.kind === 'council.retry' && d.detail === councilDecisionKey(council, round),
+    ).length;
+  const councilProceedAccepted = (council: CouncilKind, round: number): boolean =>
+    ledger.decisions.some(
+      (d) => d.kind === 'council.proceed' && d.detail === councilDecisionKey(council, round),
+    );
+
+  /**
+   * The council gate a quorum failure passes through before it may end the run.
+   *
+   * A council below quorum used to return an error outright — one dead
+   * transport (an `opencode serve` outage, a free-tier model that never
+   * answers) voided every completed review alongside it. Now the failure
+   * PAUSES the run with a decision the user can actually make: retry the
+   * failed reviewers (another paid attempt) or proceed with the survivors
+   * (recorded, loud, degraded). Only a council with NO survivors keeps
+   * retry as its single exit.
+   */
+  const resolveCouncilGate = (
+    council: CouncilKind,
+    round: number,
+    outcomes: readonly CouncilOutcome[],
+    phaseId: string,
+  ): { proceed: true; waived: boolean } | { proceed: false; error: string } => {
+    // A resolved pause must not shadow the eventual result: staging only
+    // promotes a PENDING outcome to ready, so the stored blocked-for-decision
+    // outcome is cleared the moment this council passes its gate again.
+    const clearCouncilPause = () => {
+      if (
+        ledger.outcome.status === 'blocked' &&
+        ledger.outcome.pendingDecision?.kind === 'council' &&
+        ledger.outcome.pendingDecision.council === council &&
+        ledger.outcome.pendingDecision.round === round
+      ) {
+        setOutcome({ status: 'pending', blockingReasons: [] });
+      }
+    };
+    const quorum = councilQuorum(outcomes, resolvedCouncilPolicy());
+    if (quorum.ok) {
+      if (quorum.degraded) {
+        host.emit({
+          type: 'note',
+          stepId: phaseId,
+          message: `${council} council ran DEGRADED — ${quorum.completed.length} of ${outcomes.length} reviewers completed; missing: ${quorum.failed
+            .map((f) => `${f.label} (${f.reason ?? 'no valid review'})`)
+            .join('; ')}`,
+        });
+      }
+      clearCouncilPause();
+      return { proceed: true, waived: false };
+    }
+    const completed = outcomes.filter((o) => o.status === 'completed');
+    const failed = outcomes.filter((o) => o.status === 'failed');
+    if (completed.length > 0 && councilProceedAccepted(council, round)) {
+      clearCouncilPause();
+      host.emit({
+        type: 'note',
+        stepId: phaseId,
+        message:
+          `${council} council proceeds WITHOUT quorum on the user's recorded decision — ` +
+          `${completed.length} of ${outcomes.length} reviewers completed; ignored: ${failed
+            .map((f) => f.label)
+            .join(', ')}`,
+      });
+      return { proceed: true, waived: true };
+    }
+    const reason = `${council} council did not reach quorum: ${quorum.reason}`;
+    setOutcome({
+      status: 'blocked',
+      blockingReasons: [reason],
+      pendingDecision: {
+        kind: 'council',
+        council,
+        round,
+        failed: failed.map((f) => ({
+          label: f.label,
+          ...(f.reason ? { reason: f.reason } : {}),
+        })),
+        completedCount: completed.length,
+        canProceed: completed.length > 0,
+      },
+    });
+    host.emit({
+      type: 'note',
+      stepId: phaseId,
+      message:
+        `${council} council is below quorum and the run is paused for your decision: ` +
+        `retry the failed reviewer(s)${completed.length > 0 ? ' or proceed with the survivors' : ''}. ` +
+        `Completed work is preserved either way.`,
+    });
+    return { proceed: false, error: reason };
+  };
+
   const runAdvisorCouncilOp = async (op: {
     kindTag: string;
     round: number;
@@ -1904,6 +2006,8 @@ export async function runHarnessDriver(
     }>;
     criteriaText: string;
     artifact?: string;
+    /** Extra attempts granted by recorded `council.retry` decisions. */
+    retryAllowance?: number;
   }): Promise<{ rows: Array<Record<string, unknown>>; error: string | null } | null> => {
     const configSource = ledger.trustedConfig?.path ?? join(host.cwd, '.ai', 'agentic.config.json');
     const rows: Array<Record<string, unknown>> = [];
@@ -2028,7 +2132,7 @@ export async function runHarnessDriver(
           });
           continue;
         }
-        if (attemptsForInput(id, inputSha256) >= 2) {
+        if (attemptsForInput(id, inputSha256) >= 2 + (op.retryAllowance ?? 0)) {
           rows.push({
             id: member.label,
             runner: 'harness',
@@ -3225,8 +3329,10 @@ export async function runHarnessDriver(
           // Reviewers fan out (2026-07-25, parity with the om runtime's
           // `pool(profile.reviewers, maxParallel)`): they are independent fresh
           // contexts over the same read-only subject, so serializing them only
-          // multiplied the wall clock by the reviewer count.
-          await pool(specRunnerReviewers, MAX_PARALLEL_REVIEWERS, async (reviewer, idx) => {
+          // multiplied the wall clock by the reviewer count. The advisor
+          // council launches alongside this pool (2026-07-29) for the same
+          // reason — the groups share nothing but the read-only subject.
+          const specRunnerWork = pool(specRunnerReviewers, MAX_PARALLEL_REVIEWERS, async (reviewer, idx) => {
             if (host.isCancelled()) return;
             const label = roleRefId(reviewer);
             const resultPath = join(artifactDir, `phase-${councilId}-r${idx + 1}-result.json`);
@@ -3256,7 +3362,8 @@ export async function runHarnessDriver(
             const priorAttempts = attemptsForInput(invocationId, inputSha256);
             for (
               let attempt = priorAttempts + 1;
-              attempt <= 2 && parsed === null;
+              // A recorded `council.retry` decision extends the budget of 2.
+              attempt <= 2 + councilRetryAllowance('spec', sround) && parsed === null;
               attempt += 1
             ) {
               const attemptPrompt =
@@ -3357,21 +3464,27 @@ export async function runHarnessDriver(
               council: { round: sround, kind: 'spec', reviewers: councilReviewers, verdict: null },
             });
           });
-          if (specCouncilMembers.length > 0 && !host.isCancelled()) {
-            const advisorRun = await runAdvisorCouncilOpWithRetry({
-              kindTag: 'spec',
-              round: sround,
-              members: specCouncilMembers,
-              criteriaText: `${[
-                  `Spec council criteria (run ${host.runId}).`,
-                  ``,
-                  `The subject is the feature SPECIFICATION at ${specPath} — not a code diff.`,
-                  `Feature brief: ${input.task}`,
-                  ``,
-                  `Judge risks, backward compatibility, gaps, implementation-readiness, and simplicity.`,
-                ].join('\n')}${councilBoundaryAppendix}`,
-              artifact: join(host.cwd, specPath),
-            });
+          const specAdvisorWork =
+            specCouncilMembers.length > 0 && !host.isCancelled()
+              ? runAdvisorCouncilOpWithRetry({
+                  kindTag: 'spec',
+                  round: sround,
+                  members: specCouncilMembers,
+                  retryAllowance: councilRetryAllowance('spec', sround),
+                  criteriaText: `${[
+                      `Spec council criteria (run ${host.runId}).`,
+                      ``,
+                      `The subject is the feature SPECIFICATION at ${specPath} — not a code diff.`,
+                      `Feature brief: ${input.task}`,
+                      ``,
+                      `Judge risks, backward compatibility, gaps, implementation-readiness, and simplicity.`,
+                    ].join('\n')}${councilBoundaryAppendix}`,
+                  artifact: join(host.cwd, specPath),
+                })
+              : null;
+          await specRunnerWork;
+          if (specAdvisorWork !== null) {
+            const advisorRun = await specAdvisorWork;
             if (advisorRun === null) return null;
             if (advisorRun.error) {
               for (const member of specCouncilMembers) {
@@ -3400,10 +3513,9 @@ export async function runHarnessDriver(
               }
             }
           }
-          const quorum = councilQuorum(outcomes, resolvedCouncilPolicy());
-          if (!quorum.ok) {
-            const error = `spec council did not reach quorum: ${quorum.reason}`;
-            finishPhase(ledger, councilId, 'failed', error);
+          const gate = resolveCouncilGate('spec', sround, outcomes, councilId);
+          if (!gate.proceed) {
+            finishPhase(ledger, councilId, 'failed', gate.error);
             upsertCouncil('spec', sround, {
               round: sround,
               kind: 'spec',
@@ -3411,18 +3523,9 @@ export async function runHarnessDriver(
               verdict: null,
             });
             persist();
-            host.setStepStatus(councilId, 'failed', error);
+            host.setStepStatus(councilId, 'failed', gate.error);
             emitPhase(councilId);
-            return error;
-          }
-          if (quorum.degraded) {
-            host.emit({
-              type: 'note',
-              stepId: councilId,
-              message: `spec council ran DEGRADED — ${quorum.completed.length} of ${outcomes.length} reviewers completed; missing: ${quorum.failed
-                .map((f) => `${f.label} (${f.reason ?? 'no valid review'})`)
-                .join('; ')}`,
-            });
+            return gate.error;
           }
           const byKey = new Map<string, AttributedFinding>();
           for (const entry of councilReviewers) {
@@ -4012,8 +4115,11 @@ export async function runHarnessDriver(
         const runnerReviewers = implSplit.sessions;
         const implCouncilMembers = implSplit.members;
         // Same fan-out as the spec council: independent fresh contexts over
-        // one read-only subject, so they run side by side (2026-07-25).
-        await pool(runnerReviewers, MAX_PARALLEL_REVIEWERS, async (reviewer, idx) => {
+        // one read-only subject, so they run side by side (2026-07-25) — and
+        // the advisor council launches ALONGSIDE this pool (2026-07-29): the
+        // two groups review the same read-only subject, so serializing them
+        // only added the slower group's wall clock to the faster one's.
+        const runnerReviewerWork = pool(runnerReviewers, MAX_PARALLEL_REVIEWERS, async (reviewer, idx) => {
           if (host.isCancelled()) return;
           const label = roleRefId(reviewer);
           const resultPath = join(artifactDir, `phase-${reviewId}-r${idx + 1}-result.json`);
@@ -4046,7 +4152,8 @@ export async function runHarnessDriver(
           const priorAttempts = attemptsForInput(invocationId, inputSha256);
           for (
             let attempt = priorAttempts + 1;
-            attempt <= 2 && parsed === null;
+            // A recorded `council.retry` decision extends the budget of 2.
+            attempt <= 2 + councilRetryAllowance('implementation', round) && parsed === null;
             attempt += 1
           ) {
             const attemptPrompt =
@@ -4146,28 +4253,34 @@ export async function runHarnessDriver(
             council: { round, kind: 'implementation', reviewers: councilReviewers, verdict: null },
           });
         });
-        if (implCouncilMembers.length > 0 && !host.isCancelled()) {
-          // Advisor reviewers (spec 2026-07-24-advisor-reviewers): one
-          // packet-less runtime council over the worktree diff — the same
-          // subject the runner sessions reviewed.
-          const advisorRun = await runAdvisorCouncilOpWithRetry({
-            kindTag: 'impl',
-            round,
-            members: implCouncilMembers,
-            criteriaText: `${[
-                `Role-based cezar council criteria (run ${host.runId}).`,
-                ``,
-                `The task under review: ${input.task}`,
-                `Validation gate: ${
-                  ledger.validation.length === 0
-                    ? 'no commands configured'
-                    : ledger.validation.map((c) => `${c.command} → ${c.status}${c.preexisting ? ' (failed at baseline too — tolerated as pre-existing)' : ''}`).join('; ')
-                }`,
-                `Validation evidence sha256: ${validationEvidenceSha256}`,
-                ``,
-                `Review the worktree's uncommitted diff (the subject) against these facts.`,
-              ].join('\n')}${priorRoundsAppendix()}${councilBoundaryAppendix}`,
-          });
+        // Advisor reviewers (spec 2026-07-24-advisor-reviewers): one
+        // packet-less runtime council over the worktree diff — the same
+        // subject the runner sessions reviewed, launched concurrently with them.
+        const advisorWork =
+          implCouncilMembers.length > 0 && !host.isCancelled()
+            ? runAdvisorCouncilOpWithRetry({
+                kindTag: 'impl',
+                round,
+                members: implCouncilMembers,
+                retryAllowance: councilRetryAllowance('implementation', round),
+                criteriaText: `${[
+                    `Role-based cezar council criteria (run ${host.runId}).`,
+                    ``,
+                    `The task under review: ${input.task}`,
+                    `Validation gate: ${
+                      ledger.validation.length === 0
+                        ? 'no commands configured'
+                        : ledger.validation.map((c) => `${c.command} → ${c.status}${c.preexisting ? ' (failed at baseline too — tolerated as pre-existing)' : ''}`).join('; ')
+                    }`,
+                    `Validation evidence sha256: ${validationEvidenceSha256}`,
+                    ``,
+                    `Review the worktree's uncommitted diff (the subject) against these facts.`,
+                  ].join('\n')}${priorRoundsAppendix()}${councilBoundaryAppendix}`,
+              })
+            : null;
+        await runnerReviewerWork;
+        if (advisorWork !== null) {
+          const advisorRun = await advisorWork;
           if (advisorRun === null) return null;
           if (advisorRun.error) {
             for (const member of implCouncilMembers) {
@@ -4201,10 +4314,9 @@ export async function runHarnessDriver(
             });
           }
         }
-        const quorum = councilQuorum(outcomes, resolvedCouncilPolicy());
-        if (!quorum.ok) {
-          const error = `review council did not reach quorum: ${quorum.reason}`;
-          finishPhase(ledger, reviewId, 'failed', error);
+        const gate = resolveCouncilGate('implementation', round, outcomes, reviewId);
+        if (!gate.proceed) {
+          finishPhase(ledger, reviewId, 'failed', gate.error);
           upsertCouncil('implementation', round, {
             round,
             kind: 'implementation',
@@ -4212,18 +4324,9 @@ export async function runHarnessDriver(
             verdict: null,
           });
           persist();
-          host.setStepStatus(reviewId, 'failed', error);
+          host.setStepStatus(reviewId, 'failed', gate.error);
           emitPhase(reviewId);
-          return error;
-        }
-        if (quorum.degraded) {
-          host.emit({
-            type: 'note',
-            stepId: reviewId,
-            message: `review council ran DEGRADED — ${quorum.completed.length} of ${outcomes.length} reviewers completed; missing: ${quorum.failed
-              .map((f) => `${f.label} (${f.reason ?? 'no valid review'})`)
-              .join('; ')}`,
-          });
+          return gate.error;
         }
         const byKey = new Map<string, AttributedFinding>();
         for (const entry of councilReviewers) {

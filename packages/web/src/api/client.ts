@@ -370,6 +370,20 @@ export function getHarnessInvocation(
   )
 }
 
+/** Resolve a council paused below quorum: `retry` buys the failed reviewers one
+ *  more attempt, `proceed` continues with the survivors. Recorded in the ledger
+ *  and the run resumes immediately (council resilience 2026-07-29). */
+export function councilDecision(
+  id: string,
+  action: 'retry' | 'proceed',
+): Promise<{ resumed: boolean; decisions?: HarnessLedgerResponse['decisions'] }> {
+  return mutate<{ resumed: boolean; decisions?: HarnessLedgerResponse['decisions'] }>(
+    'POST',
+    runPath(id, '/harness/council-decision'),
+    { action },
+  )
+}
+
 /** Explicitly accept a contested harness result before publishing it. The reason is retained
  *  in the durable ledger; this is intentionally separate from commit/push/PR actions. */
 export function acceptContestedHarness(

@@ -1,6 +1,9 @@
+import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { HarnessLedgerResponse } from '@open-mercato/cezar-api-client'
+
+import { createQueryClient } from '@/api/query-client'
 
 import { HarnessRail } from './harness-rail'
 
@@ -157,5 +160,65 @@ describe('HarnessRail council tile', () => {
       document.querySelectorAll('[data-slot="harness-rail-reviewer"]'),
     ).toHaveLength(0)
     expect(screen.getAllByText('gpt-5.6-luna').length).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * Council resilience (2026-07-29): a council paused below quorum surfaces its
+ * two exits — retry the failed reviewers, or proceed with the survivors —
+ * right under the reviewer rows. Proceed only exists when someone survived,
+ * and the card never renders without a runId to act on.
+ */
+describe('HarnessRail council decision card', () => {
+  const council = (reviewers: Array<Record<string, unknown>>) =>
+    [{ round: 1, kind: 'implementation', reviewers, verdict: null }] as unknown as
+      HarnessLedgerResponse['councils']
+  const paused = (over: Partial<HarnessLedgerResponse['outcome']['pendingDecision']> = {}) =>
+    ledger({
+      councils: council([
+        { id: 'claude/opus', status: 'completed', verdict: 'approve', findings: [] },
+        { id: 'cez-codex-gpt', status: 'failed', reason: 'transport died' },
+      ]),
+      outcome: {
+        status: 'blocked',
+        blockingReasons: ['implementation council did not reach quorum'],
+        pendingDecision: {
+          kind: 'council',
+          council: 'implementation',
+          round: 1,
+          failed: [{ label: 'cez-codex-gpt', reason: 'transport died' }],
+          completedCount: 1,
+          canProceed: true,
+          ...over,
+        },
+      } as HarnessLedgerResponse['outcome'],
+    })
+  const renderRail = (l: HarnessLedgerResponse, runId?: string) =>
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <HarnessRail ledger={l} runId={runId} />
+      </QueryClientProvider>,
+    )
+
+  it('offers retry and proceed when survivors exist', () => {
+    renderRail(paused(), 'r1')
+
+    expect(document.querySelector('[data-slot="council-decision"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="council-retry"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="council-proceed"]')).not.toBeNull()
+    expect(screen.getByText(/produced no review/).textContent).toContain('1 review completed')
+  })
+
+  it('offers only retry when every reviewer failed', () => {
+    renderRail(paused({ completedCount: 0, canProceed: false }), 'r1')
+
+    expect(document.querySelector('[data-slot="council-retry"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="council-proceed"]')).toBeNull()
+  })
+
+  it('stays read-only without a runId to act on', () => {
+    renderRail(paused())
+
+    expect(document.querySelector('[data-slot="council-decision"]')).toBeNull()
   })
 })

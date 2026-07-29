@@ -1,12 +1,15 @@
-import { BotIcon, ShieldCheckIcon, WaypointsIcon } from 'lucide-react'
+import { BotIcon, RotateCcwIcon, ShieldCheckIcon, WaypointsIcon } from 'lucide-react'
 
+import { useCouncilDecision } from '@/api/queries'
 import type { HarnessLedgerResponse, HarnessPhaseRecord } from '@open-mercato/cezar-api-client'
 import { Pill } from '@/components/pill'
 import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 
 import { elapsed, phaseLabel, toneOf } from './harness-components'
-import { activeHarnessPhase, blockingReasonList, displayedCouncil } from './harness-state'
+import { activeHarnessPhase, blockingReasonList, displayedCouncil, shortModelName } from './harness-state'
 
 /**
  * The run rail (review 2026-07-27, findings A2 + B1).
@@ -22,10 +25,13 @@ import { activeHarnessPhase, blockingReasonList, displayedCouncil } from './harn
  */
 export function HarnessRail({
   ledger,
+  runId,
   onOpenTimeline,
   onOpenReviewer,
 }: {
   ledger: HarnessLedgerResponse
+  /** Enables the council decision actions; without it the rail is read-only. */
+  runId?: string
   onOpenTimeline?: () => void
   onOpenReviewer?: (id: string) => void
 }) {
@@ -37,9 +43,77 @@ export function HarnessRail({
       className="sticky hidden flex-col gap-3 self-start overflow-y-auto xl:flex top-[calc(var(--run-header-h,0px)+0.75rem)] max-h-[calc(100dvh-var(--run-header-h,0px)-1.5rem)] [scrollbar-width:thin]"
     >
       <PhaseSection ledger={ledger} onOpenTimeline={onOpenTimeline} />
-      <CouncilSection ledger={ledger} onOpenReviewer={onOpenReviewer} />
+      <CouncilSection ledger={ledger} runId={runId} onOpenReviewer={onOpenReviewer} />
       <ModelsSection ledger={ledger} />
     </aside>
+  )
+}
+
+/**
+ * A council paused below quorum, with the two exits the driver honors: another
+ * paid attempt for the failed reviewers, or proceeding with the survivors.
+ * Lives directly under the reviewer rows so the failure and the remedy share
+ * one glance (council resilience 2026-07-29).
+ */
+export function CouncilDecisionCard({
+  runId,
+  ledger,
+}: {
+  runId: string
+  ledger: HarnessLedgerResponse
+}) {
+  const decision = useCouncilDecision(runId)
+  const pending = ledger.outcome.pendingDecision
+  if (ledger.outcome.status !== 'blocked' || pending?.kind !== 'council') return null
+  const act = (action: 'retry' | 'proceed') =>
+    decision.mutate(action, {
+      onSuccess: () =>
+        toast(
+          action === 'retry'
+            ? 'Retrying the failed reviewer(s) — the run resumed'
+            : 'Proceeding with the completed reviewers — the run resumed',
+        ),
+      onError: (error) =>
+        toast(error instanceof Error ? error.message : 'could not resume the run', { tone: 'danger' }),
+    })
+  return (
+    <div
+      data-slot="council-decision"
+      className="mt-2 rounded-lg border border-danger/40 bg-danger/5 px-2.5 py-2"
+    >
+      <p className="text-[11px] leading-snug text-muted-foreground">
+        Below quorum — {pending.failed.map((f) => shortModelName(f.label)).join(', ')} produced no
+        review.{' '}
+        {pending.canProceed
+          ? `${pending.completedCount} review${pending.completedCount === 1 ? '' : 's'} completed and preserved.`
+          : 'No reviewer completed.'}
+      </p>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6.5 gap-1 px-2 text-[11px]"
+          disabled={decision.isPending}
+          onClick={() => act('retry')}
+          data-slot="council-retry"
+        >
+          <RotateCcwIcon aria-hidden="true" className="size-3" />
+          {decision.isPending ? 'Resuming…' : 'Retry'}
+        </Button>
+        {pending.canProceed ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6.5 px-2 text-[11px] text-muted-foreground"
+            disabled={decision.isPending}
+            onClick={() => act('proceed')}
+            data-slot="council-proceed"
+          >
+            Continue without {pending.failed.length === 1 ? 'it' : 'them'}
+          </Button>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -158,15 +232,21 @@ function PhaseSection({
 
 function CouncilSection({
   ledger,
+  runId,
   onOpenReviewer,
 }: {
   ledger: HarnessLedgerResponse
+  runId?: string
   onOpenReviewer?: (id: string) => void
 }) {
   const council = displayedCouncil(ledger)
   if (!council) return null
   const reviewers = council.reviewers ?? []
-  const blocked = ledger.outcome.status === 'contested' || ledger.outcome.status === 'blocked'
+  const pendingCouncilDecision =
+    ledger.outcome.status === 'blocked' && ledger.outcome.pendingDecision?.kind === 'council'
+  const blocked =
+    !pendingCouncilDecision &&
+    (ledger.outcome.status === 'contested' || ledger.outcome.status === 'blocked')
 
   return (
     <Section
@@ -226,6 +306,7 @@ function CouncilSection({
           )
         })}
       </ul>
+      {pendingCouncilDecision && runId ? <CouncilDecisionCard runId={runId} ledger={ledger} /> : null}
       {blocked ? (
         <p className="mt-2 rounded-md border-l-2 border-danger bg-danger/5 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
           <span className="font-semibold text-danger">Publishing blocked.</span>{' '}

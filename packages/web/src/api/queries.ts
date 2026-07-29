@@ -9,6 +9,7 @@ import {
   browseFs,
   checkoutProject,
   continueRun,
+  councilDecision,
   editQueuedMessage,
   getAgentConfig,
   getAgentConfigFile,
@@ -541,6 +542,21 @@ export function useAcceptContestedHarness(id: string) {
           return { ...ledger, outcome, ...(rows ? { decisions: rows } : {}) }
         },
       )
+    },
+  })
+}
+
+/** Resolve a paused council: retry the failed reviewers or proceed with the
+ *  survivors. The run resumes server-side, so the run + ledger queries are
+ *  invalidated rather than patched — the driver rewrites both immediately. */
+export function useCouncilDecision(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (action: 'retry' | 'proceed') => councilDecision(id, action),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.detail(id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })
     },
   })
 }

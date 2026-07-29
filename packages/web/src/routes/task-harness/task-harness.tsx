@@ -45,7 +45,7 @@ import { RunHeader } from '../task-thread/run-header'
 import { elapsed, SeverityTag, toneOf } from './harness-components'
 import { HarnessRail } from './harness-rail'
 import { HarnessStatusBar, HarnessTimeline } from './harness-status-bar'
-import { ReviewerDrawer } from './reviewer-drawer'
+import { ReviewerModal } from './reviewer-modal'
 import { RUN_RAIL_GRID, runShellClass } from '../task-thread/run-shell'
 import {
   blockingReasonList,
@@ -138,12 +138,13 @@ function HarnessPage({
           <div className="flex min-w-0 flex-col gap-3">{children}</div>
           <HarnessRail
             ledger={ledger}
+            runId={run.id}
             onOpenTimeline={() => setTimelineOpen((open) => !open)}
             onOpenReviewer={setOpenReviewer}
           />
         </div>
       </main>
-      <ReviewerDrawer
+      <ReviewerModal
         runId={run.id}
         ledger={ledger}
         reviewerId={openReviewer}

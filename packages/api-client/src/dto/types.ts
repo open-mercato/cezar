@@ -1232,12 +1232,25 @@ export interface HarnessDecisionRecord {
   [key: string]: unknown
 }
 
+/** A blocked outcome the user can resolve from the cockpit (council resilience
+ *  2026-07-29): a review council below quorum with survivors. */
+export interface HarnessCouncilPendingDecision {
+  kind: 'council'
+  council: 'spec' | 'implementation'
+  round: number
+  failed: Array<{ label: string; reason?: string }>
+  completedCount: number
+  canProceed: boolean
+  [key: string]: unknown
+}
+
 export interface HarnessOutcomeRecord {
   status: 'pending' | 'ready' | 'blocked' | 'contested' | 'no-action'
   blockingReasons: string[]
   acceptedAt?: string
   acceptedBy?: 'user'
   acceptanceReason?: string
+  pendingDecision?: HarnessCouncilPendingDecision
   [key: string]: unknown
 }
 

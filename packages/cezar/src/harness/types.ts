@@ -164,6 +164,23 @@ const harnessOutcomeSchema = z
     acceptedAt: z.string().optional(),
     acceptedBy: z.literal('user').optional(),
     acceptanceReason: z.string().optional(),
+    /** A blocked outcome the USER can resolve: a council below quorum with
+     *  survivors. The UI offers "retry the failed reviewers" / "proceed with
+     *  the survivors"; the decision endpoint records the choice and resumes
+     *  the run. Absent on every other blocked outcome. */
+    pendingDecision: z
+      .object({
+        kind: z.literal('council'),
+        council: z.enum(['spec', 'implementation']),
+        round: z.number().int().min(1),
+        failed: z.array(
+          z.object({ label: z.string(), reason: z.string().optional() }),
+        ),
+        completedCount: z.number().int().min(0),
+        /** False when every reviewer failed — there is nothing to proceed WITH. */
+        canProceed: z.boolean(),
+      })
+      .optional(),
   })
   .passthrough();
 
