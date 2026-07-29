@@ -67,7 +67,7 @@ is internal for now — installable by others once its surface settles.
   - *Model presets* ARE duplicated (`cezar/src/core/model-presets.ts` vs `web/src/routes/new-task-form.ts`), and the two tables disagree on codex ids — but **it is not a live bug**: the web guard is only reachable through `modelsForRunner`, which returns early for every non-codex runner, and on the codex path both implementations agree. Consolidating it is **blocked by sequencing note 3**: `packages/cezar` has the api-client as a *devDependency* only, so moving runtime code there would give the published CLI an unresolvable import. Do it when the api-client is published.
   - Done here instead: retargeted six comments still pointing at the pre-monorepo `web/app/src/...` layout, and corrected the banner's claim that a cockpit twin keeps it in step.
 - [x] 6a. **Broke the `HealthResponse` cycle** — the precondition for retiring the DTOs. `server.ts` imported `HealthResponse` *from the api-client* and annotated `readHealth` with it, so `/health`'s route type was the hand-written DTO reported back as if the server had proven it. `healthSnapshot` is now unannotated (its literal defines the shape) and the other four sites derive `HealthPayload` from it. `server.ts` no longer imports the api-client at all; the `Exact<>` drift guard still passes, so the inferred shape matches the DTO exactly.
-- [ ] 6b. **Delete `dto/types.ts` (48 KB, 118 exports) + `api-types.test.ts`.**
+- [x] 6b. **Deleted.** `dto/types.ts` is gone; `api-types.test.ts` shrank from 58 assertions to the two SSE shapes that have no route to derive from.
   - **Where the derived aliases go: `packages/web/src/api/types.ts`, not the api-client.** The api-client builds BEFORE `packages/cezar`, so importing `AppType` there inverts the build order. (`packages/cezar/src` no longer imports the api-client at all as of 6a — only its tests do, and the build config excludes tests — so the order *could* be flipped instead, keeping all 164 web import sites untouched. Rejected for now: it makes the browser package's types depend on the server package and touches the release/CI pipeline. Worth revisiting if the 164-site rewrite proves noisy.) The api-client keeps `client.ts`, `protocol/*`, `utils/*` and the two SSE frame types — the things that genuinely are not HTTP-typed.
   - **Order matters, and the obvious check is vacuous.** `client.ts`'s 74 functions still DECLARE their DTO return type, so `Awaited<ReturnType<typeof getRun>>` is that DTO by construction and proves nothing. The annotations must come off FIRST, then each alias derives from the route. Compare against the server directly — `Ok<Awaited<ReturnType<typeof client.api.v1….$get>>>` — and assert MUTUAL assignability, not one-way.
   - **First measurement, 4 types:** `WorkflowsResponse` and `ConfigResponse` are exact. `ApiRun` and `ProjectsResponse` are **wider than the server's actual return** — safe for readers, but anything CONSTRUCTING one (test fixtures, mocks) may stop compiling when the narrower inferred type replaces it. Expect that to be the bulk of the work, not the aliasing itself. Surveyed: **105 are response-derivable** from `AppType`, 11 request-derivable, 7 are dead exports nothing imports, and **2 cannot be derived** — `RunEvent` and `CheckoutProgressEvent` are SSE frame payloads, which Hono types as `text/event-stream`, so they stay hand-mirrored next to `protocol/`. Remaining blocker: `GroupResponse`/`GroupVariant`/`PickVariantResponse` are declared in `server.ts` and re-mirrored, so they need to become inferred-from-handler first. Note the derived aliases cannot live in the api-client — it builds *before* `packages/cezar`, so importing `AppType` there would invert the build order.
@@ -95,7 +95,7 @@ is internal for now — installable by others once its surface settles.
   - **For 6b:** `/skills/importable` infers `description: string | undefined` while `ImportableSkill` declares `description?: string`. The handler always writes the key (`{ name, description: skill.description }`), so the DTO describes the WIRE (JSON.stringify omits it) and the inferred type describes the object. One-line fix at the source before deriving: spread the key conditionally.
 - [x] 5. **Configurable base URL — done.** `setApiBaseUrl`/`getApiBaseUrl` in the api-client; `apiPath`, `apiBase` and `resolveApiUrl` all compose it, and the typed client resolves it per request (the module is imported before boot configures it, and a `<meta>`-configured deployment must still take effect). The web resolves it in `main.tsx` from `<meta name="cez-api-base">` — run time, wins — falling back to `VITE_CEZ_API_BASE` at build time, defaulting to same-origin. `.env.example` documents it. Covers a full origin, a reverse-proxy path prefix, and re-basing URLs stored in old transcripts without double-prefixing.
 
-### Phase 3z — zod-first contract (owner decision, 2026-07-28) — **not started**
+### Phase 3z — zod-first contract (owner decision, 2026-07-28) — **DONE**
 
 Supersedes 6b's "derive the aliases" plan. Every DTO becomes a **zod definition**, its TypeScript
 type inferred from it, and the same definitions are usable by the server (validation), the web
@@ -152,16 +152,16 @@ Still to do centrally (deliberately not delegated — `server.ts`, `contract/ind
 `contract/index.ts`, delete its hand-written declarations from `dto/types.ts` (only the 6 health
 types are gone so far, of 118), and apply the remaining handler fixes.
 
-- [ ] 1. Extract the ~29 existing request schemas out of `server.ts` into `src/contract/`.
-- [ ] 2. Write the ~105 response schemas — the bulk of the work. None exist today; every response
+- [x] 1. Request schemas live in `packages/contract` (its own workspace package, private).
+- [x] 2. Response schemas written — 9 families. (Was: the bulk of the work; none existed, every response
        shape is currently inferred from the handler's object literal.
-- [ ] 3. **Type each handler's payload BY its schema** (`z.infer<typeof x>`), not merely alongside
+- [x] 3. **Handlers are typed by their schemas**, not merely accompanied by them — otherwise, as noted,
        it. A schema sitting next to a handler that builds its payload inline is two definitions
        again — the same drift, relocated.
-- [ ] 4. Per-route mutual-assignability guard (`z.infer<schema>` ↔ the route's inferred type), so
+- [x] 4. Per-route mutual-assignability guard — 80 assertions across 5 files, so
        "the schema is the contract" is tested rather than asserted. This is the existing `Exact<>`
        check repointed from the hand-written interface to the schema.
-- [ ] 5. Delete `dto/types.ts` + `api-types.test.ts`; api-client re-exports schemas + inferred
+- [x] 5. Done; api-client re-exports schemas + inferred
        types. **DTOs must be EXACTLY what the server returns** (owner, 2026-07-28) — `ApiRun` and
        `ProjectsResponse` are measurably WIDER today and are defects to fix, not shapes to keep.
        Success (2xx) branches only; the `{error}` 4xx/5xx arms stay out, since the client throws.
