@@ -97,11 +97,13 @@ const WORKSPACE_LEVEL =
  * Applied at request time (send(), the EventSources), never stored.
  */
 export function apiPath(route: string): string {
-  const scoped =
-    activeProjectId === null || WORKSPACE_LEVEL.test(route)
-      ? route
-      : `/p/${encodeURIComponent(activeProjectId)}${route}`
-  return `${baseUrl}${API_PREFIX}${scoped}`
+  return `${baseUrl}${API_PREFIX}${scopeRoute(route)}`
+}
+
+/** The active project's prefix, or nothing — the one place the scoping rule is spelled. */
+function scopeRoute(route: string): string {
+  if (activeProjectId === null || WORKSPACE_LEVEL.test(route)) return route
+  return `/p/${encodeURIComponent(activeProjectId)}${route}`
 }
 
 /** Matches a cockpit API URL and captures the part after `/api`, scope included. */
@@ -155,9 +157,5 @@ function upgradeApiPath(path: string): string | null {
   const route = match[1] as string
   // Already scoped (`/p/<id>/…`) — the stored URL names its own project, so leave it.
   if (route.startsWith('/p/')) return `${API_PREFIX}${route}`
-  const scoped =
-    activeProjectId === null || WORKSPACE_LEVEL.test(route)
-      ? route
-      : `/p/${encodeURIComponent(activeProjectId)}${route}`
-  return `${API_PREFIX}${scoped}`
+  return `${API_PREFIX}${scopeRoute(route)}`
 }
