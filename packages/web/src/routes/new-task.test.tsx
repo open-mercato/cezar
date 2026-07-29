@@ -852,6 +852,20 @@ describe('submit', () => {
     await waitFor(() => expect(location()).toBe('/tasks/v-a'))
   })
 
+  it('shows a locked native default but omits it from the direct run request', async () => {
+    serve({ config: { defaultModels: { claude: 'native-sonnet' }, modelsLocked: true } })
+    renderNewTask()
+    await pillReady()
+
+    const modelPill = document.querySelector('[data-slot="model-pill"]') as HTMLButtonElement
+    expect(modelPill.textContent).toContain('native-sonnet')
+    expect(modelPill.disabled).toBe(true)
+
+    fireEvent.change(textarea(), { target: { value: 'Use native settings' } })
+    await startTask()
+    expect(postedBody()).toEqual({ task: 'Use native settings', workflow: 'quick-task' })
+  })
+
   it('single-backend hosts omit `runner` when it matches the server default', async () => {
     serve()
     renderNewTask()
@@ -1533,6 +1547,25 @@ describe('the plan flow', () => {
       ],
     })
     await waitFor(() => expect(location()).toBe('/tasks/planned-1'))
+  })
+
+  it('▶ Start omits a locked native default from the planned run request', async () => {
+    serve({
+      config: { defaultModels: { claude: 'native-sonnet' }, modelsLocked: true },
+      createRun: { id: 'planned-native' },
+    })
+    renderNewTask()
+    await planTask('Plan with native settings')
+    expect((document.querySelector('[data-slot="model-pill"]') as HTMLButtonElement).textContent).toContain(
+      'native-sonnet',
+    )
+
+    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
+    await waitFor(() => expect(postedBody()).toBeDefined())
+    expect(postedBody()).toEqual({
+      task: 'Plan with native settings',
+      steps: PLAN.steps,
+    })
   })
 
   it('▶ Start uses project config while boot health is still pending', async () => {

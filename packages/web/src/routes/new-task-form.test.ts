@@ -176,6 +176,24 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
     })
   })
 
+  it('keeps a locked native default visible while omitting it from direct and automation requests', () => {
+    const model = resolveModel(null, 'claude', { claude: 'native-sonnet' })
+    expect(model).toBe('native-sonnet')
+
+    const opts = {
+      task: 'use the native model',
+      source: { source: 'workflow' as const, ref: 'quick-task' },
+      model,
+      modelsLocked: true,
+      runner: 'claude' as const,
+      defaultRunner: 'claude' as const,
+      variants: 1,
+      images: [],
+    }
+    expect(buildCreateRunBody(opts).model).toBeUndefined()
+    expect(buildAutomationTask(opts).model).toBeUndefined()
+  })
+
   it('omits runner when the chosen connected runner equals the server default', () => {
     const body = buildCreateRunBody({
       task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',

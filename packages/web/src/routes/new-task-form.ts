@@ -220,6 +220,8 @@ export function buildCreateRunBody(opts: {
   task: string
   source: TaskSource
   model: string
+  /** Native coding-agent settings stay visible, but a locked model is never a request override. */
+  modelsLocked?: boolean
   runner: Runner
   /** True when the draft contains a sticky/user runner choice rather than an untouched default. */
   runnerExplicit?: boolean
@@ -243,6 +245,7 @@ export function buildCreateRunBody(opts: {
     task,
     source,
     model,
+    modelsLocked,
     runner,
     runnerExplicit,
     defaultRunner,
@@ -258,7 +261,7 @@ export function buildCreateRunBody(opts: {
     ...(source.source === 'skill'
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source.ref }),
-    model: model || undefined,
+    model: modelsLocked ? undefined : model || undefined,
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
