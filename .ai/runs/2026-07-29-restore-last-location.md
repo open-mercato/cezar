@@ -466,7 +466,7 @@ PR: #729
 
 ### Phase 2: Route restoration and persistence
 
-- [ ] 2.1 Restore valid saved locations from the exact bare root
+- [x] 2.1 Restore valid saved locations from the exact bare root — b136bda7
 - [ ] 2.2 Persist settled valid project-scoped navigation
 
 ### Phase 3: Verification and hand-off
