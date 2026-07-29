@@ -1476,8 +1476,9 @@ export function createApp(deps: ServerDeps) {
 
     .post('/projects', jsonZodValidator(() => registerProjectSchema, { message: 'root must be a non-empty path' }), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const { status, body } = await registerFolder(parsed.data.root, 'local');
-      return c.json(body, status);
+      const registered = await registerFolder(parsed.data.root, 'local');
+      if (registered.status !== 200) return c.json(registered.body, registered.status);
+      return c.json(registered.body, 200);
     })
 
     .delete('/projects/:projectId', async (c) => {
@@ -1626,16 +1627,17 @@ export function createApp(deps: ServerDeps) {
           result.status,
         );
       }
-      const { status, body } = await registerFolder(result.target, 'checkout');
-      if (status !== 200) {
+      const registered = await registerFolder(result.target, 'checkout');
+      if (registered.status !== 200) {
         // The clone SUCCEEDED and its files are legitimately the user's, so this
         // path deliberately does NOT clean up — an unregisterable checkout is a
         // registry problem, not a reason to delete a repo we just fetched. Say
         // where it is so they can register it by hand.
+        const { body } = registered;
         const error = 'error' in body && body.error ? body.error : 'could not register the checkout';
-        return c.json({ error: `${error} (the clone is at ${result.target})` }, status);
+        return c.json({ error: `${error} (the clone is at ${result.target})` }, registered.status);
       }
-      return c.json(body, 200);
+      return c.json(registered.body, 200);
     });
 
   // Register an existing folder (multi-project spec, "Add project" — the
@@ -1655,10 +1657,15 @@ export function createApp(deps: ServerDeps) {
   const registerFolder = async (
     spelled: string,
     source: 'local' | 'checkout',
-  ): Promise<{
-    status: 200 | 400 | 409 | 500;
-    body: RegisterProjectResponse | { error: string };
-  }> => {
+  ): Promise<
+    // Discriminated on `status`, not one object with a union `body`: a flat
+    // `{ status: 200 | 400 | 409 | 500; body: RegisterProjectResponse | { error } }` made
+    // `c.json(body, status)` type the route's 200 as carrying the ERROR bodies too, which is a
+    // shape neither POST route can answer with (`contract-parity.workspace.test.ts` pins it).
+    // Split here so the success branch narrows at the call site instead.
+    | { status: 200; body: RegisterProjectResponse }
+    | { status: 400 | 409 | 500; body: RegisterProjectResponse | { error: string } }
+  > => {
     if (capabilities().singleProject) {
       return { status: 409, body: singleProjectRefusal('adding projects') };
     }

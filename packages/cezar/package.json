@@ -38,12 +38,12 @@
     "test:watch": "vitest",
     "test:unit": "node --import tsx --test test/unit/*.test.ts",
     "test:package": "node --import tsx --test test/e2e/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "postbuild": "node scripts/inline-contract.mjs"
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
     "@hono/node-server": "^1.13.0",
-    "@open-mercato/cezar-contract": "^0.9.1",
     "hono": "^4.6.0",
     "smol-toml": "^1.7.0",
     "ws": "^8.21.1",
@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@open-mercato/cezar-api-client": "^0.9.1",
+    "@open-mercato/cezar-contract": "^0.9.1",
     "@types/node": "^20.14.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.0",

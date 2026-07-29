@@ -31,8 +31,17 @@ describe('the shapes that cannot come from a route are still mirrored faithfully
   const guards = {
     /** `GET /api/v1/runs/:id/events` and `/api/v1/events` — the run event stream. */
     runEvent: true satisfies Exact<RunEvent, WebRunEvent>,
-    runEventKeys: true satisfies ExactKeys<RunEvent, WebRunEvent>,
   };
+
+  /**
+   * No `ExactKeys` pair here, deliberately. `RunEvent` carries a string index signature, and
+   * TypeScript reports `keyof` of an interface with one as `string | number` while the zod loose
+   * object infers `string` — a difference in how the two are spelled, not in what they accept
+   * (`Exact` above passes both ways). `ExactKeys` exists to catch a MISSING OPTIONAL property
+   * (#472), which cannot happen on a type that already accepts arbitrary keys, so pinning it
+   * here would fail forever while proving nothing.
+   */
+  type _KeysNotApplicable = ExactKeys<{ a: 1 }, { a: 1 }>;
 
   it('holds every pair above', () => {
     // The compiler does the real work. This only stops a future edit from deleting the pairs and

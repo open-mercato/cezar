@@ -83,8 +83,9 @@ import {
   getApiScope,
   queryScope,
 } from '@open-mercato/cezar-api-client'
-import type { Ok } from '@open-mercato/cezar-api-client'
+import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
+import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
 
 /**
@@ -248,17 +249,24 @@ function unscoped(url: string): string {
 /** The per-request options `hc` takes, from this module's `ReadOptions`. */
 const init = (opts?: ReadOptions) => ({ init: { signal: opts?.signal } })
 
-async function unwrap<R extends ClientResponse<unknown, number, 'json'>>(
+/**
+ * Accepts a route that answers more than one FORMAT — `/repo/commit/:sha` serves a structured
+ * payload or a raw blob on the same path, `/runs/:id/files` a listing or image bytes — and reads
+ * the JSON branch. `OkJson` keeps that from becoming a hole: a route with no JSON branch at all
+ * resolves to a branded error type rather than to `never`, which would have been assignable to
+ * every caller's declared return type and failed only at runtime.
+ */
+async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>(
   res: R,
   label: string,
-): Promise<Ok<R>> {
+): Promise<OkJson<R>> {
   const body = await res.text()
   if (!res.ok) throw errorFor(res.status, res.statusText, body)
   const parsed = parseJson(body)
   if (parsed === undefined) {
     throw new ApiError(res.status, `the cezar server answered ${label} with a non-JSON body`)
   }
-  return parsed as Ok<R>
+  return parsed as OkJson<R>
 }
 
 /**
@@ -567,12 +575,17 @@ export async function getRepoChanges(opts?: ReadOptions): Promise<ChangesPayload
  *  additive, the text-blob answer stays for the legacy UI. 409 + reason for unknown shas. */
 /*  NOT on the typed client, and it is the route that cannot be: the same handler answers the
  *  legacy `text/plain` blob when `?structured=1` is absent (a protected surface —
- *  BACKWARD_COMPATIBILITY.md §2), so `hc` infers a `ClientResponse<string, …, 'text'>` member
- *  alongside the JSON ones. `unwrap` requires every member to be `'json'`, and relaxing that
- *  would let a genuinely text-only route through as `never`. The `?structured=1` key IS validated
- *  server-side now, so this is the only thing left in the way. */
-export function getRepoCommit(sha: string, opts?: ReadOptions): Promise<RepoCommitPayload> {
-  return get<RepoCommitPayload>(`/repo/commit/${encodeURIComponent(sha)}?structured=1`, opts)
+ *  BACKWARD_COMPATIBILITY.md §2), so `hc` infers a text member alongside the JSON one — one path,
+ *  two formats. `unwrap` reads the JSON branch; `OkJson` is what stops that from also silently
+ *  accepting a route that has no JSON branch at all. */
+export async function getRepoCommit(sha: string, opts?: ReadOptions): Promise<RepoCommitPayload> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.commit[':sha'].$get(
+      { param: { projectId: queryScope(), sha: encodeURIComponent(sha) }, query: { structured: '1' } },
+      init(opts),
+    ),
+    '/repo/commit/:sha',
+  )
 }
 
 /** A run's own commits (`<base>..HEAD`, newest first) for the task's Commits tab. */
@@ -680,11 +693,17 @@ export async function getGithubPrMergeState(
   )
 }
 
-export function mergeGithubPr(
+export async function mergeGithubPr(
   number: number,
   input: { method: GithubMergeMethod; expectedHeadSha: string; overrideRules?: boolean },
 ): Promise<GithubMergeResponse> {
-  return mutate<GithubMergeResponse>('POST', `/github/prs/${number}/merge`, input)
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.prs[':number'].merge.$post({
+      param: { projectId: queryScope(), number: String(number) },
+      json: input,
+    }),
+    '/github/prs/:number/merge',
+  )
 }
 
 export async function getGithubPrChanges(
@@ -730,12 +749,14 @@ export async function getRunChanges(id: string, opts?: ReadOptions): Promise<Cha
 
 /** One worktree path (R5 Files tab; also the Changes tab's expandable-context source):
  *  a directory listing, or a file with content unless binary/too large. */
-/*  Blocked on the same thing `getRepoCommit` is, for a different reason: `?raw=1` serves image
- *  BYTES from this route (`c.body(...)`), so `hc` infers a `ClientResponse<ArrayBuffer, 200,
- *  'body'>` member that `unwrap`'s all-JSON constraint rejects — even though this call never
- *  sends `raw`. `?path=` is validated server-side now; only the mixed-format union remains. */
-export function getRunFile(id: string, path: string, opts?: ReadOptions): Promise<WorktreeEntry> {
-  return get<WorktreeEntry>(runPath(id, `/files?path=${encodeURIComponent(path)}`), opts)
+export async function getRunFile(id: string, path: string, opts?: ReadOptions): Promise<WorktreeEntry> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].files.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: { path } },
+      init(opts),
+    ),
+    '/runs/:id/files',
+  )
 }
 
 /** The same-origin URL an `<img>` can load an image file's bytes from (R5 Files tab). The
@@ -873,8 +894,11 @@ export async function updateProject(
 // ---- run mutations ------------------------------------------------------------------------
 
 /** ×1 answers the run record; ×2/×3 answers `{ runs }` — narrow on `'runs' in result`. */
-export function createRun(input: CreateRunInput): Promise<CreateRunResponse> {
-  return mutate<CreateRunResponse>('POST', '/runs', input)
+export async function createRun(input: CreateRunInput): Promise<CreateRunResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs.$post({ param: { projectId: queryScope() }, json: input }),
+    '/runs',
+  )
 }
 
 export async function cancelRun(id: string): Promise<CancelResponse> {

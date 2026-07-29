@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { runnerSchema } from './health.ts';
+// The chain shapes belong to the workflows family; the run record embeds one, so this file
+// consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
+import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -185,15 +188,18 @@ export const runRecordSchema = z.object({
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
   /**
-   * The persisted workflow definition, kept loose so a `queued` run survives a restart — including
-   * ad-hoc "(planned)" chains that exist nowhere else.
+   * The persisted workflow definition, so a `queued` run survives a restart — including the ad-hoc
+   * "(planned)" chains that exist nowhere else.
    *
-   * `z.json()` and not `z.record(z.string(), z.unknown())`: this key comes off the wire, so its
-   * values are whatever `JSON.parse` can produce and nothing else. `unknown` would be wider than
-   * the server can serialize, and it is what makes the route type unrepresentable here — see the
-   * note on `NormalizeWorkflowDef` in `src/server/contract-parity.runs.test.ts`.
+   * The definition schema and NOT `z.record(z.string(), z.unknown())`: this key comes off the wire,
+   * so its values are whatever `JSON.parse` can produce and nothing else. `unknown` was wider than
+   * the server can serialize, and it made the route type unrepresentable here — hono maps `unknown`
+   * to its own `JSONValue`, whose index signature admits `object | symbol | undefined`. The fix was
+   * at the source: `src/runs/store.ts` persists a typed `workflowDefSchema` now, so the route's own
+   * type is this shape and the two-way check in `src/server/contract-parity.runs.test.ts` covers it
+   * like every other key.
    */
-  workflowDef: z.record(z.string(), z.unknown()).optional(),
+  workflowDef: workflowDefSchema.optional(),
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 
@@ -324,6 +330,55 @@ export type RunCommit = z.infer<typeof runCommitSchema>;
 export const runCommitsResponseSchema = z.object({ commits: z.array(runCommitSchema) });
 export type RunCommitsResponse = z.infer<typeof runCommitsResponseSchema>;
 
+// ---- parallel variants (spec 010) ----------------------------------------------------------
+//
+// `/groups/:groupId/*` is the RUN family seen sideways: a group is the runs sharing a `groupId`,
+// and the pick answers a whole run record. So these live here rather than with the workflows,
+// which keeps `./workflows.ts` free of any edge back into this file (see its header).
+
+/**
+ * One variant column of the compare view.
+ *
+ * CAREFUL: `diffStat` here is the raw `git diff --stat` TEXT the server runs in the variant's
+ * worktree — a different thing from the numeric `RunRecord.diffStat`. `''` when the worktree
+ * is gone.
+ */
+export const groupVariantSchema = z.object({
+  id: z.string(),
+  /** 'A' | 'B' | 'C' in practice; `'?'` for a record that lost its letter. */
+  variant: z.string(),
+  title: z.string(),
+  status: runStatusSchema,
+  archived: z.boolean(),
+  tokensUsed: z.number(),
+  costUsd: z.number().optional(),
+  diffStat: z.string(),
+  /** First lines of the handoff journal's "## Progress log" section, as markdown. */
+  handoffExcerpt: z.string(),
+});
+export type GroupVariant = z.infer<typeof groupVariantSchema>;
+
+/** `GET /groups/:groupId` — every run sharing a groupId, side by side. */
+export const groupResponseSchema = z.object({
+  groupId: z.string(),
+  runs: z.array(groupVariantSchema),
+});
+export type GroupResponse = z.infer<typeof groupResponseSchema>;
+
+/**
+ * `POST /groups/:groupId/pick` — the winner (parked at `review` when it has a diff); the losers
+ * were cancelled if alive, archived, and their worktrees + branches removed.
+ *
+ * `winner` is OPTIONAL because that is what the wire says: `store.getRun(id)` can miss, and
+ * `JSON.stringify` drops a key whose value is `undefined`. The handler spreads the key in
+ * conditionally (`server.ts`, the `/groups/:groupId/pick` route) so its own type says the same
+ * thing — the two-way check in `contract-parity.workflows.test.ts` is what pins that.
+ */
+export const pickVariantResponseSchema = z.object({
+  winner: runRecordSchema.optional(),
+});
+export type PickVariantResponse = z.infer<typeof pickVariantResponseSchema>;
+
 // ---- request bodies ----------------------------------------------------------------------
 //
 // Request types are `z.input`, not `z.infer`: a caller writes what the schema ACCEPTS, and the
@@ -338,33 +393,6 @@ export const imageInputSchema = z.object({
 export type ImageInput = z.input<typeof imageInputSchema>;
 
 /**
- * One step of an inline chain posted to `POST /runs` (spec 008 — an approved plan runs as an
- * ad-hoc workflow, never written to a file).
- *
- * Module-private on purpose: this shape belongs to the WORKFLOWS family, and duplicating its
- * export here would collide with it in `./index.ts`. `CreateRunInput` still carries it
- * structurally; re-point `steps` at the workflows schema once that file lands.
- */
-const inlineWorkflowStepSchema = z
-  .object({
-    id: z.string().min(1),
-    name: z.string().optional(),
-    // agent step
-    prompt: z.string().optional(),
-    skill: z.string().optional(),
-    model: z.string().optional(),
-    runner: runnerSchema.optional(),
-    allowedTools: z.array(z.string()).optional(),
-    bashAllowlist: z.array(z.string()).optional(),
-    // check step
-    command: z.string().optional(),
-    onFail: z.object({ retry: z.string().min(1), max: z.number().int().positive().default(2) }).optional(),
-  })
-  .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
-    message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
-  });
-
-/**
  * `POST /runs`. Exactly one of `workflow` / `steps` — the server rejects both or neither.
  *
  * Every bound here is the server's own (#429): an unbounded body must never reach a spawned
@@ -373,7 +401,9 @@ const inlineWorkflowStepSchema = z
 export const createRunInputSchema = z
   .object({
     workflow: z.string().min(1).optional(),
-    steps: z.array(inlineWorkflowStepSchema).min(1).max(8).optional(),
+    /** An inline chain (spec 008 — an approved plan runs as an ad-hoc workflow, never written to
+     *  a file). The catalog's own step shape, not a copy of it. */
+    steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     runner: runnerSchema.optional(),

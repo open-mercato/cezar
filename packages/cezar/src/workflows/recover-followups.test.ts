@@ -54,7 +54,7 @@ describe('recover() and the follow-up ceiling (#471)', () => {
   const WORKFLOW_DEF = {
     name: 'quick-task',
     description: 'x',
-    source: 'built-in',
+    source: 'built-in' as const,
     steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
   };
 
@@ -68,7 +68,7 @@ describe('recover() and the follow-up ceiling (#471)', () => {
       generateFollowups,
       steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
     });
-    store.updateRun(id, { workflowDef: WORKFLOW_DEF as unknown as Record<string, unknown> });
+    store.updateRun(id, { workflowDef: WORKFLOW_DEF });
     return id;
   };
 

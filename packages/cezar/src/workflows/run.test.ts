@@ -1324,7 +1324,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
 
   const WORKFLOW = {
     name: '(planned)',
-    source: 'built-in',
+    source: 'built-in' as const,
     steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
   };
 
@@ -1341,7 +1341,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
     const r = store.createRun({ title: 't', workflow: '(planned)', task: 'the original task', steps: [] });
     store.updateRun(r.id, {
       status: 'queued',
-      workflowDef: WORKFLOW as unknown as Record<string, unknown>,
+      workflowDef: WORKFLOW,
       queuedMessages: [
         { id: 'm1', text: 'the stacked bit', createdAt: '2026-07-21T10:00:00.000Z' },
       ],

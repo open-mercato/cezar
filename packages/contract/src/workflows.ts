@@ -1,19 +1,15 @@
 import { z } from 'zod';
-// The run shapes belong to the runs family; this file consumes them rather than redeclaring.
-import { queuedMessageSchema, runRecordSchema, runStatusSchema, stepStateSchema } from './runs.ts';
-export type { QueuedMessage, RunRecord, RunStatus, StepState } from './runs.ts';
 import { runnerSchema } from './health.ts';
 
-// ---- TEMPORARY: the run-record shapes this family embeds ---------------------------------
-//
-// `PickVariantResponse` (`POST /groups/:groupId/pick`) and `StartTodoResponse`
-// (`POST /todos/:id/start`, see `./skills.ts`) both answer with a whole stored run, so this
-// family cannot be described without the run record. The run family is a SEPARATE slice of the
-// contract, so the four schemas below are a verbatim mirror of `src/runs/store.ts` and exist
-// only so the group/inbox schemas can be written — and PROVEN — before the run slice lands.
-//
-// AT MERGE: delete this block and import `runStatusSchema` / `runRecordSchema` from the run
-// contract module instead. Nothing else in this file changes.
+/**
+ * The WORKFLOWS family: the chain catalog, the save/parse routes, and the planner.
+ *
+ * This file must NOT import `./runs.ts`: the run record embeds a workflow definition
+ * (`RunRecord.workflowDef`), so `runs.ts` imports the two definition schemas below, and a second
+ * edge back would be a module cycle — one whose top-level `z.object(…)` calls would hit a TDZ at
+ * import time, not a type error. The parallel-variant shapes (`/groups/:groupId/*`), which DO
+ * embed the record, live with the run family for the same reason.
+ */
 
 // ---- workflows (`GET/POST /workflows`, `DELETE /workflows/:name`, `POST /workflows/parse`) ----
 
@@ -135,48 +131,3 @@ export const planResponseSchema = z.object({
   fallback: z.boolean(),
 });
 export type PlanResponse = z.infer<typeof planResponseSchema>;
-
-// ---- parallel variants (spec 010) --------------------------------------------------------
-
-/**
- * One variant column of the compare view.
- *
- * CAREFUL: `diffStat` here is the raw `git diff --stat` TEXT the server runs in the variant's
- * worktree — a different thing from the numeric `RunRecord.diffStat`. `''` when the worktree
- * is gone.
- */
-export const groupVariantSchema = z.object({
-  id: z.string(),
-  /** 'A' | 'B' | 'C' in practice; `'?'` for a record that lost its letter. */
-  variant: z.string(),
-  title: z.string(),
-  status: runStatusSchema,
-  archived: z.boolean(),
-  tokensUsed: z.number(),
-  costUsd: z.number().optional(),
-  diffStat: z.string(),
-  /** First lines of the handoff journal's "## Progress log" section, as markdown. */
-  handoffExcerpt: z.string(),
-});
-export type GroupVariant = z.infer<typeof groupVariantSchema>;
-
-/** `GET /groups/:groupId` — every run sharing a groupId, side by side. */
-export const groupResponseSchema = z.object({
-  groupId: z.string(),
-  runs: z.array(groupVariantSchema),
-});
-export type GroupResponse = z.infer<typeof groupResponseSchema>;
-
-/**
- * `POST /groups/:groupId/pick` — the winner (parked at `review` when it has a diff); the losers
- * were cancelled if alive, archived, and their worktrees + branches removed.
- *
- * `winner` is OPTIONAL because that is what the wire says: the handler builds
- * `{ winner: store.getRun(id) }`, and `JSON.stringify` drops the key entirely when the lookup
- * misses. See `contract-parity.workflows.test.ts` — the route's own type still claims a
- * required `winner: RunRecord | undefined`, which is a handler defect, not a contract one.
- */
-export const pickVariantResponseSchema = z.object({
-  winner: runRecordSchema.optional(),
-});
-export type PickVariantResponse = z.infer<typeof pickVariantResponseSchema>;

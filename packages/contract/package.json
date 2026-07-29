@@ -11,12 +11,15 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "zod": "^4.4.3"
-  }
+  },
+  "private": true
 }

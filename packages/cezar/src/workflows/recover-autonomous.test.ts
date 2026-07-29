@@ -47,7 +47,7 @@ describe('recover() and the autonomous flag (#489)', () => {
   const WORKFLOW_DEF = {
     name: 'quick-task',
     description: 'x',
-    source: 'built-in',
+    source: 'built-in' as const,
     steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
   };
 
@@ -59,7 +59,7 @@ describe('recover() and the autonomous flag (#489)', () => {
       autonomous,
       steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
     });
-    store.updateRun(id, { workflowDef: WORKFLOW_DEF as unknown as Record<string, unknown> });
+    store.updateRun(id, { workflowDef: WORKFLOW_DEF });
     return id;
   };
 

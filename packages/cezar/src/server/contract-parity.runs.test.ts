@@ -48,23 +48,6 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type Runs = typeof client.api.v1.runs;
   type Run = Runs[':id'];
 
-  /**
-   * The ONE key of the run record whose route type cannot be named from `src/contract/`.
-   *
-   * `RunRecord.workflowDef` is `z.record(z.string(), z.unknown())` in `src/runs/store.ts:185`, and
-   * hono's `JSONParsed` maps `unknown` to its own `JSONValue` (`hono/utils/types`), whose index
-   * signature admits `object | symbol | undefined` — none of which survive `JSON.stringify`, and
-   * none of which a schema built from `zod` alone can express (rule: no imports outside the
-   * contract directory). So the route type is UNREPRESENTABLE here rather than different from the
-   * schema, and it is normalized away on the ROUTE side, for that one key only. Every other key of
-   * the record stays under the strict two-way check.
-   *
-   * The fix belongs at the source: type the store's `workflowDef` with a JSON value schema
-   * (`z.json()`, as the contract does) and this bridge can go.
-   */
-  type NormalizeWorkflowDef<T> = Omit<T, 'workflowDef'> &
-    Pick<z.infer<typeof runRecordSchema>, 'workflowDef'>;
-
   type RunsList200 = InferResponseType<Runs['$get'], 200>;
   type RunGet200 = InferResponseType<Run['$get'], 200>;
   type RunCreate201 = InferResponseType<Runs['$post'], 201>;
@@ -87,16 +70,16 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
 
   type _Checks = [
     // the record, in both of its two forms
-    Assert<Exact<z.infer<typeof apiRunSchema>[], NormalizeWorkflowDef<RunsList200[number]>[]>>,
-    Assert<Exact<z.infer<typeof apiRunSchema>, NormalizeWorkflowDef<RunGet200>>>,
-    Assert<Exact<z.infer<typeof runRecordSchema>, NormalizeWorkflowDef<RunArchive200>>>,
-    Assert<Exact<z.infer<typeof runRecordSchema>, NormalizeWorkflowDef<RunPatch200>>>,
+    Assert<Exact<z.infer<typeof apiRunSchema>[], RunsList200[number][]>>,
+    Assert<Exact<z.infer<typeof apiRunSchema>, RunGet200>>,
+    Assert<Exact<z.infer<typeof runRecordSchema>, RunArchive200>>,
+    Assert<Exact<z.infer<typeof runRecordSchema>, RunPatch200>>,
     // POST /runs answers 201, and its ×1 branch carries no `usage`
     Assert<
       Exact<
         z.infer<typeof createRunResponseSchema>,
-        | NormalizeWorkflowDef<Extract<RunCreate201, { id: string }>>
-        | { runs: NormalizeWorkflowDef<Extract<RunCreate201, { runs: unknown }>['runs'][number]>[] }
+        | Extract<RunCreate201, { id: string }>
+        | { runs: Extract<RunCreate201, { runs: unknown }>['runs'][number][] }
       >
     >,
     // lifecycle

@@ -475,7 +475,7 @@ export class RunManager {
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
-    this.store.updateRun(run.id, { workflowDef: workflow as unknown as Record<string, unknown> });
+    this.store.updateRun(run.id, { workflowDef: workflow });
     // Initial pasted images must be visible while the run is still queued (#612),
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
@@ -741,10 +741,11 @@ export class RunManager {
 
   /** The persisted definition when it looks sane, else the catalog by name. */
   private async reviveWorkflow(run: RunRecord): Promise<WorkflowDef | null> {
+    // "Looks sane" is the STORE's job now: it parses `workflowDef` against the definition schema
+    // and `.catch`es a def that no longer fits to `undefined`, so anything present here already
+    // has the `steps` array the old inline `Array.isArray` check was asking for.
     const def = run.workflowDef;
-    if (def && Array.isArray((def as { steps?: unknown }).steps)) {
-      return def as unknown as WorkflowDef;
-    }
+    if (def) return def;
     const { workflows } = await loadWorkflows(this.repoRoot);
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }

@@ -4,6 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Type-only module (zod + nothing else), so this cannot cycle back into the store.
+import { workflowDefSchema } from '../workflows/types.ts';
 
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
@@ -180,9 +182,16 @@ const runRecordSchema = z.object({
   steps: z.array(stepStateSchema),
   /** Full workflow definition, persisted so a `queued` run can be re-enqueued
    *  after a restart (#367) — including ad-hoc "(planned)" chains that exist
-   *  nowhere else. Kept loose here to avoid an upward import; the run manager
-   *  validates the shape before reviving it. */
-  workflowDef: z.record(z.string(), z.unknown()).optional(),
+   *  nowhere else.
+   *
+   *  Typed, not `z.record(z.string(), z.unknown())`: this key goes out over the
+   *  wire on every run route, and `unknown` is wider than anything the server
+   *  can serialize — which made the route's own type (hono's `JSONValue`, whose
+   *  index signature admits `object | symbol | undefined`) impossible for the
+   *  contract to describe. `.catch(undefined)` keeps an older or hand-edited
+   *  entry from failing the whole index parse: a def that no longer fits simply
+   *  drops, and `reviveWorkflow` falls back to the catalog by name. */
+  workflowDef: workflowDefSchema.optional().catch(undefined),
 });
 
 export type StepState = z.infer<typeof stepStateSchema>;

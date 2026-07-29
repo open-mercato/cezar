@@ -70,28 +70,18 @@ describe('src/contract workflows/skills/agent-config schemas match the routes ex
     Assert<Exact<z.infer<typeof parsedWorkflowSchema>, ParseWorkflow200>>,
     Assert<Exact<z.infer<typeof planResponseSchema>, Plan200>>,
     Assert<Exact<z.infer<typeof groupResponseSchema>, Group200>>,
-    // NOT asserted yet — see KNOWN GAPS below.
+    Assert<Exact<z.infer<typeof pickVariantResponseSchema>, Pick200>>,
     Assert<Exact<z.infer<typeof skillSchema>[], Skills200>>,
     Assert<Exact<z.infer<typeof skillSchema>[], SkillsRefresh200>>,
     Assert<Exact<z.infer<typeof importableSkillSchema>[], Importable200>>,
     Assert<Exact<z.infer<typeof todoItemSchema>[], Todos200>>,
     Assert<Exact<z.infer<typeof removeTodoResponseSchema>, RemoveTodo200>>,
-    // NOT asserted yet — see KNOWN GAPS below.
+    Assert<Exact<z.infer<typeof startTodoResponseSchema>, StartTodo201>>,
     Assert<Exact<z.infer<typeof agentConfigListingSchema>, AgentConfig200>>,
     Assert<Exact<z.infer<typeof agentConfigFileContentSchema>, AgentConfigFile200>>,
     Assert<Exact<z.infer<typeof agentConfigFileContentSchema>, AgentConfigPut200>>,
   ];
 
-  /**
-   * KNOWN GAPS — deliberately unasserted, not silently passing.
-   *
-   * `pickVariantResponseSchema` and `startTodoResponseSchema` both embed `runRecordSchema`, and
-   * that schema is presently NARROWER than the routes in a field type (no key is missing; the
-   * difference is inside one). It was written by a pass that did not finish, so rather than
-   * weaken the comparator or assert a one-way check that would pass on real drift, the two
-   * assertions are removed and named here. Restore both lines once `contract/runs.ts` is
-   * completed — that is the whole remaining work for this family.
-   */
   it('is enforced by tsc, not at runtime', () => {
     // Pins the comparator itself: a `Mutual` that degenerated to `true` would make every
     // assertion above vacuous, exactly the trap this file is meant to avoid.

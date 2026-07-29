@@ -43,7 +43,7 @@ is internal for now — installable by others once its surface settles.
 - [x] 5. Docs swept for the new paths (AGENTS.md gained a Repository layout section; `.ai/specs` and `.ai/runs` left alone as historical records).
 - [x] 6. api-client marked `private` (amended decision 7): stamped in lockstep, never published, publication gated on npm's own flag. CI's pack step verifies only what actually ships.
 
-### Phase 3 — Chain the rest; single-source DTOs; delete the mirror — **~80%**
+### Phase 3 — Chain the rest; single-source DTOs; delete the mirror — **DONE**
 - [x] 1. DTOs relocated to `packages/api-client/src/dto/types.ts` and exported from the barrel. Forced by the restructure: once the mirror lived in `packages/web`, the server's drift guard reached across a package boundary and broke `rootDir` — which is exactly the coupling this spec removes.
 - [x] 2. All 138 web files import DTOs from `@open-mercato/cezar-api-client`; `api-types.test.ts` imports the package too, not a relative path.
 - [x] 3. **Chain the remaining route families — done.** All 77 registrations converted into 23 family builders; zero loose `api.get(…)`/`app.get('/api/…')` statements remain. `/api/v1` now mirrors the legacy surface completely, so `AppType` covers the whole API. The legacy side mounts through un-chained holders (`api`, `workspaceLegacy`) so `/api/*` stays untyped by design. `v1-parity.test.ts` gained the guard that replaces per-family spot checks: every `/api` route must have a `/api/v1` twin, with a vacuous-pass check beneath it.
@@ -72,7 +72,7 @@ is internal for now — installable by others once its surface settles.
   - **Order matters, and the obvious check is vacuous.** `client.ts`'s 74 functions still DECLARE their DTO return type, so `Awaited<ReturnType<typeof getRun>>` is that DTO by construction and proves nothing. The annotations must come off FIRST, then each alias derives from the route. Compare against the server directly — `Ok<Awaited<ReturnType<typeof client.api.v1….$get>>>` — and assert MUTUAL assignability, not one-way.
   - **First measurement, 4 types:** `WorkflowsResponse` and `ConfigResponse` are exact. `ApiRun` and `ProjectsResponse` are **wider than the server's actual return** — safe for readers, but anything CONSTRUCTING one (test fixtures, mocks) may stop compiling when the narrower inferred type replaces it. Expect that to be the bulk of the work, not the aliasing itself. Surveyed: **105 are response-derivable** from `AppType`, 11 request-derivable, 7 are dead exports nothing imports, and **2 cannot be derived** — `RunEvent` and `CheckoutProgressEvent` are SSE frame payloads, which Hono types as `text/event-stream`, so they stay hand-mirrored next to `protocol/`. Remaining blocker: `GroupResponse`/`GroupVariant`/`PickVariantResponse` are declared in `server.ts` and re-mirrored, so they need to become inferred-from-handler first. Note the derived aliases cannot live in the api-client — it builds *before* `packages/cezar`, so importing `AppType` there would invert the build order.
 
-### Phase 4 — Base URL + one-command build/run — **mostly done**
+### Phase 4 — Base URL + one-command build/run — **DONE (81 of 83 calls; 2 named exceptions)**
 - [x] 1. Workspace-aware `dev`/`build`: `scripts/dev.mjs` delegates to workspace scripts, keeps the free-port probe, `CEZ_API_PORT` and either-dies-kills-both. Root build order is api-client → server → web → `check:pack`.
 - [x] 2. `createCezarClient({ baseUrl })` exists and defaults to `''` (same-origin).
 - [x] 3. **The cockpit moved to `/api/v1`** (amended decision 8). Call sites pass ROUTES (`/runs`), and `apiPath` owns the version + project scope — so the version is one fact, not sixty literals. A second helper, `resolveApiUrl`, upgrades server-minted URLs stored in old transcripts. Both EventSources, `runFileRawUrl` and the WebSocket path moved too.
@@ -168,6 +168,38 @@ types are gone so far, of 118), and apply the remaining handler fixes.
        In-payload 200 unions (`GithubChecksData`, `GithubPrMergeStateResponse`,
        `RegisterProjectResponse`, `ForgeInfo.available?`, `PlanResponse.name?`) ARE part of the
        success shape and stay.
+
+**Phases 3 and 4 closed, 2026-07-28.**
+
+`packages/api-client/src/dto/types.ts` is DELETED — zero hand-written API types remain. Every
+shape is a zod definition in `packages/contract` with its type inferred; the SSE frames that have
+no route to derive from (`RunEvent`, `CheckoutProgressEvent`) are zod too, in `contract/events.ts`.
+70 mutual-assignability assertions across 5 parity files cover all 9 families, and non-vacuity was
+verified empirically — five deliberately-wrong assertions were injected and all five failed to
+compile.
+
+Defects the guards found, every one fixed AT THE SOURCE rather than absorbed by a schema:
+  - `registerFolder` returned an undiscriminated `{status, body}` pair, so the 200 of
+    `POST /projects` and `/projects/checkout` also carried the error bodies. Now discriminated.
+  - `workflowDef` was `Record<string, unknown>`, which hono maps to a `JSONValue` no zod schema
+    can name. `WorkflowDef` became a real schema, which also deleted two `as unknown as` casts in
+    `workflows/run.ts` and let `runRecordSchema` come under the strict check on every key.
+  - The `key: maybeUndefined` pattern (a key always present in the TYPE that `JSON.stringify`
+    drops from the WIRE) at `latestVersion`, `/skills/importable`, `/groups/:groupId/pick`.
+  - `type: 'dir'` widening to `string` and erasing a discriminant consumers narrow on.
+
+Two KNOWN GAPS remain, measured rather than assumed: `uiState`/`workspaceUiState` cannot be
+asserted because both GET routes answer `Record<string, unknown>` verbatim, so the route type
+names no key and every schema key is optional — the comparison is `true` for ANY key set. It was
+documented instead of asserted, because a green vacuous check is worse than none.
+
+**Phase 4 — 81 of 83 calls on the typed client.** `unwrap` now accepts a route that answers more
+than one FORMAT on one path (owner's call: one endpoint, format chosen by the request), which
+migrated `getRepoCommit` and `getRunFile`. It did NOT become permissive: `OkJson<R>` substitutes a
+branded error type when a route has no JSON branch at all, because `Ok<R>` would otherwise be
+`never` — assignable to every declared return type, i.e. a compile-time guard silently traded for
+a runtime bug. Two calls stay hand-written, both named in the source: `startTodo` (its contract is
+404-before-body-validation, which route middleware cannot express) and `checkoutProject`.
 
 ### Phase 5 — Opt-in remote-access auth — **not started**
 - [ ] 1. `auth.ts` (jwt verify middleware, `POST /api/auth/login`, scrypt verify) + `~/.cezar/` account and secret storage.

@@ -90,3 +90,19 @@ export type Ok<R> = R extends ClientResponse<infer T, infer S, 'json'>
     ? T
     : never
   : never
+
+/**
+ * `Ok<R>`, but loud when there is no JSON branch at all.
+ *
+ * A route can answer more than one format on one path — `/repo/commit/:sha` serves a structured
+ * payload or a raw blob, `/runs/:id/files` a listing or image bytes — so `hc` infers a union of
+ * `'json'` and `'text'`/`'body'` members and `Ok` correctly picks the JSON one. But for a route
+ * that is text-only, `Ok` is `never`, and `never` is assignable to EVERY declared return type: a
+ * caller would compile and then fail at runtime, with the type system having said nothing.
+ *
+ * Substituting a branded object makes that case a readable compile error instead. It is why
+ * `unwrap` can accept mixed-format routes without becoming a hole for single-format ones.
+ */
+export type OkJson<R> = [Ok<R>] extends [never]
+  ? { readonly __error: 'this route has no JSON response; read it as text instead' }
+  : Ok<R>
