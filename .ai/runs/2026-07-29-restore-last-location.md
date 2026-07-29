@@ -471,5 +471,26 @@ PR: #729
 
 ### Phase 3: Verification and hand-off
 
-- [ ] 3.1 Complete the full validation and UI smoke gates
-- [ ] 3.2 Complete automated review, evidence, and PR metadata
+- [x] 3.1 Complete the full validation and UI smoke gates — 59065639
+- [x] 3.2 Complete automated review, evidence, and PR metadata — 59065639
+
+## Final Evidence
+
+- `npm run typecheck` passed for the API client, server, and web workspaces.
+- `npm test` passed 4,814 tests across 268 files after the review fixes.
+- `npm run test:unit` passed 35 tests; the one `setsid` case was skipped on
+  macOS as designed.
+- `npm run build` passed and `check:pack` verified 382 files, including 75
+  cockpit assets.
+- `npm run test:package` passed all 9 packed-release tests.
+- Real-browser verification confirmed exact pathname/query/hash persistence,
+  bare-root restoration, and explicit deep-link precedence.
+- The full local `npm run test:e2e` invocation was blocked by an existing
+  package-split fixture path (`<repo>/dist/index.js`; the build emits
+  `packages/cezar/dist/index.js`) plus detached-process reaping in this
+  execution environment. PR CI's `Unit, build, E2E, and package` check passed
+  on the implementation branch before the review-fix commit; the direct
+  feature verification above used the same production build.
+- Independent review found two important failure-path races. Commit
+  `59065639` fixed both; re-review reported no remaining findings and a ready
+  verdict.
