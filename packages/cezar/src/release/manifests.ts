@@ -44,10 +44,12 @@ export function isPublishable(pkg: ManifestLike): boolean {
  */
 export interface ReleaseManifests {
   /**
-   * The API contract (zod schemas + inferred types). FIRST in the publish order: both the
-   * api-client and the service depend on it at runtime, so a consumer that resolves either one
-   * must be able to resolve this. It is published even though the api-client is not — the
-   * SERVICE depends on it, and the service is public.
+   * The API contract (zod schemas + inferred types). FIRST in the stamped set because both the
+   * api-client and the service depend on it, so its version has to settle before their pins are
+   * rewritten. Like the api-client it is `private`, so it is stamped but never published — which
+   * is exactly why the service cannot simply depend on it at runtime: `packages/cezar/scripts/
+   * inline-contract.mjs` folds it into `dist/contract/` at build time instead. It moves to a real
+   * publish the day that script is deleted.
    */
   contract: ManifestLike;
   /** The contract package a consumer installs to talk to a cezar service. */

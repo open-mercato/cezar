@@ -190,7 +190,16 @@ const runRecordSchema = z.object({
    *  index signature admits `object | symbol | undefined`) impossible for the
    *  contract to describe. `.catch(undefined)` keeps an older or hand-edited
    *  entry from failing the whole index parse: a def that no longer fits simply
-   *  drops, and `reviveWorkflow` falls back to the catalog by name. */
+   *  drops, and `reviveWorkflow` falls back to the catalog by name.
+   *
+   *  That drop is PERMANENT, not per-boot — the index is re-serialized from the
+   *  parsed records (`saveNow`), so the next save writes runs.json back without
+   *  it. Harmless for a catalog workflow, which re-resolves by name; fatal for
+   *  the ad-hoc "(planned)" chain this field exists to preserve, which has no
+   *  catalog entry to fall back to. Nothing written since #367 fails the schema
+   *  (`name`, `source` and `steps` have been on every persisted def), so tighten
+   *  `workflowStepSchema` only with that in mind: a narrowing here silently eats
+   *  queued runs rather than degrading them. */
   workflowDef: workflowDefSchema.optional().catch(undefined),
 });
 
