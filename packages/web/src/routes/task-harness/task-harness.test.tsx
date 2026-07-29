@@ -425,3 +425,28 @@ describe('formatReviewResponse', () => {
     expect(out).toContain('0 findings')
   })
 })
+
+/**
+ * Per-attempt findings (user feedback 2026-07-29): the modal's FINDINGS section
+ * follows the selected attempt, parsed from that attempt's result artifact.
+ */
+describe('parseReviewFindings', () => {
+  it('parses the findings array out of a result artifact', async () => {
+    const { parseReviewFindings } = await import('./reviewer-modal')
+    expect(
+      parseReviewFindings(
+        JSON.stringify({
+          verdict: 'request_changes',
+          findings: [{ severity: 'major', title: 'Race in store', location: 'src/a.ts:4', evidence: 'x' }],
+        }),
+      ),
+    ).toEqual([{ severity: 'major', title: 'Race in store', location: 'src/a.ts:4', evidence: 'x' }])
+  })
+
+  it('answers null for prose, non-review JSON, or nothing — the caller falls back', async () => {
+    const { parseReviewFindings } = await import('./reviewer-modal')
+    expect(parseReviewFindings('not json')).toBeNull()
+    expect(parseReviewFindings('{"unrelated":1}')).toBeNull()
+    expect(parseReviewFindings(null)).toBeNull()
+  })
+})

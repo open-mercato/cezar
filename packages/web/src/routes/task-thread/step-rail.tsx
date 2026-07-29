@@ -48,30 +48,57 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
-export function StepRail({ steps }: { steps: StepState[] }) {
+export function StepRail({
+  steps,
+  onSelectStep,
+}: {
+  steps: StepState[]
+  /** Makes each row a jump target — the thread scrolls to where the step
+   *  started (user request 2026-07-29). Absent = the rows stay inert. */
+  onSelectStep?: (id: string) => void
+}) {
   if (steps.length === 0) return null
   const pct = railProgress(steps) * 100
   return (
     <div data-slot="step-rail" className="flex min-w-0 flex-col gap-1">
-      {steps.map((step, index) => (
-        <div
-          key={step.id}
-          data-slot="step-row"
-          data-visual={railVisual(step.status)}
-          className="flex min-h-[22px] min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
-        >
-          <RailIcon visual={railVisual(step.status)} />
-          <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
-          {step.iterations > 1 ? (
-            <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
-              ×{step.iterations}
+      {steps.map((step, index) => {
+        const body = (
+          <>
+            <RailIcon visual={railVisual(step.status)} />
+            <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
+            {step.iterations > 1 ? (
+              <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
+                ×{step.iterations}
+              </span>
+            ) : null}
+            <span className="ml-auto shrink-0 pl-2 text-[11.5px] text-soft-foreground tabular-nums">
+              {step.kind} · step {index + 1} of {steps.length}
             </span>
-          ) : null}
-          <span className="ml-auto shrink-0 pl-2 text-[11.5px] text-soft-foreground tabular-nums">
-            {step.kind} · step {index + 1} of {steps.length}
-          </span>
-        </div>
-      ))}
+          </>
+        )
+        return onSelectStep ? (
+          <button
+            key={step.id}
+            type="button"
+            data-slot="step-row"
+            data-visual={railVisual(step.status)}
+            title={`Jump to where "${step.name}" started`}
+            onClick={() => onSelectStep(step.id)}
+            className="-mx-1 flex min-h-[22px] w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 text-left text-[13px] text-muted-foreground hover:bg-muted"
+          >
+            {body}
+          </button>
+        ) : (
+          <div
+            key={step.id}
+            data-slot="step-row"
+            data-visual={railVisual(step.status)}
+            className="flex min-h-[22px] min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
+          >
+            {body}
+          </div>
+        )
+      })}
       <div data-slot="step-progress" className="mt-1 h-0.5 overflow-hidden rounded-full bg-muted">
         <div className="h-full rounded-full bg-pending" style={{ width: `${pct}%` }} />
       </div>
@@ -147,7 +174,16 @@ const openByRun = new Map<string, boolean>()
  * Collapsed by default because the summary already answers "where is this run?" at a glance;
  * an explicit expand is remembered for that run across tab switches.
  */
-export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepState[] }) {
+export function WorkflowSteps({
+  runId,
+  steps,
+  onJumpToStep,
+}: {
+  runId: string
+  steps: StepState[]
+  /** Jump the transcript to a step's start; the panel closes on selection. */
+  onJumpToStep?: (id: string) => void
+}) {
   const [open, setOpen] = useState(() => openByRun.get(runId) ?? false)
   if (steps.length === 0) return null
   const toggle = (next: boolean) => {
@@ -158,7 +194,7 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
   const current = steps[index]!
   const pct = railProgress(steps) * 100
   return (
-    <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
+    <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="relative min-w-0">
       <CollapsibleTrigger
         aria-label={`Workflow: ${current.name}, step ${index + 1} of ${steps.length}`}
         className="group flex min-h-[30px] w-full items-center gap-2.5 text-left text-xs text-muted-foreground hover:text-foreground"
@@ -180,10 +216,26 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
           className="size-4 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-180"
         />
       </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="pt-2">
-          <StepRail steps={steps} />
-        </div>
+      {/* An OVERLAY panel, not an inline expansion (user feedback 2026-07-29):
+          a multi-modal harness run carries 12–18 steps, and expanding them in
+          the sticky header shoved the transcript below the fold. The panel
+          floats over the thread, bounded and scrollable, and a step click
+          closes it (jumping the transcript when the caller wires it). */}
+      <CollapsibleContent
+        data-slot="workflow-steps-panel"
+        className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-[min(55vh,380px)] overflow-y-auto rounded-xl border border-border bg-card p-2.5 shadow-lg"
+      >
+        <StepRail
+          steps={steps}
+          onSelectStep={
+            onJumpToStep
+              ? (id) => {
+                  toggle(false)
+                  onJumpToStep(id)
+                }
+              : undefined
+          }
+        />
       </CollapsibleContent>
     </Collapsible>
   )

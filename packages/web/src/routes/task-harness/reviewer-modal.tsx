@@ -40,12 +40,16 @@ import { displayedCouncil, shortModelName } from './harness-state'
 function ReviewerConversation({
   runId,
   invocations,
+  openId,
+  onSelect,
 }: {
   runId: string
   invocations: readonly HarnessInvocationRecord[]
+  /** Selection lives on the modal: the FINDINGS section follows it too. */
+  openId: string | null
+  onSelect: (id: string) => void
 }) {
   const ordered = [...invocations].reverse()
-  const [openId, setOpenId] = useState<string | null>(ordered[0]?.id ?? null)
   const detail = useHarnessInvocation(runId, openId)
 
   if (ordered.length === 0) return null
@@ -61,7 +65,8 @@ function ReviewerConversation({
             <button
               key={invocation.id}
               type="button"
-              onClick={() => setOpenId(invocation.id)}
+              data-slot="reviewer-attempt"
+              onClick={() => onSelect(invocation.id)}
               className={cn(
                 'inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium',
                 invocation.id === openId
@@ -138,6 +143,33 @@ function Turn({
  * strings, so it becomes readable prose — and anything that is not the expected
  * shape falls through untouched rather than being hidden.
  */
+/** The findings inside one attempt's result artifact, or null when the text is
+ *  not a parseable review — the caller then falls back to the council row.
+ *  Shared shape with the ledger's findings so the section renders identically
+ *  whichever source fed it. */
+export function parseReviewFindings(
+  raw: string | null,
+): Array<{ severity: string; title: string; location?: string; evidence?: string }> | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const findings = (parsed as { findings?: unknown }).findings
+  if (!Array.isArray(findings)) return null
+  return findings
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
+    .map((entry) => ({
+      severity: typeof entry.severity === 'string' ? entry.severity : 'nit',
+      title: String(entry.title ?? 'untitled'),
+      ...(typeof entry.location === 'string' ? { location: entry.location } : {}),
+      ...(typeof entry.evidence === 'string' ? { evidence: entry.evidence } : {}),
+    }))
+}
+
 export function formatReviewResponse(raw: string | null): string | null {
   if (!raw) return null
   let parsed: unknown
@@ -188,6 +220,25 @@ export function ReviewerModal({
     (invocation) => invocation.reviewerId === reviewerId || invocation.binding.model === reviewerId,
   )
   const open = reviewerId !== null && reviewer !== undefined
+
+  // The selected attempt drives the conversation AND the findings: reading
+  // attempt 1 while the findings silently showed attempt 2's list made the
+  // two sections tell different stories about one reviewer (user feedback
+  // 2026-07-29). Keyed by reviewer so switching reviewers resets to newest.
+  const newestId = invocations[invocations.length - 1]?.id ?? null
+  const [attemptByReviewer, setAttemptByReviewer] = useState<Record<string, string>>({})
+  const openAttemptId = (reviewerId && attemptByReviewer[reviewerId]) || newestId
+  const selectAttempt = (id: string) => {
+    if (reviewerId) setAttemptByReviewer((current) => ({ ...current, [reviewerId]: id }))
+  }
+  const attemptDetail = useHarnessInvocation(runId, openAttemptId)
+  const attemptFindings = parseReviewFindings(attemptDetail.data?.result ?? null)
+  const attemptNumber =
+    openAttemptId === null
+      ? null
+      : invocations.findIndex((invocation) => invocation.id === openAttemptId) + 1
+  const showingAttempt = attemptFindings !== null && openAttemptId !== newestId
+  const findings = attemptFindings ?? reviewer?.findings ?? []
 
   // A failed reviewer inside a paused council is actionable right here: the
   // same decision endpoint the rail's banner uses, one click from the failure.
@@ -279,18 +330,30 @@ export function ReviewerModal({
             </div>
           ) : null}
 
-          <ReviewerConversation runId={runId} invocations={invocations} />
+          <ReviewerConversation
+            runId={runId}
+            invocations={invocations}
+            openId={openAttemptId}
+            onSelect={selectAttempt}
+          />
 
           <h3 className="text-[10.5px] font-semibold tracking-[0.06em] text-soft-foreground uppercase">
             Findings
+            {showingAttempt && attemptNumber ? (
+              <span className="ml-1.5 font-medium normal-case tracking-normal text-muted-foreground">
+                — attempt {attemptNumber}
+              </span>
+            ) : null}
           </h3>
-          {(reviewer?.findings ?? []).length === 0 ? (
+          {findings.length === 0 ? (
             <p className="mt-2 text-xs text-soft-foreground">
-              This reviewer raised nothing on the final diff.
+              {showingAttempt && attemptNumber
+                ? `Attempt ${attemptNumber} raised nothing.`
+                : 'This reviewer raised nothing on the final diff.'}
             </p>
           ) : (
             <ul className="mt-2 flex flex-col gap-2.5">
-              {(reviewer?.findings ?? []).map((finding, index) => (
+              {findings.map((finding, index) => (
                 <li key={`${finding.title}-${index}`} className="flex flex-col gap-1">
                   <span className="flex items-start gap-2">
                     <SeverityTag severity={finding.severity} />

@@ -222,3 +222,46 @@ describe('HarnessRail council decision card', () => {
     expect(document.querySelector('[data-slot="council-decision"]')).toBeNull()
   })
 })
+
+/**
+ * A reviewing model shows it (user request 2026-07-29): the Models tile marks
+ * every model with a running invocation with a spinner, so "who is the run
+ * waiting on" is readable without opening the timeline.
+ */
+describe('HarnessRail models working indicator', () => {
+  const models = [
+    { id: 'claude/claude-haiku-4-5', model: 'claude-haiku-4-5', family: 'anthropic', roles: ['reviewer'], readiness: 'ready', invocations: 1, totalDurationMs: 1000 },
+    { id: 'codex/gpt-5.6-luna', model: 'gpt-5.6-luna', family: 'openai', roles: ['reviewer'], readiness: 'ready', invocations: 0, totalDurationMs: 0 },
+  ] as unknown as HarnessLedgerResponse['models']
+
+  it('spins exactly the models with a running invocation', () => {
+    render(
+      <HarnessRail
+        ledger={ledger({
+          models,
+          invocations: [
+            {
+              id: 'reviewer:review:claude/claude-haiku-4-5',
+              phaseId: 'review',
+              role: 'reviewer',
+              reviewerId: 'claude/claude-haiku-4-5',
+              binding: { runner: 'claude', model: 'claude-haiku-4-5' },
+              status: 'running',
+              attempt: 1,
+              inputSha256: 'x',
+            },
+          ] as unknown as HarnessLedgerResponse['invocations'],
+        })}
+      />,
+    )
+
+    const spinners = document.querySelectorAll('[data-slot="model-working"]')
+    expect(spinners).toHaveLength(1)
+    expect(spinners[0]!.getAttribute('aria-label')).toContain('claude-haiku-4-5')
+  })
+
+  it('shows no spinner when nothing runs', () => {
+    render(<HarnessRail ledger={ledger({ models, invocations: [] })} />)
+    expect(document.querySelectorAll('[data-slot="model-working"]')).toHaveLength(0)
+  })
+})

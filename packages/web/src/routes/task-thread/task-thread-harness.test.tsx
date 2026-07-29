@@ -193,3 +193,27 @@ describe('harness phase-boundary composer', () => {
     expect(screen.getByText(/harness recovery snapshot is unavailable/i)).toBeTruthy()
   })
 })
+
+/**
+ * The step panel's jump target (user request 2026-07-29): harness phase items
+ * carry `stepId:itemId` scoped ids inside their row keys, so the first row of a
+ * step is a delimited containment match — and a prefix step id ("spec") must
+ * never match its longer siblings ("spec-review").
+ */
+describe('stepRowIndex', () => {
+  it('finds the step divider row, with a round-suffix fallback', async () => {
+    const { stepRowIndex } = await import('./task-thread')
+    const rows = [
+      { key: 'task', node: null },
+      { key: 'turn-1:step-start:spec', node: null },
+      { key: 'turn-1:item_1', node: null },
+      { key: 'turn-2:step-start:spec-review-1', node: null },
+      { key: 'turn-3:step-start:implement', node: null },
+    ] as never[]
+    expect(stepRowIndex(rows, 'spec')).toBe(1)
+    expect(stepRowIndex(rows, 'implement')).toBe(4)
+    // Council sub-phases stamp their round; the panel's plain id still lands.
+    expect(stepRowIndex(rows, 'spec-review')).toBe(3)
+    expect(stepRowIndex(rows, 'validate')).toBe(-1)
+  })
+})

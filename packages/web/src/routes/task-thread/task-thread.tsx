@@ -62,7 +62,7 @@ import {
 } from './thread-state'
 import { HarnessModelsDock } from '../task-harness/harness-components'
 import { HarnessRail } from '../task-harness/harness-rail'
-import { HarnessStatusBar, HarnessTimeline } from '../task-harness/harness-status-bar'
+import { HarnessStatusBar, HarnessTimelineDialog } from '../task-harness/harness-status-bar'
 import { ReviewerModal } from '../task-harness/reviewer-modal'
 import { RUN_RAIL_GRID, runShellClass } from './run-shell'
 import { mergeHarnessLedger } from '../task-harness/harness-state'
@@ -201,6 +201,22 @@ export function buildThreadRows(
   return rows
 }
 
+/**
+ * The transcript row of a step's divider marker (`reduceThread` pushes one
+ * `step-start:<id>` note per phase boundary) — the jump target for the
+ * header's step panel (user request 2026-07-29). Falls back to a
+ * round-suffixed variant (`spec-review` → `spec-review-1`) because council
+ * sub-phases stamp their round onto the event step id. -1 when the step never
+ * reached the transcript — the caller then no-ops.
+ */
+export function stepRowIndex(rows: readonly ThreadRow[], stepId: string): number {
+  const exact = rows.findIndex((row) => row.key.endsWith(`:step-start:${stepId}`))
+  if (exact >= 0) return exact
+  const escaped = stepId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const suffixed = new RegExp(`:step-start:${escaped}-\\d+$`)
+  return rows.findIndex((row) => suffixed.test(row.key))
+}
+
 /** The loaded thread. The header owns its own data hooks (mutations, the runs list); the
  *  thread body stays presentational — tests drive it with reduced fixture states directly. */
 export function ThreadView({
@@ -333,12 +349,34 @@ export function ThreadView({
   useKeyboardInsetVar(scroll.restickIfStuck)
   const [timelineOpen, setTimelineOpen] = useState(false)
 
+  // The step panel's jump: virtua owns programmatic scrolls while virtualized;
+  // the flat mode scrolls the row's own element. The virtual jump is issued
+  // twice — a far target's offset is an estimate until its neighborhood has
+  // been measured, and the second call lands on the corrected position.
+  const jumpToStep = (stepId: string) => {
+    const index = stepRowIndex(rows, stepId)
+    if (index < 0) return
+    const virtualizer = scroll.virtualizerRef.current
+    if (virtualizer) {
+      virtualizer.scrollToIndex(index, { align: 'start' })
+      window.setTimeout(() => {
+        scroll.virtualizerRef.current?.scrollToIndex(index, { align: 'start' })
+      }, 120)
+      return
+    }
+    const row = (scroll.scrollElRef.current ?? document).querySelectorAll(
+      '[data-slot="thread-row"]',
+    )[index]
+    row?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+
   return (
     <div data-route="task-thread" className="flex min-h-full flex-col">
       <RunHeader
         run={run}
         planTally={planTally}
         publishBlockedReason={harnessPublishBlocked}
+        onJumpToStep={jumpToStep}
       />
       {/* ONE status line, and the timeline behind it (review 2026-07-27): the
           horizontal phase rail could not be read — 18 phases, 2620px wide, inside
@@ -363,7 +401,13 @@ export function ThreadView({
           runShellClass(Boolean(harnessLedger)),
         )}
       >
-        {harnessLedger && timelineOpen ? <HarnessTimeline ledger={harnessLedger} /> : null}
+        {harnessLedger ? (
+          <HarnessTimelineDialog
+            ledger={harnessLedger}
+            open={timelineOpen}
+            onOpenChange={setTimelineOpen}
+          />
+        ) : null}
         <div className={harnessLedger ? RUN_RAIL_GRID : undefined}>
           <div className="flex min-w-0 flex-col gap-3.5">
         <ThreadCardCache runId={run.id}>

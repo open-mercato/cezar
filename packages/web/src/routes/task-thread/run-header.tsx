@@ -102,11 +102,14 @@ export function RunHeader({
   planTally,
   tab = 'session',
   publishBlockedReason,
+  onJumpToStep,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
   publishBlockedReason?: string
+  /** Wired only where a transcript exists to jump in (the Session tab). */
+  onJumpToStep?: (id: string) => void
 }) {
   // Harness runs render the wide shell (they carry a run rail); everything else
   // keeps the reading measure. One source of truth so the header can never sit
@@ -284,7 +287,7 @@ export function RunHeader({
 
         {run.steps.length > 0 ? (
           <div className="border-t border-border pt-2 pb-1">
-            <WorkflowSteps runId={run.id} steps={run.steps} />
+            <WorkflowSteps runId={run.id} steps={run.steps} onJumpToStep={onJumpToStep} />
           </div>
         ) : null}
 

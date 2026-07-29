@@ -3,6 +3,7 @@ import { Fragment } from 'react'
 
 import type { HarnessLedgerResponse, HarnessPhaseRecord } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 
 import { activeHarnessPhase, currentImplementationCouncil } from './harness-state'
@@ -131,12 +132,110 @@ function stageOf(phase: HarnessPhaseRecord): string {
 }
 
 /**
+ * The wall-clock graph (user request 2026-07-29): WHEN each phase ran, not just
+ * how long — one time axis for the whole run, one thin bar per phase positioned
+ * by its real start/end. Bars wear the product's status tokens (the same three
+ * the tables above already use), each row is named in text and carries a native
+ * tooltip, so color never stands alone; the grid stays recessive.
+ */
+export function WallClockGraph({ phases }: { phases: readonly HarnessPhaseRecord[] }) {
+  const spans = phases
+    .map((phase) => {
+      const start = phase.startedAt ? Date.parse(phase.startedAt) : Number.NaN
+      const end = phase.endedAt ? Date.parse(phase.endedAt) : Date.now()
+      return { phase, start, end }
+    })
+    .filter((span) => !Number.isNaN(span.start) && !Number.isNaN(span.end) && span.end >= span.start)
+  if (spans.length < 2) return null
+  const t0 = Math.min(...spans.map((span) => span.start))
+  const t1 = Math.max(...spans.map((span) => span.end))
+  if (t1 <= t0) return null
+  const pct = (ms: number) => ((ms - t0) / (t1 - t0)) * 100
+  const barClass = (status: HarnessPhaseRecord['status']) =>
+    status === 'failed'
+      ? 'bg-danger'
+      : status === 'running'
+        ? 'bg-pending animate-pulse motion-reduce:animate-none'
+        : status === 'done'
+          ? 'bg-success/80'
+          : 'bg-muted'
+  return (
+    <div data-slot="wall-clock-graph" className="border-b border-border px-4 py-3">
+      <div className="mb-2 flex items-center gap-3">
+        <h3 className="text-[10px] font-semibold tracking-[0.07em] text-soft-foreground uppercase">
+          Phase timing
+        </h3>
+        <span className="flex items-center gap-2.5 text-[10px] text-soft-foreground">
+          {(
+            [
+              ['done', 'bg-success/80'],
+              ['running', 'bg-pending'],
+              ['failed', 'bg-danger'],
+            ] as const
+          ).map(([label, tone]) => (
+            <span key={label} className="flex items-center gap-1">
+              <i aria-hidden="true" className={cn('size-1.5 rounded-full', tone)} />
+              {label}
+            </span>
+          ))}
+        </span>
+      </div>
+      <div className="grid grid-cols-[minmax(0,150px)_1fr_auto] items-center gap-x-3 gap-y-1">
+        {spans.map(({ phase, start, end }) => (
+          <Fragment key={phase.id}>
+            <span className="truncate text-[11px] text-muted-foreground">{phaseLabel(phase)}</span>
+            <span className="relative h-2">
+              {/* Recessive quarter grid behind the bars. */}
+              {[25, 50, 75].map((tick) => (
+                <i
+                  key={tick}
+                  aria-hidden="true"
+                  className="absolute inset-y-0 w-px bg-border/60"
+                  style={{ left: `${tick}%` }}
+                />
+              ))}
+              <i
+                title={`${phaseLabel(phase)} — ${elapsed(Math.max(0, end - start))} (${new Date(start).toLocaleTimeString()} → ${phase.endedAt ? new Date(end).toLocaleTimeString() : 'now'})`}
+                className={cn('absolute inset-y-0 block rounded-full', barClass(phase.status))}
+                style={{
+                  left: `${pct(start)}%`,
+                  width: `${Math.max(0.8, pct(end) - pct(start))}%`,
+                }}
+              />
+            </span>
+            <span className="text-right text-[10.5px] text-soft-foreground tabular-nums">
+              {elapsed(Math.max(0, end - start))}
+            </span>
+          </Fragment>
+        ))}
+      </div>
+      <div className="mt-1.5 grid grid-cols-[minmax(0,150px)_1fr_auto] gap-x-3">
+        <span />
+        <span className="flex justify-between text-[9.5px] text-soft-foreground tabular-nums">
+          <span>+0s</span>
+          <span>+{elapsed(Math.round((t1 - t0) / 2))}</span>
+          <span>+{elapsed(t1 - t0)}</span>
+        </span>
+        <span />
+      </div>
+    </div>
+  )
+}
+
+/**
  * The run timeline (mockup 04): the vertical, grouped replacement for the
  * horizontal rail. Retries and durations are first-class here because they are
  * where a long run's time and money actually went, and the old rail showed
  * neither.
  */
-export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
+export function HarnessTimeline({
+  ledger,
+  frameless = false,
+}: {
+  ledger: HarnessLedgerResponse
+  /** Inside the timeline dialog the card's own frame would double the modal's. */
+  frameless?: boolean
+}) {
   const phases = ledger.phases
   if (phases.length === 0) return null
 
@@ -174,7 +273,10 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
     <section
       data-slot="harness-timeline"
       aria-label="Run timeline"
-      className="overflow-hidden rounded-xl border border-border bg-card shadow-xs"
+      className={cn(
+        'overflow-hidden bg-card',
+        !frameless && 'rounded-xl border border-border shadow-xs',
+      )}
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-4 py-2.5">
         <h2 className="text-[13px] font-semibold">Run timeline</h2>
@@ -197,6 +299,8 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
           </div>
         ))}
       </dl>
+
+      <WallClockGraph phases={phases} />
 
       <div className="flex flex-col gap-3 px-4 py-3">
         {groups.map((group, index) => (
@@ -317,5 +421,35 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
         ))}
       </div>
     </section>
+  )
+}
+
+/**
+ * The timeline behind a MODAL (user feedback 2026-07-29): it used to render at
+ * the top of the page, full width — in a long chat that meant scrolling far up
+ * to find it, and on xl screens it shoved the rail's tiles below itself. A
+ * dialog opens where you are, bounded and scrollable, and closes where you are.
+ */
+export function HarnessTimelineDialog({
+  ledger,
+  open,
+  onOpenChange,
+}: {
+  ledger: HarnessLedgerResponse
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="w-[min(920px,95vw)] gap-0 overflow-hidden p-0 sm:max-w-[920px]"
+        data-slot="harness-timeline-modal"
+      >
+        <DialogTitle className="sr-only">Run timeline</DialogTitle>
+        <div className="max-h-[85vh] overflow-y-auto">
+          <HarnessTimeline ledger={ledger} frameless />
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

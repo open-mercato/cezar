@@ -84,3 +84,46 @@ describe('HarnessTimeline', () => {
     expect(within(retries).getByText('2')).not.toBeNull()
   })
 })
+
+/**
+ * The wall-clock graph (user request 2026-07-29): one shared time axis, one
+ * bar per phase positioned by its real start/end — reading WHERE the run's
+ * hours went, not just each phase's own duration. Needs two dated phases;
+ * anything less has no axis to draw.
+ */
+describe('WallClockGraph', () => {
+  it('draws one positioned bar per dated phase over a shared axis', async () => {
+    const { WallClockGraph } = await import('./harness-status-bar')
+    render(
+      <WallClockGraph
+        phases={[
+          phase('spec', {
+            startedAt: '2026-07-29T10:00:00.000Z',
+            endedAt: '2026-07-29T10:10:00.000Z',
+          }),
+          phase('implement', {
+            startedAt: '2026-07-29T10:10:00.000Z',
+            endedAt: '2026-07-29T10:40:00.000Z',
+          }),
+        ]}
+      />,
+    )
+
+    const graph = document.querySelector('[data-slot="wall-clock-graph"]')!
+    expect(graph).not.toBeNull()
+    const bars = graph.querySelectorAll('i[title]')
+    expect(bars).toHaveLength(2)
+    // The second phase starts a quarter into the 40-minute span.
+    expect((bars[1] as HTMLElement).style.left).toBe('25%')
+    expect((bars[1] as HTMLElement).style.width).toBe('75%')
+    // The axis is labeled from +0s to the full span.
+    expect(graph.textContent).toContain('+0s')
+    expect(graph.textContent).toContain('+40m')
+  })
+
+  it('renders nothing for a run without two dated phases', async () => {
+    const { WallClockGraph } = await import('./harness-status-bar')
+    render(<WallClockGraph phases={[phase('spec', { startedAt: undefined, endedAt: undefined })]} />)
+    expect(document.querySelector('[data-slot="wall-clock-graph"]')).toBeNull()
+  })
+})

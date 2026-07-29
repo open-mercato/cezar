@@ -44,7 +44,7 @@ import { cn } from '@/lib/utils'
 import { RunHeader } from '../task-thread/run-header'
 import { elapsed, SeverityTag, toneOf } from './harness-components'
 import { HarnessRail } from './harness-rail'
-import { HarnessStatusBar, HarnessTimeline } from './harness-status-bar'
+import { HarnessStatusBar, HarnessTimelineDialog } from './harness-status-bar'
 import { ReviewerModal } from './reviewer-modal'
 import { RUN_RAIL_GRID, runShellClass } from '../task-thread/run-shell'
 import {
@@ -133,7 +133,6 @@ function HarnessPage({
       <main
         className={cn('flex flex-1 flex-col gap-3 px-4 py-5 md:px-6', runShellClass(true))}
       >
-        {timelineOpen ? <HarnessTimeline ledger={ledger} /> : null}
         <div className={RUN_RAIL_GRID}>
           <div className="flex min-w-0 flex-col gap-3">{children}</div>
           <HarnessRail
@@ -144,6 +143,7 @@ function HarnessPage({
           />
         </div>
       </main>
+      <HarnessTimelineDialog ledger={ledger} open={timelineOpen} onOpenChange={setTimelineOpen} />
       <ReviewerModal
         runId={run.id}
         ledger={ledger}

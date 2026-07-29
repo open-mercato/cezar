@@ -40,6 +40,9 @@ export interface ThreadNote {
   id: string
   text: string
   tone: 'dim' | 'danger'
+  /** A synthetic client-side phase boundary (2026-07-29): rendered as a step
+   *  divider, and the row the header's step panel jumps to. */
+  marker?: 'step-start'
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -397,7 +400,20 @@ export function reduceThread(events: RunEvent[]): ThreadState {
     itemsById.set(key, { turn, entry: draft })
   }
 
+  /** The last workflow step whose events reached the transcript. Phases share
+   *  turns (a harness run folds several phases into one), so step boundaries
+   *  are their own synthetic entries: a marker note pushed the moment the
+   *  stream switches steps — the divider the step panel jumps to (2026-07-29). */
+  let currentStepId: string | undefined
   for (const event of events) {
+    const eventStepId = str(event.stepId)
+    if (eventStepId !== undefined && eventStepId !== currentStepId) {
+      currentStepId = eventStepId
+      currentTurn().entries.push({
+        origin: 'meta',
+        entry: { kind: 'note', id: `step-start:${eventStepId}`, text: eventStepId, tone: 'dim', marker: 'step-start' },
+      })
+    }
     switch (event.type) {
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {

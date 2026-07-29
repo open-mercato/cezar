@@ -1,4 +1,4 @@
-import { BotIcon, RotateCcwIcon, ShieldCheckIcon, WaypointsIcon } from 'lucide-react'
+import { BotIcon, LoaderCircleIcon, RotateCcwIcon, ShieldCheckIcon, WaypointsIcon } from 'lucide-react'
 
 import { useCouncilDecision } from '@/api/queries'
 import type { HarnessLedgerResponse, HarnessPhaseRecord } from '@open-mercato/cezar-api-client'
@@ -317,6 +317,23 @@ function CouncilSection({
   )
 }
 
+/** Is this roster model the one a running invocation is executing on?
+ *  Invocations name models three ways — reviewerId (the roster id), the
+ *  binding's model, or an adapter id the roster id embeds — so all three match. */
+export function modelIsWorking(
+  model: Pick<HarnessLedgerResponse['models'][number], 'id' | 'model'>,
+  invocations: HarnessLedgerResponse['invocations'],
+): boolean {
+  return invocations.some(
+    (invocation) =>
+      invocation.status === 'running' &&
+      (invocation.reviewerId === model.id ||
+        (invocation.binding.model !== undefined &&
+          (invocation.binding.model === model.model ||
+            model.id.endsWith(`/${invocation.binding.model}`)))),
+  )
+}
+
 function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
   if (ledger.models.length === 0) return null
   const working = ledger.invocations.filter((invocation) => invocation.status === 'running').length
@@ -339,8 +356,16 @@ function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
           >
             <StatusDot tone={toneOf(model.readiness)} className="mt-[5px]" />
             <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium text-foreground">
-                {model.model || modelName(model.id)}
+              <span className="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
+                <span className="truncate">{model.model || modelName(model.id)}</span>
+                {modelIsWorking(model, ledger.invocations) ? (
+                  <LoaderCircleIcon
+                    role="status"
+                    aria-label={`${model.model || modelName(model.id)} is working`}
+                    data-slot="model-working"
+                    className="size-3 shrink-0 animate-spin stroke-pending motion-reduce:animate-none"
+                  />
+                ) : null}
               </span>
               <span className="block font-mono text-[10px] leading-tight break-all text-soft-foreground">
                 {model.binding ?? model.family ?? model.id}

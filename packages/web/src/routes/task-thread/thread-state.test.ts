@@ -32,7 +32,14 @@ const asRunEvents = (events: object[]): RunEvent[] =>
 const line = (seq: number, type: string, rest: Record<string, unknown> = {}): RunEvent =>
   ({ seq, ts: '2026-07-14T12:00:00.000Z', type, ...rest }) as RunEvent
 
-const kinds = (items: ThreadEntry[]) => items.map((item) => item.kind)
+/** Step dividers (2026-07-29) are additive markers with their own tests below;
+ *  the assertions here are about agent/tool/user content, so they read the
+ *  transcript with the markers stripped. */
+const stripStepMarkers = (items: ThreadEntry[]): ThreadEntry[] =>
+  items.filter((item) => !(item.kind === 'note' && (item as { marker?: string }).marker === 'step-start'))
+
+
+const kinds = (items: ThreadEntry[]) => stripStepMarkers(items).map((item) => item.kind)
 
 describe('reduceThread — golden v2 fixtures', () => {
   it('text-turn: one turn, one assistant message, completion recorded', () => {
@@ -105,10 +112,10 @@ describe('reduceThread — item ids across workflow steps', () => {
     ])
 
     expect(turns).toHaveLength(2)
-    expect(turns[0]!.items).toEqual([
+    expect(stripStepMarkers(turns[0]!.items)).toEqual([
       { kind: 'reasoning', id: 'item_1', text: 'Earlier thinking survives.' },
     ])
-    expect(turns[1]!.items).toEqual([
+    expect(stripStepMarkers(turns[1]!.items)).toEqual([
       { kind: 'message', id: 'item_1', role: 'assistant', text: 'Resumed response.' },
     ])
   })
@@ -166,7 +173,7 @@ describe('reduceThread — v1-only fallback (pre-v2 transcripts)', () => {
 
     // Turn 1: dim lines, the assistant text, the completed tool.
     expect(kinds(turns[0]!.items)).toEqual(['note', 'note', 'message', 'tool'])
-    const tool = turns[0]!.items[3] as UiToolItem
+    const tool = stripStepMarkers(turns[0]!.items)[3] as UiToolItem
     expect(tool.id).toBe('toolu_01WJ')
     expect(tool.title).toBe('Ran cat README.md | head -40') // via the shared toolDisplay model
     expect(tool.status).toBe('completed') // v1 has no failure signal — none is invented
@@ -175,7 +182,7 @@ describe('reduceThread — v1-only fallback (pre-v2 transcripts)', () => {
     // Turn 2: opened by the user-message, then the reply and the danger line.
     expect(turns[1]!.userMessage).toEqual({ text: 'Now summarize it.', imageCount: 0, images: [] })
     expect(kinds(turns[1]!.items)).toEqual(['message', 'note'])
-    expect(turns[1]!.items[1]).toMatchObject({ tone: 'danger', text: 'claude exited with code 1' })
+    expect(stripStepMarkers(turns[1]!.items)[1]).toMatchObject({ tone: 'danger', text: 'claude exited with code 1' })
   })
 
   it('a tool with no result stays honestly running', () => {
@@ -217,7 +224,7 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     // Turn 1 wears the v2 id and holds the two dim lines + exactly ONE copy of the message.
     expect(turns[0]!.turnId).toBe('turn_1')
     expect(kinds(turns[0]!.items)).toEqual(['note', 'note', 'message'])
-    expect((turns[0]!.items[2] as UiMessageItem).id).toBe('item_1')
+    expect((stripStepMarkers(turns[0]!.items)[2] as UiMessageItem).id).toBe('item_1')
 
     // Turn 2: the v1 user-message opened it, the v2 turn.started attached to it (no phantom
     // extra turn), and the v1 text twin was dropped.
@@ -237,7 +244,7 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     reordered[7] = completed
     const { turns } = reduceThread(reordered)
     expect(kinds(turns[0]!.items)).toEqual(['note', 'note', 'message'])
-    expect((turns[0]!.items[2] as UiMessageItem).id).toBe('item_1')
+    expect((stripStepMarkers(turns[0]!.items)[2] as UiMessageItem).id).toBe('item_1')
   })
 
   it('v1 tool lines are skipped in a v2-covered turn, matched by the shared toolu id', () => {
@@ -254,7 +261,7 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     ]
     const { turns } = reduceThread(withTools)
     expect(kinds(turns[0]!.items)).toEqual(['tool'])
-    expect((turns[0]!.items[0] as UiToolItem).status).toBe('completed')
+    expect((stripStepMarkers(turns[0]!.items)[0] as UiToolItem).status).toBe('completed')
   })
 
   // The vanishing-message regression: a turn can be v2-covered for TOOLS while its prose exists
@@ -275,7 +282,7 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     ]
     const { turns } = reduceThread(resultFallback)
     expect(kinds(turns[0]!.items)).toEqual(['message', 'tool'])
-    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('Prose that only v1 ever described.')
+    expect((stripStepMarkers(turns[0]!.items)[0] as UiMessageItem).text).toBe('Prose that only v1 ever described.')
   })
 
   // The two vocabularies normalize markers differently — the server strips `CEZ:` from v1 `text`
@@ -292,7 +299,7 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     ]
     const { turns } = reduceThread(finalTurn)
     expect(kinds(turns[0]!.items)).toEqual(['tool', 'message'])
-    expect((turns[0]!.items[1] as UiMessageItem).text).toBe('All done.')
+    expect((stripStepMarkers(turns[0]!.items)[1] as UiMessageItem).text).toBe('All done.')
   })
 })
 
@@ -315,8 +322,8 @@ describe('reduceThread — legacy per-delta transcripts (codex/opencode runs rec
     ]
     const { turns } = reduceThread(events)
     expect(kinds(turns[0]!.items)).toEqual(['message'])
-    expect((turns[0]!.items[0] as UiMessageItem).id).toBe('item_1')
-    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('QA done — see github.com/open-mercato/cezar/pull/628')
+    expect((stripStepMarkers(turns[0]!.items)[0] as UiMessageItem).id).toBe('item_1')
+    expect((stripStepMarkers(turns[0]!.items)[0] as UiMessageItem).text).toBe('QA done — see github.com/open-mercato/cezar/pull/628')
   })
 
   it('drops one run spanning TWO v2 messages (v1 tool suppression made them adjacent)', () => {
@@ -385,7 +392,7 @@ describe('reduceThread — live-stream mechanics', () => {
       line(2, 'item.completed', { item: { kind: 'message', id: 'm1', role: 'assistant', text: 'All done.\n\nCEZ:DONE' } }),
     ]
     const { turns } = reduceThread(events)
-    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('All done.')
+    expect((stripStepMarkers(turns[0]!.items)[0] as UiMessageItem).text).toBe('All done.')
   })
 
   it('strips a trailing CEZ:MONITORING from assistant messages too (#490)', () => {
@@ -396,7 +403,7 @@ describe('reduceThread — live-stream mechanics', () => {
       }),
     ]
     const { turns } = reduceThread(events)
-    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('Spawned the reviewer, waiting on it.')
+    expect((stripStepMarkers(turns[0]!.items)[0] as UiMessageItem).text).toBe('Spawned the reviewer, waiting on it.')
   })
 
   it('strips CEZ:PR/CEZ:ISSUE/CEZ:TITLE marker lines but keeps prose mentions (spec 2026-07-18-task-ref-markers)', () => {
@@ -412,7 +419,7 @@ describe('reduceThread — live-stream mechanics', () => {
       }),
     ]
     const { turns } = reduceThread(events)
-    expect((turns[0]!.items[0] as UiMessageItem).text).toBe('Opened the PR.\nI will keep CEZ:PR=442 updated.')
+    expect((stripStepMarkers(turns[0]!.items)[0] as UiMessageItem).text).toBe('Opened the PR.\nI will keep CEZ:PR=442 updated.')
   })
 
   it('a malformed line costs itself, not the fold', () => {
@@ -431,7 +438,7 @@ describe('reduceThread — live-stream mechanics', () => {
       line(1, 'step-end', { stepId: 'task', status: 'done' }),
       line(2, 'step-end', { stepId: 'check', status: 'failed', error: 'tests failed' }),
     ])
-    expect(turns[0]!.items).toEqual([
+    expect(stripStepMarkers(turns[0]!.items)).toEqual([
       { kind: 'note', id: 'v1:2', text: 'step check failed — tests failed', tone: 'danger' },
     ])
   })
@@ -495,7 +502,7 @@ describe('latestPlanEntries — the dock takes the newest snapshot across turns'
     ])
     expect(latestPlanEntries(state)).toEqual(todos)
     // The plan-kind tool item itself is still synthesized — hiding it is the grouping's job.
-    expect((state.turns[0]!.items[0] as UiToolItem).toolKind).toBe('plan')
+    expect((stripStepMarkers(state.turns[0]!.items)[0] as UiToolItem).toolKind).toBe('plan')
   })
 
   it('v1 fallback is all-or-nothing: a malformed todos array yields no plan', () => {
@@ -515,7 +522,7 @@ describe('reduceThread — check-output (check steps, v1-only by nature)', () =>
       line(2, 'check-output', { stepId: 'verify', command: 'npm test', text: '72 passing (1.2s)', exitCode: 0 }),
     ])
     expect(kinds(turns[0]!.items)).toEqual(['note', 'tool'])
-    expect(turns[0]!.items[1]).toEqual({
+    expect(stripStepMarkers(turns[0]!.items)[1]).toEqual({
       kind: 'tool',
       id: 'v1:2',
       name: 'check',
@@ -532,7 +539,7 @@ describe('reduceThread — check-output (check steps, v1-only by nature)', () =>
       line(1, 'check-output', { stepId: 'verify', command: 'npm test', text: '1 failing', exitCode: 2 }),
       line(2, 'check-output', { stepId: 'verify', command: 'nope', text: 'failed to spawn: ENOENT', exitCode: -1 }),
     ])
-    const [failed, spawn] = turns[0]!.items as [UiToolItem, UiToolItem]
+    const [failed, spawn] = stripStepMarkers(turns[0]!.items) as [UiToolItem, UiToolItem]
     expect(failed).toMatchObject({ status: 'failed', exitCode: 2, output: '1 failing' })
     expect(spawn).toMatchObject({ status: 'failed', exitCode: -1 })
   })
@@ -549,13 +556,13 @@ describe('reduceThread — check-output (check steps, v1-only by nature)', () =>
 
 describe('reduceThread — provider authorization recovery', () => {
   it('persists a valid provider authorization incident in its failure turn', () => {
-    expect(reduceThread([
+    expect(stripStepMarkers(reduceThread([
       line(1, 'provider-auth-required', {
         provider: 'claude',
         authFailureId: 'incident-1',
         stepId: 'work',
       }),
-    ]).turns[0]?.items).toEqual([{
+    ]).turns[0]?.items ?? [])).toEqual([{
       kind: 'provider-auth-required',
       id: 'v1:1',
       provider: 'claude',
@@ -645,7 +652,7 @@ describe('threadFilePaths — the @ mention source (today: what the tools touche
 
 describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted type renders or is a documented suppression', () => {
   const allItems = (events: RunEvent[]): ThreadEntry[] =>
-    reduceThread(events).turns.flatMap((turn) => turn.items)
+    stripStepMarkers(reduceThread(events).turns.flatMap((turn) => turn.items))
 
   // -- types that RENDER ------------------------------------------------------------------
 
@@ -726,9 +733,9 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
     ['turn-end', {}], // engine control flow
     ['done', {}], // shadowed by its lifecycle line
     ['session', { sessionId: 'abc-123' }], // header resume hint (record sessionId)
-  ])('%s → deliberately nothing in the thread body', (type, rest) => {
+  ])('%s → nothing in the thread body beyond the step divider', (type, rest) => {
     const state = reduceThread([line(1, type, rest)])
-    expect(state.turns.flatMap((turn) => turn.items)).toEqual([])
+    expect(stripStepMarkers(state.turns.flatMap((turn) => turn.items))).toEqual([])
   })
 
   it('unknown future types → nothing, never a guessed rendering (divergence from the legacy raw-JSON note, on purpose)', () => {
@@ -738,7 +745,7 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
 
 describe('reduceThread — AskUser cards (#473)', () => {
   const allItems = (events: RunEvent[]): ThreadEntry[] =>
-    reduceThread(events).turns.flatMap((turn) => turn.items)
+    stripStepMarkers(reduceThread(events).turns.flatMap((turn) => turn.items))
 
   const ASK = {
     requestId: 'ask_1',
@@ -835,7 +842,7 @@ describe('reduceThread — AskUser cards (#473)', () => {
 // read as questions stays raw.
 describe('cardless CEZ:ASK rendering', () => {
   const allItems = (events: RunEvent[]): ThreadEntry[] =>
-    reduceThread(events).turns.flatMap((turn) => turn.items)
+    stripStepMarkers(reduceThread(events).turns.flatMap((turn) => turn.items))
   const payload = JSON.stringify({
     questions: [
       {
@@ -886,5 +893,39 @@ describe('cardless CEZ:ASK rendering', () => {
       }),
     ]).find((i) => i.kind === 'message') as { text: string } | undefined
     expect(msg?.text).toBe(raw)
+  })
+})
+
+/**
+ * Step dividers (2026-07-29): phases share turns in a harness run, so the
+ * reducer pushes one synthetic `step-start:<id>` marker note the moment the
+ * stream switches steps — the divider the header's step panel jumps to.
+ */
+describe('step-start markers', () => {
+  it('pushes one marker per step transition, none for same-step events', () => {
+    const thread = reduceThread([
+      { seq: 1, type: 'item.started', stepId: 'spec', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'a' } },
+      { seq: 2, type: 'item.completed', stepId: 'spec', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'ab' } },
+      { seq: 3, type: 'item.started', stepId: 'implement', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'c' } },
+    ] as never[])
+    const markers = thread.turns.flatMap((turn) =>
+      turn.items.filter(
+        (item): item is Extract<typeof item, { kind: 'note' }> =>
+          item.kind === 'note' && (item as { marker?: string }).marker === 'step-start',
+      ),
+    )
+    expect(markers.map((marker) => marker.id)).toEqual(['step-start:spec', 'step-start:implement'])
+    // The marker precedes the step's first item in the turn.
+    const first = thread.turns[0]!.items
+    expect(first[0]).toMatchObject({ kind: 'note', id: 'step-start:spec' })
+  })
+
+  it('pushes no markers for streams that never carry a step id', () => {
+    const thread = reduceThread([
+      { seq: 1, type: 'item.completed', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'a' } },
+    ] as never[])
+    expect(
+      thread.turns.flatMap((turn) => turn.items).some((item) => item.kind === 'note'),
+    ).toBe(false)
   })
 })
