@@ -12,20 +12,6 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:web"],
       "port": 5173
-    },
-    {
-      "_comment": "Fresh-machine simulation: opencode reads an empty XDG data dir, so it has no logins and offers only the free tier — exactly what a new install sees. The real auth store (~/.local/share/opencode) is untouched; codex and claude use their own config dirs and are unaffected. Run the plain `cezar` config to go back.",
-      "name": "cezar-fresh",
-      "runtimeExecutable": "env",
-      "runtimeArgs": [
-        "XDG_DATA_HOME=/private/tmp/claude-501/-Users-haxiorz-GIT-cezar/632fd540-2008-44e1-8df3-7fd52039248c/scratchpad/fresh-xdg",
-        "npx",
-        "tsx",
-        "src/index.ts",
-        "serve",
-        "--no-open"
-      ],
-      "port": 4321
     }
   ]
 }

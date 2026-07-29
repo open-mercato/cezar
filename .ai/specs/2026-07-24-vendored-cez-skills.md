@@ -16,7 +16,7 @@
 - Rename map, longest-first, case-sensitive, each token compiled as `/<escaped>(?![a-z0-9-])/g`:
   `om-setup-agent-harness→cez-setup-harness`, `om-setup-agent-pipeline→cez-setup-pipeline`, `om-harness-review→cez-harness-review`, `om-verify-in-repo→cez-verify-in-repo`, `om-spec-writing→cez-spec-writing`, `om-code-review→cez-code-review`, `om-root-cause→cez-root-cause`, `om-harness→cez-harness`, `om-fix→cez-fix`.
   The lookahead keeps `om-fix-issue`, `om-harness-adapter-` tmp prefixes, and `.om-freeze-tests` sentinel untouched; uppercase `OM_HARNESS_*` / `OM_AGENT_HARNESS_CONFIG` env names are untouched by construction. `om-harness-review` precedes `om-harness` in the map so the output-style filename renames too.
-- Vendored set (8): `om-harness`, `om-setup-agent-harness`, `om-setup-agent-pipeline`, `om-code-review`, `om-verify-in-repo`, `om-root-cause`, `om-fix`, `om-spec-writing`. Source: local checkout `/Users/haxiorz/GIT/skills` @ its current `feat/omdyo-harness` HEAD (record full SHA in the manifest).
+- Vendored set (8): `om-harness`, `om-setup-agent-harness`, `om-setup-agent-pipeline`, `om-code-review`, `om-verify-in-repo`, `om-root-cause`, `om-fix`, `om-spec-writing`. Source: local checkout `<local open-mercato/skills checkout>` @ its current `feat/omdyo-harness` HEAD (record full SHA in the manifest).
 - `requires:` injected by the vendor script: `cez-setup-harness → [cez-harness, cez-setup-pipeline]`; `cez-harness → [cez-code-review]` (harness.mjs resolves the review rubric as a sibling dir).
 
 ---
@@ -124,7 +124,7 @@ writeFileSync(join(DEST, 'MANIFEST.json'), `${JSON.stringify({
 console.log(`vendored ${vendored.length} skills from ${ref}@${commit.slice(0, 7)} into vendor/skills/`);
 ```
 
-- [ ] **Step 2: Run it** — `node scripts/vendor-skills.mjs --source /Users/haxiorz/GIT/skills`. Expected: `vendored 8 skills from feat/omdyo-harness@a018dc9 into vendor/skills/`.
+- [ ] **Step 2: Run it** — `node scripts/vendor-skills.mjs --source <local open-mercato/skills checkout>`. Expected: `vendored 8 skills from feat/omdyo-harness@a018dc9 into vendor/skills/`.
 - [ ] **Step 3: Spot-verify the transform** (grep, all must hold):
   - `grep -rn "'../../cez-code-review/SKILL.md'" vendor/skills/cez-harness/scripts/harness.mjs` → 1 hit (sibling resolution renamed).
   - `grep -rn "om-harness\b" vendor/skills/*/SKILL.md` → 0 hits.
