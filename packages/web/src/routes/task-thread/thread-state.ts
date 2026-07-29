@@ -198,19 +198,62 @@ function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | un
  *
  *  `stripAsk` gates the `CEZ:ASK` strip on the turn actually holding an ask card (#473): the
  *  card is the only other place the questions exist, so a marker whose card never materialized
- *  (invalid payload, or the session died before turn-end) must stay visible as raw text — the
- *  user can still read the question and answer via the composer. Hiding it would delete the
- *  question from the thread entirely. */
+ *  (invalid payload, a non-interactive harness phase, or the session died before turn-end)
+ *  must stay VISIBLE — but visible as readable questions, not as the raw protocol JSON it was
+ *  repeatedly reported as. `askMarkerAsProse` rewrites anything ask-shaped; only a payload too
+ *  broken to read as questions stays raw, because raw is then the only honest rendering. */
 function stripDoneMarker(text: string, stripAsk: boolean): string {
   let trailing = text
     .replace(/\s*CEZ:DONE\s*$/, '')
     .replace(/\s*CEZ:MONITORING\s*$/, '')
   if (stripAsk) trailing = trailing.replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '')
+  else trailing = askMarkerAsProse(trailing) ?? trailing
   if (!trailing.includes('CEZ:')) return trailing
   return trailing
     .split('\n')
     .filter((line) => !/^CEZ:(?:PR=\d+|ISSUE=\d+|TITLE=.+)\s*$/.test(line))
     .join('\n')
+}
+
+/**
+ * A trailing `CEZ:ASK {...}` whose card never rendered, rewritten as the questions it carries —
+ * message text renders as markdown, so this reads as a normal ask. Returns `null` when there is
+ * no trailing marker or the payload is not ask-shaped enough to rewrite honestly (then the raw
+ * text stays, per the gate comment above). Mirrors `formatAskAsProse` in
+ * `packages/cezar/src/core/ask.ts` — same duplication contract as `stripTaskMarkers`.
+ */
+function askMarkerAsProse(trailing: string): string | null {
+  const match = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/.exec(trailing.trimEnd())
+  if (!match) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(match[1]!)
+  } catch {
+    return null
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const questions = (raw as { questions?: unknown }).questions
+  if (!Array.isArray(questions) || questions.length === 0) return null
+  const blocks: string[] = []
+  for (const entry of questions) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const question = entry as Record<string, unknown>
+    const text = typeof question.question === 'string' ? question.question.trim() : ''
+    if (!text) continue
+    const header = typeof question.header === 'string' ? question.header.trim() : ''
+    const lines = [header ? `**${header}** — ${text}` : `**${text}**`]
+    for (const rawOption of Array.isArray(question.options) ? question.options : []) {
+      if (rawOption === null || typeof rawOption !== 'object' || Array.isArray(rawOption)) continue
+      const option = rawOption as Record<string, unknown>
+      const label = typeof option.label === 'string' ? option.label.trim() : ''
+      if (!label) continue
+      const description = typeof option.description === 'string' ? option.description.trim() : ''
+      lines.push(description ? `- ${label} — ${description}` : `- ${label}`)
+    }
+    blocks.push(lines.join('\n'))
+  }
+  if (blocks.length === 0) return null
+  return trailing.replace(/CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, blocks.join('\n\n'))
 }
 
 /**

@@ -8,9 +8,12 @@
  * discarded because a third (a free-tier model) could not finish inside its
  * budget. The user got nothing, twice over, for work that was 2/3 done.
  *
- * The default is the upstream harness contract: every selected reviewer is
- * required. A lower quorum is available only when an explicit resolved profile
- * says so; it is never an implicit fallback after a paid reviewer fails.
+ * The driver resolves picker-selected roles to `quorum` (run 0fe16fb7 made the
+ * cost of implicit unanimity concrete: two completed reviewers across two
+ * families discarded because a third wrote prose instead of the result JSON).
+ * `all-required` is honored when a profile explicitly configures it — strict
+ * unanimity is a choice, not a default. Either way a degraded round is loud,
+ * and the stage-only human gate always sees which reviewer is missing.
  */
 
 export interface CouncilOutcome {

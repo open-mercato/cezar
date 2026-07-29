@@ -123,6 +123,25 @@ const patchCezarHarnessFile = (skill, relativePath, input) => {
       'language-agnostic test freeze',
     );
   }
+  if (relativePath === 'references/stage-only-contract.md') {
+    return replaceRequired(
+      input,
+      `   - current \`HEAD\`, refs, and reflogs equal the captured starting state;
+   - the staged diff is non-empty;
+   - the staged diff passes whitespace/error checking;
+   - no non-ignored unstaged or untracked files remain;
+   - every staged path came from the allowlist.`,
+      `   - current \`HEAD\`, refs, and reflogs equal the captured starting state;
+   - the staged diff is non-empty;
+   - every staged path came from the allowlist.
+   Whitespace findings in the staged diff and non-ignored unstaged or
+   untracked leftovers are reported as WARNINGS on the stage result, never as
+   refusals: the staged handoff feeds a human gate, and that gate judges
+   cosmetic and completeness questions better than a fatal last-step check
+   that hands it nothing.`,
+      'advisory stage findings contract wording',
+    );
+  }
   if (relativePath !== 'scripts/harness.mjs') return input;
   let text = replaceRequired(
     input,
@@ -593,6 +612,80 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
     `  const promptDir = args['prompt-dir'] && args['prompt-dir'] !== true ? resolve(String(args['prompt-dir'])) : null
   const providerReviewers = await pool(profile.reviewers, profile.maxParallel, (id) => runReviewer(id, config.agentHarness.models[id], criteria, subject, worktree, profile.workerFamilies, profile.maxInputBytes, null, reviewContract, profile.retry, promptDir))`,
     "reviewer prompt-dir plumbing",
+  );
+  // --- advisory stage findings (cezar) ----------------------------------------
+  // Whitespace nits and out-of-handoff leftovers refuse nothing anymore (run
+  // aad28178: two green hours refused over trailing whitespace in a spec .md).
+  // They become warnings on the stage result; the human gate judges them.
+  text = replaceRequired(
+    text,
+    `  git(['add', '--', ...paths.map((path) => \`:(literal)\${path}\`)], worktree)
+  const staged = git(['diff', '--cached', '--name-status'], worktree).trim()
+  if (!staged) throw new Error('Staged diff is empty')
+  git(['diff', '--cached', '--check'], worktree)
+  const stagedPaths = git(['diff', '--cached', '--name-only'], worktree).trim().split(/\\r?\\n/).filter(Boolean)
+  const allowed = (entry) => paths.some((scope) => entry === scope || entry.startsWith(\`\${scope}/\`))
+  const unexpected = stagedPaths.filter((entry) => !allowed(entry))
+  if (unexpected.length) throw new Error(\`Staged paths outside allowlist: \${unexpected.join(', ')}\`)
+  const status = git(['status', '--porcelain=v1', '--untracked-files=all'], worktree).split(/\\r?\\n/).filter(Boolean)
+  const residual = status.filter((line) => {
+    const index = line.slice(0, 2)
+    return index === '??' || index[1] !== ' '
+  })
+  if (residual.length) throw new Error(\`Unstaged or untracked files remain:\\n\${residual.join('\\n')}\`)
+  const result = { status: 'ready', startHead, currentHead, branch: git(['branch', '--show-current'], worktree).trim(), worktree, stagedPaths }`,
+    `  // The allowlist is a UNION across every implement/fix round, so it can name
+  // ghosts: a scratch file created in round one and deleted in round three is
+  // still listed, exists nowhere, and is tracked by nothing — and \`git add\`
+  // fails the whole handoff over a pathspec that matches nothing. A deleted
+  // TRACKED file stays: adding it stages the deletion, which is real product.
+  const tracked = new Set(git(['ls-files', '-z', '--'], worktree).toString().split('\\0').filter(Boolean))
+  const ghosts = paths.filter((path) => !existsSync(join(worktree, path)) && !tracked.has(path))
+  const addable = paths.filter((path) => !ghosts.includes(path))
+  if (!addable.length) throw new Error('Stage allowlist is empty after dropping entries that no longer exist')
+  // One immediate retry: \`git add\` can lose a race for index.lock to an editor
+  // or a status poll holding the worktree open — transient by nature.
+  try {
+    git(['add', '--', ...addable.map((path) => \`:(literal)\${path}\`)], worktree)
+  } catch (error) {
+    if (!/index\\.lock|unable to create/i.test(String(error.message || ''))) throw error
+    git(['add', '--', ...addable.map((path) => \`:(literal)\${path}\`)], worktree)
+  }
+  const staged = git(['diff', '--cached', '--name-status'], worktree).trim()
+  if (!staged) throw new Error('Staged diff is empty')
+  // Cosmetic and completeness findings are WARNINGS, not refusals (run
+  // aad28178, 2026-07-28): a two-hour run — councils passed, three fix rounds,
+  // full validation green — was refused at handoff over trailing whitespace in
+  // a spec markdown file and blank lines at EOF. The human gate this staging
+  // feeds exists precisely to judge such things; a fatal check at the last
+  // step hands them nothing instead. Only genuine integrity failures still
+  // refuse: git-state drift, an empty diff, and staged paths escaping the
+  // allowlist.
+  const warnings = []
+  if (ghosts.length) {
+    warnings.push(\`allowlist entries dropped — created during the run, deleted again before the handoff:\\n\${ghosts.join('\\n')}\`)
+  }
+  try {
+    git(['diff', '--cached', '--check'], worktree)
+  } catch (error) {
+    warnings.push(\`whitespace findings in the staged diff (cosmetic — clean before committing if your CI checks them):\\n\${String(error.message || '').trim()}\`)
+  }
+  const stagedPaths = git(['diff', '--cached', '--name-only'], worktree).trim().split(/\\r?\\n/).filter(Boolean)
+  const allowed = (entry) => paths.some((scope) => entry === scope || entry.startsWith(\`\${scope}/\`))
+  const unexpected = stagedPaths.filter((entry) => !allowed(entry))
+  if (unexpected.length) throw new Error(\`Staged paths outside allowlist: \${unexpected.join(', ')}\`)
+  const status = git(['status', '--porcelain=v1', '--untracked-files=all'], worktree).split(/\\r?\\n/).filter(Boolean)
+  const residual = status.filter((line) => {
+    const index = line.slice(0, 2)
+    return index === '??' || index[1] !== ' '
+  })
+  if (residual.length) {
+    // The worktree survives the handoff, so nothing here is lost — but the
+    // human must know the staged diff is not the whole story.
+    warnings.push(\`files changed by the run but NOT part of the staged handoff — review whether they belong:\\n\${residual.join('\\n')}\`)
+  }
+  const result = { status: 'ready', startHead, currentHead, branch: git(['branch', '--show-current'], worktree).trim(), worktree, stagedPaths, ...(warnings.length ? { warnings } : {}) }`,
+    "advisory whitespace and residual stage findings",
   );
   return text;
 };

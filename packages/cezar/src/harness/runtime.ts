@@ -591,6 +591,157 @@ export async function exportTrustedConfig(
 /* Validation gate                                                     */
 /* ------------------------------------------------------------------ */
 
+const ANSI_PATTERN = /\u001B\[[0-9;]*[A-Za-z]/g;
+
+/** Lines that carry a failure verdict across the runners repos actually use
+ *  (jest via turbo, tsc, package managers). Ordered from most to least
+ *  specific only for readability — selection keeps the stream's own order. */
+const FAILURE_LINE_PATTERNS: RegExp[] = [
+  /(^|\s)FAIL\s/,
+  /^\s*Failed:\s+\S/,
+  /ERROR\s+(run failed|command)/,
+  /\bTest Suites:\s+\d+\s+failed/,
+  /\bTests:\s+\d+\s+failed/,
+  /(^|\s)●\s/,
+  /\berror TS\d+/,
+  /npm ERR!|ELIFECYCLE|Command failed with exit code|error Command failed/,
+  /JavaScript heap out of memory|FATAL ERROR/,
+];
+
+const EVIDENCE_MAX_CHARS = 6_000;
+const EVIDENCE_MAX_MATCHED_LINES = 80;
+const EVIDENCE_TAIL_LINES = 12;
+
+/**
+ * Extract the failure-relevant lines from a validation command's output.
+ *
+ * Run c54c2ed4 died with evidence quoting a PASSING package: `yarn test` was
+ * ~1 MB of interleaved turbo output and the evidence was "the last 8 lines" of
+ * a head-truncated capture — 8 lines from mid-stream. A repair agent (and the
+ * final failure report) needs the `FAIL` blocks and the runner's own verdict
+ * lines wherever they sit in the stream, plus the true tail for context.
+ */
+export function extractFailureEvidence(output: string): string {
+  const lines = output.replace(ANSI_PATTERN, '').split('\n');
+  const matchedIndexes: number[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.trim().length === 0) continue;
+    if (FAILURE_LINE_PATTERNS.some((pattern) => pattern.test(line))) {
+      matchedIndexes.push(index);
+    }
+  }
+  const clip = (line: string) => (line.length > 400 ? `${line.slice(0, 400)}…` : line);
+  let matched: string[];
+  if (matchedIndexes.length > EVIDENCE_MAX_MATCHED_LINES) {
+    const half = EVIDENCE_MAX_MATCHED_LINES / 2;
+    matched = [
+      ...matchedIndexes.slice(0, half).map((i) => clip(lines[i]!)),
+      `… (${matchedIndexes.length - EVIDENCE_MAX_MATCHED_LINES} more matching lines elided)`,
+      ...matchedIndexes.slice(-half).map((i) => clip(lines[i]!)),
+    ];
+  } else {
+    matched = matchedIndexes.map((i) => clip(lines[i]!));
+  }
+  const matchedSet = new Set(matchedIndexes);
+  const tailStart = Math.max(0, lines.length - EVIDENCE_TAIL_LINES);
+  const tail = lines
+    .slice(tailStart)
+    .map((line, offset) => ({ line, index: tailStart + offset }))
+    .filter(({ line, index }) => line.trim().length > 0 && !matchedSet.has(index))
+    .map(({ line }) => clip(line));
+  const parts = [...matched];
+  if (tail.length > 0) {
+    if (matched.length > 0) parts.push('— output tail —');
+    parts.push(...tail);
+  }
+  let evidence = parts.join('\n').trim();
+  if (evidence.length > EVIDENCE_MAX_CHARS) {
+    const keep = EVIDENCE_MAX_CHARS / 2;
+    evidence = `${evidence.slice(0, keep)}\n… (evidence trimmed) …\n${evidence.slice(-keep)}`;
+  }
+  return evidence;
+}
+
+/**
+ * Normalize a command's output into stable failing-test identities: jest
+ * `FAIL <path>` suites, turbo `Failed: <pkg#task>` tasks, and tsc
+ * `file: error TSxxxx` pairs (line numbers dropped — they shift under
+ * unrelated edits). These are the delta-gate's comparison keys, so they must
+ * be reproducible across runs of the same tree.
+ */
+export function extractFailingTestIds(output: string): string[] {
+  const ids = new Set<string>();
+  const clean = output.replace(ANSI_PATTERN, '');
+  for (const line of clean.split('\n')) {
+    const fail = /(?:^|\s)FAIL\s+(\S+)/.exec(line);
+    if (fail && /[./]/.test(fail[1]!)) ids.add(`fail:${fail[1]}`);
+    const failedTasks = /^\s*Failed:\s+(.+)$/.exec(line);
+    if (failedTasks) {
+      for (const token of failedTasks[1]!.split(/[,\s]+/)) {
+        if (token.includes('#')) ids.add(`task:${token}`);
+      }
+    }
+    const tsc = /(?:^|\s)([^\s()]+)\(\d+,\d+\):\s+error\s+(TS\d+)/.exec(line);
+    if (tsc) ids.add(`ts:${tsc[1]}:${tsc[2]}`);
+  }
+  return [...ids];
+}
+
+export type GateRegressionCheck = HarnessValidationCheck & {
+  /** Failure identities present now but absent at baseline. */
+  newFailureIds?: string[];
+};
+
+/**
+ * Split the gate's failed checks into regressions this run must answer for and
+ * failures the baseline already had. A failed check is tolerated only when the
+ * same command already failed on the untouched worktree AND its failing-test
+ * identities are a subset of the baseline's (or neither side has comparable
+ * identities). Timed-out checks are never tolerated — a partial stream proves
+ * nothing about identity. Tolerated checks are marked `preexisting` in place so
+ * the persisted artifact carries the verdict.
+ */
+export function computeGateRegressions(
+  current: HarnessValidationCheck[],
+  baseline: HarnessValidationCheck[] | undefined,
+): {
+  blocking: GateRegressionCheck[];
+  tolerated: Array<{ check: HarnessValidationCheck; reason: string }>;
+} {
+  const blocking: GateRegressionCheck[] = [];
+  const tolerated: Array<{ check: HarnessValidationCheck; reason: string }> = [];
+  for (const check of current) {
+    if (check.status !== 'failed') continue;
+    const base = baseline?.find((entry) => entry.command === check.command);
+    if (!base || base.status !== 'failed' || check.timedOut) {
+      blocking.push(check);
+      continue;
+    }
+    const currentIds = check.failureIds ?? [];
+    const baseIds = new Set(base.failureIds ?? []);
+    if (currentIds.length === 0 && baseIds.size === 0) {
+      check.preexisting = true;
+      tolerated.push({
+        check,
+        reason: `\`${check.command}\` already failed at baseline (no comparable failure identities)`,
+      });
+      continue;
+    }
+    const newIds = currentIds.filter((id) => !baseIds.has(id));
+    if (currentIds.length > 0 && newIds.length === 0) {
+      check.preexisting = true;
+      tolerated.push({
+        check,
+        reason: `\`${check.command}\` fails exactly as it did at baseline (${currentIds.join(', ')})`,
+      });
+      continue;
+    }
+    blocking.push(newIds.length > 0 ? Object.assign(check, { newFailureIds: newIds }) : check);
+  }
+  return { blocking, tolerated };
+}
+
 /**
  * Run the repo's configured validation commands in order, recording the real
  * status, exit code and observed output for each — the gate takes trusted
@@ -607,6 +758,11 @@ export async function runValidationCommands(
     onExit?: (command: string, index: number) => void;
     signal?: AbortSignal;
     env?: Record<string, string>;
+    /** When set, each command's full captured output is persisted here as
+     *  `<logPrefix><n>-<command-slug>.log` and failed checks reference it —
+     *  the evidence is an extract, the log is the trusted whole. */
+    logDir?: string;
+    logPrefix?: string;
   } = {},
 ): Promise<HarnessValidationCheck[]> {
   const checks: HarnessValidationCheck[] = [];
@@ -661,7 +817,13 @@ export async function runValidationCommands(
         failed = true;
         continue;
       }
-      const result = await new Promise<{ code: number | null; output: string }>((resolve) => {
+      const timeoutMs = opts.timeoutMs ?? VALIDATION_TIMEOUT_MS;
+      const result = await new Promise<{
+        code: number | null;
+        output: string;
+        droppedBytes: number;
+        timedOut: boolean;
+      }>((resolve) => {
         const processToken = randomProcessToken();
         const child = spawn('bash', ['-lc', command], {
           cwd,
@@ -680,29 +842,58 @@ export async function runValidationCommands(
               group: true,
             }
           : undefined;
-        let output = '';
+        // Keep the TAIL of the stream, bounded. Test runners write their
+        // verdicts last; keeping the head turned run c54c2ed4's evidence into
+        // mid-stream noise while `Failed: @open-mercato/core#test` was dropped.
+        let chunks: Buffer[] = [];
+        let total = 0;
+        let droppedBytes = 0;
+        let timedOut = false;
         let settled = false;
         const collect = (chunk: Buffer) => {
-          if (output.length < OP_OUTPUT_CAP) {
-            output += chunk.toString('utf8').slice(0, OP_OUTPUT_CAP - output.length);
+          chunks.push(chunk);
+          total += chunk.length;
+          if (total > OP_OUTPUT_CAP * 2) {
+            const joined = Buffer.concat(chunks);
+            const kept = joined.subarray(joined.length - OP_OUTPUT_CAP);
+            droppedBytes += joined.length - kept.length;
+            chunks = [kept];
+            total = kept.length;
           }
+        };
+        const snapshot = (): { text: string; dropped: number } => {
+          const joined = Buffer.concat(chunks);
+          const kept =
+            joined.length > OP_OUTPUT_CAP
+              ? joined.subarray(joined.length - OP_OUTPUT_CAP)
+              : joined;
+          return {
+            text: kept.toString('utf8'),
+            dropped: droppedBytes + (joined.length - kept.length),
+          };
         };
         child.stdout.on('data', collect);
         child.stderr.on('data', collect);
         const abort = () => terminateProcessTree(child, identity);
         opts.signal?.addEventListener('abort', abort, { once: true });
-        const timer = setTimeout(
-          () => terminateProcessTree(child, identity),
-          opts.timeoutMs ?? VALIDATION_TIMEOUT_MS,
-        );
+        const timer = setTimeout(() => {
+          timedOut = true;
+          terminateProcessTree(child, identity);
+        }, timeoutMs);
         timer.unref?.();
-        const settle = (code: number | null, resultOutput: string) => {
+        const settle = (code: number | null, syntheticOutput?: string) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           opts.signal?.removeEventListener('abort', abort);
           opts.onExit?.(command, index);
-          resolve({ code, output: resultOutput });
+          const captured = snapshot();
+          resolve({
+            code,
+            output: syntheticOutput ?? captured.text,
+            droppedBytes: syntheticOutput ? 0 : captured.dropped,
+            timedOut,
+          });
         };
         try {
           if (identity) opts.onSpawn?.(identity, command, index);
@@ -720,19 +911,67 @@ export async function runValidationCommands(
           settle(null, `failed to spawn: ${err.message}`);
         });
         child.on('close', (code) => {
-          settle(code, output);
+          settle(code);
         });
       });
       opts.onOutput?.(command, result.output);
-      const passed = result.code === 0;
+      const passed = result.code === 0 && !result.timedOut;
       if (!passed) failed = true;
-      const tail = result.output.trim().split('\n').slice(-8).join('\n');
-      checks.push({
-        command,
-        status: passed ? 'passed' : 'failed',
-        exitCode: result.code,
-        evidence: tail || '(no output)',
-      });
+      let logPath: string | undefined;
+      if (opts.logDir) {
+        try {
+          const slug =
+            command
+              .replace(/[^a-zA-Z0-9._-]+/g, '-')
+              .replace(/^-+|-+$/g, '')
+              .slice(0, 60) || 'command';
+          // The prefix can carry model-authored ids (packet gates) — slug it too.
+          const prefix = (opts.logPrefix ?? '').replace(/[^a-zA-Z0-9._-]+/g, '-');
+          logPath = join(opts.logDir, `${prefix}${index + 1}-${slug}.log`);
+          const banner =
+            result.droppedBytes > 0
+              ? `[cezar: output exceeded the capture cap — first ${result.droppedBytes} bytes dropped, tail kept]\n`
+              : '';
+          writeFileSync(logPath, banner + result.output, 'utf8');
+        } catch {
+          logPath = undefined; // an unwritable log never fails the gate itself
+        }
+      }
+      if (passed) {
+        const tail = result.output.trim().split('\n').slice(-8).join('\n');
+        checks.push({
+          command,
+          status: 'passed',
+          exitCode: result.code,
+          evidence: tail || '(no output)',
+          ...(logPath ? { logPath } : {}),
+        });
+      } else {
+        const notes = [
+          result.timedOut
+            ? `command timed out after ${
+                timeoutMs >= 120_000 ? `${Math.round(timeoutMs / 60_000)} minutes` : `${timeoutMs / 1000}s`
+              } and was killed`
+            : null,
+          result.droppedBytes > 0
+            ? `output exceeded the ${OP_OUTPUT_CAP}-byte capture cap — kept the tail, dropped ${result.droppedBytes} earlier bytes`
+            : null,
+        ].filter((note): note is string => note !== null);
+        const extracted = extractFailureEvidence(result.output);
+        checks.push({
+          command,
+          status: 'failed',
+          exitCode: result.code,
+          evidence: [
+            ...notes,
+            extracted || '(no output)',
+            ...(logPath ? [`full output: ${logPath}`] : []),
+          ].join('\n'),
+          failureIds: extractFailingTestIds(result.output),
+          ...(logPath ? { logPath } : {}),
+          ...(result.timedOut ? { timedOut: true } : {}),
+        });
+      }
     }
   } finally {
     if (corepackShimDir) {

@@ -80,6 +80,17 @@ export const validationCheckSchema = z.object({
   status: z.enum(['passed', 'failed', 'skipped']),
   exitCode: z.number().int().nullable(),
   evidence: z.string(),
+  /** Normalized failing-test identities (FAIL paths, turbo tasks, tsc codes)
+   *  extracted from the real output — the delta-gate's comparison key. */
+  failureIds: z.array(z.string()).optional(),
+  /** Full captured output on disk; evidence is an extract, this is the whole
+   *  stream a repair agent can read instead of re-running a long suite. */
+  logPath: z.string().optional(),
+  /** True when the identical failure was already present at baseline — the
+   *  gate tolerated it (loudly) instead of charging it to this run. */
+  preexisting: z.boolean().optional(),
+  /** The command was killed at the validation timeout, not by its own exit. */
+  timedOut: z.boolean().optional(),
 });
 
 export type HarnessValidationCheck = z.infer<typeof validationCheckSchema>;
@@ -218,6 +229,11 @@ const harnessLedgerBaseShape = {
   councils: z.array(looseRecordSchema).default([]),
   packets: z.array(looseRecordSchema).default([]),
   validation: z.array(validationCheckSchema).default([]),
+  /** The gate run once on the untouched worktree at capture time. A red
+   *  baseline is the repo's debt, not this run's: later gates block only on
+   *  regressions beyond it (run c54c2ed4 died on an upstream failure it never
+   *  caused). Absent on ledgers from before the baseline gate existed. */
+  baselineValidation: z.array(validationCheckSchema).optional(),
   loops: z
     .object({ fixRounds: z.number().int().min(0), maxFixRounds: z.number().int().min(1) })
     .default({ fixRounds: 0, maxFixRounds: 3 }),

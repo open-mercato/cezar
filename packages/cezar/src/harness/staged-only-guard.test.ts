@@ -109,6 +109,83 @@ describe('staged-only git guard', () => {
     });
   });
 
+  /**
+   * Regression (run aad28178, 2026-07-28): two hours of green work — councils,
+   * three fix rounds, full validation — refused at handoff over trailing
+   * whitespace in a spec markdown file and blank lines at EOF. Cosmetic and
+   * completeness findings are warnings on the stage result now; the human gate
+   * judges them. Only integrity failures still refuse.
+   */
+  it('stages a whitespace-dirty diff and leftovers with warnings instead of refusing', async () => {
+    const { repo, worktree, startState } = await fixture();
+    // Trailing whitespace + blank line at EOF — exactly what killed aad28178.
+    writeFileSync(join(worktree, 'spec.md'), '**Date**: 2026-07-28 \ntext\n\n', 'utf8');
+    // And a leftover the allowlist never mentions.
+    writeFileSync(join(worktree, 'scratch-notes.txt'), 'model scratchpad\n', 'utf8');
+    const paths = join(repo, 'paths.txt');
+    writeFileSync(paths, 'spec.md\n');
+    const staged = await runtime(
+      ['stage', '--worktree', worktree, '--start-state', startState, '--paths-file', paths],
+      repo,
+    );
+    expect(staged.stderr).toBe('');
+    expect(staged.code).toBe(0);
+    const result = JSON.parse(staged.stdout) as { status: string; stagedPaths: string[]; warnings?: string[] };
+    expect(result.status).toBe('ready');
+    expect(result.stagedPaths).toEqual(['spec.md']);
+    const warnings = (result.warnings ?? []).join('\n');
+    expect(warnings).toContain('whitespace findings');
+    expect(warnings).toContain('trailing whitespace');
+    expect(warnings).toContain('NOT part of the staged handoff');
+    expect(warnings).toContain('scratch-notes.txt');
+  });
+
+  /**
+   * Predicted, not yet observed: the allowlist is a union across fix rounds, so
+   * a file created in round one and deleted in round three is a ghost — listed,
+   * absent, untracked — and `git add` used to fail the whole two-hour handoff
+   * over a pathspec matching nothing.
+   */
+  it('drops created-then-deleted allowlist ghosts with a warning instead of refusing', async () => {
+    const { repo, worktree, startState } = await fixture();
+    writeFileSync(join(worktree, 'feature.txt'), 'kept product\n', 'utf8');
+    // scratch.tmp was written by an early round and deleted by a later one —
+    // it exists only in the allowlist.
+    const paths = join(repo, 'paths.txt');
+    writeFileSync(paths, 'feature.txt\nscratch.tmp\n');
+    const staged = await runtime(
+      ['stage', '--worktree', worktree, '--start-state', startState, '--paths-file', paths],
+      repo,
+    );
+    expect(staged.stderr).toBe('');
+    expect(staged.code).toBe(0);
+    const result = JSON.parse(staged.stdout) as { status: string; stagedPaths: string[]; warnings?: string[] };
+    expect(result.status).toBe('ready');
+    expect(result.stagedPaths).toEqual(['feature.txt']);
+    expect((result.warnings ?? []).join('\n')).toContain('scratch.tmp');
+
+    // A deleted TRACKED file is not a ghost: staging it stages the deletion.
+    const del = await runtime(['verify', '--worktree', worktree, '--start-state', startState], repo);
+    expect(del.code).toBe(0); // still clean — deletion staging is covered next
+  });
+
+  it('stages the deletion of a tracked file named in the allowlist', async () => {
+    const { repo, worktree, startState } = await fixture();
+    // base.txt is tracked from the fixture commit; the run deletes it.
+    rmSync(join(worktree, 'base.txt'));
+    const paths = join(repo, 'paths.txt');
+    writeFileSync(paths, 'base.txt\n');
+    const staged = await runtime(
+      ['stage', '--worktree', worktree, '--start-state', startState, '--paths-file', paths],
+      repo,
+    );
+    expect(staged.stderr).toBe('');
+    expect(staged.code).toBe(0);
+    const result = JSON.parse(staged.stdout) as { status: string; stagedPaths: string[] };
+    expect(result.status).toBe('ready');
+    expect(result.stagedPaths).toEqual(['base.txt']);
+  });
+
   it('still refuses a handoff when the run commits on its own branch', async () => {
     const { repo, worktree, startState } = await fixture();
     writeFileSync(join(worktree, 'feature.txt'), 'the run output\n');

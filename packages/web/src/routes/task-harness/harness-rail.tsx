@@ -270,7 +270,10 @@ function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
             key={model.id}
             className="flex items-start gap-2 border-b border-border py-1.5 text-[12.5px] last:border-0"
           >
-            <StatusDot tone={toneOf(model.readiness)} />
+            {/* `items-start` is right for a two-line row, but it parks the 7px
+                dot at the very top of an ~19px first line — visibly high of the
+                model name it belongs to. Nudge it to that line's optical center. */}
+            <StatusDot tone={toneOf(model.readiness)} className="mt-[5px]" />
             {/* Two lines, never a truncated identifier (finding B2): the dock
                 used to render `claude/claude-haiku-4…` and `opencode/opencode/…`,
                 cutting off exactly the part that says which model it is. */}

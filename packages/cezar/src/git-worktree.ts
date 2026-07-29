@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { isSafeGitRef } from './git-refs.js';
 
@@ -30,15 +31,48 @@ interface RegisteredWorktree {
 }
 
 /** Run git, never throw — degradation is the caller's policy. */
-function git(cwd: string, args: string[]): Promise<GitResult> {
+function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
   return new Promise((resolve) => {
     execFile(
       'git',
       args,
-      { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' },
+      {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        encoding: 'utf8',
+        ...(env ? { env: { ...process.env, ...env } } : {}),
+      },
       (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
   });
+}
+
+let scratchSeq = 0;
+
+/**
+ * A throwaway index seeded from HEAD with every untracked file intent-to-added,
+ * so diffs show the whole worktree WITHOUT touching the real index.
+ *
+ * The bare `git add -N .` these helpers used to run is a WRITE, and it raced
+ * everything that asserts worktree integrity: the harness subject hashes used
+ * to flip the moment a cockpit poll promoted a fresh untracked file (run
+ * 5f6fe8ae — a spec council rejected all three reviewers over it), and the
+ * stage residual check reads `git status` from the same index these helpers
+ * were mutating. Read paths must not write. Same technique as
+ * `collectChanges({intentToAdd: false})` in server/git-changes.ts.
+ *
+ * Returns the env to run diffs under, or null when seeding failed (callers
+ * then diff without untracked visibility rather than failing the read).
+ */
+async function scratchIndexEnv(worktreePath: string): Promise<Record<string, string> | null> {
+  scratchSeq += 1;
+  const env = {
+    GIT_INDEX_FILE: join(tmpdir(), `cez-wt-scratch-${process.pid}-${scratchSeq}`),
+  };
+  const seed = await git(worktreePath, ['read-tree', 'HEAD'], env);
+  if (!seed.ok) return null;
+  const ita = await git(worktreePath, ['add', '-N', '.'], env);
+  return ita.ok ? env : null;
 }
 
 export function branchFor(runId: string): string {
@@ -464,7 +498,7 @@ async function gitHasIdentity(dir: string): Promise<boolean> {
 
 /**
  * "What did this task change": diff of the worktree (committed + uncommitted
- * + untracked, via `add -N`) against the merge-base with its base branch —
+ * + untracked, via a scratch-index intent-to-add) against the merge-base with its base branch —
  * so the diff stays *this task's* changes even after the base moves on.
  */
 export async function worktreeDiff(
@@ -473,10 +507,10 @@ export async function worktreeDiff(
   cap = DIFF_CAP,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '(diff failed: refusing option-like base ref)';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
+  const env = (await scratchIndexEnv(worktreePath)) ?? undefined; // untracked files show up; real index untouched
   const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', base]);
+  const res = await git(worktreePath, ['diff', base], env);
   if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
   if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
   return res.stdout;
@@ -491,10 +525,10 @@ export async function worktreeDiffStat(
   baseBranch: string,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
+  const env = (await scratchIndexEnv(worktreePath)) ?? undefined; // untracked files show up; real index untouched
   const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', '--stat', base]);
+  const res = await git(worktreePath, ['diff', '--stat', base], env);
   return res.ok ? res.stdout.trim() : '';
 }
 
@@ -525,7 +559,7 @@ export function parseShortstat(s: string): DiffStat {
 
 /**
  * `git diff --shortstat` of the worktree vs its base (#389) — same
- * merge-base anchoring and intent-to-add as `worktreeDiff`, parsed into
+ * merge-base anchoring and scratch-index technique as `worktreeDiff`, parsed into
  * numbers. Null on git failure (the caller notes it, never fails the run);
  * an empty diff is a valid all-zero stat.
  */
@@ -534,10 +568,10 @@ export async function worktreeShortstat(
   baseBranch: string,
 ): Promise<DiffStat | null> {
   if (!isSafeGitRef(baseBranch)) return null;
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
+  const env = (await scratchIndexEnv(worktreePath)) ?? undefined; // untracked files show up; real index untouched
   const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', '--shortstat', base]);
+  const res = await git(worktreePath, ['diff', '--shortstat', base], env);
   return res.ok ? parseShortstat(res.stdout) : null;
 }
 

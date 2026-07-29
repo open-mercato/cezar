@@ -811,3 +811,66 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(msg?.text).toBe(raw)
   })
 })
+
+// Regression (user reports 2026-07-27 and 2026-07-28, same complaint twice): a
+// harness phase session ends its turn with a CEZ:ASK no card will ever render
+// (phase sessions are non-interactive), and the thread showed ~1.5 KB of raw
+// protocol JSON where four questions should be. Ask-shaped payloads without a
+// card now render as the questions themselves; only a payload too broken to
+// read as questions stays raw.
+describe('cardless CEZ:ASK rendering', () => {
+  const allItems = (events: RunEvent[]): ThreadEntry[] =>
+    reduceThread(events).turns.flatMap((turn) => turn.items)
+  const payload = JSON.stringify({
+    questions: [
+      {
+        header: 'Navigation',
+        question: 'Should email and proposal inboxes share unified tabbed navigation or remain separate?',
+        multiSelect: false,
+        options: [
+          { label: 'Unified tabs', description: 'Group both under one navigation model' },
+          { label: 'Keep separate', description: 'Maintain separate browsable sections' },
+        ],
+      },
+      {
+        header: 'Progress Indicator',
+        question: 'Add visual proposal lifecycle indicator?',
+        multiSelect: false,
+        options: [{ label: 'Yes, auto-advance' }, { label: 'No indicator' }],
+      },
+    ],
+  })
+
+  it('renders the questions as readable markdown instead of raw JSON', () => {
+    const msg = allItems([
+      line(1, 'item.completed', {
+        item: {
+          kind: 'message',
+          id: 'm1',
+          role: 'assistant',
+          text: `Before I write the spec:\n\nCEZ:ASK ${payload}`,
+        },
+      }),
+    ]).find((i) => i.kind === 'message') as { text: string } | undefined
+    expect(msg?.text).not.toContain('CEZ:ASK')
+    expect(msg?.text).not.toContain('{"questions"')
+    expect(msg?.text).toContain('Before I write the spec:')
+    expect(msg?.text).toContain(
+      '**Navigation** — Should email and proposal inboxes share unified tabbed navigation or remain separate?',
+    )
+    expect(msg?.text).toContain('- Unified tabs — Group both under one navigation model')
+    // A header past the 12-char card cap renders fine here — prose has no cap.
+    expect(msg?.text).toContain('**Progress Indicator** — Add visual proposal lifecycle indicator?')
+    expect(msg?.text).toContain('- Yes, auto-advance')
+  })
+
+  it('still leaves a payload raw when it is not ask-shaped enough to rewrite', () => {
+    const raw = 'Done.\n\nCEZ:ASK {"questions":[{"options":[{"label":"a"}]}]}'
+    const msg = allItems([
+      line(1, 'item.completed', {
+        item: { kind: 'message', id: 'm1', role: 'assistant', text: raw },
+      }),
+    ]).find((i) => i.kind === 'message') as { text: string } | undefined
+    expect(msg?.text).toBe(raw)
+  })
+})

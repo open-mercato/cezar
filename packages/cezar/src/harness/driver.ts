@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -8,6 +9,7 @@ import {
   readFileSync,
   readlinkSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -15,6 +17,7 @@ import { z } from 'zod';
 import { createLedger, finishPhase, readLedger, saveLedger, startPhase } from './ledger.js';
 import {
   HarnessRuntime,
+  computeGateRegressions,
   exportTrustedConfig,
   harnessChildEnvironment,
   harnessConfigEnvironmentNames,
@@ -31,6 +34,7 @@ import {
   type ReconcileHarnessProcessResult,
 } from './runtime.js';
 import { excludeFromGit } from '../skills-remote.js';
+import { bundledSkillsDir } from '../skills.js';
 import { HARNESS_FIX_ISSUE, HARNESS_IMPLEMENT_FEATURE } from './workflows.js';
 import { createModelProber, sharedHarnessProbeCache, type ModelProber } from './probe.js';
 import { synthesizeReviewerBinding } from './reviewer-binding.js';
@@ -185,6 +189,11 @@ interface RuntimeLike {
 /** Injectable seams (tests swap these; production uses the real modules). */
 export interface HarnessDriverDeps {
   resolveScript?: (cwd: string) => string | null;
+  /** Where the harness's own cez-* skills are copied from — ALWAYS, overwriting
+   *  whatever the worktree holds (2026-07-28: catalog-resolved copies froze a
+   *  stale runtime into four consecutive runs). `null` disables the refresh and
+   *  falls back to `host.ensureSkill` (tests). Undefined → the real bundled dir. */
+  bundledSkillsRoot?: string | null;
   /** Copy the materialized skill tree out of the model-writable worktree and
    *  return the sealed runtime path + digest (2026-07-27). */
   sealRuntime?: (cwd: string, destDir: string) => { script: string; sha256: string } | null;
@@ -240,6 +249,60 @@ export function roleRefId(ref: HarnessReviewerRef): string {
  * become another implementer. Repository-global refs and reflogs are deliberately excluded:
  * a background fetch or another linked worktree is not a mutation of this review subject.
  * Ignored harness artifacts are intentionally outside the subject. */
+/**
+ * Hash everything the worktree's CONTENT says relative to HEAD — deliberately
+ * blind to the git index.
+ *
+ * The subject hashes used to serialize the index's view (`diff --cached`, the
+ * unstaged diff, the untracked list). That made them representation-dependent:
+ * `git add -N .` moves an untracked file out of the "others" list and into the
+ * diff without changing a byte on disk, and cezar's own diff polling runs
+ * exactly that in task worktrees. First cockpit poll after the spec phase wrote
+ * its file, the "subject" changed mid-council, and all three reviewers were
+ * rejected for a mutation nobody made (run 5f6fe8ae).
+ *
+ * What a reviewer actually reads is files, not the index. So: the candidate set
+ * is every path `git status` lists (tracked-changed or untracked — the STATUS
+ * CODES are discarded, only paths are kept, which is what makes `add -N`
+ * invisible), and each path contributes its on-disk bytes. Content edits,
+ * new files, deletions, and commits all still change the hash; index
+ * choreography no longer can.
+ */
+function hashWorktreeContentVsHead(
+  hash: ReturnType<typeof createHash>,
+  cwd: string,
+  git: (args: string[]) => Buffer,
+): void {
+  hash.update('\0head\0');
+  hash.update(git(['rev-parse', 'HEAD']));
+  const paths = git([
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all',
+    '--no-renames',
+  ])
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .map((entry) => entry.slice(3))
+    .sort();
+  for (const path of paths) {
+    hash.update('\0');
+    hash.update(path);
+    hash.update('\0');
+    const absolute = join(cwd, path);
+    try {
+      const stat = lstatSync(absolute);
+      if (stat.isSymbolicLink()) hash.update(`symlink:${readlinkSync(absolute)}`);
+      else if (stat.isFile()) hash.update(readFileSync(absolute));
+      else hash.update(`mode:${stat.mode}`);
+    } catch {
+      hash.update('absent'); // deleted from the worktree
+    }
+  }
+}
+
 export async function snapshotHarnessReviewSubject(cwd: string): Promise<string> {
   const hash = createHash('sha256');
   const git = (args: string[]): Buffer =>
@@ -249,30 +312,11 @@ export async function snapshotHarnessReviewSubject(cwd: string): Promise<string>
       maxBuffer: 256 * 1024 * 1024,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
     });
-  const sections: Array<[string, string[]]> = [
-    ['head', ['rev-parse', 'HEAD']],
-    ['cached', ['diff', '--cached', '--binary', '--no-ext-diff', '--full-index', '--']],
-    ['unstaged', ['diff', '--binary', '--no-ext-diff', '--full-index', '--']],
-    ['head-reflog', ['reflog', 'show', 'HEAD', '--format=%H%x09%gD']],
-  ];
-  for (const [label, args] of sections) {
-    hash.update(`\0${label}\0`);
-    hash.update(git(args));
-  }
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'])
-    .toString('utf8')
-    .split('\0')
-    .filter(Boolean)
-    .sort();
-  for (const path of untracked) {
-    hash.update('\0');
-    hash.update(path);
-    const absolute = join(cwd, path);
-    const stat = lstatSync(absolute);
-    if (stat.isSymbolicLink()) hash.update(`symlink:${readlinkSync(absolute)}`);
-    else if (stat.isFile()) hash.update(readFileSync(absolute));
-    else hash.update(`mode:${stat.mode}`);
-  }
+  hashWorktreeContentVsHead(hash, cwd, git);
+  // The reflog stays: content-equality alone cannot see a commit that was
+  // reset away again, and the review window must.
+  hash.update('\0head-reflog\0');
+  hash.update(git(['reflog', 'show', 'HEAD', '--format=%H%x09%gs']));
   return hash.digest('hex');
 }
 
@@ -289,24 +333,12 @@ export async function snapshotHarnessStageSubject(cwd: string): Promise<string> 
       maxBuffer: 256 * 1024 * 1024,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
     });
-  hash.update('\0head\0');
-  hash.update(git(['rev-parse', 'HEAD']));
-  hash.update('\0complete-diff\0');
-  hash.update(git(['diff', 'HEAD', '--binary', '--no-ext-diff', '--full-index', '--']));
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'])
-    .toString('utf8')
-    .split('\0')
-    .filter(Boolean)
-    .sort();
-  for (const path of untracked) {
-    hash.update('\0');
-    hash.update(path);
-    const absolute = join(cwd, path);
-    const stat = lstatSync(absolute);
-    if (stat.isSymbolicLink()) hash.update(`symlink:${readlinkSync(absolute)}`);
-    else if (stat.isFile()) hash.update(readFileSync(absolute));
-    else hash.update(`mode:${stat.mode}`);
-  }
+  // Same content-vs-HEAD core as the review subject (and the same immunity to
+  // `git add -N` — its previous `diff HEAD` + untracked-list split flipped when
+  // the diff poller promoted an untracked file to intent-to-add). No reflog
+  // here: staging cares about what ships, and the stage git guard already owns
+  // the commit-laundering window.
+  hashWorktreeContentVsHead(hash, cwd, git);
   return hash.digest('hex');
 }
 
@@ -338,6 +370,11 @@ const specResultSchema = z.object({
   summary: z.string(),
   specPath: z.string().optional(),
   files: z.array(z.string()).optional(),
+  /** Design questions the author could not settle, each with the assumption it
+   *  proceeded under. The phase is non-interactive, so this is the Open
+   *  Questions gate's legal outlet — they flow to the run log and to every
+   *  implementation reviewer as known-open questions. */
+  openQuestions: z.array(z.string().min(1)).optional(),
 });
 
 const implementResultSchema = z.object({
@@ -505,7 +542,16 @@ const PHASE_SESSION_CONTRACT = [
   'Phase session contract: this session IS the phase.',
   '- Never end a turn while a subagent or background job you started is still running — wait for it in this session and fold its output in first.',
   '- Do not schedule wake-ups or defer work to a later session.',
-  '- Write the result JSON file (path given above) BEFORE ending your final turn; a turn that ends without it gets a nudge, then the phase fails.',
+  // The non-interactive clause exists because a skill CAN mandate the opposite.
+  // cez-spec-writing carries a hard Open Questions gate ("present the open
+  // questions to the user and stop"), and a spec session followed it faithfully
+  // — twice, once per attempt — ending each turn with a CEZ:ASK nobody could
+  // ever answer and no result file. The phase contract must outrank the skill
+  // here, and must say HOW the gate is satisfied instead, or the model is left
+  // choosing between disobeying the skill and failing the phase.
+  '- This session is NON-INTERACTIVE: no human reads it live, and questions cannot be answered. Never end a turn to ask the user something, and never emit CEZ:ASK.',
+  '- When a skill requires user answers before proceeding (an Open Questions gate, a confirmation step), satisfy it autonomously: pick the most defensible answer yourself, record each question and the assumption you chose inside the artifact you produce, and continue. Surface them in the result file when its shape allows.',
+  '- Write the result JSON file (path given above) BEFORE ending your final turn; a turn that ends without it fails the phase after at most one retry.',
 ].join('\n');
 
 const PHASE_TIMEOUTS_MS: Record<string, number> = {
@@ -914,6 +960,9 @@ export async function runHarnessDriver(
       phase.startedAt = undefined;
       phase.endedAt = undefined;
       phase.error = undefined;
+      // The baseline is capture-scoped data, not just a phase status: stale
+      // baseline failures could launder new breakage as "pre-existing".
+      if (phase.id === 'baseline-gate') ledger.baselineValidation = undefined;
     }
     ledger.validation = [];
     ledger.stage = { status: 'pending' };
@@ -923,15 +972,140 @@ export async function runHarnessDriver(
 
   const resultPathFor = (phaseId: string) => join(artifactDir, `phase-${phaseId}-result.json`);
 
-  const readResult = <T>(schema: z.ZodType<T>, phaseId: string): T | null => {
-    try {
-      const raw = JSON.parse(readFileSync(resultPathFor(phaseId), 'utf8'));
-      const parsed = schema.safeParse(raw);
-      return parsed.success ? parsed.data : null;
-    } catch {
-      return null;
+  /**
+   * Pull the first schema-valid JSON object out of arbitrary session output.
+   *
+   * Small models honor the CONTENT of the result contract more reliably than
+   * its FRAMING: run 0fe16fb7's haiku reviewer produced a complete review —
+   * three blockers, seven majors — wrapped in a markdown summary, twice, and
+   * both attempts were discarded as "ended without a valid result file". When
+   * the object is present but decorated, extracting it is strictly better than
+   * failing: the schema still decides validity, so nothing unvalidated gets in.
+   * Bounded: 2 MB of text, at most 20 candidate objects, string-aware brace
+   * matching so JSON inside prose (or prose inside JSON strings) cannot confuse
+   * the scan.
+   */
+  const salvageJson = <S extends z.ZodTypeAny>(schema: S, raw: string): z.infer<S> | null => {
+    if (raw.length > 2_000_000) return null;
+    let candidates = 0;
+    for (let start = raw.indexOf('{'); start >= 0 && candidates < 20; start = raw.indexOf('{', start + 1)) {
+      let depth = 0;
+      let quoted = false;
+      let escaped = false;
+      for (let index = start; index < raw.length; index += 1) {
+        const char = raw[index];
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') quoted = false;
+          continue;
+        }
+        if (char === '"') quoted = true;
+        else if (char === '{') depth += 1;
+        else if (char === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            candidates += 1;
+            try {
+              const parsed = schema.safeParse(JSON.parse(raw.slice(start, index + 1)));
+              if (parsed.success) return parsed.data;
+            } catch {
+              // not JSON — keep scanning from the next opening brace
+            }
+            break;
+          }
+        }
+      }
     }
+    return null;
   };
+
+  /**
+   * A result file read with the failure NAMED. "ended without a valid result
+   * file" collapsed very different problems — a session that never wrote, one
+   * that wrote prose, one whose JSON missed the schema — into one
+   * undiagnosable string. The name matters twice now: it reaches the operator
+   * AND the retry session, which is told exactly what its predecessor got
+   * wrong instead of being rerun blind (the "remind it of the JSON" loop).
+   */
+  const readContractResult = <S extends z.ZodTypeAny>(
+    schema: S,
+    resultPath: string,
+  ): { result: z.infer<S> | null; failure: string | null; salvaged: boolean } => {
+    let text: string;
+    try {
+      text = readFileSync(resultPath, 'utf8');
+    } catch {
+      return { result: null, failure: 'ended without writing its result file', salvaged: false };
+    }
+    if (text.trim().length === 0) {
+      return { result: null, failure: 'ended with an empty result file', salvaged: false };
+    }
+    let schemaIssues: string | null = null;
+    try {
+      const parsed = schema.safeParse(JSON.parse(text));
+      if (parsed.success) return { result: parsed.data, failure: null, salvaged: false };
+      schemaIssues = parsed.error.issues
+        .slice(0, 3)
+        .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+        .join('; ');
+    } catch {
+      // not JSON at all — fall through to salvage
+    }
+    const salvaged = salvageJson(schema, text);
+    if (salvaged !== null) return { result: salvaged, failure: null, salvaged: true };
+    return {
+      result: null,
+      failure: schemaIssues
+        ? `wrote JSON that does not match the result contract (${schemaIssues})`
+        : `wrote ${text.length} characters that do not contain the contracted JSON object (starts: ${JSON.stringify(
+            text.slice(0, 80),
+          )})`,
+      salvaged: false,
+    };
+  };
+
+  const readResult = <T>(schema: z.ZodType<T>, phaseId: string): T | null =>
+    readContractResult(schema, resultPathFor(phaseId)).result;
+
+  /** A council reviewer's result file, in the reviewer loop's phrasing. */
+  const readReviewResultFile = (
+    resultPath: string,
+  ): {
+    result: z.infer<typeof reviewResultSchema> | null;
+    failure: string | null;
+    salvaged: boolean;
+  } => {
+    const read = readContractResult(reviewResultSchema, resultPath);
+    return {
+      result: read.result,
+      failure: read.failure === null ? null : `the session ${read.failure}`,
+      salvaged: read.salvaged,
+    };
+  };
+
+  /**
+   * What a fresh retry session is told when its predecessor failed the result
+   * contract. A blind rerun repeated the same framing mistake (and, for
+   * implement/fix phases, redid paid work already sitting in the worktree);
+   * the user's ask is literal: remind the model of the JSON and what was wrong.
+   */
+  const resultContractRetryAppendix = (
+    failure: string,
+    resultPath: string,
+    editsPersist: boolean,
+  ): string =>
+    [
+      '',
+      '',
+      `RESULT-CONTRACT RETRY: the previous session for this phase ${failure}, so nothing could be accepted from it.`,
+      ...(editsPersist
+        ? [
+            'Any worktree edits that session made are still present — verify and finish them instead of redoing the work.',
+          ]
+        : []),
+      `This session MUST end by writing the result file at ${resultPath}: exactly one JSON object matching the contract above — no markdown fences, no commentary, nothing else in the file.`,
+    ].join('\n');
 
   type BoundaryMessage = HarnessLedger['pendingMessages'][number];
   const boundaryMessagesForPhase = (
@@ -1089,7 +1263,9 @@ export async function runHarnessDriver(
         entry.id === invocationId &&
         entry.inputSha256 === invocationInputSha256 &&
         entry.status === 'failed' &&
-        entry.error === 'ended without a valid result file' &&
+        // startsWith: the error now carries the named contract failure after a
+        // dash; ledgers from before the suffix still match on the bare string.
+        entry.error?.startsWith('ended without a valid result file') &&
         entry.startedAt &&
         entry.endedAt,
     );
@@ -1142,8 +1318,33 @@ export async function runHarnessDriver(
       }
     }
     const priorAttempts = attemptsForInput(invocationId, invocationInputSha256);
+    // What the last failed attempt got wrong, restored across a host restart
+    // so a crash between attempts does not turn the retry blind again.
+    let lastContractFailure: string | null =
+      [...ledger.invocations]
+        .reverse()
+        .find(
+          (entry) =>
+            entry.id === invocationId &&
+            entry.inputSha256 === invocationInputSha256 &&
+            entry.status === 'failed' &&
+            typeof entry.error === 'string' &&
+            entry.error.startsWith('ended without a valid result file'),
+        )
+        ?.error?.replace(/^ended without a valid result file(?: — )?/, '') || null;
     for (let attempt = priorAttempts + 1; attempt <= 2; attempt += 1) {
       if (host.isCancelled()) return { cancelled: true };
+      // The retry is not a blind rerun: it carries what the first attempt got
+      // wrong. The input hash stays keyed to the base prompt — the appendix is
+      // derived mechanically from the recorded failure, not new input.
+      const attemptPrompt =
+        attempt > 1 && lastContractFailure
+          ? `${renderedPrompt}${resultContractRetryAppendix(
+              lastContractFailure,
+              sessionResultPath,
+              timeoutKey === 'implement' || timeoutKey === 'fix',
+            )}`
+          : renderedPrompt;
       startPhase(ledger, { id: phaseId, name, kind: 'agent', skill });
       persist();
       host.setStepStatus(phaseId, 'running');
@@ -1173,7 +1374,7 @@ export async function runHarnessDriver(
           artifactDir,
           `worker-prompt-${phaseId}-${invocation.attempt}.md`,
         );
-        writeFileSync(promptPath, renderedPrompt, 'utf8');
+        writeFileSync(promptPath, attemptPrompt, 'utf8');
         const result = await runtime.run(
           'worker',
           [
@@ -1213,7 +1414,7 @@ export async function runHarnessDriver(
           skill,
           // Literal paths, not env references: codex/opencode phases must be able
           // to follow the contract even when a backend does not forward env vars.
-          prompt: renderedPrompt,
+          prompt: attemptPrompt,
           resultPath,
           timeoutMs: PHASE_TIMEOUTS_MS[timeoutKey] ?? 30 * 60_000,
           env: {
@@ -1250,8 +1451,15 @@ export async function runHarnessDriver(
         emitPhase(phaseId);
         return { error: `phase "${phaseId}" failed: ${failure}` };
       }
-      const parsed = readResult(schema, phaseId);
-      if (parsed !== null) {
+      const read = readContractResult(schema, resultPathFor(phaseId));
+      if (read.result !== null) {
+        if (read.salvaged) {
+          host.emit({
+            type: 'note',
+            stepId: phaseId,
+            message: `phase "${phaseId}" wrapped its result JSON in prose — salvaged the embedded object`,
+          });
+        }
         finishInvocation(invocation, 'completed', {
           artifactPath: resultPath,
           modelId,
@@ -1264,16 +1472,19 @@ export async function runHarnessDriver(
         host.setStepStatus(phaseId, 'done');
         emitPhase(phaseId);
         emitBoundaryMessagesConsumed(phaseId, consumedMessageIds);
-        return parsed;
+        return read.result;
       }
-      finishInvocation(invocation, 'failed', { error: 'ended without a valid result file' });
+      lastContractFailure = read.failure ?? 'ended without a valid result file';
+      finishInvocation(invocation, 'failed', {
+        error: `ended without a valid result file — ${lastContractFailure}`,
+      });
       host.emit({
         type: 'note',
         stepId: phaseId,
         message:
           attempt === 1
-            ? `phase "${phaseId}" ended without a valid result file — retrying once in a fresh session`
-            : `phase "${phaseId}" ended without a valid result file after the retry`,
+            ? `phase "${phaseId}" ${lastContractFailure} — retrying once in a fresh session that is told what was wrong`
+            : `phase "${phaseId}" ${lastContractFailure} after the informed retry`,
       });
     }
     const error = `phase "${phaseId}" produced no valid result after a retry`;
@@ -1412,7 +1623,41 @@ export async function runHarnessDriver(
     const needed = isFeature
       ? ['cez-harness', 'cez-spec-writing', 'cez-code-review']
       : ['cez-harness', 'cez-verify-in-repo', 'cez-root-cause', 'cez-fix', 'cez-code-review'];
+    /**
+     * The harness's own skills come from the BUNDLED tree, copied fresh into
+     * the worktree every driver execution — never from the catalog.
+     *
+     * The catalog resolves local-first, which is right for skills users author
+     * and fatal for the runtime cezar ships: any root-cwd session that invokes
+     * a cez-* skill materializes a copy into `<repo>/.claude/skills/`, and from
+     * that moment every harness run clones that FROZEN snapshot instead of the
+     * bundled runtime. On 2026-07-28 a snapshot planted at 12:22 served four
+     * consecutive runs while three deployed runtime fixes changed a file no run
+     * ever read — the last of them died at stage, two hours in, on a check the
+     * fix had made advisory five hours earlier. A provenance warning fired into
+     * the run log and helped nobody. Resolution order was the bug; only pinning
+     * the source fixes it.
+     *
+     * Overwriting also refreshes stale worktree copies on resume. The known
+     * cost: after an upgrade, rubric hashes change, so a resumed run re-runs
+     * reviews instead of reusing them — reviews against the current rubric,
+     * paid knowingly, which beats mechanics frozen at whatever bug they had.
+     */
+    const bundledRoot =
+      deps.bundledSkillsRoot === undefined ? bundledSkillsDir() : deps.bundledSkillsRoot;
     for (const name of needed) {
+      const bundledSkill = bundledRoot === null ? null : join(bundledRoot, name);
+      if (bundledSkill && existsSync(join(bundledSkill, 'SKILL.md'))) {
+        try {
+          const target = join(host.cwd, '.claude', 'skills', name);
+          rmSync(target, { recursive: true, force: true });
+          cpSync(bundledSkill, target, { recursive: true });
+          await excludeFromGit(host.cwd, `.claude/skills/${name}/`);
+          continue;
+        } catch {
+          // fall through — the catalog path below is the degraded route
+        }
+      }
       if (!(await host.ensureSkill(name))) {
         return {
           ok: false,
@@ -1420,8 +1665,36 @@ export async function runHarnessDriver(
         };
       }
     }
-    if (!resolveScript(host.cwd)) {
+    const runtimeScript = resolveScript(host.cwd);
+    if (!runtimeScript) {
       return { ok: false, error: 'cez-harness runtime not found in the worktree (.claude/skills/cez-harness/scripts/harness.mjs)' };
+    }
+    // A project-local `.claude/skills/cez-harness` wins over the bundled copy
+    // (skills resolve local-first). That is the intended override, but when the
+    // local copy is a STALE install it silently shadows every runtime fix cezar
+    // ships and there was no way to tell from the run: 71edb02c executed a
+    // cez-harness from 2026-07-25 while the shipped one carried a corrected
+    // staged-only git guard, and the ledger looked completely normal.
+    try {
+      const bundledRuntime = join(
+        bundledSkillsDir(),
+        'cez-harness',
+        'scripts',
+        'harness.mjs',
+      );
+      const running = hashFile(runtimeScript);
+      const shipped = hashFile(bundledRuntime);
+      if (running && shipped && running !== shipped) {
+        host.emit({
+          type: 'note',
+          message:
+            `this run's cez-harness runtime is NOT the one cezar ships — a project-local copy at ` +
+            `${runtimeScript} is shadowing the bundled one. Runtime fixes shipped with cezar do ` +
+            `not apply to this run. Remove the local copy to pick up the bundled runtime.`,
+        });
+      }
+    } catch {
+      // Advisory only — never fail a run over a provenance check.
     }
     let agentic = await loadAgentic(host.cwd);
     let baseSnapshot = await exportConfig(
@@ -1442,38 +1715,26 @@ export async function runHarnessDriver(
     if (agentic.agentHarness === undefined && host.repoRoot !== host.cwd) {
       const rootAgentic = await loadAgentic(host.repoRoot);
       if (rootAgentic.agentHarness !== undefined) {
-        const configPath = '.ai/agentic.config.json';
-        const differs = (args: string[]): boolean => {
-          try {
-            execFileSync('git', args, {
-              cwd: host.repoRoot,
-              stdio: 'ignore',
-              env: {
-                ...process.env,
-                GIT_OPTIONAL_LOCKS: '0',
-                GIT_TERMINAL_PROMPT: '0',
-              },
-            });
-            return false;
-          } catch (error) {
-            return (error as { status?: unknown }).status === 1;
-          }
-        };
-        const staged = differs(['diff', '--cached', '--quiet', '--', configPath]);
-        const unstaged = differs(['diff', '--quiet', '--', configPath]);
-        if (!staged || unstaged) {
-          return {
-            ok: false,
-            error:
-              'agentHarness exists only in the repo working tree, but its config is not a clean staged change; stage .ai/agentic.config.json with no unstaged edits or commit it before starting',
-          };
-        }
+        // This used to demand the config be a CLEAN STAGED change and refuse the
+        // run otherwise. It was a dead end for the ordinary path: a user
+        // configures models in the cockpit, starts a multi-model run, and the
+        // first thing cezar says is that the file cezar itself just wrote is
+        // staged wrong — with git instructions, in a repo they never touched by
+        // hand. `MM` (staged, then edited again) is the normal result of setup
+        // writing more than once, and it failed the check.
+        //
+        // The index state was never the security boundary. What matters is WHERE
+        // the config comes from: `host.repoRoot` is the user's own checkout, and
+        // the untrusted thing — the task branch in the worktree — cannot reach
+        // this read. That property is unchanged. The run still snapshots the
+        // file into its artifacts below, so a mid-run edit cannot change the
+        // config the run is executing under.
         agentic = rootAgentic;
         workingTreeConfig = true;
         const copyPath = join(artifactDir, 'working-agentic.config.json');
         writeFileSync(copyPath, readFileSync(join(host.repoRoot, '.ai', 'agentic.config.json'), 'utf8'), 'utf8');
         ledger.trustedConfig = {
-          baseRef: 'working-tree (staged, uncommitted)',
+          baseRef: 'working-tree (uncommitted)',
           path: copyPath,
           overlay: false,
           sha256: hashFile(copyPath) ?? undefined,
@@ -1481,7 +1742,7 @@ export async function runHarnessDriver(
         host.emit({
           type: 'note',
           message:
-            'agentHarness config is staged in the repo working tree but not committed on the base branch — using the staged copy for this run; commit .ai/agentic.config.json to pin it',
+            'using the model configuration from your working copy of .ai/agentic.config.json — it is not committed on the base branch yet. This run snapshotted it, so later edits will not affect it. Commit the file when you are happy with it to pin the setup for future runs.',
         });
       }
     }
@@ -1779,9 +2040,25 @@ export async function runHarnessDriver(
     }
     return { members, sessions };
   };
+  /**
+   * Which quorum rule this run's cezar-conducted councils use.
+   *
+   * QUORUM is the default (run 0fe16fb7, 2026-07-28): a role-picker run never
+   * sets `reviewPolicy` at all, and the old absent→all-required mapping meant
+   * one flaky reviewer voided everything — a spec council where two reviewers
+   * across two families had COMPLETED was thrown away because a third (a small
+   * free-tier model) wrote its review as prose instead of the result JSON.
+   * Under quorum the round proceeds DEGRADED and loudly once ≥2 reviewers
+   * spanning ≥2 families completed; delivery is stage-only, so the human gate
+   * still sees exactly which reviewer is missing.
+   *
+   * `all-required` remains available as an explicit choice — a configured
+   * profile that says so gets unanimity — it is just never an implicit default
+   * again.
+   */
   const resolvedCouncilPolicy = (): { mode: 'all-required' | 'quorum' } => {
     const mode = (ledger.roles as { reviewPolicy?: unknown } | undefined)?.reviewPolicy;
-    return { mode: mode === 'quorum' ? 'quorum' : 'all-required' };
+    return { mode: mode === 'all-required' ? 'all-required' : 'quorum' };
   };
 
   const runAdvisorCouncilOp = async (op: {
@@ -2146,6 +2423,37 @@ export async function runHarnessDriver(
       }
     }
     return { rows, error };
+  };
+
+  /**
+   * The advisor council, with one bounded second attempt when the subject
+   * changed underneath it.
+   *
+   * A subject change mid-council rejects every reviewer by design — cezar
+   * cannot attribute a shared change to an individual. But rejecting used to be
+   * TERMINAL: one write landing inside the council window (run 5f6fe8ae) failed
+   * quorum and killed the run outright, discarding completed paid reviews. The
+   * op itself re-snapshots the subject at entry and its recovery path can adopt
+   * reviews written during a rejected attempt when their contract hash matches,
+   * so a single retry against the now-current subject is cheap — often free —
+   * and the second failure still fails the run: something rewriting the
+   * worktree CONTINUOUSLY is a real integrity problem, not a race.
+   */
+  const runAdvisorCouncilOpWithRetry = async (
+    op: Parameters<typeof runAdvisorCouncilOp>[0],
+  ): ReturnType<typeof runAdvisorCouncilOp> => {
+    const first = await runAdvisorCouncilOp(op);
+    if (first === null || first.error === null || !isCouncilSubjectChangedError(first.error)) {
+      return first;
+    }
+    if (host.isCancelled()) return first;
+    host.emit({
+      type: 'note',
+      message:
+        'the review subject changed while the advisor council was running — retrying the ' +
+        'council once against the current subject before giving up',
+    });
+    return runAdvisorCouncilOp(op);
   };
 
   const runHighAssurancePackets = async (
@@ -2627,6 +2935,8 @@ export async function runHarnessDriver(
               env: harnessChildEnvironment(
                 harnessConfigEnvironmentNames(agentic.agentHarness),
               ),
+              logDir: artifactDir,
+              logPrefix: `validation-packet-${effectiveId}-`,
               onSpawn: (identity) => {
                 gateInvocation.process = { ...identity };
                 persist();
@@ -2804,6 +3114,148 @@ export async function runHarnessDriver(
     if (captureError === 'cancelled') return null;
     if (captureError) return captureError;
 
+    /* ---------------- baseline gate ---------------- */
+
+    /**
+     * The gate's reference point: the same validation commands, run once on
+     * the still-untouched worktree. A red baseline is the repo's own debt —
+     * run c54c2ed4 spent every repair round on a `yarn test` failure that
+     * predated its first edit, then died reporting it. Later gates compare
+     * against this and block only on regressions the run introduced.
+     *
+     * Fails OPEN and loud: a baseline that cannot run leaves
+     * `ledger.baselineValidation` unset (delta gating off, today's strict
+     * behavior), because an infrastructure hiccup here must not kill a run.
+     */
+    const baselineGateId = 'baseline-gate';
+    if (
+      runtimeAgentic.validationCommands.length > 0 &&
+      ledger.baselineValidation === undefined &&
+      !phaseDone(baselineGateId)
+    ) {
+      const agentWorkStarted = ledger.phases.some((phase) => phase.kind === 'agent');
+      if (agentWorkStarted) {
+        // A resumed pre-baseline-era run: the worktree is no longer the
+        // untouched base, so measuring it now would launder this run's own
+        // breakage into "pre-existing". Say so once and gate strictly.
+        host.emit({
+          type: 'note',
+          stepId: 'capture',
+          message:
+            'this run started before the baseline gate existed and has already run agent phases — ' +
+            'pre-existing validation failures cannot be told apart from regressions, so the gate stays strict',
+        });
+      } else {
+        const baselineArtifactSchema = z.object({
+          version: z.literal(1),
+          checks: z.array(validationCheckSchema),
+        });
+        const baselinePath = join(artifactDir, 'validation-baseline.json');
+        const baselineInvocationId = 'validation:baseline';
+        const baselineInputSha256 = sha256(
+          JSON.stringify({
+            inputHashVersion: 2,
+            operation: 'baseline-validation',
+            commands: runtimeAgentic.validationCommands,
+            trustedConfigSha256: ledger.trustedConfig?.sha256 ?? null,
+          }),
+        );
+        const recoveredBaseline = reusableInvocation(
+          baselineInvocationId,
+          baselineInputSha256,
+          baselineArtifactSchema,
+        );
+        if (recoveredBaseline) {
+          ledger.baselineValidation = recoveredBaseline.checks;
+          startPhase(ledger, { id: baselineGateId, name: 'Baseline gate', kind: 'op' });
+          finishPhase(ledger, baselineGateId, 'done');
+          persist();
+          host.upsertStep({ id: baselineGateId, name: 'Baseline gate', kind: 'check' });
+          host.setStepStatus(baselineGateId, 'done');
+          emitPhase(baselineGateId);
+        } else {
+          const baselineError = await opPhase(baselineGateId, 'Baseline gate', async () => {
+            const invocation = beginInvocation({
+              id: baselineInvocationId,
+              phaseId: baselineGateId,
+              role: 'validation',
+              binding: { runner: 'bash' },
+              inputSha256: baselineInputSha256,
+            });
+            const controller = new AbortController();
+            const offBaselineInterrupt = host.onInterrupt(() => controller.abort());
+            try {
+              const checks = await validate(runtimeAgentic.validationCommands, host.cwd, {
+                signal: controller.signal,
+                env: harnessChildEnvironment(
+                  harnessConfigEnvironmentNames(runtimeAgentic.agentHarness),
+                ),
+                logDir: artifactDir,
+                logPrefix: 'validation-baseline-',
+                onSpawn: (identity) => {
+                  invocation.process = { ...identity };
+                  persist();
+                  emitInvocation(invocation);
+                },
+                onExit: () => {
+                  invocation.process = undefined;
+                  persist();
+                  emitInvocation(invocation);
+                },
+              });
+              if (host.isCancelled()) {
+                finishInvocation(invocation, 'interrupted', {
+                  error: 'run cancelled during the baseline gate',
+                });
+                return { ok: true };
+              }
+              ledger.baselineValidation = checks;
+              writeJsonAtomic(baselinePath, { version: 1, checks });
+              finishInvocation(invocation, 'completed', { artifactPath: baselinePath });
+              const red = checks.filter((check) => check.status === 'failed');
+              if (red.length > 0) {
+                const detail = red
+                  .map(
+                    (check) =>
+                      `\`${check.command}\`${
+                        check.failureIds?.length ? ` (${check.failureIds.join(', ')})` : ''
+                      }`,
+                  )
+                  .join('; ');
+                ledger.decisions.push({
+                  at: new Date().toISOString(),
+                  kind: 'baseline-gate.red',
+                  by: 'driver',
+                  detail,
+                });
+                host.emit({
+                  type: 'note',
+                  stepId: baselineGateId,
+                  message:
+                    `the validation gate is RED on the untouched worktree: ${detail}. ` +
+                    `These failures predate this run — later gates will tolerate them (loudly) and block only on regressions beyond them.`,
+                });
+              }
+              return { ok: true };
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              finishInvocation(invocation, 'failed', { error: detail });
+              host.emit({
+                type: 'note',
+                stepId: baselineGateId,
+                message: `the baseline gate could not run (${detail}) — continuing with the strict gate (every failure blocks)`,
+              });
+              return { ok: true }; // fail open: strict gating is the safe fallback
+            } finally {
+              offBaselineInterrupt();
+            }
+          });
+          if (baselineError === 'cancelled') return null;
+          if (baselineError) return baselineError;
+        }
+      }
+    }
+
     /**
      * The staged-only guard, run between phases instead of only at handoff.
      *
@@ -2850,6 +3302,24 @@ export async function runHarnessDriver(
     /* ---------------- judgment phases ---------------- */
 
     const allowlist = new Set<string>();
+    /** Which phase first pulled a path in — see `scopeReport` at stage time. */
+    const allowlistOrigin = new Map<string, string>();
+    const addToAllowlist = (path: string, phaseId: string): void => {
+      allowlist.add(path);
+      if (!allowlistOrigin.has(path)) allowlistOrigin.set(path, phaseId);
+    };
+    /**
+     * Blocking findings the SPEC council never resolved.
+     *
+     * The spec loop can exit non-converged and proceed by design (the human is
+     * the final gate). But those findings then vanished, and on 71edb02c the
+     * very first unresolved one — "extraction error persistence and API
+     * ownership are contradictory" — was the exact contradiction the
+     * implementation councils then burned both their rounds oscillating over.
+     * Carrying it forward lets the implementation reviewers see that the design
+     * question was already known to be open.
+     */
+    const unresolvedSpecFindings: string[] = [];
     let suggestedCommit: string | undefined;
     let implementSummary: string | undefined;
     let diagnosisSummary: string;
@@ -2873,8 +3343,9 @@ export async function runHarnessDriver(
           `Save the spec inside THIS worktree — its root is ${host.cwd}. Resolve the repository's spec`,
           `location relative to that root; never write to any other checkout, even if a repo-root check`,
           `points outside this directory (this worktree's .git is a file, not a directory, which fools that check).`,
+          `This session is non-interactive, so the cez-spec-writing Open Questions gate cannot stop on the user: answer each open question yourself with the most defensible assumption, record question + chosen assumption in the spec's Open Questions section, and list them in the result's "openQuestions".`,
           `When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
-          `{"summary": "<one-paragraph spec summary>", "specPath": "<repo-relative path of the spec file>", "files": ["<spec file>"]}`,
+          `{"summary": "<one-paragraph spec summary>", "specPath": "<repo-relative path of the spec file>", "files": ["<spec file>"], "openQuestions": ["<question> — assumed: <the assumption you proceeded under>"]}`,
         ].join('\n'),
         specResultSchema,
         'spec',
@@ -2885,6 +3356,22 @@ export async function runHarnessDriver(
       const specResult = spec as z.infer<typeof specResultSchema>;
       diagnosisSummary = specResult.summary;
       for (const f of specResult.files ?? []) allowlist.add(f);
+      if (specResult.openQuestions?.length) {
+        // The assumptions the author proceeded under, surfaced twice: to the
+        // human in the run log now, and to every implementation reviewer as
+        // known-open design questions (priorRoundsAppendix).
+        unresolvedSpecFindings.push(
+          ...specResult.openQuestions.map((q) => `[open-question] ${q}`),
+        );
+        host.emit({
+          type: 'note',
+          stepId: 'spec',
+          message:
+            `the spec proceeded under ${specResult.openQuestions.length} recorded assumption${
+              specResult.openQuestions.length === 1 ? '' : 's'
+            } (non-interactive Open Questions gate):\n- ${specResult.openQuestions.join('\n- ')}`,
+        });
+      }
 
       // Spec council (2026-07-24, parity with the upstream multi wrapper):
       // the council reviews the SPECIFICATION itself in a bounded revise loop
@@ -2997,12 +3484,19 @@ export async function runHarnessDriver(
               });
             }
             let lastFailure: string | null = null;
+            /** Contract failures only — transport failures must not make the
+             *  retry lecture the model about JSON it never got to write. */
+            let lastContractFailure: string | null = null;
             const priorAttempts = attemptsForInput(invocationId, inputSha256);
             for (
               let attempt = priorAttempts + 1;
               attempt <= 2 && parsed === null;
               attempt += 1
             ) {
+              const attemptPrompt =
+                attempt > 1 && lastContractFailure
+                  ? `${renderedPrompt}${resultContractRetryAppendix(lastContractFailure, resultPath, false)}`
+                  : renderedPrompt;
               const invocation = beginInvocation({
                 id: invocationId,
                 phaseId: councilId,
@@ -3015,14 +3509,18 @@ export async function runHarnessDriver(
                   family: councilFamilyOf(reviewer),
                 },
                 inputSha256,
-                prompt: renderedPrompt,
+                prompt: attemptPrompt,
               });
+              // A failed prior attempt can leave a result file behind; attempt 2 of run
+              // 0fe16fb7 read one, announced "the file already exists", and set about
+              // editing it instead of writing the contract. Every attempt starts clean.
+              rmSync(resultPath, { force: true });
               const failure = await runReadOnlyReviewer(invocation, {
                 concurrent: true,
                 phaseId: councilId,
                 name: `${councilName} — ${label}`,
                 skill: 'cez-spec-writing',
-                prompt: renderedPrompt,
+                prompt: attemptPrompt,
                 resultPath,
                 timeoutMs: PHASE_TIMEOUTS_MS.review ?? 30 * 60_000,
                 env: { CEZ_HARNESS_RESULT_FILE: resultPath, CEZ_HARNESS_ARTIFACT_DIR: artifactDir },
@@ -3041,14 +3539,20 @@ export async function runHarnessDriver(
                 if (!isRetryableReviewerFailure(failure)) break;
                 continue;
               }
-              try {
-                const check = reviewResultSchema.safeParse(JSON.parse(readFileSync(resultPath, 'utf8')));
-                parsed = check.success ? check.data : null;
-              } catch {
-                parsed = null;
+              const read = readReviewResultFile(resultPath);
+              parsed = read.result;
+              if (read.salvaged) {
+                // The review was all there — only the framing was wrong. Say so, so
+                // a model that keeps doing this is visible without failing runs.
+                host.emit({
+                  type: 'note',
+                  stepId: councilId,
+                  message: `reviewer ${label} wrapped its result JSON in prose — salvaged the embedded review`,
+                });
               }
               if (parsed === null) {
-                lastFailure = 'ended without a valid result file';
+                lastFailure = read.failure ?? 'ended without a valid result file';
+                lastContractFailure = lastFailure.replace(/^the session /, '');
                 finishInvocation(invocation, 'failed', { error: lastFailure });
               } else {
                 finishInvocation(invocation, 'completed', { artifactPath: resultPath, modelId: label });
@@ -3095,7 +3599,7 @@ export async function runHarnessDriver(
           // Advisors run regardless of runner outcomes — they are a separate
           // transport and their verdicts count toward quorum on their own.
           if (specCouncilMembers.length > 0 && !host.isCancelled()) {
-            const advisorRun = await runAdvisorCouncilOp({
+            const advisorRun = await runAdvisorCouncilOpWithRetry({
               kindTag: 'spec',
               round: sround,
               members: specCouncilMembers,
@@ -3217,6 +3721,11 @@ export async function runHarnessDriver(
               .filter((f) => f.severity === 'blocker' || f.severity === 'major')
               .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`)
               .join('; ');
+            unresolvedSpecFindings.push(
+              ...specFindings
+                .filter((f) => f.severity === 'blocker' || f.severity === 'major')
+                .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`),
+            );
             setOutcome({
               status: 'contested',
               blockingReasons: contested
@@ -3340,7 +3849,113 @@ export async function runHarnessDriver(
         : `fix: ${input.task.split('\n')[0]}`;
     }
 
-    for (let round = 1; round <= ledger.loops.maxFixRounds; round += 1) {
+    /**
+     * Rounds spent repairing the validation gate rather than answering a review.
+     *
+     * A failing gate short-circuits the council (`continue` below), so before
+     * this the round was still charged to the review budget: a run whose first
+     * validate failed got two review rounds instead of three, and spent one of
+     * its three fixes on breakage the reviewers never saw. Observed on
+     * 71edb02c, where round one went entirely to unrelated pre-existing test
+     * failures and the councils then ran out of rounds mid-disagreement.
+     *
+     * Validation repair gets its own small budget on top. It is capped
+     * separately so a permanently red gate still terminates.
+     */
+    let validationRepairRounds = 0;
+    const MAX_VALIDATION_REPAIR_ROUNDS = 2;
+    /** Fix phases that existed only to green the gate — see the scope report. */
+    const validationRepairPhases = new Set<string>();
+
+    /**
+     * The gate's verdict over a round's checks, measured against the baseline:
+     * returns the blocking description (what a repair round must fix, with the
+     * real extracted evidence), or null when every failure was already present
+     * on the untouched worktree. Tolerated failures are announced, marked
+     * `preexisting` on the persisted checks, and recorded as a decision — loud,
+     * never silent (run c54c2ed4 died blaming a pre-existing upstream failure).
+     */
+    const describeGateVerdict = (
+      checks: HarnessValidationCheck[],
+      validateId: string,
+    ): string | null => {
+      const gate = computeGateRegressions(checks, ledger.baselineValidation);
+      if (gate.tolerated.length > 0) {
+        const reasons = gate.tolerated.map((entry) => entry.reason);
+        ledger.decisions.push({
+          at: new Date().toISOString(),
+          kind: 'validation.preexisting-tolerated',
+          by: 'driver',
+          detail: reasons.join('; '),
+        });
+        persist();
+        host.emit({
+          type: 'note',
+          stepId: validateId,
+          message:
+            `validation gate: tolerating ${gate.tolerated.length} pre-existing failure(s) already red at baseline —\n- ${reasons.join(
+              '\n- ',
+            )}\nThe repo owes these fixes; this run is not charged for them.`,
+        });
+      }
+      if (gate.blocking.length === 0) return null;
+      const first = gate.blocking[0]!;
+      const newIds = first.newFailureIds?.length
+        ? ` — new failures vs baseline: ${first.newFailureIds.join(', ')}`
+        : '';
+      return `\`${first.command}\` exited ${first.exitCode}${newIds}: ${first.evidence}`;
+    };
+
+    /**
+     * What each earlier round demanded and what the fixer did about it.
+     *
+     * Reviewers are fresh contexts by design — that is what makes them
+     * independent — but with no record of earlier rounds a reviewer can demand
+     * a change and then block its reversal. Run 71edb02c hit exactly that: one
+     * model raised a blocker on sanitizing error responses ("existing fields
+     * retyped to internal keys"), the fixer restored the raw contract as
+     * instructed, and the same model then raised two blockers for exposing raw
+     * errors. The loop was unwinnable and exhausted into a contested handoff.
+     *
+     * Independence is preserved — reviewers still read the diff themselves and
+     * are never told what verdict to reach. They are only denied the ability to
+     * reverse an accepted fix without noticing they are doing it.
+     */
+    const roundHistory: Array<{ round: number; demanded: string[]; response: string }> = [];
+
+    /** Prior rounds — and any open spec question — rendered for a reviewer. */
+    const priorRoundsAppendix = (): string => {
+      if (roundHistory.length === 0 && unresolvedSpecFindings.length === 0) return '';
+      const lines: string[] = [];
+      if (unresolvedSpecFindings.length > 0) {
+        lines.push(
+          ``,
+          `The specification review closed WITHOUT resolving these, and the build proceeded anyway:`,
+          ...unresolvedSpecFindings.map((f) => `  - ${f}`),
+          `Treat them as known-open design questions. If the diff has to pick a side, the pick is`,
+          `not itself a defect — say which side it took and whether it is defensible.`,
+        );
+      }
+      if (roundHistory.length === 0) return lines.join('\n');
+      lines.push('', `Earlier rounds of this same review (newest last):`);
+      for (const entry of roundHistory) {
+        lines.push(``, `Round ${entry.round} required:`);
+        for (const d of entry.demanded) lines.push(`  - ${d}`);
+        lines.push(`Round ${entry.round} response: ${entry.response || '(not recorded)'}`);
+      }
+      lines.push(
+        ``,
+        `Judge the diff in front of you on its own merits — this history is context, not a verdict.`,
+        `But if your finding would reverse a change an earlier round required, say so explicitly in`,
+        `that finding's evidence and justify why the earlier round was wrong. Silently flipping the`,
+        `requirement back is what makes these loops unwinnable.`,
+      );
+      return lines.join('\n');
+    };
+
+    // The bound is re-evaluated each iteration, so a validation-repair round
+    // extends the loop instead of consuming a review round.
+    for (let round = 1; round <= ledger.loops.maxFixRounds + validationRepairRounds; round += 1) {
       const isFirst = round === 1;
       const implementId = isFirst ? 'implement' : `fix-${round}`;
       const reviewId = isFirst ? 'review' : `review-${round}`;
@@ -3369,6 +3984,7 @@ export async function runHarnessDriver(
                 `- [${f.severity}] ${f.title}${f.location ? ` (${f.location})` : ''}${f.evidence ? ` — ${f.evidence}` : ''}${f.by ? ` — raised by ${f.by}` : ''}`,
             ),
             ``,
+            `When a finding cites a "full output:" log path, read that log for the complete failure detail before re-running long suites.`,
             `Hard boundaries: edit only this worktree; create NO commit; perform NO push or PR; do not weaken or delete tests.`,
             `When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
             `{"changedPaths": ["<every repo-relative file you changed>"], "summary": "<what you fixed>"}`,
@@ -3403,9 +4019,13 @@ export async function runHarnessDriver(
         if ('cancelled' in (implement as object)) return null;
         if ('error' in (implement as object)) return (implement as { error: string }).error;
         const implementResult = implement as z.infer<typeof fixResultSchema>;
-        for (const path of implementResult.changedPaths) allowlist.add(path);
+        for (const path of implementResult.changedPaths) addToAllowlist(path, implementId);
         suggestedCommit = implementResult.suggestedCommit ?? suggestedCommit;
         implementSummary = implementResult.summary ?? implementSummary;
+        // Close the loop on the previous round's demands: the next council sees
+        // both what was required and what the fixer did in response.
+        const answering = roundHistory[roundHistory.length - 1];
+        if (answering && !answering.response) answering.response = implementResult.summary ?? '';
       }
 
       // The implementer is the phase with both the means and the motive to
@@ -3447,12 +4067,10 @@ export async function runHarnessDriver(
       );
       if (recoveredValidation) {
         ledger.validation = recoveredValidation.checks;
-        validationFailed = recoveredValidation.checks.some((check) => check.status === 'failed')
-          ? (() => {
-              const failed = recoveredValidation.checks.find((check) => check.status === 'failed')!;
-              return `\`${failed.command}\` exited ${failed.exitCode}: ${failed.evidence}`;
-            })()
-          : null;
+        validationFailed = describeGateVerdict(
+          recoveredValidation.checks,
+          validateId,
+        );
         if (!phaseDone(validateId)) {
           startPhase(ledger, {
             id: validateId,
@@ -3513,6 +4131,8 @@ export async function runHarnessDriver(
                   env: harnessChildEnvironment(
                     harnessConfigEnvironmentNames(agentic.agentHarness),
                   ),
+                  logDir: artifactDir,
+                  logPrefix: `validation-${validateId}-`,
                   onSpawn: (identity) => {
                     invocation.process = { ...identity };
                     persist();
@@ -3530,6 +4150,12 @@ export async function runHarnessDriver(
                   });
                   return { ok: true };
                 }
+                // A failed gate is not a run failure — it re-enters the fix loop
+                // with the real command evidence, like a confirmed review finding.
+                // Pre-existing baseline failures are tolerated (loudly) instead.
+                // Verdict first: it stamps `preexisting` on the checks, and the
+                // persisted artifact must carry those stamps.
+                validationFailed = describeGateVerdict(checks, validateId);
                 ledger.validation = checks;
                 const artifact = {
                   version: 1 as const,
@@ -3542,12 +4168,6 @@ export async function runHarnessDriver(
                 finishInvocation(invocation, 'completed', {
                   artifactPath: validationPath,
                 });
-                const failed = checks.find((check) => check.status === 'failed');
-                if (failed) {
-                  // A failed gate is not a run failure — it re-enters the fix loop
-                  // with the real command evidence, like a confirmed review finding.
-                  validationFailed = `\`${failed.command}\` exited ${failed.exitCode}: ${failed.evidence}`;
-                }
                 return { ok: true };
               } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);
@@ -3565,18 +4185,32 @@ export async function runHarnessDriver(
       }
       if (validationFailed) {
         reviewFindings = [{ severity: 'blocker', title: 'validation gate failed', evidence: validationFailed }];
-        ledger.loops.fixRounds = round;
+        // Charged to the validation budget, not the review one — no council ran
+        // this round, so it cost the reviewers nothing to converge with.
+        ledger.loops.fixRounds = Math.max(0, round - validationRepairRounds - 1);
         persist();
         if (packetized) {
           const reason = `high-assurance validation regressed after packet gates: ${validationFailed}`;
           setOutcome({ status: 'blocked', blockingReasons: [reason] });
           return reason;
         }
-        if (round === ledger.loops.maxFixRounds) {
-          const reason = `validation gate still failing after ${ledger.loops.maxFixRounds} rounds: ${validationFailed}`;
+        if (validationRepairRounds >= MAX_VALIDATION_REPAIR_ROUNDS) {
+          const reason = `validation gate still failing after ${MAX_VALIDATION_REPAIR_ROUNDS + 1} repair rounds: ${validationFailed}`;
           setOutcome({ status: 'blocked', blockingReasons: [reason] });
           return reason;
         }
+        validationRepairRounds += 1;
+        // The NEXT fix phase exists to make the gate green again, not to build
+        // the feature. Naming it lets the handoff separate "work the task asked
+        // for" from "collateral repairs the gate forced".
+        validationRepairPhases.add(`fix-${round + 1}`);
+        host.emit({
+          type: 'note',
+          stepId: validateId,
+          message:
+            `validation gate failed — spending a repair round on it. This does NOT consume a ` +
+            `review round (${ledger.loops.fixRounds}/${ledger.loops.maxFixRounds} used).`,
+        });
         continue;
       }
       const validationEvidenceSha256 = hashFile(validationPath);
@@ -3596,14 +4230,14 @@ export async function runHarnessDriver(
         `Validation gate: ${
           ledger.validation.length === 0
             ? 'no commands configured'
-            : ledger.validation.map((c) => `${c.command} → ${c.status}`).join('; ')
+            : ledger.validation.map((c) => `${c.command} → ${c.status}${c.preexisting ? ' (failed at baseline too — tolerated as pre-existing)' : ''}`).join('; ')
         }`,
         `Validation evidence sha256: ${validationEvidenceSha256}`,
         ``,
         `Confirm findings against the code itself. When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
         `{"verdict": "approve" | "request_changes", "findings": [{"severity": "blocker|major|minor|nit", "title": "…", "location": "path:line", "evidence": "…"}]}`,
         `Verdict follows cez-code-review mechanically: any blocker or major finding means "request_changes"; only minor/nit findings (or none) means "approve".`,
-      ].join('\n');
+      ].join('\n') + priorRoundsAppendix();
 
       let mergedFindings: AttributedFinding[];
       let mergedVerdict: 'approve' | 'request_changes';
@@ -3683,12 +4317,19 @@ export async function runHarnessDriver(
             });
           }
           let lastFailure: string | null = null;
+          /** Contract failures only — transport failures must not make the
+           *  retry lecture the model about JSON it never got to write. */
+          let lastContractFailure: string | null = null;
           const priorAttempts = attemptsForInput(invocationId, inputSha256);
           for (
             let attempt = priorAttempts + 1;
             attempt <= 2 && parsed === null;
             attempt += 1
           ) {
+            const attemptPrompt =
+              attempt > 1 && lastContractFailure
+                ? `${renderedPrompt}${resultContractRetryAppendix(lastContractFailure, resultPath, false)}`
+                : renderedPrompt;
             const invocation = beginInvocation({
               id: invocationId,
               phaseId: reviewId,
@@ -3701,14 +4342,17 @@ export async function runHarnessDriver(
                 family: councilFamilyOf(reviewer),
               },
               inputSha256,
-              prompt: renderedPrompt,
+              prompt: attemptPrompt,
             });
+            // Same lesson as the spec council (run 0fe16fb7): a failed prior
+            // attempt can leave a result file behind that derails attempt 2.
+            rmSync(resultPath, { force: true });
             const failure = await runReadOnlyReviewer(invocation, {
               concurrent: true,
               phaseId: reviewId,
               name: `Review — ${label}`,
               skill: 'cez-code-review',
-              prompt: renderedPrompt,
+              prompt: attemptPrompt,
               resultPath,
               timeoutMs: PHASE_TIMEOUTS_MS.review ?? 30 * 60_000,
               env: { CEZ_HARNESS_RESULT_FILE: resultPath, CEZ_HARNESS_ARTIFACT_DIR: artifactDir },
@@ -3726,14 +4370,20 @@ export async function runHarnessDriver(
               if (!isRetryableReviewerFailure(failure)) break;
               continue;
             }
-            try {
-              const check = reviewResultSchema.safeParse(JSON.parse(readFileSync(resultPath, 'utf8')));
-              parsed = check.success ? check.data : null;
-            } catch {
-              parsed = null;
+            const read = readReviewResultFile(resultPath);
+            parsed = read.result;
+            if (read.salvaged) {
+              // The review was all there — only the framing was wrong. Say so, so
+              // a model that keeps doing this is visible without failing runs.
+              host.emit({
+                type: 'note',
+                stepId: reviewId,
+                message: `reviewer ${label} wrapped its result JSON in prose — salvaged the embedded review`,
+              });
             }
             if (parsed === null) {
-              lastFailure = 'ended without a valid result file';
+              lastFailure = read.failure ?? 'ended without a valid result file';
+              lastContractFailure = lastFailure.replace(/^the session /, '');
               finishInvocation(invocation, 'failed', { error: lastFailure });
             } else {
               finishInvocation(invocation, 'completed', { artifactPath: resultPath, modelId: label });
@@ -3779,7 +4429,7 @@ export async function runHarnessDriver(
           // Advisor reviewers (spec 2026-07-24-advisor-reviewers): one
           // packet-less runtime council over the worktree diff — the same
           // subject the runner sessions reviewed.
-          const advisorRun = await runAdvisorCouncilOp({
+          const advisorRun = await runAdvisorCouncilOpWithRetry({
             kindTag: 'impl',
             round,
             members: implCouncilMembers,
@@ -3790,12 +4440,12 @@ export async function runHarnessDriver(
                 `Validation gate: ${
                   ledger.validation.length === 0
                     ? 'no commands configured'
-                    : ledger.validation.map((c) => `${c.command} → ${c.status}`).join('; ')
+                    : ledger.validation.map((c) => `${c.command} → ${c.status}${c.preexisting ? ' (failed at baseline too — tolerated as pre-existing)' : ''}`).join('; ')
                 }`,
                 `Validation evidence sha256: ${validationEvidenceSha256}`,
                 ``,
                 `Review the worktree's uncommitted diff (the subject) against these facts.`,
-              ].join('\n')}${councilBoundaryAppendix}`,
+              ].join('\n')}${priorRoundsAppendix()}${councilBoundaryAppendix}`,
           });
           if (advisorRun === null) return null;
           if (advisorRun.error) {
@@ -3955,7 +4605,9 @@ export async function runHarnessDriver(
         });
         break;
       }
-      if (round === ledger.loops.maxFixRounds) {
+      // Against the EXTENDED bound: a repair round pushed the loop out by one,
+      // and stopping at the original number would hand the extra round back.
+      if (round >= ledger.loops.maxFixRounds + validationRepairRounds) {
         // Same reasoning as the spec council: stage the work with the surviving
         // findings named, rather than deleting an hour of it because a reviewer
         // will not sign off. The validation GATE is different and still fails
@@ -3976,6 +4628,15 @@ export async function runHarnessDriver(
         });
         break;
       }
+      // Record what this round demanded, so the next council sees it alongside
+      // whatever the fixer does about it and cannot reverse it unknowingly.
+      roundHistory.push({
+        round,
+        demanded: blocking.map(
+          (f) => `[${f.severity}] ${f.title}${f.location ? ` (${f.location})` : ''}${f.by ? ` — raised by ${f.by}` : ''}`,
+        ),
+        response: '',
+      });
       reviewFindings = blocking;
     }
 
@@ -4064,6 +4725,25 @@ export async function runHarnessDriver(
       const phase = ledger.phases.find((entry) => entry.id === 'stage');
       if (phase) phase.status = 'pending';
     }
+    // Scope report: which staged files the task actually asked for, and which
+    // came in as collateral while making a red gate green again. 71edb02c staged
+    // 48 files for a UI task; 14 of them were unrelated pre-existing test and
+    // tooling breakage repaired in-band, and nothing in the handoff said so.
+    const collateral = [...allowlistOrigin.entries()]
+      .filter(([, phaseId]) => validationRepairPhases.has(phaseId))
+      .map(([path]) => path)
+      .sort();
+    if (collateral.length > 0) {
+      host.emit({
+        type: 'note',
+        stepId: 'stage',
+        message:
+          `${collateral.length} of ${allowlist.size} staged paths were touched only to repair the ` +
+          `validation gate, not to implement the task — review them separately, they may belong ` +
+          `in their own change:\n- ${collateral.join('\n- ')}`,
+      });
+    }
+
     const stageError = recoveredStage ? null : await opPhase('stage', 'Stage', async () => {
       const invocation = beginInvocation({
         id: stageInvocationId,
@@ -4118,6 +4798,26 @@ export async function runHarnessDriver(
       return stageError;
     }
 
+    // Advisory findings the runtime demoted from refusals (whitespace nits,
+    // leftovers outside the handoff — run aad28178). They ride the run log AND
+    // the prepared PR body, so the human gate sees them wherever it reads.
+    let stageWarnings: string[] = [];
+    try {
+      const stageResult = JSON.parse(readFileSync(stageResultPath, 'utf8')) as {
+        warnings?: unknown;
+      };
+      if (Array.isArray(stageResult.warnings)) {
+        stageWarnings = stageResult.warnings.filter(
+          (entry): entry is string => typeof entry === 'string',
+        );
+      }
+    } catch {
+      // unreadable result — the op already passed, nothing advisory to surface
+    }
+    for (const warning of stageWarnings) {
+      host.emit({ type: 'note', stepId: 'stage', message: `staged with a warning — ${warning}` });
+    }
+
     ledger.stage = {
       status: 'staged',
       startStatePath,
@@ -4145,6 +4845,9 @@ export async function runHarnessDriver(
                   ]
                 : []),
             ]
+          : []),
+        ...(stageWarnings.length > 0
+          ? [``, `## Handoff warnings`, ...stageWarnings.map((warning) => `- ${warning}`)]
           : []),
         ``,
         `Staged by the cezar harness driver (stage-only: no commit, push, or PR was created).`,

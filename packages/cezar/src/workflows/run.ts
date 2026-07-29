@@ -2405,7 +2405,24 @@ export class RunManager {
           // nudge a session that ended its turn early — e.g. to await a
           // background subagent, its home-harness habit — and keep the CLI
           // process (and that subagent) alive across the boundary.
+          //
+          // A turn that ends ASKING is diagnosed by name. A spec session once
+          // ended both its attempts with a CEZ:ASK nobody could answer (the
+          // skill's Open Questions gate), and all the run log said was "ended
+          // without a valid result file" — the one fact that explained the
+          // failure was sitting unread in the turn text.
+          const endedAsking = parseAskMarker(turnText) !== null;
           turnText = '';
+          if (endedAsking && !existsSync(phaseResultPath)) {
+            emit({
+              type: 'note',
+              stepId: step.id,
+              message:
+                'the phase ended its turn by asking the user a question — phase sessions are ' +
+                'non-interactive and no one can answer. The agent must choose a defensible ' +
+                'assumption, record it in its artifact, and write the result file instead.',
+            });
+          }
           if (state.cancelled || !liveSession?.open) return;
           if (existsSync(phaseResultPath)) {
             liveSession.end();

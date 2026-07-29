@@ -3398,7 +3398,10 @@ export function createApp(deps: ServerDeps) {
             orchestrator: body.data.roles.orchestrator,
             implementer: body.data.roles.implementer,
             reviewers: body.data.roles.reviewers,
-            reviewPolicy: 'all-required' as const,
+            // Mirrors the driver's default for picker-selected roles: quorum
+            // (≥2 completed reviewers across ≥2 families proceeds, loudly
+            // degraded), never implicit unanimity.
+            reviewPolicy: 'quorum' as const,
             packetized: false,
           },
         }

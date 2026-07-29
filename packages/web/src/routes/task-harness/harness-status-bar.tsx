@@ -55,8 +55,13 @@ export function HarnessStatusBar({
       <span className="shrink-0 font-semibold text-foreground">
         {current ? phaseLabel(current) : 'Starting'}
       </span>
+      {/* Done-count, matching the rail's PHASE aside and the bar below — not the
+          running phase's ordinal. The ordinal read "phase 3 of 3" the moment a
+          3-phase-old run entered its third phase, over a ⅔ bar — sounding
+          finished while barely started (phases are discovered as rounds spawn,
+          so the total grows; a fraction of DONE work stays honest as it does). */}
       <span className="shrink-0 text-soft-foreground tabular-nums">
-        · phase {Math.min(done + (active ? 1 : 0), phases.length)} of {phases.length}
+        · {done}/{phases.length} done
       </span>
 
       <span

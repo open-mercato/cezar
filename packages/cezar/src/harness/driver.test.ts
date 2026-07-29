@@ -106,6 +106,8 @@ function makeHarness(dir: string) {
   const sealDigest = () => sealedDigest;
 
   const ops: FakeCall[] = [];
+  /** Advisory findings the fake stage op attaches to its result (run aad28178). */
+  const stageWarnings: string[] = [];
   /** Per-model probe verdicts, keyed by `roleRefId`. Empty = everything ready. */
   const probeVerdicts = new Map<string, ProbeVerdict>();
 
@@ -125,6 +127,9 @@ function makeHarness(dir: string) {
   };
 
   const deps: HarnessDriverDeps = {
+    // Tests drive skill presence through `ensureSkill`; the real bundled-copy
+    // refresh would drag the actual vendor tree into every fixture.
+    bundledSkillsRoot: null,
     resolveScript: () => join(dir, 'harness.mjs'),
     // The sealed-runtime seam (2026-07-27). Tests never materialize a real
     // skill tree, so seal to a stable fake and keep its digest constant —
@@ -158,7 +163,15 @@ function makeHarness(dir: string) {
         if (op === 'stage') {
           const output = args[args.indexOf('--output') + 1];
           if (output) {
-            writeFileSync(output, JSON.stringify({ status: 'ready', stagedPaths: [] }), 'utf8');
+            writeFileSync(
+              output,
+              JSON.stringify({
+                status: 'ready',
+                stagedPaths: [],
+                ...(stageWarnings.length > 0 ? { warnings: [...stageWarnings] } : {}),
+              }),
+              'utf8',
+            );
           }
         }
         if (op === 'packet-run') {
@@ -283,6 +296,7 @@ function makeHarness(dir: string) {
     events,
     steps,
     agentBehavior,
+    stageWarnings,
     probeVerdicts,
     setCouncilBehavior,
     setPacketRunBehavior,
@@ -334,6 +348,42 @@ describe('harness driver — standard fix-issue graph', () => {
     },
   });
 
+  /**
+   * Regression (2026-07-28, the day three deployed runtime fixes reached zero
+   * runs): the catalog resolves skills local-first, so a stale project-local
+   * `.claude/skills/cez-harness` — replanted by any root-cwd session invoking a
+   * cez-* skill — silently outranked the bundled runtime for every harness run.
+   * The driver now copies its own skills from the bundled tree unconditionally,
+   * overwriting whatever the worktree holds.
+   */
+  it('replaces a stale worktree runtime with the bundled copy at preflight', async () => {
+    const h = makeHarness(dir);
+    const bundledRoot = join(dir, 'fake-bundled');
+    for (const name of ['cez-harness', 'cez-verify-in-repo', 'cez-root-cause', 'cez-fix', 'cez-code-review']) {
+      mkdirSync(join(bundledRoot, name, 'scripts'), { recursive: true });
+      writeFileSync(join(bundledRoot, name, 'SKILL.md'), `# ${name} (bundled, current)\n`, 'utf8');
+      writeFileSync(join(bundledRoot, name, 'scripts', 'harness.mjs'), `// bundled-current ${name}\n`, 'utf8');
+    }
+    h.deps.bundledSkillsRoot = bundledRoot;
+    // The stale local-first clone a poisoned catalog would have produced.
+    const stale = join(dir, '.claude', 'skills', 'cez-harness');
+    mkdirSync(join(stale, 'scripts'), { recursive: true });
+    writeFileSync(join(stale, 'scripts', 'harness.mjs'), '// FROZEN 12:22 SNAPSHOT\n', 'utf8');
+    let ensureSkillCalls = 0;
+    h.host.ensureSkill = async () => {
+      ensureSkillCalls += 1;
+      return true;
+    };
+
+    const error = await runHarnessDriver(h.host, input, h.deps);
+
+    expect(error).toBeNull();
+    expect(readFileSync(join(stale, 'scripts', 'harness.mjs'), 'utf8')).toContain('bundled-current');
+    expect(readFileSync(join(stale, 'scripts', 'harness.mjs'), 'utf8')).not.toContain('FROZEN');
+    // Every needed skill came from the bundled tree — the catalog was never asked.
+    expect(ensureSkillCalls).toBe(0);
+  });
+
   it('runs the full graph in order and stages the declared allowlist', async () => {
     const h = makeHarness(dir);
     const error = await runHarnessDriver(h.host, input, h.deps);
@@ -363,6 +413,19 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(ledger?.phases.every((p) => p.status === 'done')).toBe(true);
     expect(h.events.some((e) => e.type === 'harness.stage.updated')).toBe(true);
     expect(h.events.some((e) => e.type === 'harness.readiness.updated')).toBe(true);
+  });
+
+  it('surfaces stage warnings in the run log and the prepared PR body', async () => {
+    const h = makeHarness(dir);
+    h.stageWarnings.push('whitespace findings in the staged diff (cosmetic):\nspec.md:3: trailing whitespace');
+    const error = await runHarnessDriver(h.host, input, h.deps);
+    expect(error).toBeNull();
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.stage.status).toBe('staged');
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('staged with a warning') && n.includes('trailing whitespace'))).toBe(true);
+    expect(ledger?.stage.prBody).toContain('## Handoff warnings');
+    expect(ledger?.stage.prBody).toContain('trailing whitespace');
   });
 
   it('stops successfully after qualify reports no_action, skipping the rest', async () => {
@@ -396,6 +459,41 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(ledger?.phases.find((p) => p.id === 'qualify')?.status).toBe('failed');
   });
 
+  /**
+   * The retry is informed, not blind (the "remind it of the JSON" loop): a
+   * session that broke the result contract is rerun with the named failure and
+   * the contract restated — and an implement/fix retry is told its predecessor's
+   * worktree edits survive, so paid work is finished rather than redone.
+   */
+  it('tells the retry session what the first attempt got wrong', async () => {
+    const h = makeHarness(dir);
+    const prompts: string[] = [];
+    h.agentBehavior.set('implement', (req) => {
+      prompts.push(req.prompt);
+      writeFileSync(
+        req.resultPath,
+        prompts.length === 1
+          ? 'I finished the work! Summary: everything went great.'
+          : JSON.stringify({ changedPaths: ['src/fix.ts'], summary: 'done' }),
+        'utf8',
+      );
+      return null;
+    });
+
+    const error = await runHarnessDriver(h.host, input, h.deps);
+
+    expect(error).toBeNull();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).not.toContain('RESULT-CONTRACT RETRY');
+    expect(prompts[1]).toContain('RESULT-CONTRACT RETRY');
+    // The named failure, not a generic "invalid result".
+    expect(prompts[1]).toContain('do not contain the contracted JSON object');
+    // Paid work survives the retry — say so.
+    expect(prompts[1]).toContain('worktree edits');
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('told what was wrong'))).toBe(true);
+  });
+
   it('adopts a valid result written during a previously rejected attempt without another model call', async () => {
     const h = makeHarness(dir);
     h.agentBehavior.set('qualify', (req) => {
@@ -409,7 +507,9 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(failed).toMatchObject({
       status: 'failed',
       attempt: 2,
-      error: 'ended without a valid result file',
+      // The error now names WHAT was wrong after the dash — the same detail
+      // the informed retry feeds back to the model.
+      error: expect.stringContaining('ended without a valid result file'),
     });
     const resultPath = join(
       harnessArtifactDir(h.host.dataDir, h.host.runId),
@@ -501,6 +601,158 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(h.calls.map((c) => c.id)).toContain('stage');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('fix loop exhausted') && n.includes('still broken'))).toBe(true);
+  });
+
+  /**
+   * Regression (run 71edb02c): a red validation gate short-circuits the council
+   * (no review runs that round), but the round was still charged to the review
+   * budget. That run's first gate failed on pre-existing breakage the reviewers
+   * never saw, so it got two review rounds instead of three and the councils ran
+   * out mid-disagreement. Repair rounds have their own budget now.
+   */
+  it('does not charge a validation repair round to the review budget', async () => {
+    const h = makeHarness(dir);
+    let gate = 0;
+    h.deps.validate = async (commands: string[]) => {
+      gate += 1;
+      // Call 1 is the baseline gate (green). Red once on the round-1 validate —
+      // a genuine regression — then green.
+      const failed = gate === 2;
+      return commands.map((command) => ({
+        command,
+        status: failed ? ('failed' as const) : ('passed' as const),
+        exitCode: failed ? 1 : 0,
+        evidence: failed ? 'a regression the reviewers never saw' : 'ok',
+      }));
+    };
+    h.agentBehavior.set('review', (req) => {
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({ verdict: 'request_changes', findings: [{ severity: 'blocker', title: 'still broken' }] }),
+        'utf8',
+      );
+      return null;
+    });
+    for (const id of ['fix-2', 'fix-3', 'fix-4']) {
+      h.agentBehavior.set(id, (req) => {
+        writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/runs/store.ts'] }), 'utf8');
+        return null;
+      });
+    }
+    const error = await runHarnessDriver(h.host, input, h.deps);
+    expect(error).toBeNull();
+    // Three review rounds still available despite the repair round — the whole
+    // point. Before this, the failed gate cost one of them and only two ran.
+    expect(h.calls.filter((c) => c.id.startsWith('review'))).toHaveLength(3);
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('does NOT consume a review round'))).toBe(true);
+  });
+
+  /**
+   * Regression (run c54c2ed4): the repo's own base branch had a failing test
+   * (`explicit-sort-comparators` flagging an upstream script). The gate charged
+   * that debt to the run — three repair rounds fixing upstream breakage, then a
+   * dead run "still failing" on a failure that predated its first edit. The
+   * baseline gate measures the untouched worktree once; identical failures are
+   * tolerated loudly, and only regressions beyond the baseline block.
+   */
+  it('tolerates a pre-existing baseline failure and completes without a repair round', async () => {
+    const h = makeHarness(dir);
+    h.deps.validate = async (commands: string[]) =>
+      commands.map((command) => ({
+        command,
+        status: 'failed' as const,
+        exitCode: 1,
+        evidence: 'FAIL src/upstream.test.ts',
+        failureIds: ['fail:src/upstream.test.ts'],
+      }));
+    let reviewPrompt = '';
+    h.agentBehavior.set('review', (req) => {
+      reviewPrompt = req.prompt;
+      writeFileSync(req.resultPath, JSON.stringify({ verdict: 'approve', findings: [] }), 'utf8');
+      return null;
+    });
+
+    const error = await runHarnessDriver(h.host, input, h.deps);
+
+    expect(error).toBeNull();
+    expect(h.calls.map((c) => c.id)).toContain('stage');
+    // The identical failure never bought a repair round.
+    expect(h.calls.filter((c) => c.id.startsWith('fix-'))).toHaveLength(0);
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('RED on the untouched worktree'))).toBe(true);
+    expect(notes.some((n) => n.includes('tolerating 1 pre-existing failure'))).toBe(true);
+    // Reviewers see the tolerance, not a bare "failed" they would block on.
+    expect(reviewPrompt).toContain('tolerated as pre-existing');
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.baselineValidation?.[0]?.status).toBe('failed');
+    expect(ledger?.validation[0]?.preexisting).toBe(true);
+    expect(ledger?.decisions.some((d) => d.kind === 'validation.preexisting-tolerated')).toBe(true);
+    expect(ledger?.decisions.some((d) => d.kind === 'baseline-gate.red')).toBe(true);
+  });
+
+  it('blocks on failures beyond the baseline set and names the new identities', async () => {
+    const h = makeHarness(dir);
+    let gate = 0;
+    h.deps.validate = async (commands: string[]) => {
+      gate += 1;
+      const baselineCall = gate === 1;
+      return commands.map((command) => ({
+        command,
+        status: 'failed' as const,
+        exitCode: 1,
+        evidence: baselineCall
+          ? 'FAIL src/upstream.test.ts'
+          : 'FAIL src/upstream.test.ts\nFAIL src/new-breakage.test.ts',
+        failureIds: baselineCall
+          ? ['fail:src/upstream.test.ts']
+          : ['fail:src/upstream.test.ts', 'fail:src/new-breakage.test.ts'],
+      }));
+    };
+    for (const id of ['fix-2', 'fix-3']) {
+      h.agentBehavior.set(id, (req) => {
+        writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/runs/store.ts'] }), 'utf8');
+        return null;
+      });
+    }
+
+    const error = await runHarnessDriver(h.host, input, h.deps);
+
+    expect(error).toMatch(/validation gate still failing/);
+    expect(error).toMatch(/new failures vs baseline: fail:src\/new-breakage\.test\.ts/);
+    // The pre-existing upstream failure is not what the run is charged with.
+    expect(error).not.toMatch(/new failures vs baseline: fail:src\/upstream\.test\.ts/);
+    expect(h.calls.map((c) => c.id)).not.toContain('stage');
+  });
+
+  it('pays the baseline gate once — a resume reuses it hash-bound', async () => {
+    const h = makeHarness(dir);
+    let calls = 0;
+    h.deps.validate = async (commands: string[]) => {
+      calls += 1;
+      return commands.map((command) => ({
+        command,
+        status: 'passed' as const,
+        exitCode: 0,
+        evidence: 'ok',
+      }));
+    };
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBeNull();
+    expect(calls).toBe(2); // baseline + the round-1 validate
+
+    const resumed = makeHarness(dir);
+    let resumedCalls = 0;
+    resumed.deps.validate = async (commands: string[]) => {
+      resumedCalls += 1;
+      return commands.map((command) => ({
+        command,
+        status: 'passed' as const,
+        exitCode: 0,
+        evidence: 'ok',
+      }));
+    };
+    expect(await runHarnessDriver(resumed.host, input, resumed.deps)).toBeNull();
+    expect(resumedCalls).toBe(0);
   });
 
   /**
@@ -600,7 +852,7 @@ describe('harness driver — standard fix-issue graph', () => {
     ).toMatchObject({ status: 'failed' });
   });
 
-  it('changes the real review-subject hash when a tracked edit moves into the index', async () => {
+  it('ignores index moves in both subject hashes — content is the subject, not representation', async () => {
     const repo = join(dir, 'review-subject-repo');
     mkdirSync(repo);
     const git = (...args: string[]) =>
@@ -617,14 +869,53 @@ describe('harness driver — standard fix-issue graph', () => {
     git('commit', '-q', '-m', 'base');
     writeFileSync(join(repo, 'tracked.ts'), 'export const value = 2\n', 'utf8');
 
+    // Staging a tracked edit is index choreography, not a content change. The
+    // review subject used to flip here, which meant `git add` could void a
+    // council; both hashes now read the worktree, not the index.
     const unstaged = await snapshotHarnessReviewSubject(repo);
     const unstagedStageSubject = await snapshotHarnessStageSubject(repo);
     git('add', 'tracked.ts');
-    const staged = await snapshotHarnessReviewSubject(repo);
-    const stagedStageSubject = await snapshotHarnessStageSubject(repo);
+    expect(await snapshotHarnessReviewSubject(repo)).toBe(unstaged);
+    expect(await snapshotHarnessStageSubject(repo)).toBe(unstagedStageSubject);
 
-    expect(staged).not.toBe(unstaged);
-    expect(stagedStageSubject).toBe(unstagedStageSubject);
+    // A real content edit still changes both.
+    writeFileSync(join(repo, 'tracked.ts'), 'export const value = 3\n', 'utf8');
+    expect(await snapshotHarnessReviewSubject(repo)).not.toBe(unstaged);
+    expect(await snapshotHarnessStageSubject(repo)).not.toBe(unstagedStageSubject);
+  });
+
+  /**
+   * Regression (run 5f6fe8ae, 2026-07-28): the cockpit's diff polling runs
+   * `git add -N .` in task worktrees so untracked files show in diffstats. The
+   * first poll after the spec phase wrote its file moved that file from the
+   * subject's "untracked" section into its "diff" section — same bytes on disk,
+   * different serialization — and the spec council rejected all three reviewers
+   * for a "subject change" nobody made. The subject must not see the index.
+   */
+  it('does not change either subject hash when the diff poller intent-to-adds a new file', async () => {
+    const repo = join(dir, 'ita-subject-repo');
+    mkdirSync(repo);
+    const git = (...args: string[]) =>
+      execFileSync('git', args, {
+        cwd: repo,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@local');
+    git('config', 'user.name', 'test');
+    writeFileSync(join(repo, 'base.ts'), 'export {}\n', 'utf8');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+    // The spec phase writes a brand-new file…
+    mkdirSync(join(repo, '.ai', 'specs'), { recursive: true });
+    writeFileSync(join(repo, '.ai', 'specs', 'feature.md'), '# spec\n', 'utf8');
+    const review = await snapshotHarnessReviewSubject(repo);
+    const stage = await snapshotHarnessStageSubject(repo);
+    // …and the poller runs `git add -N .` mid-council.
+    git('add', '-N', '.');
+    expect(await snapshotHarnessReviewSubject(repo)).toBe(review);
+    expect(await snapshotHarnessStageSubject(repo)).toBe(stage);
   });
 
   it('ignores background remote-ref updates but detects current-worktree HEAD history changes', async () => {
@@ -1476,15 +1767,21 @@ describe('harness driver — standard fix-issue graph', () => {
         },
       },
     });
+    let validateCalls = 0;
     h.deps.validate = async (commands) => {
-      const external = loadLedger(h.host.dataDir, h.host.runId)!;
-      if (!external.pendingMessages.some((message) => message.id === 'during-validation')) {
-        external.pendingMessages.push({
-          id: 'during-validation',
-          text: 'Confirm the compatibility alias in council.',
-          createdAt: '2026-07-26T10:03:00.000Z',
-        });
-        saveLedger(h.host.dataDir, h.host.runId, external);
+      validateCalls += 1;
+      // Author the message during the VALIDATE phase, not the baseline gate
+      // that now precedes the agent phases — its next boundary is the council.
+      if (validateCalls > 1) {
+        const external = loadLedger(h.host.dataDir, h.host.runId)!;
+        if (!external.pendingMessages.some((message) => message.id === 'during-validation')) {
+          external.pendingMessages.push({
+            id: 'during-validation',
+            text: 'Confirm the compatibility alias in council.',
+            createdAt: '2026-07-26T10:03:00.000Z',
+          });
+          saveLedger(h.host.dataDir, h.host.runId, external);
+        }
       }
       return commands.map((command) => ({
         command,
@@ -1689,7 +1986,14 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
    * Regression: a run spent 5.3M tokens and $12, two reviewers had completed,
    * and the whole thing was discarded because a third produced nothing.
    */
-  it('fails closed when one selected council reviewer does not complete', async () => {
+  /**
+   * Regression (run 0fe16fb7, 2026-07-28): a spec council with two completed
+   * reviewers across two families was discarded because a third small model
+   * flubbed the result-file contract. One flaky reviewer must never void a run:
+   * picker-selected roles default to quorum — ≥2 completed across ≥2 families
+   * proceeds, DEGRADED and loud, with the missing reviewer named.
+   */
+  it('proceeds degraded when one council reviewer fails but quorum holds', async () => {
     const h = makeHarness(dir);
     h.setCouncilBehavior((ids) => ({
       ok: true,
@@ -1705,8 +2009,10 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     const error = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
 
-    expect(error).toMatch(/required reviewers/i);
-    expect(h.calls.map((c) => c.id)).not.toContain('stage');
+    expect(error).toBeNull();
+    expect(h.calls.map((c) => c.id)).toContain('stage');
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('DEGRADED') && n.includes('mimo'))).toBe(true);
   });
 
   it('resumes a partial council without rerunning completed paid reviewers', async () => {
@@ -1720,8 +2026,11 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
           verdict: 'approve',
           reviewers: ids.map((id) => ({
             id,
-            status: councilCalls.length === 1 && id.includes('mimo') ? 'failed' : 'completed',
-            ...(councilCalls.length === 1 && id.includes('mimo')
+            // Run 1: BOTH advisors fail — the claude session alone is below the
+            // quorum floor, so the run genuinely dies (a single failure would
+            // now proceed degraded instead of exercising resume at all).
+            status: councilCalls.length === 1 ? 'failed' : 'completed',
+            ...(councilCalls.length === 1
               ? {}
               : { review: { verdict: 'approve', findings: [] } }),
           })),
@@ -1730,7 +2039,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     });
 
     const first = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
-    expect(first).toMatch(/required reviewers/i);
+    expect(first).toMatch(/quorum/i);
     const second = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
 
     expect(second).toBeNull();
@@ -1738,8 +2047,10 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(councilCalls[0]).toEqual(
       expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-opencode-mimo-v2.5-free']),
     );
-    expect(councilCalls[1]).toHaveLength(1);
-    expect(councilCalls[1]?.[0]).toContain('mimo');
+    // Only the failed advisors rerun; the claude session review is reused.
+    expect(councilCalls[1]).toEqual(
+      expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-opencode-mimo-v2.5-free']),
+    );
     expect(h.calls.filter((call) => call.kind === 'agent' && call.id === 'review')).toHaveLength(1);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
     expect(
@@ -1757,7 +2068,9 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     h.deps.snapshotReviewSubject = async () => subject;
     h.setCouncilBehavior((ids) => {
       councilCalls += 1;
-      subject = 'changed-during-council';
+      // A CONTINUOUS writer: a fresh value every attempt, so the in-run retry
+      // fails too and the run genuinely dies — the case recovery exists for.
+      subject = `changed-during-council-${councilCalls}`;
       return {
         ok: true,
         result: {
@@ -1775,7 +2088,8 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     expect(first).toMatch(/review subject changed/i);
     expect(first).not.toMatch(/reviewer mutated/i);
-    expect(councilCalls).toBe(1);
+    // The paid attempt plus the automatic in-run retry, both defeated.
+    expect(councilCalls).toBe(2);
 
     // Existing production ledgers contain the pre-fix wording. Recovery must
     // remain compatible with them so clicking Continue can adopt the result
@@ -1789,14 +2103,17 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     }
     saveLedger(h.host.dataDir, h.host.runId, failedLedger);
 
-    subject = 'stable-review-subject';
+    // Adoption is hash-gated: the resumed run must observe the same subject the
+    // rejected attempt hashed at entry — attempt 2 entered at the value attempt
+    // 1's write left behind.
+    subject = 'changed-during-council-1';
     h.setCouncilBehavior(() => {
       throw new Error('the recovered council must not invoke reviewers again');
     });
 
     await expect(runHarnessDriver(h.host, threeReviewerInput, h.deps)).resolves.toBeNull();
 
-    expect(councilCalls).toBe(1);
+    expect(councilCalls).toBe(2);
     expect(
       loadLedger(h.host.dataDir, h.host.runId)?.invocations.filter((invocation) =>
         invocation.id.startsWith('advisor:impl:'),
@@ -1824,8 +2141,10 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     const error = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
 
+    // Below the floor there is nothing to degrade TO: one surviving reviewer
+    // cross-checks nothing.
     expect(error).toMatch(/quorum/);
-    expect(error).toMatch(/required reviewers/);
+    expect(error).toMatch(/needs at least 2/);
     expect(h.calls.map((c) => c.id)).not.toContain('stage');
   });
 
@@ -1924,6 +2243,73 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     await runHarnessDriver(h.host, threeReviewerInput, h.deps);
 
     expect(attempts).toBe(1);
+  });
+
+  /**
+   * Regression (run a6978de6, 2026-07-28): the spec session obeyed the
+   * cez-spec-writing Open Questions gate, ended BOTH attempts by asking the
+   * user four design questions — in a session nobody reads live — and the run
+   * died as "produced no valid result after a retry". The phase contract now
+   * outranks the gate: it forbids asking outright and gives the gate a legal
+   * outlet (answer yourself, record the assumption, list it in the result).
+   */
+  it('tells every phase session it is non-interactive and must not ask', async () => {
+    const h = makeHarness(dir);
+    let specPrompt = '';
+    h.agentBehavior.set('spec', (req) => {
+      specPrompt = req.prompt;
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({ summary: 's', specPath: '.ai/specs/f.md', files: ['.ai/specs/f.md'] }),
+        'utf8',
+      );
+      writeFileSync(join(dir, '.ai', 'specs', 'f.md'), '# spec\n', 'utf8');
+      return null;
+    });
+    h.agentBehavior.set('review', (req) => {
+      writeFileSync(req.resultPath, JSON.stringify({ verdict: 'approve', findings: [] }), 'utf8');
+      return null;
+    });
+    mkdirSync(join(dir, '.ai', 'specs'), { recursive: true });
+    const error = await runHarnessDriver(h.host, { ...input, workflow: HARNESS_IMPLEMENT_FEATURE }, h.deps);
+    expect(error).toBeNull();
+    expect(specPrompt).toContain('NON-INTERACTIVE');
+    expect(specPrompt).toContain('never emit CEZ:ASK');
+    // And the gate is not just forbidden — it is redirected.
+    expect(specPrompt).toContain('record each question and the assumption');
+  });
+
+  it('carries the spec author\'s recorded assumptions to the run log and the reviewer', async () => {
+    const h = makeHarness(dir);
+    let reviewPrompt = '';
+    h.agentBehavior.set('spec', (req) => {
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({
+          summary: 's',
+          specPath: '.ai/specs/f.md',
+          files: ['.ai/specs/f.md'],
+          openQuestions: ['Unified tabs or separate inboxes? — assumed: unified tabs'],
+        }),
+        'utf8',
+      );
+      writeFileSync(join(dir, '.ai', 'specs', 'f.md'), '# spec\n', 'utf8');
+      return null;
+    });
+    h.agentBehavior.set('review', (req) => {
+      reviewPrompt = req.prompt;
+      writeFileSync(req.resultPath, JSON.stringify({ verdict: 'approve', findings: [] }), 'utf8');
+      return null;
+    });
+    mkdirSync(join(dir, '.ai', 'specs'), { recursive: true });
+    const error = await runHarnessDriver(h.host, { ...input, workflow: HARNESS_IMPLEMENT_FEATURE }, h.deps);
+    expect(error).toBeNull();
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('proceeded under 1 recorded assumption'))).toBe(true);
+    // The implementation reviewer sees the question as a known-open decision,
+    // not a defect to relitigate.
+    expect(reviewPrompt).toContain('known-open design questions');
+    expect(reviewPrompt).toContain('assumed: unified tabs');
   });
 
   /* ---- spec placement (2026-07-25) ---- */
@@ -2049,6 +2435,137 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     h.deps.loadAgentic = async () => ({ baseBranch: 'main', validationCommands: ['echo ok'], agentHarness });
   }
 
+  /**
+   * Regression (user report 2026-07-28): configure models in the cockpit, start
+   * a multi-model run, and the run died on its first step with
+   * "agentHarness exists only in the repo working tree, but its config is not a
+   * clean staged change; stage .ai/agentic.config.json ... or commit it".
+   *
+   * The user had touched nothing by hand — cezar's own setup wrote the file,
+   * twice, leaving it `MM` (staged, then edited again), which is precisely what
+   * the check rejected. The index state was never the security boundary; where
+   * the config is READ from is, and that is the user's checkout either way.
+   */
+  it('starts from a dirty working-copy model config instead of demanding git staging', async () => {
+    const h = makeHarness(dir);
+    bindKimi(h);
+    const checkout = mkdtempSync(join(tmpdir(), 'cez-checkout-'));
+    h.host.repoRoot = checkout; // worktree (cwd) ≠ checkout, as in a real run
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: checkout, stdio: 'ignore' });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@local');
+    git('config', 'user.name', 'test');
+    mkdirSync(join(checkout, '.ai'), { recursive: true });
+    const configPath = join(checkout, '.ai', 'agentic.config.json');
+    const agentHarness = {
+      models: { kimi: { roles: ['reviewer'], family: 'moonshot', timeoutMs: 120_000 } },
+      profiles: {},
+    };
+    // Committed WITHOUT agentHarness — the base branch has no model config yet.
+    writeFileSync(configPath, JSON.stringify({ validation: { commands: ['echo ok'] } }), 'utf8')
+    git('add', '.ai/agentic.config.json')
+    git('commit', '-q', '-m', 'base')
+    // Setup writes it, stages it, then writes again → `MM`.
+    writeFileSync(configPath, JSON.stringify({ agentHarness }), 'utf8')
+    git('add', '.ai/agentic.config.json')
+    writeFileSync(configPath, JSON.stringify({ agentHarness, touchedAgain: true }), 'utf8')
+    expect(
+      execFileSync('git', ['status', '--porcelain=v1', '--', '.ai/agentic.config.json'], {
+        cwd: checkout,
+        encoding: 'utf8',
+      }).trim(),
+    ).toMatch(/^MM/)
+
+    // The worktree has no agentHarness; only the checkout does.
+    h.deps.loadAgentic = async (root: string) => ({
+      baseBranch: 'main',
+      validationCommands: ['echo ok'],
+      agentHarness: root === checkout ? agentHarness : undefined,
+    })
+
+    const error = await runHarnessDriver(h.host, advisorInput, h.deps)
+
+    // Null, not the refusal it used to be — the dirty index is no longer fatal.
+    expect(error).toBeNull()
+    expect(String(error)).not.toMatch(/clean staged change/)
+    // And it says plainly what it used, without asking for git surgery.
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message))
+    expect(notes.some((n) => n.includes('working copy of .ai/agentic.config.json'))).toBe(true)
+    expect(notes.some((n) => /stage .ai\/agentic.config.json/.test(n))).toBe(false)
+    rmSync(checkout, { recursive: true, force: true })
+  })
+
+  /**
+   * Regression (run 0fe16fb7, 2026-07-28): a haiku reviewer produced a complete
+   * review — three blockers, seven majors — wrapped in a markdown summary
+   * instead of bare result JSON, twice, and both attempts were discarded as
+   * "ended without a valid result file". When the contract object is present
+   * inside the prose, it is salvaged (schema-validated as always) and the
+   * framing slip is noted instead of billed as a failure.
+   */
+  it('salvages a review whose JSON the model wrapped in prose', async () => {
+    const h = makeHarness(dir);
+    h.agentBehavior.set('review', (req) => {
+      writeFileSync(
+        req.resultPath,
+        [
+          '## Summary',
+          '',
+          "I've completed a comprehensive review. Here is the result:",
+          '',
+          '```json',
+          JSON.stringify({ verdict: 'approve', findings: [{ severity: 'minor', title: 'nit about naming' }] }),
+          '```',
+          '',
+          'Let me know if anything needs a closer look.',
+        ].join('\n'),
+        'utf8',
+      );
+      return null;
+    });
+    const error = await runHarnessDriver(h.host, input, h.deps);
+    expect(error).toBeNull();
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.stage.status).toBe('staged');
+  });
+
+  /**
+   * Regression (run 5f6fe8ae, 2026-07-28): one write landing inside the council
+   * window — there, cezar's own diff poller — "changed" the subject, every
+   * reviewer was rejected, quorum failed, and the run DIED on its first council.
+   * The subject hash is representation-invariant now, so the poller specifically
+   * can no longer trigger this; for changes that are real, the council retries
+   * once against the current subject before giving up.
+   */
+  it('retries the advisor council once when the subject changed mid-council', async () => {
+    const h = makeHarness(dir);
+    bindKimi(h);
+    let subject = 'stable-review-subject';
+    h.deps.snapshotReviewSubject = async () => subject;
+    scriptCouncil(h, (round) => {
+      // Round 1 simulates one write landing inside the council window; the
+      // retry's window is quiet.
+      if (round === 1) subject = 'changed-during-council';
+      return {
+        ok: true,
+        result: {
+          verdict: 'approve',
+          reviewers: [{ id: 'kimi', status: 'completed', review: { verdict: 'approve', findings: [], notes: [] } }],
+        },
+      };
+    });
+    const error = await runHarnessDriver(h.host, advisorInput, h.deps);
+    expect(error).toBeNull();
+    // A rerun, not an adoption: the input hash embeds the subject, and the
+    // subject is exactly what changed — recovery-by-hash can never fire here.
+    expect(h.ops.filter((o) => o.id === 'review')).toHaveLength(2);
+    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
+    expect(notes.some((n) => n.includes('retrying the council once against the current subject'))).toBe(true);
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.stage.status).toBe('staged');
+  });
+
   /** Swap the fake runtime for one whose `review` op is scripted per round. */
   function scriptCouncil(
     h: ReturnType<typeof makeHarness>,
@@ -2084,7 +2601,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     });
   }
 
-  it('recovers the legacy-rejected spec council only when its contract still names the current spec', async () => {
+  it('adopts a subject-rejected spec council in the retry when its contract names the current spec', async () => {
     const h = makeHarness(dir);
     bindKimi(h);
     let subject = 'stable-review-subject';
@@ -2104,20 +2621,17 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       );
       return null;
     });
+    // A continuous writer: every council window sees a fresh subject.
     scriptCouncil(h, () => {
       councilCalls += 1;
-      if (councilCalls === 1) subject = 'changed-during-spec-council';
+      subject = `changed-${councilCalls}`;
       return {
         ok: true,
         result: {
           verdict: 'approve',
-          ...(councilCalls === 1
-            ? {
-                reviewContract: {
-                  subjectSha256: createHash('sha256').update('# feat\n').digest('hex'),
-                },
-              }
-            : {}),
+          reviewContract: {
+            subjectSha256: createHash('sha256').update('# feat\n').digest('hex'),
+          },
           reviewers: [
             {
               id: 'kimi',
@@ -2130,28 +2644,29 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     });
     const featureInput = { ...advisorInput, workflow: HARNESS_IMPLEMENT_FEATURE };
 
-    await expect(runHarnessDriver(h.host, featureInput, h.deps)).resolves.toMatch(
-      /review subject changed/i,
-    );
-    const failedLedger = loadLedger(h.host.dataDir, h.host.runId)!;
-    const failedAdvisor = failedLedger.invocations.find((invocation) =>
-      invocation.id.startsWith('advisor:spec:1:'),
-    )!;
-    failedAdvisor.error =
-      'advisor reviewer mutated the worktree or index; every result from this council was rejected and the changed subject was preserved for manual recovery';
-    saveLedger(h.host.dataDir, h.host.runId, failedLedger);
+    const error = await runHarnessDriver(h.host, featureInput, h.deps);
 
-    subject = 'stable-review-subject';
-    await expect(runHarnessDriver(h.host, featureInput, h.deps)).resolves.toBeNull();
-
-    // One paid spec council before the false rejection, then only the later
-    // implementation council. A spec rerun would make this three.
-    expect(councilCalls).toBe(2);
+    // The SPEC council reviews a pinned artifact, so its input hash survives the
+    // worktree churn: the retry finds the round-1 result, checks its contract
+    // still names the spec on disk, and adopts it — one paid call, no rerun.
     expect(
       loadLedger(h.host.dataDir, h.host.runId)?.invocations.find((invocation) =>
         invocation.id.startsWith('advisor:spec:1:'),
       ),
     ).toMatchObject({ status: 'completed', artifactSha256: expect.any(String) });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === 'note' && String(event.message).includes('no model rerun was needed'),
+      ),
+    ).toBe(true);
+
+    // The IMPLEMENTATION council reviews the live worktree — its hash moves with
+    // the writer, adoption can never apply, and after the one retry the run
+    // honestly fails: something rewriting the worktree continuously is a real
+    // integrity problem.
+    expect(error).toMatch(/review subject changed/i);
+    expect(councilCalls).toBe(3); // spec ×1 (adopted in retry), impl ×2 (attempt + retry)
   });
 
   /**

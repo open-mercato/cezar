@@ -13,7 +13,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   HarnessRuntime,
+  computeGateRegressions,
   exportTrustedConfig,
+  extractFailingTestIds,
+  extractFailureEvidence,
   harnessChildEnvironment,
   harnessConfigEnvironmentNames,
   reconcileHarnessProcess,
@@ -269,6 +272,175 @@ describe('harness runtime bridge', () => {
     );
     expect(check?.status).toBe('passed');
     expect(check?.evidence).toHaveLength(200_000);
+  });
+
+  /**
+   * Regression (run c54c2ed4): `yarn test` produced ~1 MB of interleaved turbo
+   * output; the old capture kept the FIRST 200 KB and the run's failure
+   * evidence became 8 lines from mid-stream — a PASSING package's summary —
+   * while the real `FAIL` and turbo's own `Failed:` block sat in the dropped
+   * tail. The capture must keep the tail, where test runners put their verdicts.
+   */
+  it('keeps the TAIL of over-cap validation output, not the head', async () => {
+    const [check] = await runValidationCommands(
+      [
+        // process.exitCode, not process.exit(): exit() truncates unflushed
+        // pipe-backed stdout, which would drop the very tail under test.
+        `node -e "process.stdout.write('HEAD-MARKER\\n'); process.stdout.write('x'.repeat(250000)); process.stdout.write('\\nTAIL-MARKER: the real failure\\n'); process.exitCode = 1"`,
+      ],
+      dir,
+    );
+    expect(check?.status).toBe('failed');
+    expect(check?.evidence).toContain('TAIL-MARKER: the real failure');
+    expect(check?.evidence).not.toContain('HEAD-MARKER');
+  });
+
+  it('marks a timed-out validation command as timed out in its evidence', async () => {
+    const [check] = await runValidationCommands(
+      [`node -e "setTimeout(() => {}, 60000)"`],
+      dir,
+      { timeoutMs: 500 },
+    );
+    expect(check?.status).toBe('failed');
+    expect(check?.timedOut).toBe(true);
+    expect(check?.evidence).toContain('timed out');
+  });
+
+  it('persists full command output to a log file when a logDir is given', async () => {
+    const logDir = join(dir, 'artifacts');
+    mkdirSync(logDir, { recursive: true });
+    const [check] = await runValidationCommands(
+      [`node -e "console.log('FAIL src/a.test.ts'); console.log('long diagnostics'); process.exit(1)"`],
+      dir,
+      { logDir, logPrefix: 'validation-validate-2-' },
+    );
+    expect(check?.status).toBe('failed');
+    expect(check?.logPath).toBeTruthy();
+    expect(check?.logPath).toContain('validation-validate-2-');
+    const logged = readFileSync(check!.logPath!, 'utf8');
+    expect(logged).toContain('FAIL src/a.test.ts');
+    expect(logged).toContain('long diagnostics');
+    // The evidence names the log so a repair agent can read it instead of
+    // re-running a long suite.
+    expect(check?.evidence).toContain(check!.logPath!);
+  });
+
+  describe('failure evidence extraction', () => {
+    /** The real shape from run c54c2ed4: a failing package mid-stream, a
+     *  passing package's summary as the physical tail, turbo's verdict last. */
+    const turboOutput = [
+      '@open-mercato/ui:test: PASS src/ai/__tests__/AiChat.test.tsx',
+      '@open-mercato/core:test: FAIL src/__tests__/explicit-sort-comparators.test.ts',
+      '@open-mercato/core:test:   ● sort/toSorted call sites use explicit comparators (#3620) › no production sort/toSorted call omits its comparator',
+      '@open-mercato/core:test:     expect(received).toEqual(expected) // deep equality',
+      '@open-mercato/core:test: Tests:       1 failed, 7904 passed, 7905 total',
+      '@open-mercato/webhooks:test: Tests:       116 passed, 116 total',
+      '@open-mercato/webhooks:test: Ran all test suites.',
+      ' Tasks:    22 successful, 23 total',
+      'Failed:    @open-mercato/core#test',
+      ' ERROR  run failed: command  exited (1)',
+    ].join('\n');
+
+    it('surfaces FAIL lines and the runner verdict, not just the physical tail', () => {
+      const evidence = extractFailureEvidence(turboOutput);
+      expect(evidence).toContain('FAIL src/__tests__/explicit-sort-comparators.test.ts');
+      expect(evidence).toContain('Failed:    @open-mercato/core#test');
+      expect(evidence).toContain('● sort/toSorted call sites use explicit comparators');
+      expect(evidence).toContain('1 failed');
+    });
+
+    it('bounds the extracted evidence and keeps a tail for context', () => {
+      const noisy = Array.from({ length: 5000 }, (_, i) => `@pkg:test: FAIL suite-${i}.test.ts`).join('\n');
+      const evidence = extractFailureEvidence(`${noisy}\nfinal tail line`);
+      expect(evidence.length).toBeLessThan(8_000);
+      expect(evidence).toContain('final tail line');
+    });
+
+    it('falls back to the plain tail when no failure signature matches', () => {
+      const evidence = extractFailureEvidence('some output\nwithout known markers\nlast line');
+      expect(evidence).toContain('last line');
+    });
+  });
+
+  describe('failing-test identity extraction', () => {
+    it('normalizes jest FAIL paths and turbo failed tasks, ignoring ANSI codes', () => {
+      const output = [
+        '@open-mercato/core:test: \u001B[31mFAIL\u001B[0m src/__tests__/explicit-sort-comparators.test.ts',
+        '@open-mercato/webhooks:test: PASS src/modules/webhooks/__tests__/ok.test.ts',
+        'Failed:    @open-mercato/core#test',
+      ].join('\n');
+      expect(extractFailingTestIds(output)).toEqual([
+        'fail:src/__tests__/explicit-sort-comparators.test.ts',
+        'task:@open-mercato/core#test',
+      ]);
+    });
+
+    it('captures tsc error identities by file and code, not line numbers', () => {
+      const output = [
+        "src/server/server.ts(42,7): error TS2345: Argument of type 'string'…",
+        "src/server/server.ts(90,1): error TS2345: another instance",
+      ].join('\n');
+      expect(extractFailingTestIds(output)).toEqual(['ts:src/server/server.ts:TS2345']);
+    });
+  });
+
+  describe('gate regressions against a baseline', () => {
+    const failed = (command: string, failureIds: string[]): Parameters<typeof computeGateRegressions>[0][number] => ({
+      command,
+      status: 'failed',
+      exitCode: 1,
+      evidence: 'x',
+      failureIds,
+    });
+    const passed = (command: string): Parameters<typeof computeGateRegressions>[0][number] => ({
+      command,
+      status: 'passed',
+      exitCode: 0,
+      evidence: 'ok',
+    });
+
+    it('blocks every failure when there is no baseline', () => {
+      const gate = computeGateRegressions([failed('yarn test', ['fail:a.test.ts'])], undefined);
+      expect(gate.blocking).toHaveLength(1);
+      expect(gate.tolerated).toHaveLength(0);
+    });
+
+    it('tolerates failures whose identities are a subset of the baseline set', () => {
+      const gate = computeGateRegressions(
+        [passed('yarn build'), failed('yarn test', ['fail:a.test.ts'])],
+        [passed('yarn build'), failed('yarn test', ['fail:a.test.ts', 'fail:b.test.ts'])],
+      );
+      expect(gate.blocking).toHaveLength(0);
+      expect(gate.tolerated).toHaveLength(1);
+      expect(gate.tolerated[0]?.check.command).toBe('yarn test');
+      expect(gate.tolerated[0]?.check.preexisting).toBe(true);
+    });
+
+    it('blocks when new failure identities appear beyond the baseline', () => {
+      const gate = computeGateRegressions(
+        [failed('yarn test', ['fail:a.test.ts', 'fail:NEW.test.ts'])],
+        [failed('yarn test', ['fail:a.test.ts'])],
+      );
+      expect(gate.blocking).toHaveLength(1);
+      expect(gate.blocking[0]?.newFailureIds).toEqual(['fail:NEW.test.ts']);
+    });
+
+    it('blocks when the command passed at baseline', () => {
+      const gate = computeGateRegressions(
+        [failed('yarn test', ['fail:a.test.ts'])],
+        [passed('yarn test')],
+      );
+      expect(gate.blocking).toHaveLength(1);
+    });
+
+    it('tolerates a command-level repeat when neither side has comparable identities', () => {
+      const gate = computeGateRegressions(
+        [failed('yarn lint', [])],
+        [failed('yarn lint', [])],
+      );
+      expect(gate.blocking).toHaveLength(0);
+      expect(gate.tolerated).toHaveLength(1);
+    });
   });
 
   it('loadAgenticConfig reads validation commands and tolerates absence', async () => {

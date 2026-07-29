@@ -2207,10 +2207,42 @@ function commandStage(args) {
   const currentHead = currentState.head
   const drift = gitStateDrift(startState, currentState)
   if (drift.length) throw new Error(`Git refs or reflogs changed during staged-only run:\n- ${drift.join('\n- ')}`)
-  git(['add', '--', ...paths.map((path) => `:(literal)${path}`)], worktree)
+  // The allowlist is a UNION across every implement/fix round, so it can name
+  // ghosts: a scratch file created in round one and deleted in round three is
+  // still listed, exists nowhere, and is tracked by nothing — and `git add`
+  // fails the whole handoff over a pathspec that matches nothing. A deleted
+  // TRACKED file stays: adding it stages the deletion, which is real product.
+  const tracked = new Set(git(['ls-files', '-z', '--'], worktree).toString().split('\0').filter(Boolean))
+  const ghosts = paths.filter((path) => !existsSync(join(worktree, path)) && !tracked.has(path))
+  const addable = paths.filter((path) => !ghosts.includes(path))
+  if (!addable.length) throw new Error('Stage allowlist is empty after dropping entries that no longer exist')
+  // One immediate retry: `git add` can lose a race for index.lock to an editor
+  // or a status poll holding the worktree open — transient by nature.
+  try {
+    git(['add', '--', ...addable.map((path) => `:(literal)${path}`)], worktree)
+  } catch (error) {
+    if (!/index\.lock|unable to create/i.test(String(error.message || ''))) throw error
+    git(['add', '--', ...addable.map((path) => `:(literal)${path}`)], worktree)
+  }
   const staged = git(['diff', '--cached', '--name-status'], worktree).trim()
   if (!staged) throw new Error('Staged diff is empty')
-  git(['diff', '--cached', '--check'], worktree)
+  // Cosmetic and completeness findings are WARNINGS, not refusals (run
+  // aad28178, 2026-07-28): a two-hour run — councils passed, three fix rounds,
+  // full validation green — was refused at handoff over trailing whitespace in
+  // a spec markdown file and blank lines at EOF. The human gate this staging
+  // feeds exists precisely to judge such things; a fatal check at the last
+  // step hands them nothing instead. Only genuine integrity failures still
+  // refuse: git-state drift, an empty diff, and staged paths escaping the
+  // allowlist.
+  const warnings = []
+  if (ghosts.length) {
+    warnings.push(`allowlist entries dropped — created during the run, deleted again before the handoff:\n${ghosts.join('\n')}`)
+  }
+  try {
+    git(['diff', '--cached', '--check'], worktree)
+  } catch (error) {
+    warnings.push(`whitespace findings in the staged diff (cosmetic — clean before committing if your CI checks them):\n${String(error.message || '').trim()}`)
+  }
   const stagedPaths = git(['diff', '--cached', '--name-only'], worktree).trim().split(/\r?\n/).filter(Boolean)
   const allowed = (entry) => paths.some((scope) => entry === scope || entry.startsWith(`${scope}/`))
   const unexpected = stagedPaths.filter((entry) => !allowed(entry))
@@ -2220,8 +2252,12 @@ function commandStage(args) {
     const index = line.slice(0, 2)
     return index === '??' || index[1] !== ' '
   })
-  if (residual.length) throw new Error(`Unstaged or untracked files remain:\n${residual.join('\n')}`)
-  const result = { status: 'ready', startHead, currentHead, branch: git(['branch', '--show-current'], worktree).trim(), worktree, stagedPaths }
+  if (residual.length) {
+    // The worktree survives the handoff, so nothing here is lost — but the
+    // human must know the staged diff is not the whole story.
+    warnings.push(`files changed by the run but NOT part of the staged handoff — review whether they belong:\n${residual.join('\n')}`)
+  }
+  const result = { status: 'ready', startHead, currentHead, branch: git(['branch', '--show-current'], worktree).trim(), worktree, stagedPaths, ...(warnings.length ? { warnings } : {}) }
   if (args.output && args.output !== true) {
     const output = resolve(String(args.output))
     mkdirSync(dirname(output), { recursive: true })
