@@ -404,10 +404,12 @@ describe('GET /api/workspace/events', () => {
     bus.emit('project-added', { project: { id: 'newbie', name: 'newbie' } });
     bus.emit('checkout-progress', { url: 'octo/repo', phase: 'cloning' });
     bus.emit('project-removed', { id: 'newbie' });
+    bus.emit('automation-change', { project: 'newbie', automationId: 'review-prs', revision: 2 });
 
-    const body = await ws.readUntil('event: project-removed');
+    const body = await ws.readUntil('event: automation-change');
     expect(payloadsOf(body, 'project-added')).toEqual([{ project: { id: 'newbie', name: 'newbie' } }]);
     expect(payloadsOf(body, 'checkout-progress')).toEqual([{ url: 'octo/repo', phase: 'cloning' }]);
     expect(payloadsOf(body, 'project-removed')).toEqual([{ id: 'newbie' }]);
+    expect(payloadsOf(body, 'automation-change')).toEqual([{ project: 'newbie', automationId: 'review-prs', revision: 2 }]);
   });
 });

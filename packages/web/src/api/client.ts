@@ -1,5 +1,10 @@
 import type {
   AgentConfigFileContent,
+  AutomationsResponse,
+  AutomationCheck,
+  AutomationDefinition,
+  AutomationLogRecord,
+  CreateAutomationInput,
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
@@ -745,6 +750,37 @@ export function createRepoBranch(input: { name: string; from?: string }): Promis
  *  as a one-step plan with `fallback: true`, never as an error — only transport/validation fail. */
 export function postPlan(task: string): Promise<PlanResponse> {
   return mutate<PlanResponse>('POST', '/api/plan', { task })
+}
+
+export function getAutomations(opts?: ReadOptions): Promise<AutomationsResponse> {
+  return get<AutomationsResponse>('/api/automations', opts)
+}
+
+export function createAutomation(input: CreateAutomationInput): Promise<{ automation: AutomationDefinition }> {
+  return mutate<{ automation: AutomationDefinition }>('POST', '/api/automations', input)
+}
+
+export function updateAutomation(
+  id: string,
+  input: CreateAutomationInput & { expectedRevision: number; enabled?: boolean },
+): Promise<{ automation: AutomationDefinition }> {
+  return mutate<{ automation: AutomationDefinition }>('PUT', `/api/automations/${encodeURIComponent(id)}`, input)
+}
+
+export function setAutomationEnabled(id: string, enabled: boolean): Promise<{ automation: AutomationDefinition }> {
+  return mutate<{ automation: AutomationDefinition }>('POST', `/api/automations/${encodeURIComponent(id)}/${enabled ? 'enable' : 'pause'}`, {})
+}
+
+export function checkAutomation(id: string, mode: 'preview' | 'execute'): Promise<{ checkId: string }> {
+  return mutate<{ checkId: string }>('POST', `/api/automations/${encodeURIComponent(id)}/check`, { mode })
+}
+
+export function getAutomationCheck(id: string, opts?: ReadOptions): Promise<AutomationCheck> {
+  return get<AutomationCheck>(`/api/automation-checks/${encodeURIComponent(id)}`, opts)
+}
+
+export function getAutomationLog(id: string, opts?: ReadOptions): Promise<{ records: AutomationLogRecord[] }> {
+  return get<{ records: AutomationLogRecord[] }>(`/api/automation-log?automationId=${encodeURIComponent(id)}`, opts)
 }
 
 /** Save an approved plan as a reusable chain. A 409 carries `exists: true` on the ApiError —

@@ -168,6 +168,14 @@ export interface RunRecord {
   /** Autonomous mode (#autonomous): the run never parks at `waiting` or the terminal `review`
    *  gate. Absent = falsy = not autonomous. */
   autonomous?: boolean
+  /** GitHub automation provenance; additive and absent for ordinary runs. */
+  automation?: {
+    automationId: string
+    automationRevision: number
+    receiptId: string
+    event: string
+    githubUrl: string
+  }
   /** Absent when the run executed in the repo working tree rather than its own worktree. */
   worktreePath?: string
   /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is
@@ -987,6 +995,75 @@ export interface CreateRunInput {
    *  follow-ups, not whether the entry it was launched from gets marked started. */
   todoId?: string
 }
+
+export type AutomationEvent =
+  | 'pull_request.opened'
+  | 'issue.opened'
+  | 'issue.labeled'
+  | 'issue.unlabeled'
+
+export interface AutomationDefinition {
+  id: string
+  revision: number
+  name: string
+  description?: string
+  enabled: boolean
+  events: AutomationEvent[]
+  intervalSeconds: number
+  filters: {
+    authors?: string[]
+    assignees?: string[]
+    allLabels?: string[]
+    anyLabels?: string[]
+    excludeLabels?: string[]
+    changedLabels?: string[]
+    lookbackDays: number
+    maxRecords: number
+  }
+  task: Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string }
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AutomationsResponse {
+  available: boolean
+  reason?: string
+  scheduler: { state: string; nextDue?: string }
+  automations: Array<AutomationDefinition & { state?: { nextCheckAt?: string; lastSuccessAt?: string } }>
+}
+
+export interface AutomationCheck {
+  id: string
+  automationId: string
+  mode: 'preview' | 'execute'
+  status: 'queued' | 'running' | 'complete' | 'error'
+  createdAt: string
+  completedAt?: string
+  matches?: number
+  truncated?: boolean
+  error?: string
+}
+
+export interface AutomationLogRecord {
+  seq: number
+  ts: string
+  automationId: string
+  revision: number
+  event?: AutomationEvent
+  result: 'launched' | 'no-match' | 'duplicate' | 'rate-limited' | 'error' | 'baseline' | 'preview'
+  reason?: string
+  durationMs?: number
+  receiptId?: string
+  runId?: string
+  githubNumber?: number
+  githubTitle?: string
+  githubUrl?: string
+}
+
+export type CreateAutomationInput = Omit<
+  AutomationDefinition,
+  'id' | 'revision' | 'createdAt' | 'updatedAt' | 'enabled'
+> & { enable?: boolean }
 
 export interface MessageInput {
   text?: string

@@ -30,6 +30,7 @@ Consumed by the bundled React cockpit (`packages/cezar/web/dist`, shipped in loc
 - `GET/PUT /api/workspace/ui-state` — the global GUI-state twin of `/api/ui-state`, backed by `~/.cezar/ui-state.json` (section 9): same `.passthrough()` + top-level key cap + shallow merge-on-write semantics as the per-repo route (one shared parse path in the code), so unknown keys survive round-trips; a bad body is `400 {error}` and never a partial write.
 - Skills: `GET /api/skills`, `GET /api/skills/importable`, `POST /api/skills/refresh`
 - Workflows: `GET/POST /api/workflows`, `DELETE /api/workflows/:name`, `POST /api/workflows/parse`, `POST /api/plan`
+- Automations: `GET/POST /api/automations`, `GET/PUT/DELETE /api/automations/:id`, `POST /api/automations/:id/{enable,pause,check}`, `GET /api/automation-checks/:checkId`, `GET /api/automation-log`, `POST /api/automation-log/:receiptId/retry`
 - Runs: `GET/POST /api/runs`, `GET /api/runs/:id`, `PATCH /api/runs/:id`, `PATCH/DELETE /api/runs/:id/queued-messages/:msgId`, `POST /api/runs/:id/{cancel,messages,finish,continue,open-in-cli,open-in,pr,archive,remove-worktree,git/commit,git/push}`, `POST /api/runs/archive-finished`, `DELETE /api/runs/:id`, `GET /api/runs/:id/{handoff,diff,changes,files,commits,events}`, `GET /api/runs/:id/commit/:sha`, `GET /api/runs/:id/images/:file`
 - Worktrees: `GET /api/worktrees`, `POST /api/worktrees/reclaim`
 - Open-in: `GET /api/open-targets`

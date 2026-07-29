@@ -101,6 +101,16 @@ const runRecordSchema = z.object({
    *  group-pick winner-park read it). Additive-safe: absent = falsy = not
    *  autonomous. Set at creation from `WorkflowInput.autonomous`. */
   autonomous: z.boolean().optional(),
+  /** Optional provenance for tasks launched by a project GitHub automation. */
+  automation: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number().int().positive(),
+      receiptId: z.string(),
+      event: z.string(),
+      githubUrl: z.string().url(),
+    })
+    .optional(),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.

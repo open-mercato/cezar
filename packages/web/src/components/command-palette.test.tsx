@@ -181,22 +181,22 @@ describe('opening and closing', () => {
 })
 
 describe('Views group', () => {
-  it('lists the 7 nav destinations plus New task with its C hint', async () => {
+  it('lists the 8 nav destinations plus New task with its C hint', async () => {
     renderPalette()
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
     // The GitHub row waits on the health answer (forge gate) — settle before asserting.
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(8),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings', '/new',
+      '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings', '/new',
     ])
-    expect(views[7]?.textContent).toContain('New task')
+    expect(views[8]?.textContent).toContain('New task')
     // The chip advertises `c` — ⌘N is browser-reserved and only fires in the desktop shell.
-    expect(views[7]?.textContent).toContain('C')
+    expect(views[8]?.textContent).toContain('C')
   })
 
   // R6 Step 1.1: the palette must not offer a GitHub view the sidebar honestly hides.
@@ -212,6 +212,7 @@ describe('Views group', () => {
       view.getAttribute('data-nav-to'),
     )
     expect(targets).not.toContain('/github')
+    expect(targets).not.toContain('/automations')
   })
 
   it('navigates to the selected view and closes', async () => {

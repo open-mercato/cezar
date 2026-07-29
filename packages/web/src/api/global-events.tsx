@@ -66,7 +66,7 @@ const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
  * projects query (the sidebar grows/loses a group without a reload) and fan out to whoever
  * subscribed via `onWorkspaceEvent`.
  */
-const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress'] as const
+const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change'] as const
 
 type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number]
 
@@ -268,7 +268,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // clicked. `checkout-progress` is deliberately NOT in this branch: a clone emits a
           // line every few hundred ms, and re-listing the registry on each would turn one clone
           // into a request flood (the dialog's own success handler invalidates once, at the end).
-          if (name !== 'checkout-progress') {
+          if (name !== 'checkout-progress' && name !== 'automation-change') {
             void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
           }
           for (const listener of [...workspaceListeners]) listener(name, payload)
