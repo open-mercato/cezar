@@ -55,6 +55,7 @@
     "@open-mercato/cezar-contract": "^0.9.1",
     "@types/node": "^20.14.0",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
