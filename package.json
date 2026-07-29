@@ -1,7 +1,7 @@
 {
   "name": "cezar-monorepo",
   "private": true,
-  "description": "Workspace root for cezar. Publishes nothing itself \u2014 see packages/*.",
+  "description": "Workspace root for cezar. Publishes nothing itself — see packages/*.",
   "license": "MIT",
   "type": "module",
   "engines": {
