@@ -292,3 +292,40 @@ describe('mergeHarnessLedger', () => {
     ).toBeUndefined()
   })
 })
+
+/**
+ * Existing runs recorded dynamic steps appended at the tail (fixed at the
+ * store for new runs) — the display orders them by the ledger's phases, which
+ * were always appended in execution order (user report 2026-07-29).
+ */
+describe('orderStepsByLedger', () => {
+  it('reorders a tail-appended history into execution order, pendings last', async () => {
+    const { orderStepsByLedger } = await import('./harness-state')
+    const steps = ['preflight', 'capture', 'spec', 'implement', 'validate', 'review', 'stage', 'baseline-gate', 'spec-review', 'fix-2'].map(
+      (id) => ({ id }),
+    )
+    const ledger = {
+      phases: ['preflight', 'capture', 'baseline-gate', 'spec', 'spec-review', 'implement', 'validate', 'review', 'fix-2', 'stage'].map(
+        (id) => ({ id }),
+      ),
+    } as never
+    expect(orderStepsByLedger(steps, ledger).map((step) => step.id)).toEqual([
+      'preflight', 'capture', 'baseline-gate', 'spec', 'spec-review', 'implement', 'validate', 'review', 'fix-2', 'stage',
+    ])
+  })
+
+  it('keeps not-yet-started steps in stored order after the started ones', async () => {
+    const { orderStepsByLedger } = await import('./harness-state')
+    const steps = ['preflight', 'spec', 'implement', 'stage'].map((id) => ({ id }))
+    const ledger = { phases: [{ id: 'preflight' }, { id: 'baseline-gate' }] } as never
+    expect(orderStepsByLedger(steps, ledger).map((step) => step.id)).toEqual([
+      'preflight', 'spec', 'implement', 'stage',
+    ])
+  })
+
+  it('is the identity without a ledger', async () => {
+    const { orderStepsByLedger } = await import('./harness-state')
+    const steps = [{ id: 'a' }, { id: 'b' }]
+    expect(orderStepsByLedger(steps, undefined)).toEqual(steps)
+  })
+})

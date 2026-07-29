@@ -52,6 +52,7 @@ import {
   displayedCouncil,
   mergeHarnessLedger,
   shortModelName,
+  orderStepsByLedger,
 } from './harness-state'
 
 function HarnessLoadState({
@@ -117,7 +118,7 @@ function HarnessPage({
   return (
     <OpenReviewerContext.Provider value={setOpenReviewer}>
     <div data-route={`task-harness-${tab}`} className="flex min-h-full flex-col">
-      <RunHeader run={run} tab={tab} />
+      <RunHeader run={run} tab={tab} orderedSteps={orderStepsByLedger(run.steps, ledger)} />
       {/* Same shell width as the header (review 2026-07-27): these two used to
           cap at 1120px and 820px respectively, so at any viewport above 820px
           the header block and the content cards were visibly out of line. */}

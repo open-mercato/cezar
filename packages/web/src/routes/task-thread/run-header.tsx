@@ -38,7 +38,7 @@ import { useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
 import { queryKeys, useConfig, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
-import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
+import type { ApiRun, OpenTarget, StepState } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
@@ -103,6 +103,7 @@ export function RunHeader({
   tab = 'session',
   publishBlockedReason,
   onJumpToStep,
+  orderedSteps,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
@@ -110,6 +111,9 @@ export function RunHeader({
   publishBlockedReason?: string
   /** Wired only where a transcript exists to jump in (the Session tab). */
   onJumpToStep?: (id: string) => void
+  /** Steps in EXECUTION order (harness pages derive it from the ledger) —
+   *  older harness runs recorded their dynamic steps appended at the tail. */
+  orderedSteps?: StepState[]
 }) {
   // Harness runs render the wide shell (they carry a run rail); everything else
   // keeps the reading measure. One source of truth so the header can never sit
@@ -287,7 +291,7 @@ export function RunHeader({
 
         {run.steps.length > 0 ? (
           <div className="border-t border-border pt-2 pb-1">
-            <WorkflowSteps runId={run.id} steps={run.steps} onJumpToStep={onJumpToStep} />
+            <WorkflowSteps runId={run.id} steps={orderedSteps ?? run.steps} onJumpToStep={onJumpToStep} />
           </div>
         ) : null}
 

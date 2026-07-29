@@ -3292,7 +3292,7 @@ export async function runHarnessDriver(
             return `could not hash the specification before council round ${sround}: ${specPath}`;
           }
           const councilId = sround === 1 ? 'spec-review' : `spec-review-${sround}`;
-          const councilName = sround === 1 ? 'Spec council' : `Spec council (round ${sround})`;
+          const councilName = `Spec council (round ${sround})`;
           const councilWasDone = phaseDone(councilId);
           const councilBoundaryMessages = boundaryMessagesForPhase(
             councilId,
@@ -3606,7 +3606,7 @@ export async function runHarnessDriver(
           }
           const revise = await agentPhase(
             `spec-${sround + 1}`,
-            `Revise spec (round ${sround + 1})`,
+            `Revise spec (round ${sround} feedback)`,
             'cez-spec-writing',
             [
               `The spec council requested changes on the specification at ${specPath}. Address every finding, update the spec file in place, and keep it implementation-accurate.`,
@@ -3869,7 +3869,7 @@ export async function runHarnessDriver(
       } else {
         const implement = await agentPhase(
           implementId,
-          isFirst ? 'Implement' : `Fix (round ${round})`,
+          isFirst ? 'Implement' : `Fixes (round ${round - 1} feedback)`,
           'cez-fix',
           implementPrompt,
           isFirst ? implementResultSchema : fixResultSchema,
@@ -4094,7 +4094,7 @@ export async function runHarnessDriver(
             error instanceof Error ? error.message : String(error)
           }`;
         }
-        const councilName = isFirst ? 'Council review' : `Council review (round ${round})`;
+        const councilName = `Council review (round ${round})`;
         const councilWasDone = phaseDone(reviewId);
         const councilBoundaryMessages = boundaryMessagesForPhase(
           reviewId,
@@ -4374,7 +4374,7 @@ export async function runHarnessDriver(
       } else {
         const review = await agentPhase(
           reviewId,
-          isFirst ? 'Review' : `Review (round ${round})`,
+          isFirst ? 'Review (round 1)' : `Review (round ${round})`,
           'cez-code-review',
           reviewPromptText,
           reviewResultSchema,

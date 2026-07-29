@@ -204,3 +204,25 @@ export function blockingReasonList(ledger: HarnessLedgerResponse): string[] {
       .filter(Boolean),
   )
 }
+
+/**
+ * `run.steps` in EXECUTION order for a harness run. The ledger's phases are
+ * appended as they start, so their order is the ground truth; runs recorded
+ * before the store inserted dynamic steps at the execution point (b32408a1)
+ * hold them appended at the tail — Stage read as "step 7 of 19" on a run
+ * whose stage ran last. Steps the ledger has not seen yet (a live run's
+ * still-pending predeclared steps) keep their stored relative order after
+ * the started ones — which is exactly where they belong in time.
+ */
+export function orderStepsByLedger<T extends { id: string }>(
+  steps: readonly T[],
+  ledger: Pick<HarnessLedgerResponse, 'phases'> | undefined,
+): T[] {
+  if (!ledger || ledger.phases.length === 0) return [...steps]
+  const rank = new Map(ledger.phases.map((phase, index) => [phase.id, index] as const))
+  const started = steps
+    .filter((step) => rank.has(step.id))
+    .sort((a, b) => rank.get(a.id)! - rank.get(b.id)!)
+  const pending = steps.filter((step) => !rank.has(step.id))
+  return [...started, ...pending]
+}

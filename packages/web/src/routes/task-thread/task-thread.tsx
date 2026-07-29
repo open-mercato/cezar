@@ -65,7 +65,7 @@ import { HarnessRail } from '../task-harness/harness-rail'
 import { HarnessStatusBar, HarnessTimelineDialog } from '../task-harness/harness-status-bar'
 import { ReviewerModal } from '../task-harness/reviewer-modal'
 import { RUN_RAIL_GRID, runShellClass } from './run-shell'
-import { mergeHarnessLedger } from '../task-harness/harness-state'
+import { mergeHarnessLedger, orderStepsByLedger } from '../task-harness/harness-state'
 
 /**
  * `/tasks/:id` — the Session tab (spec, "Task thread"): the run header (title/meta/tabs/
@@ -377,6 +377,7 @@ export function ThreadView({
         planTally={planTally}
         publishBlockedReason={harnessPublishBlocked}
         onJumpToStep={jumpToStep}
+        orderedSteps={harnessLedger ? orderStepsByLedger(run.steps, harnessLedger) : undefined}
       />
       {/* ONE status line, and the timeline behind it (review 2026-07-27): the
           horizontal phase rail could not be read — 18 phases, 2620px wide, inside
