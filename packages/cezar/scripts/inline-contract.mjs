@@ -1,35 +1,38 @@
 /**
- * Inline `@open-mercato/cezar-contract` into `dist` after `tsc`.
+ * Bundle `@open-mercato/cezar-contract` into `dist` after `tsc`.
  *
- * The contract is a real workspace package — that is how the source reads, and how every
- * developer and the api-client consume it. But this package IS published and the contract is not,
- * so a `dist` that imported it by name would install broken: `npm i -g @open-mercato/cezar` would
- * fail to resolve it. Inlining at the artifact level keeps both properties — a clean package
- * dependency in source, a self-contained tarball on npm — and is the ordinary thing a bundler
- * would do, except this package builds with plain `tsc`.
+ * The contract and the api-client are PRIVATE and ship no build of their own — they are linked as
+ * workspace packages and consumed as TypeScript source, which is what every other consumer wants:
+ * the cockpit's Vite bundles them, vitest transforms them.
  *
- * Deliberately NOT a source-level copy: the earlier attempt copied `src/` between packages, which
- * hid the dependency from the package graph. Here the source always names the package; only the
- * emitted output is rewritten.
+ * This package is the exception, because it is PUBLISHED. `workspace/migrations.ts` imports
+ * `workspaceUiStateSchema` — a zod value, not a type — so the installed CLI resolves the contract
+ * at runtime, and a tarball naming a package npm has never seen would fail on install. So the
+ * build folds it in: esbuild compiles the contract's source to one ESM file under `dist/contract/`
+ * and the emitted references are repointed at it.
+ *
+ * Nothing is copied at the SOURCE level — the package graph still states the dependency, and this
+ * runs only when `dist` actually names it. Delete this the day the contract is published, or the
+ * day nothing here imports a contract VALUE.
  */
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = join(here, '..', 'dist');
-const from = join(here, '..', '..', 'contract', 'dist');
-const to = join(dist, 'contract');
-
+const entry = join(here, '..', '..', 'contract', 'src', 'index.ts');
+const outdir = join(dist, 'contract');
 const SPEC = /(['"])@open-mercato\/cezar-contract\1/g;
 
-/** Every emitted file that names the package, so the copy only happens when it is actually used. */
+/** Emitted files that name the package — the copy happens only if it is really used. */
 const referrers = [];
 const scan = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (p !== to) scan(p);
+      if (p !== outdir) scan(p);
     } else if (/\.(js|d\.ts|js\.map)$/.test(entry.name)) {
       SPEC.lastIndex = 0;
       if (SPEC.test(readFileSync(p, 'utf8'))) referrers.push(p);
@@ -38,25 +41,27 @@ const scan = (dir) => {
 };
 scan(dist);
 
-// Nothing in the shipped output names it — today the server uses the contract only from tests,
-// which never reach `dist`. Copying anyway would put dead files in the published tarball.
-rmSync(to, { recursive: true, force: true });
+rmSync(outdir, { recursive: true, force: true });
 if (referrers.length === 0) {
-  console.log('inline-contract ok — nothing in dist references the contract, nothing inlined');
+  console.log('inline-contract ok — nothing in dist references the contract, nothing bundled');
   process.exit(0);
 }
 
-if (!statSync(from, { throwIfNoEntry: false })) {
-  throw new Error('inline-contract: packages/contract/dist is missing — build the contract first');
-}
-mkdirSync(to, { recursive: true });
-cpSync(from, to, { recursive: true });
-let rewritten = 0;
+// `zod` stays external: it is a real dependency of this package, so npm resolves it normally and
+// the tarball does not carry a second copy.
+await build({
+  entryPoints: [entry],
+  outfile: join(outdir, 'index.js'),
+  bundle: true,
+  format: 'esm',
+  platform: 'neutral',
+  target: 'es2022',
+  external: ['zod'],
+});
+
 for (const p of referrers) {
-  // `./contract` relative to THIS file, so nesting depth is handled rather than assumed.
-  let rel = relative(dirname(p), join(to, 'index.js')).replaceAll('\\', '/');
+  let rel = relative(dirname(p), join(outdir, 'index.js')).replaceAll('\\', '/');
   if (!rel.startsWith('.')) rel = `./${rel}`;
   writeFileSync(p, readFileSync(p, 'utf8').replace(SPEC, `'${rel}'`), 'utf8');
-  rewritten += 1;
 }
-console.log(`inline-contract ok — contract inlined, ${rewritten} file(s) repointed`);
+console.log(`inline-contract ok — contract bundled, ${referrers.length} file(s) repointed`);
