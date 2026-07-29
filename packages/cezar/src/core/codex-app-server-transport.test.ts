@@ -1,9 +1,11 @@
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS } from './claude-cli-runner.js';
 import {
   buildCodexAppServerEnv,
   CodexAppServerRpc,
+  endCodexAppServer,
   resolveCodexExecutable,
 } from './codex-app-server-transport.js';
 
@@ -69,5 +71,70 @@ describe('Codex app-server transport', () => {
     const request = rpc.request('model/list', {});
     rpc.dispatchResponse({ id: 1, error: { code: -32601, message: 'method unavailable' } });
     await expect(request).rejects.toThrow('method unavailable');
+  });
+});
+
+/**
+ * #703 — the runner can only tell its own teardown apart from a codex failure
+ * if the watchdog reports BEFORE the teardown it provokes, or the exit can
+ * race ahead of the flag. Teardown itself is `terminateAgentProcessTree` (one
+ * group SIGTERM with its own group-checked SIGKILL escalation — exercised
+ * against real processes in the claude-cli-runner EOF-watchdog test); a fake
+ * without a pid deliberately makes the group signal a no-op, because a made-up
+ * pid would signal a real process group on the host.
+ */
+describe('endCodexAppServer watchdog', () => {
+  function signallableChild(): { child: ChildProcessWithoutNullStreams; signals: NodeJS.Signals[] } {
+    const signals: NodeJS.Signals[] = [];
+    const child = {
+      stdin: new PassThrough(),
+      exitCode: null,
+      killed: false,
+      kill: (signal: NodeJS.Signals) => {
+        signals.push(signal);
+        return true;
+      },
+      once: () => child,
+    } as unknown as ChildProcessWithoutNullStreams;
+    return { child, signals };
+  }
+
+  it('reports the teardown before it starts so the runner can classify the exit', () => {
+    vi.useFakeTimers();
+    try {
+      const { child, signals } = signallableChild();
+      let reported = 0;
+      endCodexAppServer(child, undefined, () => {
+        reported += 1;
+      });
+
+      // EOF alone: the server is given the full grace period first.
+      expect(reported).toBe(0);
+
+      vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
+      expect(reported).toBe(1);
+      // The tree teardown owns signalling — the per-child kill is never used.
+      expect(signals).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays silent when the app-server exits on EOF by itself', () => {
+    vi.useFakeTimers();
+    try {
+      const { child, signals } = signallableChild();
+      let reported = 0;
+      endCodexAppServer(child, undefined, () => {
+        reported += 1;
+      });
+      (child as unknown as { exitCode: number | null }).exitCode = 0;
+
+      vi.advanceTimersByTime(EOF_TERM_GRACE_MS + EOF_KILL_GRACE_MS);
+      expect(signals).toEqual([]);
+      expect(reported).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

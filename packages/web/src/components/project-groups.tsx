@@ -4,7 +4,7 @@ import * as React from 'react'
 import { useLocation } from 'react-router'
 
 import { putWorkspaceUiState } from '@/api/client'
-import { useProjectRuns, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
+import { useHealth, useProjectRuns, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import type { ProjectListEntry, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
@@ -13,6 +13,7 @@ import { QuickListBuckets } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
+import { tokenMetricsVisible } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
@@ -152,6 +153,8 @@ export function ProjectGroups({
   const runExact = useProjectMatch('/tasks/:id')
   const currentRunId = runMatch?.params.id ?? runExact?.params.id ?? null
   const now = useNow(30_000)
+  const health = useHealth()
+  const showTokenMetrics = tokenMetricsVisible(health.data)
 
   // Most-recently-opened first, per the spec. Sorted here rather than trusted from the wire so
   // the order is a property of the sidebar, not of whichever route last touched the registry.
@@ -177,6 +180,7 @@ export function ProjectGroups({
           inboxAvailable={inboxAvailable}
           inboxCount={inboxCount}
           skillsUpdateAvailable={skillsUpdateAvailable}
+          showTokenMetrics={showTokenMetrics}
         />
       ))}
     </div>
@@ -196,6 +200,7 @@ function ProjectGroup({
   inboxAvailable,
   inboxCount,
   skillsUpdateAvailable,
+  showTokenMetrics,
 }: {
   project: ProjectListEntry
   /** The boot project's runs cache lives under the `'default'` scope key (it mounts
@@ -212,6 +217,7 @@ function ProjectGroup({
   inboxAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
+  showTokenMetrics: boolean
 }) {
   const missing = project.status === 'missing'
   // Collapsed (or missing) groups never fetch — a 40-project workspace costs one registry
@@ -361,6 +367,7 @@ function ProjectGroup({
             currentRunId={active ? currentRunId : null}
             now={now}
             scope={project.id}
+            showTokenMetrics={showTokenMetrics}
           />
 
           {/* Always present, not only past the cap: it is this group's door into the project's

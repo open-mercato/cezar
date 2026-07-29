@@ -159,6 +159,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       localHandoff: false,
       followups: true,
       singleProject: false,
+      tokenMetrics: true,
     });
   });
 });
@@ -178,4 +179,25 @@ describe('resolveCapabilities — singleProject', () => {
       expect(resolveCapabilities({ CEZ_SINGLE_PROJECT: value }).singleProject).toBe(false);
     },
   );
+});
+
+describe('resolveCapabilities — tokenMetrics (#481)', () => {
+  it('is visible by default', () => {
+    expect(resolveCapabilities({}).tokenMetrics).toBe(true);
+  });
+
+  it('is hidden with CEZ_HIDE_TOKEN_METRICS=1', () => {
+    expect(resolveCapabilities({ CEZ_HIDE_TOKEN_METRICS: '1' }).tokenMetrics).toBe(false);
+  });
+
+  it.each(['0', 'true', 'yes', '', 'on'])(
+    'stays visible for CEZ_HIDE_TOKEN_METRICS=%j — only an exact "1" opts out',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_HIDE_TOKEN_METRICS: value }).tokenMetrics).toBe(true);
+    },
+  );
+
+  it('does not change telemetry visibility when another deployment capability is enabled', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FOLLOWUPS: '1' }).tokenMetrics).toBe(true);
+  });
 });

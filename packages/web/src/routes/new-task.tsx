@@ -152,7 +152,8 @@ export function NewTaskRoute() {
   const skills = useSkills()
   const repo = useRepo()
   const uiState = useUiState()
-  // Settings → Agents `defaultModels` (R6 1.5): the per-runner preset the Model pill starts on.
+  // Settings → Agents runner/model policy for this project. `/api/health` is boot-bound and
+  // cannot answer these per-project defaults when another project is active (#699).
   const config = useConfig()
   const workspaceConfig = useWorkspaceConfig()
 
@@ -204,9 +205,6 @@ export function NewTaskRoute() {
     draft.composerMode ?? (harnessWorkflowName(rawSource) !== null ? 'multi' : 'task')
   const harnessMode =
     draft.harnessMode ?? HARNESS_MODES.find((m) => m.workflow === rawSource.ref)?.id ?? 'fix-issue'
-  const selectedWorkflow = source.source === 'workflow'
-    ? taskWorkflows.find((workflow) => workflow.name === source.ref)
-    : undefined
   const selectedSkill = source.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
@@ -237,7 +235,7 @@ export function NewTaskRoute() {
 
   const providers = useProviderStatus()
   const runners = usableRunners(providers.data)
-  const defaultRunner = health.data?.defaultRunner
+  const defaultRunner = config.data?.defaultRunner
   const preferredRunner = defaultRunner ?? 'claude'
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
@@ -374,14 +372,11 @@ export function NewTaskRoute() {
   const hasGit = health.data === undefined || health.data.repo !== null
   const variants = hasGit ? draft.variants : 1
 
-  // Worktree opt-out (#worktree-toggle): only offered for a single skill run in a git repo —
-  // workflows and variants always isolate, and a non-git repo already runs in place. The choice
-  // is remembered (draft → last-used → default on).
-  const singleStepSource = source.source === 'skill'
-    || source.ref === 'quick-task'
-    || selectedWorkflow?.steps.length === 1
+  // Worktree opt-out (#worktree-toggle): any ordinary run in a git repo may use the current
+  // checkout. Parallel variants are the one hard constraint because each competing run needs
+  // its own tree; a non-git repo already runs in place.
   const worktreeToggleShown = hasGit
-  const worktreeForced = !singleStepSource || variants > 1
+  const worktreeForced = variants > 1
 
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
   // wins; then an interactive skill recommends handing the ball back; otherwise the configured
@@ -391,7 +386,6 @@ export function NewTaskRoute() {
   const runMode = resolveComposerRunMode({
     hasGit,
     variants,
-    forceWorktree: !singleStepSource,
     planFirst: draft.planFirst,
     explicitAutonomous: draft.autonomous,
     explicitWorktree: draft.worktree,
@@ -457,10 +451,10 @@ export function NewTaskRoute() {
       setAutoStarting(false)
       return
     }
-    // Provider status often resolves before health on a cold load. The protected bookmarklet
-    // body may omit runner only against the server's authoritative default, never our display
-    // fallback; a failed health check degrades to the prefilled composer instead of guessing.
-    if (health.isPending) return
+    // Provider status often resolves before project config on a cold load. The protected
+    // bookmarklet body may omit runner only against that scoped authoritative default, never
+    // our display fallback; a failed config read degrades to the prefilled composer.
+    if (config.isPending) return
     deepLinkHandled.current = true
     if (defaultRunner === undefined) {
       setNotice({ kind: 'prefill' })
@@ -493,7 +487,7 @@ export function NewTaskRoute() {
       }
       setAutoStarting(false)
     })()
-  }, [defaultRunner, health.isPending, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config.isPending, defaultRunner, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
   // The prefill toast waits for the pickers' data: whether the skill exists decides the
   // wording, and the unknown-skill case rewrites the draft the way legacy did (intent into
   // the text, quick-task as the source — its planner resolves skills from prose).
@@ -609,6 +603,7 @@ export function NewTaskRoute() {
         source,
         model,
         runner,
+        runnerExplicit: draft.runner !== null,
         defaultRunner,
         variants,
         images,
@@ -658,6 +653,7 @@ export function NewTaskRoute() {
           steps: plan.steps,
           model,
           runner,
+          runnerExplicit: draft.runner !== null,
           defaultRunner,
           variants,
           images: plan.images,
@@ -881,9 +877,7 @@ export function NewTaskRoute() {
                 <WorktreeToggle
                   on={worktreeOn}
                   disabled={worktreeForced}
-                  disabledReason={variants > 1
-                    ? 'Parallel variants always use isolated worktrees'
-                    : 'Multi-step workflows require an isolated worktree'}
+                  disabledReason="Parallel variants always use isolated worktrees"
                   onChange={(on) => update({ worktree: on })}
                 />
               ) : null}
@@ -995,7 +989,7 @@ export function NewTaskRoute() {
   )
 }
 
-/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for single skill runs.
+/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for ordinary runs.
  *  Checked = isolated worktree (the default); unchecked = run in the repo working tree. */
 function WorktreeToggle({
   on,

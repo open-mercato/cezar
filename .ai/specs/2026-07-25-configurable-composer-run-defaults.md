@@ -2,8 +2,8 @@
 
 ## TLDR
 
-Make quick-task the cold New Task default, expose Worktree for every eligible
-single-step run, and let Autonomous/Worktree defaults be seeded by environment
+Make quick-task the cold New Task default, expose Worktree for every ordinary
+run, and let Autonomous/Worktree defaults be seeded by environment
 and overridden in workspace Settings. This is the no-ceremony composer policy
 half of issue #657; per-skill `interactive: true` semantics are specified
 separately in `2026-07-25-interactive-skill-composer-defaults.md`.
@@ -15,7 +15,7 @@ separately in `2026-07-25-interactive-skill-composer-defaults.md`.
 | Q1 | Where do configured defaults live? | Workspace config with nullable stored overrides that inherit environment values. | These are operator preferences shared across projects, and sandboxes need one seed with a per-sandbox override. | ok |
 | Q2 | How much of #650 belongs here? | Only cold selection of quick-task and the truthful Worktree control. Broader source-picker/no-skill redesign stays in #650. | This delivers the issue’s explicit no-ceremony path without expanding into navigation work. | ok |
 | Q3 | What replaces last-used toggle memory? | Stable workspace/env policy. Legacy `lastAutonomous`/`lastWorktree` keys remain parseable but new clients stop reading/writing them. | An unrelated previous run should not silently override an administrator’s or user’s declared default. | ok |
-| Q4 | Which workflows can disable Worktree? | Skills and workflows with exactly one executable step; multi-step workflows and parallel variants remain isolated. | The engine can run one step in place, while multi-step/parallel execution depends on a shared or separate worktree boundary. | ok |
+| Q4 | Which workflows can disable Worktree? | Skills and workflows may run in place; parallel variants remain isolated. | The repository-root lease safely serializes ordinary in-place workflows, while parallel variants require separate worktrees by definition. | ok |
 
 ## Problem Statement
 
@@ -32,8 +32,8 @@ based on whichever task ran last.
 
 1. Cold New Task selects built-in `quick-task` when no draft, deep link, or
    remembered explicit source exists.
-2. Worktree appears for any git-backed single-step skill/workflow. Multi-step
-   workflows and parallel variants show it on and disabled with a reason.
+2. Worktree appears for any ordinary git-backed skill/workflow. Parallel
+   variants show it on and disabled with a reason.
 3. `~/.cezar/config.json` gains optional workspace composer overrides.
 4. `CEZ_AUTONOMOUS_DEFAULT` and `CEZ_WORKTREE_DEFAULT` seed absent overrides.
 5. Global Resources Settings gains a **New task defaults** card with
@@ -86,9 +86,8 @@ The companion interactive-skill spec adds its hint between explicit choice and
 configured policy. Implement one helper with an optional skill recommendation
 input so the two specs cannot create competing ternaries.
 
-Eligibility requires git, variants ≤ 1, and exactly one expanded executable
-step. While sources load, retain the existing readiness guard to prevent control
-flicker.
+Eligibility requires git and variants ≤ 1. While sources load, retain the
+existing readiness guard to prevent control flicker.
 
 Legacy `lastAutonomous`/`lastWorktree` UI-state keys remain accepted by the
 passthrough schema for backward compatibility but no longer participate in
@@ -143,9 +142,9 @@ patterns apply.
 
 - Cold composer selects quick-task only when no explicit draft/deep-link/source
   preference exists.
-- Worktree renders for eligible single-step workflows, including quick-task.
-- Multi-step workflows and parallel variants render Worktree on and disabled
-  with a concise reason.
+- Worktree renders for ordinary workflows, including quick-task and multi-step
+  workflows.
+- Parallel variants render Worktree on and disabled with a concise reason.
 - Explicit user changes survive source switching for the current draft.
 - Starting/clearing creates a fresh draft resolved from current policy.
 
@@ -179,7 +178,7 @@ Visuals live under `assets/configurable-composer-run-defaults/`.
 - No git hides Worktree and runs in place.
 - Raising variants after explicit Worktree off forces on; returning to one
   restores the draft’s explicit off.
-- Multi-step workflow forces Worktree on.
+- Multi-step workflows honor explicit and configured Worktree opt-outs.
 - Workflow shape loading does not flicker controls.
 - Direct incompatible API requests remain subject to server validation.
 
@@ -219,8 +218,7 @@ capability: every checkpoint uses the same resolver and Settings contract.
    tolerant state parsing.
 6. Make quick-task the cold default without overriding deep links, drafts, or
    explicit source memory. Add route tests.
-7. Derive single-step eligibility from expanded workflow data; render Worktree
-   for quick-task and eligible workflows, forced disabled states otherwise,
+7. Render Worktree for ordinary workflows, force it only for parallel variants,
    and verify submitted request bodies.
 8. Document both env vars in `.env.example` and README and update any env drift
    guard.

@@ -22,11 +22,15 @@ export function providerForActiveRun(run: ApiRun): Runner {
   return 'claude'
 }
 
-export function activeProviderAvailability(
-  run: ApiRun,
+/** Mirrors the server's providerForExistingRun for an override-free POST /continue. */
+export function providerForExistingRun(run: ApiRun): Runner {
+  return run.runner ?? 'claude'
+}
+
+function providerAvailability(
+  provider: Runner,
   status: ProviderStatusResponse,
 ): { provider: Runner; usable: boolean; reason?: string } {
-  const provider = providerForActiveRun(run)
   const row = providerStatusFor(status, provider)
   if (row?.enabled === false) {
     return {
@@ -45,6 +49,20 @@ export function activeProviderAvailability(
   return { provider, usable: true }
 }
 
+export function activeProviderAvailability(
+  run: ApiRun,
+  status: ProviderStatusResponse,
+): { provider: Runner; usable: boolean; reason?: string } {
+  return providerAvailability(providerForActiveRun(run), status)
+}
+
+export function existingProviderAvailability(
+  run: ApiRun,
+  status: ProviderStatusResponse,
+): { provider: Runner; usable: boolean; reason?: string } {
+  return providerAvailability(providerForExistingRun(run), status)
+}
+
 /** Availability for the same provider the server will use for a live/queued message. */
 export function useActiveProviderAvailability(run: ApiRun) {
   const status = useProviderStatus()
@@ -55,4 +73,23 @@ export function useActiveProviderAvailability(run: ApiRun) {
   return status.isSuccess && status.data
     ? activeProviderAvailability(run, status.data)
     : { provider, usable: true }
+}
+
+/** Availability for the run's recorded provider, which an override-free continuation keeps. */
+export function useExistingProviderAvailability(run: ApiRun) {
+  const status = useProviderStatus()
+  const provider = providerForExistingRun(run)
+  if (status.isSuccess && status.data) return existingProviderAvailability(run, status.data)
+  if (status.isError) {
+    return {
+      provider,
+      usable: false,
+      reason: 'Provider authentication could not be verified.',
+    }
+  }
+  return {
+    provider,
+    usable: false,
+    reason: 'Checking agent providers…',
+  }
 }

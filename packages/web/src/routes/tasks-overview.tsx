@@ -13,7 +13,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, useRuns } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -36,6 +36,7 @@ import {
   workflowLabel,
   type UsageCell,
 } from '@/lib/tasks-table'
+import { tokenMetricsVisible } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
@@ -58,6 +59,7 @@ export function TasksOverview({
   onArchiveFinished,
   onRename,
   now = Date.now(),
+  showTokenMetrics = true,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
@@ -70,6 +72,8 @@ export function TasksOverview({
   onRename: (id: string, title: string) => void
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
+  /** Presentation capability; defaults visible for older health responses and direct renders. */
+  showTokenMetrics?: boolean
 }) {
   const [query, setQuery] = React.useState('')
   const all = runs ?? []
@@ -144,8 +148,12 @@ export function TasksOverview({
                     <Th>Branch</Th>
                     <Th>±</Th>
                     <Th>Ref</Th>
-                    <Th right>Tokens</Th>
-                    <Th right>Cost</Th>
+                    {showTokenMetrics ? (
+                      <>
+                        <Th right>Tokens</Th>
+                        <Th right>Cost</Th>
+                      </>
+                    ) : null}
                     <Th right>CPU</Th>
                     <Th right>Mem</Th>
                     <Th right>Started</Th>
@@ -159,6 +167,7 @@ export function TasksOverview({
                       queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
                       onRename={onRename}
                       now={now}
+                      showTokenMetrics={showTokenMetrics}
                     />
                   ))}
                 </tbody>
@@ -173,6 +182,7 @@ export function TasksOverview({
                   run={run}
                   queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
                   now={now}
+                  showTokenMetrics={showTokenMetrics}
                 />
               ))}
             </div>
@@ -323,11 +333,13 @@ function TableRow({
   queuePosition,
   onRename,
   now,
+  showTokenMetrics,
 }: {
   run: RunRecord
   queuePosition: number | null
   onRename: (id: string, title: string) => void
   now: number
+  showTokenMetrics: boolean
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -358,12 +370,16 @@ function TableRow({
       {/* ± — refreshed on every turn-end (#389); still an honest dash on records that predate it. */}
       <td className={TD_BASE}>{run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : <Dash />}</td>
       <td className={TD_BASE}>{reference ? <ReferenceChip reference={reference} taskTitle={runTitle(run)} /> : <Dash />}</td>
-      <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
-        {compactTokens(run.tokensUsed)}
-      </td>
-      <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
-        {cost || <Dash />}
-      </td>
+      {showTokenMetrics ? (
+        <>
+          <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
+            {compactTokens(run.tokensUsed)}
+          </td>
+          <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
+            {cost || <Dash />}
+          </td>
+        </>
+      ) : null}
       {queuePosition !== null ? (
         <td
           data-slot="queue-note"
@@ -462,10 +478,12 @@ function TaskCard({
   run,
   queuePosition,
   now,
+  showTokenMetrics,
 }: {
   run: RunRecord
   queuePosition: number | null
   now: number
+  showTokenMetrics: boolean
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -515,7 +533,7 @@ function TaskCard({
                 <DiffStatLabel stat={run.diffStat} className="text-[11.5px]" />
               </>
             ) : null}
-            {run.tokensUsed > 0 ? (
+            {showTokenMetrics && run.tokensUsed > 0 ? (
               <>
                 <Sep />
                 <span>{compactTokens(run.tokensUsed)}</span>
@@ -560,6 +578,7 @@ function BranchChip({ branch }: { branch: string }) {
  */
 export function TasksOverviewRoute() {
   const runs = useRuns()
+  const health = useHealth()
   const [view, setView] = useListView()
   const queryClient = useQueryClient()
   const archive = useMutation({
@@ -583,6 +602,7 @@ export function TasksOverviewRoute() {
       onArchiveFinished={() => archive.mutate()}
       onRename={(id, title) => rename.mutate({ id, title })}
       now={now}
+      showTokenMetrics={tokenMetricsVisible(health.data)}
     />
   )
 }

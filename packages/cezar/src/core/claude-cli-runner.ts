@@ -14,6 +14,7 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.js';
+import { isSignalTerminationExit } from './agent-runner.js';
 import { thinkingBudgetFor } from './reasoning-effort.js';
 import { buildChildEnv } from './agent-env.js';
 import { costWeightedTokens, type RawUsage } from './usage.js';
@@ -178,6 +179,19 @@ export class ClaudeCliRunner implements AgentRunner {
       }
     };
 
+    // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
+    // wall-clock kill switch. claude installs its own SIGTERM handler and exits
+    // 143 instead of dying from the signal, so without this flag our own
+    // teardown reads as an agent failure (#703). Termination itself is
+    // tree-wide: the CLI's own children (MCP servers, provider processes) must
+    // not outlive it, and the group-liveness escalation inside
+    // `terminateAgentProcessTree` replaces the per-child SIGKILL timers.
+    let terminatedByCezar = false;
+    const terminateChild = (graceMs: number): NodeJS.Timeout => {
+      terminatedByCezar = true;
+      return terminateAgentProcessTree(child, graceMs);
+    };
+
     const end = (): void => {
       if (!stdinOpen) return;
       stdinOpen = false;
@@ -189,7 +203,7 @@ export class ClaudeCliRunner implements AgentRunner {
       eofTermTimer = setTimeout(() => {
         if (child.exitCode == null && !child.killed) {
           eofKilled = true;
-          eofKillTimer = terminateAgentProcessTree(child, EOF_KILL_GRACE_MS);
+          eofKillTimer = terminateChild(EOF_KILL_GRACE_MS);
         }
       }, EOF_TERM_GRACE_MS);
       eofTermTimer.unref?.();
@@ -197,7 +211,7 @@ export class ClaudeCliRunner implements AgentRunner {
 
     const interrupt = (): void => {
       stdinOpen = false;
-      if (!child.killed) terminateAgentProcessTree(child, KILL_GRACE_MS);
+      if (!child.killed) terminateChild(KILL_GRACE_MS);
     };
 
     // Seed the first user message — the same path every follow-up takes.
@@ -225,6 +239,8 @@ export class ClaudeCliRunner implements AgentRunner {
     if (limitMs > 0) {
       deadline = setTimeout(() => {
         timedOut = true;
+        // `interrupt()` tree-terminates with its own SIGKILL escalation — no
+        // separate kill timer needed here.
         interrupt();
         child.stdout.destroy();
       }, limitMs);
@@ -243,11 +259,17 @@ export class ClaudeCliRunner implements AgentRunner {
             continue;
           }
 
-          emitUi((state) => mapClaudeMessage(msg, state));
+          // Claude reports `error_during_execution` while reacting to our
+          // teardown signal. Once cezar has signalled the child, that frame
+          // describes the intentional stop rather than an agent failure.
+          // Normalize only this precise wire shape so genuine result errors
+          // (authentication, limits, malformed sessions) stay authoritative.
+          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
+          emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
           let delta = 0;
           try {
-            delta = handleClaudeMessage(msg, { toolCalls, textChunks, onEvent });
+            delta = handleClaudeMessage(mappedMessage, { toolCalls, textChunks, onEvent });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             onEvent?.({ type: 'note', message: `claude: skipped malformed event (${msg.type ?? 'unknown'}): ${message}` });
@@ -291,6 +313,20 @@ export class ClaudeCliRunner implements AgentRunner {
       if (timedOut) {
         const mins = Math.round((limitMs / 60_000) * 10) / 10;
         onEvent?.({ type: 'error', message: `claude CLI timed out after ${mins}m and was killed` });
+        onEvent?.({ type: 'done' });
+        return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
+      }
+
+      // A session cezar itself tore down (EOF watchdog after `end()`, or a
+      // cancel) exits 143/137 — that is our own signal coming back, not an
+      // agent failure, so it settles on the normal path with a note (#703).
+      if (terminatedByCezar && isSignalTerminationExit(exitCode)) {
+        onEvent?.({
+          type: 'note',
+          message: eofKilled
+            ? `claude CLI ignored EOF after session end and was terminated (exit ${exitCode}) — result already delivered (known CLI bug)`
+            : `claude CLI did not exit on its own after close; terminated by cezar (code ${exitCode})`,
+        });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }
@@ -434,6 +470,21 @@ interface ClaudeStreamMessage {
   total_cost_usd?: number;
 }
 
+function normalizeIntentionalTeardownResult(
+  msg: ClaudeStreamMessage,
+  terminatedByCezar: boolean,
+): ClaudeStreamMessage {
+  if (
+    terminatedByCezar
+    && msg.type === 'result'
+    && msg.is_error === true
+    && msg.subtype === 'error_during_execution'
+  ) {
+    return { ...msg, subtype: 'success', is_error: false };
+  }
+  return msg;
+}
+
 function handleClaudeMessage(
   msg: ClaudeStreamMessage,
   ctx: {
@@ -453,7 +504,12 @@ function handleClaudeMessage(
         ctx.onEvent?.({ type: 'tool-call', id: b.id, tool: b.name, input: b.input });
       }
     }
-    return costWeightedTokens(msg.message.usage);
+    // Assistant-frame usage belongs to the individual API calls inside this
+    // agentic turn. Claude's terminal result frame already aggregates those
+    // calls, so adding both sources inflates the run total (#716). Keep these
+    // frames presentation-only; the result branch below is authoritative,
+    // matching the v2 `usage.updated` mapping in AGENT_PROTOCOL.md.
+    return 0;
   }
 
   if (msg.type === 'user' && msg.message?.content) {
