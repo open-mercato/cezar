@@ -508,11 +508,22 @@ export class RunStore extends EventEmitter {
     return { ...patch, error: this.redactText(patch.error) };
   }
 
-  /** Append a step to an existing run (used by "Continue" — spec 003). */
+  /** Add a step to an existing run (Continue — spec 003 — and every step the
+   *  harness driver creates as it conducts). A NEW step is created the moment
+   *  execution reaches it, so it is inserted before the first step that has
+   *  not started yet — the harness predeclares its seven base steps and
+   *  creates the rest (baseline gate, council rounds, fix rounds) as it goes,
+   *  and appending those at the tail displayed Stage as "step 7 of 19" on a
+   *  run whose stage ran LAST (user report 2026-07-29). For ordinary runs
+   *  every earlier step is terminal by the time Continue adds one, so the
+   *  insertion point is the tail — exactly the old order. */
   addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'>): void {
     const run = this.runs.get(runId);
     if (!run || run.steps.some((s) => s.id === step.id)) return;
-    run.steps.push({ ...step, status: 'pending', iterations: 0, tokensUsed: 0 });
+    const created: StepState = { ...step, status: 'pending', iterations: 0, tokensUsed: 0 };
+    const firstPending = run.steps.findIndex((s) => s.status === 'pending');
+    if (firstPending === -1) run.steps.push(created);
+    else run.steps.splice(firstPending, 0, created);
     this.touch(run);
   }
 
