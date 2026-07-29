@@ -660,7 +660,24 @@ function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
 /** Keep run data out of the user's repo history; workflows/skills stay committable. */
 function ensureDataGitignore(repoRoot: string): void {
   const path = join(repoRoot, '.ai/cezar', '.gitignore');
-  const wanted = ['runs.json', 'runs.json.tmp', 'runs/', 'worktrees/', 'todos.json', 'todos.json.tmp', 'launch-key'];
+  const wanted = [
+    'runs.json',
+    'runs.json.tmp',
+    'runs/',
+    'worktrees/',
+    'todos.json',
+    'todos.json.tmp',
+    'launch-key',
+    'automations.json',
+    'automations.json.tmp',
+    'automation-state.json',
+    'automation-state.json.tmp',
+    'automation-receipts.ndjson',
+    'automation-receipts.ndjson.tmp',
+    'automation-log.ndjson',
+    'automation-log.ndjson.tmp',
+    'automation-poll.lock',
+  ];
   try {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     const current = existsSync(path) ? readFileSync(path, 'utf8') : '';

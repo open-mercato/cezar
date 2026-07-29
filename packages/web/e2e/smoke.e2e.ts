@@ -51,7 +51,7 @@ function expectedNavLabels(): string[] {
     'Tasks',
     ...(followupsAvailable ? ['Inbox'] : []),
     'Git',
-    ...(forgeAvailable ? ['GitHub'] : []),
+    ...(forgeAvailable ? ['GitHub', 'Automations'] : []),
     'Skills',
     'Workflows',
     'Settings',

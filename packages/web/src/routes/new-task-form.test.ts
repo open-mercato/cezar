@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
+  buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
   MODELS_BY_RUNNER,
@@ -274,5 +275,27 @@ describe('pushRecentSource (recency, #picker)', () => {
 
   it('handles an undefined starting list', () => {
     expect(pushRecentSource(undefined, s('a'))).toEqual([s('a')])
+  })
+})
+
+describe('buildAutomationTask', () => {
+  it('uses the New task serializer while dropping one-shot transport fields', () => {
+    expect(buildAutomationTask({
+      task: 'Review {{github.url}}',
+      source: { source: 'skill', ref: 'om-code-review' },
+      model: 'opus',
+      runner: 'claude',
+      defaultRunner: 'claude',
+      variants: 2,
+      images: [{ mediaType: 'image/png', data: 'ignored' }],
+      autonomous: true,
+      todoId: 'ignored',
+    })).toEqual({
+      prompt: 'Review {{github.url}}',
+      steps: [{ id: 'task', name: 'om-code-review', skill: 'om-code-review', prompt: '{{task}}' }],
+      model: 'opus',
+      variants: 2,
+      autonomous: true,
+    })
   })
 })

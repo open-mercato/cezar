@@ -34,6 +34,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - `GET/PUT /api/v1/workspace/ui-state` — the global GUI-state twin of `/api/v1/ui-state`, backed by `~/.cezar/ui-state.json` (section 9): same `.passthrough()` + top-level key cap + shallow merge-on-write semantics as the per-repo route (one shared parse path in the code), so unknown keys survive round-trips; a bad body is `400 {error}` and never a partial write.
 - Skills: `GET /api/v1/skills`, `GET /api/v1/skills/importable`, `POST /api/v1/skills/refresh`
 - Workflows: `GET/POST /api/v1/workflows`, `DELETE /api/v1/workflows/:name`, `POST /api/v1/workflows/parse`, `POST /api/v1/plan`
+- Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check}`, `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry`
 - Runs: `GET/POST /api/v1/runs`, `GET /api/v1/runs/:id`, `PATCH /api/v1/runs/:id`, `PATCH/DELETE /api/v1/runs/:id/queued-messages/:msgId`, `POST /api/v1/runs/:id/{cancel,messages,finish,continue,open-in-cli,open-in,pr,archive,remove-worktree,git/commit,git/push}`, `POST /api/v1/runs/archive-finished`, `DELETE /api/v1/runs/:id`, `GET /api/v1/runs/:id/{handoff,diff,changes,files,commits,events}`, `GET /api/v1/runs/:id/commit/:sha`, `GET /api/v1/runs/:id/images/:file`
 - Worktrees: `GET /api/v1/worktrees`, `POST /api/v1/worktrees/reclaim`
 - Open-in: `GET /api/v1/open-targets`

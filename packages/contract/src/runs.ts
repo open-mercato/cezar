@@ -135,6 +135,24 @@ export const runRecordSchema = z.object({
   /** Autonomous mode (#autonomous): the run never parks at `waiting` or the terminal `review`
    *  gate. Absent = falsy = not autonomous. */
   autonomous: z.boolean().optional(),
+  /**
+   * Provenance for a task a project GitHub automation launched (#694). Absent on every ordinary
+   * run, which is what makes it additive — the cockpit shows the "from automation" link only when
+   * it is there.
+   *
+   * `event` is a plain string rather than `automationEventSchema`: it is the event NAME the
+   * launching definition matched, recorded on the run for the audit trail, and `src/runs/store.ts`
+   * persists it as free text so an older cezar can still read a record written by a newer one.
+   */
+  automation: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number(),
+      receiptId: z.string(),
+      event: z.string(),
+      githubUrl: z.string(),
+    })
+    .optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
@@ -393,12 +411,14 @@ export const imageInputSchema = z.object({
 export type ImageInput = z.input<typeof imageInputSchema>;
 
 /**
- * `POST /runs`. Exactly one of `workflow` / `steps` — the server rejects both or neither.
+ * The KEYS of `POST /runs`' body, before the XOR refinement that `createRunInputSchema` adds.
  *
- * Every bound here is the server's own (#429): an unbounded body must never reach a spawned
- * process, so a client that validates before sending gets the same answer the route would give.
+ * Split out for one reason: `./automations.ts` builds an automation's task on top of this shape
+ * (a task IS a run-creation body minus the three keys an automation supplies itself), and zod
+ * refuses `.omit()` on a schema that carries refinements. Validate with `createRunInputSchema`
+ * below — this half accepts a body naming both `workflow` and `steps`, which the server does not.
  */
-export const createRunInputSchema = z
+export const createRunInputBaseSchema = z
   .object({
     workflow: z.string().min(1).optional(),
     /** An inline chain (spec 008 — an approved plan runs as an ad-hoc workflow, never written to
@@ -430,10 +450,18 @@ export const createRunInputSchema = z
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
-  })
-  .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
-    message: 'provide either "workflow" or "steps", not both',
   });
+
+/**
+ * `POST /runs`. Exactly one of `workflow` / `steps` — the server rejects both or neither.
+ *
+ * Every bound here is the server's own (#429): an unbounded body must never reach a spawned
+ * process, so a client that validates before sending gets the same answer the route would give.
+ */
+export const createRunInputSchema = createRunInputBaseSchema.refine(
+  (b) => Boolean(b.workflow) !== Boolean(b.steps),
+  { message: 'provide either "workflow" or "steps", not both' },
+);
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**

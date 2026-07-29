@@ -51,7 +51,7 @@ function expectedNavHrefs(projectId: string): string[] {
     scoped(projectId, '/'),
     ...(followupsAvailable ? [scoped(projectId, '/inbox')] : []),
     scoped(projectId, '/git'),
-    ...(forgeAvailable ? [scoped(projectId, '/github')] : []),
+    ...(forgeAvailable ? [scoped(projectId, '/github'), scoped(projectId, '/automations')] : []),
     scoped(projectId, '/skills'),
     scoped(projectId, '/workflows'),
     scoped(projectId, '/settings'),

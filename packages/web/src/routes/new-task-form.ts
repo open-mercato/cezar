@@ -266,6 +266,16 @@ export function buildCreateRunBody(opts: {
   }
 }
 
+/** The automation editor persists the exact New task serialization, with only the transport-
+ * specific `task` key renamed to `prompt`. Images and inbox provenance are deliberately absent:
+ * an automation is a reusable template, not one browser submission. */
+export function buildAutomationTask(
+  opts: Parameters<typeof buildCreateRunBody>[0],
+): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
+  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+  return { prompt: task, ...body }
+}
+
 /** Where a successful POST navigates: the run's thread — for ×2/×3 the FIRST variant's thread,
  *  exactly what legacy `handleStarted` selects. */
 export function startedRunPath(response: CreateRunResponse): string {

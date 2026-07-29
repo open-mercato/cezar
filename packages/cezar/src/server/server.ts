@@ -1,4 +1,17 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { AutomationStore } from '../automations/store.ts';
+import { AutomationCoordinator } from '../automations/coordinator.ts';
+import { GithubPoller } from '../automations/github-poller.ts';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
+import { launchAutomationRun, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
+import {
+  automationEventSchema,
+  automationFiltersSchema,
+  automationLogResultSchema,
+  automationTaskSchema,
+  type AutomationDefinition,
+} from '../automations/types.ts';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -91,7 +104,7 @@ import { expandTilde } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
-import { resolveForge } from './forge/index.ts';
+import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -135,6 +148,10 @@ export interface ServerDeps {
    *  context is seeded from `deps.{store,manager}` (which src/index.ts already
    *  recovered/pruned at startup) and the resolver short-circuits to it. */
   contexts?: ProjectContexts;
+  /** Boot project's shared automation store. `startServer` injects the
+   *  coordinator-owned instance so HTTP routes and the scheduler never cache
+   *  separate views of the same project files. */
+  automationStore?: AutomationStore;
   /** Workspace-wide parallel-cap semaphore + cached resource config (spec
    *  2026-07-20, step 2.5): the ONE instance boot created, refreshed, and gave
    *  the boot manager — threaded into the default `ProjectContexts` so every
@@ -176,6 +193,8 @@ export interface ServerDeps {
    *  to the HTTP server it binds. Optional so legacy callers/tests change
    *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
   socketHub?: SocketHub;
+  /** Re-arm the workspace automation timer after definition mutations. */
+  automationsChanged?: () => void;
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -199,6 +218,46 @@ const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
 const providerRetrySchema = z.object({
   authFailureId: z.string().min(1).max(128),
 }).strict();
+
+const automationEditableSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    description: z.string().max(2_000).optional(),
+    enabled: z.boolean().optional(),
+    events: z.array(automationEventSchema).min(1).max(4),
+    intervalSeconds: z.number().int().min(60).max(86_400),
+    filters: automationFiltersSchema,
+    task: automationTaskSchema,
+  })
+  .strict();
+const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
+const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
+const automationCheckRequestSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
+const automationLogQuerySchema = z.object({
+  automationId: z.string().optional(),
+  result: automationLogResultSchema.optional(),
+  event: automationEventSchema.optional(),
+  since: z.string().datetime().optional(),
+  cursor: z.coerce.number().int().positive().optional(),
+  // Optional, not `.default(100)`: `AutomationStore.logs` already clamps `limit ?? 100` into
+  // 1..100, so the default here was a second copy of it — and a defaulted key is REQUIRED in the
+  // request type `queryZodValidator` publishes (see validators.ts on why the request side falls
+  // back to the schema's output), which would have made every caller send a `?limit=` this route
+  // never needed.
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+function editableAutomation(definition: AutomationDefinition) {
+  return {
+    name: definition.name,
+    description: definition.description,
+    enabled: definition.enabled,
+    events: definition.events,
+    intervalSeconds: definition.intervalSeconds,
+    filters: definition.filters,
+    task: definition.task,
+  };
+}
 
 /** One row of the mirrored project-route table. */
 export interface ProjectRouteInfo {
@@ -346,7 +405,8 @@ export type WorkspaceEventName =
   | 'project-added'
   | 'project-removed'
   | 'checkout-progress'
-  | 'provider-status';
+  | 'provider-status'
+  | 'automation-change';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -1009,6 +1069,7 @@ export function createApp(deps: ServerDeps) {
     dataDir: bootDataDir,
     store: deps.store,
     manager: deps.manager,
+    automationStore: deps.automationStore ?? AutomationStore.open(bootDataDir),
     launchKey: ensureLaunchKey(bootDataDir), // bookmarklet auto-start secret (spec 011)
   };
   // Non-boot projects build lazily on first scoped request; their managers
@@ -1025,6 +1086,18 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
+  const emitAutomationChange = (
+    project: ProjectContext,
+    automationId: string,
+    revision: number,
+    deleted = false,
+  ) => workspaceEvents.emit('automation-change', {
+    project: project.id,
+    automationId,
+    revision,
+    ...(deleted ? { deleted: true } : {}),
+  });
+  const automationsChanged = () => deps.automationsChanged?.();
 
   const providerRuntimeAuth = deps.providerRuntimeAuth
     ?? new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -2325,6 +2398,253 @@ export function createApp(deps: ServerDeps) {
       const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
       if (blocked) return c.json({ error: blocked }, 409);
       return c.json(await planChain(repoRoot, parsed.data.task));
+    });
+
+  // ---- GitHub automations --------------------------------------------------
+
+  /**
+   * One manual "test filter" check, in server memory only.
+   *
+   * Declared here rather than inferred from `contract/src/automations.ts`: the contract's
+   * `automationCheckSchema` is checked against what this route ANSWERS
+   * (`contract-parity.automations.test.ts`), and a schema that annotated the handler it is
+   * compared with would be true by construction.
+   */
+  type ManualCheck = {
+    id: string;
+    automationId: string;
+    mode: 'preview' | 'execute';
+    status: 'queued' | 'running' | 'complete' | 'error';
+    createdAt: string;
+    completedAt?: string;
+    matches?: number;
+    truncated?: boolean;
+    error?: string;
+  };
+  const manualChecks = new Map<string, ManualCheck>();
+
+  // ---- chained family: GitHub automations (project-scoped) ----
+  // Every handler below reads `c.get('project')` — the definitions, their runtime state and the
+  // execution log are per-project files — so the family is project-scoped and mounted with the
+  // rest of the mirrored table. The one exception is the manual-check read, which touches no
+  // project at all; it is its own workspace-level family below.
+  const automationsRoutes = new Hono<ProjectApiEnv>()
+    .get('/automations', async (c) => {
+      const { root, automationStore } = c.get('project');
+      const forge = resolveForge(await getRepoInfo(root));
+      // Annotated, so the two branches are ONE shape rather than a union of two: the fallback
+      // literal always carries `reason`, the cached answer only sometimes does, and the route
+      // type is what `contract/src/automations.ts` has to describe.
+      const availability: ForgeAvailability = forge?.detectCached() ?? {
+        available: false,
+        reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
+      };
+      const automations = automationStore.list().map((automation) => {
+        const logs = automationStore.logs({ automationId: automation.id, limit: 100 });
+        const state = automationStore.state(automation.id);
+        const latestLog = logs[0];
+        return {
+          ...automation,
+          // Spread conditionally, never `state: maybeUndefined`: the latter types the key as
+          // always-present while `JSON.stringify` drops it from the wire, so the contract would
+          // have to describe a key consumers never receive.
+          ...(state ? { state } : {}),
+          ...(latestLog ? { latestLog } : {}),
+          counts: {
+            matches: logs.filter((row) => row.result === 'launched' || row.result === 'duplicate').length,
+            launched: logs.filter((row) => row.result === 'launched').length,
+            duplicates: logs.filter((row) => row.result === 'duplicate').length,
+            errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited').length,
+          },
+        };
+      });
+      const nextDue = automations.map((item) => item.state?.nextCheckAt).filter(Boolean).sort()[0];
+      return c.json({
+        ...availability,
+        scheduler: {
+          // `as const` on both arms: in an object literal a conditional of two string literals
+          // widens to `string`, which would erase the two states this key can hold.
+          state: automations.some((item) => item.enabled) ? ('scheduled' as const) : ('idle' as const),
+          ...(nextDue ? { nextDue } : {}),
+        },
+        automations,
+      });
+    })
+
+    .post('/automations', jsonZodValidator(() => automationCreateSchema), async (c) => {
+      const { automationStore } = c.get('project');
+      const parsed = { data: c.req.valid('json') };
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const { enable, ...input } = parsed.data;
+      try {
+        const automation = automationStore.create({ ...input, enabled: enable === true });
+        if (enable) {
+          const baselineAt = new Date().toISOString();
+          automationStore.setState(automation.id, {
+            revision: automation.revision,
+            baselineAt,
+            cursor: { timestamp: baselineAt },
+            nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
+          });
+        }
+        emitAutomationChange(c.get('project'), automation.id, automation.revision);
+        automationsChanged();
+        return c.json({ automation }, 201);
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+    })
+
+    .get('/automations/:id', (c) => {
+      const { automationStore } = c.get('project');
+      const automation = automationStore.get(c.req.param('id'));
+      if (!automation) return c.json({ error: 'not found' }, 404);
+      const state = automationStore.state(automation.id);
+      const latestLog = automationStore.logs({ automationId: automation.id, limit: 1 })[0];
+      return c.json({
+        automation,
+        ...(state ? { state } : {}),
+        ...(latestLog ? { latestLog } : {}),
+      });
+    })
+
+    .put('/automations/:id', jsonZodValidator(() => automationUpdateSchema), async (c) => {
+      const { automationStore } = c.get('project');
+      const parsed = { data: c.req.valid('json') };
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const { expectedRevision, ...input } = parsed.data;
+      if (!automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+      try {
+        const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false });
+        emitAutomationChange(c.get('project'), automation.id, automation.revision);
+        automationsChanged();
+        return c.json({ automation });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return c.json({ error: message }, message.includes('conflict') ? 409 : 400);
+      }
+    })
+
+    .delete('/automations/:id', (c) => {
+      const id = c.req.param('id');
+      const store = c.get('project').automationStore;
+      const current = store.get(id);
+      if (!current || !store.delete(id)) return c.json({ error: 'not found' }, 404);
+      emitAutomationChange(c.get('project'), id, current.revision, true);
+      automationsChanged();
+      return c.body(null, 204);
+    })
+
+    .post('/automations/:id/enable', (c) => {
+      const store = c.get('project').automationStore;
+      const current = store.get(c.req.param('id'));
+      if (!current) return c.json({ error: 'not found' }, 404);
+      const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: true });
+      const baselineAt = new Date().toISOString();
+      store.setState(automation.id, {
+        ...store.state(automation.id),
+        revision: automation.revision,
+        baselineAt,
+        cursor: { timestamp: baselineAt },
+        nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
+      });
+      store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+      emitAutomationChange(c.get('project'), automation.id, automation.revision);
+      automationsChanged();
+      return c.json({ automation });
+    })
+
+    .post('/automations/:id/pause', (c) => {
+      const store = c.get('project').automationStore;
+      const current = store.get(c.req.param('id'));
+      if (!current) return c.json({ error: 'not found' }, 404);
+      const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: false });
+      emitAutomationChange(c.get('project'), automation.id, automation.revision);
+      automationsChanged();
+      return c.json({ automation });
+    })
+
+    // The body is validated as MIDDLEWARE, which is what puts it in the route type — and moves
+    // the 400 ahead of this route's 404: `POST /automations/<unknown>/check` with a malformed
+    // body now answers 400 rather than 404. Nothing else about either answer changed.
+    .post('/automations/:id/check', jsonZodValidator(() => automationCheckRequestSchema), async (c) => {
+      const project = c.get('project');
+      const store = project.automationStore;
+      const automation = store.get(c.req.param('id'));
+      if (!automation) return c.json({ error: 'not found' }, 404);
+      const parsed = { data: c.req.valid('json') };
+      // `string`, not `randomUUID`'s template-literal type: the wire carries an opaque id, and
+      // leaking `${string}-${string}-…` into the route type would make the contract describe the
+      // generator rather than the answer.
+      const id: string = randomUUID();
+      const check: ManualCheck = { id, automationId: automation.id, mode: parsed.data.mode, status: 'queued', createdAt: new Date().toISOString() };
+      if (manualChecks.size >= 200) manualChecks.delete(manualChecks.keys().next().value!);
+      manualChecks.set(id, check);
+      void (async () => {
+        check.status = 'running';
+        try {
+          const remote = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
+          if (!remote || remote.host !== 'github.com') throw new Error('No GitHub remote is configured');
+          const scheduler = new ProjectAutomationScheduler({
+            projectId: project.id,
+            owner: remote.owner,
+            repo: remote.repo,
+            store,
+            poller: new GithubPoller(),
+            launch: parsed.data.mode === 'execute'
+              ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId })
+              : undefined,
+            onChange: (automationId, revision) => emitAutomationChange(project, automationId, revision),
+          });
+          const result = await scheduler.check(automation, parsed.data.mode);
+          Object.assign(check, { status: 'complete', completedAt: new Date().toISOString(), matches: result.candidates.length, truncated: result.truncated });
+        } catch (error) {
+          Object.assign(check, { status: 'error', completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
+        }
+      })();
+      return c.json({ checkId: id }, 202);
+    })
+
+    .get('/automation-log', queryZodValidator(automationLogQuerySchema), (c) => {
+      return c.json({ records: c.get('project').automationStore.logs(c.req.valid('query')) });
+    })
+
+    .post('/automation-log/:receiptId/retry', async (c) => {
+      const project = c.get('project');
+      const store = project.automationStore;
+      const receipt = [...store.latestReceipts().values()].find((row) => row.receiptId === c.req.param('receiptId'));
+      if (!receipt) return c.json({ error: 'not found' }, 404);
+      if (receipt.status !== 'launch-error' || receipt.runId) return c.json({ error: 'receipt is not retryable' }, 409);
+      if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
+      const definition = store.get(receipt.automationId);
+      if (!definition) return c.json({ error: 'automation not found' }, 404);
+      const lease = store.acquireLease();
+      if (!lease) return c.json({ error: 'automation polling lease is held by another process' }, 409);
+      const reserved = { ...receipt, status: 'reserved' as const, error: undefined, updatedAt: new Date().toISOString() };
+      store.appendReceipt(reserved);
+      try {
+        const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId });
+        store.appendReceipt({ ...reserved, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
+        emitAutomationChange(project, definition.id, definition.revision);
+        return c.json({ receiptId: receipt.receiptId, runId: launched.runId }, 202);
+      } catch (error) {
+        store.appendReceipt({ ...reserved, status: 'launch-error', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() });
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+      } finally {
+        lease.release();
+      }
+    });
+
+  // ---- chained family: manual automation checks (workspace-level) ----
+  // Workspace-level because the handler reads no project: a check lives in the server-memory map
+  // above, keyed by an unguessable id that the project-scoped POST hands back. Mounting it under
+  // `/api/v1/p/:projectId` too would be a second spelling of a lookup that consults no project.
+  const automationChecksRoutes = new Hono()
+    .get('/automation-checks/:checkId', (c) => {
+      const check = manualChecks.get(c.req.param('checkId'));
+      return check ? c.json(check) : c.json({ error: 'not found' }, 404);
     });
 
   // ---- runs ----------------------------------------------------------------
@@ -3920,6 +4240,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', uiStateRoutes)
     .route('/', workflowsRoutes)
     .route('/', planRoutes)
+    .route('/', automationsRoutes)
     .route('/', runsRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
@@ -3941,6 +4262,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', skillsUpdateRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', fsBrowseRoutes)
+    .route('/', automationChecksRoutes)
     .route('/', workspaceEventsRoutes);
 
   // ---- mount ---------------------------------------------------------------
@@ -3977,7 +4299,24 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
-  const app = createApp({ ...deps, workspaceEvents, skillsUpdate, socketHub });
+  const automationCoordinator = new AutomationCoordinator({ listProjects });
+  const bootProjectId = deps.bootProjectId ?? 'default';
+  const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
+  const sharedContexts = deps.contexts ?? new ProjectContexts({
+    listProjects,
+    semaphore: deps.semaphore,
+    automationStore: (projectId, root) => automationCoordinator.store(projectId, root)!,
+  });
+  let rescheduleAutomations = () => {};
+  const app = createApp({
+    ...deps,
+    contexts: sharedContexts,
+    automationStore: bootAutomationStore,
+    workspaceEvents,
+    skillsUpdate,
+    socketHub,
+    automationsChanged: () => rescheduleAutomations(),
+  });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
   // expose an agent-executing box to the network. `bindHost` exists only for a deliberate
@@ -3990,15 +4329,57 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   });
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
+  const automationProjects = new Map<string, { root: string; owner: string; repo: string }>();
+  const automationScheduler = new WorkspaceAutomationScheduler({
+    coordinator: automationCoordinator,
+    handle: (projectId, store) => {
+      const project = automationProjects.get(projectId);
+      if (!project) return undefined;
+      return {
+        projectId,
+        owner: project.owner,
+        repo: project.repo,
+        store,
+        poller: new GithubPoller(),
+        onChange: (automationId, revision) =>
+          workspaceEvents.emit('automation-change', { project: projectId, automationId, revision }),
+        launch: async (definition, candidate, receiptId) => {
+          const bootId = deps.bootProjectId ?? 'default';
+          const context = projectId === bootId
+            ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
+            : await sharedContexts.context(projectId);
+          return launchAutomationRun({
+            root: context.root,
+            manager: context.manager,
+            store: context.store,
+            definition,
+            candidate,
+            receiptId,
+          });
+        },
+      };
+    },
+  });
+  rescheduleAutomations = () => { void automationScheduler.reschedule(); };
   const unsubscribe = workspaceEvents.on((event, data) => {
     if (event === 'project-added') {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
       if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
         coordinator.add(project.id, project.root);
+        void getRepoInfo(project.root).then((info) => {
+          const parsed = parseRemote(info?.remote ?? '');
+          if (parsed?.host === 'github.com') automationProjects.set(project.id as string, { root: project.root as string, owner: parsed.owner, repo: parsed.repo });
+          return automationScheduler.reschedule();
+        });
       }
     } else if (event === 'project-removed') {
       const id = (data as { id?: unknown }).id;
       if (typeof id === 'string') coordinator.remove(id);
+      if (typeof id === 'string') {
+        automationCoordinator.remove(id);
+        automationProjects.delete(id);
+        void automationScheduler.reschedule();
+      }
     }
   });
   server.once('listening', () => {
@@ -4006,9 +4387,18 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       const all = projects.some((project) => project.root === deps.repoRoot)
         ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
       coordinator.start(all);
+      void Promise.all(all.map(async (project) => {
+        const parsed = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
+        if (parsed?.host === 'github.com') automationProjects.set(project.id, { root: project.root, owner: parsed.owner, repo: parsed.repo });
+        const automationStore = automationCoordinator.store(project.id, project.root);
+        const runStore = project.id === (deps.bootProjectId ?? 'default')
+          ? deps.store
+          : sharedContexts.peek(project.id)?.store;
+        if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
+      })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { unsubscribe(); coordinator.stop(); });
+  server.once('close', () => { unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return server;
 }

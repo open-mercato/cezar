@@ -1,5 +1,12 @@
 import type {
   AgentConfigFileContent,
+  AutomationsResponse,
+  AutomationCheck,
+  AutomationCheckQueuedResponse,
+  AutomationLogResponse,
+  AutomationResponse,
+  CreateAutomationInput,
+  UpdateAutomationInput,
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
@@ -1194,6 +1201,105 @@ export async function postPlan(task: string): Promise<PlanResponse> {
       json: { task },
     }),
     '/plan',
+  )
+}
+
+// ---- GitHub automations (#694) ---------------------------------------------------------------
+//
+// Project-scoped, like the runs family: the definitions, their state and the log are per-project
+// files. The one exception is `getAutomationCheck` — a manual check lives in the server's memory
+// under an id the POST handed back, and its route reads no project, so it has no scoped spelling.
+
+/** Every automation with its runtime state, latest log row and tallies, plus the forge's
+ *  availability and the scheduler summary — one read, the whole page. */
+export async function getAutomations(opts?: ReadOptions): Promise<AutomationsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/automations',
+  )
+}
+
+/** Create a definition. Always created PAUSED unless `enable` asks for a current-time baseline. */
+export async function createAutomation(input: CreateAutomationInput): Promise<AutomationResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations',
+  )
+}
+
+/** Edit a definition. `expectedRevision` is the one the editor read — a stale one answers 409
+ *  rather than overwriting an edit made elsewhere. */
+export async function updateAutomation(
+  id: string,
+  input: UpdateAutomationInput,
+): Promise<AutomationResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].$put({
+      // `hc` does not percent-encode a path param, so ids are pre-encoded at every call site.
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: input,
+    }),
+    `/automations/${encodeURIComponent(id)}`,
+  )
+}
+
+/** Enable (from a current-time baseline — existing records never launch) or pause. Two routes,
+ *  because they are two acts: only one of them establishes a baseline. */
+export async function setAutomationEnabled(id: string, enabled: boolean): Promise<AutomationResponse> {
+  const param = { projectId: queryScope(), id: encodeURIComponent(id) }
+  const label = `/automations/${encodeURIComponent(id)}/${enabled ? 'enable' : 'pause'}`
+  return unwrap(
+    enabled
+      ? await cez.api.v1.p[':projectId'].automations[':id'].enable.$post({ param })
+      : await cez.api.v1.p[':projectId'].automations[':id'].pause.$post({ param }),
+    label,
+  )
+}
+
+/** Start a manual check (202) — `preview` counts matches and launches nothing, `execute` runs
+ *  the poll for real. Poll `getAutomationCheck` with the returned id. */
+export async function checkAutomation(
+  id: string,
+  mode: 'preview' | 'execute',
+): Promise<AutomationCheckQueuedResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].check.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { mode },
+    }),
+    `/automations/${encodeURIComponent(id)}/check`,
+  )
+}
+
+/** One manual check's progress. Workspace-level: the check registry is the server's, not a
+ *  project's — the id is the whole address. */
+export async function getAutomationCheck(id: string, opts?: ReadOptions): Promise<AutomationCheck> {
+  return unwrap(
+    await cez.api.v1['automation-checks'][':checkId'].$get(
+      { param: { checkId: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `/automation-checks/${encodeURIComponent(id)}`,
+  )
+}
+
+/** One automation's execution log — newest first, capped server-side at 100 rows. */
+export async function getAutomationLog(
+  id: string,
+  opts?: ReadOptions,
+): Promise<AutomationLogResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['automation-log'].$get(
+      { param: { projectId: queryScope() }, query: { automationId: id } },
+      init(opts),
+    ),
+    `/automation-log?automationId=${encodeURIComponent(id)}`,
   )
 }
 

@@ -33,6 +33,9 @@ describe('every mutating route carries a typed body into AppType', () => {
   type _Checks = [
     Assert<HasTypedBody<'/api/v1/runs', '$post'>>,
     Assert<HasTypedBody<'/api/v1/plan', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/automations', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/automations/:id', '$put'>>,
+    Assert<HasTypedBody<'/api/v1/automations/:id/check', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/checkout', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/:projectId', '$patch'>>,
@@ -90,6 +93,7 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'param'>>,
     Assert<HasTypedInput<'/api/v1/repo/commit/:sha', '$get', 'query'>>,
+    Assert<HasTypedInput<'/api/v1/automation-log', '$get', 'query'>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

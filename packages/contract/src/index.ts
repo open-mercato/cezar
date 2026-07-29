@@ -12,3 +12,4 @@ export * from './workspace.ts';
 export * from './workflows.ts';
 export * from './skills.ts';
 export * from './agent-config.ts';
+export * from './automations.ts';
