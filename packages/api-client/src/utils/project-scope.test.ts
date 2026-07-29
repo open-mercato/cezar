@@ -133,6 +133,37 @@ describe('resolveApiUrl — URLs the server minted', () => {
     expect(resolveApiUrl('/raw/assets/icon.svg')).toBe('/raw/assets/icon.svg')
     expect(resolveApiUrl('https://github.com/o/r/pull/7')).toBe('https://github.com/o/r/pull/7')
     expect(resolveApiUrl('data:image/png;base64,AAAA')).toBe('data:image/png;base64,AAAA')
+    expect(resolveApiUrl('blob:http://localhost:4321/abc-123')).toBe('blob:http://localhost:4321/abc-123')
+  })
+
+  it('upgrades an ABSOLUTE URL stored before the API was versioned, keeping its origin', () => {
+    // A transcript can carry a fully-qualified URL just as easily as a root-relative one, and the
+    // unversioned spelling 404s either way — so the origin is preserved and only the path moves.
+    expect(resolveApiUrl('http://127.0.0.1:4321/api/runs/r1/images/shot.png')).toBe(
+      'http://127.0.0.1:4321/api/v1/runs/r1/images/shot.png',
+    )
+  })
+
+  it('scopes an absolute stored URL onto the active project too', () => {
+    setApiScope('cezar')
+    expect(resolveApiUrl('http://127.0.0.1:4321/api/runs/r1/images/shot.png')).toBe(
+      'http://127.0.0.1:4321/api/v1/p/cezar/runs/r1/images/shot.png',
+    )
+  })
+
+  it('leaves an absolute URL that already names its own project alone', () => {
+    setApiScope('cezar')
+    expect(resolveApiUrl('http://127.0.0.1:4321/api/v1/p/other/runs/r1/images/shot.png')).toBe(
+      'http://127.0.0.1:4321/api/v1/p/other/runs/r1/images/shot.png',
+    )
+  })
+
+  it('never re-bases an absolute URL onto the configured base', () => {
+    // The origin in the stored URL wins: rewriting someone else's host is not this function's job.
+    setApiBaseUrl('https://cezar.example.com')
+    expect(resolveApiUrl('http://127.0.0.1:4321/api/runs/r1/images/a.png')).toBe(
+      'http://127.0.0.1:4321/api/v1/runs/r1/images/a.png',
+    )
   })
 })
 

@@ -120,17 +120,44 @@ const API_URL = /^\/api(?:\/v1)?(\/.*)$/
  * - **Re-scope.** Transcripts store the unscoped spelling, so the active project's prefix is
  *   applied on use, which keeps one stored URL valid under every project.
  *
- * Anything that is not a cockpit API URL — a `/raw/...` asset, an absolute `https://` link —
- * is returned untouched. It is not ours to rewrite.
+ * Anything that is not a cockpit API URL — a `/raw/...` asset, a `https://github.com/...` link,
+ * a `data:` URI — is returned untouched. It is not ours to rewrite.
  */
 export function resolveApiUrl(url: string): string {
-  // Already absolute (a full origin) — the server minted it complete; not ours to re-base.
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url
+  // An absolute URL keeps its own origin — re-basing someone else's host is not ours to do — but
+  // it still gets the version upgrade, because a transcript written before `/api/v1` existed can
+  // just as easily carry `https://host/api/runs/…` as `/api/runs/…`, and the unversioned spelling
+  // 404s either way. Only the PATH is rewritten, and only when it is a cockpit API path.
+  const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(url)
+  if (scheme) {
+    // Opaque schemes (`data:`, `blob:`) have no path to speak of and no origin to preserve.
+    const separator = url.indexOf('//', scheme[0].length)
+    if (separator !== scheme[0].length) return url
+    const pathStart = url.indexOf('/', separator + 2)
+    if (pathStart === -1) return url
+    const origin = url.slice(0, pathStart)
+    const upgraded = upgradeApiPath(url.slice(pathStart))
+    return upgraded === null ? url : `${origin}${upgraded}`
+  }
   const withoutBase = baseUrl && url.startsWith(baseUrl) ? url.slice(baseUrl.length) : url
-  const match = API_URL.exec(withoutBase)
-  if (!match) return url
+  const upgraded = upgradeApiPath(withoutBase)
+  return upgraded === null ? url : `${baseUrl}${upgraded}`
+}
+
+/**
+ * The path half of {@link resolveApiUrl}: `/api/…` or `/api/v1/…` → the versioned, correctly
+ * scoped spelling, WITHOUT the configured base (the caller owns that, since an absolute URL keeps
+ * its own origin instead). `null` when the path is not a cockpit API path at all.
+ */
+function upgradeApiPath(path: string): string | null {
+  const match = API_URL.exec(path)
+  if (!match) return null
   const route = match[1] as string
   // Already scoped (`/p/<id>/…`) — the stored URL names its own project, so leave it.
-  if (route.startsWith('/p/')) return `${baseUrl}${API_PREFIX}${route}`
-  return apiPath(route)
+  if (route.startsWith('/p/')) return `${API_PREFIX}${route}`
+  const scoped =
+    activeProjectId === null || WORKSPACE_LEVEL.test(route)
+      ? route
+      : `/p/${encodeURIComponent(activeProjectId)}${route}`
+  return `${API_PREFIX}${scoped}`
 }
