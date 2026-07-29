@@ -3572,10 +3572,13 @@ export async function runHarnessDriver(
             // same themes, with no criterion it would ever sign off on. The
             // spec was materially better each round and was thrown away anyway.
             //
-            // Delivery is stage-only: the human is the final gate. So the run
-            // proceeds with the contested findings recorded and surfaced, and
-            // the human decides — which is what they would have done with the
-            // failed run's artifacts anyway, minus the hours.
+            // The LAST revision already answered the previous round's findings
+            // (review > fixes, user contract 2026-07-29) — so the build simply
+            // proceeds. The open questions stay loud: they are threaded into
+            // every later review prompt and into the handoff, but they no
+            // longer mark the whole run contested — a spec disagreement from
+            // minute ten must not gate publishing a build that every later
+            // council approved.
             const contested = specFindings
               .filter((f) => f.severity === 'blocker' || f.severity === 'major')
               .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`)
@@ -3585,12 +3588,13 @@ export async function runHarnessDriver(
                 .filter((f) => f.severity === 'blocker' || f.severity === 'major')
                 .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`),
             );
-            setOutcome({
-              status: 'contested',
-              blockingReasons: contested
-                ? [contested]
-                : ['specification council did not converge on an approving verdict'],
+            ledger.decisions.push({
+              at: new Date().toISOString(),
+              kind: 'spec-council.unresolved',
+              by: 'driver',
+              detail: contested || 'reviewers split on the verdict without blocking findings',
             });
+            persist();
             host.emit({
               type: 'note',
               stepId: councilId,
@@ -3688,6 +3692,12 @@ export async function runHarnessDriver(
     type AttributedFinding = ReviewResult['findings'][number] & { by?: string };
     let reviewFindings: AttributedFinding[] = [];
     let survivingBlockers: AttributedFinding[] = [];
+    /** The last council's blocking findings when the review budget ran out —
+     *  the CLOSING FIX answers them and the run moves on (review > fixes,
+     *  user contract 2026-07-29). The om harness this ports always gave the
+     *  fixer the last word; the contested publish gate was cezar-only friction. */
+    let closingFindings: AttributedFinding[] = [];
+    let closingFix: { findings: string[]; response: string } | null = null;
     const packetized = ledger.effectiveProfile === 'high-assurance';
     if (packetized) {
       const packetError = await runHighAssurancePackets(agentic, diagnosisSummary, allowlist);
@@ -4428,23 +4438,19 @@ export async function runHarnessDriver(
         break;
       }
       if (round >= ledger.loops.maxFixRounds + validationRepairRounds) {
-        // Same reasoning as the spec council: stage the work with the surviving
-        // findings named, rather than deleting an hour of it because a reviewer
-        // will not sign off. The validation GATE is different and still fails
-        // the run — that one is objective.
+        // The review budget is spent. The fixer gets the LAST WORD (review >
+        // fixes): one closing fix answers these findings after the loop, the
+        // validation gate re-proves the tree, and the run completes with the
+        // whole exchange recorded — no publish gate. The validation GATE is
+        // different and still fails the run — that one is objective.
         const surviving = blocking.map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`).join('; ');
-        setOutcome({
-          status: 'contested',
-          blockingReasons: blocking.map(
-            (finding) => `[${finding.severity}] ${finding.title} (raised by ${finding.by})`,
-          ),
-        });
+        closingFindings = blocking;
         host.emit({
           type: 'note',
           stepId: reviewId,
           message:
-            `fix loop exhausted after ${ledger.loops.maxFixRounds} rounds — staging anyway for human review, ` +
-            `UNRESOLVED: ${surviving}`,
+            `review budget exhausted after ${ledger.loops.maxFixRounds} rounds — the closing fixes get ` +
+            `the last word, unreviewed by the council: ${surviving}`,
         });
         break;
       }
@@ -4456,6 +4462,128 @@ export async function runHarnessDriver(
         response: '',
       });
       reviewFindings = blocking;
+    }
+
+    if (closingFindings.length > 0) {
+      const closingFindingLines = closingFindings.map(
+        (f) =>
+          `- [${f.severity}] ${f.title}${f.location ? ` (${f.location})` : ''}${f.evidence ? ` — ${f.evidence}` : ''}${f.by ? ` — raised by ${f.by}` : ''}`,
+      );
+      const closing = await agentPhase(
+        'fix-final',
+        'Final fixes',
+        'cez-fix',
+        [
+          `The review budget is spent; these are the council's final blocking findings. Address them in the current worktree — this is the run's closing pass and it will NOT be re-reviewed, so keep every change minimal and safe.`,
+          ``,
+          `Findings:`,
+          ...closingFindingLines,
+          ``,
+          `When a finding cites a "full output:" log path, read that log for the complete failure detail before re-running long suites.`,
+          `Hard boundaries: edit only this worktree; create NO commit; perform NO push or PR; do not weaken or delete tests.`,
+          `When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
+          `{"changedPaths": ["<every repo-relative file you changed>"], "summary": "<what you fixed and any finding you deliberately left, with why>"}`,
+        ].join('\n'),
+        fixResultSchema,
+        'fix',
+        roles?.implementer,
+      );
+      if ('cancelled' in (closing as object)) return null;
+      if ('error' in (closing as object)) return (closing as { error: string }).error;
+      const closingResult = closing as z.infer<typeof fixResultSchema>;
+      for (const path of closingResult.changedPaths) addToAllowlist(path, 'fix-final');
+      const closingDrift = await gitDriftError('fix-final');
+      if (closingDrift) return closingDrift;
+
+      // The gate re-proves the closing pass — the one authority that still
+      // fails the run here, because it is objective.
+      const closingChecksPath = join(artifactDir, 'validation-validate-final.json');
+      let closingGateError: string | null = null;
+      const closingValidate = await opPhase('validate-final', 'Validate (final)', async () => {
+        if (agentic.validationCommands.length === 0) return { ok: true };
+        const invocation = beginInvocation({
+          id: 'validation:validate-final',
+          phaseId: 'validate-final',
+          role: 'validation',
+          binding: { runner: 'bash' },
+          inputSha256: sha256(
+            JSON.stringify({
+              inputHashVersion: 2,
+              operation: 'validate-final',
+              commands: agentic.validationCommands,
+            }),
+          ),
+        });
+        const controller = new AbortController();
+        const offClosingInterrupt = host.onInterrupt(() => controller.abort());
+        try {
+          const checks = await validate(agentic.validationCommands, host.cwd, {
+            signal: controller.signal,
+            env: harnessChildEnvironment(harnessConfigEnvironmentNames(agentic.agentHarness)),
+            logDir: artifactDir,
+            logPrefix: 'validation-validate-final-',
+            onSpawn: (identity) => {
+              invocation.process = { ...identity };
+              persist();
+              emitInvocation(invocation);
+            },
+            onExit: () => {
+              invocation.process = undefined;
+              persist();
+              emitInvocation(invocation);
+            },
+          });
+          if (host.isCancelled()) {
+            finishInvocation(invocation, 'interrupted', { error: 'run cancelled during the final validation' });
+            return { ok: true };
+          }
+          closingGateError = describeGateVerdict(checks, 'validate-final');
+          ledger.validation = checks;
+          writeJsonAtomic(closingChecksPath, {
+            version: 1,
+            status: checks.every((check) => check.status === 'passed') ? 'passed' : 'failed',
+            checks,
+          });
+          finishInvocation(invocation, 'completed', { artifactPath: closingChecksPath });
+          return { ok: true };
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          finishInvocation(invocation, 'failed', { error: detail });
+          return { ok: false, error: `the final validation could not run: ${detail}` };
+        } finally {
+          offClosingInterrupt();
+        }
+      });
+      if (closingValidate === 'cancelled') return null;
+      if (closingValidate) {
+        setOutcome({ status: 'blocked', blockingReasons: [closingValidate] });
+        return closingValidate;
+      }
+      if (closingGateError) {
+        const reason = `the closing fixes broke the validation gate: ${closingGateError}`;
+        setOutcome({ status: 'blocked', blockingReasons: [reason] });
+        return reason;
+      }
+      closingFix = {
+        findings: closingFindings.map(
+          (f) => `[${f.severity}] ${f.title} (raised by ${f.by})`,
+        ),
+        response: closingResult.summary ?? '(no summary recorded)',
+      };
+      ledger.decisions.push({
+        at: new Date().toISOString(),
+        kind: 'review.closing-fixes',
+        by: 'driver',
+        detail: closingFix.findings.join('; '),
+      });
+      persist();
+      host.emit({
+        type: 'note',
+        message:
+          `closing fixes applied and the gate re-proved — moving on. The council did not re-review ` +
+          `this pass; the findings and the fixer's response ride the handoff.`,
+      });
+      survivingBlockers = [];
     }
 
     if (survivingBlockers.length > 0 && ledger.outcome.status === 'pending') {
@@ -4654,6 +4782,22 @@ export async function runHarnessDriver(
                     `Risk accepted by the user at ${ledger.outcome.acceptedAt}: ${ledger.outcome.acceptanceReason ?? '(no reason recorded)'}`,
                   ]
                 : []),
+            ]
+          : []),
+        ...(closingFix
+          ? [
+              ``,
+              `## Closing fixes (review budget exhausted — unreviewed by the council)`,
+              ...closingFix.findings.map((finding) => `- ${finding}`),
+              ``,
+              `Fixer's response: ${closingFix.response}`,
+            ]
+          : []),
+        ...(unresolvedSpecFindings.length > 0
+          ? [
+              ``,
+              `## Spec council — open questions (the build proceeded)`,
+              ...unresolvedSpecFindings.map((finding) => `- ${finding}`),
             ]
           : []),
         ...(stageWarnings.length > 0

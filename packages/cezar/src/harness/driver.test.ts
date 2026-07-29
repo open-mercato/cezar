@@ -52,6 +52,7 @@ function makeHarness(dir: string) {
     qualify: { outcome: 'work_needed', evidence: 'bug reproduced on main' },
     diagnose: { summary: 'race in flushQueued', files: ['src/runs/store.ts'], regressionTest: 'store.replay-race' },
     implement: { changedPaths: ['src/runs/store.ts', 'test/unit/store.test.ts'], suggestedCommit: 'fix(runs): guard replay' },
+    'fix-final': { changedPaths: ['src/runs/store.ts'], summary: 'closing fixes applied' },
     'packet-plan': {
       summary: 'one bounded packet',
       packets: [
@@ -551,7 +552,7 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(ledger?.stage.status).toBe('staged');
   });
 
-  it('stages after maxFixRounds with the surviving findings named, instead of discarding the work', async () => {
+  it('runs the closing fixes after maxFixRounds and stages READY — review > fixes, no publish gate', async () => {
     const h = makeHarness(dir);
     h.agentBehavior.set('review', (req) => {
       writeFileSync(
@@ -570,9 +571,17 @@ describe('harness driver — standard fix-issue graph', () => {
     const error = await runHarnessDriver(h.host, input, h.deps);
     expect(error).toBeNull();
     expect(h.calls.filter((c) => c.id.startsWith('review'))).toHaveLength(3);
+    // The council's last findings get a CLOSING FIX instead of a contested gate.
+    expect(h.calls.map((c) => c.id)).toContain('fix-final');
     expect(h.calls.map((c) => c.id)).toContain('stage');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
-    expect(notes.some((n) => n.includes('fix loop exhausted') && n.includes('still broken'))).toBe(true);
+    expect(notes.some((n) => n.includes('review budget exhausted') && n.includes('still broken'))).toBe(true);
+    expect(notes.some((n) => n.includes('closing fixes applied'))).toBe(true);
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.outcome.status).toBe('ready');
+    expect(ledger?.stage.prBody).toContain('Closing fixes');
+    expect(ledger?.stage.prBody).toContain('still broken');
+    expect(ledger?.decisions.some((d) => d.kind === 'review.closing-fixes')).toBe(true);
   });
 
   /**
@@ -752,8 +761,11 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(error).toBeNull();
     expect(h.calls.filter((c) => c.id.startsWith('review')).length).toBeGreaterThan(1);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
-    expect(ledger?.outcome.status).toBe('contested');
-    expect(ledger?.outcome.blockingReasons.join(' ')).toContain('Auth check removed');
+    // The coercion forces the full fix loop; the closing fix then gets the last
+    // word and the finding rides the handoff instead of gating publishing.
+    expect(h.calls.map((c) => c.id)).toContain('fix-final');
+    expect(ledger?.outcome.status).toBe('ready');
+    expect(ledger?.stage.prBody).toContain('Auth check removed');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('coerced to "request_changes"'))).toBe(true);
   });
@@ -2313,6 +2325,12 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(h.calls.map((c) => c.id)).toContain('stage');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('did not converge') && n.includes('UNRESOLVED'))).toBe(true);
+    // A spec disagreement from the first minutes never gates publishing at the
+    // end: the open questions ride the handoff, the outcome stays ready.
+    const ledger = loadLedger(h.host.dataDir, h.host.runId);
+    expect(ledger?.outcome.status).toBe('ready');
+    expect(ledger?.stage.prBody).toContain('open questions');
+    expect(ledger?.decisions.some((d) => d.kind === 'spec-council.unresolved')).toBe(true);
   });
 
   it('does not retry a timeout on the session path — a spent budget is not bought twice', async () => {
