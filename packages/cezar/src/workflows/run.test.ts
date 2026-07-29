@@ -1028,7 +1028,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
     expect(delivered?.persistedAttachments).toEqual([
       {
         name: 'pasted-1.png',
-        url: `/api/runs/${r.id}/images/pasted-1.png`,
+        url: `/api/v1/runs/${r.id}/images/pasted-1.png`,
         path: join(imagesDir(r.id), 'pasted-1.png'),
       },
     ]);

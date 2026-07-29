@@ -51,7 +51,7 @@ const stepStateSchema = z.object({
 const queuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
-  /** `/api/runs/:id/images/…` URLs — the base64 never enters `runs.json`. */
+  /** `/api/v1/runs/:id/images/…` URLs — the base64 never enters `runs.json`. */
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
 });

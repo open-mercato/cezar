@@ -2481,7 +2481,10 @@ export class RunManager {
           throw err;
         }
         this.queuedImageSeq.set(runId, seq);
-        return { name, url: `/api/runs/${runId}/images/${name}`, path };
+        // Versioned, because that is the only surface served now. The cockpit still upgrades
+        // the unversioned URLs sitting in OLD transcripts when it renders them
+        // (`resolveApiUrl`), but a URL minted today must be fetchable as written.
+        return { name, url: `/api/v1/runs/${runId}/images/${name}`, path };
       }
       return null;
     } catch {
