@@ -72,7 +72,7 @@ is internal for now — installable by others once its surface settles.
   - **Order matters, and the obvious check is vacuous.** `client.ts`'s 74 functions still DECLARE their DTO return type, so `Awaited<ReturnType<typeof getRun>>` is that DTO by construction and proves nothing. The annotations must come off FIRST, then each alias derives from the route. Compare against the server directly — `Ok<Awaited<ReturnType<typeof client.api.v1….$get>>>` — and assert MUTUAL assignability, not one-way.
   - **First measurement, 4 types:** `WorkflowsResponse` and `ConfigResponse` are exact. `ApiRun` and `ProjectsResponse` are **wider than the server's actual return** — safe for readers, but anything CONSTRUCTING one (test fixtures, mocks) may stop compiling when the narrower inferred type replaces it. Expect that to be the bulk of the work, not the aliasing itself. Surveyed: **105 are response-derivable** from `AppType`, 11 request-derivable, 7 are dead exports nothing imports, and **2 cannot be derived** — `RunEvent` and `CheckoutProgressEvent` are SSE frame payloads, which Hono types as `text/event-stream`, so they stay hand-mirrored next to `protocol/`. Remaining blocker: `GroupResponse`/`GroupVariant`/`PickVariantResponse` are declared in `server.ts` and re-mirrored, so they need to become inferred-from-handler first. Note the derived aliases cannot live in the api-client — it builds *before* `packages/cezar`, so importing `AppType` there would invert the build order.
 
-### Phase 4 — Base URL + one-command build/run — **DONE (81 of 83 calls; 2 named exceptions)**
+### Phase 4 — Base URL + one-command build/run — **DONE (83 of 83 calls)**
 - [x] 1. Workspace-aware `dev`/`build`: `scripts/dev.mjs` delegates to workspace scripts, keeps the free-port probe, `CEZ_API_PORT` and either-dies-kills-both. Root build order is api-client → server → web → `check:pack`.
 - [x] 2. `createCezarClient({ baseUrl })` exists and defaults to `''` (same-origin).
 - [x] 3. **The cockpit moved to `/api/v1`** (amended decision 8). Call sites pass ROUTES (`/runs`), and `apiPath` owns the version + project scope — so the version is one fact, not sixty literals. A second helper, `resolveApiUrl`, upgrades server-minted URLs stored in old transcripts. Both EventSources, `runFileRawUrl` and the WebSocket path moved too.
@@ -200,6 +200,36 @@ branded error type when a route has no JSON branch at all, because `Ok<R>` would
 `never` — assignable to every declared return type, i.e. a compile-time guard silently traded for
 a runtime bug. Two calls stay hand-written, both named in the source: `startTodo` (its contract is
 404-before-body-validation, which route middleware cannot express) and `checkoutProject`.
+
+**Closed out, 2026-07-28 (owner follow-ups).** Three things I had recorded as done-or-impossible
+turned out to be neither:
+
+- **Content negotiation is real now.** `Accept` selects the representation on the two mixed-format
+  routes and `Content-Type` confirms it, with `Vary: Accept`. Precedence: an explicitly PRESENT
+  query flag wins (so `?raw=0` is an opt-out a header cannot re-decide), else the best `Accept`
+  match, else the route's OWN established default — deliberately not "JSON by default", because
+  `/repo/commit/:sha`'s no-flag answer has always been the text blob and §2 protects it. `*/*`
+  matches nothing on purpose, so every existing caller is byte-identical. It does NOT simplify the
+  client types: hono's response type is a union of what a handler CAN return and does not vary
+  with the request, so `unwrap`/`OkJson` stay.
+- **ui-state IS typeable — the earlier "unassertable" note was wrong.** The cause was that
+  `readUiState`/`readWorkspaceUiState` were DECLARED `Promise<Record<string, unknown>>`, exactly
+  the `/health` bug. Typing them by the contract made all four routes assertable. One genuine
+  limit remains and is now precise rather than hand-waved: for the two OPEN bags the comparison
+  runs as `Mutual<JSONParsed<Schema>, Route>`, because `c.json` bakes `JSONParsed<T>` into the
+  route and `JSONParsed<unknown>` is hono's `JSONValue`, which zod cannot spell (and `z.json()`
+  hits TS2589 under it). Non-vacuity is PINNED: a drifting named key and a required key the route
+  never sends both fail.
+- **Both remaining hand-written calls migrated.** `checkoutProject` needed no server change at all
+  — `Ok<>` already resolved exactly, and the "variable status" I blamed has no 2xx member so it
+  never entered the union. `startTodo`'s 404-before-body-validation contract was solved by
+  middleware ORDER (`todoMustExist` before `jsonZodValidator`), not by giving up on middleware.
+  That exposed a real bug in `jsonZodValidator`: `{ absent = null }` as a destructuring default
+  silently overwrote an explicitly passed `absent: undefined` — the exact value that route needs.
+  Options are now read by KEY PRESENCE. Caught by tests, not by review.
+
+`mutate`/`get`/`request` are deleted from the cockpit client: with 83 of 83 calls on the typed
+client they had no callers left.
 
 ### Phase 5 — Opt-in remote-access auth — **not started**
 - [ ] 1. `auth.ts` (jwt verify middleware, `POST /api/auth/login`, scrypt verify) + `~/.cezar/` account and secret storage.

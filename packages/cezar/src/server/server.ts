@@ -722,6 +722,10 @@ const startTodoSchema = z
   })
   .optional();
 
+/** Hono env for `POST /todos/:id/start`: the guard in front of that route publishes the resolved
+ *  entry so the handler does not re-read `todos.json` a second time in the same request. */
+type TodoStartEnv = ProjectApiEnv & { Variables: { todo: TodoItem } };
+
 // `POST /api/runs/:id/archive` (#429) — no body archives; `{archived:false}`
 // un-archives. A tiny schema so the route follows the safeParse convention.
 const archiveSchema = z.object({
@@ -790,6 +794,83 @@ const queryValue = z.union([z.string(), z.array(z.string()).transform((v) => v[0
 
 const refreshQuery = z.object({ refresh: queryValue });
 const waitQuery = z.object({ wait: queryValue });
+
+/**
+ * HTTP content negotiation for the two routes that serve more than one FORMAT on one path:
+ * `GET /repo/commit/:sha` (a structured payload or the legacy text blob) and
+ * `GET /runs/:id/files` (a JSON listing/metadata or an image file's BYTES).
+ *
+ * ## Precedence — flag, then Accept, then the route's own default
+ *
+ * 1. **The query flag wins whenever the request carries it.** `?structured=1` and `?raw=1` are the
+ *    live wire and a protected surface (BACKWARD_COMPATIBILITY.md §2); `Accept` is ADDITIVE and
+ *    may never override a caller that said what it wanted in the URL. The flag counts as "carried"
+ *    when the key is PRESENT, so `?raw=0` is an explicit opt-out of the raw representation and not
+ *    an invitation to re-decide from a header.
+ * 2. **Otherwise the best `Accept` match** among the representations that route offers.
+ * 3. **Otherwise the route's established default** — the text blob for `/repo/commit/:sha`, the
+ *    JSON listing for `/runs/:id/files` — i.e. exactly what a pre-Accept client received.
+ *
+ * `*<slash>*` matches NOTHING here, deliberately: it is what `fetch`, `curl` and XHR send when
+ * they have no preference at all, and treating "anything" as a preference would silently change
+ * the default representation of both routes for every existing caller. A browser that navigates to
+ * a worktree image DOES get the bytes, because its `Accept` really does ask for `image/*` at q=1 —
+ * the same protections ride along (image extensions only, size cap, `nosniff`, sandbox CSP).
+ *
+ * Both routes answer `Vary: Accept`, since a cache that ignored the header would serve one
+ * representation for the other.
+ */
+type MediaRange = { type: string; subtype: string; q: number };
+
+function parseAccept(header: string): MediaRange[] {
+  const ranges: MediaRange[] = [];
+  for (const part of header.split(',')) {
+    const [range = '', ...params] = part.split(';');
+    const [type = '', subtype = ''] = range.trim().toLowerCase().split('/');
+    if (type === '' || subtype === '') continue;
+    const weight = params.map((p) => p.trim().toLowerCase()).find((p) => p.startsWith('q='));
+    const parsed = weight === undefined ? 1 : Number.parseFloat(weight.slice(2));
+    const q = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 0), 1) : 0;
+    if (q > 0) ranges.push({ type, subtype, q });
+  }
+  return ranges;
+}
+
+/**
+ * The best of `offers` for this `Accept`, or `null` for "no preference expressed" — which is what
+ * an absent header, a `*<slash>*`-only header and a header naming nothing on offer all mean, and
+ * what leaves the caller on its route's default.
+ *
+ * `offers` is the server's own preference order: an offer may itself be a wildcard (`image/*`,
+ * since the concrete image type is not known until the file is read), and equal q-values go to the
+ * EARLIER offer, so each route lists its default representation first.
+ */
+function negotiate<O extends string>(accept: string | undefined, offers: readonly O[]): O | null {
+  if (accept === undefined) return null;
+  const ranges = parseAccept(accept);
+  let best: { offer: O; q: number } | null = null;
+  for (const offer of offers) {
+    const [type = '', subtype = ''] = offer.split('/');
+    let q = 0;
+    for (const range of ranges) {
+      if (range.type === '*' && range.subtype === '*') continue; // "anything" is not a preference
+      const typeMatches = range.type === type || range.type === '*' || type === '*';
+      const subtypeMatches = range.subtype === subtype || range.subtype === '*' || subtype === '*';
+      if (typeMatches && subtypeMatches && range.q > q) q = range.q;
+    }
+    if (q > 0 && (best === null || q > best.q)) best = { offer, q };
+  }
+  return best?.offer ?? null;
+}
+
+/** What `GET /repo/commit/:sha` offers, DEFAULT FIRST: the legacy `text/plain` blob is what a
+ *  request with no opinion has always received (§2), so it also wins an Accept tie. */
+const COMMIT_FORMATS = ['text/plain', 'application/json'] as const;
+
+/** What `GET /runs/:id/files` offers, DEFAULT FIRST. `image/*` rather than a concrete type: which
+ *  image type the bytes are is only known once the path resolves, and the raw branch refuses
+ *  everything that is not an image anyway. */
+const FILE_FORMATS = ['application/json', 'image/*'] as const;
 
 /** Workspace-root writability probe (multi-project spec, "API Contracts"):
  *  optional `mkdir -p`, `access W_OK`, then a real create/delete round-trip — W_OK alone
@@ -2776,9 +2857,18 @@ export function createApp(deps: ServerDeps) {
     // image files only, for the preview's inline <img> — never HTML/JS/etc., so
     // no worktree file can become a same-origin document, and never past the
     // size cap. The no-script CSP neutralizes SVG opened as a top-level URL.
+    //
+    // An `Accept` that asks for images reaches the same raw branch without the flag — which is
+    // what an `<img>` sends — while the flag still wins whenever it is present and `*<slash>*`
+    // (every `fetch`) still gets the JSON listing. See `negotiate`.
     .get('/runs/:id/files', queryZodValidator(z.object({ path: queryValue, raw: queryValue })), async (c) => {
       const { store } = c.get('project');
       const query = c.req.valid('query');
+      c.header('vary', 'Accept');
+      const wantsRaw =
+        query.raw !== undefined
+          ? query.raw === '1'
+          : negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*';
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const worktree = worktreeOf(run);
@@ -2797,23 +2887,28 @@ export function createApp(deps: ServerDeps) {
           entries: result.entries,
         });
       }
-      if (query.raw === '1') {
+      if (wantsRaw) {
         const mime = imageMimeType(result.path);
-        if (!mime) return c.json({ error: `raw serving is limited to images: ${result.path}` }, 409);
-        if (result.tooLarge) {
-          return c.json(
-            {
-              error: `file too large to serve raw (${result.size} bytes): ${result.path}`,
-            },
-            409,
-          );
+        if (mime === null || result.tooLarge) {
+          // `?raw=1` ASKED for bytes, so it hears why it cannot have them — that 409 and its
+          // wording are the protected surface (§2). An `Accept` is only a preference, so a
+          // resource with no image representation falls THROUGH to the JSON answer below rather
+          // than turning a browser's navigation to a text file into an error.
+          if (query.raw !== undefined) {
+            const error =
+              mime === null
+                ? `raw serving is limited to images: ${result.path}`
+                : `file too large to serve raw (${result.size} bytes): ${result.path}`;
+            return c.json({ error }, 409);
+          }
+        } else {
+          const bytes = await readFile(join(worktree, result.path));
+          return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
+            'content-type': mime,
+            'x-content-type-options': 'nosniff',
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          });
         }
-        const bytes = await readFile(join(worktree, result.path));
-        return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
-          'content-type': mime,
-          'x-content-type-options': 'nosniff',
-          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-        });
       }
       return c.json({
         type: 'file' as const,
@@ -3062,6 +3157,28 @@ export function createApp(deps: ServerDeps) {
     });
 
   const reclaimBodySchema = z.object({}).passthrough();
+
+  /**
+   * "The inbox is on and this entry exists" — the 409/404 half of `POST /todos/:id/start`, lifted
+   * out of the handler and in FRONT of the body validator.
+   *
+   * That position is the whole point. The route's contract is that an unknown id 404s before the
+   * body is looked at, and Hono only records a body in the route type when it is validated as
+   * MIDDLEWARE — which necessarily runs before the handler. Registering this guard first satisfies
+   * both: the documented status order is unchanged, and `startTodoSchema` becomes visible to
+   * `AppType` (and so to `hc`) instead of being parsed invisibly inside the handler.
+   *
+   * Deliberately NOT annotated with a return type: the inferred one carries the two typed
+   * responses, which is what keeps the 409 and 404 branches in the route's schema for the client.
+   */
+  const todoMustExist = async (c: Context<TodoStartEnv, '/todos/:id/start'>, next: Next) => {
+    if (!capabilities().followups) return c.json({ error: FOLLOWUPS_OFF }, 409);
+    const todo = (await readTodos(c.get('project').dataDir)).find((t) => t.id === c.req.param('id'));
+    if (!todo) return c.json({ error: 'not found' }, 404);
+    c.set('todo', todo);
+    await next();
+  };
+
   // ---- chained family: follow-up inbox / todos (project-scoped) ----
   const todosRoutes = new Hono<ProjectApiEnv>()
     .get('/todos', async (c) => c.json(capabilities().followups ? await readTodos(c.get('project').dataDir) : []))
@@ -3076,36 +3193,26 @@ export function createApp(deps: ServerDeps) {
 
     // "▶ Run": turn an inbox entry into a task — a one-off single-step workflow
     // around the suggested skill when it exists, plain quick-task otherwise.
-    // The ONE mutating route that still parses its body in the handler, deliberately. Body
-    // validation as middleware necessarily runs BEFORE the handler, and this route's contract
-    // (pinned by todos-start.test.ts) is that an unknown id answers 404 *before* the body is
-    // looked at. A validator cannot express "404 first", so `hc` does not see this body — the
-    // cost of keeping the documented status order.
-    .post('/todos/:id/start', async (c) => {
+    //
+    // TWO middlewares, and their ORDER is the contract. This route's documented status order
+    // (pinned by todos-start.test.ts) is that a disabled inbox 409s and an unknown id 404s BEFORE
+    // the body is looked at — which is why the body used to be parsed inline, invisible to `hc`.
+    // Hono runs route middleware in registration order, so `todoMustExist` FIRST keeps that order
+    // exactly while `jsonZodValidator` second is what records the body in the route type.
+    //
+    // The two no-body cases the old inline parse distinguished are carried by the validator's
+    // `absent`/`malformed` options: no body at all is `undefined` (the pre-#401 bodyless POST,
+    // which the optional schema accepts → 201), a truncated payload is `null` (which it rejects
+    // → 400, rather than passing as "no body" and silently starting a run).
+    .post(
+      '/todos/:id/start',
+      todoMustExist,
+      jsonZodValidator(startTodoSchema, { absent: undefined, malformed: null }),
+      async (c) => {
         const { root: repoRoot, dataDir, manager } = c.get('project');
-        if (!capabilities().followups) return c.json({ error: FOLLOWUPS_OFF }, 409);
         const id = c.req.param('id');
-        const todo = (await readTodos(dataDir)).find((t) => t.id === id);
-        if (!todo) return c.json({ error: 'not found' }, 404);
-
-        // Body is optional and read exactly once (runner/model #401 + prompt #413 share it). A
-      // request with none at all (the pre-pills/pre-composer client) stays `undefined`, same as an
-      // empty `{}`. A body that IS present but is not valid JSON becomes `null`, which the schema
-      // rejects → 400; mapping it to `undefined` too would let a broken payload pass as "no body"
-      // and silently 201.
-      const rawBody = await c.req.text().catch(() => '');
-      let body: unknown;
-      if (rawBody.trim().length > 0) {
-        try {
-          body = JSON.parse(rawBody);
-        } catch {
-          body = null;
-        }
-      }
-      const parsed = startTodoSchema.safeParse(body);
-      if (!parsed.success) {
-        return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
-      }
+        const todo = c.get('todo');
+        const parsed = { data: c.req.valid('json') };
         if (todo.startedTaskId) return c.json({ error: 'already started' }, 409);
 
         let task = todoTaskText(todo);
@@ -3531,10 +3638,20 @@ export function createApp(deps: ServerDeps) {
     // shape `{sha, subject, author, when, files, stat}` with 409 + reason on failure. The
     // legacy text answer below is a protected surface (BACKWARD_COMPATIBILITY.md §2) — its
     // shape, including the in-band failure sentences, stays exactly as it was.
+    //
+    // `Accept: application/json` reaches the same structured answer without the flag, and
+    // `Accept: text/plain` asks for the blob; the flag still wins whenever it is present, and a
+    // request with no opinion still gets the blob. See `negotiate`.
     .get('/repo/commit/:sha', queryZodValidator(z.object({ structured: queryValue })), async (c) => {
       const { root: repoRoot } = c.get('project');
+      c.header('vary', 'Accept');
+      const { structured } = c.req.valid('query');
+      const wantsJson =
+        structured !== undefined
+          ? structured === '1'
+          : negotiate(c.req.header('accept'), COMMIT_FORMATS) === 'application/json';
       const info = await getRepoInfo(repoRoot);
-      if (c.req.valid('query').structured === '1') {
+      if (wantsJson) {
         if (!info) return c.json({ error: 'not a git repository' }, 409);
         const result = await collectCommitChanges(info.root, c.req.param('sha'));
         if (!result.ok) return c.json({ error: result.error }, 409);

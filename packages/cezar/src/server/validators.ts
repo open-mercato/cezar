@@ -40,6 +40,18 @@ type JsonOptions = ErrorOptions & {
    * tolerate no body at all pass `{}` here, and the rest keep rejecting it exactly as they did.
    */
   absent?: unknown;
+  /**
+   * What a body that is PRESENT but not parseable as JSON becomes. Defaults to `absent`, which is
+   * what every route wants when both cases are rejected anyway.
+   *
+   * `POST /todos/:id/start` is the one route that must tell them apart: no body at all is the
+   * pre-#401 bodyless POST and has to succeed (`absent: undefined`, which its optional schema
+   * accepts), while a truncated payload must 400 rather than pass as "no body" and silently 201
+   * (`malformed: null`, which it does not). That distinction lived in the handler's own
+   * `JSON.parse` before the route moved its body onto a validator; it is expressed here so the
+   * behaviour moved with it rather than being lost in the move.
+   */
+  malformed?: unknown;
 };
 
 /**
@@ -84,8 +96,14 @@ export function jsonZodValidator<
   // a GENERIC thunk is worse than either, since an unresolved schema type makes Hono drop the
   // route from the app type silently (see typed-bodies.test.ts).
   schema: S | (() => S),
-  { absent = null, message }: JsonOptions = {},
+  options: JsonOptions = {},
 ): JsonValidator<S, E, P> {
+  // Key presence, not a destructuring default: `undefined` IS a meaningful value for both of
+  // these (it is what `POST /todos/:id/start` wants a bodyless request to parse as), and a
+  // `= null` default would silently overwrite exactly that case.
+  const absent = 'absent' in options ? options.absent : null;
+  const malformed = 'malformed' in options ? options.malformed : absent;
+  const { message } = options;
   const check = (input: unknown, c: Context) => {
     const resolved = typeof schema === 'function' ? schema() : schema;
     const parsed = resolved.safeParse(input);
@@ -111,7 +129,7 @@ export function jsonZodValidator<
         body = JSON.parse(text);
         parseable = true;
       } catch {
-        body = absent;
+        body = malformed;
       }
     }
     const contentType = c.req.header('content-type');

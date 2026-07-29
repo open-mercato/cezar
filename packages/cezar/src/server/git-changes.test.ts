@@ -585,6 +585,99 @@ describe('session git API routes', () => {
     expect(res.status).toBe(409);
   });
 
+  // ---- content negotiation on /files: `Accept` as the ADDITIVE fallback to `?raw=` ----------
+  //
+  // Precedence is flag → Accept → the route's JSON default (see `negotiate` in server.ts). The
+  // flag half above is unchanged and stays the live wire; these pin the other two rungs.
+
+  const files = (query: string, accept?: string) =>
+    apiRequest(app, `/api/v1/runs/${run.id}/files?${query}`, {
+      ...(accept === undefined ? {} : { headers: { accept } }),
+    });
+
+  it('GET /files with an image Accept serves the bytes without any raw flag', async () => {
+    writeFileSync(join(worktree, 'logo.png'), PNG);
+    // What an <img> actually sends: several concrete image types, `image/*`, then `*/*;q=0.8`.
+    const res = await files(
+      'path=logo.png',
+      'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('content-security-policy')).toContain('sandbox');
+    expect(res.headers.get('vary')).toBe('Accept');
+    expect(Buffer.from(await res.arrayBuffer()).equals(PNG)).toBe(true);
+  });
+
+  it('GET /files with `*/*` — every fetch/XHR — still gets the JSON metadata', async () => {
+    writeFileSync(join(worktree, 'logo.png'), PNG);
+    const res = await files('path=logo.png', '*/*');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect((await res.json()) as object).toMatchObject({ type: 'file', path: 'logo.png' });
+  });
+
+  it('GET /files with no Accept at all keeps the JSON default', async () => {
+    writeFileSync(join(worktree, 'logo.png'), PNG);
+    const res = await files('path=logo.png');
+    expect(res.status).toBe(200);
+    expect((await res.json()) as object).toMatchObject({ type: 'file' });
+  });
+
+  it('the raw flag wins over Accept in BOTH directions', async () => {
+    writeFileSync(join(worktree, 'logo.png'), PNG);
+    // Present-but-not-`1` is an explicit opt-out: the image Accept must not re-decide it.
+    const optedOut = await files('path=logo.png&raw=0', 'image/png');
+    expect(optedOut.status).toBe(200);
+    expect((await optedOut.json()) as object).toMatchObject({ type: 'file' });
+    // And `raw=1` still serves bytes to a caller asking for JSON.
+    const optedIn = await files('path=logo.png&raw=1', 'application/json');
+    expect(optedIn.status).toBe(200);
+    expect(optedIn.headers.get('content-type')).toBe('image/png');
+  });
+
+  it('an image Accept on a directory is still the JSON listing', async () => {
+    const res = await files('path=', 'image/*');
+    expect(res.status).toBe(200);
+    expect((await res.json()) as object).toMatchObject({ type: 'dir', path: '' });
+  });
+
+  it('an image Accept on a NON-image falls back to JSON — only `raw=1` earns the 409', async () => {
+    writeFileSync(join(worktree, 'page.html'), '<script>alert(1)</script>\n');
+    // A preference the resource cannot satisfy is not an error: a browser navigating here (its
+    // Accept lists image/avif & co at q=1) must still see the metadata it saw before.
+    const negotiated = await files('path=page.html', 'image/avif,image/webp,image/*,*/*;q=0.8');
+    expect(negotiated.status).toBe(200);
+    expect((await negotiated.json()) as object).toMatchObject({ type: 'file', path: 'page.html' });
+    // The flag still says why, verbatim — that 409 is the protected surface.
+    const asked = await files('path=page.html&raw=1', 'image/*');
+    expect(asked.status).toBe(409);
+    expect(((await asked.json()) as { error: string }).error).toContain('limited to images');
+  });
+
+  it('an over-cap image negotiates back to JSON, but `raw=1` still 409s with the size reason', async () => {
+    const huge = Buffer.alloc(FILE_CONTENT_CAP + 1);
+    PNG.copy(huge);
+    writeFileSync(join(worktree, 'huge.png'), huge);
+    const negotiated = await files('path=huge.png', 'image/*');
+    expect(negotiated.status).toBe(200);
+    expect((await negotiated.json()) as object).toMatchObject({ type: 'file', tooLarge: true });
+    const asked = await files('path=huge.png&raw=1', 'image/*');
+    expect(asked.status).toBe(409);
+    expect(((await asked.json()) as { error: string }).error).toContain('too large');
+  });
+
+  it('q-values decide when a request asks for both representations', async () => {
+    writeFileSync(join(worktree, 'logo.png'), PNG);
+    const wantsJson = await files('path=logo.png', 'image/png;q=0.2, application/json;q=0.9');
+    expect(wantsJson.headers.get('content-type')).toContain('application/json');
+    const wantsBytes = await files('path=logo.png', 'image/png;q=0.9, application/json;q=0.2');
+    expect(wantsBytes.headers.get('content-type')).toBe('image/png');
+    // `q=0` is a refusal, not a preference — it never selects a representation.
+    const refused = await files('path=logo.png', 'image/png;q=0');
+    expect(refused.headers.get('content-type')).toContain('application/json');
+  });
+
   it('POST git/commit commits everything; a clean tree is a 409, a bad body a 400', async () => {
     writeFileSync(join(worktree, 'feat.txt'), 'feature\n');
     const res = await commit(run.id, { message: 'feat: add feature' });
@@ -832,6 +925,60 @@ describe('repo git API routes (R5 Step 1.3 — main working tree)', () => {
     const invalid = await apiRequest(app, '/api/v1/repo/commit/not-a-sha?structured=1');
     expect(invalid.status).toBe(409);
     expect(((await invalid.json()) as { error: string }).error).toContain('not a commit hash');
+  });
+
+  // ---- content negotiation: `Accept` as the ADDITIVE fallback to `?structured=` --------------
+  //
+  // Precedence is flag → Accept → this route's TEXT default (see `negotiate` in server.ts). The
+  // default deliberately stays the legacy blob: it is the answer every pre-Accept caller gets and
+  // a protected surface (BACKWARD_COMPATIBILITY.md §2), so "JSON by default" was not on offer.
+
+  const commit = (suffix: string, accept?: string) =>
+    apiRequest(app, `/api/v1/repo/commit/${g(repoRoot, 'rev-parse', 'HEAD').trim()}${suffix}`, {
+      ...(accept === undefined ? {} : { headers: { accept } }),
+    });
+
+  it('Accept: application/json reaches the structured answer with no flag at all', async () => {
+    const res = await commit('', 'application/json');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(res.headers.get('vary')).toBe('Accept');
+    const body = (await res.json()) as { sha: string; files: unknown[] };
+    expect(body.sha).toBe(g(repoRoot, 'rev-parse', 'HEAD').trim());
+  });
+
+  it('Accept: text/plain, `*/*` and no header at all all keep the legacy blob', async () => {
+    for (const accept of ['text/plain', '*/*', undefined]) {
+      const res = await commit('', accept);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/plain');
+      expect(await res.text()).toContain('commit ');
+    }
+  });
+
+  it('a browser navigation (text/html …) keeps the legacy blob', async () => {
+    const res = await commit(
+      '',
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    );
+    expect(res.headers.get('content-type')).toContain('text/plain');
+  });
+
+  it('the structured flag wins over Accept in BOTH directions', async () => {
+    const optedOut = await commit('?structured=0', 'application/json');
+    expect(optedOut.headers.get('content-type')).toContain('text/plain');
+    const optedIn = await commit('?structured=1', 'text/plain');
+    expect(optedIn.headers.get('content-type')).toContain('application/json');
+  });
+
+  it('q-values decide when a request asks for both representations', async () => {
+    const wantsText = await commit('', 'application/json;q=0.3, text/plain;q=0.8');
+    expect(wantsText.headers.get('content-type')).toContain('text/plain');
+    const wantsJson = await commit('', 'application/json;q=0.8, text/plain;q=0.3');
+    expect(wantsJson.headers.get('content-type')).toContain('application/json');
+    // Equal weights go to the route's default — the offer list is the server's preference order.
+    const tied = await commit('', 'application/json, text/plain');
+    expect(tied.headers.get('content-type')).toContain('text/plain');
   });
 });
 

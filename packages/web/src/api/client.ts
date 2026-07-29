@@ -104,10 +104,12 @@ import type { AppType } from '@open-mercato/cezar/app-type'
  * carrying the server's own words, and does nothing else: no caching, no retries, no
  * reconnect. Freshness is SSE's job and TanStack Query's (queries.ts, and Step 3.2's reconcile).
  *
- * Two request paths live here during the migration to the typed client: the hand-written
- * `send()`/`request()` pair, and `cez`/`unwrap` below, which check the route against the
- * server's own handlers. Both end in the same `ApiError` contract, so a caller cannot tell
- * which one a given function uses.
+ * Every call goes through the typed client (`cez`/`unwrap` below), which checks the route against
+ * the server's own handlers. Three functions keep their own `fetch` for a reason `hc` cannot
+ * express, and each says which in its own comment: `registerProject` (a 409 is a SUCCESS for the
+ * add-project flow), `requestText` (the routes that answer `text/plain`), and `runFileRawUrl`
+ * (a URL handed to an `<img>`, never fetched). All of them end in the same `ApiError` contract,
+ * so a caller cannot tell which path a given function uses.
  */
 
 /**
@@ -298,36 +300,22 @@ async function send(path: string, init: RequestInit): Promise<Response> {
   return fetchOrThrow(apiPath(path), init)
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await send(path, init)
-  const body = await res.text()
-  if (!res.ok) throw errorFor(res.status, res.statusText, body)
-  const parsed = parseJson(body)
-  if (parsed === undefined) {
-    throw new ApiError(res.status, `the cezar server answered ${apiPath(path)} with a non-JSON body`)
-  }
-  return parsed as T
-}
-
-/** For the endpoints that answer `text/plain` (diffs, the handoff journal). */
+/**
+ * For the endpoints that answer `text/plain` (diffs, the handoff journal).
+ *
+ * These say so in `Accept`. Two of the server's routes now negotiate the representation from that
+ * header when no query flag decides it (`/repo/commit/:sha`, `/runs/:id/files`), and a reader that
+ * wants text should ASK for text rather than rely on a default — `fetch` would otherwise send
+ * `*<slash>*`, which those routes deliberately read as "no preference". None of the callers here
+ * is on a negotiating route today; the header is what keeps that true if one ever moves.
+ */
 async function requestText(path: string, init: RequestInit = {}): Promise<string> {
-  const res = await send(path, init)
+  const headers = new Headers(init.headers)
+  headers.set('accept', 'text/plain')
+  const res = await send(path, { ...init, headers })
   const body = await res.text()
   if (!res.ok) throw errorFor(res.status, res.statusText, body)
   return body
-}
-
-function get<T>(path: string, opts: ReadOptions = {}): Promise<T> {
-  return request<T>(path, { method: 'GET', signal: opts.signal })
-}
-
-function mutate<T>(method: string, path: string, body?: unknown): Promise<T> {
-  return request<T>(path, {
-    method,
-    ...(body === undefined
-      ? {}
-      : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-  })
 }
 
 const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent(id)}${suffix}`
@@ -843,17 +831,18 @@ export async function registerProject(root: string): Promise<RegisterProjectResp
  * Clone a GitHub repo into the checkout root and register it (`POST /api/projects/checkout`,
  * step 4.3).
  *
- * Ordinary `mutate()`, unlike `registerProject` above: every non-2xx here IS a failure the
- * dialog must show (a 409 means the target folder exists, and there is no entry to navigate
- * to). `mutate` already surfaces the server's `{ error }` string as the ApiError message, which
- * is exactly what the dialog renders — a clone fails for reasons only the server can name.
+ * On the typed client, unlike `registerProject` above: every non-2xx here IS a failure the dialog
+ * must show (a 409 means the target folder exists, and there is no entry to navigate to), so
+ * `unwrap`'s ordinary contract is the right one. It surfaces the server's `{ error }` string as
+ * the ApiError message, which is exactly what the dialog renders — a clone fails for reasons only
+ * the server can name.
  *
  * No timeout of our own: cloning a large repo legitimately takes minutes, and the request is
  * what the dialog waits on. Progress meanwhile comes from `checkout-progress` on the workspace
  * stream, keyed by `input.checkoutId`.
  */
-export function checkoutProject(input: CheckoutProjectInput): Promise<RegisterProjectResponse> {
-  return mutate<RegisterProjectResponse>('POST', '/projects/checkout', input)
+export async function checkoutProject(input: CheckoutProjectInput): Promise<RegisterProjectResponse> {
+  return unwrap(await cez.api.v1.projects.checkout.$post({ json: input }), '/projects/checkout')
 }
 
 /**
@@ -861,7 +850,7 @@ export function checkoutProject(input: CheckoutProjectInput): Promise<RegisterPr
  *
  * Registry-only by contract — the server deletes NOTHING under the project root — so this
  * never needs an "are you sure you have a backup" ceremony beyond the pane's own confirm.
- * Ordinary `mutate()`: the 409s (running tasks, the boot project) are real failures whose
+ * Ordinary `unwrap`: the 409s (running tasks, the boot project) are real failures whose
  * `{ error }` message is what the pane shows, and `errorFor` already surfaces it.
  */
 export async function removeProject(projectId: string): Promise<RemoveProjectResponse> {
@@ -1030,17 +1019,25 @@ export interface StartTodoOptions {
  *  answers 201 with the new run. 409 when the entry was already started. An optional
  *  runner/model (#401) picks the engine and an optional `prompt` (#413) appends instructions;
  *  with neither, sends no body at all — the pre-#401/#413 bodyless POST, kept for compat. */
-export function startTodo(id: string, opts: StartTodoOptions = {}): Promise<StartTodoResponse> {
-  const body: Record<string, unknown> = {}
-  if (opts.runner !== undefined) body.runner = opts.runner
-  if (opts.model !== undefined) body.model = opts.model
-  if (opts.prompt !== undefined) body.prompt = opts.prompt
+export async function startTodo(
+  id: string,
+  opts: StartTodoOptions = {},
+): Promise<StartTodoResponse> {
+  const body = {
+    ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+    ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.prompt !== undefined ? { prompt: opts.prompt } : {}),
+  }
   // No override → no body at all, exactly the bodyless POST this endpoint has always sent
-  // (`continueRun` posts `{}` because it always carried one). The server tolerates either.
-  return mutate<StartTodoResponse>(
-    'POST',
+  // (`continueRun` posts `{}` because it always carried one). The server tolerates either, and
+  // `hc` sends nothing for an `undefined` json — no body AND no content-type, which is the same
+  // request `mutate(…, undefined)` used to build.
+  return unwrap(
+    await cez.api.v1.p[':projectId'].todos[':id'].start.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: Object.keys(body).length > 0 ? body : undefined,
+    }),
     `/todos/${encodeURIComponent(id)}/start`,
-    Object.keys(body).length > 0 ? body : undefined,
   )
 }
 

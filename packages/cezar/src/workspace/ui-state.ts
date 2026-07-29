@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import type { WorkspaceUiState } from '@open-mercato/cezar-contract';
 import { workspaceUiStatePath } from '../paths.ts';
 import { atomicWriteJsonSync } from './config.ts';
 
@@ -14,12 +15,17 @@ import { atomicWriteJsonSync } from './config.ts';
  */
 
 /** Read `~/.cezar/ui-state.json` on demand — never cached, never throws.
- *  Missing, unreadable, malformed, or non-object all degrade to `{}`. */
-export async function readWorkspaceUiState(): Promise<Record<string, unknown>> {
+ *  Missing, unreadable, malformed, or non-object all degrade to `{}`.
+ *
+ *  Typed by the CONTRACT (`WorkspaceUiState`) for the same reason as its per-repo twin in
+ *  `src/ui-state.ts`: `GET /api/v1/workspace/ui-state` answers this value verbatim, so a loose
+ *  record left the route naming no key. The schema is a `z.looseObject`, so unknown prefs keep
+ *  round-tripping (BACKWARD_COMPATIBILITY.md §3) — the type only adds the known names. */
+export async function readWorkspaceUiState(): Promise<WorkspaceUiState> {
   try {
     const parsed: unknown = JSON.parse(await readFile(workspaceUiStatePath(), 'utf8'));
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
+      ? (parsed as WorkspaceUiState)
       : {};
   } catch {
     return {};
@@ -36,8 +42,8 @@ export async function readWorkspaceUiState(): Promise<Record<string, unknown>> {
  * degrading is the caller's policy, per house rules.
  */
 export async function mergeWriteWorkspaceUiState(
-  mutator: (state: Record<string, unknown>) => Record<string, unknown> | void,
-): Promise<Record<string, unknown>> {
+  mutator: (state: WorkspaceUiState) => WorkspaceUiState | void,
+): Promise<WorkspaceUiState> {
   const current = await readWorkspaceUiState();
   const next = mutator(current) ?? current;
   atomicWriteJsonSync(workspaceUiStatePath(), next);

@@ -12,7 +12,23 @@
   (`@open-mercato/cezar-api-client`) describe the whole API, and what makes a future `v2` an
   additive mount rather than an edit to every route.
 
+## ✨ Features
+- ✨ **The two mixed-format routes do real HTTP content negotiation.** `GET /api/v1/repo/commit/:sha`
+  (legacy text blob or structured commit payload) and `GET /api/v1/runs/:id/files` (JSON listing or
+  an image's raw bytes) now honour the request's `Accept` header, answer `Vary: Accept`, and set a
+  `Content-Type` confirming what they actually sent. Purely additive: the `?structured=`/`?raw=`
+  flags still decide whenever the request carries one, `*/*` (what `fetch` and `curl` send) is read
+  as "no preference" and keeps each route's existing default, so every current caller's answer is
+  byte-identical. What is new is that a client that really does ask — an `<img>`, a browser
+  navigation — gets the other representation without the flag, under the same allowlist, size cap
+  and sandbox CSP as before.
+
 ## 🔧 Changed
+- Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
+  Its body used to be parsed inside the handler to keep "unknown id 404s before the body is
+  validated"; a small existence guard registered *before* the body validator keeps that status
+  order while the body becomes part of the route type. A bodyless POST still 201s and a malformed
+  one still 400s.
 - **Validation errors (`400 {error}`) are worded differently and now name the field.** Two causes:
   zod 4 rewrote its default messages (`Required` → `Invalid input: expected string, received
   undefined`), and each issue is now prefixed with its path — `task: must be at most 100000
