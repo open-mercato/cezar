@@ -27,7 +27,6 @@
     "server-install": "npm run server-install -w @open-mercato/cezar --",
     "server-deploy": "npm run server-deploy -w @open-mercato/cezar --",
     "server-uninstall": "npm run server-uninstall -w @open-mercato/cezar --",
-    "pretest": "npm run build:client",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "npm run test:unit -w @open-mercato/cezar",
