@@ -200,8 +200,6 @@ describe('ClaudeCliRunner EOF watchdog', () => {
       await writeFile(
         bin,
         `#!/usr/bin/env node
-// Simulates the CLI bug: finishes a turn, then ignores stdin EOF and hangs
-// until SIGTERMed — exiting 143 exactly like the real CLI does.
 setInterval(() => {}, 60_000);
 process.on('SIGTERM', () => process.exit(143));
 process.stdin.resume();

@@ -101,11 +101,8 @@ export function modelsForRunner(
   customIds: readonly (string | null | undefined)[] = [],
 ): readonly ModelPreset[] {
   const base = [...(MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude)]
-  // claude has no discovery adapter — its tier presets ARE the catalog.
   if (runner === 'claude') return base
   const seen = new Set(base.map((model) => model.id))
-  // Merge live discovery only from the catalog fetched FOR this runner — a
-  // codex catalog must never leak entries into the opencode picker.
   if (catalog?.runner === runner) {
     for (const model of catalog.models) {
       if (!model.id || seen.has(model.id)) continue
@@ -308,12 +305,8 @@ export interface HarnessModelOption extends HarnessModelRef {
   family: string
 }
 
-/** Gateways that resell other vendors' weights: the `provider/` prefix of such an
- *  id is a routing detail, never a family. */
 const GATEWAY_PREFIXES: ReadonlySet<string> = new Set(['opencode', 'openrouter', 'zen'])
 
-/** Weight lineage by model name — two models behind one gateway can be genuinely
- *  different, and one vendor reached through two gateways is still one vendor. */
 const FAMILY_BY_NAME: ReadonlyArray<[RegExp, string]> = [
   [/^glm/i, 'zhipu'],
   [/^kimi/i, 'moonshot'],
@@ -349,11 +342,8 @@ export function modelFamilyOf(ref: HarnessModelRef): string {
   const prefix = slash > 0 ? ref.model.slice(0, slash) : ''
   const bare = slash > 0 ? ref.model.slice(slash + 1) : ref.model
 
-  // A non-gateway prefix IS the provider; trust it over the name table.
   if (prefix && !GATEWAY_PREFIXES.has(prefix.toLowerCase())) return prefix.toLowerCase()
 
-  // The runner implies the vendor for the first-party CLIs — but only as a
-  // FALLBACK, so gateway-resold Anthropic still collapses into `anthropic`.
   const runnerFallback =
     ref.runner === 'claude' ? 'anthropic'
     : ref.runner === 'codex' ? 'openai'
@@ -425,9 +415,6 @@ export function groupHarnessOptions(options: readonly HarnessModelOption[]): Har
   return families.map((family) => ({ family, options: byFamily.get(family)! }))
 }
 
-/** Structural equality of two role selections — the "is this preset active" test. Reviewer
- *  order matters (it is the council's run order), and effort counts: a preset restores the
- *  whole dial, not just the models. Uniqueness (`sameRef`) deliberately ignores effort. */
 const sameSelection = (a: HarnessModelRef, b: HarnessModelRef) =>
   sameRef(a, b) && a.effort === b.effort
 
@@ -514,10 +501,6 @@ export function normalizeHarnessPresets(raw: unknown): HarnessPreset[] {
 
 const HARNESS_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'max']
 
-/** Copy a ref keeping only a VALID effort — stale/hand-edited values drop silently.
- *  An advisor ref's `family` is preserved: it IS the ref's identity (the
- *  diversity axis), and dropping it turned a saved advisor reviewer into an
- *  unresolvable one. */
 function sanitizeRef(ref: HarnessModelRef): HarnessModelRef {
   const effort = typeof ref.effort === 'string' && HARNESS_EFFORTS.includes(ref.effort) ? ref.effort : undefined
   return {
@@ -544,18 +527,11 @@ function isModelRefShape(raw: unknown): raw is HarnessModelRef {
   const ref = raw as HarnessModelRef
   if (typeof ref.model !== 'string') return false
   if (ref.runner === 'harness') {
-    // An advisor without its family cannot be resolved back to a binding.
     return typeof ref.family === 'string' && ref.family !== ''
   }
   return ['claude', 'codex', 'opencode'].includes(ref.runner)
 }
 
-/**
- * A sound default selection from what this workspace actually offers, or null when fewer
- * than two families exist — the "configure more models first" modal case. Orchestrator
- * prefers claude (the long-context host); implementer prefers a different family; reviewers
- * take one model from each of the first two families.
- */
 /**
  * Warn when a free-tier gateway model is bound to a reviewer slot.
  *
@@ -568,7 +544,6 @@ function isModelRefShape(raw: unknown): raw is HarnessModelRef {
  */
 export function freeTierReviewerWarning(roles: HarnessRoles | null): string | null {
   if (!roles) return null
-  // The `-free` suffix is the OpenCode Zen catalog's own marker for the tier.
   const free = roles.reviewers.filter((r) => /-free$/.test(r.model))
   if (free.length === 0) return null
   const names = [...new Set(free.map((r) => r.model))].join(', ')
@@ -576,14 +551,11 @@ export function freeTierReviewerWarning(roles: HarnessRoles | null): string | nu
 }
 
 export function defaultHarnessRoles(allOptions: readonly HarnessModelOption[]): HarnessRoles | null {
-  // Defaults stay runner-backed: advisors are an explicit, configured choice.
   const options = allOptions.filter((o) => o.runner !== 'harness')
   const families = [...new Set(options.map((o) => o.family))]
   if (families.length < 2 || options.length < 2) return null
   const byFamily = (family: string) => options.filter((o) => o.family === family)
   const anthropic = byFamily('anthropic')
-  // The orchestrator reads the most — prefer the long-context tier (sonnet
-  // carries the 1M window) over the family's generic first entry.
   const orchestrator = anthropic.find((o) => o.model === 'sonnet') ?? anthropic[0] ?? options[0]!
   const otherFamily = families.find((f) => f !== orchestrator.family)!
   const implementer = byFamily(otherFamily)[0]!

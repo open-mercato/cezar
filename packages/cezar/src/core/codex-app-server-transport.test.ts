@@ -113,7 +113,6 @@ describe('endCodexAppServer watchdog', () => {
 
       vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
       expect(reported).toBe(1);
-      // The tree teardown owns signalling — the per-child kill is never used.
       expect(signals).toEqual([]);
     } finally {
       vi.useRealTimers();

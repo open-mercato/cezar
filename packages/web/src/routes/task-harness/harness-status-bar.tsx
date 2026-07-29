@@ -55,11 +55,6 @@ export function HarnessStatusBar({
       <span className="shrink-0 font-semibold text-foreground">
         {current ? phaseLabel(current) : 'Starting'}
       </span>
-      {/* Done-count, matching the rail's PHASE aside and the bar below — not the
-          running phase's ordinal. The ordinal read "phase 3 of 3" the moment a
-          3-phase-old run entered its third phase, over a ⅔ bar — sounding
-          finished while barely started (phases are discovered as rounds spawn,
-          so the total grows; a fraction of DONE work stays honest as it does). */}
       <span className="shrink-0 text-soft-foreground tabular-nums">
         · {done}/{phases.length} done
       </span>
@@ -109,8 +104,6 @@ export function HarnessStatusBar({
   )
 }
 
-/** Wall time for one phase. The ledger records timestamps, not a duration —
- *  a phase still running measures to now, so a live run's total keeps moving. */
 function phaseDurationMs(phase: HarnessPhaseRecord): number {
   if (!phase.startedAt) return 0
   const started = Date.parse(phase.startedAt)
@@ -119,9 +112,6 @@ function phaseDurationMs(phase: HarnessPhaseRecord): number {
   return Number.isNaN(ended) ? 0 : Math.max(0, ended - started)
 }
 
-/** Phases grouped into the four stages a harness run actually moves through, so
- *  eighteen rows read as four things. Order follows first appearance, so an
- *  unknown/new phase id lands in the stage it ran in rather than vanishing. */
 const STAGE_OF: ReadonlyArray<[RegExp, string]> = [
   [/^(preflight|capture|qualify|diagnose)/i, 'Preparation'],
   [/spec/i, 'Specification'],
@@ -130,7 +120,6 @@ const STAGE_OF: ReadonlyArray<[RegExp, string]> = [
   [/^stage/i, 'Handoff'],
 ]
 
-/** Wall time attributable to one stage — the sum of its phases. */
 function stageMs(phases: readonly HarnessPhaseRecord[]): number {
   return phases.reduce((sum, phase) => sum + phaseDurationMs(phase), 0)
 }
@@ -169,13 +158,6 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
   const reviewerCount = new Set(
     ledger.councils.flatMap((council) => (council.reviewers ?? []).map((r) => r.id)),
   ).size
-  /**
-   * A council's reviewers, so a review phase can expand in place (mockup 04).
-   *
-   * ONLY for phases that are actually councils — matching on the round alone
-   * attached the round-1 council to Preflight, Capture and every other phase,
-   * because a label without "round N" defaulted to 1.
-   */
   const councilFor = (phase: HarnessPhaseRecord) => {
     const name = `${phase.id} ${phase.name ?? ''}`
     if (!/council|review/i.test(name)) return undefined
@@ -183,8 +165,6 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
     const kind = /spec/i.test(name) ? 'spec' : 'implementation'
     return ledger.councils.find((council) => council.round === round && council.kind === kind)
   }
-  /** What a reviewer spent IN THIS phase. `models[].totalDurationMs` is its
-   *  whole-run total, which read as though every round cost 81 minutes. */
   const reviewerPhaseMs = (phaseId: string, reviewerId: string) =>
     ledger.invocations
       .filter((inv) => inv.phaseId === phaseId && inv.reviewerId === reviewerId)
@@ -204,10 +184,6 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
         </span>
       </div>
 
-      {/* The headline numbers (mockup 04): where a long run's time actually
-          went. Wall clock is the run's span; model time is the sum of the
-          phases, which is smaller when phases overlap and is the honest answer
-          to "how much of this was waiting on models". */}
       <dl className="grid grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-4">
         {[
           ['Wall clock', wallMs > 0 ? elapsed(wallMs) : '—'],
@@ -229,9 +205,6 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
               <span className="text-[10px] font-semibold tracking-[0.07em] text-soft-foreground uppercase">
                 {group.stage}
               </span>
-              {/* One segment per phase, width proportional to its duration and
-                  tinted by how it went — so a stage that burned its time on
-                  retries looks different from one that ran clean. */}
               <span className="flex h-1 min-w-[40px] flex-1 overflow-hidden rounded-full bg-muted">
                 {group.phases.map((phase) => {
                   const share = stageMs(group.phases) > 0
@@ -294,9 +267,6 @@ export function HarnessTimeline({ ledger }: { ledger: HarnessLedgerResponse }) {
                     {phaseDurationMs(phase) > 0 ? elapsed(phaseDurationMs(phase)) : '—'}
                   </span>
                 </li>
-                {/* A council phase opens into the reviewers that ran in it —
-                    the round is where the run's judgement and money went, so it
-                    should not be one opaque row (mockup 04). */}
                 {(councilFor(phase)?.reviewers ?? []).length > 0 ? (
                   <li className="ml-[7px] border-l border-border pl-3.5">
                     <ul className="flex flex-col">

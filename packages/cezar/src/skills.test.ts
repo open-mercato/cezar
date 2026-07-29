@@ -156,7 +156,6 @@ describe('discoverSkills local entrypoints', () => {
     expect(found?.source).toBe('bundled');
     expect(found?.requires).toEqual(['cez-code-review']);
 
-    // A repo-local skill of the same name wins the collision:
     await mkdir(join(repoRoot, '.ai/skills/cez-harness'), { recursive: true });
     await writeFile(join(repoRoot, '.ai/skills/cez-harness/SKILL.md'), '---\nname: cez-harness\n---\nlocal');
     const again = await discoverSkills(repoRoot, { bundledDir: bundled });

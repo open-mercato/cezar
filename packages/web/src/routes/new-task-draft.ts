@@ -34,7 +34,6 @@ export interface NewTaskDraft {
    *  one (user feedback 2026-07-23). null → derived (a harness lastTask lands
    *  on 'multi', everything else on 'task'). */
   composerMode: 'task' | 'multi' | null
-  /** What the Multi-model tab runs. null → fix-issue. */
   harnessMode: 'fix-issue' | 'implement-feature' | null
   /** The role-based model selection (2026-07-24). null → derived defaults from
    *  the available catalog. Kept as picked even while momentarily invalid —

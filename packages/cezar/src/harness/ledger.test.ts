@@ -131,7 +131,6 @@ describe('harness ledger', () => {
     expect(ledger.phases[0]?.status).toBe('done');
     expect(ledger.phases[0]?.endedAt).toBeTruthy();
 
-    // Restarting an existing phase bumps attempts and clears the end mark.
     const again = startPhase(ledger, { id: 'qualify', name: 'Qualify', kind: 'agent' });
     expect(again.attempts).toBe(2);
     expect(again.status).toBe('running');

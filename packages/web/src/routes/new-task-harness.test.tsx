@@ -31,10 +31,7 @@ const roles: HarnessRoles = {
 const noop = () => {}
 
 beforeEach(() => {
-  // cmdk scrolls the selected item into view; jsdom has no scrollIntoView.
   Element.prototype.scrollIntoView = vi.fn()
-  // cmdk sizes its list with a ResizeObserver; jsdom has none and never resizes anything
-  // (the command-palette test's stub, verbatim).
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -73,7 +70,6 @@ describe('HarnessPanel (role-based)', () => {
     expect(onRoles).toHaveBeenCalledWith(
       expect.objectContaining({ reviewers: [...roles.reviewers, { runner: 'claude', model: 'sonnet' }] }),
     )
-    // With exactly two reviewers there is no remove affordance — two is the floor.
     expect(screen.queryByRole('button', { name: /remove reviewer/i })).toBeNull()
   })
 
@@ -130,7 +126,6 @@ describe('ModelPickerPill (grouped + searchable, 2026-07-24)', () => {
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Orchestrator model' }))
-    // Family group headings render.
     expect(screen.getByText('anthropic')).toBeTruthy()
     expect(screen.getByText('deepseek')).toBeTruthy()
     fireEvent.click(screen.getByText(/deepseek-v4/))
@@ -172,7 +167,6 @@ describe('harness presets (2026-07-24)', () => {
         onDeletePreset={noop}
       />,
     )
-    // Current roles deep-equal p1 → its chip reads as active.
     expect(screen.getByRole('button', { name: 'Cheap council' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Other' }))
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ id: 'p2' }))
@@ -220,8 +214,6 @@ describe('harness presets (2026-07-24)', () => {
 })
 
 describe('per-role reasoning effort + add-models (2026-07-24)', () => {
-  // The dial is a segmented control now (mockup 03): the whole scale is visible
-  // instead of hidden behind a dropdown, so the setting reads as a position.
   it('changes a role effort through its dial', () => {
     const onRoles = vi.fn()
     render(<HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={onRoles} options={options} />)
@@ -255,7 +247,6 @@ describe('per-role reasoning effort + add-models (2026-07-24)', () => {
 
   it('states each picked model provider family beside its pill', () => {
     render(<HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={noop} options={options} />)
-    // The council's diversity rule is checkable by eye, not just enforced.
     expect(screen.getAllByText('anthropic').length).toBeGreaterThan(0)
     expect(screen.getAllByText('openai').length).toBeGreaterThan(0)
   })
@@ -272,10 +263,8 @@ describe('per-role reasoning effort + add-models (2026-07-24)', () => {
         onAddModels={onAddModels}
       />,
     )
-    // Panel-level affordance — a real button in the lineup header, not a footnote.
     fireEvent.click(screen.getByRole('button', { name: /add providers/i }))
     expect(onAddModels).toHaveBeenCalledTimes(1)
-    // …and one pinned inside every model menu, immune to search filtering.
     fireEvent.click(screen.getByRole('button', { name: 'Orchestrator model' }))
     fireEvent.change(screen.getByPlaceholderText(/search models/i), { target: { value: 'zzz-no-match' } })
     fireEvent.click(screen.getByRole('button', { name: /add more models/i }))
@@ -349,7 +338,6 @@ describe('preset overflow + explicit cap (2026-07-24)', () => {
     fireEvent.change(screen.getByPlaceholderText(/preset name/i), { target: { value: 'Brand new' } })
     expect(screen.getByText(/12 presets max/i)).toBeTruthy()
     expect((screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement).disabled).toBe(true)
-    // Reusing an existing name replaces in place — allowed at the cap.
     fireEvent.change(screen.getByPlaceholderText(/preset name/i), { target: { value: 'P4' } })
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
     expect(onSave).toHaveBeenCalledWith('P4')
@@ -360,8 +348,6 @@ describe('free-tier reviewer warning', () => {
   const noop = () => {}
 
   it('warns in the lineup when a reviewer is a free-tier model', () => {
-    // Live failure: mimo-v2.5-free burned two 60-minute review budgets and the
-    // council lost that voice. Advisory only — it must not block Start.
     const withFree: HarnessRoles = {
       ...roles,
       reviewers: [

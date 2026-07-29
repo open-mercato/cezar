@@ -48,7 +48,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** The normal packaged answer: the vendored collection is present and pinned. */
 const BUNDLED_RUNTIME = { installed: true, source: 'bundled' as const, commit: 'a'.repeat(40) }
 
 describe('Settings → Harness', () => {
@@ -80,7 +79,6 @@ describe('Settings → Harness', () => {
     })
     mount()
     await waitFor(() => expect(screen.getByText(/no external models configured/i)).toBeTruthy())
-    // standard still works with zero config — the section must say so.
     expect(screen.getByText(/needs no provider config/i)).toBeTruthy()
   })
 

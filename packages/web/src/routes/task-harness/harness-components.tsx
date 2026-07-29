@@ -85,8 +85,6 @@ export function HarnessModelsDock({ ledger }: { ledger: HarnessLedgerResponse })
   return (
     <details
       data-slot="harness-models-dock"
-      // Once every model is idle this becomes reference material, so the transcript gets
-      // the dock space back. An active invocation opens it automatically.
       open={working > 0}
       className="group rounded-xl border border-border bg-card shadow-xs"
     >

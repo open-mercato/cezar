@@ -30,7 +30,6 @@ export function HScroller({
   className?: string
   contentClassName?: string
   ariaLabel?: string
-  /** Pixels per arrow press. */
   step?: number
 } & Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'className'>) {
   const ref = useRef<HTMLDivElement>(null)
@@ -40,8 +39,6 @@ export function HScroller({
   const measure = useCallback(() => {
     const el = ref.current
     if (!el) return
-    // 1px of slack: fractional layout widths otherwise leave a permanently
-    // "scrollable" strip that can't actually move.
     const max = el.scrollWidth - el.clientWidth
     setAtStart(el.scrollLeft <= 1)
     setAtEnd(el.scrollLeft >= max - 1)
@@ -51,11 +48,6 @@ export function HScroller({
     const el = ref.current
     if (!el) return
     measure()
-    // Content changes (a tab appears when a run becomes a harness run) matter as
-    // much as viewport changes, so observe both the strip and its children.
-    // ResizeObserver is absent in jsdom and in older browsers; a window resize
-    // listener is a coarser but sufficient fallback — never let a progressive
-    // enhancement throw during render.
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', measure)
       return () => window.removeEventListener('resize', measure)
@@ -81,8 +73,6 @@ export function HScroller({
         ref={ref}
         onScroll={measure}
         aria-label={ariaLabel}
-        // `overflow-y-hidden` is the fix for the stray corner square: a box that
-        // can scroll on both axes gets a scrollbar gutter intersection drawn.
         className={cn(
           'flex min-w-0 flex-1 items-end gap-1 overflow-x-auto overflow-y-hidden scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
           contentClassName,

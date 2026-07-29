@@ -73,7 +73,6 @@ describe('councilQuorum', () => {
   });
 
   it('refuses when the survivors collapse to a single family — independence is the point', () => {
-    // Two completed, but both anthropic: no cross-family check happened.
     const q = councilQuorum(
       [
         done('claude/opus', 'claude'),
@@ -110,8 +109,6 @@ describe('councilQuorum', () => {
 
 describe('isRetryableReviewerFailure', () => {
   it('does not retry a timeout — the budget is already spent', () => {
-    // Observed live: two consecutive 60-minute timeouts on the same reviewer,
-    // costing two hours to learn the same thing twice.
     expect(isRetryableReviewerFailure('opencode timed out after 60m and was killed')).toBe(false);
     expect(isRetryableReviewerFailure('POST /session/x/message timed out after 3600000ms')).toBe(false);
   });

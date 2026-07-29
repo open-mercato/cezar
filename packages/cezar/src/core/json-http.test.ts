@@ -18,7 +18,6 @@ import { jsonRequest } from './json-http.js';
 
 let server: Server | null = null;
 
-/** Answers after `delayMs`, so a request can be made to outlive its deadline. */
 function slowServer(delayMs: number, status = 200, payload = '{"ok":true}'): Promise<string> {
   return new Promise((resolve) => {
     server = createServer((_req, res) => {
@@ -58,7 +57,6 @@ describe('jsonRequest', () => {
     await expect(
       jsonRequest(`${base}/session/x/message`, { method: 'POST', body: {}, timeoutMs: 250 }),
     ).rejects.toThrow(/timed out after 250ms/);
-    // Failed on OUR deadline, not something else's.
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
@@ -83,7 +81,6 @@ describe('jsonRequest', () => {
   });
 
   it('surfaces a connection failure as a real error, not a timeout', async () => {
-    // Nothing is listening on this port.
     await expect(
       jsonRequest('http://127.0.0.1:1/session/x/message', { method: 'POST', body: {}, timeoutMs: 2_000 }),
     ).rejects.toThrow(/ECONNREFUSED|connect/i);

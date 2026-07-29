@@ -192,10 +192,6 @@ export function NewTaskRoute() {
   const projectList = projects.data?.projects ?? []
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
-  // The Task tab's catalog: harness workflows live in the Multi-model tab only. The RAW
-  // resolution (unfiltered) is still consulted once — a legacy draft/lastTask that names a
-  // harness workflow lands the composer on the Multi-model tab instead of silently mapping
-  // to some other source.
   const taskWorkflows = withoutHarnessWorkflows(workflowList)
   const rawSource = resolveSource([draft.source, uiState.data?.lastTask], skillList, workflowList)
   const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, taskWorkflows)
@@ -274,8 +270,6 @@ export function NewTaskRoute() {
     }
   }, [providersReady])
 
-  // Every model a harness role can run on: each connected backend × its model catalog, with
-  // the provider family precomputed (the strictly-multi-model rule's diversity axis).
   const codexCatalogData = codexCatalog.data
   const opencodeCatalogData = opencodeCatalog.data
   // Configured agentHarness advisor bindings (kimi-subscription, deepseek-api…)
@@ -313,7 +307,6 @@ export function NewTaskRoute() {
     () => [...new Set(harnessOptions.filter((o) => o.runner === 'harness').map((o) => o.family))],
     [harnessOptions],
   )
-  /** Null while the workspace cannot field a council — the setup-dialog case. */
   const harnessRoles = draft.harnessRoles ?? defaultHarnessRoles(harnessOptions)
   const harnessBlocked = harnessRoles === null
   // The composer always probes the custom lineup (2026-07-27: the named execution profiles
@@ -360,9 +353,6 @@ export function NewTaskRoute() {
       { id: crypto.randomUUID(), name, roles: harnessRoles },
     ])
   }
-  /** The dialog's primary action: prefill the interactive setup task right in the Task tab —
-   *  no navigation hop, the Start button is one click away. Runs in the repo working tree
-   *  (`harnessSetupPrefill`) so the staged config lands where the human reviews it. */
   const startHarnessSetup = () => {
     setHarnessSetupOpen(false)
     update(harnessSetupPrefill())
@@ -531,9 +521,6 @@ export function NewTaskRoute() {
       throw new Error('Still loading workflows and skills — try again in a second.')
     }
     if (composerMode === 'multi') {
-      // The Multi-model tab has its own, narrower submit: the harness driver conducts the
-      // phases (plan-first is meaningless) and variants are forbidden server-side. The role
-      // rules gate through the composer's rejection path — same rules the server re-checks.
       if (harnessBlocked || harnessRoles === null) {
         setHarnessSetupOpen(true)
         throw new Error('Multi-model needs models from at least two families — configure models first.')

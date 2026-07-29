@@ -26,7 +26,6 @@ describe('synthesizeReviewerBinding', () => {
       authStoreProvider: 'opencode',
       roles: ['reviewer'],
     });
-    // Never a credential value, only where to find one.
     expect(JSON.stringify(binding!.entry)).not.toMatch(/sk-|Bearer/);
   });
 
@@ -50,8 +49,6 @@ describe('synthesizeReviewerBinding', () => {
   });
 
   it('returns null for claude — the host has no endpoint on a subscription login', () => {
-    // Deliberate: the om contract has the wrapper supply a fresh Claude
-    // context, and the Claude session path is the one that never failed.
     expect(synthesizeReviewerBinding({ runner: 'claude', model: 'opus' })).toBeNull();
   });
 
@@ -80,8 +77,6 @@ describe('synthesizeReviewerBinding', () => {
 
 describe('reviewerFamily', () => {
   it('reads weight lineage, so two models behind one gateway stay independent', () => {
-    // Both arrive via the Zen gateway but are unrelated models — collapsing
-    // them into one "family" would wrongly fail the council's diversity rule.
     expect(reviewerFamily('glm-5.2', 'opencode')).toBe('zhipu');
     expect(reviewerFamily('mimo-v2.5-free', 'opencode')).toBe('xiaomi');
     expect(reviewerFamily('kimi-k2.6', 'opencode')).toBe('moonshot');

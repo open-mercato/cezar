@@ -4,7 +4,6 @@ import type { HarnessLedgerResponse } from '@open-mercato/cezar-api-client'
 
 import { HarnessTimeline } from './harness-status-bar'
 
-/** Fidelity to mockup 04, and two bugs the first cut of it had. */
 const phase = (id: string, over: Record<string, unknown> = {}) =>
   ({
     id,
@@ -69,15 +68,12 @@ describe('HarnessTimeline', () => {
   })
 
   it('never attaches a council to a phase that is not one', () => {
-    // Regression: matching on round alone defaulted every unlabelled phase to
-    // round 1, so Preflight and Capture sprouted the whole council.
     render(<HarnessTimeline ledger={ledger({ phases: [phase('preflight')] })} />)
     expect(screen.queryByText('gpt')).toBeNull()
   })
 
   it("shows a reviewer's time in THIS phase, not its whole-run total", () => {
     render(<HarnessTimeline ledger={ledger()} />)
-    // 62s here; the model's run total is 9,000,000ms (2h 30m) and must not leak in.
     expect(screen.getByText('1m 2s')).not.toBeNull()
     expect(screen.queryByText('150m')).toBeNull()
   })

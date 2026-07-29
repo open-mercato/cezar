@@ -1,10 +1,3 @@
-/**
- * The live round-trips behind `ProbeTransport` (see `probe.ts` for why these
- * exist). Each one exercises the SAME code path the run will use — that is the
- * whole point. A probe that validates a different transport than the run
- * executes is how `opencode/mimo-v2.5-free` came back "ready" from a healthy
- * Zen HTTP endpoint while the local opencode server 500'd on every prompt.
- */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -15,7 +8,6 @@ import { ClaudeCliRunner } from '../core/claude-cli-runner.js';
 import type { ProbeRef, ProbeTransport, ProbeVerdict } from './probe.js';
 import { harnessChildEnvironment, terminateProcessTree } from './runtime.js';
 
-/** Smallest prompt that still proves the whole pipeline answers. */
 const PROBE_PROMPT = 'Reply with exactly: OK';
 const PROBE_TIMEOUT_MS = 45_000;
 const SERVER_START_TIMEOUT_MS = 30_000;
@@ -129,7 +121,6 @@ export async function probeOpencode(
       const sessionId = ((await created.json()) as { id?: string }).id;
       if (!sessionId) return done({ status: 'failed', detail: 'opencode returned no session id' });
 
-      // `provider/model` → opencode's `{providerID, modelID}`.
       const slash = ref.model.indexOf('/');
       const body: Record<string, unknown> = { parts: [{ type: 'text', text: PROBE_PROMPT }] };
       if (slash > 0) {
@@ -348,7 +339,6 @@ export function resolveAdvisorCredential(model: {
       const key = entry?.key ?? entry?.apiKey ?? entry?.access ?? entry?.token;
       if (key) return { key, source: `opencode auth store (${model.authStoreProvider})` };
     } catch {
-      // absent or unreadable store — fall through to the miss below
     }
   }
   return {

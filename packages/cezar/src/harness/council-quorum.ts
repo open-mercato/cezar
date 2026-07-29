@@ -17,12 +17,9 @@
  */
 
 export interface CouncilOutcome {
-  /** `roleRefId` of the reviewer. */
   label: string;
   status: 'completed' | 'failed';
-  /** Independence axis. Under-counting here fails safe (toward refusing). */
   family?: string;
-  /** Why it failed — carried into the operator-facing message. */
   reason?: string;
 }
 
@@ -30,9 +27,7 @@ export type CouncilQuorum =
   | { ok: true; degraded: boolean; completed: CouncilOutcome[]; failed: CouncilOutcome[] }
   | { ok: false; reason: string };
 
-/** Minimum reviewers that must complete for the round to mean anything. */
 const MIN_REVIEWERS = 2;
-/** Minimum independent families among the survivors. */
 const MIN_FAMILIES = 2;
 
 export interface CouncilPolicy {

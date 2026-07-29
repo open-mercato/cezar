@@ -40,8 +40,6 @@ const makeSession = (id: string): FakeSession => ({
   },
 });
 
-/** Mirrors `runAgentStep`'s registration: always tracked; the singular slots
- *  are claimed only by a non-concurrent session. */
 function register(state: FakeState, session: FakeSession, concurrent: boolean): void {
   state.liveSessions.add(session);
   if (!concurrent) {
@@ -50,9 +48,6 @@ function register(state: FakeState, session: FakeSession, concurrent: boolean): 
   }
 }
 
-/** Mirrors `runAgentStep`'s `finally`: the singular slot is cleared when a
- *  non-concurrent phase ends. This is what used to erase the driver's runtime
- *  killer along with it. */
 function unregister(state: FakeState, session: FakeSession, concurrent: boolean): void {
   state.liveSessions.delete(session);
   if (!concurrent) {
@@ -61,7 +56,6 @@ function unregister(state: FakeState, session: FakeSession, concurrent: boolean)
   }
 }
 
-/** Mirrors the driver's `host.onInterrupt(() => runtime.kill())`. */
 function onInterrupt(state: FakeState, fn: () => void): () => void {
   state.interruptHandlers.add(fn);
   return () => {
@@ -69,26 +63,22 @@ function onInterrupt(state: FakeState, fn: () => void): () => void {
   };
 }
 
-/** Mirrors `RunManager.cancel`. */
 function cancel(state: FakeState): void {
   state.cancelled = true;
   try {
     state.interrupt();
   } catch {
-    /* already gone */
   }
   for (const handler of state.interruptHandlers) {
     try {
       handler();
     } catch {
-      /* already gone */
     }
   }
   for (const session of state.liveSessions) {
     try {
       session.interrupt();
     } catch {
-      /* already gone */
     }
   }
 }
@@ -116,7 +106,6 @@ describe('cancel() with concurrent phase sessions', () => {
     const reviewers = ['r1', 'r2'].map(makeSession);
     for (const s of reviewers) register(state, s, true);
 
-    // Nothing claimed `state.session` — so nothing could be clobbered.
     expect(state.session).toBeUndefined();
   });
 
@@ -195,8 +184,6 @@ describe('cancel() reaches handlers that outlive a phase', () => {
       runtimeKilled = true;
     });
 
-    // A non-concurrent phase runs to completion, claiming and then clearing
-    // the singular slots.
     const phase = makeSession('qualify');
     register(state, phase, false);
     unregister(state, phase, false);
@@ -267,7 +254,6 @@ describe('the real implementation still honours the contract', () => {
     const start = source.indexOf('onInterrupt: (fn) => {');
     const body = source.slice(start, source.indexOf('},', start));
     expect(body).toMatch(/state\.interruptHandlers\.add\(fn\)/);
-    // The old shape — the one a phase could evict.
     expect(body).not.toMatch(/state\.interrupt = \(\) => \{/);
   });
 
@@ -277,7 +263,6 @@ describe('the real implementation still honours the contract', () => {
   });
 
   it('a concurrent phase never claims the singular session slots', () => {
-    // The guard that makes parallel reviewers safe.
     expect(source).toMatch(/if \(!concurrentPhase\) \{\s*\n\s*state\.session = session;/);
   });
 

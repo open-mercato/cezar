@@ -31,13 +31,7 @@ describe('child stdin EPIPE', () => {
       child.on('close', (code) => resolve({ code, stderr }));
     });
 
-  // The payload must exceed the pipe buffer so the write stays queued and the
-  // failure arrives asynchronously — that is the whole point.
   const payload = "'x'.repeat(8_000_000)";
-  // The child must be ALIVE when the write is queued and exit while it is still
-  // in flight — that is the real shape (a CLI killed or dying mid-turn). A child
-  // that is already reaped has its stdio socket destroyed, which fails
-  // differently and is not the hazard.
   const target = `spawn('/bin/sh', ['-c', 'sleep 0.3; exit 1'])`;
 
   it('kills the host process when nothing listens (the bug)', async () => {
@@ -50,7 +44,6 @@ describe('child stdin EPIPE', () => {
 
     expect(code).not.toBe(0);
     expect(stderr).toContain('EPIPE');
-    // The synchronous catch never fires — proof that try/catch is not the fix.
     expect(stderr).not.toContain('SYNC-CATCH');
   }, 20_000);
 
@@ -79,8 +72,6 @@ describe('every agent transport guards its child stdin', () => {
   });
 
   it('no transport relies on try/catch alone around a stdin write', () => {
-    // Guard against a future edit deleting the listener and leaving the
-    // (useless) synchronous catch behind as though it were the protection.
     for (const file of ['claude-cli-runner.ts', 'codex-app-server-transport.ts']) {
       const source = read(file);
       if (!source.includes('stdin.write')) continue;

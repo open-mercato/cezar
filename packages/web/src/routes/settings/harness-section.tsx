@@ -45,8 +45,6 @@ export function HarnessSection() {
     )
   }
 
-  // Defensive against an older server serving a newer bundle: absent arrays read as empty
-  // (this exact skew blanked the page during development — never trust the wire shape).
   const { configured } = status.data
   const profiles = status.data.profiles ?? []
   const driven = status.data.driven ?? []

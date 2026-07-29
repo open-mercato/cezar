@@ -25,8 +25,6 @@ describe('harness built-in workflows', () => {
     for (const def of defs) {
       expect(def.source).toBe('built-in');
       expect(stepsIssue(def.steps)).toBeNull();
-      // The driver's contract: agent phases carry prompts, op phases carry
-      // (never-executed) command placeholders — both kinds render on the rail.
       expect(def.steps.some((s) => stepKind(s) === 'agent')).toBe(true);
       expect(def.steps.some((s) => stepKind(s) === 'check')).toBe(true);
     }

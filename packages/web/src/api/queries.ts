@@ -525,10 +525,6 @@ export function useAcceptContestedHarness(id: string) {
         queryKeys.runs.harness(id),
         (ledger) => {
           if (!ledger) return ledger
-          // An older server answers with `outcome` only. Everything the row
-          // needs is already on the acceptance stamp the server just wrote, so
-          // reconstruct it rather than refetching — the server persisted the
-          // identical row, and a refetch would only be a slower way to agree.
           const rows =
             decisions ??
             (outcome.acceptedAt && outcome.acceptanceReason

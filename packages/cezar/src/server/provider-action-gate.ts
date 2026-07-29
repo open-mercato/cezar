@@ -54,8 +54,6 @@ export function providersRequiredByHarness(
     add(harness.roles.implementer?.runner);
     for (const reviewer of harness.roles.reviewers ?? []) add(reviewer.runner);
   } else {
-    // Every profile-only plan uses the Claude host for orchestration and its
-    // final fresh review, including optimized profiles whose worker is Codex.
     add('claude');
   }
   if (!harness?.roles && harness?.profile && agentHarness) {

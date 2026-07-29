@@ -20,7 +20,6 @@ async function tmp(prefix: string): Promise<string> {
   return dir;
 }
 
-/** A directory skill on disk: <root>/<name>/{SKILL.md, references/a.md, scripts/x.mjs}. */
 async function writeDirSkill(root: string, name: string): Promise<string> {
   const dir = join(root, name);
   await mkdir(join(dir, 'references'), { recursive: true });
@@ -70,7 +69,6 @@ describe('ensureSkillOnDisk', () => {
       requires: ['cez-code-review'],
     });
     const review = dirSkill('cez-code-review', await writeDirSkill(store, 'cez-code-review'), {
-      // Deliberate cycle back to the root — must not loop forever.
       requires: ['cez-setup-harness'],
     });
     const cwd = await tmp('cez-mat-cwd-');
@@ -89,8 +87,6 @@ describe('ensureSkillOnDisk', () => {
 
     expect(await ensureSkillOnDisk(cwd, skill, [skill])).toBe(true);
     expect((await stat(join(cwd, '.claude', 'skills', 'cez-harness', 'SKILL.md'))).isFile()).toBe(true);
-    // The exclude helper must no-op outside a repository — a `.git` holding
-    // only `info/exclude` reads as a broken repo to everything downstream.
     await expect(stat(join(cwd, '.git'))).rejects.toThrow();
   });
 
@@ -107,7 +103,6 @@ describe('ensureSkillOnDisk', () => {
     const insideDir = await writeDirSkill(join(cwd, '.ai', 'skills'), 'local-dir');
     const inside = dirSkill('local-dir', insideDir, { source: 'ai' });
     expect(await ensureSkillOnDisk(cwd, inside, [inside])).toBe(true);
-    // Not duplicated under .claude/skills — it already lives in the tree.
     await expect(stat(join(cwd, '.claude', 'skills', 'local-dir'))).rejects.toThrow();
   });
 
@@ -118,7 +113,6 @@ describe('ensureSkillOnDisk', () => {
     });
     const cwd = await tmp('cez-mat-cwd-');
     expect(await ensureSkillOnDisk(cwd, setup, [setup])).toBe(false);
-    // The skill itself still materialized — only the dependency is missing.
     expect((await stat(join(cwd, '.claude', 'skills', 'cez-setup-harness', 'SKILL.md'))).isFile()).toBe(true);
   });
 });

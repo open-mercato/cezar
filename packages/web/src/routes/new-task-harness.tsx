@@ -93,7 +93,6 @@ export function humanReadinessError(detail: string): string {
   if (/adapter missing|no endpoint|no credential/i.test(detail)) {
     return 'This model has no usable binding configured yet.'
   }
-  // Unrecognised: the first sentence still beats 300 characters of nested JSON.
   const first = detail.split(/(?<=[.!?])\s|:\s/)[0] ?? detail
   return first.length > 140 ? `${first.slice(0, 137)}…` : first
 }
@@ -188,8 +187,6 @@ export function ModelPickerPill({
                       keywords={[option.family, option.runner, option.label, option.model]}
                       data-slot={`${slot}-option`}
                       onSelect={() => {
-                        // Advisor options carry their provider family (the diversity
-                        // axis) and have no effort dial — the config owns their tuning.
                         onPick(
                           option.runner === 'harness'
                             ? { runner: 'harness', model: option.model, family: option.family }
@@ -235,7 +232,6 @@ export function ModelPickerPill({
 const EFFORT_OPTIONS: ReadonlyArray<{
   id: HarnessEffort | ''
   label: string
-  /** The segmented control is narrow; `medium` does not fit five-across. */
   short: string
   desc: string
 }> = [
@@ -248,14 +244,6 @@ const EFFORT_OPTIONS: ReadonlyArray<{
 
 /** Per-role reasoning dial (user feedback 2026-07-24): the seam's neutral tiers, mapped per
  *  backend server-side (claude thinking budget, codex reasoning level; opencode ignores it). */
-/**
- * The reasoning dial as a SEGMENTED control (mockup 03).
- *
- * It was a dropdown pill, which hid the scale behind a click and read as just
- * another chip beside the model — so a row was a run of near-identical pills
- * with no visual hierarchy. Five segments show the whole range at a glance and
- * make the current setting a position rather than a word.
- */
 function EffortSegments({
   slot,
   ariaLabel,
@@ -299,9 +287,6 @@ function EffortSegments({
   )
 }
 
-/** The provider family a picked model belongs to — the council's diversity axis,
- *  stated beside the pill (mockup 03) so "at least two families" is checkable by
- *  eye instead of being a rule you have to take on trust. */
 function FamilyTag({ family }: { family: string }) {
   return (
     <span className="shrink-0 text-[9.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
@@ -310,15 +295,6 @@ function FamilyTag({ family }: { family: string }) {
   )
 }
 
-/**
- * One lineup row (mockup 03): a three-column grid — role label, the model picks,
- * and the effort dial in its own right-hand column — with the role's one-line
- * hint spanning underneath.
- *
- * Effort used to sit inline among the model pills, so a reviewer row read as
- * five interchangeable chips. Giving it a column makes "which models" and "how
- * hard they think" two separate questions, which is what they are.
- */
 function RoleRow({
   icon,
   label,
@@ -365,8 +341,6 @@ function PresetRow({
   const [saveOpen, setSaveOpen] = useState(false)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const [name, setName] = useState('')
-  // Header stability at any count ("what if 100 presets?"): a few chips
-  // inline — the active one always among them — and the rest behind "+N more".
   const { visible, overflow } = visibleHarnessPresets(presets, roles)
   const saveCheck = canSaveHarnessPreset(presets, name.trim())
   return (
@@ -388,9 +362,6 @@ function PresetRow({
             >
               <span className="truncate">{preset.name}</span>
             </button>
-            {/* A chip used to show a NAME and nothing else, so the only way to
-                learn what a lineup held was to apply it — which destroyed the one
-                you had. Hover/focus previews the three roles instead. */}
             <span
               role="tooltip"
               data-slot="harness-preset-preview"
@@ -549,7 +520,6 @@ export function HarnessPanel({
   }
   baseAcknowledgementReason?: string
   onBaseAcknowledgementReason?: (reason: string) => void
-  /** Null while the workspace cannot offer a sound default (the modal case). */
   roles: HarnessRoles | null
   onRoles: (roles: HarnessRoles) => void
   options: readonly HarnessModelOption[]
@@ -563,8 +533,6 @@ export function HarnessPanel({
 }) {
   const issue = roles ? harnessRolesIssue(roles) : null
   const freeTierWarning = freeTierReviewerWarning(roles)
-  // The probe reports one row per distinct binding, keyed `runner/model` — the
-  // same id the driver's roster uses.
   const readinessOf = (ref: HarnessModelRef) =>
     probe?.models.find((model) => model.id === `${ref.runner}/${ref.model || 'auto'}`)?.readiness
   return (
@@ -686,10 +654,6 @@ export function HarnessPanel({
             label="Reviewers"
             hint="each reviewer runs its own fresh review of the final diff; findings are merged — 2–5, unique, at least two model families"
           >
-            {/* One LINE per reviewer, not a wrap of chips. The mockup drew a
-                single effort control for this row, but effort is per-reviewer in
-                the data model and collapsing it would take away a real choice —
-                so each reviewer carries its own dial on its own line. */}
             <div className="flex min-w-0 flex-col gap-1.5">
               {roles.reviewers.map((reviewer, index) => (
                 <div
@@ -725,7 +689,6 @@ export function HarnessPanel({
                         }
                       />
                     ) : (
-                      // Advisors are tuned by the repo config, not here.
                       <span className="text-[10.5px] text-soft-foreground">configured</span>
                     )}
                     {roles.reviewers.length > 2 ? (
@@ -781,8 +744,6 @@ export function HarnessPanel({
             </p>
           ) : null}
 
-          {/* Advisory, never blocking: a free-tier reviewer is a legitimate
-              choice, it just frequently cannot finish in time. */}
           {freeTierWarning ? (
             <p
               data-slot="harness-free-tier-warning"
@@ -824,10 +785,6 @@ export function HarnessPanel({
                     <span className="block truncate font-mono text-[10.5px] text-soft-foreground">
                       {model.binding ?? model.model ?? 'default'}
                     </span>
-                    {/* A failure used to print the provider's raw JSON — often the
-                        same error nested twice, ~300 characters — right-aligned in
-                        the widest column, with no remedy. One human line, the raw
-                        text behind a disclosure, and a way out. */}
                     {failed ? (
                       <>
                         <span className="mt-0.5 block leading-relaxed text-danger">
@@ -913,9 +870,6 @@ export function HarnessSetupDialog({
   onBackToTask,
   onClose,
 }: {
-  /** RUNNER-backed families currently available (e.g. ['anthropic']). Only these
-   *  can fill orchestrator and implementer, which is why the count that gates
-   *  this dialog is theirs, not the whole roster's. */
   families: readonly string[]
   /** Configured advisor families (reviewer-only). Present but unusable alone —
    *  saying "no models are available" when three of these exist is false, and

@@ -55,13 +55,10 @@ describe('HarnessRail phase tile', () => {
 
     const drawn = lines()
     expect(drawn).toHaveLength(3)
-    // First: starts at its own dot, so nothing dangles above the tile.
     expect(drawn[0]!.className).toContain('top-1/2')
     expect(drawn[0]!.className).not.toContain('bottom-1/2')
-    // Middle: overhangs both ways so consecutive segments join.
     expect(drawn[1]!.className).toContain('-top-3.5')
     expect(drawn[1]!.className).toContain('-bottom-3.5')
-    // Last: stops at its own dot.
     expect(drawn[2]!.className).toContain('bottom-1/2')
   })
 
@@ -159,7 +156,6 @@ describe('HarnessRail council tile', () => {
     expect(
       document.querySelectorAll('[data-slot="harness-rail-reviewer"]'),
     ).toHaveLength(0)
-    // The reviewers are still listed — only the affordance is absent.
     expect(screen.getAllByText('gpt-5.6-luna').length).toBeGreaterThan(0)
   })
 })

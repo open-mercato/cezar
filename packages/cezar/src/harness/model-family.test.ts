@@ -15,7 +15,6 @@ import { reviewerFamily } from './reviewer-binding.js';
  */
 describe('providerFamilyOf', () => {
   it('collapses one vendor reached through different runners into one family', () => {
-    // THE regression: the host CLI and the same weights resold by a gateway.
     expect(providerFamilyOf({ runner: 'claude', model: 'sonnet-4.5' })).toBe('anthropic');
     expect(providerFamilyOf({ runner: 'opencode', model: 'opencode/claude-sonnet-4-5' })).toBe(
       'anthropic',
@@ -45,7 +44,6 @@ describe('providerFamilyOf', () => {
   });
 
   it('gives an unrecognised model its own family rather than merging it', () => {
-    // Erring toward MORE families can only make the diversity check stricter.
     expect(providerFamilyOf({ runner: 'opencode', model: 'opencode/brand-new-thing' })).toBe(
       'opencode',
     );
@@ -57,8 +55,6 @@ describe('providerFamilyOf', () => {
     expect(councilFamilyOf({ runner: 'opencode', model: 'opencode/claude-sonnet-4-5' })).toBe(
       'anthropic',
     );
-    // A council of two Anthropic models is now ONE family — no longer a passing
-    // "two independent families" quorum.
     expect(
       new Set(
         [

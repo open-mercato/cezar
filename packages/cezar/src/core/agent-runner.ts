@@ -150,9 +150,6 @@ export interface AgentSession {
    *  tree (agents spawn Bash children under it). Absent when the spawn
    *  failed before a pid existed. Feeds live resource telemetry (#348). */
   readonly pid?: number;
-  /** True when the pid identifies a runner-owned process tree (Unix process
-   * group or Windows taskkill tree), so crash recovery may terminate it as a
-   * unit after verifying the persisted identity token. */
   readonly processGroup?: boolean;
   /** Write a user message into the live session. False when it is closed. */
   sendMessage(content: ContentBlock[]): boolean;

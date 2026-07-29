@@ -119,7 +119,6 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
-  /** Run deadline, reused as the HTTP deadline. 0 = no limit. */
   private readonly limitMs: number;
 
   constructor(
@@ -159,9 +158,6 @@ class OpencodeSession implements AgentSession {
     const urlReady = this.waitForServerUrl(port);
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
-    // The run deadline is also the HTTP deadline: a prompt POST may legitimately
-    // stay open for as long as the turn itself (see `http()` — anything shorter
-    // silently truncates long turns).
     this.limitMs = limitMs;
     let deadline: NodeJS.Timeout | undefined;
     if (limitMs > 0) {

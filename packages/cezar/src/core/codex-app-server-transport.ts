@@ -50,11 +50,6 @@ export class CodexAppServerRpc {
   private readonly pending = new Map<number, PendingRequest>();
 
   constructor(readonly child: ChildProcessWithoutNullStreams) {
-    // Same reason as the claude runner: a failed pipe write surfaces as an
-    // asynchronous 'error' event, which is an uncaught exception — and fatal for
-    // the whole server — when nothing listens. `destroyed` and the try/catch in
-    // `write()` cover the synchronous cases only. The read/exit path already
-    // owns settlement, so swallowing here is correct.
     this.child.stdin.on('error', () => undefined);
   }
 

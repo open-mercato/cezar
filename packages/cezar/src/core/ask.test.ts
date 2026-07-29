@@ -175,12 +175,6 @@ describe('stripAskMarker', () => {
     expect(stripAskMarker(invalid)).toBe(invalid);
   });
 
-  // This case used to be pinned the other way: an over-length header left the
-  // marker in place as raw JSON. That is the rule as written, but in the thread
-  // it reads as a wall of braces where a question should be, and it fires on
-  // the single most common thing agents get wrong. The blank-question bug the
-  // original rule protected against is still covered — the question is now
-  // REPLACED (by a card here, by prose above) rather than deleted.
   it('renders a card for an over-length header — the schema-invalid shape agents actually produce', () => {
     const repairable =
       'Zanim pójdziemy dalej:\nCEZ:ASK ' +
@@ -222,9 +216,6 @@ describe('parseAskMarker — backend-agnostic assembly (codex/opencode delta str
   });
 });
 
-// The payload from the session that prompted this: two headers were 15
-// characters against a 12-character contract, and one over-length chip label
-// was enough to lose the whole card and dump ~1.5 KB of JSON into the thread.
 const OVER_LENGTH_HEADERS = {
   questions: [
     {
@@ -264,7 +255,6 @@ describe('repairAskRequest', () => {
     const repaired = repairAskRequest(OVER_LENGTH_HEADERS);
     expect(repaired).not.toBeNull();
     expect(repaired!.questions.map((q) => q.header)).toEqual(['Scope', 'List UI den…', 'Email rende…']);
-    // Only the chip label is shortened; the question and every option survive.
     expect(repaired!.questions[1]!.question).toBe(OVER_LENGTH_HEADERS.questions[1]!.question);
     expect(repaired!.questions[0]!.options).toHaveLength(3);
   });
@@ -285,8 +275,6 @@ describe('repairAskRequest', () => {
   });
 
   it('refuses to repair structural damage rather than silently dropping choices', () => {
-    // One option is not a choice, and trimming five questions to four would
-    // discard something the agent meant to ask.
     expect(repairAskRequest({ questions: [{ header: 'H', question: 'Q?', options: [{ label: 'only' }] }] })).toBeNull();
     expect(
       repairAskRequest({

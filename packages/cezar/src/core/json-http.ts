@@ -20,12 +20,8 @@ import { request as httpsRequest } from 'node:https';
  */
 export interface JsonRequestOptions {
   method: string;
-  /** Serialized as JSON with `content-type: application/json`. Omit for GET. */
   body?: unknown;
-  /** The one and only deadline, measured from request start to response end.
-   *  Non-positive means no deadline (the runner's `limitMs: 0`). */
   timeoutMs: number;
-  /** Aborts the in-flight request (run cancellation). */
   signal?: AbortSignal;
   headers?: Record<string, string>;
 }
@@ -33,7 +29,6 @@ export interface JsonRequestOptions {
 export interface JsonResponse {
   ok: boolean;
   status: number;
-  /** Raw body; callers parse. Non-2xx is returned, not thrown. */
   text: string;
 }
 
@@ -118,8 +113,6 @@ export function jsonRequest(url: string, opts: JsonRequestOptions): Promise<Json
       },
     );
 
-    // The deadline covers headers AND body — a stalled response is a failure
-    // even if the status line arrived.
     const timer =
       timeoutMs > 0
         ? setTimeout(() => {

@@ -20,9 +20,6 @@ export function isHarnessWorkflow(name: string): boolean {
   return name === HARNESS_FIX_ISSUE || name === HARNESS_IMPLEMENT_FEATURE;
 }
 
-/** Marker command for op phases — recognizably not a shell command. The
- *  driver never executes these; they only make the step a `check`-kind entry
- *  so the rail shows the op glyph. */
 const OP = (id: string) => `harness:${id}`;
 
 const FIX_ISSUE_DEF: WorkflowDef = {
@@ -59,8 +56,6 @@ const IMPLEMENT_FEATURE_DEF: WorkflowDef = {
 };
 
 export function harnessWorkflowDefs(): WorkflowDef[] {
-  // Fresh copies — callers (createRun persistence, the driver) must never
-  // mutate a shared module-level definition.
   return [FIX_ISSUE_DEF, IMPLEMENT_FEATURE_DEF].map((def) => ({
     ...def,
     steps: def.steps.map((s) => ({ ...s })),

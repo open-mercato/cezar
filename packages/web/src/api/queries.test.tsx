@@ -786,7 +786,6 @@ describe('query defaults', () => {
   })
 })
 
-
 /**
  * Review finding (2026-07-27): the mutation patched only `outcome` into the
  * cached ledger, but BOTH the server's publish gate and its client mirror
@@ -837,7 +836,6 @@ describe('useAcceptContestedHarness', () => {
     const patched = client.getQueryData(queryKeys.runs.harness('run-1')) as Record<string, unknown>
     expect(patched.outcome).toEqual(accepted.outcome)
     expect(patched.decisions).toEqual(accepted.decisions)
-    // The exact predicate the publish gate runs, on the cache the UI reads.
     const outcome = patched.outcome as Record<string, unknown>
     const decisions = patched.decisions as Array<Record<string, unknown>>
     expect(

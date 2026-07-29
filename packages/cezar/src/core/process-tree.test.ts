@@ -5,7 +5,6 @@ import { AGENT_PROCESS_DETACHED, terminateAgentProcessTree } from './process-tre
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Signal 0 delivers nothing — it only answers "does this pid exist?". */
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -28,7 +27,6 @@ function alive(pid: number): boolean {
  */
 describe.skipIf(process.platform === 'win32')('terminateAgentProcessTree', () => {
   it('escalates to SIGKILL for a group member that ignores SIGTERM after the leader exits', async () => {
-    // Leader exits promptly on SIGTERM; its child traps SIGTERM and keeps running.
     const leader = spawn(
       '/bin/sh',
       ['-c', `/bin/sh -c 'trap "" TERM; while :; do sleep 0.05; done' & echo $!; wait $!`],
@@ -39,7 +37,6 @@ describe.skipIf(process.platform === 'win32')('terminateAgentProcessTree', () =>
     leader.stdout.on('data', (chunk: string) => {
       out += chunk;
     });
-    // Let the stubborn grandchild start and report its pid.
     await wait(250);
     const stubbornPid = Number(out.trim().split('\n')[0]);
     expect(Number.isInteger(stubbornPid)).toBe(true);
@@ -47,7 +44,6 @@ describe.skipIf(process.platform === 'win32')('terminateAgentProcessTree', () =>
 
     terminateAgentProcessTree(leader, 300);
 
-    // Grace window plus slack: the leader is long gone, the trapping child is not.
     await wait(1200);
     expect(alive(stubbornPid)).toBe(false);
   }, 15_000);

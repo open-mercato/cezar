@@ -23,8 +23,6 @@ const openByRun = new Map<string, boolean>()
 function defaultOpen(entries: PlanEntry[]): boolean {
   const desktop =
     typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 768px)').matches
-  // A completed checklist is archival context, not the next thing the reader needs. Keep
-  // live/pending plans open on desktop; fold a finished plan to its N/N odometer.
   return desktop && planActiveEntry(entries) !== undefined
 }
 
@@ -51,8 +49,6 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
   const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen(entries))
   const hasActiveEntry = planActiveEntry(entries) !== undefined
   useEffect(() => {
-    // Collapse at the exact transition to an all-done plan. The effect does not re-run when
-    // the reader expands that finished plan manually.
     if (!hasActiveEntry) {
       openByRun.set(runId, false)
       setOpen(false)

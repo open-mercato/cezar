@@ -153,7 +153,6 @@ export function RunHeader({
     observer.observe(el)
     return () => {
       observer.disconnect()
-      // Leaving a stale height behind would misalign every other route.
       document.documentElement.style.removeProperty('--run-header-h')
     }
   }, [])

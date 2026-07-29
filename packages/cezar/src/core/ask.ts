@@ -76,7 +76,6 @@ export function parseAskRequest(value: unknown): AskRequest | null {
  */
 export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
 
-/** Shorten for display, marking that something was cut. */
 function clamp(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
 }
@@ -117,8 +116,6 @@ export function repairAskRequest(value: unknown): AskRequest | null {
             if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw;
             const option = raw as Record<string, unknown>;
             if (typeof option.label !== 'string') return option;
-            // Truncation can collide two labels that differed only past the
-            // cut, which the schema then rejects for non-uniqueness.
             let label = clamp(option.label, 60);
             for (let n = 2; taken.has(label); n += 1) label = `${clamp(option.label, 56)} (${n})`;
             taken.add(label);
@@ -213,7 +210,5 @@ export function stripAskMarker(text: string): string {
     return text;
   }
   const prose = formatAskAsProse(raw);
-  // No leading `\s*` here: the blank line before the marker is what separates
-  // the question from the message that introduced it.
   return prose === null ? text : text.replace(/CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, prose);
 }

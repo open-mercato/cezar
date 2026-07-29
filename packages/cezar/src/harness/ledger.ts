@@ -112,9 +112,6 @@ export function loadLedger(dataDir: string, runId: string): HarnessLedger | null
 export function saveLedger(dataDir: string, runId: string, ledger: HarnessLedger): void {
   const path = ledgerPath(dataDir, runId);
   mkdirSync(dirname(path), { recursive: true });
-  // Multiple local Cezar processes may inspect the same project. A unique
-  // sibling temp keeps their atomic writes from clobbering one another before
-  // rename; operator-authored rows are merged by the driver's persist path.
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(tmp, JSON.stringify(ledger, null, 2), 'utf8');
   renameSync(tmp, path);

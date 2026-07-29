@@ -122,7 +122,6 @@ describe('multi-model start surface', () => {
     expect(rowFor('mimo').querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe(
       'danger',
     )
-    // Once in the card header, once in the blocking footer — the lineup is not startable.
     expect(screen.getAllByText('Every selected model must be verified.')).toHaveLength(2)
   })
 
@@ -145,7 +144,6 @@ describe('multi-model start surface', () => {
     })
   })
 })
-
 
 /**
  * Review finding (2026-07-27): the dialog's `families` came from the WHOLE
@@ -190,7 +188,6 @@ describe('harness setup dialog copy', () => {
   })
 })
 
-
 /**
  * Composer findings D1–D3 (review 2026-07-27).
  */
@@ -220,7 +217,6 @@ describe('composer readiness surface', () => {
     panel(failing)
 
     expect(screen.getByText(/pick a named model/i)).not.toBeNull()
-    // The raw text is kept, but behind a disclosure rather than in the row.
     const details = document.querySelector('details')
     expect(details).not.toBeNull()
     expect(details?.textContent).toContain('invalid_request_error')

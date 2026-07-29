@@ -381,9 +381,7 @@ export interface UiImageEvent {
   data: string;
 }
 
-/* ------------------------------------------------------------------ */
 /* Harness events (spec 2026-07-23-harness-orchestration)              */
-/* ------------------------------------------------------------------ */
 
 /**
  * Driver-level events for cez-harness runs. Unlike the item events these are

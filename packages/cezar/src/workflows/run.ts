@@ -121,10 +121,6 @@ interface ActiveRun {
   interruptHandlers: Set<() => void>;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
-  /** Live claude session of the currently running agent step, if any.
-   *  Single-session model only (interactive runs, sequential workflow steps) —
-   *  concurrent harness phases deliberately do NOT write here, because the last
-   *  writer would win and the others would become unreachable. */
   session?: AgentSession;
   /** EVERY session currently in flight on this run, including concurrent
    *  council reviewers (2026-07-25). `cancel()` interrupts all of them; before
@@ -171,12 +167,6 @@ const MONITORING_WAKE_NUDGE =
  *  phase whose work was in flight). */
 const PHASE_NUDGE_LIMIT = 3;
 
-/** How long a phase session may sit idle after a turn boundary before it is
- *  prodded. Ending a turn to await a background subagent is legitimate — the
- *  subagent's return resumes the session — so an immediate nudge fired on
- *  nearly every phase and spent a turn saying nothing. Long enough for a
- *  subagent to come back, short enough that a genuinely stuck phase does not
- *  idle away its budget. */
 const PHASE_NUDGE_GRACE_MS = 45_000;
 
 const phaseResultNudge = (resultPath: string): string =>
@@ -886,7 +876,6 @@ export class RunManager {
           });
           continue;
         }
-        // No revivable definition — fall through to the generic handling.
       }
 
       if (run.status === 'waiting') {
@@ -1054,25 +1043,17 @@ export class RunManager {
     try {
       state.interrupt();
     } catch {
-      // already gone — the handlers below still have to run
     }
-    // Handlers that outlive any single phase (the harness driver's runtime
-    // killer): without these, cancelling a harness run stopped the current
-    // agent session and left harness.mjs and every reviewer CLI running.
     for (const handler of state.interruptHandlers) {
       try {
         handler();
       } catch {
-        // already gone — keep interrupting the rest
       }
     }
-    // Reach every concurrent phase session too — `state.interrupt` only ever
-    // points at one of them.
     for (const session of state.liveSessions) {
       try {
         session.interrupt();
       } catch {
-        // already gone — keep interrupting the rest
       }
     }
     return true;
@@ -2297,10 +2278,6 @@ export class RunManager {
     taskBackend: RunnerId,
     extraSystemPrompt: string | undefined,
   ): Promise<string | null> {
-    // The record stub is the fallback source: queued-revival and restart
-    // recovery rebuild the input WITHOUT `harness` (hydrateQueuedInput knows
-    // nothing about it), and the stub — persisted at startRun — is what
-    // carries the requested profile across the gap.
     const recorded = this.store.getRun(runId)?.harness;
     let requested = input.harness?.profile ?? recorded?.profile;
     const roles =
@@ -2384,9 +2361,6 @@ export class RunManager {
         });
       },
       onInterrupt: (fn) => {
-        // Registered in the durable set, NOT chained onto `state.interrupt`:
-        // the next agent phase assigns that slot outright (and clears it on
-        // teardown), which used to silently drop the driver's runtime killer.
         state.interruptHandlers.add(fn);
         return () => {
           state.interruptHandlers.delete(fn);
@@ -2395,10 +2369,6 @@ export class RunManager {
       ensureSkill: async (name) => {
         const skill = skills.find((s) => s.name === name);
         if (!skill) return false;
-        // Directory skills carry companion files (references/, scripts/,
-        // hooks/) the runtime needs on disk — materialize them, and their
-        // `requires:` closure, into the worktree whatever source they came
-        // from (bundled cez-* set, global install, team repo).
         return ensureSkillOnDisk(state.cwd, skill, skills).catch(() => false);
       },
     };
@@ -2451,14 +2421,10 @@ export class RunManager {
        *  assignment below. It is still tracked in `liveSessions`, so cancel
        *  reaches it. */
       concurrent?: boolean;
-      /** Harness invocation journal hook: persist the owned runner PID before
-       * waiting for any paid work to complete. */
       onSpawn?: (pid: number, processGroup: boolean) => void;
     } = {},
   ): Promise<string | null> {
     const concurrentPhase = opts.concurrent === true;
-    /** This invocation's own session — the phase handlers close over THIS,
-     *  never `state.session`, which a sibling phase may have replaced. */
     let liveSession: AgentSession | undefined;
     let systemPrompt: string | undefined;
     if (step.skill) {
@@ -2469,12 +2435,6 @@ export class RunManager {
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
         systemPrompt = skillSystemPrompt(skill);
-        // Directory skills (SKILL.md + references/) get materialized into
-        // <cwd>/.claude/skills/<name>/ — the run's worktree when there is
-        // one — so the agent sees the companion files on disk, from ANY
-        // source (bundled cez-* set, global install, team repo), together
-        // with the skill's `requires:` closure; the shared info/exclude
-        // keeps them out of git (and out of autosave commits).
         const seeded = await ensureSkillOnDisk(state.cwd, skill, skills).catch(() => false);
         if (seeded && skill.path.endsWith('SKILL.md')) {
           emit({
@@ -2513,13 +2473,8 @@ export class RunManager {
     const backend = step.runner ?? taskBackend;
     this.store.updateStep(runId, step.id, { sessionId, backend });
 
-    // Harness phases with a result-file contract are turn-driven (see the
-    // turn-end handler): no auto-end, the driver of turns is the file.
     const phaseResultPath = !interactive ? opts.resultPath : undefined;
     let phaseNudges = 0;
-    /** Bumped by any live activity. A pending idle-nudge timer compares against
-     *  the value it captured at turn-end and stands down if it changed — the
-     *  session came back on its own and needs no prodding. */
     let phaseTurnSeq = 0;
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
@@ -2528,7 +2483,6 @@ export class RunManager {
     let turnText = '';
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
-      // Live work after a turn boundary = the session resumed by itself.
       if (
         phaseResultPath &&
         (event.type === 'text' || event.type === 'tool-call' || event.type === 'token-usage')
@@ -2600,7 +2554,6 @@ export class RunManager {
           const seqAtTurnEnd = phaseTurnSeq;
           const graceTimer = setTimeout(() => {
             if (state.cancelled || !liveSession?.open) return;
-            // Resumed on its own (subagent returned) — nothing to nudge.
             if (phaseTurnSeq !== seqAtTurnEnd) return;
             if (existsSync(phaseResultPath)) {
               liveSession.end();
@@ -2736,8 +2689,6 @@ export class RunManager {
         },
         onEvent,
         {
-          // Phase sessions stay open across turns (the turn-end handler ends
-          // them once the result file lands) — everything else one-shots.
           autoEndAfterFirstTurn: !interactive && !phaseResultPath,
           onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
         },
@@ -2757,8 +2708,6 @@ export class RunManager {
         }`;
       }
     }
-    // Always tracked, so `cancel()` reaches this session no matter how many
-    // others are in flight beside it.
     state.liveSessions.add(session);
     state.sessionEverOpened = true;
     this.flushDeferred(runId);

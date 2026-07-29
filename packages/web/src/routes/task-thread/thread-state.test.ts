@@ -874,7 +874,6 @@ describe('cardless CEZ:ASK rendering', () => {
       '**Navigation** — Should email and proposal inboxes share unified tabbed navigation or remain separate?',
     )
     expect(msg?.text).toContain('- Unified tabs — Group both under one navigation model')
-    // A header past the 12-char card cap renders fine here — prose has no cap.
     expect(msg?.text).toContain('**Progress Indicator** — Add visual proposal lifecycle indicator?')
     expect(msg?.text).toContain('- Yes, auto-advance')
   })

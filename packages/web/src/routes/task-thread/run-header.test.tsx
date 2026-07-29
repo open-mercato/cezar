@@ -131,7 +131,6 @@ describe('workflow step density', () => {
     expect(document.querySelector('[data-slot="workflow-steps"]')?.getAttribute('data-state')).toBe(
       'closed',
     )
-    // The summary still names the live step, so folding costs no information.
     expect(document.body.textContent).toContain('step 1 of 2')
   })
 })

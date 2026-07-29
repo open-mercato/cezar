@@ -70,7 +70,6 @@ describe('harness runtime bridge', () => {
   };
 
   it('resolveHarnessRuntimeInfo reports the bundled collection with its pinned commit', async () => {
-    // The real vendored tree (default bundledDir) — a packaged cezar always has it.
     const info = await resolveHarnessRuntimeInfo(dir);
     expect(info.installed).toBe(true);
     expect(info.source).toBe('bundled');
@@ -78,11 +77,9 @@ describe('harness runtime bridge', () => {
   });
 
   it('resolveHarnessRuntimeInfo degrades honestly when the collection is absent or scriptless', async () => {
-    // No bundled dir, empty repo: not installed at all.
     const none = await resolveHarnessRuntimeInfo(dir, { bundledDir: null });
     expect(none).toEqual({ installed: false, source: null, commit: null });
 
-    // A cez-harness skill without its runtime script: found but not installed.
     const fake = join(dir, 'fake-bundled');
     mkdirSync(join(fake, 'cez-harness'), { recursive: true });
     writeFileSync(join(fake, 'cez-harness', 'SKILL.md'), '---\nname: cez-harness\n---\nbody');
@@ -225,7 +222,6 @@ describe('harness runtime bridge', () => {
     expect(checks).toHaveLength(3);
     expect(checks[0]).toMatchObject({ command: 'echo ok', status: 'passed', exitCode: 0 });
     expect(checks[1]).toMatchObject({ command: 'exit 2', status: 'failed', exitCode: 2 });
-    // Commands after a failure are recorded as skipped, never silently absent.
     expect(checks[2]).toMatchObject({ command: 'echo never', status: 'skipped', exitCode: null });
   });
 
@@ -284,8 +280,6 @@ describe('harness runtime bridge', () => {
   it('keeps the TAIL of over-cap validation output, not the head', async () => {
     const [check] = await runValidationCommands(
       [
-        // process.exitCode, not process.exit(): exit() truncates unflushed
-        // pipe-backed stdout, which would drop the very tail under test.
         `node -e "process.stdout.write('HEAD-MARKER\\n'); process.stdout.write('x'.repeat(250000)); process.stdout.write('\\nTAIL-MARKER: the real failure\\n'); process.exitCode = 1"`,
       ],
       dir,
@@ -320,8 +314,6 @@ describe('harness runtime bridge', () => {
     const logged = readFileSync(check!.logPath!, 'utf8');
     expect(logged).toContain('FAIL src/a.test.ts');
     expect(logged).toContain('long diagnostics');
-    // The evidence names the log so a repair agent can read it instead of
-    // re-running a long suite.
     expect(check?.evidence).toContain(check!.logPath!);
   });
 
@@ -468,7 +460,6 @@ describe('harness runtime bridge', () => {
       writeFileSync(join(dir, '.ai', 'agentic.config.json'), '{"committed": true}', 'utf8');
       git('add', '.');
       git('commit', '-m', 'base');
-      // Working-tree drift after the commit must NOT leak into the snapshot.
       writeFileSync(join(dir, '.ai', 'agentic.config.json'), '{"committed": false}', 'utf8');
 
       const out = mkdtempSync(join(tmpdir(), 'cez-trusted-'));

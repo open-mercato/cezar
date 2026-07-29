@@ -23,7 +23,6 @@ export function signalAgentProcessTree(
       try {
         process.kill(child.pid, signal);
       } catch {
-        // The process already exited.
       }
     }
   }
@@ -38,7 +37,6 @@ function groupStillAlive(pid: number): boolean {
     process.kill(-pid, 0);
     return true;
   } catch (error) {
-    // EPERM means the group exists but is not ours to signal — still alive.
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
@@ -66,7 +64,6 @@ export function terminateAgentProcessTree(
   signalAgentProcessTree(child, 'SIGTERM');
   const timer = setTimeout(() => {
     if (pid === undefined) return;
-    // Windows `taskkill /t` already covers the tree; only re-check on Unix.
     if (process.platform === 'win32') {
       if (child.exitCode === null && child.signalCode === null) {
         signalAgentProcessTree(child, 'SIGKILL');
@@ -76,8 +73,6 @@ export function terminateAgentProcessTree(
     if (groupStillAlive(pid)) signalAgentProcessTree(child, 'SIGKILL');
   }, graceMs);
   child.once('close', () => {
-    // Only stand down when nothing is left in the group — a leader that exits
-    // first must not cancel the escalation its children still need.
     if (pid === undefined || !groupStillAlive(pid)) clearTimeout(timer);
   });
   timer.unref?.();

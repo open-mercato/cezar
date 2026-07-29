@@ -4,8 +4,6 @@ export interface ResolvedRunnerRef {
   runner: 'claude' | 'codex' | 'opencode';
   model: string;
   effort?: 'low' | 'medium' | 'high' | 'max';
-  /** Trusted agentHarness model id. Present only for configured workers and
-   * executed through the audited command adapter, never the native runner. */
   adapterId?: string;
 }
 

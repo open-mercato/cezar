@@ -21,8 +21,6 @@
  * and that mirror must change together; `model-family.test.ts` pins them.
  */
 
-/** Gateways that resell other vendors' weights. The prefix of a `provider/model`
- *  id is a routing detail for these, never a family. */
 const GATEWAY_PREFIXES: ReadonlySet<string> = new Set(['opencode', 'openrouter', 'zen']);
 
 /** Weight lineage by model name. Two models behind one gateway can be genuinely
@@ -56,7 +54,6 @@ export function familyByModelName(bareModel: string, fallback: string): string {
 export interface FamilyResolvableRef {
   runner: string;
   model: string;
-  /** Advisor refs (`runner: 'harness'`) carry the family from trusted config. */
   family?: string;
 }
 
@@ -67,20 +64,14 @@ export interface FamilyResolvableRef {
  * means, and a gateway prefix only tells you who billed for them.
  */
 export function providerFamilyOf(ref: FamilyResolvableRef): string {
-  // Configured advisors declare their family in trusted config; it wins.
   if (ref.runner === 'harness') return ref.family ?? 'harness';
 
   const slash = ref.model.indexOf('/');
   const prefix = slash > 0 ? ref.model.slice(0, slash) : '';
   const bare = slash > 0 ? ref.model.slice(slash + 1) : ref.model;
 
-  // A non-gateway prefix IS the provider (`anthropic/claude-sonnet-5`); trust it
-  // over the name table, which cannot know a vendor's private model names.
   if (prefix && !GATEWAY_PREFIXES.has(prefix.toLowerCase())) return prefix.toLowerCase();
 
-  // The runner implies the vendor for the two first-party CLIs — but only as a
-  // FALLBACK, so `claude`-runner and gateway-resold Anthropic still collapse to
-  // one family via the name table above.
   const runnerFallback =
     ref.runner === 'claude' ? 'anthropic'
     : ref.runner === 'codex' ? 'openai'

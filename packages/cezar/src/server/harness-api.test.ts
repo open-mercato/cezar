@@ -76,7 +76,6 @@ describe('harness API', () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as { configured: boolean; profiles: string[] };
       expect(body.configured).toBe(false);
-      // `standard` needs no configuration at all — always offered.
       expect(body.profiles).toContain('standard');
     });
 
@@ -110,7 +109,6 @@ describe('harness API', () => {
       const codex = body.models.find((m) => m.id === 'codex');
       expect(codex).toMatchObject({ model: 'gpt-5.6-sol', family: 'openai', roles: ['worker', 'reviewer'] });
       expect(codex?.profiles).toContain('multi');
-      // The host is always in the roster — `standard` is claude-only.
       expect(body.models.some((m) => m.id === 'claude')).toBe(true);
     });
 
@@ -350,8 +348,6 @@ describe('harness API', () => {
       ledger.outcome = { status: 'ready', blockingReasons: [] };
       saveLedger(dataDir, run.id, ledger);
       const push = await post(`/api/runs/${run.id}/git/push`, {});
-      // Not the guard: the request proceeds into real git work (which fails
-      // differently in this bare fixture).
       const body = (await push.json()) as { error?: string };
       expect(body.error ?? '').not.toMatch(/harness|stage-only|contested/i);
     });
@@ -697,8 +693,6 @@ describe('harness API', () => {
       const { run } = seedRun([]);
       const ledger = readLedger(dataDir, run.id);
       if (ledger.status !== 'valid') throw new Error('seed failed');
-      // The ledger is trusted, but it is still a file on disk. A rewritten path
-      // must not turn a review reader into an arbitrary file read.
       ledger.ledger.invocations = [
         reviewer({ promptPath: '/etc/passwd', artifactPath: join(dataDir, 'runs.json') }),
       ] as typeof ledger.ledger.invocations;

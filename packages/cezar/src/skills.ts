@@ -98,9 +98,6 @@ export async function discoverSkills(
   repoRoot: string,
   opts: { bundledDir?: string | null } = {},
 ): Promise<Skill[]> {
-  // `null` disables the bundled scan (tests); `undefined` means the real
-  // packaged tree. Bundled skills merge LAST — they are the guaranteed
-  // floor, and any repo-local, global, or team skill of the same name wins.
   const bundledDir = opts.bundledDir === undefined ? bundledSkillsDir() : opts.bundledDir;
   const [lists, bundledSkills, gatedRepos, uiState] = await Promise.all([
     Promise.all([

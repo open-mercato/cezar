@@ -119,21 +119,10 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
-    /** The EOF watchdog put down a CLI that ignored stdin EOF after `end()` —
-     *  the resulting non-zero exit is clean closure, not a failure (the
-     *  turn's result was already delivered before stdin closed). */
     let eofKilled = false;
 
-    // A failed pipe write does NOT throw at the call site — libuv reports it
-    // asynchronously as an 'error' event, and an EventEmitter 'error' with no
-    // listener is an uncaught exception. The RunManager shares this process with
-    // the HTTP server and there is no process-level net, so a CLI that exits
-    // while a turn is still buffered (cancel, the wall-clock kill, an expired
-    // login) would take the cockpit and every concurrent run down with it. The
-    // try/catch around `write()` cannot see this; only a listener can.
     child.stdin.on('error', (err: NodeJS.ErrnoException) => {
       stdinOpen = false;
-      // EPIPE just means the CLI is gone — the exit/close path owns settlement.
       if (err.code === 'EPIPE') return;
       onEvent?.({ type: 'note', message: `claude: stdin error: ${err.message}` });
     });
@@ -239,8 +228,6 @@ export class ClaudeCliRunner implements AgentRunner {
     if (limitMs > 0) {
       deadline = setTimeout(() => {
         timedOut = true;
-        // `interrupt()` tree-terminates with its own SIGKILL escalation — no
-        // separate kill timer needed here.
         interrupt();
         child.stdout.destroy();
       }, limitMs);

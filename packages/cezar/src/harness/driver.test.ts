@@ -44,7 +44,6 @@ function makeHarness(dir: string) {
   const events: Array<{ type: string; [k: string]: unknown }> = [];
   const steps = new Map<string, string>();
 
-  /** Per-phase agent behavior — the default writes a plausible result file. */
   const agentBehavior = new Map<string, (req: HarnessAgentPhaseRequest) => string | null>();
   const defaultResults: Record<string, unknown> = {
     qualify: { outcome: 'work_needed', evidence: 'bug reproduced on main' },
@@ -82,8 +81,6 @@ function makeHarness(dir: string) {
     runAgent: async (req) => {
       calls.push({ kind: 'agent', id: req.phaseId });
       const base = req.phaseId.replace(/-\d+$/, '');
-      // Exact phase id first, then the base name — so `review` behavior also
-      // drives `review-2` unless a test pins the round explicitly.
       const behavior = agentBehavior.get(req.phaseId) ?? agentBehavior.get(base);
       if (behavior) return behavior(req);
       const canned = defaultResults[base];
@@ -100,19 +97,14 @@ function makeHarness(dir: string) {
     ensureSkill: async () => true,
   };
 
-  /** The sealed runtime's digest as the driver will observe it. A test flips
-   *  this mid-run to simulate the runtime being rewritten under us. */
   let sealedDigest = 'sealed-sha';
   const sealDigest = () => sealedDigest;
 
   const ops: FakeCall[] = [];
   /** Advisory findings the fake stage op attaches to its result (run aad28178). */
   const stageWarnings: string[] = [];
-  /** Per-model probe verdicts, keyed by `roleRefId`. Empty = everything ready. */
   const probeVerdicts = new Map<string, ProbeVerdict>();
 
-  /** Scripted council-op outcome. Returns undefined to take the default
-   *  "everyone approves" behavior. */
   let councilBehavior: (ids: string[]) =>
     | { ok: boolean; stderr?: string; result?: unknown }
     | undefined = () => undefined;
@@ -127,8 +119,6 @@ function makeHarness(dir: string) {
   };
 
   const deps: HarnessDriverDeps = {
-    // Tests drive skill presence through `ensureSkill`; the real bundled-copy
-    // refresh would drag the actual vendor tree into every fixture.
     bundledSkillsRoot: null,
     resolveScript: () => join(dir, 'harness.mjs'),
     // The sealed-runtime seam (2026-07-27). Tests never materialize a real
@@ -272,9 +262,6 @@ function makeHarness(dir: string) {
     exportConfig: async () => null,
     snapshotReviewSubject: async () => 'stable-review-subject',
     snapshotStageSubject: async () => 'stable-stage-subject',
-    // Preflight probes every binding on its real transport; in tests that must
-    // never spawn a CLI or reach the network. Individual tests override
-    // `probeVerdicts` to exercise the unreachable-model path.
     createProber: () => ({
       probe: async (ref) => probeVerdicts.get(probeKey(ref)) ?? { status: 'ready', detail: 'stub' },
       probeAll: async (refs) =>
@@ -300,7 +287,6 @@ function makeHarness(dir: string) {
     probeVerdicts,
     setCouncilBehavior,
     setPacketRunBehavior,
-    /** Simulate the sealed runtime being rewritten under a live run. */
     tamperRuntime: (digest = 'tampered-sha') => {
       sealedDigest = digest;
     },
@@ -365,7 +351,6 @@ describe('harness driver — standard fix-issue graph', () => {
       writeFileSync(join(bundledRoot, name, 'scripts', 'harness.mjs'), `// bundled-current ${name}\n`, 'utf8');
     }
     h.deps.bundledSkillsRoot = bundledRoot;
-    // The stale local-first clone a poisoned catalog would have produced.
     const stale = join(dir, '.claude', 'skills', 'cez-harness');
     mkdirSync(join(stale, 'scripts'), { recursive: true });
     writeFileSync(join(stale, 'scripts', 'harness.mjs'), '// FROZEN 12:22 SNAPSHOT\n', 'utf8');
@@ -380,7 +365,6 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(error).toBeNull();
     expect(readFileSync(join(stale, 'scripts', 'harness.mjs'), 'utf8')).toContain('bundled-current');
     expect(readFileSync(join(stale, 'scripts', 'harness.mjs'), 'utf8')).not.toContain('FROZEN');
-    // Every needed skill came from the bundled tree — the catalog was never asked.
     expect(ensureSkillCalls).toBe(0);
   });
 
@@ -390,15 +374,12 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(error).toBeNull();
 
     const order = h.calls.map((c) => c.id);
-    // Sequencing: agent phases sandwiched by capture first and stage last.
     expect(order[0]).toBe('capture');
     expect(order[order.length - 1]).toBe('stage');
     expect(order.indexOf('qualify')).toBeLessThan(order.indexOf('diagnose'));
     expect(order.indexOf('diagnose')).toBeLessThan(order.indexOf('implement'));
     expect(order.indexOf('implement')).toBeLessThan(order.indexOf('review'));
 
-    // The stage op received the start state and the allowlist file, whose
-    // content is the implement phase's declared paths.
     const stage = h.ops.find((o) => o.id === 'stage');
     expect(stage?.args).toContain('--paths-file');
     const pathsFile = stage!.args![stage!.args!.indexOf('--paths-file') + 1]!;
@@ -459,12 +440,6 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(ledger?.phases.find((p) => p.id === 'qualify')?.status).toBe('failed');
   });
 
-  /**
-   * The retry is informed, not blind (the "remind it of the JSON" loop): a
-   * session that broke the result contract is rerun with the named failure and
-   * the contract restated — and an implement/fix retry is told its predecessor's
-   * worktree edits survive, so paid work is finished rather than redone.
-   */
   it('tells the retry session what the first attempt got wrong', async () => {
     const h = makeHarness(dir);
     const prompts: string[] = [];
@@ -486,9 +461,7 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(prompts).toHaveLength(2);
     expect(prompts[0]).not.toContain('RESULT-CONTRACT RETRY');
     expect(prompts[1]).toContain('RESULT-CONTRACT RETRY');
-    // The named failure, not a generic "invalid result".
     expect(prompts[1]).toContain('do not contain the contracted JSON object');
-    // Paid work survives the retry — say so.
     expect(prompts[1]).toContain('worktree edits');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('told what was wrong'))).toBe(true);
@@ -507,8 +480,6 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(failed).toMatchObject({
       status: 'failed',
       attempt: 2,
-      // The error now names WHAT was wrong after the dash — the same detail
-      // the informed retry feeds back to the model.
       error: expect.stringContaining('ended without a valid result file'),
     });
     const resultPath = join(
@@ -594,8 +565,6 @@ describe('harness driver — standard fix-issue graph', () => {
       });
     }
     const error = await runHarnessDriver(h.host, input, h.deps);
-    // Bounded rounds still apply; what changed is what happens at the bound —
-    // stage-only delivery hands the human the work plus what is unresolved.
     expect(error).toBeNull();
     expect(h.calls.filter((c) => c.id.startsWith('review'))).toHaveLength(3);
     expect(h.calls.map((c) => c.id)).toContain('stage');
@@ -615,8 +584,6 @@ describe('harness driver — standard fix-issue graph', () => {
     let gate = 0;
     h.deps.validate = async (commands: string[]) => {
       gate += 1;
-      // Call 1 is the baseline gate (green). Red once on the round-1 validate —
-      // a genuine regression — then green.
       const failed = gate === 2;
       return commands.map((command) => ({
         command,
@@ -641,8 +608,6 @@ describe('harness driver — standard fix-issue graph', () => {
     }
     const error = await runHarnessDriver(h.host, input, h.deps);
     expect(error).toBeNull();
-    // Three review rounds still available despite the repair round — the whole
-    // point. Before this, the failed gate cost one of them and only two ran.
     expect(h.calls.filter((c) => c.id.startsWith('review'))).toHaveLength(3);
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('does NOT consume a review round'))).toBe(true);
@@ -677,12 +642,10 @@ describe('harness driver — standard fix-issue graph', () => {
 
     expect(error).toBeNull();
     expect(h.calls.map((c) => c.id)).toContain('stage');
-    // The identical failure never bought a repair round.
     expect(h.calls.filter((c) => c.id.startsWith('fix-'))).toHaveLength(0);
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('RED on the untouched worktree'))).toBe(true);
     expect(notes.some((n) => n.includes('tolerating 1 pre-existing failure'))).toBe(true);
-    // Reviewers see the tolerance, not a bare "failed" they would block on.
     expect(reviewPrompt).toContain('tolerated as pre-existing');
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
     expect(ledger?.baselineValidation?.[0]?.status).toBe('failed');
@@ -720,7 +683,6 @@ describe('harness driver — standard fix-issue graph', () => {
 
     expect(error).toMatch(/validation gate still failing/);
     expect(error).toMatch(/new failures vs baseline: fail:src\/new-breakage\.test\.ts/);
-    // The pre-existing upstream failure is not what the run is charged with.
     expect(error).not.toMatch(/new failures vs baseline: fail:src\/upstream\.test\.ts/);
     expect(h.calls.map((c) => c.id)).not.toContain('stage');
   });
@@ -785,7 +747,6 @@ describe('harness driver — standard fix-issue graph', () => {
     const error = await runHarnessDriver(h.host, input, h.deps);
 
     expect(error).toBeNull();
-    // The "approve" label no longer ends the loop: the fix rounds actually run.
     expect(h.calls.filter((c) => c.id.startsWith('review')).length).toBeGreaterThan(1);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
     expect(ledger?.outcome.status).toBe('contested');
@@ -811,15 +772,11 @@ describe('harness driver — standard fix-issue graph', () => {
 
     const pinned = loadLedger(h.host.dataDir, h.host.runId)?.runtimeScript;
     expect(pinned?.sha256).toBe('sealed-sha');
-    // Sealed OUT of the worktree — the path the worker can write is not the
-    // path that runs.
     expect(pinned?.path).not.toContain('.claude/skills');
   });
 
   it('refuses to execute a runtime that changed mid-run', async () => {
     const h = makeHarness(dir);
-    // The implement phase "rewrites" the runtime, exactly as a prompt-injected
-    // worker would, then the next op tries to run it.
     h.agentBehavior.set('implement', (req) => {
       writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/a.ts'] }), 'utf8');
       h.tamperRuntime();
@@ -869,16 +826,12 @@ describe('harness driver — standard fix-issue graph', () => {
     git('commit', '-q', '-m', 'base');
     writeFileSync(join(repo, 'tracked.ts'), 'export const value = 2\n', 'utf8');
 
-    // Staging a tracked edit is index choreography, not a content change. The
-    // review subject used to flip here, which meant `git add` could void a
-    // council; both hashes now read the worktree, not the index.
     const unstaged = await snapshotHarnessReviewSubject(repo);
     const unstagedStageSubject = await snapshotHarnessStageSubject(repo);
     git('add', 'tracked.ts');
     expect(await snapshotHarnessReviewSubject(repo)).toBe(unstaged);
     expect(await snapshotHarnessStageSubject(repo)).toBe(unstagedStageSubject);
 
-    // A real content edit still changes both.
     writeFileSync(join(repo, 'tracked.ts'), 'export const value = 3\n', 'utf8');
     expect(await snapshotHarnessReviewSubject(repo)).not.toBe(unstaged);
     expect(await snapshotHarnessStageSubject(repo)).not.toBe(unstagedStageSubject);
@@ -912,7 +865,6 @@ describe('harness driver — standard fix-issue graph', () => {
     writeFileSync(join(repo, '.ai', 'specs', 'feature.md'), '# spec\n', 'utf8');
     const review = await snapshotHarnessReviewSubject(repo);
     const stage = await snapshotHarnessStageSubject(repo);
-    // …and the poller runs `git add -N .` mid-council.
     git('add', '-N', '.');
     expect(await snapshotHarnessReviewSubject(repo)).toBe(review);
     expect(await snapshotHarnessStageSubject(repo)).toBe(stage);
@@ -1449,8 +1401,6 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(await runHarnessDriver(resumed.host, input, resumed.deps)).toBeNull();
 
     expect(resumed.calls.map((call) => call.id)).toContain('qualify');
-    // The upstream decision reran, but the hash-bound staged subject itself
-    // remained identical, so the deterministic stage invocation is reusable.
     expect(resumed.calls.map((call) => call.id)).not.toContain('stage');
     const ledger = loadLedger(resumed.host.dataDir, resumed.host.runId);
     expect(
@@ -1770,8 +1720,6 @@ describe('harness driver — standard fix-issue graph', () => {
     let validateCalls = 0;
     h.deps.validate = async (commands) => {
       validateCalls += 1;
-      // Author the message during the VALIDATE phase, not the baseline gate
-      // that now precedes the agent phases — its next boundary is the council.
       if (validateCalls > 1) {
         const external = loadLedger(h.host.dataDir, h.host.runId)!;
         if (!external.pendingMessages.some((message) => message.id === 'during-validation')) {
@@ -1905,7 +1853,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(error).toBeNull();
     expect(seen.find((s) => s.id === 'qualify')?.runner).toBe('claude');
     expect(seen.find((s) => s.id === 'implement')?.runner).toBe('codex');
-    // The codex reviewer is a structured call, NOT an agent session.
     expect(h.calls.filter((c) => c.kind === 'agent' && c.id === 'review')).toHaveLength(1);
     expect(h.ops.some((o) => o.id === 'review')).toBe(true);
   });
@@ -1930,8 +1877,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     const models = loadLedger(h.host.dataDir, h.host.runId)?.models ?? [];
     expect(models.length).toBeGreaterThan(0);
     expect(models.every((m) => typeof m.family === 'string' && m.family.length > 0)).toBe(true);
-    // The parts are carried separately so no surface has to re-split `id`
-    // (which is `runner/model` and doubles up for gateway-qualified ids).
     expect(models.every((m) => typeof m.runner === 'string')).toBe(true);
     const claude = models.find((m) => m.id.startsWith('claude/'));
     expect(claude?.family).toBe('anthropic');
@@ -1983,10 +1928,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
   };
 
   /**
-   * Regression: a run spent 5.3M tokens and $12, two reviewers had completed,
-   * and the whole thing was discarded because a third produced nothing.
-   */
-  /**
    * Regression (run 0fe16fb7, 2026-07-28): a spec council with two completed
    * reviewers across two families was discarded because a third small model
    * flubbed the result-file contract. One flaky reviewer must never void a run:
@@ -2026,9 +1967,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
           verdict: 'approve',
           reviewers: ids.map((id) => ({
             id,
-            // Run 1: BOTH advisors fail — the claude session alone is below the
-            // quorum floor, so the run genuinely dies (a single failure would
-            // now proceed degraded instead of exercising resume at all).
             status: councilCalls.length === 1 ? 'failed' : 'completed',
             ...(councilCalls.length === 1
               ? {}
@@ -2047,7 +1985,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(councilCalls[0]).toEqual(
       expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-opencode-mimo-v2.5-free']),
     );
-    // Only the failed advisors rerun; the claude session review is reused.
     expect(councilCalls[1]).toEqual(
       expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-opencode-mimo-v2.5-free']),
     );
@@ -2068,8 +2005,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     h.deps.snapshotReviewSubject = async () => subject;
     h.setCouncilBehavior((ids) => {
       councilCalls += 1;
-      // A CONTINUOUS writer: a fresh value every attempt, so the in-run retry
-      // fails too and the run genuinely dies — the case recovery exists for.
       subject = `changed-during-council-${councilCalls}`;
       return {
         ok: true,
@@ -2088,12 +2023,8 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     expect(first).toMatch(/review subject changed/i);
     expect(first).not.toMatch(/reviewer mutated/i);
-    // The paid attempt plus the automatic in-run retry, both defeated.
     expect(councilCalls).toBe(2);
 
-    // Existing production ledgers contain the pre-fix wording. Recovery must
-    // remain compatible with them so clicking Continue can adopt the result
-    // that was already paid for.
     const failedLedger = loadLedger(h.host.dataDir, h.host.runId)!;
     for (const invocation of failedLedger.invocations) {
       if (invocation.id.startsWith('advisor:impl:')) {
@@ -2103,9 +2034,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     }
     saveLedger(h.host.dataDir, h.host.runId, failedLedger);
 
-    // Adoption is hash-gated: the resumed run must observe the same subject the
-    // rejected attempt hashed at entry — attempt 2 entered at the value attempt
-    // 1's write left behind.
     subject = 'changed-during-council-1';
     h.setCouncilBehavior(() => {
       throw new Error('the recovered council must not invoke reviewers again');
@@ -2133,7 +2061,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
   it('refuses when required reviewers do not complete', async () => {
     const h = makeHarness(dir);
-    // Both structured reviewers fail; only the claude session remains.
     h.setCouncilBehavior((ids) => ({
       ok: true,
       result: { verdict: 'approve', reviewers: ids.map((id) => ({ id, status: 'failed' })) },
@@ -2141,8 +2068,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     const error = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
 
-    // Below the floor there is nothing to degrade TO: one surviving reviewer
-    // cross-checks nothing.
     expect(error).toMatch(/quorum/);
     expect(error).toMatch(/needs at least 2/);
     expect(h.calls.map((c) => c.id)).not.toContain('stage');
@@ -2154,7 +2079,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     const error = await runHarnessDriver(h.host, threeReviewerInput, h.deps);
 
-    // The claude session still reviewed; quorum reports what was missing.
     expect(error).toMatch(/quorum/);
     expect(error).toMatch(/runtime exploded|no valid review/);
   });
@@ -2167,7 +2091,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
    */
   it('stages the work when the council will not converge, naming what is unresolved', async () => {
     const h = makeHarness(dir);
-    // Every round: one reviewer approves, the other raises a fresh major.
     let round = 0;
     h.setCouncilBehavior((ids) => {
       round += 1;
@@ -2225,7 +2148,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       h.deps,
     );
 
-    // The run delivers rather than evaporating.
     expect(error).toBeNull();
     expect(h.calls.map((c) => c.id)).toContain('stage');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
@@ -2275,7 +2197,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(error).toBeNull();
     expect(specPrompt).toContain('NON-INTERACTIVE');
     expect(specPrompt).toContain('never emit CEZ:ASK');
-    // And the gate is not just forbidden — it is redirected.
     expect(specPrompt).toContain('record each question and the assumption');
   });
 
@@ -2306,8 +2227,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(error).toBeNull();
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('proceeded under 1 recorded assumption'))).toBe(true);
-    // The implementation reviewer sees the question as a known-open decision,
-    // not a defect to relitigate.
     expect(reviewPrompt).toContain('known-open design questions');
     expect(reviewPrompt).toContain('assumed: unified tabs');
   });
@@ -2329,7 +2248,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     mkdirSync(join(parent, '.ai', 'specs'), { recursive: true });
     writeFileSync(join(parent, '.ai', 'specs', 'stray.md'), '# spec\n', 'utf8');
     h.agentBehavior.set('spec', (req) => {
-      // Reports a plausible repo-relative path — but wrote it to the checkout.
       writeFileSync(
         req.resultPath,
         JSON.stringify({ summary: 's', specPath: '.ai/specs/stray.md', files: ['.ai/specs/stray.md'] }),
@@ -2342,7 +2260,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     expect(error).toContain('main checkout');
     expect(error).toContain('.ai/specs/stray.md');
-    // Nothing was reviewed: the council never ran, so no round was wasted.
     expect(h.ops.map((o) => o.id)).not.toContain('review');
     expect(h.calls.map((c) => c.id)).not.toContain('spec-review');
     rmSync(parent, { recursive: true, force: true });
@@ -2368,12 +2285,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
   /* ---- readiness probing (2026-07-25) ---- */
 
-  /**
-   * Regression: a council once ran to completion-minus-one with a reviewer
-   * whose transport 500'd on every prompt, because preflight hardcoded
-   * `readiness: 'ready'`. The run died an hour later as "reviewer X produced no
-   * valid review", pointing at the model instead of the dead transport.
-   */
   it('fails preflight with the upstream error when a bound model is unreachable', async () => {
     const h = makeHarness(dir);
     h.probeVerdicts.set('opencode/opencode/mimo-v2.5-free', {
@@ -2394,9 +2305,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     const error = await runHarnessDriver(h.host, unreachable, h.deps);
 
     expect(error).toContain('opencode/opencode/mimo-v2.5-free');
-    // The operator gets the cause, not a downstream symptom.
     expect(error).toContain('replacement_seq');
-    // It stops BEFORE any model work — no qualify, no council, no staging.
     expect(h.calls.map((c) => c.id)).not.toContain('qualify');
     expect(h.calls.map((c) => c.id)).not.toContain('stage');
   });
@@ -2423,8 +2332,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
   };
   const advisorInput = { ...input, roles: advisorRoles };
 
-  /** Bind kimi in the worktree config (the council's config source) and in the
-   *  loaded agentic view (the preflight's check). */
   function bindKimi(h: ReturnType<typeof makeHarness>) {
     const agentHarness = {
       models: { kimi: { roles: ['reviewer'], family: 'moonshot', timeoutMs: 120_000 } },
@@ -2462,11 +2369,9 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       models: { kimi: { roles: ['reviewer'], family: 'moonshot', timeoutMs: 120_000 } },
       profiles: {},
     };
-    // Committed WITHOUT agentHarness — the base branch has no model config yet.
     writeFileSync(configPath, JSON.stringify({ validation: { commands: ['echo ok'] } }), 'utf8')
     git('add', '.ai/agentic.config.json')
     git('commit', '-q', '-m', 'base')
-    // Setup writes it, stages it, then writes again → `MM`.
     writeFileSync(configPath, JSON.stringify({ agentHarness }), 'utf8')
     git('add', '.ai/agentic.config.json')
     writeFileSync(configPath, JSON.stringify({ agentHarness, touchedAgain: true }), 'utf8')
@@ -2477,7 +2382,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       }).trim(),
     ).toMatch(/^MM/)
 
-    // The worktree has no agentHarness; only the checkout does.
     h.deps.loadAgentic = async (root: string) => ({
       baseBranch: 'main',
       validationCommands: ['echo ok'],
@@ -2486,10 +2390,8 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     const error = await runHarnessDriver(h.host, advisorInput, h.deps)
 
-    // Null, not the refusal it used to be — the dirty index is no longer fatal.
     expect(error).toBeNull()
     expect(String(error)).not.toMatch(/clean staged change/)
-    // And it says plainly what it used, without asking for git surgery.
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message))
     expect(notes.some((n) => n.includes('working copy of .ai/agentic.config.json'))).toBe(true)
     expect(notes.some((n) => /stage .ai\/agentic.config.json/.test(n))).toBe(false)
@@ -2544,8 +2446,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     let subject = 'stable-review-subject';
     h.deps.snapshotReviewSubject = async () => subject;
     scriptCouncil(h, (round) => {
-      // Round 1 simulates one write landing inside the council window; the
-      // retry's window is quiet.
       if (round === 1) subject = 'changed-during-council';
       return {
         ok: true,
@@ -2557,8 +2457,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     });
     const error = await runHarnessDriver(h.host, advisorInput, h.deps);
     expect(error).toBeNull();
-    // A rerun, not an adoption: the input hash embeds the subject, and the
-    // subject is exactly what changed — recovery-by-hash can never fire here.
     expect(h.ops.filter((o) => o.id === 'review')).toHaveLength(2);
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('retrying the council once against the current subject'))).toBe(true);
@@ -2566,7 +2464,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(ledger?.stage.status).toBe('staged');
   });
 
-  /** Swap the fake runtime for one whose `review` op is scripted per round. */
   function scriptCouncil(
     h: ReturnType<typeof makeHarness>,
     onReview: (round: number) => { ok: boolean; stderr?: string; result?: unknown },
@@ -2621,7 +2518,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       );
       return null;
     });
-    // A continuous writer: every council window sees a fresh subject.
     scriptCouncil(h, () => {
       councilCalls += 1;
       subject = `changed-${councilCalls}`;
@@ -2661,10 +2557,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       ),
     ).toBe(true);
 
-    // The IMPLEMENTATION council reviews the live worktree — its hash moves with
-    // the writer, adoption can never apply, and after the one retry the run
-    // honestly fails: something rewriting the worktree continuously is a real
-    // integrity problem.
     expect(error).toMatch(/review subject changed/i);
     expect(councilCalls).toBe(3); // spec ×1 (adopted in retry), impl ×2 (attempt + retry)
   });
@@ -2727,10 +2619,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     const error = await runHarnessDriver(h.host, advisorInput, h.deps);
 
-    // The council's verdict must reach the fix loop, not be thrown away.
     expect(error).not.toMatch(/no structured result/);
-    // …and the object collapses to the readable form the brief interpolates,
-    // never "[object Object]".
     expect(fixPrompt).toContain('src/api/proposals.ts:42 (handler)');
     expect(fixPrompt).toContain('.ai/specs/feat.md');
     expect(fixPrompt).not.toContain('[object Object]');
@@ -2755,7 +2644,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     const review = h.ops.find((o) => o.id === 'review');
     expect(review?.args).toContain('--profile');
     expect(review!.args![review!.args!.indexOf('--profile') + 1]).toBe('cez-role-council');
-    // The synthesized config holds EXACTLY the selected advisors, all-required.
     const configPath = review!.args![review!.args!.indexOf('--config') + 1]!;
     const synthesized = JSON.parse(readFileSync(configPath, 'utf8')) as {
       agentHarness: { profiles: Record<string, { reviewers: string[]; reviewPolicy: { requiredReviewers: string[] } }> };
@@ -2884,7 +2772,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(reviewArgs[0]).toContain('--artifact');
     expect(reviewArgs[0]![reviewArgs[0]!.indexOf('--artifact') + 1]).toContain('.ai/specs/feat.md');
     expect(reviewArgs[2]).not.toContain('--artifact');
-    // Revision ran between the rounds, before implement.
     const order = h.calls.map((c) => c.id);
     expect(order.indexOf('spec-2')).toBeGreaterThan(order.indexOf('spec-review'));
     expect(order.indexOf('implement')).toBeGreaterThan(order.indexOf('spec-2'));
@@ -2904,9 +2791,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
   });
 
   it('falls back to the repo working tree config when the base carries no agentHarness (staged setup)', async () => {
-    // The exact post-setup window: cez-setup-harness staged the config in the
-    // repo root, nothing committed — a worktree forked from the base sees no
-    // agentHarness, but the run must still find the user's staged bindings.
     const h = makeHarness(dir); // dir = the run worktree
     const root = mkdtempSync(join(tmpdir(), 'cez-driver-root-'));
     try {
@@ -2933,8 +2817,6 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       const error = await runHarnessDriver(h.host, advisorInput, h.deps);
       expect(error).toBeNull();
 
-      // The council's synthesized profile was built from the immutable
-      // artifact COPY of the staged config, not the live file.
       const review = h.ops.find((o) => o.id === 'review');
       const configPath = review!.args![review!.args!.indexOf('--config') + 1]!;
       const synthesized = JSON.parse(readFileSync(configPath, 'utf8')) as {

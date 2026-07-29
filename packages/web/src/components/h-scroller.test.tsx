@@ -15,7 +15,6 @@ import { HScroller } from './h-scroller'
  * expressed as buttons.
  */
 
-/** jsdom reports every element as 0×0, so the overflow has to be stubbed. */
 function stubMetrics(scrollWidth: number, clientWidth: number) {
   Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
     configurable: true,
@@ -59,7 +58,6 @@ const view = () =>
     </HScroller>,
   )
 
-/** The scroller's inner div is the one carrying the aria-label. */
 function markStrip() {
   const el = document.querySelector<HTMLElement>('[aria-label="Run tabs"]')
   if (el) el.dataset.scroller = 'true'
@@ -84,7 +82,6 @@ describe('HScroller', () => {
 
     const right = document.querySelector<HTMLButtonElement>('[data-slot="h-scroller-right"]')
     expect(right).not.toBeNull()
-    // At the start there is nowhere left to go, so that arrow is inert.
     const left = document.querySelector<HTMLButtonElement>('[data-slot="h-scroller-left"]')
     expect(left?.disabled).toBe(true)
     expect(right?.disabled).toBe(false)

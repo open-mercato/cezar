@@ -409,7 +409,6 @@ describe('activeSubagent', () => {
     expect(subagentActivityText({ id: 'a', title: 't', status: 'completed', toolCalls: 0 })).toBe('finished')
     expect(subagentActivityText({ id: 'a', title: 't', status: 'failed', toolCalls: 0 })).toBe('failed')
     expect(subagentActivityText({ id: 'a', title: 't', status: 'declined', toolCalls: 0 })).toBe('declined')
-    // Still-live agents keep the honest "starting…" until output arrives.
     expect(subagentActivityText({ id: 'a', title: 't', status: 'pending', toolCalls: 0 })).toBe('starting…')
   })
 })

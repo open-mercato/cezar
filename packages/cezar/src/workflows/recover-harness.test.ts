@@ -62,8 +62,6 @@ describe('recover() and harness runs', () => {
     const recovered = store.getRun(id);
     expect(recovered?.status).toBe('queued');
     expect(recovered?.harness?.profile).toBe('standard');
-    // The interrupted phase's step resets to pending — the driver restarts it
-    // fresh from the ledger; nothing is marked failed.
     expect(recovered?.steps.find((s) => s.id === 'implement')?.status).toBe('pending');
     const events = store.readEvents(id);
     expect(events.some((e) => typeof e.message === 'string' && /ledger/.test(e.message as string))).toBe(true);

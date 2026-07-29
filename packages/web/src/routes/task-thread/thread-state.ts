@@ -215,13 +215,6 @@ function stripDoneMarker(text: string, stripAsk: boolean): string {
     .join('\n')
 }
 
-/**
- * A trailing `CEZ:ASK {...}` whose card never rendered, rewritten as the questions it carries —
- * message text renders as markdown, so this reads as a normal ask. Returns `null` when there is
- * no trailing marker or the payload is not ask-shaped enough to rewrite honestly (then the raw
- * text stays, per the gate comment above). Mirrors `formatAskAsProse` in
- * `packages/cezar/src/core/ask.ts` — same duplication contract as `stripTaskMarkers`.
- */
 function askMarkerAsProse(trailing: string): string | null {
   const match = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/.exec(trailing.trimEnd())
   if (!match) return null

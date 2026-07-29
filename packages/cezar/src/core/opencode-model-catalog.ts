@@ -15,14 +15,11 @@ export interface OpencodeModelDiscoveryOptions {
   cwd: string;
   bin?: string;
   timeoutMs?: number;
-  /** Injectable for tests: resolves with the raw `opencode models` stdout. */
   run?: (bin: string, args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<string>;
 }
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 5_000;
 const MAX_MODELS = 500;
-/** One `provider/model` id per line; anything else (warnings, blank lines,
- *  update banners) is noise to skip, never a parse failure. */
 const MODEL_LINE = /^[A-Za-z0-9_.-]+\/[^\s/]\S*$/;
 
 /** Parse `opencode models` output into catalog options. Pure — the discovery

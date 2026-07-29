@@ -30,14 +30,9 @@ import type { HarnessValidationCheck } from './types.js';
 
 const OP_OUTPUT_CAP = 200_000;
 const DEFAULT_OP_TIMEOUT_MS = 10 * 60_000;
-/** Validation commands are repo test suites — give them a long leash. */
 const VALIDATION_TIMEOUT_MS = 30 * 60_000;
 const PROCESS_KILL_GRACE_MS = 5_000;
 
-/** Environment inherited by the deterministic harness and the provider CLIs it launches.
- * The server process may carry unrelated deployment/database credentials; forwarding all of
- * `process.env` to independent reviewer processes turns a read-only review into secret access.
- * Provider-specific names are added explicitly from trusted `agentHarness` configuration. */
 const HARNESS_BASE_ENV = new Set([
   'PATH',
   'HOME',
@@ -66,9 +61,6 @@ const HARNESS_BASE_ENV = new Set([
   'NODE_EXTRA_CA_CERTS',
   'SSL_CERT_FILE',
   'SSL_CERT_DIR',
-  // Subscription CLIs commonly use their standard credential variables even
-  // without an agentHarness model entry. These are provider credentials, not
-  // arbitrary server secrets.
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
 ]);
@@ -105,9 +97,6 @@ export function harnessConfigEnvironmentNames(agentHarness: Record<string, unkno
   return [...names];
 }
 
-/** Every harness/validation child is its own process-group leader on Unix.
- * Signals target that group so provider CLIs and shell grandchildren cannot
- * outlive the run. Windows uses taskkill's documented tree mode. */
 function signalProcessTreePid(pid: number | undefined, signal: 'SIGTERM' | 'SIGKILL'): void {
   if (!pid) return;
   if (process.platform === 'win32') {
@@ -124,7 +113,6 @@ function signalProcessTreePid(pid: number | undefined, signal: 'SIGTERM' | 'SIGK
       try {
         process.kill(pid, signal);
       } catch {
-        // The process already exited.
       }
     }
   }
@@ -140,9 +128,6 @@ export function terminateProcessTree(
 ): void {
   signalProcessTree(child, 'SIGTERM');
   const watchdog = setTimeout(() => {
-    // The ChildProcess object retains its pid after close. Never aim a delayed
-    // hard-kill at that stale number: the OS may already have assigned it to
-    // an unrelated process/group.
     if (child.exitCode !== null || child.signalCode !== null) return;
     if (identity && processHasToken(identity) !== true) return;
     if (identity) signalOwnedProcess(identity, 'SIGKILL');
@@ -172,8 +157,6 @@ function processExists(pid: number): boolean {
   }
 }
 
-/** Check the random token in the process environment before touching a recorded PID. PID reuse
- * must never turn harness recovery into a kill of an unrelated local process. */
 function processHasToken(identity: HarnessProcessIdentity): boolean | null {
   if (!processExists(identity.pid)) return false;
   try {
@@ -209,7 +192,6 @@ function signalOwnedProcess(
   try {
     process.kill(identity.pid, signal);
   } catch {
-    // The owned process already exited.
   }
 }
 
@@ -236,8 +218,6 @@ export async function reconcileHarnessProcess(
     if (!processExists(identity.pid)) return { status: 'terminated' };
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  // Re-check immediately before escalation; the PID may have exited and been
-  // reused during the grace window.
   const stillMatches = processHasToken(identity);
   if (stillMatches !== true) {
     return stillMatches === false && !processExists(identity.pid)
@@ -269,7 +249,6 @@ export interface HarnessOpResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
-  /** Spawn/timeout diagnostics — set only when the op never ran or was cut off. */
   error?: string;
   durationMs: number;
 }
@@ -285,15 +264,6 @@ export function resolveHarnessScript(cwd: string): string | null {
   return existsSync(path) ? path : null;
 }
 
-/**
- * Copy a tree resolving EVERY symlink to its contents.
- *
- * `cpSync(..., { dereference: true })` does not do this for a symlinked
- * DIRECTORY at the root of a recursive copy — the sealed tree kept pointing at
- * the mutable original, which is precisely the escape sealing exists to close
- * (a `team`-sourced skill materializes as exactly such a link). Walk it
- * explicitly instead, so the seal is by value at every level.
- */
 function copyTreeByValue(source: string, dest: string): void {
   const stat = statSync(source); // statSync follows links, lstatSync would not
   if (stat.isDirectory()) {
@@ -347,11 +317,8 @@ export function sealHarnessRuntime(
 }
 
 export interface HarnessRuntimeInfo {
-  /** The `cez-harness` collection resolves AND its runtime script is real. */
   installed: boolean;
   source: Skill['source'] | null;
-  /** The pinned upstream commit — vendor MANIFEST for `bundled`, the resolved
-   *  repo commit for `team`; null where provenance is unrecorded (local dirs). */
   commit: string | null;
 }
 
@@ -370,8 +337,6 @@ export async function resolveHarnessRuntimeInfo(
   const skill = catalog.find((s) => s.name === 'cez-harness');
   if (!skill) return { installed: false, source: null, commit: null };
   if (skill.source === 'team') {
-    // Team skills materialize from the bare clone at run time; the catalog
-    // hit itself proves the clone is readable.
     return { installed: true, source: 'team', commit: skill.team?.commit ?? null };
   }
   const skillDir = dirname(skill.path);
@@ -403,8 +368,6 @@ export class HarnessRuntime {
     },
   ) {}
 
-  /** Terminate the in-flight op (the cancel path). Ops are serial — the
-   *  driver awaits each one — so one handle suffices. */
   kill(): void {
     this.killed = true;
     if (this.current) terminateProcessTree(this.current, this.currentIdentity ?? undefined);
@@ -513,10 +476,6 @@ function randomProcessToken(): string {
   return randomUUID();
 }
 
-/* ------------------------------------------------------------------ */
-/* Trusted configuration                                               */
-/* ------------------------------------------------------------------ */
-
 const agenticConfigSchema = z
   .object({
     baseBranch: z.string().optional(),
@@ -566,7 +525,6 @@ export async function exportTrustedConfig(
   baseRef: string,
   destDir: string,
 ): Promise<{ path: string; ref: string } | null> {
-  // Dash-guard: `baseRef` is spliced in as a git operand.
   if (!baseRef || baseRef.startsWith('-')) return null;
   const git = (args: string[]) =>
     new Promise<{ ok: boolean; stdout: string }>((resolve) => {
@@ -587,15 +545,8 @@ export async function exportTrustedConfig(
   return { path, ref: `${baseRef}@${sha.stdout.trim()}` };
 }
 
-/* ------------------------------------------------------------------ */
-/* Validation gate                                                     */
-/* ------------------------------------------------------------------ */
-
 const ANSI_PATTERN = /\u001B\[[0-9;]*[A-Za-z]/g;
 
-/** Lines that carry a failure verdict across the runners repos actually use
- *  (jest via turbo, tsc, package managers). Ordered from most to least
- *  specific only for readability — selection keeps the stream's own order. */
 const FAILURE_LINE_PATTERNS: RegExp[] = [
   /(^|\s)FAIL\s/,
   /^\s*Failed:\s+\S/,
@@ -689,7 +640,6 @@ export function extractFailingTestIds(output: string): string[] {
 }
 
 export type GateRegressionCheck = HarnessValidationCheck & {
-  /** Failure identities present now but absent at baseline. */
   newFailureIds?: string[];
 };
 
@@ -758,9 +708,6 @@ export async function runValidationCommands(
     onExit?: (command: string, index: number) => void;
     signal?: AbortSignal;
     env?: Record<string, string>;
-    /** When set, each command's full captured output is persisted here as
-     *  `<logPrefix><n>-<command-slug>.log` and failed checks reference it —
-     *  the evidence is an extract, the log is the trusted whole. */
     logDir?: string;
     logPrefix?: string;
   } = {},
@@ -925,7 +872,6 @@ export async function runValidationCommands(
               .replace(/[^a-zA-Z0-9._-]+/g, '-')
               .replace(/^-+|-+$/g, '')
               .slice(0, 60) || 'command';
-          // The prefix can carry model-authored ids (packet gates) — slug it too.
           const prefix = (opts.logPrefix ?? '').replace(/[^a-zA-Z0-9._-]+/g, '-');
           logPath = join(opts.logDir, `${prefix}${index + 1}-${slug}.log`);
           const banner =

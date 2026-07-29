@@ -181,8 +181,6 @@ export interface ServerDeps {
   modelCatalog?: RunnerModelCatalog;
   /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
   providerAuth?: ProviderAuthService;
-  /** Harness binding readiness. Production uses live transports; tests inject
-   * a no-network prober so start-gate behavior stays deterministic. */
   harnessProber?: ModelProber;
   /** Global provider enablement preferences. Tests may inject an in-memory store. */
   workspaceConfig?: {
@@ -423,7 +421,6 @@ const streamSSENoBuffer: typeof streamSSE = (c, cb, onError) => {
 
 // A run starts from a named workflow OR an inline chain of steps (spec 008 —
 // the approved plan is posted as-is, never written to a file).
-/** One concrete model a harness role runs on ('' = the backend's default). */
 const harnessModelRefSchema = z.object({
   runner: z.enum(['claude', 'codex', 'opencode']),
   model: z.string().max(200),
@@ -442,11 +439,6 @@ const harnessAdvisorRefSchema = z.object({
   family: z.string().min(1).max(80),
 });
 
-/** The provider family a role ref belongs to — the diversity axis of the
- *  strictly-multi-model rule. Delegates to the ONE shared definition
- *  (`src/harness/model-family.ts`) so admission and the driver's quorum check
- *  can no longer measure different things; `modelFamilyOf` in the web form
- *  rules mirrors it for the browser. */
 const harnessFamilyOf = providerFamilyOf;
 
 /** Role-based harness selection (2026-07-24): one orchestrator, one
@@ -1427,9 +1419,6 @@ export function createApp(deps: ServerDeps) {
   // `GET /api/health` reads a warm value instead of the cold ~1 s compute.
   if (deps.socketHub) void refreshHealth();
 
-  // Host capability, not project state: one installed/authenticated CLI per
-  // backend and one in-memory cache are shared by every registered workspace.
-  // claude keeps its static tier presets — no discovery adapter to ask.
   app.get('/api/models', async (c) => {
     const query = z.object({ runner: z.enum(['codex', 'opencode']) }).safeParse(c.req.query());
     if (!query.success) return c.json({ error: 'runner must be codex or opencode' }, 400);
@@ -2392,8 +2381,6 @@ export function createApp(deps: ServerDeps) {
       return c.json({ error: `"harness" is only valid with the harness workflows, not "${workflow.name}"` }, 400);
     }
     if (isHarnessWorkflow(workflow.name) && (parsed.data.variants ?? 1) > 1) {
-      // One staged handoff per issue: the claim protocol forbids competing
-      // claimants, so competing variants make no sense for a harness run.
       return c.json({ error: 'parallel variants are not available for harness runs — one staged handoff per task' }, 400);
     }
     const harnessInput = isHarnessWorkflow(workflow.name)
@@ -2761,9 +2748,6 @@ export function createApp(deps: ServerDeps) {
 
     const queued = manager.enqueueMessage(id, content);
     if (queued) return c.json({ queued: true, message: queued });
-    // Harness startup messages must never enter RunManager's in-memory-only
-    // dequeue buffer. Persist them in the ledger even if the driver has not
-    // reached its first checkpoint yet; its merge-on-save path adopts them.
     if (!run.harness && manager.deferMessage(id, content)) return c.json({ deferred: true });
     if (
       run.harness &&
@@ -2841,10 +2825,6 @@ export function createApp(deps: ServerDeps) {
       };
       read.ledger.pendingMessages.push(message);
       saveLedger(harnessDataDir, id, read.ledger);
-      // A phase-boundary message is already user-authored even though its delivery to the next
-      // model session is deferred. Emit the ordinary transcript event now so the bubble remains
-      // visible across reloads; the driver only marks the durable ledger row consumed later and
-      // must not emit a second user-message event.
       store.appendEvent(id, {
         type: 'user-message',
         text: message.text,
@@ -3255,9 +3235,6 @@ export function createApp(deps: ServerDeps) {
 
   // ---- cez-harness (spec 2026-07-23-harness-orchestration) -------------------
 
-  /** The stage-only publish guard: a harness run's worktree must not be
-   *  pushed or PR'd before the run parks at its review gate — the cockpit
-   *  twin of the harness `block-push-and-pr` hook. */
   const harnessPublishBlockReason = (run: RunRecord, dataDir: string): string | null => {
     if (!run.harness) return null;
     if (!['review', 'done'].includes(run.status)) {
@@ -3299,12 +3276,6 @@ export function createApp(deps: ServerDeps) {
     }`;
   };
 
-  // Installed/configured summary for the start surface and Settings →
-  // Harness. `standard` is always offered — it needs no provider and no
-  // `agentHarness` section at all — and claude (the host) always leads the
-  // roster. Configured models are read from the om pipeline's own config,
-  // which cezar never writes; binding a model happens by running
-  // `cez-setup-harness` as a task.
   api.get('/harness/status', async (c) => {
     const { root: repoRoot } = c.get('project');
     const [agentic, cezarConfig, remoteDefault] = await Promise.all([
@@ -3317,7 +3288,6 @@ export function createApp(deps: ServerDeps) {
     const profiles = [...new Set(['standard', ...configuredProfiles])].filter((p) =>
       (HARNESS_PROFILES as readonly string[]).includes(p),
     );
-    // Which configured profiles reference a model id, as worker or reviewer.
     const profilesUsing = (id: string): string[] =>
       profiles.filter((p) => {
         const profile = rawProfiles[p] as { workers?: unknown; reviewers?: unknown } | undefined;
@@ -3349,8 +3319,6 @@ export function createApp(deps: ServerDeps) {
     return c.json({
       configured: agentic.agentHarness !== undefined,
       profiles,
-      /** All public profiles have a concrete driver plan; configured bindings
-       * are still measured by the probe endpoint before a run may start. */
       driven: [...HARNESS_PROFILES],
       models,
       base: {
@@ -3365,15 +3333,10 @@ export function createApp(deps: ServerDeps) {
             ? staleBaseNote(cezarConfig.baseBranch, remoteDefault) ?? undefined
             : undefined,
       },
-      /** Where the harness collection would come from — normally `bundled`
-       *  (the vendored cez-* tree shipped with cezar) with its pinned
-       *  upstream commit; repo-local/team overrides report as themselves. */
       runtime: await resolveHarnessRuntimeInfo(repoRoot),
     });
   });
 
-  // Readiness for the start surface: resolve the same immutable plan the
-  // driver will use, then measure every distinct binding on its real transport.
   api.post('/harness/probe', async (c) => {
     const body = z
       .object({
@@ -3398,9 +3361,6 @@ export function createApp(deps: ServerDeps) {
             orchestrator: body.data.roles.orchestrator,
             implementer: body.data.roles.implementer,
             reviewers: body.data.roles.reviewers,
-            // Mirrors the driver's default for picker-selected roles: quorum
-            // (≥2 completed reviewers across ≥2 families proceeds, loudly
-            // degraded), never implicit unanimity.
             reviewPolicy: 'quorum' as const,
             packetized: false,
           },
@@ -3464,19 +3424,12 @@ export function createApp(deps: ServerDeps) {
     });
   });
 
-  // The run's harness ledger — refetch-on-reconnect companion to the
-  // `harness.*` events on the run's SSE stream.
-  /** A review prompt carries diff context; a result carries every finding.
-   *  Generous, but bounded — the response is rendered in a drawer, not streamed. */
   const HARNESS_ARTIFACT_CHAR_CAP = 400_000;
 
   api.get('/runs/:id/harness', (c) => {
     const { dataDir, store } = c.get('project');
     const id = c.req.param('id');
     if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-    // The driver persists before emitting. Sampling the event watermark first
-    // means the following ledger read is at least as new as every event the
-    // reducer is instructed to discard.
     const snapshotSeq = store.eventHighWaterMark(id);
     const read = readLedger(dataDir, id);
     if (read.status === 'missing') return c.json({ error: 'no harness ledger for this run' }, 404);
@@ -3514,9 +3467,6 @@ export function createApp(deps: ServerDeps) {
     const artifactRoot = resolve(harnessArtifactDir(dataDir, id));
     const readArtifact = (path: string | undefined): string | null => {
       if (!path) return null;
-      // Defence in depth: the ledger is trusted, but it is a file on disk that
-      // a compromised run could have rewritten, so confine reads to the run's
-      // own artifact directory regardless.
       const full = resolve(path);
       if (full !== artifactRoot && !full.startsWith(`${artifactRoot}${sep}`)) return null;
       try {

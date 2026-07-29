@@ -26,11 +26,7 @@ export function HarnessRail({
   onOpenReviewer,
 }: {
   ledger: HarnessLedgerResponse
-  /** Opens the full run timeline — the rail shows only the tail. */
   onOpenTimeline?: () => void
-  /** Opens the reviewer drill-down. Reading what a reviewer was actually asked
-   *  used to mean leaving for the Review tab and scrolling past the findings to
-   *  the council table, even though the same reviewers are listed right here. */
   onOpenReviewer?: (id: string) => void
 }) {
   if (ledger.phases.length === 0 && ledger.models.length === 0) return null
@@ -72,7 +68,6 @@ function Section({
   )
 }
 
-/** Wall time for one phase; a live phase measures to now. */
 function phaseDurationMs(phase: HarnessPhaseRecord): number {
   if (!phase.startedAt) return 0
   const started = Date.parse(phase.startedAt)
@@ -81,8 +76,6 @@ function phaseDurationMs(phase: HarnessPhaseRecord): number {
   return Number.isNaN(ended) ? 0 : Math.max(0, ended - started)
 }
 
-/** The last few phases, newest last — the shape of a timeline without the
- *  2620px of history the old horizontal rail insisted on showing at once. */
 function PhaseSection({
   ledger,
   onOpenTimeline,
@@ -108,11 +101,6 @@ function PhaseSection({
         </span>
       }
     >
-      {/* The connector line is the point of the shape (mockup 01): without it
-          this is a list of unrelated rows, with it you can see a run moving
-          through its phases. It is drawn behind the dots, clipped at the first
-          and last row, and each dot punches a hole in it with a card-coloured
-          ring so the line never appears to pass through a status. */}
       <ol className="flex flex-col">
         {shown.map((phase, index) => (
           <li
@@ -175,8 +163,6 @@ function CouncilSection({
   ledger: HarnessLedgerResponse
   onOpenReviewer?: (id: string) => void
 }) {
-  // The same resolver the drawer uses: a row here must name a reviewer the
-  // drawer can find, or clicking it would silently do nothing.
   const council = displayedCouncil(ledger)
   if (!council) return null
   const reviewers = council.reviewers ?? []
@@ -270,13 +256,7 @@ function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
             key={model.id}
             className="flex items-start gap-2 border-b border-border py-1.5 text-[12.5px] last:border-0"
           >
-            {/* `items-start` is right for a two-line row, but it parks the 7px
-                dot at the very top of an ~19px first line — visibly high of the
-                model name it belongs to. Nudge it to that line's optical center. */}
             <StatusDot tone={toneOf(model.readiness)} className="mt-[5px]" />
-            {/* Two lines, never a truncated identifier (finding B2): the dock
-                used to render `claude/claude-haiku-4…` and `opencode/opencode/…`,
-                cutting off exactly the part that says which model it is. */}
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium text-foreground">
                 {model.model || modelName(model.id)}
@@ -291,9 +271,6 @@ function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
           </li>
         ))}
       </ul>
-      {/* The roles present in this run (mockup 01). The per-row identity is the
-          model; this says what the roster is FOR without repeating a tag on
-          every line. */}
       {roles.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {roles.map((role) => (
@@ -310,7 +287,6 @@ function ModelsSection({ ledger }: { ledger: HarnessLedgerResponse }) {
   )
 }
 
-/** `runner/model` — show the model, which is the part that identifies it. */
 function modelName(id: string): string {
   const slash = id.indexOf('/')
   return slash > 0 ? id.slice(slash + 1) : id

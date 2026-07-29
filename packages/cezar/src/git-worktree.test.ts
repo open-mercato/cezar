@@ -236,7 +236,6 @@ describe('remoteDefaultBranch + staleBaseNote (run 9788d87f: a stale configured 
     expect(staleBaseNote('develop', 'main')).toContain('"develop" is not the remote default "main"');
     expect(staleBaseNote('main', 'main')).toBeNull();
     expect(staleBaseNote('origin/main', 'main')).toBeNull();
-    // No remote → nothing to compare against; stay quiet.
     expect(staleBaseNote('develop', null)).toBeNull();
   });
 });

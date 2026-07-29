@@ -41,11 +41,4 @@ export function runShellClass(wide = false): string {
 /** The harness body grid: transcript + a sticky rail that folds away under xl.
  *  Kept here so the header, the body and the composer dock cannot drift apart. */
 export const RUN_RAIL_GRID =
-  // `items-start` matters: without it the rail stretches to the full grid-row
-  // height and `position: sticky` can never engage (a 93,000px-tall element has
-  // nothing left to stick within).
-  //
-  // The rail widens with the shell at 2xl — at that point the transcript already
-  // has all the measure it can use, so the extra pixels are worth more to the
-  // council and roster rows, which were the ones truncating.
   'grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_336px] 2xl:grid-cols-[minmax(0,1fr)_400px]'

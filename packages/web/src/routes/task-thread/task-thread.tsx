@@ -88,8 +88,6 @@ export function TaskThreadRoute() {
     0,
   )
   useEffect(() => {
-    // A queued harness has no ledger yet. Its first harness event is the live
-    // signal that startup created one — refetch once, without a polling loop.
     if (lastHarnessSeq > 0 && harness.isError) void harness.refetch()
   }, [lastHarnessSeq, harness.isError, harness.refetch])
   const thread = useMemo(() => reduceThread(events), [events])
@@ -251,8 +249,6 @@ export function ThreadView({
   // The drill-down's whole state: which agent is open. Ephemeral by design (spec Q2/Q5) —
   // sub-agents have no stable identity outside their run, so there is nothing to persist.
   const [openAgentId, setOpenAgentId] = useState<string | undefined>(undefined)
-  // The rail lists the council reviewers next to the transcript; opening one
-  // should not mean leaving the run you are watching for the Review tab.
   const [openReviewer, setOpenReviewer] = useState<string | null>(null)
   // Item ids repeat across runs (codex mints `item_1`, `item_rv_1` per session), so a
   // selection carried across a route change could pop the sheet open on an unrelated item.
@@ -425,8 +421,6 @@ export function ThreadView({
         ) : null}
           </div>
 
-          {/* Phase / council / models beside the transcript, so watching a run
-              never means leaving the tab you are watching it in. */}
           {harnessLedger ? (
             <HarnessRail
               ledger={harnessLedger}
@@ -451,8 +445,6 @@ export function ThreadView({
         />
       </ThreadCardCache>
 
-      {/* Same reasoning as the subagent sheet above: rendered outside the rail,
-          which is `hidden` below `xl` and would take an open drawer with it. */}
       {harnessLedger ? (
         <ReviewerDrawer
           runId={run.id}
@@ -475,8 +467,6 @@ export function ThreadView({
             <JumpToLatestPill onJump={scroll.jumpToLatest} />
           </div>
         ) : null}
-        {/* The dock tracks the SHELL, and inside it the transcript column — the
-            composer must sit under the messages, not under the run rail. */}
         <div
           className={cn(
             runShellClass(Boolean(harnessLedger)),
@@ -488,8 +478,6 @@ export function ThreadView({
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
 
-          {/* Below xl the rail is not rendered, so the dock keeps the roster.
-              At xl and up the rail owns it and this would be a duplicate. */}
           {harnessLedger ? (
             <div className="xl:hidden">
               <HarnessModelsDock ledger={harnessLedger} />

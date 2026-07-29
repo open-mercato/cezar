@@ -42,7 +42,6 @@ function ReviewerConversation({
   runId: string
   invocations: readonly HarnessInvocationRecord[]
 }) {
-  // Newest attempt first — a retry is the one you usually want to read.
   const ordered = [...invocations].reverse()
   const [openId, setOpenId] = useState<string | null>(ordered[0]?.id ?? null)
   const detail = useHarnessInvocation(runId, openId)
@@ -100,8 +99,6 @@ function ReviewerConversation({
   )
 }
 
-/** One side of the exchange, collapsed by default: prompts run to thousands of
- *  lines and would otherwise bury the reply underneath them. */
 function Turn({
   label,
   body,

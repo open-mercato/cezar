@@ -33,12 +33,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // the generator has to write where that resolution looks.
 const CEZAR_PKG = join(ROOT, 'packages', 'cezar');
 const DEST = join(CEZAR_PKG, 'vendor', 'skills');
-/** Staging area for CEZAR_OWNED dirs across the wipe/regenerate cycle. */
 const HOLD = join(CEZAR_PKG, 'vendor', '.skills-hold');
-// Longest-first where one name prefixes another; the lookahead keeps
-// om-fix from eating om-fix-issue and om-harness from eating the
-// om-harness-adapter- tmp prefixes. om-harness-review (the output-style
-// filename) precedes om-harness so it renames as a whole.
 const NAME_MAP = [
   ['om-setup-agent-harness', 'cez-setup-harness'],
   ['om-setup-agent-pipeline', 'cez-setup-pipeline'],
@@ -50,9 +45,6 @@ const NAME_MAP = [
   ['om-harness', 'cez-harness'],
   ['om-fix', 'cez-fix'],
 ];
-// Sibling skills a host must put on disk next to the named one: the runtime
-// resolves the review rubric as a sibling directory (harness.mjs). The setup
-// skill no longer requires pipeline setup — see CEZAR_OWNED below.
 const REQUIRES = {
   'cez-setup-harness': ['cez-harness'],
   'cez-harness': ['cez-code-review'],
@@ -95,19 +87,12 @@ const ref = execFileSync('git', ['-C', source, 'rev-parse', '--abbrev-ref', 'HEA
 const rename = (text) =>
   NAME_MAP.reduce((out, [from, to]) => out.replace(new RegExp(`${from}(?![a-z0-9-])`, 'g'), to), text);
 
-// Frontmatter is `---\nname: …\ndescription: …\n---`; add requires before the close.
 const injectRequires = (skillMd, names) => {
   const close = skillMd.indexOf('\n---', 4);
   if (close === -1) throw new Error('SKILL.md has no frontmatter to inject requires into');
   return `${skillMd.slice(0, close)}\nrequires: [${names.join(', ')}]${skillMd.slice(close)}`;
 };
 
-/**
- * Cezar-specific hardening applied while generating the mirrored harness. Keep these as narrow,
- * checked transforms: a changed upstream anchor makes regeneration fail instead of silently
- * dropping a safety boundary. The source checkout remains pristine and MANIFEST provenance stays
- * truthful about the input commit.
- */
 const replaceRequired = (text, before, after, label) => {
   if (!text.includes(before)) throw new Error(`cannot apply cezar harness patch (${label}): upstream anchor changed`);
   return text.replace(before, after);
@@ -360,22 +345,9 @@ function runProcess`,
   const unexpected = stagedPaths.filter((entry) => !allowed(entry))`,
     'directory-aware final stage allowlist',
   );
-  // --- staged-only git guard, scoped to the run worktree (cezar) -------------
-  // Upstream compares every local head, tag, stash entry and \`reflog --all\`
-  // against the captured start state. That assumes one session owns the whole
-  // repository for the run. cezar runs N task worktrees off one object store
-  // while the human keeps committing in the main checkout, and from inside a
-  // linked worktree all of it is visible — sibling \`refs/heads/cez/<id>\`,
-  // \`worktrees/<id>/HEAD\`, and \`main-worktree/HEAD\` — so one ordinary user
-  // commit made the final \`stage\` refuse a correct diff after hours of council
-  // spend. Scope the snapshot to this worktree, report WHAT drifted, and expose
-  // the check as its own command so the driver can fail fast between phases.
   text = replaceRequired(
     text,
     `function captureGitState(worktree) {
-  // Remote-tracking refs are excluded: concurrent fetches by other processes
-  // legitimately move them, and they publish nothing. Local heads, tags,
-  // stash, HEAD, and their reflogs are the mutation surface that matters.
   return {
     head: git(['rev-parse', 'HEAD'], worktree).trim(),
     refs: git(['for-each-ref', '--format=%(refname)%09%(objectname)', 'refs/heads', 'refs/tags', 'refs/stash'], worktree).trim().split(/\\r?\\n/).filter(Boolean).sort(),
@@ -389,21 +361,10 @@ function runProcess`,
  *  \`head\`. */
 const GIT_STATE_VERSION = 2
 
-/** \`<refname>\\t<sha>\` for one ref, or \`[]\` when it does not exist. */
 function refLines(worktree, ref) {
   return git(['for-each-ref', '--format=%(refname)%09%(objectname)', ref], worktree).trim().split(/\\r?\\n/).filter(Boolean)
 }
 
-/**
- * One ref's reflog, newest first, each entry as \`<sha>\\t<subject>\`.
- *
- * \`%gs\` (the subject) replaces \`%gD\` (the \`name@{N}\` selector) deliberately.
- * Selectors are positional, so a single new entry renumbers every older one:
- * under the previous format one stray operation changed every line of the
- * snapshot permanently, and even a \`reset --hard\` back to the exact starting
- * commit could not restore it. The guard became unpassable for the rest of the
- * run rather than reporting a recoverable state.
- */
 function reflogLines(worktree, ref) {
   let out = ''
   try {
@@ -414,25 +375,6 @@ function reflogLines(worktree, ref) {
   return out.trim().split(/\\r?\\n/).filter(Boolean)
 }
 
-/**
- * The staged-only integrity snapshot, scoped to THIS run's worktree.
- *
- * Breadth was the bug. This used to snapshot every local head, every tag, the
- * stash and \`reflog --all\`. Under one session driving one worktree that is
- * harmless; under cezar it is fatal. cezar runs N task worktrees off a single
- * object store while the human keeps working in the main checkout, and all of
- * that churn is globally visible from inside a linked worktree: a sibling
- * session starting appears as \`refs/heads/cez/<id>\` plus
- * \`worktrees/<id>/HEAD@{n}\`, and \`reflog --all\` additionally reports
- * \`main-worktree/HEAD\` — the user's own checkout. One ordinary commit by the
- * user on an unrelated branch was enough to make the final \`stage\` refuse a
- * correct diff after hours of council spend.
- *
- * What the contract actually protects is narrow: this run must not have
- * committed, reset, or re-pointed *its own* branch. HEAD, this worktree's own
- * branch ref, and this worktree's own reflogs say exactly that. Nothing outside
- * the worktree can say anything about it.
- */
 function captureGitState(worktree) {
   const branch = git(['branch', '--show-current'], worktree).trim()
   const branchRef = branch ? \`refs/heads/\${branch}\` : null
@@ -448,26 +390,11 @@ function captureGitState(worktree) {
   }
 }
 
-/**
- * Why the worktree no longer matches its captured start state — one readable
- * reason per drift, empty when clean. The old guard reported only that
- * *something* somewhere had changed, which told an operator nothing about
- * whether their own commit or the run itself was responsible.
- *
- * Only reflog *additions* count. A vanished old entry is \`git gc\` expiring
- * history, not a mutation by this run, and the branch's own entries are minutes
- * old so they are never the ones expired. The mutation this protects against —
- * a commit — always shows up in \`head\`/\`refs\` anyway.
- */
 function gitStateDrift(startState, currentState) {
   const drift = []
   if (startState.head !== currentState.head) {
     drift.push(\`HEAD moved \${String(startState.head).slice(0, 12)} → \${String(currentState.head).slice(0, 12)} — this run created or reset a commit\`)
   }
-  // A start-state written by an older runtime snapshotted the whole repository.
-  // Comparing it field-by-field against a worktree-scoped capture would report
-  // drift that never happened, so trust only \`head\` — the field that carries
-  // the contract — and let a resumed run finish.
   if (Number(startState.version) !== GIT_STATE_VERSION) return drift
   if (startState.branch !== currentState.branch) {
     drift.push(\`checked-out branch changed \${startState.branch || '(detached)'} → \${currentState.branch || '(detached)'}\`)
@@ -481,9 +408,6 @@ function gitStateDrift(startState, currentState) {
     const before = Array.isArray(startLogs[ref]) ? startLogs[ref] : []
     const addedCount = current.length - before.length
     if (addedCount <= 0) continue
-    // Newest first, so the captured list must still be the tail. When it is
-    // not, the log was rewritten rather than appended to and per-entry blame
-    // would be a guess.
     const tail = current.slice(addedCount)
     if (tail.join('\\n') !== before.join('\\n')) {
       drift.push(\`\${ref} reflog was rewritten during the run\`)
@@ -546,11 +470,6 @@ function validateStagePath(worktree, entry) {`,
     "capture|verify|worker|prepare-review",
     "verify command usage line",
   );
-  // --- reviewer prompt transcripts (cezar) -----------------------------------
-  // The host passes criteria in and never learns what was actually sent, so the
-  // cockpit showed a 7-line fragment as "Sent to the reviewer" while the model
-  // had received that plus the subject, the whole cez-code-review rubric and
-  // the output contract. Write the built prompt where the host can read it.
   text = replaceRequired(
     text,
     `async function runReviewer(id, model, criteria, subject, worktree, workerFamilies, maxInputBytes, lens = null, reviewContract = null, retry = null) {
@@ -586,12 +505,6 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
     reviewContract: reviewContract || { name: 'cez-code-review', version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256, subjectSha256: sha256(subject) },
     parts: built.prompts.length
   }
-  // Persist what the model was ACTUALLY sent. The caller only ever sees the
-  // criteria it passed in, which is the \`<review_packet>\` section — a handful
-  // of lines — while \`buildReviewPrompt\` also wraps in the review subject, the
-  // whole cez-code-review rubric and the output contract. A host that showed
-  // the caller's fragment as "the prompt" made a rubric-backed review look like
-  // it had been asked for an opinion with no criteria at all.
   if (promptDir) {
     try {
       mkdirSync(promptDir, { recursive: true })
@@ -601,7 +514,6 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
         : built.prompts.map((prompt, index) => \`=== part \${index + 1} of \${built.prompts.length} ===\\n\${prompt}\`).join('\\n\\n'))
       envelope.promptPath = promptPath
     } catch {
-      // Diagnostics only — never fail a paid review over a transcript file.
     }
   }`,
     "reviewer prompt transcript capture",
@@ -635,16 +547,10 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
   if (residual.length) throw new Error(\`Unstaged or untracked files remain:\\n\${residual.join('\\n')}\`)
   const result = { status: 'ready', startHead, currentHead, branch: git(['branch', '--show-current'], worktree).trim(), worktree, stagedPaths }`,
     `  // The allowlist is a UNION across every implement/fix round, so it can name
-  // ghosts: a scratch file created in round one and deleted in round three is
-  // still listed, exists nowhere, and is tracked by nothing — and \`git add\`
-  // fails the whole handoff over a pathspec that matches nothing. A deleted
-  // TRACKED file stays: adding it stages the deletion, which is real product.
   const tracked = new Set(git(['ls-files', '-z', '--'], worktree).toString().split('\\0').filter(Boolean))
   const ghosts = paths.filter((path) => !existsSync(join(worktree, path)) && !tracked.has(path))
   const addable = paths.filter((path) => !ghosts.includes(path))
   if (!addable.length) throw new Error('Stage allowlist is empty after dropping entries that no longer exist')
-  // One immediate retry: \`git add\` can lose a race for index.lock to an editor
-  // or a status poll holding the worktree open — transient by nature.
   try {
     git(['add', '--', ...addable.map((path) => \`:(literal)\${path}\`)], worktree)
   } catch (error) {
@@ -680,8 +586,6 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
     return index === '??' || index[1] !== ' '
   })
   if (residual.length) {
-    // The worktree survives the handoff, so nothing here is lost — but the
-    // human must know the staged diff is not the whole story.
     warnings.push(\`files changed by the run but NOT part of the staged handoff — review whether they belong:\\n\${residual.join('\\n')}\`)
   }
   const result = { status: 'ready', startHead, currentHead, branch: git(['branch', '--show-current'], worktree).trim(), worktree, stagedPaths, ...(warnings.length ? { warnings } : {}) }`,
@@ -690,8 +594,6 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
   return text;
 };
 
-// Lift the cezar-authored skills out of the way, wipe, then put them back —
-// regeneration must never silently revert a deliberate divergence.
 const preserved = new Map();
 for (const name of CEZAR_OWNED) {
   const dir = join(DEST, name);
@@ -759,7 +661,6 @@ writeFileSync(
       generatedBy: 'scripts/vendor-skills.mjs',
       nameMap: Object.fromEntries(NAME_MAP),
       requires: REQUIRES,
-      /** Authored by cezar, not mirrored — `source.commit` says nothing about these. */
       cezarOwned: [...CEZAR_OWNED],
       skills: [...vendored].sort(),
     },

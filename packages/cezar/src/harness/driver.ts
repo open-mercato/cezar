@@ -74,34 +74,24 @@ import type {
  * conversation used to carry lives in the ledger and the artifact directory.
  */
 
-/* ------------------------------------------------------------------ */
-/* Host + dependency seams                                             */
-/* ------------------------------------------------------------------ */
-
 export interface HarnessAgentPhaseRequest {
   phaseId: string;
   name: string;
-  /** The cez-* skill this phase executes; undefined runs the plain prompt. */
   skill: string | undefined;
   prompt: string;
-  /** Where the phase MUST write its structured result JSON. */
   resultPath: string;
   timeoutMs: number;
-  /** Extra env for the session (`CEZ_HARNESS_*`). */
   env: Record<string, string>;
   /** Role-based model routing (2026-07-24): the backend + model this phase
    *  runs on. Absent → the run's default (claude). */
   runner?: 'claude' | 'codex' | 'opencode';
   model?: string;
-  /** Reasoning effort for the phase's session — the role's own dial. */
   effort?: 'low' | 'medium' | 'high' | 'max';
   /** This phase runs BESIDE its siblings (council reviewers fan out in
    *  parallel, 2026-07-25) — the host must not let it claim the run's singular
    *  session slots, or the last one started would be the only one a Stop could
    *  reach. */
   concurrent?: boolean;
-  /** Called immediately after the runner process exists, before awaiting its
-   * paid work. The driver persists the PID plus its environment token here. */
   onSpawn?: (pid: number, processGroup: boolean) => void;
 }
 
@@ -112,8 +102,6 @@ export interface HarnessRoleRef {
   runner: 'claude' | 'codex' | 'opencode';
   model: string;
   effort?: 'low' | 'medium' | 'high' | 'max';
-  /** Configured profile workers carry their trusted adapter id. Custom
-   * runner-backed lineups omit it and use the native runner seam. */
   adapterId?: string;
 }
 
@@ -150,27 +138,19 @@ export interface HarnessRolesInput {
  *  is testable without a manager, a store, or a live backend. */
 export interface HarnessDriverHost {
   runId: string;
-  /** The isolated worktree every phase executes in. */
   cwd: string;
   dataDir: string;
   repoRoot: string;
   isCancelled(): boolean;
   emit(event: { type: string; stepId?: string; [k: string]: unknown }): void;
-  /** Run one agent phase in a fresh session; returns an error or null —
-   *  `runAgentStep` semantics. */
   runAgent(req: HarnessAgentPhaseRequest): Promise<string | null>;
-  /** Ensure a step exists on the run record (dynamic fix/review rounds). */
   upsertStep(step: { id: string; name: string; kind: 'agent' | 'check' }): void;
   setStepStatus(
     stepId: string,
     status: 'pending' | 'running' | 'done' | 'failed' | 'skipped',
     error?: string,
   ): void;
-  /** Chain an interrupt hook into the run's cancel path; returns unregister. */
   onInterrupt(fn: () => void): () => void;
-  /** Ensure a cez-* skill is discoverable and its directory (plus the
-   *  `requires:` closure) is materialized into the worktree — any source:
-   *  bundled vendor set, global install, or team repo. */
   ensureSkill(name: string): Promise<boolean>;
 }
 
@@ -197,7 +177,6 @@ export interface HarnessDriverDeps {
   /** Copy the materialized skill tree out of the model-writable worktree and
    *  return the sealed runtime path + digest (2026-07-27). */
   sealRuntime?: (cwd: string, destDir: string) => { script: string; sha256: string } | null;
-  /** sha256 of the sealed runtime, re-checked before every op. */
   scriptDigest?: (script: string) => string | null;
   createRuntime?: (opts: { script: string; cwd: string; env?: Record<string, string> }) => RuntimeLike;
   loadAgentic?: (cwd: string) => Promise<AgenticConfig>;
@@ -208,15 +187,8 @@ export interface HarnessDriverDeps {
     opts?: Parameters<typeof runValidationCommands>[2],
   ) => Promise<HarnessValidationCheck[]>;
   exportConfig?: typeof exportTrustedConfig;
-  /** Readiness prober. Injected in tests so preflight never spawns a CLI or
-   *  reaches the network; defaults to live round-trips on the real transports. */
   createProber?: (opts: { advisors: Record<string, unknown>; cwd: string }) => ModelProber;
-  /** Hash of the complete review subject (tracked diff + untracked files). A reviewer changing
-   *  it is a protocol violation even when the changed path is otherwise in the implementation
-   *  allowlist. */
   snapshotReviewSubject?: (cwd: string) => Promise<string>;
-  /** Complete code subject normalized across staged/unstaged placement, used
-   *  to bind deterministic stage replay. */
   snapshotStageSubject?: (cwd: string) => Promise<string>;
   reconcileProcess?: (
     identity: HarnessProcessIdentity,
@@ -244,11 +216,6 @@ export function roleRefId(ref: HarnessReviewerRef): string {
   return `${ref.runner}/${ref.model || 'auto'}`;
 }
 
-/** Reviewers are read-only by contract. Hash the current worktree's HEAD, index/worktree
- * diff, local HEAD reflog, and every untracked file so an independent model cannot quietly
- * become another implementer. Repository-global refs and reflogs are deliberately excluded:
- * a background fetch or another linked worktree is not a mutation of this review subject.
- * Ignored harness artifacts are intentionally outside the subject. */
 /**
  * Hash everything the worktree's CONTENT says relative to HEAD — deliberately
  * blind to the git index.
@@ -313,8 +280,6 @@ export async function snapshotHarnessReviewSubject(cwd: string): Promise<string>
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
     });
   hashWorktreeContentVsHead(hash, cwd, git);
-  // The reflog stays: content-equality alone cannot see a commit that was
-  // reset away again, and the review window must.
   hash.update('\0head-reflog\0');
   hash.update(git(['reflog', 'show', 'HEAD', '--format=%H%x09%gs']));
   return hash.digest('hex');
@@ -333,11 +298,6 @@ export async function snapshotHarnessStageSubject(cwd: string): Promise<string> 
       maxBuffer: 256 * 1024 * 1024,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
     });
-  // Same content-vs-HEAD core as the review subject (and the same immunity to
-  // `git add -N` — its previous `diff HEAD` + untracked-list split flipped when
-  // the diff poller promoted an untracked file to intent-to-add). No reflog
-  // here: staging cares about what ships, and the stage git guard already owns
-  // the commit-laundering window.
   hashWorktreeContentVsHead(hash, cwd, git);
   return hash.digest('hex');
 }
@@ -350,10 +310,6 @@ export async function snapshotHarnessStageSubject(cwd: string): Promise<string> 
 export function councilFamilyOf(ref: HarnessReviewerRef): string {
   return isAdvisorRef(ref) ? ref.family : providerFamilyOf(ref);
 }
-
-/* ------------------------------------------------------------------ */
-/* Phase result contracts                                              */
-/* ------------------------------------------------------------------ */
 
 const qualifyResultSchema = z.object({
   outcome: z.enum(['work_needed', 'no_action']),
@@ -370,10 +326,6 @@ const specResultSchema = z.object({
   summary: z.string(),
   specPath: z.string().optional(),
   files: z.array(z.string()).optional(),
-  /** Design questions the author could not settle, each with the assumption it
-   *  proceeded under. The phase is non-interactive, so this is the Open
-   *  Questions gate's legal outlet — they flow to the run log and to every
-   *  implementation reviewer as known-open questions. */
   openQuestions: z.array(z.string().min(1)).optional(),
 });
 
@@ -384,9 +336,6 @@ const implementResultSchema = z.object({
 });
 
 const fixResultSchema = implementResultSchema.extend({
-  // A fix pass may correctly conclude that the existing worktree already
-  // satisfies the finding (for example after re-running a tool through the
-  // repository-pinned package manager). That is still a valid phase result.
   changedPaths: z.array(z.string().min(1)),
 });
 
@@ -476,8 +425,6 @@ export function mechanicalVerdict(
     : 'approve';
 }
 
-/** The coerced verdict plus whether it contradicted the reported label — the
- *  caller emits a note so a silently-corrected reviewer is still visible. */
 function coerceReviewVerdict(result: {
   verdict: 'approve' | 'request_changes';
   findings?: readonly { severity: string }[];
@@ -498,8 +445,6 @@ const councilResultSchema = z
     verdict: z.enum(['approve', 'request_changes']).nullable().optional(),
     reviewContract: z
       .object({
-        // Keep the result boundary loose for older/custom runtimes. Recovery
-        // uses this proof when present; normal council parsing never requires it.
         subjectSha256: z.string().min(1).optional(),
       })
       .passthrough()
@@ -528,9 +473,7 @@ const isCouncilSubjectChangedError = (error: string | undefined): boolean =>
   error ===
     'advisor reviewer mutated the worktree or index; every result from this council was rejected and the changed subject was preserved for manual recovery';
 
-/* ------------------------------------------------------------------ */
 /* Phase timeouts (spec: implement gets hours, qualify minutes)        */
-/* ------------------------------------------------------------------ */
 
 /** Appended to every agent-phase prompt (2026-07-24, live failure): a spec
  *  phase dispatched a background subagent and ended its turn to await it —
@@ -560,21 +503,12 @@ const PHASE_TIMEOUTS_MS: Record<string, number> = {
   spec: 60 * 60_000,
   implement: 3 * 60 * 60_000,
   fix: 90 * 60_000,
-  // A review is the most bounded phase there is — read one artifact, write
-  // findings. Competent reviewers finish in single-digit minutes; the 60m this
-  // used to be simply let a model that could not finish burn an hour per
-  // reviewer (and, before timeouts stopped being retried, two). Every reviewer
-  // in a council pays this, so it multiplies. 30m is still generous.
   review: 30 * 60_000,
 };
 
 export function harnessArtifactDir(dataDir: string, runId: string): string {
   return join(dataDir, 'runs', `${runId}-harness`);
 }
-
-/* ------------------------------------------------------------------ */
-/* The driver                                                          */
-/* ------------------------------------------------------------------ */
 
 /** Executes the harness phase graph. Returns an error message (run fails),
  *  or null — success, cancellation, and the no-action early stop all settle
@@ -611,8 +545,6 @@ export async function runHarnessDriver(
   const artifactDir = harnessArtifactDir(host.dataDir, host.runId);
   mkdirSync(artifactDir, { recursive: true });
 
-  // Resume: only a genuinely absent ledger may start fresh. Corrupt, future,
-  // or mismatched state fails closed so a restart cannot replay paid work.
   const ledgerRead = readLedger(host.dataDir, host.runId);
   if (ledgerRead.status === 'corrupt') {
     return `harness recovery blocked: ledger is corrupt (${ledgerRead.error}); restore or remove it explicitly before retrying`;
@@ -636,9 +568,6 @@ export async function runHarnessDriver(
             ? { kind: 'issue', id: input.issueId, text: input.task }
             : { kind: 'brief', text: input.task },
         });
-  /** API handlers can add operator messages/decisions while the driver is
-   * awaiting a model. Merge those externally-authored rows before every
-   * driver save so this long-lived in-memory ledger cannot erase them. */
   const mergeOperatorMutations = (): void => {
     const current = readLedger(host.dataDir, host.runId);
     if (current.status !== 'valid' || current.ledger === ledger) return;
@@ -700,9 +629,6 @@ export async function runHarnessDriver(
       council,
     ];
   };
-  // A hard Cezar crash can leave a detached paid runtime alive. Reconcile
-  // every recorded process before launching anything else. A missing token
-  // never authorizes a kill — it blocks recovery for explicit operator action.
   for (const invocation of ledger.invocations.filter((entry) => entry.status === 'running')) {
     if (invocation.process) {
       const reconciliation = await reconcileProcess(invocation.process);
@@ -817,7 +743,6 @@ export async function runHarnessDriver(
       const parsed = schema.safeParse(JSON.parse(readFileSync(invocation.artifactPath, 'utf8')));
       if (parsed.success) return parsed.data;
     } catch {
-      // Mark below.
     }
     invocation.status = 'interrupted';
     invocation.error = 'completed invocation artifact is not valid JSON for this operation';
@@ -837,10 +762,7 @@ export async function runHarnessDriver(
     reviewerId?: string;
     binding: HarnessInvocation['binding'];
     inputSha256: string;
-    /** The exact text handed to the model. Persisted beside the result so a
-     *  reviewer's reasoning can be read back — see `promptPath` in types.ts. */
     prompt?: string;
-    /** An already-on-disk prompt (the advisor council's shared criteria file). */
     promptPath?: string;
   }): HarnessInvocation => {
     const now = new Date().toISOString();
@@ -876,8 +798,6 @@ export async function runHarnessDriver(
         writeFileSync(promptPath, init.prompt, 'utf8');
         invocation.promptPath = promptPath;
       } catch {
-        // A prompt we could not persist is a missing convenience, never a
-        // reason to fail the paid model call that follows.
       }
     }
     persist();
@@ -946,12 +866,6 @@ export async function runHarnessDriver(
 
   const phaseDone = (id: string) => ledger.phases.find((p) => p.id === id)?.status === 'done';
 
-  /**
-   * A completed phase whose durable invocation can no longer be trusted must
-   * invalidate every later gate. Their invocations may still be reused when
-   * their own input hashes match, but phase status alone can never let stale
-   * validation/review/staging evidence survive an upstream retry.
-   */
   const invalidateFollowingPhases = (phaseId: string): void => {
     const at = ledger.phases.findIndex((phase) => phase.id === phaseId);
     if (at < 0) return;
@@ -960,8 +874,6 @@ export async function runHarnessDriver(
       phase.startedAt = undefined;
       phase.endedAt = undefined;
       phase.error = undefined;
-      // The baseline is capture-scoped data, not just a phase status: stale
-      // baseline failures could launder new breakage as "pre-existing".
       if (phase.id === 'baseline-gate') ledger.baselineValidation = undefined;
     }
     ledger.validation = [];
@@ -1010,7 +922,6 @@ export async function runHarnessDriver(
               const parsed = schema.safeParse(JSON.parse(raw.slice(start, index + 1)));
               if (parsed.success) return parsed.data;
             } catch {
-              // not JSON — keep scanning from the next opening brace
             }
             break;
           }
@@ -1020,14 +931,6 @@ export async function runHarnessDriver(
     return null;
   };
 
-  /**
-   * A result file read with the failure NAMED. "ended without a valid result
-   * file" collapsed very different problems — a session that never wrote, one
-   * that wrote prose, one whose JSON missed the schema — into one
-   * undiagnosable string. The name matters twice now: it reaches the operator
-   * AND the retry session, which is told exactly what its predecessor got
-   * wrong instead of being rerun blind (the "remind it of the JSON" loop).
-   */
   const readContractResult = <S extends z.ZodTypeAny>(
     schema: S,
     resultPath: string,
@@ -1050,7 +953,6 @@ export async function runHarnessDriver(
         .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
         .join('; ');
     } catch {
-      // not JSON at all — fall through to salvage
     }
     const salvaged = salvageJson(schema, text);
     if (salvaged !== null) return { result: salvaged, failure: null, salvaged: true };
@@ -1068,7 +970,6 @@ export async function runHarnessDriver(
   const readResult = <T>(schema: z.ZodType<T>, phaseId: string): T | null =>
     readContractResult(schema, resultPathFor(phaseId)).result;
 
-  /** A council reviewer's result file, in the reviewer loop's phrasing. */
   const readReviewResultFile = (
     resultPath: string,
   ): {
@@ -1084,12 +985,6 @@ export async function runHarnessDriver(
     };
   };
 
-  /**
-   * What a fresh retry session is told when its predecessor failed the result
-   * contract. A blind rerun repeated the same framing mistake (and, for
-   * implement/fix phases, redid paid work already sitting in the worktree);
-   * the user's ask is literal: remind the model of the JSON and what was wrong.
-   */
   const resultContractRetryAppendix = (
     failure: string,
     resultPath: string,
@@ -1171,9 +1066,6 @@ export async function runHarnessDriver(
     });
   };
 
-  /** One agent phase: fresh session, structured result file, one automatic
-   *  retry on a missing/malformed result. Returns the parsed result or an
-   *  error string. */
   const agentPhase = async <T>(
     phaseId: string,
     name: string,
@@ -1185,10 +1077,6 @@ export async function runHarnessDriver(
   ): Promise<T | { error: string } | { cancelled: true }> => {
     const wasDone = phaseDone(phaseId);
     host.upsertStep({ id: phaseId, name, kind: 'agent' });
-    // Completed phases are replayed only against the messages originally
-    // assigned to them. Newly queued text belongs to the next incomplete
-    // phase; letting it alter an earlier input hash would repeat paid work
-    // while walking the graph after restart.
     const boundaryMessages = boundaryMessagesForPhase(phaseId, wasDone);
     if (!wasDone) assignBoundaryMessages(phaseId, boundaryMessages);
     const boundaryAppendix = boundaryMessageAppendix(boundaryMessages);
@@ -1235,10 +1123,6 @@ export async function runHarnessDriver(
             : null,
       }),
     );
-    // A v1 ledger has no invocation/input provenance. Its completed model
-    // phases can never satisfy the v2 reuse contract: stamping an old artifact
-    // with today's prompt or review-subject hash would bless unreviewed work.
-    // Leave the artifact as historical evidence and rerun the phase.
     const reusable = reusableInvocation(invocationId, invocationInputSha256, schema);
     if (reusable !== null) {
       if (!ledger.phases.some((phase) => phase.id === phaseId)) {
@@ -1263,8 +1147,6 @@ export async function runHarnessDriver(
         entry.id === invocationId &&
         entry.inputSha256 === invocationInputSha256 &&
         entry.status === 'failed' &&
-        // startsWith: the error now carries the named contract failure after a
-        // dash; ledgers from before the suffix still match on the bare string.
         entry.error?.startsWith('ended without a valid result file') &&
         entry.startedAt &&
         entry.endedAt,
@@ -1313,13 +1195,9 @@ export async function runHarnessDriver(
           return parsed;
         }
       } catch {
-        // No trustworthy artifact to adopt; the ordinary bounded attempt logic
-        // below remains authoritative.
       }
     }
     const priorAttempts = attemptsForInput(invocationId, invocationInputSha256);
-    // What the last failed attempt got wrong, restored across a host restart
-    // so a crash between attempts does not turn the retry blind again.
     let lastContractFailure: string | null =
       [...ledger.invocations]
         .reverse()
@@ -1334,9 +1212,6 @@ export async function runHarnessDriver(
         ?.error?.replace(/^ended without a valid result file(?: — )?/, '') || null;
     for (let attempt = priorAttempts + 1; attempt <= 2; attempt += 1) {
       if (host.isCancelled()) return { cancelled: true };
-      // The retry is not a blind rerun: it carries what the first attempt got
-      // wrong. The input hash stays keyed to the base prompt — the appendix is
-      // derived mechanically from the recorded failure, not new input.
       const attemptPrompt =
         attempt > 1 && lastContractFailure
           ? `${renderedPrompt}${resultContractRetryAppendix(
@@ -1360,9 +1235,6 @@ export async function runHarnessDriver(
         },
         inputSha256: invocationInputSha256,
       });
-      // Every attempt must prove it wrote fresh bytes. Clearing the canonical
-      // file here prevents a prior attempt's valid result from being accepted
-      // when a later session exits without writing anything.
       writeFileSync(resultPath, '', 'utf8');
       if (sessionResultPath !== resultPath) {
         writeFileSync(sessionResultPath, '', 'utf8');
@@ -1412,8 +1284,6 @@ export async function runHarnessDriver(
           phaseId,
           name,
           skill,
-          // Literal paths, not env references: codex/opencode phases must be able
-          // to follow the contract even when a backend does not forward env vars.
           prompt: attemptPrompt,
           resultPath,
           timeoutMs: PHASE_TIMEOUTS_MS[timeoutKey] ?? 30 * 60_000,
@@ -1495,7 +1365,6 @@ export async function runHarnessDriver(
     return { error };
   };
 
-  /** One deterministic op phase against the installed harness.mjs. */
   const opPhase = async (
     phaseId: string,
     name: string,
@@ -1542,16 +1411,11 @@ export async function runHarnessDriver(
     persist();
   };
 
-  /* ---------------- preflight ---------------- */
-
   const isFeature = input.workflow === HARNESS_IMPLEMENT_FEATURE;
   if (input.workflow !== HARNESS_FIX_ISSUE && !isFeature) {
     return `unknown harness workflow: ${input.workflow}`;
   }
 
-  // Explicit roles override a configured profile's bindings. Profile-only
-  // runs resolve their immutable plan from trusted agentHarness config during
-  // preflight, before any model is invoked.
   let roles = input.roles;
   if (roles) {
     ledger.effectiveProfile = input.profile;
@@ -1568,9 +1432,6 @@ export async function runHarnessDriver(
     agentHarness: undefined,
   };
   if (phaseDone('preflight')) {
-    // v1 had no config hash. Migrate once without invoking a model: retain and
-    // pin its existing artifact when available, otherwise reconstruct the
-    // trusted base snapshot (or an explicit empty snapshot for standard).
     if (ledgerRead.status === 'valid' && ledgerRead.migrated && !ledger.trustedConfig?.sha256) {
       const legacyPath = ledger.trustedConfig?.path;
       if (legacyPath && hashFile(legacyPath)) {
@@ -1619,7 +1480,6 @@ export async function runHarnessDriver(
     }
   }
   const preflightError = await opPhase('preflight', 'Preflight', async () => {
-    // The cez-harness runtime plus every skill the graph delegates judgment to.
     const needed = isFeature
       ? ['cez-harness', 'cez-spec-writing', 'cez-code-review']
       : ['cez-harness', 'cez-verify-in-repo', 'cez-root-cause', 'cez-fix', 'cez-code-review'];
@@ -1655,7 +1515,6 @@ export async function runHarnessDriver(
           await excludeFromGit(host.cwd, `.claude/skills/${name}/`);
           continue;
         } catch {
-          // fall through — the catalog path below is the degraded route
         }
       }
       if (!(await host.ensureSkill(name))) {
@@ -1694,7 +1553,6 @@ export async function runHarnessDriver(
         });
       }
     } catch {
-      // Advisory only — never fail a run over a provenance check.
     }
     let agentic = await loadAgentic(host.cwd);
     let baseSnapshot = await exportConfig(
@@ -1715,20 +1573,6 @@ export async function runHarnessDriver(
     if (agentic.agentHarness === undefined && host.repoRoot !== host.cwd) {
       const rootAgentic = await loadAgentic(host.repoRoot);
       if (rootAgentic.agentHarness !== undefined) {
-        // This used to demand the config be a CLEAN STAGED change and refuse the
-        // run otherwise. It was a dead end for the ordinary path: a user
-        // configures models in the cockpit, starts a multi-model run, and the
-        // first thing cezar says is that the file cezar itself just wrote is
-        // staged wrong — with git instructions, in a repo they never touched by
-        // hand. `MM` (staged, then edited again) is the normal result of setup
-        // writing more than once, and it failed the check.
-        //
-        // The index state was never the security boundary. What matters is WHERE
-        // the config comes from: `host.repoRoot` is the user's own checkout, and
-        // the untrusted thing — the task branch in the worktree — cannot reach
-        // this read. That property is unchanged. The run still snapshots the
-        // file into its artifacts below, so a mid-run edit cannot change the
-        // config the run is executing under.
         agentic = rootAgentic;
         workingTreeConfig = true;
         const copyPath = join(artifactDir, 'working-agentic.config.json');
@@ -1807,8 +1651,6 @@ export async function runHarnessDriver(
         advisors: (agentic.agentHarness?.models ?? {}) as Record<string, unknown>,
         cwd: host.cwd,
       });
-      // One roster row per distinct model; a model serving several roles
-      // carries every tag (the Models dock renders these).
       const roster = new Map<
         string,
         { id: string; binding: string; roles: string[]; family: string; runner: string; model: string }
@@ -1861,8 +1703,6 @@ export async function runHarnessDriver(
         };
       });
 
-      // An unreachable binding fails HERE, with the upstream error, instead of
-      // surfacing as "reviewer X produced no valid review" an hour into a run.
       const unreachable = ledger.models.filter((m) => m.readiness !== 'ready');
       if (unreachable.length > 0) {
         persist();
@@ -1942,17 +1782,6 @@ export async function runHarnessDriver(
       harnessConfigEnvironmentNames(runtimeAgentic.agentHarness),
     ),
   });
-  /**
-   * Every op re-verifies the sealed bytes, at the seam rather than at each of
-   * the seven call sites — a future op added without remembering the check is
-   * exactly how this class of hole reopens.
-   *
-   * The copy lives outside the worktree, so the sandboxed codex worker cannot
-   * reach it at all; an agent phase with an unrestricted Bash tool still could,
-   * and this is what catches that. A tampered runtime FAILS the op rather than
-   * running it: executing an unknown script with the provider credential env is
-   * the outcome this exists to prevent.
-   */
   const runtime: RuntimeLike = {
     kill: () => rawRuntime.kill(),
     run: async (op, args, opts) => {
@@ -2112,8 +1941,6 @@ export async function runHarnessDriver(
         recoverableCouncilMtimeMs = resultStat.mtimeMs;
       }
     } catch {
-      // No valid prior council result to adopt. The bounded retry path below
-      // remains authoritative.
     }
     const invocationMeta = new Map<
       string,
@@ -2250,8 +2077,6 @@ export async function runHarnessDriver(
         };
       };
       const harnessObj = configJson.agentHarness ?? {};
-      // A picker-chosen reviewer has no entry in the repo's config; give the
-      // runtime its binding for this op only. Never written back to the repo.
       harnessObj.models = { ...(harnessObj.models ?? {}) };
       for (const member of pendingMembers) {
         if (member.entry) harnessObj.models[member.councilId] = member.entry as never;
@@ -2269,8 +2094,6 @@ export async function runHarnessDriver(
       writeFileSync(councilConfigPath, `${JSON.stringify(configJson, null, 2)}\n`, 'utf8');
       const criteriaPath = join(artifactDir, `council-criteria-${op.kindTag}-r${op.round}.md`);
       writeFileSync(criteriaPath, op.criteriaText, 'utf8');
-      // The runtime requires its artifact dir to be git-ignored inside the
-      // worktree — same exclusion discipline as skill materialization.
       await excludeFromGit(host.cwd, '.ai/qa/');
       const timeoutMs =
         Math.max(600_000, ...ids.map((id) => Number(harnessObj.models?.[id]?.timeoutMs) || 0)) + 120_000;
@@ -2289,16 +2112,10 @@ export async function runHarnessDriver(
               family: member.family,
             },
             inputSha256: meta.inputSha256,
-            // Advisors are all given the same criteria document by the runtime,
-            // so the prompt is a file that already exists — point at it rather
-            // than writing N identical copies.
             promptPath: criteriaPath,
           }),
         );
       }
-      // A fixed round directory can contain the result of a prior rejected
-      // attempt. Preserve it for diagnosis, but never let a retry that writes
-      // nothing accidentally parse the stale file as its own output.
       if (existsSync(resultFile)) {
         renameSync(resultFile, `${resultFile}.previous-${randomUUID()}`);
       }
@@ -2317,8 +2134,6 @@ export async function runHarnessDriver(
           criteriaPath,
           '--output-dir',
           outputDir,
-          // Into the run's artifact dir, not the council's output dir under the
-          // worktree: the invocation endpoint only reads artifacts from there.
           '--prompt-dir',
           artifactDir,
         ],
@@ -2350,11 +2165,6 @@ export async function runHarnessDriver(
       const raw = existsSync(resultFile) ? (JSON.parse(readFileSync(resultFile, 'utf8')) as unknown) : null;
       const parsedCouncil = raw === null ? null : councilResultSchema.safeParse(raw);
       if (!parsedCouncil?.success) {
-        // Two very different failures used to collapse into one mute message.
-        // Separate them, and never swallow a schema mismatch again: a council
-        // that ran to completion and APPROVED was once discarded as "no
-        // structured result" because one field's type had drifted from the
-        // runtime's published contract.
         if (result.ok && raw !== null && parsedCouncil && !parsedCouncil.success) {
           const issues = parsedCouncil.error.issues
             .slice(0, 3)
@@ -2390,12 +2200,6 @@ export async function runHarnessDriver(
               : {}),
           });
           const invocation = running.get(member.label)!;
-          // Replace the criteria file recorded at spawn time with the prompt the
-          // runtime actually sent. The criteria are only its `<review_packet>`
-          // section; the rubric, the subject and the output contract are added
-          // by the runtime, and showing the fragment made a rubric-backed
-          // review look like it had been given no criteria at all. Older
-          // runtimes write no path — those keep the criteria file.
           const promptPath = typeof row?.promptPath === 'string' ? row.promptPath : null;
           if (promptPath && existsSync(promptPath)) invocation.promptPath = promptPath;
           if (completed) {
@@ -2413,8 +2217,6 @@ export async function runHarnessDriver(
             });
           }
         }
-        // Completed rows are durable even when the command exits non-zero
-        // because a sibling failed. Recovery reruns only incomplete members.
       }
     } catch (err) {
       error = `advisor council failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -2511,9 +2313,6 @@ export async function runHarnessDriver(
         allPaths.add(path);
       }
     }
-    // Model output is not required to be topologically ordered. Validate the
-    // complete dependency graph and execute a stable topological order so a
-    // dependent packet never receives an original/not-yet-run dependency id.
     const packetById = new Map(packetPlan.packets.map((packet) => [packet.id, packet]));
     const inputOrder = new Map(packetPlan.packets.map((packet, index) => [packet.id, index]));
     const indegree = new Map(
@@ -2634,9 +2433,6 @@ export async function runHarnessDriver(
         (invocation) => invocation.id === releaseInvocationId,
       );
 
-      // packet-release is itself durable. If its packet ledger reached aborted
-      // before Cezar recorded completion, reconcile that exact state and move
-      // to the one bounded replacement instead of trying the occupied id again.
       if (
         stateName === 'aborted' &&
         attempt < 2 &&
@@ -3045,7 +2841,6 @@ export async function runHarnessDriver(
   };
 
   try {
-    /* ---------------- capture ---------------- */
 
     const startStatePath = join(artifactDir, 'start-state.json');
     const captureInvocationId = 'runtime:capture';
@@ -3114,8 +2909,6 @@ export async function runHarnessDriver(
     if (captureError === 'cancelled') return null;
     if (captureError) return captureError;
 
-    /* ---------------- baseline gate ---------------- */
-
     /**
      * The gate's reference point: the same validation commands, run once on
      * the still-untouched worktree. A red baseline is the repo's own debt —
@@ -3135,9 +2928,6 @@ export async function runHarnessDriver(
     ) {
       const agentWorkStarted = ledger.phases.some((phase) => phase.kind === 'agent');
       if (agentWorkStarted) {
-        // A resumed pre-baseline-era run: the worktree is no longer the
-        // untouched base, so measuring it now would launder this run's own
-        // breakage into "pre-existing". Say so once and gate strictly.
         host.emit({
           type: 'note',
           stepId: 'capture',
@@ -3256,20 +3046,6 @@ export async function runHarnessDriver(
       }
     }
 
-    /**
-     * The staged-only guard, run between phases instead of only at handoff.
-     *
-     * `stage` is the last step of the workflow, so a commit made during round
-     * one used to surface only after every remaining fix round and council had
-     * been paid for — the most expensive possible moment to learn the run was
-     * void. The check is one short-lived git process, so it runs as soon as a
-     * phase that can write to git finishes.
-     *
-     * It fails open on anything it cannot read as a drift verdict. This is an
-     * early warning, not a new authority: `stage` still makes the same check
-     * and remains the one that decides. A runtime hiccup here must not be able
-     * to void a run that the handoff would have accepted.
-     */
     const gitDriftError = async (phaseId: string): Promise<string | null> => {
       if (!existsSync(startStatePath)) return null;
       const result = await runtime.run('verify', [
@@ -3299,10 +3075,7 @@ export async function runHarnessDriver(
       )}`;
     };
 
-    /* ---------------- judgment phases ---------------- */
-
     const allowlist = new Set<string>();
-    /** Which phase first pulled a path in — see `scopeReport` at stage time. */
     const allowlistOrigin = new Map<string, string>();
     const addToAllowlist = (path: string, phaseId: string): void => {
       allowlist.add(path);
@@ -3357,9 +3130,6 @@ export async function runHarnessDriver(
       diagnosisSummary = specResult.summary;
       for (const f of specResult.files ?? []) allowlist.add(f);
       if (specResult.openQuestions?.length) {
-        // The assumptions the author proceeded under, surfaced twice: to the
-        // human in the run log now, and to every implementation reviewer as
-        // known-open design questions (priorRoundsAppendix).
         unresolvedSpecFindings.push(
           ...specResult.openQuestions.map((q) => `[open-question] ${q}`),
         );
@@ -3403,7 +3173,6 @@ export async function runHarnessDriver(
           }
           return `the spec phase reported "${p}" but no such file exists in the run worktree (${host.cwd})`;
         };
-        // Structured calls wherever possible; sessions only for claude.
         const specSplit = splitReviewers(roles.reviewers);
         const specRunnerReviewers = specSplit.sessions;
         const specCouncilMembers = specSplit.members;
@@ -3412,7 +3181,6 @@ export async function runHarnessDriver(
           if (!specPath || specPath.startsWith('/') || specPath.split('/').includes('..')) {
             return `spec phase returned an unsafe spec path: ${specPath}`;
           }
-          // Re-checked every round: a revision round can move the file too.
           const misplaced = specMisplaced(specPath);
           if (misplaced) return misplaced;
           const specSubjectSha256 = hashFile(join(host.cwd, specPath));
@@ -3484,8 +3252,6 @@ export async function runHarnessDriver(
               });
             }
             let lastFailure: string | null = null;
-            /** Contract failures only — transport failures must not make the
-             *  retry lecture the model about JSON it never got to write. */
             let lastContractFailure: string | null = null;
             const priorAttempts = attemptsForInput(invocationId, inputSha256);
             for (
@@ -3535,15 +3301,12 @@ export async function runHarnessDriver(
               if (failure) {
                 lastFailure = failure;
                 finishInvocation(invocation, 'failed', { error: failure });
-                // A spent budget stays spent: never buy the same timeout twice.
                 if (!isRetryableReviewerFailure(failure)) break;
                 continue;
               }
               const read = readReviewResultFile(resultPath);
               parsed = read.result;
               if (read.salvaged) {
-                // The review was all there — only the framing was wrong. Say so, so
-                // a model that keeps doing this is visible without failing runs.
                 host.emit({
                   type: 'note',
                   stepId: councilId,
@@ -3560,8 +3323,6 @@ export async function runHarnessDriver(
             }
             if (parsed === null) {
               const reason = lastFailure ?? 'no valid review';
-              // Record and CARRY ON — the remaining reviewers are independent,
-              // and quorum below decides whether the round still stands.
               outcomes.push({ label, family: councilFamilyOf(reviewer), status: 'failed', reason });
               councilReviewers.push({ id: label, ...reviewer, status: 'failed', reason, freshContext: true });
               host.emit({
@@ -3596,8 +3357,6 @@ export async function runHarnessDriver(
               council: { round: sround, kind: 'spec', reviewers: councilReviewers, verdict: null },
             });
           });
-          // Advisors run regardless of runner outcomes — they are a separate
-          // transport and their verdicts count toward quorum on their own.
           if (specCouncilMembers.length > 0 && !host.isCancelled()) {
             const advisorRun = await runAdvisorCouncilOpWithRetry({
               kindTag: 'spec',
@@ -3615,7 +3374,6 @@ export async function runHarnessDriver(
             });
             if (advisorRun === null) return null;
             if (advisorRun.error) {
-              // The council op failed as a group — every advisor in it is out.
               for (const member of specCouncilMembers) {
                 outcomes.push({
                   label: member.label,
@@ -3658,8 +3416,6 @@ export async function runHarnessDriver(
             return error;
           }
           if (quorum.degraded) {
-            // Loud, recorded, and carried into the handoff — a degraded council
-            // must never look like a clean one.
             host.emit({
               type: 'note',
               stepId: councilId,
@@ -3825,15 +3581,9 @@ export async function runHarnessDriver(
       diagnosisSummary = (diagnose as z.infer<typeof diagnoseResultSchema>).summary;
     }
 
-    /* ------------- implement → validate → review (bounded loop) ------------- */
-
-    // Provider bindings and executable validation commands were frozen during
-    // preflight. Never reload the task worktree after a model has edited it.
     const agentic = runtimeAgentic;
     type AttributedFinding = ReviewResult['findings'][number] & { by?: string };
     let reviewFindings: AttributedFinding[] = [];
-    /** Blocker/major findings from the LAST review round, kept outside the loop
-     *  so the pre-stage invariant below can see them however the loop exited. */
     let survivingBlockers: AttributedFinding[] = [];
     const packetized = ledger.effectiveProfile === 'high-assurance';
     if (packetized) {
@@ -3864,7 +3614,6 @@ export async function runHarnessDriver(
      */
     let validationRepairRounds = 0;
     const MAX_VALIDATION_REPAIR_ROUNDS = 2;
-    /** Fix phases that existed only to green the gate — see the scope report. */
     const validationRepairPhases = new Set<string>();
 
     /**
@@ -3953,8 +3702,6 @@ export async function runHarnessDriver(
       return lines.join('\n');
     };
 
-    // The bound is re-evaluated each iteration, so a validation-repair round
-    // extends the loop instead of consuming a review round.
     for (let round = 1; round <= ledger.loops.maxFixRounds + validationRepairRounds; round += 1) {
       const isFirst = round === 1;
       const implementId = isFirst ? 'implement' : `fix-${round}`;
@@ -4022,19 +3769,13 @@ export async function runHarnessDriver(
         for (const path of implementResult.changedPaths) addToAllowlist(path, implementId);
         suggestedCommit = implementResult.suggestedCommit ?? suggestedCommit;
         implementSummary = implementResult.summary ?? implementSummary;
-        // Close the loop on the previous round's demands: the next council sees
-        // both what was required and what the fixer did in response.
         const answering = roundHistory[roundHistory.length - 1];
         if (answering && !answering.response) answering.response = implementResult.summary ?? '';
       }
 
-      // The implementer is the phase with both the means and the motive to
-      // commit — checking here is what keeps a stray commit from costing a
-      // validation gate and a full council before anyone notices.
       const implementDrift = await gitDriftError(implementId);
       if (implementDrift) return implementDrift;
 
-      /* validate */
       const validateId = isFirst ? 'validate' : `validate-${round}`;
       let validationFailed: string | null = null;
       const validationArtifactSchema = z.object({
@@ -4150,11 +3891,6 @@ export async function runHarnessDriver(
                   });
                   return { ok: true };
                 }
-                // A failed gate is not a run failure — it re-enters the fix loop
-                // with the real command evidence, like a confirmed review finding.
-                // Pre-existing baseline failures are tolerated (loudly) instead.
-                // Verdict first: it stamps `preexisting` on the checks, and the
-                // persisted artifact must carry those stamps.
                 validationFailed = describeGateVerdict(checks, validateId);
                 ledger.validation = checks;
                 const artifact = {
@@ -4185,8 +3921,6 @@ export async function runHarnessDriver(
       }
       if (validationFailed) {
         reviewFindings = [{ severity: 'blocker', title: 'validation gate failed', evidence: validationFailed }];
-        // Charged to the validation budget, not the review one — no council ran
-        // this round, so it cost the reviewers nothing to converge with.
         ledger.loops.fixRounds = Math.max(0, round - validationRepairRounds - 1);
         persist();
         if (packetized) {
@@ -4200,9 +3934,6 @@ export async function runHarnessDriver(
           return reason;
         }
         validationRepairRounds += 1;
-        // The NEXT fix phase exists to make the gate green again, not to build
-        // the feature. Naming it lets the handoff separate "work the task asked
-        // for" from "collateral repairs the gate forced".
         validationRepairPhases.add(`fix-${round + 1}`);
         host.emit({
           type: 'note',
@@ -4222,7 +3953,6 @@ export async function runHarnessDriver(
       const codeReviewRubricSha256 =
         hashMaterializedSkill('cez-code-review') ?? 'missing';
 
-      /* fresh review — one pass per reviewer for role-based runs */
       const reviewPromptText = [
         `You are a FRESH review context with no implementation transcript — review this worktree's complete uncommitted diff against the base branch with the cez-code-review skill, in full.`,
         ``,
@@ -4251,10 +3981,6 @@ export async function runHarnessDriver(
             error instanceof Error ? error.message : String(error)
           }`;
         }
-        // The council: every reviewer gets its own fresh session over the same
-        // diff; a reviewer that cannot produce a valid result after one retry
-        // fails the run — a partial council is no council (the om all-required
-        // rule). Sequential in version 1: one live session per run.
         const councilName = isFirst ? 'Council review' : `Council review (round ${round})`;
         const councilWasDone = phaseDone(reviewId);
         const councilBoundaryMessages = boundaryMessagesForPhase(
@@ -4281,7 +4007,6 @@ export async function runHarnessDriver(
           emitPhase(reviewId);
         }
         const councilReviewers: Array<Record<string, unknown>> = [];
-        /** Per-reviewer outcomes — quorum, not unanimity, decides the round. */
         const outcomes: CouncilOutcome[] = [];
         const implSplit = splitReviewers(roles.reviewers);
         const runnerReviewers = implSplit.sessions;
@@ -4317,8 +4042,6 @@ export async function runHarnessDriver(
             });
           }
           let lastFailure: string | null = null;
-          /** Contract failures only — transport failures must not make the
-           *  retry lecture the model about JSON it never got to write. */
           let lastContractFailure: string | null = null;
           const priorAttempts = attemptsForInput(invocationId, inputSha256);
           for (
@@ -4373,8 +4096,6 @@ export async function runHarnessDriver(
             const read = readReviewResultFile(resultPath);
             parsed = read.result;
             if (read.salvaged) {
-              // The review was all there — only the framing was wrong. Say so, so
-              // a model that keeps doing this is visible without failing runs.
               host.emit({
                 type: 'note',
                 stepId: reviewId,
@@ -4504,8 +4225,6 @@ export async function runHarnessDriver(
               .join('; ')}`,
           });
         }
-        // Union findings across reviewers, deduped by severity+title, each
-        // attributed to every reviewer that raised it.
         const byKey = new Map<string, AttributedFinding>();
         for (const entry of councilReviewers) {
           const label = entry.id as string;
@@ -4605,8 +4324,6 @@ export async function runHarnessDriver(
         });
         break;
       }
-      // Against the EXTENDED bound: a repair round pushed the loop out by one,
-      // and stopping at the original number would hand the extra round back.
       if (round >= ledger.loops.maxFixRounds + validationRepairRounds) {
         // Same reasoning as the spec council: stage the work with the surviving
         // findings named, rather than deleting an hour of it because a reviewer
@@ -4628,8 +4345,6 @@ export async function runHarnessDriver(
         });
         break;
       }
-      // Record what this round demanded, so the next council sees it alongside
-      // whatever the fixer does about it and cannot reverse it unknowingly.
       roundHistory.push({
         round,
         demanded: blocking.map(
@@ -4640,11 +4355,6 @@ export async function runHarnessDriver(
       reviewFindings = blocking;
     }
 
-    // Pre-stage invariant: unresolved blocker/major findings can never reach a
-    // "ready" handoff without a recorded contested outcome. Per-reviewer verdict
-    // coercion above should make this unreachable, but the loop has several exit
-    // paths (and recovered ledger rows predate the coercion), so the guarantee is
-    // asserted here on the objective data rather than inferred from a label.
     if (survivingBlockers.length > 0 && ledger.outcome.status === 'pending') {
       setOutcome({
         status: 'contested',
@@ -4670,8 +4380,6 @@ export async function runHarnessDriver(
       setOutcome({ status: 'blocked', blockingReasons: [reason] });
       return reason;
     }
-
-    /* ---------------- stage ---------------- */
 
     const allowlistPath = join(artifactDir, 'allowlist.txt');
     writeFileSync(allowlistPath, `${[...allowlist].sort().join('\n')}\n`, 'utf8');
@@ -4812,7 +4520,6 @@ export async function runHarnessDriver(
         );
       }
     } catch {
-      // unreadable result — the op already passed, nothing advisory to surface
     }
     for (const warning of stageWarnings) {
       host.emit({ type: 'note', stepId: 'stage', message: `staged with a warning — ${warning}` });

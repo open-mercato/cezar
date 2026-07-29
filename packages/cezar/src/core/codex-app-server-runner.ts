@@ -158,8 +158,6 @@ class CodexSession implements AgentSession {
     if (limitMs > 0) {
       deadline = setTimeout(() => {
         this.timedOut = true;
-        // `interrupt()` tree-terminates with its own SIGKILL escalation — no
-        // separate kill timer needed here.
         this.interrupt();
         this.child.stdout.destroy();
       }, limitMs);

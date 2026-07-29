@@ -113,10 +113,6 @@ function HarnessPage({
   children: ReactNode
 }) {
   const [timelineOpen, setTimelineOpen] = useState(false)
-  // The drawer lives at the page level, not on the Review tab, because the rail
-  // that opens it is on every harness surface. It is rendered outside the rail
-  // for the same reason the Agents dock renders its sheet outside itself: the
-  // rail is `hidden` below `xl`, and a sheet inside it would disappear with it.
   const [openReviewer, setOpenReviewer] = useState<string | null>(null)
   return (
     <OpenReviewerContext.Provider value={setOpenReviewer}>
@@ -256,9 +252,6 @@ function CouncilProgress({ ledger }: { ledger: HarnessLedgerResponse }) {
  * result). Reviewers only now, with the verdict and findings that make the
  * council's claim checkable; orchestrator and implementer live in the run rail.
  */
-/** Opens the reviewer drawer that `HarnessPage` owns. The Review tab's council
- *  table reaches `HarnessPage` as `children`, so it takes the opener from
- *  context instead of threading a setter back up through the route. */
 const OpenReviewerContext = createContext<(id: string) => void>(() => undefined)
 
 function CouncilTable({ ledger }: { ledger: HarnessLedgerResponse }) {
@@ -308,8 +301,6 @@ function CouncilTable({ ledger }: { ledger: HarnessLedgerResponse }) {
                   className="cursor-pointer border-t border-border first:border-0 hover:bg-card-2"
                 >
                   <td className="px-4 py-2.5">
-                    {/* runner and model rendered apart — never the concatenated
-                        ledger key, which reads `opencode/opencode/mimo-v2.5-free`. */}
                     <span className="block font-semibold text-foreground">
                       {model?.model || shortModelName(reviewer.id)}
                     </span>
@@ -501,8 +492,6 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
   }
   if (status === 'pending') return null
 
-  // `blockingReasons` is sometimes ONE semicolon-joined string from the driver;
-  // the shared splitter keeps this banner and the run rail counting alike.
   const reasons = blockingReasonList(ledger)
 
   return (
@@ -590,8 +579,6 @@ export function TaskHarnessReviewRoute() {
   }
   return (
     <HarnessPage run={run.data} ledger={ledger} tab="review">
-      {/* Outcome first, findings second, the council that produced them third —
-          the order a reader needs, not the order the data happens to be in. */}
       <OutcomeBanner runId={id ?? run.data.id} ledger={ledger} />
       <Findings ledger={ledger} />
       <CouncilProgress ledger={ledger} />

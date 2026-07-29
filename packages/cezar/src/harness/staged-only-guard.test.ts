@@ -4,22 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-/**
- * The staged-only git guard, end to end against the real vendored runtime.
- *
- * The guard used to compare every local head, tag and `reflog --all` entry
- * against the start state, which silently assumed one session owns the whole
- * repository for the duration of a run. cezar breaks that assumption by design:
- * it runs N task worktrees off a single object store while the human keeps
- * working in the main checkout. A run would spend hours on fix rounds and
- * councils and then have `stage` refuse the handoff because someone committed
- * on an unrelated branch — and because reflog selectors are positional, the
- * refusal was permanent, surviving even a `reset --hard` back to the start.
- *
- * These tests pin both halves: unrelated repository churn must not fail a run,
- * and the run's own commits still must.
- */
-
 const RUNTIME = join(
   import.meta.dirname,
   '..',
@@ -31,7 +15,6 @@ const RUNTIME = join(
   'harness.mjs',
 );
 
-/** Commit as a fixed identity so the fixture repo works on bare CI machines. */
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 const roots: string[] = [];
@@ -60,7 +43,6 @@ function run(
 const git = (args: string[], cwd: string) => run('git', [...GIT_ID, ...args], cwd);
 const runtime = (args: string[], cwd: string) => run(process.execPath, [RUNTIME, ...args], cwd);
 
-/** A repo with one linked worktree standing in for a cezar task worktree. */
 async function fixture(): Promise<{ repo: string; worktree: string; startState: string }> {
   const repo = mkdtempSync(join(tmpdir(), 'cez-guard-'));
   roots.push(repo);
@@ -80,9 +62,6 @@ describe('staged-only git guard', () => {
   it('ignores repository churn the run did not cause', async () => {
     const { repo, worktree, startState } = await fixture();
 
-    // Everything that used to fail the handoff, none of it this run's doing:
-    // the human commits in their own checkout, a second cezar session claims a
-    // worktree and branch, and a release tag lands.
     writeFileSync(join(repo, 'base.txt'), 'base\nhuman edit\n');
     await git(['commit', '-q', '-am', 'human commits on their own branch'], repo);
     await git(['worktree', 'add', '-q', '-b', 'cez/run2', '.wt/run2'], repo);
@@ -92,7 +71,6 @@ describe('staged-only git guard', () => {
     expect(verified.code).toBe(0);
     expect(JSON.parse(verified.stdout)).toMatchObject({ status: 'clean', drift: [] });
 
-    // And the handoff itself still goes through.
     writeFileSync(join(worktree, 'feature.txt'), 'the run output\n');
     const paths = join(repo, 'paths.txt');
     writeFileSync(paths, 'feature.txt\n');
@@ -120,7 +98,6 @@ describe('staged-only git guard', () => {
     const { repo, worktree, startState } = await fixture();
     // Trailing whitespace + blank line at EOF — exactly what killed aad28178.
     writeFileSync(join(worktree, 'spec.md'), '**Date**: 2026-07-28 \ntext\n\n', 'utf8');
-    // And a leftover the allowlist never mentions.
     writeFileSync(join(worktree, 'scratch-notes.txt'), 'model scratchpad\n', 'utf8');
     const paths = join(repo, 'paths.txt');
     writeFileSync(paths, 'spec.md\n');
@@ -140,17 +117,9 @@ describe('staged-only git guard', () => {
     expect(warnings).toContain('scratch-notes.txt');
   });
 
-  /**
-   * Predicted, not yet observed: the allowlist is a union across fix rounds, so
-   * a file created in round one and deleted in round three is a ghost — listed,
-   * absent, untracked — and `git add` used to fail the whole two-hour handoff
-   * over a pathspec matching nothing.
-   */
   it('drops created-then-deleted allowlist ghosts with a warning instead of refusing', async () => {
     const { repo, worktree, startState } = await fixture();
     writeFileSync(join(worktree, 'feature.txt'), 'kept product\n', 'utf8');
-    // scratch.tmp was written by an early round and deleted by a later one —
-    // it exists only in the allowlist.
     const paths = join(repo, 'paths.txt');
     writeFileSync(paths, 'feature.txt\nscratch.tmp\n');
     const staged = await runtime(
@@ -164,14 +133,12 @@ describe('staged-only git guard', () => {
     expect(result.stagedPaths).toEqual(['feature.txt']);
     expect((result.warnings ?? []).join('\n')).toContain('scratch.tmp');
 
-    // A deleted TRACKED file is not a ghost: staging it stages the deletion.
     const del = await runtime(['verify', '--worktree', worktree, '--start-state', startState], repo);
     expect(del.code).toBe(0); // still clean — deletion staging is covered next
   });
 
   it('stages the deletion of a tracked file named in the allowlist', async () => {
     const { repo, worktree, startState } = await fixture();
-    // base.txt is tracked from the fixture commit; the run deletes it.
     rmSync(join(worktree, 'base.txt'));
     const paths = join(repo, 'paths.txt');
     writeFileSync(paths, 'base.txt\n');
@@ -199,8 +166,6 @@ describe('staged-only git guard', () => {
       repo,
     );
     expect(staged.code).not.toBe(0);
-    // The reason, not just the fact — an operator has to be able to tell their
-    // own commit apart from the run's without reconstructing the timeline.
     expect(staged.stderr).toContain('Git refs or reflogs changed during staged-only run');
     expect(staged.stderr).toContain('this run created or reset a commit');
   });
@@ -213,8 +178,6 @@ describe('staged-only git guard', () => {
     await git(['commit', '-q', '-m', 'intermediate commit'], worktree);
     await git(['reset', '-q', '--hard', head], worktree);
 
-    // HEAD and the branch ref are back where they started; only the reflog
-    // remembers. That is exactly what the reflog half of the snapshot is for.
     const verified = await runtime(['verify', '--worktree', worktree, '--start-state', startState], repo);
     expect(verified.code).toBe(2);
     const result = JSON.parse(verified.stdout) as { status: string; drift: string[] };
@@ -225,9 +188,6 @@ describe('staged-only git guard', () => {
   it('trusts only HEAD in a start state written by the previous runtime', async () => {
     const { repo, worktree, startState } = await fixture();
     const head = (await git(['rev-parse', 'HEAD'], worktree)).stdout.trim();
-    // A run captured before this change and resumed after it: the old snapshot
-    // covered the whole repository, so comparing it field-by-field would report
-    // drift that never happened and strand the run.
     writeFileSync(
       startState,
       `${JSON.stringify({

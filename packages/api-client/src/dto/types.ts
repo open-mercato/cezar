@@ -709,7 +709,6 @@ export interface Skill {
   body: string
   path: string
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'bundled'
-  /** Sibling skills materialized alongside this one (frontmatter `requires:`). */
   requires?: string[]
   /** Team skills only: where the definition lives in its skills repo. */
   team?: {
@@ -1063,16 +1062,11 @@ export type HarnessProfile = 'standard' | 'optimized' | 'multi' | 'multi-optimiz
 export interface HarnessModel {
   id: string
   family?: string
-  /** The bound model identifier (e.g. `gpt-5.6-sol`), `host app` for claude. */
   model?: string
   adapter?: string
   roles: string[]
-  /** Which configured profiles reference this model (status only). */
   profiles?: string[]
-  /** Probe outcome (probe only). */
   readiness?: 'ready' | 'missing' | 'failed' | 'unknown'
-  /** What the probe observed — the upstream error behind a `failed`, or how the
-   *  round-trip succeeded. A red row without this just relocates the mystery. */
   readinessDetail?: string
   binding?: string
 }
@@ -1080,20 +1074,14 @@ export interface HarnessModel {
 export interface HarnessStatusResponse {
   /** Whether `.ai/agentic.config.json` carries an `agentHarness` section. `standard` needs none. */
   configured: boolean
-  /** Profiles the repo offers (`standard` always included). */
   profiles: string[]
-  /** Profiles this cezar's driver can conduct itself. */
   driven: string[]
   models: HarnessModel[]
-  /** Where the harness collection resolves from — normally `bundled` (the vendored cez-* tree
-   *  shipped inside cezar) with its pinned upstream commit. `installed: false` means even the
-   *  bundle is missing (broken install). */
   runtime: {
     installed: boolean
     source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'bundled' | null
     commit: string | null
   }
-  /** The exact branch comparison enforced again by POST /runs before worktree creation. */
   base?: {
     configured: string | null
     remoteDefault: string | null
@@ -1105,7 +1093,6 @@ export interface HarnessStatusResponse {
 export interface HarnessProbeResponse {
   profile: string
   ready: boolean
-  /** Why the profile cannot start, when `ready` is false. */
   reason?: string
   models: HarnessModel[]
 }
@@ -1126,9 +1113,6 @@ export interface HarnessPhaseRecord {
 }
 
 export interface HarnessModelRecord {
-  /** `runner/model` — the ledger's stable cross-record key. Never render it
-   *  whole: a gateway-qualified model reads as `opencode/opencode/mimo-v2.5-free`.
-   *  Use `runner`/`model` below, which the driver now carries explicitly. */
   id: string
   family?: string
   runner?: string
@@ -1285,8 +1269,6 @@ export interface HarnessLedgerResponse {
   decisions?: HarnessDecisionRecord[]
   stage: HarnessStageRecord
   outcome: HarnessOutcomeRecord
-  /** Highest persisted run-event seq included by this snapshot. Replayed SSE entities at or
-   *  below it must not overwrite the newer durable state after a reload. */
   snapshotSeq?: number
   loops?: { fixRounds: number; maxFixRounds: number }
   [key: string]: unknown

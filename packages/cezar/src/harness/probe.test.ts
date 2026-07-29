@@ -11,7 +11,6 @@ import { createModelProber, probeKey, type ProbeTransport } from './probe.js';
  * transport the run will use. Presence is not readiness.
  */
 
-/** Records every transport call so tests can assert on caching. */
 function recorder(verdicts: Record<string, Awaited<ReturnType<ProbeTransport>>>) {
   const calls: string[] = [];
   const transport: ProbeTransport = async (ref) => {
@@ -35,7 +34,6 @@ describe('createModelProber', () => {
     const verdict = await prober.probe({ runner: 'opencode', model: 'opencode/mimo-v2.5-free' });
 
     expect(verdict.status).toBe('failed');
-    // The operator must be able to act on this without reading server logs.
     expect(verdict.detail).toContain('replacement_seq');
   });
 
@@ -124,8 +122,6 @@ describe('createModelProber', () => {
   });
 
   it('keys a default-model binding the same way the driver does, so its verdict is not lost', async () => {
-    // The driver's roleRefId renders an empty model as `auto`; a divergent key
-    // here would silently degrade a real verdict to "unknown" in the ledger.
     expect(probeKey({ runner: 'codex', model: '' })).toBe('codex/auto');
 
     const { transport } = recorder({ 'codex/auto': { status: 'failed', detail: 'codex exec exited 1' } });

@@ -337,7 +337,6 @@ describe('high-assurance packet route', () => {
   })
 })
 
-
 /**
  * Review-tab findings C2/C6 (2026-07-27).
  */
@@ -347,8 +346,6 @@ describe('finding attribution', () => {
     const merged = reviewerFindings({
       round: 1,
       kind: 'implementation',
-      // The council-level copy already carries `by`; the per-reviewer pass then
-      // contributed the same finding again, which used to append the id twice.
       findings: [{ severity: 'minor', title: 'dup', by: 'mimo' }],
       reviewers: [
         { id: 'mimo', status: 'completed', findings: [{ severity: 'minor', title: 'dup' }] },
@@ -372,7 +369,6 @@ describe('finding attribution', () => {
     expect(blockingFindings(rows).map((f) => f.title)).toEqual(['a', 'b'])
   })
 })
-
 
 /**
  * User request 2026-07-27: a reviewer's response has to read as prose, not as
@@ -403,7 +399,6 @@ describe('formatReviewResponse', () => {
     expect(out).toContain('at src/a.ts:4')
     expect(out).toContain('the guard no longer runs')
     expect(out).toContain('checked against the diff')
-    // The escaped-JSON wall is exactly what this exists to avoid.
     expect(out).not.toContain('\\"')
   })
 

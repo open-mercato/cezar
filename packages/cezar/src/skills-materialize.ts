@@ -49,7 +49,6 @@ async function materializeOne(cwd: string, skill: Skill): Promise<boolean> {
   if (skill.source === 'team') {
     return skill.team?.dir ? materializeSkillDir(cwd, skill).catch(() => false) : true;
   }
-  // Single-file skills are body-only by design — nothing to put on disk.
   if (!skill.path.endsWith('SKILL.md')) return true;
   let srcDir: string;
   try {
@@ -60,11 +59,8 @@ async function materializeOne(cwd: string, skill: Skill): Promise<boolean> {
   const target = join(cwd, '.claude', 'skills', skill.name);
   try {
     const cwdReal = await realpath(cwd);
-    // Already inside the run tree (a tracked repo-local skill in the
-    // worktree, or a previous materialization target) — no self-copy.
     if (srcDir === resolve(target) || srcDir.startsWith(`${cwdReal}/`)) return true;
   } catch {
-    // cwd not resolvable — fall through and let the copy attempt decide.
   }
   try {
     const existing = await stat(target).catch(() => null);

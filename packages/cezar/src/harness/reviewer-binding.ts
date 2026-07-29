@@ -25,12 +25,10 @@ import { familyByModelName } from './model-family.js';
 
 /** A synthesized `agentHarness.models` entry, in the runtime's own shape. */
 export interface ReviewerBinding {
-  /** Key under `agentHarness.models`, and the id the profile references. */
   id: string;
   entry: Record<string, unknown>;
 }
 
-/** Gateways cezar can reach with a credential the runtime already resolves. */
 const GATEWAYS: Record<string, { endpoint: string; authStoreProvider: string }> = {
   opencode: {
     endpoint: 'https://opencode.ai/zen/v1/chat/completions',
@@ -65,8 +63,6 @@ export function synthesizeReviewerBinding(
   if (ref.runner === 'claude') return null;
 
   if (ref.runner === 'codex') {
-    // Codex reviews through its own CLI with a schema file — the runtime's
-    // audited read-only command shape.
     return {
       id: `cez-codex-${sanitize(ref.model || 'auto')}`,
       entry: {
@@ -99,7 +95,6 @@ export function synthesizeReviewerBinding(
     };
   }
 
-  // opencode: the model id is `provider/model` from the gateway catalog.
   const slash = ref.model.indexOf('/');
   if (slash <= 0) return null;
   const gateway = ref.model.slice(0, slash);
@@ -111,7 +106,6 @@ export function synthesizeReviewerBinding(
     id: `cez-${gateway}-${sanitize(bare)}`,
     entry: {
       adapter: 'preset',
-      // Any non-kimi preset name takes the runtime's plain HTTP path.
       preset: gateway === 'deepseek' ? 'deepseek-api' : 'opencode-zen',
       family: reviewerFamily(bare, gateway),
       model: bare,

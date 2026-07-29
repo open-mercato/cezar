@@ -758,8 +758,6 @@ export class RunStore extends EventEmitter {
     }
   }
 
-  /** Highest sequence already allocated for a run. Harness snapshots expose this as their
-   * replay watermark so an older SSE prefix cannot overwrite newer durable ledger state. */
   eventHighWaterMark(runId: string): number {
     const cached = this.seqs.get(runId);
     if (cached !== undefined) return cached;

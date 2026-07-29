@@ -1,37 +1,13 @@
-/**
- * Model readiness probing for harness runs.
- *
- * Why this exists: a council run once reported every reviewer `ready` while the
- * opencode transport 500'd on the first prompt of every session. Three separate
- * layers had said "ready" and not one had called a model — the cockpit picker
- * listed models the CLI was *authenticated* against, the setup skill's probe
- * checked that a credential *existed*, and this driver's preflight hardcoded
- * `readiness: 'ready'`. Presence is not readiness.
- *
- * The contract here: a `ready` verdict means a round-trip COMPLETED on the exact
- * transport the run will use. Anything short of that is `failed`, carrying the
- * concrete reason so the operator can act without reading a server log.
- *
- * This module owns caching and orchestration only; the round-trips themselves
- * live behind the `ProbeTransport` seam (see `probe-transports.ts`) so the
- * policy is testable without spawning a CLI or touching the network.
- */
 
 /** A model bound to a role, addressed by the transport that will run it. */
 export interface ProbeRef {
   runner: 'claude' | 'codex' | 'opencode' | 'harness';
   model: string;
-  /** Provider family, for `harness` advisors (the diversity axis). */
   family?: string;
 }
 
 export interface ProbeVerdict {
-  /** `ready` is reserved for a COMPLETED round-trip. `unverified` is the honest
-   *  answer when a transport has no cheap round-trip shape (a subscription CLI
-   *  whose invocation we don't own): it must never render as green, because
-   *  false green is the exact defect this module exists to prevent. */
   status: 'ready' | 'failed' | 'unverified';
-  /** Concrete, operator-actionable: the upstream error, or what succeeded. */
   detail: string;
 }
 
@@ -42,17 +18,9 @@ export type ProbeTransport = (ref: ProbeRef) => Promise<ProbeVerdict>;
 
 export interface ProberOptions {
   transport: ProbeTransport;
-  /** How long a `ready` verdict stays fresh. Default 10 min — long enough that
-   *  back-to-back runs don't repay the round-trip. */
   ttlMs?: number;
-  /** How long a `failed` verdict stays fresh. Deliberately much shorter than
-   *  `ttlMs`: once the operator fixes the transport, the next run should see
-   *  it, not sit behind a stale failure. */
   failureTtlMs?: number;
   now?: () => number;
-  /** Pass a caller-owned map to share verdicts across prober instances — the
-   *  driver builds a fresh prober per run but keeps one process-wide cache, so
-   *  the second run in a session doesn't repay every round-trip. */
   cache?: Map<string, ProbeCacheEntry>;
 }
 
@@ -67,8 +35,6 @@ export const sharedHarnessProbeCache = new Map<string, ProbeCacheEntry>();
 
 export interface ModelProber {
   probe(ref: ProbeRef): Promise<ProbeVerdict>;
-  /** Probe a whole roster, once per distinct model, concurrently.
-   *  Keyed by `probeKey(ref)`. */
   probeAll(refs: ProbeRef[]): Promise<Map<string, ProbeVerdict>>;
   clearCache(): void;
 }
@@ -97,8 +63,6 @@ export function createModelProber(opts: ProberOptions): ModelProber {
   } = opts;
 
   const cache = opts.cache ?? new Map<string, ProbeCacheEntry>();
-  /** Shared in-flight probes — two roles bound to the same model must never
-   *  spawn two opencode servers racing for the same port. */
   const inFlight = new Map<string, Promise<ProbeVerdict>>();
 
   const probe = async (ref: ProbeRef): Promise<ProbeVerdict> => {

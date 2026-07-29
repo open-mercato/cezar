@@ -566,16 +566,10 @@ describe('a bundled directory skill materializes with its requires closure into 
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    // The step skill, its declared requirement (cez-harness), and the
-    // transitive one (cez-harness → cez-code-review).
     for (const name of ['cez-setup-harness', 'cez-harness', 'cez-code-review']) {
       expect(existsSync(join(repoRoot, '.claude', 'skills', name, 'SKILL.md'))).toBe(true);
     }
-    // NOT cez-setup-pipeline: adding a model in cezar must never drag in the om
-    // PR pipeline (tracker descriptor, labels, base branch). Materializing it
-    // is what invited the setup skill to route a first-run user through it.
     expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-setup-pipeline', 'SKILL.md'))).toBe(false);
-    // The runtime script — the driver preflight's exact probe path.
     expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-harness', 'scripts', 'harness.mjs'))).toBe(true);
   }, 30_000);
 });

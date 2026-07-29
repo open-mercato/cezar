@@ -377,8 +377,6 @@ export function acceptContestedHarness(
   reason: string,
 ): Promise<{
   outcome: HarnessLedgerResponse['outcome']
-  /** The full decision log including the new `accept-contested` row. The publish
-   *  gate needs that row, not only the acceptance stamp on `outcome`. */
   decisions?: HarnessLedgerResponse['decisions']
 }> {
   return mutate<{

@@ -353,7 +353,6 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
       { runner: 'harness', model: 'codex', label: 'codex · gpt-5.6-sol', family: 'openai' },
     ])
     expect(advisorHarnessOptions(undefined)).toEqual([])
-    // Family flows into the diversity rule.
     expect(modelFamilyOf({ runner: 'harness', model: 'kimi', family: 'moonshot' })).toBe('moonshot')
   })
 
@@ -614,8 +613,6 @@ describe('harness picker grouping and presets (2026-07-24)', () => {
     const [kept] = normalizeHarnessPresets([withAdvisor])
 
     expect(kept).toEqual(withAdvisor)
-    // `family` IS the advisor's identity — dropping it makes the ref
-    // unresolvable and silently breaks the diversity rule it feeds.
     expect(kept?.roles.reviewers[0]).toHaveProperty('family', 'deepseek')
   })
 
@@ -755,7 +752,6 @@ describe('freeTierReviewerWarning', () => {
     }) as Parameters<typeof freeTierReviewerWarning>[0]
 
   it('warns when a free-tier model is bound to a reviewer slot', () => {
-    // Live failure: mimo-v2.5-free burned two 60-minute budgets on one review.
     const warning = freeTierReviewerWarning(
       roles([
         { runner: 'claude', model: 'opus' },

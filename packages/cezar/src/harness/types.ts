@@ -28,22 +28,17 @@ export type HarnessProfile = (typeof HARNESS_PROFILES)[number];
 
 export const harnessProfileSchema = z.enum(HARNESS_PROFILES);
 
-/** One conductor phase: an agent phase (fresh session running one cez-* skill)
- *  or an op phase (a deterministic `harness.mjs` / validation invocation). */
 const harnessPhaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   kind: z.enum(['agent', 'op']),
-  /** The cez-* skill an agent phase runs (e.g. `cez-root-cause`). */
   skill: z.string().optional(),
   status: z.enum(['pending', 'running', 'done', 'failed', 'skipped']),
   attempts: z.number().int().min(0),
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
-  /** Backend session id of the phase's fresh agent session, when kind=agent. */
   sessionId: z.string().optional(),
   error: z.string().optional(),
-  /** Named artifact paths this phase produced (briefs, results, evidence). */
   artifacts: z.record(z.string(), z.string()).default({}),
 });
 
@@ -63,9 +58,6 @@ const harnessModelSchema = z.object({
   binding: z.string().optional(),
   roles: z.array(z.string()).default([]),
   readiness: z.enum(['ready', 'missing', 'failed', 'unknown']).default('unknown'),
-  /** What the readiness probe actually observed — the upstream error for a
-   *  failure, or how the round-trip succeeded. Operator-actionable detail, so
-   *  a red row never sends anyone hunting through a server log. */
   readinessDetail: z.string().optional(),
   note: z.string().optional(),
   invocations: z.number().int().min(0).default(0),
@@ -80,16 +72,9 @@ export const validationCheckSchema = z.object({
   status: z.enum(['passed', 'failed', 'skipped']),
   exitCode: z.number().int().nullable(),
   evidence: z.string(),
-  /** Normalized failing-test identities (FAIL paths, turbo tasks, tsc codes)
-   *  extracted from the real output — the delta-gate's comparison key. */
   failureIds: z.array(z.string()).optional(),
-  /** Full captured output on disk; evidence is an extract, this is the whole
-   *  stream a repair agent can read instead of re-running a long suite. */
   logPath: z.string().optional(),
-  /** True when the identical failure was already present at baseline — the
-   *  gate tolerated it (loudly) instead of charging it to this run. */
   preexisting: z.boolean().optional(),
-  /** The command was killed at the validation timeout, not by its own exit. */
   timedOut: z.boolean().optional(),
 });
 
@@ -152,8 +137,6 @@ export const harnessInvocationSchema = z
         pid: z.number().int().positive(),
         token: z.string().min(1),
         startedAt: z.string(),
-        /** Runtime ops are dedicated process-group leaders; ordinary runner
-         * sessions currently reconcile their owned root process directly. */
         group: z.boolean().optional(),
       })
       .passthrough()
@@ -187,8 +170,6 @@ const harnessOutcomeSchema = z
 const harnessLedgerBaseShape = {
   workflow: z.string().min(1),
   requestedProfile: harnessProfileSchema,
-  /** Differs from `requestedProfile` only after an explicit, recorded user
-   *  fallback decision — never silently. */
   effectiveProfile: harnessProfileSchema,
   /** The role-based selection the run was started with (2026-07-24): who
    *  orchestrates, who implements, who reviews. Loose — the driver input is
@@ -204,8 +185,6 @@ const harnessLedgerBaseShape = {
       baseRef: z.string(),
       path: z.string(),
       overlay: z.boolean(),
-      /** Hash of the exact immutable bytes used for provider bindings and
-       * executable validation commands. Optional only for legacy ledgers. */
       sha256: z.string().min(1).optional(),
     })
     .optional(),
