@@ -103,7 +103,7 @@ function renderAt(
     uiState = {},
   }: {
     seed?: boolean
-    health?: typeof HEALTH
+    health?: typeof HEALTH | null
     registry?: ProjectsResponse | null
     uiState?: WorkspaceUiState | Record<string, unknown> | null
   } = {},
@@ -112,7 +112,7 @@ function renderAt(
   if (seed) {
     // Scope is unset while seeding, so `queryKeys.health` is the unscoped `['default','health']`
     // key the legacy-redirect gate reads.
-    client.setQueryData(queryKeys.health, health)
+    if (health !== null) client.setQueryData(queryKeys.health, health)
     if (registry !== null) client.setQueryData(workspaceQueryKeys.projects, registry)
     if (uiState !== null) client.setQueryData(workspaceQueryKeys.uiState, uiState)
   }
@@ -496,6 +496,61 @@ describe('legacy flat URLs redirect to the boot project', () => {
 
     expect(routeName()).toBe('scope-resolving')
     expect(currentPathname()).toBe('/')
+  })
+
+  it('uses the registry boot project when health fails instead of resolving forever', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).startsWith('/api/health')) {
+          return new Response(JSON.stringify({ error: 'down' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Promise<never>(() => {})
+      }),
+    )
+
+    renderAt('/', {
+      health: null,
+      uiState: {
+        lastLocation: { projectId: 'other', pathname: '/p/other/tasks/run-1' },
+      },
+    })
+
+    await waitFor(() => expect(currentPathname()).toBe('/p/other/tasks/run-1'), {
+      timeout: 4_000,
+    })
+    expect(routeName()).toBe('task-thread')
+  })
+
+  it('falls through the default alias when health and registry both fail', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (
+          String(input).startsWith('/api/health') ||
+          String(input).startsWith('/api/projects')
+        ) {
+          return new Response(JSON.stringify({ error: 'down' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Promise<never>(() => {})
+      }),
+    )
+
+    renderAt('/', { health: null, registry: null })
+
+    await waitFor(
+      () => {
+        expect(currentPathname()).toBe('/p/default/')
+        expect(routeName()).toBe('tasks')
+      },
+      { timeout: 4_000 },
+    )
   })
 
   for (const [url, route] of ROUTE_CASES) {

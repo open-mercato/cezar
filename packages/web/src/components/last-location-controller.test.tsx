@@ -207,26 +207,52 @@ describe('LastLocationController', () => {
     expect(document.body.textContent).not.toContain('read-only home')
   })
 
-  it('does not let an older response overwrite a newer optimistic location', async () => {
-    let resolveFirst!: (value: WorkspaceUiState) => void
-    putWorkspaceUiStateMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveFirst = resolve
-      }),
-    )
+  it('serializes writes so an older request cannot persist after the final location', async () => {
+    const persisted: WorkspaceLastLocation[] = []
+    let resolveFirst!: () => void
+    putWorkspaceUiStateMock
+      .mockImplementationOnce(
+        (patch) =>
+          new Promise((resolve) => {
+            resolveFirst = () => {
+              persisted.push(patch.lastLocation!)
+              resolve({
+                appearance: { accent: 'lime' },
+                lastLocation: patch.lastLocation,
+              })
+            }
+          }),
+      )
+      .mockImplementationOnce(async (patch) => {
+        persisted.push(patch.lastLocation!)
+        return patch
+      })
+
     const { client } = mount('/p/boot/tasks/first')
     await runDebounce()
 
     fireEvent.click(screen.getByRole('button', { name: 'Final' }))
+    await runDebounce()
+
+    // The final candidate stays pending while the first request is active. Starting it now
+    // would allow the slower first request to land last on disk.
+    expect(putWorkspaceUiStateMock).toHaveBeenCalledTimes(1)
+
     await act(async () => {
-      resolveFirst({
-        appearance: { accent: 'lime' },
-        lastLocation: { projectId: 'boot', pathname: '/p/boot/tasks/first' },
-      })
+      resolveFirst()
     })
 
+    expect(putWorkspaceUiStateMock).toHaveBeenCalledTimes(2)
+    expect(persisted).toEqual([
+      { projectId: 'boot', pathname: '/p/boot/tasks/first' },
+      {
+        projectId: 'other',
+        pathname: '/p/other/tasks/final',
+        search: '?tab=events',
+        hash: '#tool-3',
+      },
+    ])
     expect(client.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)).toEqual({
-      appearance: { accent: 'lime' },
       lastLocation: {
         projectId: 'other',
         pathname: '/p/other/tasks/final',

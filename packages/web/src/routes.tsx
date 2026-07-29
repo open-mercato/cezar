@@ -228,10 +228,14 @@ function LegacyPathRedirect() {
   const health = useHealth()
   const projects = useProjects()
   const uiState = useWorkspaceUiState()
-  if (health.data === undefined) return <ScopeResolving />
-  // Health always names the boot project; the alias is a just-in-case fallback that still
-  // lands (the gate above normalizes `default` from the registry, which always answers one).
-  const boot = health.data.bootProject ?? 'default'
+  const resolvedBoot = health.data?.bootProject ?? projects.data?.bootProject
+  const bootSourcesSettled =
+    (health.data !== undefined || health.isError) &&
+    (projects.data !== undefined || projects.isError)
+  if (resolvedBoot === undefined && !bootSourcesSettled) return <ScopeResolving />
+  // Health and the registry normally name the same boot project. If neither can answer after
+  // both queries settle, the server-side `default` alias remains the no-config fallback.
+  const boot = resolvedBoot ?? 'default'
 
   const isBareRoot =
     location.pathname === '/' && location.search === '' && location.hash === ''
@@ -246,7 +250,7 @@ function LegacyPathRedirect() {
     const restored = locationToRestore(
       uiState.data?.lastLocation,
       projects.data,
-      health.data.bootProject,
+      resolvedBoot,
     )
     if (restored !== null) return <Navigate to={restored} replace />
   }

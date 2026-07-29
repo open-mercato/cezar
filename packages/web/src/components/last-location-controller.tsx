@@ -30,14 +30,17 @@ export function LastLocationController(): null {
   const uiState = useWorkspaceUiState()
   const pending = useRef<WorkspaceLastLocation | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const writing = useRef(false)
 
-  const flush = useCallback(() => {
+  const flush = useCallback(function flushPending() {
     timer.current = null
+    if (writing.current) return
     const lastLocation = pending.current
     if (lastLocation === null) return
     pending.current = null
+    writing.current = true
 
-    putWorkspaceUiState({ lastLocation })
+    void putWorkspaceUiState({ lastLocation })
       .then((merged) => {
         const current = queryClient.getQueryData<WorkspaceUiState>(
           workspaceQueryKeys.uiState,
@@ -57,6 +60,12 @@ export function LastLocationController(): null {
       })
       .catch(() => {
         void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.uiState })
+      })
+      .finally(() => {
+        writing.current = false
+        // A debounce that expired while this write was active left the latest candidate
+        // pending with no timer. Start it now, after the older server write has settled.
+        if (pending.current !== null && timer.current === null) flushPending()
       })
   }, [queryClient])
 
