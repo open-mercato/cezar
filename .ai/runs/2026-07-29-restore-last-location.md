@@ -461,7 +461,7 @@ PR: #729
 
 ### Phase 1: State contract and pure semantics
 
-- [ ] 1.1 Add and validate the workspace last-location contract
+- [x] 1.1 Add and validate the workspace last-location contract — 5095afc3
 - [ ] 1.2 Add pure save/restore/equality helpers
 
 ### Phase 2: Route restoration and persistence
