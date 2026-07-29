@@ -1051,7 +1051,7 @@ export function createApp(deps: ServerDeps) {
   // own: any page the user visits can still POST to us (CSRF), and DNS
   // rebinding can point a foreign domain at loopback and read our responses.
   // Two zero-config checks close both holes on every /api route EXCEPT
-  // /api/health (the intentional cross-origin discovery endpoint, spec 011 —
+  // /api/v1/health (the intentional cross-origin discovery endpoint, spec 011 —
   // it exposes nothing sensitive, see #431):
   //   1. Host allowlist (loopback deployments only) — a request whose Host is
   //      not a loopback name did not really originate from this machine. A
@@ -1074,7 +1074,7 @@ export function createApp(deps: ServerDeps) {
   // Scope note: check 2 covers writes only. A cross-origin GET from any site
   // still reaches the read routes — but its Host is ours, so it is a *forced
   // request*, not a read: the same-origin policy stops the attacker seeing any
-  // response body (we send CORS headers on /api/health alone), and no GET
+  // response body (we send CORS headers on /api/v1/health alone), and no GET
   // handler mutates state. Rebinding, which WOULD make those reads legible, is
   // what check 1 stops.
   const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -1093,9 +1093,12 @@ export function createApp(deps: ServerDeps) {
       );
     }
 
-    // /api/health stays CORS-open for bookmarklet discovery, but its Host is
-    // still checked above: cross-origin is legitimate, DNS rebinding is not.
-    if (c.req.path === '/api/health') return next();
+    // /api/v1/health stays CORS-open for cross-origin discovery, but its Host is
+    // still checked above: cross-origin is legitimate, DNS rebinding is not. The
+    // path is spelled through V1_PREFIX rather than inline — an unversioned
+    // literal here silently stopped matching when the API moved and left health
+    // relying on the mutating-methods gate below to let its GETs through.
+    if (c.req.path === `${V1_PREFIX}/health`) return next();
 
     if (MUTATING_METHODS.has(c.req.method)) {
       const origin = c.req.header('origin');
@@ -1147,16 +1150,15 @@ export function createApp(deps: ServerDeps) {
 
   // The mirrored project-route table (spec "API Contracts → Project-scoped").
   // Every route below registers ONCE on this sub-app; `createApp` mounts it
-  // twice — under `/api/p/:projectId` (scoped) and under `/api` (the legacy
-  // aliases, protected surfaces) — so both spellings share one handler and
-  // can never drift. The resolver middleware binds `c.get('project')`:
-  // no `projectId` param (legacy mount) → the boot context, byte-identical to
+  // twice — under `/api/v1/p/:projectId` (scoped) and under `/api/v1` (bound to
+  // the boot project) — so both spellings share one handler and can never
+  // drift. The resolver middleware binds `c.get('project')`:
+  // no `projectId` param (unscoped mount) → the boot context, byte-identical to
   // the pre-workspace closures; `default` or the boot project's own id → the
   // boot context too; anything else → the lazy context map, with
   // `ProjectContextError` mapped to 404 (unknown) / 409 (missing root).
-  // Named and shared because the versioned table (`v1` below) is mounted under
-  // its own prefixes and needs the byte-identical resolution — one function, so
-  // the two tables can never disagree about what `default` means.
+  // Named rather than inlined because both mounts share it — one function, so
+  // the two spellings can never disagree about what `default` means.
   const resolveProjectScope = async (c: Context<ProjectApiEnv>, next: Next): Promise<Response | void> => {
     const raw = c.req.param('projectId');
     if (raw === undefined) {
