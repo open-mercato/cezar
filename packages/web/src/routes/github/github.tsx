@@ -23,7 +23,7 @@ import { useParams } from 'react-router'
 import { Link, Navigate } from '@/lib/project-router'
 
 import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
-import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
@@ -57,7 +57,7 @@ import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from '../task-thread/markdown'
-import { allLabels, filterGithubItems, labelChipStyle } from './github-filter'
+import { allLabels, filterGithubItems, labelChipStyle, shouldSearchForge } from './github-filter'
 import { GithubLoading } from './github-loading'
 import { HandToAgent } from './hand-to-agent'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
@@ -93,6 +93,22 @@ const LIST_LIMIT = 1000
  *  The visible window is hydrated first; without virtualization (Phase 2) rows past this stay
  *  glyph-less, exactly as a PR with no CI would. */
 const CHECKS_WINDOW = 100
+
+/** How long the search box must be idle before the cross-state fallback (#730) fires. Every
+ *  search is a `gh` subprocess against GitHub's rate-limited search API, so this is a cost
+ *  control, not a polish detail. */
+const SEARCH_DEBOUNCE_MS = 350
+
+/** `value`, but only after it has stopped changing for `delay` ms. Local to this route — the
+ *  search fallback is the one place in the cockpit that pays a subprocess per keystroke. */
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return settled
+}
 
 export type GithubView = 'issues' | 'prs'
 
@@ -248,6 +264,24 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const [query, setQuery] = useState('')
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
 
+  // Cross-state search fallback (#730). The list tier only ever holds OPEN items, so a closed or
+  // merged issue/PR is not "past the fetched window" — it was never fetched, and no amount of
+  // in-memory filtering reaches it. When the local narrow comes up empty for a non-empty query we
+  // ask the forge instead. Like the checks window above, these hooks must sit ABOVE the early
+  // returns, so the open set is derived from the payload rather than from the post-filter `items`.
+  const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS)
+  const openItems = useMemo(
+    () => (gh?.available ? (view === 'issues' ? gh.issues : gh.prs) : []),
+    [gh, view],
+  )
+  // Evaluated against the DEBOUNCED query, not the live one: the fallback must be decided by the
+  // same text the request will carry, or a fast typist fires a `gh` subprocess per keystroke.
+  const searchWanted = shouldSearchForge(
+    debouncedQuery,
+    filterGithubItems(openItems, { query: debouncedQuery, labels: labelFilter }).length,
+  )
+  const forgeSearch = useGithubSearch(view === 'issues' ? 'issue' : 'pr', debouncedQuery, searchWanted)
+
   if (!gh) {
     if (list.isError) {
       return (
@@ -296,17 +330,33 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
     )
   }
 
-  const allItems = view === 'issues' ? gh.issues : gh.prs
-  const labelColors = gh.labelColors ?? {}
-  const labelOptions = allLabels(allItems)
+  const allItems = openItems
   const items = filterGithubItems(allItems, { query, labels: labelFilter })
   const filtering = query.trim() !== '' || labelFilter.length > 0
+  const searchPayload = forgeSearch.data?.available ? forgeSearch.data : null
+  // Hits are narrowed by the label filter too — it reads as "narrow whatever is on screen".
+  const searchHits = searchPayload ? filterGithubItems(searchPayload.items, { labels: labelFilter }) : []
+  // "A search is coming or running" — the debounce window counts. Without it, the moment between
+  // the last keystroke and the request firing would render the definitive "nothing anywhere",
+  // which is the same lie #730 set out to remove, just half a second long.
+  const searching =
+    (query.trim() !== '' && query.trim() !== debouncedQuery.trim()) ||
+    (searchWanted && forgeSearch.isPending)
+  // A closed item often wears labels no open one does; its own colors win nothing over the repo
+  // map, they only fill the gaps.
+  const labelColors = { ...(searchPayload?.labelColors ?? {}), ...(gh.labelColors ?? {}) }
+  const labelOptions = allLabels(allItems)
   const number = n === undefined ? null : Number.parseInt(n, 10)
   // No URL selection → the first item, like the legacy tab (rendered, not navigated-to). The
   // selection may point at an item outside the current filter — keep resolving it from the full
-  // list so a deep link to #N still opens even while a filter is active.
+  // list so a deep link to #N still opens even while a filter is active. Search hits are the last
+  // resort so a found-on-GitHub row is openable in the detail pane like any other.
   const selected =
-    number === null ? (items[0] ?? null) : (allItems.find((item) => item.number === number) ?? null)
+    number === null
+      ? (items[0] ?? searchHits[0] ?? null)
+      : (allItems.find((item) => item.number === number) ??
+        searchHits.find((item) => item.number === number) ??
+        null)
   // Feed the refresh mutation the thread that is genuinely rendered — including the no-`:n`
   // fallback to items[0], which is what the bare /github and /github/prs routes show.
   openThreadRef.current = selected ? { kind: selected.kind, number: selected.number } : null
@@ -391,11 +441,29 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
         </header>
 
         {items.length === 0 ? (
-          <p className="px-4 py-4 text-sm text-soft-foreground">
-            {filtering
-              ? `No ${view === 'issues' ? 'issues' : 'pull requests'} match your filter.`
-              : `No open ${view === 'issues' ? 'issues' : 'pull requests'}.`}
-          </p>
+          // Nothing in the OPEN list matched. Rather than the old flat "no match" — which was a
+          // lie whenever the item existed but was closed or merged (#730) — report what the forge
+          // search found, is finding, or could not do.
+          <div data-slot="gh-empty" className="px-4 py-4 text-sm text-soft-foreground">
+            {!filtering ? (
+              <p>No open {view === 'issues' ? 'issues' : 'pull requests'}.</p>
+            ) : searching ? (
+              <p className="flex items-center gap-1.5">
+                <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
+                Searching GitHub for “{query.trim()}”…
+              </p>
+            ) : searchHits.length > 0 ? null : forgeSearch.data && !forgeSearch.data.available ? (
+              <p>
+                No open {view === 'issues' ? 'issues' : 'pull requests'} match your filter, and
+                GitHub could not be searched: {forgeSearch.data.reason ?? 'unknown reason'}.
+              </p>
+            ) : (
+              <p>
+                No {view === 'issues' ? 'issues' : 'pull requests'} match your filter — open,
+                closed or merged.
+              </p>
+            )}
+          </div>
         ) : (
           <ul data-slot="gh-rows" className="flex flex-col gap-0.5 px-2 py-2">
             {items.map((item) => (
@@ -411,6 +479,29 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
             ))}
           </ul>
         )}
+
+        {/* Cross-state hits (#730) — rendered under their own heading so it is never ambiguous
+            whether a row came from the open list or from a search that reached past it. */}
+        {searchHits.length > 0 ? (
+          <div data-slot="gh-search-hits">
+            <p className="px-4 pt-2 pb-1 text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+              Found on GitHub{searchPayload?.truncated ? ' (first matches)' : ''}
+            </p>
+            <ul className="flex flex-col gap-0.5 px-2 pb-2">
+              {searchHits.map((item) => (
+                <GithubRow
+                  key={item.url}
+                  item={item}
+                  view={view}
+                  colors={labelColors}
+                  active={selected?.url === item.url}
+                  queued={queued.has(item.url)}
+                  checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                />
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </section>
 
       {/* Detail pane. Hidden below md until an item is in the URL. */}
@@ -449,11 +540,14 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
             icon={view === 'issues' ? <CircleDotIcon /> : <GitPullRequestIcon />}
             tone="neutral"
             heading="h2"
-            title={number === null ? 'Nothing selected' : 'Not in the open list'}
+            title={number === null ? 'Nothing selected' : 'Not found'}
             subtitle={
               number === null
                 ? `No open ${view === 'issues' ? 'issues' : 'pull requests'} to show.`
-                : `#${number} is not among the open ${view === 'issues' ? 'issues' : 'pull requests'} — it may be closed, or still outside the fetched batch.`
+                : // Since #730 a closed or merged item IS reachable — type its number into the
+                  // search box and the tab asks GitHub directly — so the honest advice is to
+                  // search, not the old "it may be closed" shrug.
+                  `#${number} is not among the open ${view === 'issues' ? 'issues' : 'pull requests'}. Search for ${number} above to look it up on GitHub, closed and merged included.`
             }
           />
         )}

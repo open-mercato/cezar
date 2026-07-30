@@ -105,7 +105,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
@@ -3866,6 +3866,28 @@ export function createApp(deps: ServerDeps) {
       }
       return c.json(await fetchGithubChecks(repoRoot, numbers));
     })
+
+    // Search across ALL states (#730). Additive sibling of `/github`, which lists the OPEN set
+    // only (`gh issue/pr list` defaults to `--state open`) — so the tab's in-memory filter can
+    // never match a closed or merged item, and this is the path it falls back to. Same in-payload
+    // availability degrade as the list (never a 5xx); malformed params are a 400. Deliberately
+    // uncached: it is typed-into, not polled, and the driver's own cap bounds the work.
+    .get(
+      '/github/search',
+      queryZodValidator(
+        z.object({
+          kind: z.enum(['issue', 'pr']),
+          q: z.string().trim().min(1).max(256),
+          limit: z.coerce.number().int().positive().max(GH_SEARCH_MAX).optional(),
+        }),
+        { message: 'invalid search query' },
+      ),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const { kind, q, limit } = c.req.valid('query');
+        return c.json(await searchGithubItems(repoRoot, kind, q, limit));
+      },
+    )
 
     .get(
       '/github/prs/:number/merge-state',

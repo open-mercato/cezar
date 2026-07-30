@@ -38,6 +38,22 @@ export function filterGithubItems(
   })
 }
 
+/**
+ * Should the tab stop re-filtering what it already holds and ask the forge instead (#730)?
+ *
+ * `filterGithubItems` can only ever match the OPEN set the list fetched, so "zero local matches
+ * for a non-empty query" is exactly the state where the answer may still exist on GitHub —
+ * closed, merged, or simply outside the fetched window. A blank query is never a search (that is
+ * the unfiltered list), and a query that already found something locally is not worth a `gh`
+ * subprocess.
+ *
+ * Deliberately independent of the label filter: labels narrow whatever list is on screen,
+ * including search hits, so an active label filter neither forces nor suppresses the fallback.
+ */
+export function shouldSearchForge(query: string, localMatches: number): boolean {
+  return query.trim() !== '' && localMatches === 0
+}
+
 /** Inline style for a label chip tinted like GitHub: the label color as a translucent fill with a
  *  matching border, and readable text. Falls back to neutral tokens when no color is known. */
 export function labelChipStyle(color: string | undefined): CSSProperties {

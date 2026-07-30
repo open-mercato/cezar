@@ -19,6 +19,7 @@ import type {
   ForgePrStatus,
   ForgePrDiffResult,
   ForgeRefKind,
+  ForgeSearchData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,
 } from './types.ts';
@@ -485,6 +486,171 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
 
 function firstLine(s: string): string {
   return s.split('\n').find((l) => l.trim().length > 0)?.trim() ?? 'gh failed';
+}
+
+// ---- search across states (#730) -------------------------------------------
+// `fetchGithub` above lists the OPEN set only (`gh issue/pr list` defaults to `--state open`),
+// and the tab's search is an in-memory filter over exactly that payload — so a closed or merged
+// item is not "past the window", it was never fetched at all and no amount of scrolling reaches
+// it. This tier asks GitHub instead of re-filtering what we already hold. It is deliberately a
+// SECOND, on-demand path rather than widening the list to `--state all`: the list is the tab's
+// hot path, and making every load pay for hundreds of closed rows to serve an occasional lookup
+// would trade a search bug for a performance one.
+
+/** Hits per search. `gh search`'s own default is 30; 50 matches the page size the incremental-
+ *  loading spec settled on and keeps one search to a single `gh` round-trip. */
+export const GH_SEARCH_MAX = 50;
+
+/** The `--json` field set each search path requests. PRs additionally carry `isDraft` (the row's
+ *  draft chip); neither path asks for `additions`/`deletions` or `statusCheckRollup` — the same
+ *  reason the list tier stopped (#664), those are the expensive per-PR lookups. */
+const SEARCH_FIELDS = 'number,title,author,createdAt,labels,body,url';
+
+/** `gh search issues|prs` returns `commentsCount` where the list tier gets its counts from a
+ *  separate GraphQL walk. Same value, different spelling — normalized into `ForgeItem.comments`. */
+const ghSearchHitSchema = ghIssueSchema.extend({
+  isDraft: z.boolean().default(false),
+  commentsCount: z.number().default(0),
+});
+
+/** `gh {issue,pr} view <n> --json …` — the exact-number path. Shares `ghIssueSchema`'s core;
+ *  `isDraft`/`additions`/`deletions` are PR-only and default harmlessly for issues. */
+const ghViewHitSchema = ghIssueSchema.extend({
+  isDraft: z.boolean().default(false),
+  additions: z.number().default(0),
+  deletions: z.number().default(0),
+});
+
+/** Flatten one validated hit into the `ForgeItem` the tab's rows already render. `checks: null`
+ *  is what the list tier ships too since #664 — the glyph hydrates lazily via `/api/github/checks`
+ *  — so a searched row and a listed row are indistinguishable to the UI. */
+function toSearchItem(
+  kind: 'issue' | 'pr',
+  hit: z.infer<typeof ghSearchHitSchema> | z.infer<typeof ghViewHitSchema>,
+  labelColors: Record<string, string>,
+): ForgeItem {
+  for (const label of hit.labels) {
+    if (label.color && !labelColors[label.name]) labelColors[label.name] = label.color;
+  }
+  const item: ForgeItem = {
+    kind,
+    number: hit.number,
+    title: hit.title,
+    author: hit.author?.login ?? '?',
+    createdAt: hit.createdAt,
+    labels: hit.labels.map((l) => l.name),
+    body: (hit.body ?? '').slice(0, 8_000),
+    url: hit.url,
+    comments: 'commentsCount' in hit ? hit.commentsCount : 0,
+  };
+  if (kind === 'pr') {
+    item.isDraft = hit.isDraft;
+    // Draft is a label on list rows as well as a flag — keep the parity so filtering by the
+    // `draft` chip behaves the same on a searched row.
+    if (hit.isDraft) item.labels = [...item.labels, 'draft'];
+    if ('additions' in hit) item.additions = hit.additions;
+    if ('deletions' in hit) item.deletions = hit.deletions;
+    item.checks = null;
+  }
+  return item;
+}
+
+/**
+ * Find issues/PRs in ANY state (#730).
+ *
+ * Two query shapes, because they want different GitHub calls:
+ *  - **A bare number** (`4507`, `#4507`) is a lookup, not a search: `gh {pr,issue} view <n>` is
+ *    one cheap, state-agnostic call that finds a PR merged two years ago as readily as one opened
+ *    today. GitHub's search index cannot be relied on to surface an exact number at all.
+ *  - **Anything else** is a text search: `gh search {prs,issues} <query> --repo owner/name`, with
+ *    `--state` deliberately OMITTED — the flag only accepts `open|closed`, and leaving it off is
+ *    what searches every state.
+ *
+ * A numeric query that resolves to nothing (wrong repo, deleted, or simply a number the user meant
+ * as text) falls through to the text path rather than reporting "not found" — `4507` should still
+ * find a PR whose title contains it.
+ *
+ * Never throws: every failure lands on `{available: false, reason}`, the same quiet degrade the
+ * rest of the tab uses. Exported for unit tests.
+ */
+export async function searchGithubItems(
+  repoRoot: string,
+  kind: 'issue' | 'pr',
+  query: string,
+  limit = GH_SEARCH_MAX,
+): Promise<ForgeSearchData> {
+  const trimmed = query.trim();
+  if (trimmed === '') return { available: true, items: [] };
+  if (process.env.CEZ_DRY_RUN === '1') {
+    const mock = mockGithub();
+    const pool = kind === 'issue' ? mock.issues : mock.prs;
+    const needle = trimmed.replace(/^#/, '').toLowerCase();
+    return {
+      available: true,
+      items: pool.filter(
+        (i) => String(i.number).includes(needle) || i.title.toLowerCase().includes(needle),
+      ),
+    };
+  }
+  const capped = Math.min(Math.max(limit, 1), GH_SEARCH_MAX);
+  const labelColors: Record<string, string> = {};
+  const numeric = trimmed.replace(/^#/, '');
+  try {
+    if (/^\d+$/.test(numeric)) {
+      // `Number()` before interpolation: the regex already guarantees digits, but the number is
+      // user input reaching an argv, so it is normalized rather than passed through verbatim.
+      const number = Number(numeric);
+      try {
+        const out = await gh(repoRoot, [
+          kind === 'pr' ? 'pr' : 'issue',
+          'view',
+          String(number),
+          '--json',
+          kind === 'pr' ? `${SEARCH_FIELDS},isDraft,additions,deletions` : SEARCH_FIELDS,
+        ]);
+        const hit = ghViewHitSchema.parse(JSON.parse(out));
+        return { available: true, items: [toSearchItem(kind, hit, labelColors)], labelColors };
+      } catch {
+        // Not a number in this repo (or not this kind) — fall through to the text search below.
+      }
+    }
+    // The memoized handle first (usually a hit). Its `null` is deliberately ambiguous — it swallows
+    // "gh is missing" and "no remote" alike — so on a miss, ask once more directly and let the real
+    // failure reach the catch below, where it becomes the same honest hint the list tier gives.
+    // Only a genuinely unparseable slug reaches the "no remote" reason.
+    const handle =
+      (await resolveRepoHandle(repoRoot)) ??
+      parseOwnerName(
+        await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']),
+      );
+    if (!handle) {
+      return { available: false, reason: 'no GitHub remote to search', items: [] };
+    }
+    const out = await gh(repoRoot, [
+      'search',
+      kind === 'pr' ? 'prs' : 'issues',
+      trimmed,
+      '--repo',
+      `${handle.owner}/${handle.name}`,
+      '--limit',
+      String(capped),
+      '--json',
+      `${SEARCH_FIELDS},isDraft,commentsCount`,
+    ]);
+    const hits = z.array(ghSearchHitSchema).parse(JSON.parse(out));
+    return {
+      available: true,
+      items: hits.map((hit) => toSearchItem(kind, hit, labelColors)),
+      truncated: hits.length >= capped,
+      labelColors,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const reason = /ENOENT/.test(message)
+      ? 'gh CLI not found — install it and run `gh auth login`'
+      : firstLine(message);
+    return { available: false, reason, items: [] };
+  }
 }
 
 /** CEZ_DRY_RUN=1 — a small fixed catalog so the GitHub tab is demoable offline. */
@@ -1833,6 +1999,11 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
     listIssues: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).issues,
 
     listPRs: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).prs,
+
+    // The open-only list tier's escape hatch (#730) — this is the only path that can reach a
+    // closed or merged item.
+    searchItems: (kind, query, opts) => searchGithubItems(repoRoot, kind, query, opts?.limit),
+
     prDiff: (number, opts) => fetchGithubPrDiff(repoRoot, number, opts?.refresh),
 
     createPR: (input) => createDraftPr(input),

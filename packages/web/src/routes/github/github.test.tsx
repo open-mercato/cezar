@@ -205,6 +205,12 @@ function stubFetch(
       if (method === 'GET' && path.startsWith('/api/v1/github/checks')) {
         return jsonResponse({ available: true, checks: {} })
       }
+      // Cross-state search (#730) defaults to "searched, found nothing" — a test overrides the
+      // exact `GET /api/v1/github/search?…` key to serve hits. Without this default an unstubbed
+      // search would fall through to `{}` and read as an unavailable payload.
+      if (method === 'GET' && path.includes('/github/search')) {
+        return jsonResponse({ available: true, items: [] })
+      }
       // The GitHub list is one fast fetch now (#664): `/api/v1/github` with an optional `?limit=…`
       // and/or `?refresh=1`. Sub-resources (`/api/v1/github/comments`, `/prs`, `/checks`) never match
       // `=== '/api/v1/github'` or `startsWith('/api/v1/github?')`, so this stays scoped to the list.
@@ -422,12 +428,17 @@ describe('the GitHub tab lists', () => {
     expect(document.querySelector('[data-slot="gh-body"]')?.textContent).toContain('(no description)')
   })
 
-  it('an unknown number renders the honest not-in-list state, not a crash', async () => {
+  it('an unknown number renders the honest not-found state, not a crash', async () => {
     stubFetch()
     renderAt('/github/issues/9999')
 
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 2, name: 'Not in the open list' })).toBeTruthy(),
+      expect(screen.getByRole('heading', { level: 2, name: 'Not found' })).toBeTruthy(),
+    )
+    // Since #730 the advice is actionable — a closed or merged item IS reachable through the
+    // search box — so the copy must point there rather than shrug "it may be closed".
+    expect(document.querySelector('[data-slot="gh-detail"]')?.textContent).toContain(
+      'Search for 9999 above',
     )
   })
 
@@ -2177,5 +2188,133 @@ describe('groupCommitRuns', () => {
 
   it('handles an empty list', () => {
     expect(groupCommitRuns([])).toEqual([])
+  })
+})
+
+/**
+ * Cross-state search fallback (#730).
+ *
+ * The tab's list holds the OPEN set only, and its search box is an in-memory filter over exactly
+ * that payload — so before this, a closed or merged PR could not be found by number or by title,
+ * no matter what the user typed. These tests pin the user-visible half of the fix: the fallback
+ * fires when (and only when) the local filter comes up empty, its hits are rendered and openable,
+ * and both the "still searching" and "could not search" states are honest.
+ */
+describe('cross-state search fallback (#730)', () => {
+  const MERGED_PR: GithubItem = {
+    kind: 'pr',
+    number: 4507,
+    title: 'reconcile payment-session amount with order total',
+    author: 'wojciechszyjka',
+    createdAt: '2026-07-25T07:08:17.000Z',
+    labels: ['security'],
+    body: 'A merged PR — never present in the open list.',
+    url: 'https://github.com/acme/demo/pull/4507',
+    comments: 20,
+    isDraft: false,
+    checks: null,
+  }
+
+  const searchBox = () => document.querySelector<HTMLInputElement>('[data-slot="gh-search"]')!
+  const hits = () => document.querySelector('[data-slot="gh-search-hits"]')
+
+  it('finds a merged PR the open list never contained — the bug in #730', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/github/search?kind=pr&q=4507': () =>
+        jsonResponse({ available: true, items: [MERGED_PR] }),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1)) // only the one OPEN pr
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+
+    await waitFor(() => expect(hits()).not.toBeNull(), { timeout: 3000 })
+    expect(hits()?.textContent).toContain('reconcile payment-session amount')
+    expect(hits()?.textContent).toContain('Found on GitHub')
+    expect(sent.some((r) => r.path === '/api/v1/github/search?kind=pr&q=4507')).toBe(true)
+  })
+
+  it('opens a searched item in the detail pane, like any listed row', async () => {
+    stubFetch({
+      'GET /api/v1/github/search?kind=pr&q=4507': () =>
+        jsonResponse({ available: true, items: [MERGED_PR] }),
+    })
+    renderAt('/github/prs/4507')
+    // The deep link renders before the list resolves; wait for the header to exist before typing.
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-search"]')).not.toBeNull())
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+
+    await waitFor(
+      () => expect(detail()?.textContent).toContain('reconcile payment-session amount'),
+      { timeout: 3000 },
+    )
+  })
+
+  it('does not shell out while the local filter still matches something', async () => {
+    const sent = stubFetch()
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    // 'Stream' matches the open PR_137 locally — the forge must not be asked.
+    fireEvent.change(searchBox(), { target: { value: 'Stream' } })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700)) // past the 350 ms debounce
+    })
+
+    expect(rows()).toHaveLength(1)
+    expect(sent.some((r) => r.path.includes('/github/search'))).toBe(false)
+  })
+
+  it('says it is searching rather than claiming nothing exists', async () => {
+    stubFetch({
+      // Never resolves within the assertion window — the tab must not declare "no match" yet.
+      'GET /api/v1/github/search?kind=pr&q=4507': () =>
+        new Promise<Response>(() => {}) as unknown as Response,
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+
+    await waitFor(
+      () => expect(document.querySelector('[data-slot="gh-empty"]')?.textContent).toContain('Searching GitHub'),
+      { timeout: 3000 },
+    )
+  })
+
+  it('reports an unavailable search with the server’s own reason', async () => {
+    stubFetch({
+      'GET /api/v1/github/search?kind=pr&q=4507': () =>
+        jsonResponse({ available: false, reason: 'HTTP 403: rate limit exceeded', items: [] }),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+
+    await waitFor(
+      () =>
+        expect(document.querySelector('[data-slot="gh-empty"]')?.textContent).toContain(
+          'rate limit exceeded',
+        ),
+      { timeout: 3000 },
+    )
+  })
+
+  it('states plainly that nothing matched in ANY state when the search comes back empty', async () => {
+    stubFetch() // the default search stub answers `{available: true, items: []}`
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    fireEvent.change(searchBox(), { target: { value: 'nothing-matches-this' } })
+
+    await waitFor(
+      () =>
+        expect(document.querySelector('[data-slot="gh-empty"]')?.textContent).toContain(
+          'open, closed or merged',
+        ),
+      { timeout: 3000 },
+    )
   })
 })

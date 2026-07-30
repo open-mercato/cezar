@@ -28,6 +28,7 @@ import type {
   GitCommitResponse,
   GitPushResponse,
   GithubChecksData,
+  GithubSearchData,
   GithubCommentsData,
   GithubData,
   GithubMergeMethod,
@@ -645,6 +646,27 @@ export async function getGithubChecks(
       init(opts),
     ),
     '/github/checks',
+  )
+}
+
+/** Search issues/PRs in ANY state (#730). `getGithub` lists the open set only, so the tab's
+ *  in-memory filter cannot reach a closed or merged item — this is the fallback it calls when the
+ *  local filter comes up empty. Degrades to `{ available: false, reason }` server-side. */
+export async function getGithubSearch(
+  kind: 'issue' | 'pr',
+  query: string,
+  params: { limit?: number } = {},
+  opts?: ReadOptions,
+): Promise<GithubSearchData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.search.$get(
+      {
+        param: { projectId: queryScope() },
+        query: { kind, q: query, limit: params.limit === undefined ? undefined : String(params.limit) },
+      },
+      init(opts),
+    ),
+    '/github/search',
   )
 }
 
