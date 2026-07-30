@@ -18,6 +18,77 @@ const LEGACY_RUN = {
   steps: [],
 };
 
+describe('RunStore — directional usage persistence', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('round-trips step checkpoints and complete run aggregates through runs.json', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 'metered task',
+      workflow: 'quick-task',
+      task: 'metered task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', {
+      iterations: 1,
+      inputTokens: 120,
+      outputTokens: 30,
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      usageInvocationEpoch: 1,
+    });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir).getRun(run.id);
+    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(reopened?.steps[0]).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 30,
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      usageInvocationEpoch: 1,
+    });
+  });
+
+  it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun(LEGACY_RUN.id)?.inputTokens).toBeUndefined();
+
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 'partial task',
+      workflow: 'quick-task',
+      task: 'partial task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', {
+      iterations: 1,
+      inputTokens: 10,
+      outputTokens: 2,
+      usageInvocationsStarted: 2,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+    });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+    store.updateStep(run.id, 'task', { usageInvocationsObserved: 2, usageTurnsStarted: 2 });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+  });
+});
+
 describe('RunStore — titleSummary + diffStat (#389)', () => {
   let dataDir: string;
 

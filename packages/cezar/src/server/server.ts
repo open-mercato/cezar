@@ -25,6 +25,11 @@ import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
+import type {
+  GroupResponse,
+  GroupVariant,
+  PickVariantResponse,
+} from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
@@ -310,28 +315,6 @@ const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 t
 
 /** One column of `GET /api/groups/:groupId`. NOTE: `diffStat` here is the raw
  *  `git diff --stat` text (worktreeDiffStat), NOT the numeric `RunRecord.diffStat`. */
-export interface GroupVariant {
-  id: string;
-  variant: string;
-  title: string;
-  status: RunStatus;
-  archived: boolean;
-  tokensUsed: number;
-  costUsd?: number;
-  diffStat: string;
-  handoffExcerpt: string;
-}
-
-export interface GroupResponse {
-  groupId: string;
-  runs: GroupVariant[];
-}
-
-/** `POST /api/groups/:groupId/pick` — the winner, parked at `review` when it has a diff. */
-export interface PickVariantResponse {
-  winner?: RunRecord;
-}
-
 /** `GET /api/projects` (multi-project spec) — the workspace registry with
  *  per-root status probes. Absolute `root`s belong HERE (same-origin, behind
  *  the cockpit) and are deliberately never mirrored into the CORS-open
@@ -3376,7 +3359,9 @@ export function createApp(deps: ServerDeps) {
           status: r.status,
           archived: r.archived,
           tokensUsed: r.tokensUsed,
-          costUsd: r.costUsd,
+          ...(r.inputTokens !== undefined ? { inputTokens: r.inputTokens } : {}),
+          ...(r.outputTokens !== undefined ? { outputTokens: r.outputTokens } : {}),
+          ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
           diffStat:
             r.worktreePath && existsSync(r.worktreePath)
               ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD')
