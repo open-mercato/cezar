@@ -112,8 +112,8 @@ export function taskPrUrl(run: RunRecord): string | undefined {
 /** Display-only issue association. Action gates must continue to use their created-resource
  * fields directly; this accessor exists only for links painted by the cockpit.
  *
- * `repoBase` is the cockpit's own repository (`githubRepoBase(health.repo.remote)`) and is the
- * only authority a *synthesized* link may be built on. Callers without it get today's behavior:
+ * `repoBase` is the repository of the project on screen (`useProjectRepoBase()`) and is the only
+ * authority a *synthesized* link may be built on. Callers without it get today's behavior:
  * a discovered URL or nothing. */
 export function taskIssueUrl(run: RunRecord, repoBase?: string): string | undefined {
   if (run.referencedIssueUrl) return run.referencedIssueUrl
