@@ -201,18 +201,38 @@ function GhostBlock({ block, cycleMs }: { block: SceneBlock; cycleMs: number }) 
   )
 }
 
+const REDUCE_MOTION = '(prefers-reduced-motion: reduce)'
+
+/** Live `prefers-reduced-motion`, inverted: the CSS half re-evaluates the moment the OS setting
+ *  flips, so the loop timer has to follow it rather than read it once at mount — same
+ *  subscription shape as `lib/use-desktop.ts`. Where `matchMedia` is missing (jsdom, SSR) the
+ *  answer is "don't animate", so the suites never schedule a timer. */
+function useMotionSafe(): boolean {
+  const [motionSafe, setMotionSafe] = useState(
+    () => typeof window.matchMedia === 'function' && !window.matchMedia(REDUCE_MOTION).matches,
+  )
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(REDUCE_MOTION)
+    const onChange = (event: MediaQueryListEvent) => setMotionSafe(!event.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+  return motionSafe
+}
+
 export function GhostCodeBackdrop() {
   const [cycle, setCycle] = useState(0)
+  const motionSafe = useMotionSafe()
   // A fresh random scene each loop — `cycle` is the retrigger, not data the scene reads.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const scene = useMemo(() => buildScene(), [cycle])
   useEffect(() => {
-    // Under reduced motion the CSS renders the scene static — re-rolling it would be churn
-    // (and the jsdom tests ship no matchMedia at all, which counts as "don't animate").
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches !== false) return
+    // Under reduced motion the CSS renders the scene static — re-rolling it would be churn.
+    if (!motionSafe) return
     const id = window.setTimeout(() => setCycle((current) => current + 1), scene.cycleMs)
     return () => window.clearTimeout(id)
-  }, [cycle, scene.cycleMs])
+  }, [cycle, motionSafe, scene.cycleMs])
   return (
     <div
       data-slot="ghost-code-backdrop"
