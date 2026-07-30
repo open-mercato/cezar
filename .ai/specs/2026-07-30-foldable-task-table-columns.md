@@ -72,7 +72,7 @@ References:
 
 ### Shared contract and server boundary
 
-Add the optional `taskTable` field to `workspaceUiStateSchema` in `packages/contract/src/workspace.ts` first. The nested object is an open bag so a newer cockpit’s table preferences survive round-trips through an older server:
+Add the optional `taskTable` field to the response-side `workspaceUiStateSchema` in `packages/contract/src/workspace.ts` first. The nested object is an open bag so a newer cockpit’s table preferences survive round-trips through an older server:
 
 ```ts
 taskTable: z
@@ -82,26 +82,28 @@ taskTable: z
   .optional()
 ```
 
-The write validator in `packages/cezar/src/server/server.ts` must name the same field and preserve unknown nested keys with `.passthrough()`. Bound `expandedColumns` to at most 50 entries with keys of 1–64 characters. This is intentionally more generous than today’s registry while preventing an unbounded file write. Do not narrow the server schema to the current id enum: forward-compatible ids must survive even when an older server does not render them.
+Define a separate `setWorkspaceUiStateInputSchema` in `packages/contract/src/workspace.ts` for the PUT request. Derive it from shared open sub-shapes, but override `taskTable.expandedColumns` with write-only bounds: at most 50 entries and keys of 1–64 characters. Keep unknown `taskTable` siblings and unknown top-level keys, subject to the existing top-level key cap. Export its inferred input type through the contract/api-client rather than hand-writing a request type.
+
+Use `setWorkspaceUiStateInputSchema` directly in the route’s `jsonZodValidator` middleware. Do not duplicate the field in a server-local zod object: the contract must remain the single source for the request and response shapes. The response schema keeps unknown ids and newer nested siblings open, while the request schema prevents this cockpit from writing an unbounded map. Do not narrow either schema to the current column-id enum: forward-compatible ids must survive even when an older server does not render them.
 
 No route is added. The existing chained workspace route family continues to expose:
 
 - `GET /api/v1/workspace/ui-state`
 - `PUT /api/v1/workspace/ui-state`
 
-The contract-parity tests must prove the route response and `workspaceUiStateSchema` remain exact in both directions. The request remains middleware-validated through `jsonZodValidator`; no handler-side parse or loose route registration is introduced.
+The contract-parity tests must prove the route response and `workspaceUiStateSchema` remain exact in both directions. Typed-body tests must separately prove that PUT accepts `setWorkspaceUiStateInputSchema` and rejects malformed or over-limit maps through middleware; no handler-side parse or loose route registration is introduced.
 
 ### Cockpit state controller
 
 Add a focused controller beside the Tasks overview, or in a small `lib/task-columns.ts` plus hook module if that keeps `tasks-overview.tsx` readable:
 
 - `TASK_COLUMNS` is the single ordered registry.
-- `isColumnExpanded(id, stored)` returns the stored boolean when present, otherwise the registry default.
+- `normalizeExpandedColumns(raw)` defensively accepts `unknown`, keeps only boolean values keyed by known foldable ids for rendering, and treats malformed user-edited state as absent. The original open object remains in the query cache so unknown ids and siblings still round-trip.
+- `isColumnExpanded(id, normalized)` returns the stored boolean when present, otherwise the registry default.
 - `useTaskTableColumns()` reads `useWorkspaceUiState()`, exposes resolved state and `toggleColumn(id)`, and refuses ids whose registry entry has `canFold: false`.
 - A toggle optimistically replaces the workspace UI-state query cache, preserving the whole current `taskTable` object and `expandedColumns` map.
-- Writes are debounced by roughly 400 ms so several rapid header clicks become one `putWorkspaceUiState({ taskTable })` call.
-- The server’s merged answer replaces the optimistic cache. On failure, show a danger toast and invalidate the workspace UI-state query so the next render returns to persisted truth.
-- Cleanup flushes a pending write so a navigation or tab close immediately after a toggle does not silently lose the preference.
+- Start one small PUT immediately per toggle and serialize them through a write chain; header clicks are infrequent enough that a debounce adds more lifecycle risk than useful load reduction. Tag writes with a monotonic sequence so only the newest response may replace the optimistic cache and an older response cannot resurrect stale state.
+- Send these bounded preference writes with Fetch `keepalive` enabled so an in-flight click can complete during page navigation or tab close. The server’s newest merged answer replaces the optimistic cache. On failure, show a danger toast and invalidate the workspace UI-state query so the next render returns to persisted truth.
 
 The existing PUT merge is shallow at the top level. Every write must therefore send the whole `taskTable` object, including the whole `expandedColumns` map and any unknown sibling keys already cached.
 
@@ -178,7 +180,7 @@ Content-Type: application/json
 }
 ```
 
-The response is the fully merged `WorkspaceUiState`. Validation behavior remains the existing `{ "error": "..." }` with HTTP 400 for malformed booleans, overlong ids, too many entries, or an over-limit request body.
+The response is the fully merged `WorkspaceUiState` and is validated/documented by `workspaceUiStateSchema`; the PUT body is independently validated by `setWorkspaceUiStateInputSchema`. Validation behavior remains the existing `{ "error": "..." }` with HTTP 400 for malformed booleans, overlong ids, too many entries, or an over-limit request body.
 
 No project-scoped alias is added because workspace UI state is intentionally single-mount and cross-project. No WebSocket or SSE event is needed: the preference is controlled by the active browser, reconciled immediately in the local query cache, and persisted by the existing mutation.
 
@@ -226,7 +228,8 @@ Status and Task keep their current plain labels and expose no misleading button,
 - **Newer file with unknown column ids:** The renderer ignores unknown ids; the client preserves them when it writes a known toggle.
 - **Malformed Status/Task overrides:** The renderer ignores them and keeps both columns expanded.
 - **Persistence failure or read-only home:** The optimistic change is reconciled back to server truth after a toast. Cezar remains a working cockpit with the default layout.
-- **Rapid toggles:** Optimistic cache reads compose, one debounced write carries the complete latest map, and unmount flushes it.
+- **Rapid toggles:** Optimistic cache reads compose, serialized PUTs preserve click order, and only the newest response reconciles the cache.
+- **Navigation immediately after a toggle:** The PUT starts on the click and uses Fetch `keepalive`, so the small bounded preference payload may complete after the document begins unloading; there is no component-unmount-only flush that silently launches an ordinary abortable request too late.
 - **Two Cezar/browser processes update near-simultaneously:** The existing file merge prevents unrelated top-level preferences from being lost. Same-map last-write-wins is acceptable for a personal presentation preference; each writer sends its complete cached map.
 - **Token metrics disabled:** Tokens and Cost are absent, not narrow folded stubs. Saved booleans are retained and take effect if the capability later becomes visible.
 - **Queued row:** The queue note keeps correct CPU/Mem span and remains readable at the minimum folded widths.
@@ -269,9 +272,9 @@ Ship the additive workspace state contract, registry, persistence controller, ac
 
 ### Phase 1 — Complete persisted foldable-column capability
 
-1. Add optional `taskTable.expandedColumns` to `packages/contract/src/workspace.ts` and the bounded, passthrough request validator in `packages/cezar/src/server/server.ts`. Extend workspace UI-state API and contract-parity tests to prove empty/default files still answer `{}`, valid maps round-trip, unknown nested keys survive, malformed maps are rejected without writes, and bounds are enforced.
-2. Add the ordered task-column registry and pure resolution/update helpers near `packages/web/src/lib/tasks-table.ts` (or a dedicated `task-columns.ts` if clearer). Unit-test stable order, Branch’s default-folded state, default-expanded optional columns, immutable Status/Task behavior, stored overrides, and ignored unknown ids.
-3. Add `useTaskTableColumns()` using `useWorkspaceUiState`, `putWorkspaceUiState`, and `workspaceQueryKeys.uiState`. Cover optimistic cache updates, full nested-map preservation, debounce composition, unmount flush, authoritative response adoption, and failure toast/invalidation.
+1. Add optional `taskTable.expandedColumns` to response-side `workspaceUiStateSchema`, plus a bounded `setWorkspaceUiStateInputSchema`, in `packages/contract/src/workspace.ts`; wire the latter directly into the existing route middleware. Extend workspace UI-state API, contract-parity, and typed-body tests to prove empty/default files still answer `{}`, valid maps round-trip, unknown nested keys survive, malformed maps are rejected without writes, and request-only bounds are enforced.
+2. Add the ordered task-column registry plus defensive normalization and pure resolution/update helpers near `packages/web/src/lib/tasks-table.ts` (or a dedicated `task-columns.ts` if clearer). Unit-test stable order, Branch’s default-folded state, default-expanded optional columns, immutable Status/Task behavior, malformed user-edited state, stored overrides, and ignored unknown ids.
+3. Add `useTaskTableColumns()` using `useWorkspaceUiState`, `putWorkspaceUiState`, and `workspaceQueryKeys.uiState`. Cover optimistic cache updates, full nested-map preservation, serialized rapid toggles, stale-response suppression, keepalive requests during navigation, authoritative response adoption, and failure toast/invalidation.
 4. Refactor `packages/web/src/routes/tasks-overview.tsx` so desktop headers and row cells share the registry, while existing cell renderers and mobile cards remain intact. Add registry-derived widths, folded header buttons, blank presentation cells, and remove the fixed minimum width that prevents folding from saving space.
 5. Extend `packages/web/src/routes/tasks-overview.test.tsx` for mouse and keyboard toggles, accessible names/state, fixed Status/Task columns, fresh and persisted defaults, row/header alignment, hidden token-metric capability, queued CPU/Mem span, archived/search reuse, and unchanged mobile cards.
 6. Run the configured validation gate, boot the real Cezar UI, and exercise a fresh state plus persisted reload. Capture desktop screenshots with only Branch folded and with Workflow + Branch folded at representative widths; confirm there is no unexpected navigation, focus loss, clipped restore control, or horizontal overflow regression.
