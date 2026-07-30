@@ -71,6 +71,13 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
     'usage.updated with raw token counts',
     (events) => events.some((e) => e.type === 'usage.updated' && e.usage.total > 0),
   ],
+  [
+    'turn.completed with per-turn directional usage',
+    (events) =>
+      events.some(
+        (e) => e.type === 'turn.completed' && (e.usage?.input ?? 0) > 0 && (e.usage?.output ?? 0) > 0,
+      ),
+  ],
   ['turn.completed with a stopReason', (events) => events.some((e) => e.type === 'turn.completed' && e.stopReason !== undefined)],
 ] as const;
 

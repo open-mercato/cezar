@@ -304,6 +304,30 @@ describe('mapCodexNotification edge cases', () => {
     expect(event).toEqual({ type: 'usage.updated', usage: { input: 7, output: 2, total: 9 } });
   });
 
+  it('attaches only a fresh in-turn tokenUsage.last snapshot to one completion', () => {
+    let s = createCodexUiState();
+    s = mapCodexNotification(
+      { method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 90, outputTokens: 10 }, last: { inputTokens: 90, outputTokens: 10 } } } },
+      s,
+    ).state;
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, s).state;
+    const noFreshUsage = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s);
+    expect(noFreshUsage.events).toEqual([{ type: 'turn.completed', turnId: 't1', stopReason: 'end_turn' }]);
+
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, noFreshUsage.state).state;
+    s = mapCodexNotification(
+      { method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 200, outputTokens: 30 }, last: { inputTokens: 7, outputTokens: 3 } } } },
+      s,
+    ).state;
+    const completed = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, s);
+    expect(completed.events).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', usage: { input: 7, output: 3, total: 10 } },
+    ]);
+    expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, completed.state).events).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn' },
+    ]);
+  });
+
   it('session.started is emitted once whichever path lands first', () => {
     let s = createCodexUiState();
     const viaNotification = mapCodexNotification(
@@ -743,7 +767,12 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
       exitCode: 0,
     });
     expect(v2).toContainEqual({ type: 'usage.updated', usage: { input: 1200, output: 300, total: 1500 } });
-    expect(v2).toContainEqual({ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' });
+    expect(v2).toContainEqual({
+      type: 'turn.completed',
+      turnId: 'turn_mock_1',
+      stopReason: 'end_turn',
+      usage: { input: 1200, output: 300, total: 1500 },
+    });
   }, 30_000);
 
   it('normalizes collaboration telemetry while preserving the legacy stream', async () => {
