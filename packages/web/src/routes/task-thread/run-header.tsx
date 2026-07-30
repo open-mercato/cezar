@@ -68,7 +68,7 @@ import { deriveAttention } from '@/lib/attention'
 import { compactTokens } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
-import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import { formatCost, githubRepoBase, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
 import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
@@ -471,6 +471,9 @@ function EditableTitle({ run }: { run: ApiRun }) {
  *  a status for the *active* session, so they move into the agent badge next to the token
  *  count, revealed on hover/focus rather than always-on text. */
 function MetaRow({ run }: { run: ApiRun }) {
+  // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
+  // such a link may name is this cockpit's own — health owns that fact, not the transcript.
+  const repoBase = githubRepoBase(useHealth().data?.repo?.remote)
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -497,7 +500,7 @@ function MetaRow({ run }: { run: ApiRun }) {
       />,
     )
   }
-  const issueUrl = taskIssueUrl(run)
+  const issueUrl = taskIssueUrl(run, repoBase)
   if (issueUrl && isHttpUrl(issueUrl)) {
     const number = prNumber(issueUrl)
     parts.push(

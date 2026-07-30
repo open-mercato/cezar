@@ -5,7 +5,13 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { ApiRun, ProviderStatusResponse, RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
+import type {
+  ApiRun,
+  HealthResponse,
+  ProviderStatusResponse,
+  RunEvent,
+  RunStatus,
+} from '@open-mercato/cezar-api-client'
 
 import { buildThreadRows, TaskThreadRoute, ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
@@ -17,7 +23,10 @@ afterEach(() => {
 
 /** ThreadView now hosts the run header, whose hooks need a query client (mutations, the runs
  *  list) and a router (tabs, delete-navigates-home). Data assertions still drive the reduced
- *  fixture states directly — the providers are plumbing, not fixtures. */
+ *  fixture states directly — the providers are plumbing, not fixtures.
+ *
+ *  `health` is served on `/api/health`: the footer's issue link is synthesized against the
+ *  project's own repo remote (#526), so a test that wants one must say which repo this is. */
 function renderView(
   ui: ReactElement,
   providerStatus: ProviderStatusResponse = {
@@ -27,14 +36,16 @@ function renderView(
       { provider: 'opencode', status: 'not-installed', enabled: true },
     ],
   },
+  health: Partial<HealthResponse> = {},
 ) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
+      const path = String(input)
       const body =
-        String(input) === '/api/providers/status'
-          ? providerStatus
-          : []
+        path === '/api/providers/status' ? providerStatus
+        : path === '/api/health' ? health
+        : []
       return Promise.resolve(
         new Response(JSON.stringify(body), {
           status: 200,
@@ -97,7 +108,7 @@ describe('ThreadView', () => {
     )
   })
 
-  it('an issue-subject closed run links its issue in the footer, never the incidental PR (#526)', () => {
+  it('an issue-subject closed run links its DISCOVERED issue URL, never the incidental PR (#526)', () => {
     const issueRun = run('done', {
       markerRefs: { issue: 524 },
       referencedIssueUrl: 'https://github.com/o/r/issues/524',
@@ -560,6 +571,54 @@ describe('ThreadView', () => {
     const footer = document.querySelector('[data-slot="thread-footer"]')
     expect(footer?.textContent).toBe('Session failed — checks failed')
     expect(footer?.className).toContain('text-danger')
+  })
+
+  /**
+   * #526 at the surface the user actually reported: run `6ab44452` (`om-prepare-issue`) created
+   * issue #524, declared `CEZ:ISSUE` and no `CEZ:PR`, and had one incidental PR (#454) scraped
+   * out of its duplicate-search output. The footer linked #454 and never linked #524. Asserting
+   * on the rendered anchors — not just the helpers — is what makes deleting or miswiring the
+   * JSX fail.
+   */
+  it('an issue-subject closed run SYNTHESIZES its issue link from the project repo (#526)', async () => {
+    renderView(
+      <ThreadView
+        run={run('done', {
+          issueNumber: 524,
+          markerRefs: { issue: 524 },
+          referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/454',
+          referencedPrCandidates: ['https://github.com/open-mercato/cezar/pull/454'],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+      undefined,
+      { repo: { root: '/repo', branch: 'main', remote: 'git@github.com:open-mercato/cezar.git' } },
+    )
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="issue-link"]')).not.toBeNull()
+    })
+    const footer = document.querySelector('[data-slot="thread-footer"]')
+    expect(footer?.querySelector('[data-slot="issue-link"]')?.getAttribute('href')).toBe(
+      'https://github.com/open-mercato/cezar/issues/524',
+    )
+    expect(footer?.querySelector('[data-slot="issue-link"]')?.textContent).toContain('Issue')
+    expect(footer?.querySelector('[data-slot="pr-link"]')).toBeNull()
+  })
+
+  it('a PR-subject closed run still gets its PR link and no invented issue link (#526)', () => {
+    renderView(
+      <ThreadView
+        run={run('done', { pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/900' })}
+        thread={reduceThread(EVENTS)}
+      />,
+      undefined,
+      { repo: { root: '/repo', branch: 'main', remote: 'git@github.com:open-mercato/cezar.git' } },
+    )
+    const footer = document.querySelector('[data-slot="thread-footer"]')
+    expect(footer?.querySelector('[data-slot="pr-link"]')?.getAttribute('href')).toBe(
+      'https://github.com/open-mercato/cezar/pull/900',
+    )
+    expect(footer?.querySelector('[data-slot="issue-link"]')).toBeNull()
   })
 
   it('running → no footer (the stream itself is the status), and no invented empty state', () => {

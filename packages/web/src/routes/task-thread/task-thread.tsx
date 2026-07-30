@@ -7,6 +7,7 @@ import { Link } from '@/lib/project-router'
 import { ApiError } from '@/api/client'
 import {
   useEditQueuedMessage,
+  useHealth,
   usePatchRun,
   useRemoveQueuedMessage,
   useRun,
@@ -20,7 +21,7 @@ import { Composer } from '@/components/composer/composer'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
-import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
+import { githubRepoBase, taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
@@ -270,6 +271,10 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   )
 
   const rows = useMemo(() => buildThreadRows(run, thread, edit), [run, thread, edit])
+  // #526: the footer's issue link may be synthesized from the CEZ:ISSUE marker, and the only
+  // repository it may ever name is this cockpit's own — health owns that fact, not the transcript.
+  const repoBase = githubRepoBase(useHealth().data?.repo?.remote)
+  const issueUrl = taskIssueUrl(run, repoBase)
   const { search } = useLocation()
   const mode = threadRenderMode(search, rows.length)
   const scroll = useThreadScroll(run.id)
@@ -331,10 +336,10 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
             ) : null}
             {/* #526: an issue-subject run (om-prepare-issue) links the issue it created — it
                 declares no PR, so without this the created issue was unreachable from the UI. */}
-            {isHttpUrl(taskIssueUrl(run)) ? (
+            {isHttpUrl(issueUrl) ? (
               <a
                 data-slot="issue-link"
-                href={taskIssueUrl(run)}
+                href={issueUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-medium text-foreground underline-offset-2 hover:underline"

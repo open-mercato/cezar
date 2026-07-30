@@ -74,6 +74,28 @@ export function finishedRunCount(runs: readonly RunRecord[]): number {
   return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status)).length
 }
 
+/** The cockpit's own repository as a web root (`https://github.com/owner/repo`), parsed from the
+ *  git remote `/api/health` reports (`repo.remote`). Handles the scheme forms
+ *  (`https://`, `ssh://`, credentials, port) and the scp-like `git@github.com:owner/repo.git`;
+ *  undefined for every non-github.com host, local path, or absent remote — the cockpit only knows
+ *  how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),
+ *  duplicated rather than imported because that module is server-only. */
+export function githubRepoBase(remote: string | undefined): string | undefined {
+  if (!remote) return undefined
+  const trimmed = remote.trim().replace(/\/+$/, '')
+  const url = /^(?:https?|ssh|git|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(trimmed)
+  // scp-like: [user@]host:owner/repo(.git) — a leading '/' (local path) can't match the host group.
+  const scp = url ? null : /^(?:[^@/:]+@)?([^:/]+):(.+)$/.exec(trimmed)
+  const match = url ?? scp
+  if (!match) return undefined
+  const [, host, path] = match
+  if (!path || host?.toLowerCase() !== 'github.com') return undefined
+  const parts = path.replace(/\.git$/i, '').split('/').filter(Boolean)
+  const owner = parts[parts.length - 2]
+  const repo = parts[parts.length - 1]
+  return owner && repo ? `https://github.com/${owner}/${repo}` : undefined
+}
+
 /** The URL a PR *display* chip shows: the PR the task created, else the PR the conversation
  *  is about (#407 — review/continue tasks reference an existing PR instead of opening one).
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
@@ -87,13 +109,23 @@ export function taskPrUrl(run: RunRecord): string | undefined {
   return run.referencedPullRequestUrl
 }
 
-/** Display-only issue association: the issue URL discovered for this run (#526 surfaces it in
- *  the closed-session footer). Authoritative only — a transcript-derived PR/candidate URL is NOT
- *  used to synthesize an issue link, because it may point at another repository and would recreate
- *  the "wrong link" defect. A marker-only issue whose `…/issues/N` link was never scanned stays
- *  unlinked here rather than risk a cross-repo guess. Action gates use created-resource fields. */
-export function taskIssueUrl(run: RunRecord): string | undefined {
-  return run.referencedIssueUrl
+/** Display-only issue association. Action gates must continue to use their created-resource
+ * fields directly; this accessor exists only for links painted by the cockpit.
+ *
+ * `repoBase` is the cockpit's own repository (`githubRepoBase(health.repo.remote)`) and is the
+ * only authority a *synthesized* link may be built on. Callers without it get today's behavior:
+ * a discovered URL or nothing. */
+export function taskIssueUrl(run: RunRecord, repoBase?: string): string | undefined {
+  if (run.referencedIssueUrl) return run.referencedIssueUrl
+  // #526: an issue-subject run (om-prepare-issue) knows its issue number from the CEZ:ISSUE
+  // marker even when no full `…/issues/N` link was ever scanned into referencedIssueUrl.
+  // Synthesize the link from the PROJECT's repo only — never from `referenced*Candidates` or
+  // `referenced*Url`, which are transcript scrapings that routinely name other repositories:
+  // `CEZ:ISSUE=524` beside an incidental `github.com/other/repo/pull/1` would rebuild the exact
+  // wrong-link defect #526 exists to kill, just pointing at an issue instead of a PR.
+  const number = run.markerRefs?.issue ?? run.issueNumber
+  if (!number || !repoBase) return undefined
+  return `${repoBase}/issues/${number}`
 }
 
 export interface TaskReference {
