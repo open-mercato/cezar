@@ -164,28 +164,78 @@ export function defaultWorkspaceConfig(): WorkspaceConfig {
 }
 
 /**
+ * The last-known-good copy of a NON-EMPTY registry, written beside the config
+ * by every successful merge-write. The registry is cheap to rebuild in theory
+ * ("open the project again"), but in practice it is a hand-curated list, and a
+ * single bad write — a crash between `writeFileSync` and `rename`, a full
+ * disk, a stray process — costs the user every entry. One extra file, no
+ * configuration, and `loadWorkspaceConfig` falls back to it.
+ *
+ * Removing `~/.cezar` still resets cezar completely; removing only
+ * `config.json` no longer does, because this snapshot restores it.
+ */
+export function workspaceConfigBackupPath(path: string = workspaceConfigPath()): string {
+  return `${path}.bak`;
+}
+
+function parseWorkspaceConfig(raw: string): WorkspaceConfig | null {
+  try {
+    const parsed = workspaceConfigSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The snapshot is only worth restoring while it still holds projects — an
+ *  empty one carries no information the defaults do not already have. */
+async function loadWorkspaceConfigBackup(path: string): Promise<WorkspaceConfig | null> {
+  let raw: string;
+  try {
+    raw = await readFile(workspaceConfigBackupPath(path), 'utf8');
+  } catch {
+    return null;
+  }
+  const parsed = parseWorkspaceConfig(raw);
+  return parsed && parsed.projects.length > 0 ? parsed : null;
+}
+
+/**
  * Read `~/.cezar/config.json` on demand — never cached, never throws. A
  * missing file is the zero-config default (silent); an unreadable or
  * malformed one degrades to the same default with a one-line warning and is
  * left on disk untouched (the next successful merge-write replaces it).
+ *
+ * Before degrading, a missing, empty, or corrupt file is restored from the
+ * `config.json.bak` snapshot when that still holds projects. The restore is
+ * read-only: the recovered registry is handed back in memory and lands on disk
+ * again through the next merge-write, so a read never writes. A file that
+ * parses and simply has no projects is NOT restored — that is a user who
+ * removed their last project, not a lost registry.
  *
  * `path` defaults to the current `workspaceConfigPath()`, but a caller that
  * will also WRITE passes the path it resolved itself — see
  * `mergeWriteWorkspaceConfig` for why resolving it twice is a data-loss bug.
  */
 export async function loadWorkspaceConfig(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
-  let raw: string;
+  let raw: string | null = null;
   try {
     raw = await readFile(path, 'utf8');
   } catch {
-    return defaultWorkspaceConfig();
+    // missing/unreadable — the backup below is the next chance
   }
-  try {
-    const parsed = workspaceConfigSchema.safeParse(JSON.parse(raw));
-    if (parsed.success) return parsed.data;
-  } catch {
-    // malformed JSON — fall through to the warning + defaults
+  if (raw !== null && raw.trim() !== '') {
+    const parsed = parseWorkspaceConfig(raw);
+    if (parsed) return parsed;
   }
+  const restored = await loadWorkspaceConfigBackup(path);
+  if (restored) {
+    console.warn(
+      `[cez] workspace config ${path} is missing or unreadable — restored ${restored.projects.length} project(s) from ${workspaceConfigBackupPath(path)}`,
+    );
+    return restored;
+  }
+  if (raw === null) return defaultWorkspaceConfig();
   console.warn(`[cez] workspace config ${path} is corrupt — using defaults (registry rebuilds)`);
   return defaultWorkspaceConfig();
 }
@@ -247,5 +297,13 @@ export async function mergeWriteWorkspaceConfig(
   const current = await loadWorkspaceConfig(path);
   const next = mutator(current) ?? current;
   atomicWriteJsonSync(path, next);
+  if (next.projects.length > 0) {
+    try {
+      atomicWriteJsonSync(workspaceConfigBackupPath(path), next);
+    } catch {
+      // Best-effort: the registry itself is already safely on disk, and a
+      // failed snapshot must never turn a successful write into an error.
+    }
+  }
   return next;
 }
