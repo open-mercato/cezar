@@ -12,7 +12,7 @@ import { AgentBrowser, readTestEnv } from './agent-browser'
  * seeds two real project skills into this worktree's `.ai/skills/` (removed in afterAll) and
  * builds a small workflow from them: palette → canvas adds, the YAML preview, Save (a real
  * file lands in `.ai/cezar/workflows/`, read back and parsed here), keyboard reorder through
- * dnd-kit's defaults, Import through the server's `/api/workflows/parse`, and the 8-step
+ * dnd-kit's defaults, Import through the server's `/api/v1/workflows/parse`, and the 8-step
  * limit. The saved file is removed in afterAll so a developer's repo stays clean.
  */
 

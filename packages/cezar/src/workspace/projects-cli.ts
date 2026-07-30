@@ -1,8 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { workspaceConfigPath } from '../paths.js';
-import { loadWorkspaceConfig } from './config.js';
-import { listProjects, registerProject, removeProject, shouldRegisterProject } from './projects.js';
+import { workspaceConfigPath } from '../paths.ts';
+import { loadWorkspaceConfig } from './config.ts';
+import { listProjects, registerProject, removeProject, shouldRegisterProject } from './projects.ts';
 
 /**
  * `cezar projects` (spec 2026-07-20-multi-project-workspace, step 5.2) — the

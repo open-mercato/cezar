@@ -3,19 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { connectedProviderAuth } from './provider-auth.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { connectedProviderAuth } from './provider-auth.testkit.ts';
 
 /**
- * `POST /api/runs` `systemPrompt` (R2 2.3) — the programmatic per-run
+ * `POST /api/v1/runs` `systemPrompt` (R2 2.3) — the programmatic per-run
  * override (bookmarklets, scripts; deliberately no composer-UI control).
  * Validation contract: trimmed, blank degrades to absent, 20k cap.
  */
-describe('POST /api/runs systemPrompt', () => {
+describe('POST /api/v1/runs systemPrompt', () => {
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
@@ -54,7 +54,7 @@ describe('POST /api/runs systemPrompt', () => {
   });
 
   const post = (body: unknown) =>
-    apiRequest(app, '/api/runs', {
+    apiRequest(app, '/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -118,7 +118,7 @@ describe('POST /api/runs systemPrompt', () => {
  * is what stops the agent being handed FOLLOWUP_INSTRUCTIONS and a usable
  * CEZ_TODOS_FILE downstream (`RunManager.agentEnv`).
  */
-describe('POST /api/runs generateFollowups — the CEZ_FOLLOWUPS ceiling (#471)', () => {
+describe('POST /api/v1/runs generateFollowups — the CEZ_FOLLOWUPS ceiling (#471)', () => {
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
@@ -153,7 +153,7 @@ describe('POST /api/runs generateFollowups — the CEZ_FOLLOWUPS ceiling (#471)'
   });
 
   const post = (body: unknown) =>
-    apiRequest(app, '/api/runs', {
+    apiRequest(app, '/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

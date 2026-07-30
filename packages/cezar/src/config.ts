@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { loadWorkspaceConfig } from './workspace/config.js';
+import { loadWorkspaceConfig } from './workspace/config.ts';
 
 /**
  * Optional advanced config at `.ai/cezar/config.json`. Zero-config rule:

@@ -6,7 +6,7 @@ import {
   repairAskRequest,
   stripAskMarker,
   type AskRequest,
-} from './ask.js';
+} from './ask.ts';
 
 const valid: AskRequest = {
   questions: [

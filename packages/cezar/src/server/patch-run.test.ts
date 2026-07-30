@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore, type RunRecord } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * `PATCH /api/runs/:id` (#389) through the real Hono app. The route touches
+ * `PATCH /api/v1/runs/:id` (#389) through the real Hono app. The route touches
  * only the store, so the manager can be an empty stub — no fakes beyond that
  * were needed (the createApp harness concern from the review didn't bite here).
  */
-describe('PATCH /api/runs/:id', () => {
+describe('PATCH /api/v1/runs/:id', () => {
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
@@ -37,7 +37,7 @@ describe('PATCH /api/runs/:id', () => {
   });
 
   const patch = (id: string, body: unknown) =>
-    apiRequest(app, `/api/runs/${id}`, {
+    apiRequest(app, `/api/v1/runs/${id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -83,7 +83,7 @@ describe('PATCH /api/runs/:id', () => {
   });
 
   it('400s a non-JSON body', async () => {
-    const res = await apiRequest(app, `/api/runs/${run.id}`, { method: 'PATCH', body: 'not json' });
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}`, { method: 'PATCH', body: 'not json' });
     expect(res.status).toBe(400);
   });
 

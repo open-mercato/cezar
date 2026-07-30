@@ -8,13 +8,13 @@
     "node": ">=20"
   },
   "workspaces": [
+    "packages/contract",
     "packages/api-client",
     "packages/cezar",
     "packages/web"
   ],
   "scripts": {
-    "build": "npm run build:client && npm run build:server && npm run build:web && npm run check:pack",
-    "build:client": "npm run build -w @open-mercato/cezar-api-client",
+    "build": "npm run build:server && npm run build:web && npm run check:pack",
     "build:server": "npm run build -w @open-mercato/cezar",
     "build:web": "npm run build -w @open-mercato/cezar-web",
     "check:pack": "npm run check:pack -w @open-mercato/cezar",
@@ -27,17 +27,17 @@
     "server-install": "npm run server-install -w @open-mercato/cezar --",
     "server-deploy": "npm run server-deploy -w @open-mercato/cezar --",
     "server-uninstall": "npm run server-uninstall -w @open-mercato/cezar --",
-    "pretest": "npm run build:client",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "npm run test:unit -w @open-mercato/cezar",
     "test:package": "npm run test:package -w @open-mercato/cezar",
     "test:e2e": "sh .ai/scripts/e2e.sh",
-    "pretypecheck": "npm run build:client",
-    "typecheck": "npm run typecheck:client && npm run typecheck:server && npm run typecheck:web",
+    "pretypecheck": "npm run build:server",
+    "typecheck": "npm run typecheck:contract && npm run typecheck:client && npm run typecheck:server && npm run typecheck:web",
     "typecheck:client": "npm run typecheck -w @open-mercato/cezar-api-client",
     "typecheck:server": "npm run typecheck -w @open-mercato/cezar",
-    "typecheck:web": "npm run typecheck -w @open-mercato/cezar-web"
+    "typecheck:web": "npm run typecheck -w @open-mercato/cezar-web",
+    "typecheck:contract": "npm run typecheck -w @open-mercato/cezar-contract"
   },
   "devDependencies": {
     "tsx": "^4.19.0",

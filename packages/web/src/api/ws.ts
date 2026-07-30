@@ -1,5 +1,5 @@
 /**
- * The cockpit's one WebSocket to `/api/ws` — the subscription bus that replaced polling.
+ * The cockpit's one WebSocket to `/api/v1/ws` — the subscription bus that replaced polling.
  * Design + the subscribe/unsubscribe discipline: spec
  * `.ai/specs/2026-07-23-websocket-subscriptions.md`.
  *
@@ -22,7 +22,7 @@
 
 export type TopicListener = (data: unknown) => void
 
-const WS_PATH = '/api/ws'
+const WS_PATH = '/api/v1/ws'
 
 /** Same reasoning (and value) as the SSE REOPEN_DELAY_MS: long enough not to hammer a server
  *  that is restarting, short enough that the chips are live again before the reader notices. */

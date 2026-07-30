@@ -12,7 +12,7 @@ import { HarnessSection } from './harness-section'
  * Settings → Harness (spec 2026-07-23-harness-orchestration; user feedback
  * 2026-07-23: "i don't see option to check and configure access to different
  * models"): the model-access surface. Shows the roster from
- * `GET /api/harness/status`, marks which profiles this cezar drives, and
+ * `GET /api/v1/harness/status`, marks which profiles this cezar drives, and
  * routes configuration to a `cez-setup-harness` task — cezar reads the
  * om pipeline's config, it never writes it.
  */
@@ -22,7 +22,7 @@ function serve(status: HarnessStatusResponse) {
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.includes('/api/harness/status')) {
+      if (url.includes('/api/v1/harness/status')) {
         return new Response(JSON.stringify(status), {
           status: 200,
           headers: { 'content-type': 'application/json' },

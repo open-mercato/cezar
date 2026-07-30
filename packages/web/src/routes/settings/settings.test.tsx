@@ -18,7 +18,7 @@ import { SETTINGS_SECTIONS, visibleSettingsSections } from './registry'
  *
  * The scope split is what most of this file now pins, and it is pinned where it is observable:
  * WHICH STORE a section writes. Appearance and Notifications must reach
- * `/api/workspace/ui-state` (global), Agents must reach `/api/config` (project) — the stub
+ * `/api/v1/workspace/ui-state` (global), Agents must reach `/api/v1/config` (project) — the stub
  * below answers both and records every request, so a section writing the wrong one shows up as
  * a wrong URL rather than as a passing test.
  */
@@ -40,14 +40,14 @@ function serve(uiState: Record<string, unknown> = {}) {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/workspace/ui-state' && method === 'GET') return json(uiState)
-      if (url === '/api/workspace/ui-state' && method === 'PUT')
+      if (url === '/api/v1/workspace/ui-state' && method === 'GET') return json(uiState)
+      if (url === '/api/v1/workspace/ui-state' && method === 'PUT')
         return json({ ...uiState, ...(body as Record<string, unknown>) })
-      if (url === '/api/ui-state' && method === 'GET') return json(projectUiState)
-      if (url === '/api/ui-state' && method === 'PUT')
+      if (url === '/api/v1/ui-state' && method === 'GET') return json(projectUiState)
+      if (url === '/api/v1/ui-state' && method === 'PUT')
         return json({ ...projectUiState, ...(body as Record<string, unknown>) })
-      if (url === '/api/config') return json(AGENTS_CONFIG)
-      if (url === '/api/providers/status')
+      if (url === '/api/v1/config') return json(AGENTS_CONFIG)
+      if (url === '/api/v1/providers/status')
         return json({
           providers: [
             { provider: 'claude', status: 'connected', enabled: true },
@@ -55,13 +55,13 @@ function serve(uiState: Record<string, unknown> = {}) {
             { provider: 'opencode', status: 'connected', enabled: true },
           ],
         })
-      if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [], source: 'unavailable', stale: false })
+      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [], source: 'unavailable', stale: false })
       return new Promise<never>(() => {})
     }),
   )
 }
 
-/** Enough of `GET /api/config` for the Agents section to render its form. */
+/** Enough of `GET /api/v1/config` for the Agents section to render its form. */
 const AGENTS_CONFIG = {
   baseBranch: null,
   defaultRunner: 'claude',
@@ -76,7 +76,7 @@ const AGENTS_CONFIG = {
 
 /** Seeds the step-3.2 route gates — boot id (legacy redirect) + registry (known-check) — so a
  *  flat entry URL lands scoped immediately. The boot project mounts UNSCOPED, so the exact
- *  `/api/*` paths this file's fetch stub matches stay byte-identical. */
+ *  `/api/v1/*` paths this file's fetch stub matches stay byte-identical. */
 function gateSeededClient(singleProject = false) {
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, {
@@ -258,7 +258,7 @@ describe('the appearance section (global scope)', () => {
     // The whole object, not a partial — the server's ui-state merge is shallow, so a bare
     // `{ accent }` would silently drop the stored density.
     await waitFor(() => {
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/workspace/ui-state')?.body).toEqual({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
         appearance: { accent: 'violet', density: 'compact', width: 'narrow' },
       })
     })
@@ -275,7 +275,7 @@ describe('the appearance section (global scope)', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Comfortable' }))
     expect(document.documentElement.hasAttribute('data-density')).toBe(false)
     await waitFor(() => {
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/workspace/ui-state')?.body).toEqual({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
         appearance: { accent: 'lime', density: 'comfortable', width: 'narrow' },
       })
     })
@@ -295,7 +295,7 @@ describe('the appearance section (global scope)', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Wide' }))
     expect(document.documentElement.dataset.width).toBe('wide')
     await waitFor(() => {
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/workspace/ui-state')?.body).toEqual({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
         appearance: { accent: 'violet', density: 'comfortable', width: 'wide' },
       })
     })
@@ -321,7 +321,7 @@ describe('the appearance section (global scope)', () => {
 
     // Theme is per-browser by design (pre-paint) — it must never leak into ui-state.json.
     await waitFor(() => {
-      expect(requests.some((r) => r.url === '/api/workspace/ui-state' && r.method === 'GET')).toBe(true)
+      expect(requests.some((r) => r.url === '/api/v1/workspace/ui-state' && r.method === 'GET')).toBe(true)
     })
     expect(requests.some((r) => r.method === 'PUT' && r.url.endsWith('ui-state'))).toBe(false)
   })
@@ -336,20 +336,20 @@ describe('the appearance section (global scope)', () => {
 describe('the settings split writes the right store', () => {
   const putsTo = (url: string) => requests.filter((r) => r.method === 'PUT' && r.url === url)
 
-  it('appearance → /api/workspace/ui-state, never the per-repo one', async () => {
+  it('appearance → /api/v1/workspace/ui-state, never the per-repo one', async () => {
     renderAt('/settings/global/appearance')
     await waitFor(() => expect(screen.getByRole('radio', { name: 'Violet' })).toBeTruthy())
 
     fireEvent.click(screen.getByRole('radio', { name: 'Violet' }))
 
-    await waitFor(() => expect(putsTo('/api/workspace/ui-state')).toHaveLength(1))
-    expect(putsTo('/api/workspace/ui-state')[0]?.body).toEqual({
+    await waitFor(() => expect(putsTo('/api/v1/workspace/ui-state')).toHaveLength(1))
+    expect(putsTo('/api/v1/workspace/ui-state')[0]?.body).toEqual({
       appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
     })
-    expect(putsTo('/api/ui-state')).toHaveLength(0)
+    expect(putsTo('/api/v1/ui-state')).toHaveLength(0)
   })
 
-  it('notifications → /api/workspace/ui-state, never the per-repo one', async () => {
+  it('notifications → /api/v1/workspace/ui-state, never the per-repo one', async () => {
     // `Notification` is absent in jsdom; the section only needs it to decide whether to ask for
     // permission, and "already granted" is the path that persists without any prompt.
     function FakeNotification() {}
@@ -360,12 +360,12 @@ describe('the settings split writes the right store', () => {
     const toggle = await screen.findByRole('switch', { name: 'Notify when an agent needs you' })
     fireEvent.click(toggle)
 
-    await waitFor(() => expect(putsTo('/api/workspace/ui-state')).toHaveLength(1))
-    expect(putsTo('/api/workspace/ui-state')[0]?.body).toEqual({ notifications: { enabled: true } })
-    expect(putsTo('/api/ui-state')).toHaveLength(0)
+    await waitFor(() => expect(putsTo('/api/v1/workspace/ui-state')).toHaveLength(1))
+    expect(putsTo('/api/v1/workspace/ui-state')[0]?.body).toEqual({ notifications: { enabled: true } })
+    expect(putsTo('/api/v1/ui-state')).toHaveLength(0)
   })
 
-  it('agents → the project-scoped /api/config, never the workspace routes', async () => {
+  it('agents → the project-scoped /api/v1/config, never the workspace routes', async () => {
     renderAt('/settings/agents')
     const runner = await waitFor(() => {
       const el = document.querySelector<HTMLButtonElement>('[data-slot="agents-runner"] [data-value="codex"]')
@@ -375,8 +375,8 @@ describe('the settings split writes the right store', () => {
 
     fireEvent.click(runner)
 
-    await waitFor(() => expect(putsTo('/api/config')).toHaveLength(1))
-    expect(putsTo('/api/config')[0]?.body).toEqual({ defaultRunner: 'codex' })
-    expect(requests.some((r) => r.method === 'PUT' && r.url.startsWith('/api/workspace/'))).toBe(false)
+    await waitFor(() => expect(putsTo('/api/v1/config')).toHaveLength(1))
+    expect(putsTo('/api/v1/config')[0]?.body).toEqual({ defaultRunner: 'codex' })
+    expect(requests.some((r) => r.method === 'PUT' && r.url.startsWith('/api/v1/workspace/'))).toBe(false)
   })
 })

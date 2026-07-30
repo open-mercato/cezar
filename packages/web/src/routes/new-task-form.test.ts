@@ -16,6 +16,7 @@ import {
   modelFamilyOf,
   normalizeHarnessPresets,
   rolesEqual,
+  buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
   harnessStartBlock,
@@ -179,7 +180,7 @@ describe('resolveSource (candidate validation + cold quick-task default)', () =>
   })
 })
 
-describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends', () => {
+describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sends', () => {
   it('workflow source → { workflow, task }, defaults omitted', () => {
     const body = buildCreateRunBody({
       task: 'do the thing',
@@ -801,5 +802,27 @@ describe('freeTierReviewerWarning', () => {
 
   it('handles no lineup at all', () => {
     expect(freeTierReviewerWarning(null)).toBeNull()
+  })
+})
+
+describe('buildAutomationTask', () => {
+  it('uses the New task serializer while dropping one-shot transport fields', () => {
+    expect(buildAutomationTask({
+      task: 'Review {{github.url}}',
+      source: { source: 'skill', ref: 'om-code-review' },
+      model: 'opus',
+      runner: 'claude',
+      defaultRunner: 'claude',
+      variants: 2,
+      images: [{ mediaType: 'image/png', data: 'ignored' }],
+      autonomous: true,
+      todoId: 'ignored',
+    })).toEqual({
+      prompt: 'Review {{github.url}}',
+      steps: [{ id: 'task', name: 'om-code-review', skill: 'om-code-review', prompt: '{{task}}' }],
+      model: 'opus',
+      variants: 2,
+      autonomous: true,
+    })
   })
 })

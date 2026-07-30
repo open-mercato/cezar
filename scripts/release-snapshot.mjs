@@ -46,6 +46,7 @@ const repoRoot = process.env.CEZ_SNAPSHOT_ROOT
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The workspace root publishes nothing; every publishable manifest is named here explicitly.
 const dirs = {
+  contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
   alias: path.join(repoRoot, 'alias-cezar'),
@@ -68,6 +69,7 @@ const emitOutput = (result) => {
 };
 
 const manifests = {
+  contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
   alias: readManifest(dirs.alias),
@@ -100,7 +102,7 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampManifests(manifests, plan.version);
-const order = ['apiClient', 'cezar', 'alias'];
+const order = ['contract', 'apiClient', 'cezar', 'alias'];
 for (const key of order) writeManifest(dirs[key], stamped[key]);
 console.log(
   `release-snapshot: stamped ${order.map((key) => stamped[key].name).join(' + ')} to ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,

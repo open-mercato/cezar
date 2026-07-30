@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentHomePaths } from './agent-config/catalog.js';
+import type { AgentHomePaths } from './agent-config/catalog.ts';
 
 /**
  * Per-user cezar home. Literal `~/.cezar` on every platform (no XDG, no

@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from './agent-runner.js';
-import type { UiEvent } from './ui-events.js';
+import type { AgentEvent } from './agent-runner.ts';
+import type { UiEvent } from './ui-events.ts';
 import {
   createOpencodeUiState,
   mapOpencodeEvent,
@@ -22,8 +22,8 @@ import {
   opencodeTurnStarted,
   type OpencodeUiMapperState,
   type OpencodeUiMapping,
-} from './opencode-ui-mapper.js';
-import { OpencodeServerRunner } from './opencode-server-runner.js';
+} from './opencode-ui-mapper.ts';
+import { OpencodeServerRunner } from './opencode-server-runner.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, '__fixtures__', 'opencode');
@@ -442,6 +442,27 @@ describe('mapOpencodeEvent edge cases', () => {
     expect(turn2.events).toEqual([{ type: 'turn.started', turnId: 'turn_2' }]);
   });
 
+  it('sums only message usage observed in the active turn and clears it at idle', () => {
+    let state = opencodeSessionStarted(SESSION_ID, createOpencodeUiState()).state;
+    state = mapOpencodeEvent(
+      { type: 'message.updated', properties: { info: { id: 'msg_old', sessionID: SESSION_ID, role: 'assistant', cost: 0.5, tokens: { input: 100, output: 20 } } } },
+      state,
+    ).state;
+    state = opencodeTurnStarted(state).state;
+    state = mapOpencodeEvent(
+      { type: 'message.updated', properties: { info: { id: 'msg_new', sessionID: SESSION_ID, role: 'assistant', cost: 0.02, tokens: { input: 7, output: 3 } } } },
+      state,
+    ).state;
+    const first = mapOpencodeEvent({ type: 'session.idle', properties: { sessionID: SESSION_ID } }, state);
+    expect(first.events).toEqual([
+      { type: 'turn.completed', turnId: 'turn_1', stopReason: 'end_turn', usage: { input: 7, output: 3, total: 10 }, costUsd: 0.02 },
+    ]);
+    state = opencodeTurnStarted(first.state).state;
+    expect(mapOpencodeEvent({ type: 'session.idle', properties: { sessionID: SESSION_ID } }, state).events).toEqual([
+      { type: 'turn.completed', turnId: 'turn_2', stopReason: 'end_turn' },
+    ]);
+  });
+
   it('a session.error inside the turn surfaces as non-fatal and flips the idle stopReason to error', () => {
     let state = opencodeSessionStarted(SESSION_ID, createOpencodeUiState()).state;
     state = opencodeTurnStarted(state).state;
@@ -612,7 +633,13 @@ describe('OpencodeServerRunner v2 wiring (against the bundled mock server)', () 
     const turnDone = v2.findIndex((e) => e.type === 'turn.completed');
     expect(lateDelta).toBeGreaterThan(-1);
     expect(turnDone).toBeGreaterThan(lateDelta);
-    expect(v2[turnDone]).toEqual({ type: 'turn.completed', turnId: 'turn_1', stopReason: 'end_turn' });
+    expect(v2[turnDone]).toEqual({
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 1200, output: 300, total: 1500, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+      costUsd: 0.0021,
+    });
     expect(v2.filter((e) => e.type === 'turn.completed')).toHaveLength(1);
   }, 30_000);
 });

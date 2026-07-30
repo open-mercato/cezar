@@ -37,7 +37,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -47,7 +47,7 @@ async function waitForHealth(url: string): Promise<void> {
 }
 
 async function getRun(url: string, id: string): Promise<Record<string, unknown>> {
-  return (await (await fetch(`${url}/api/runs/${id}`)).json()) as Record<string, unknown>
+  return (await (await fetch(`${url}/api/v1/runs/${id}`)).json()) as Record<string, unknown>
 }
 
 async function waitForStatus(url: string, id: string, wanted: string[]): Promise<string> {
@@ -98,7 +98,7 @@ beforeAll(async () => {
   bootProject = await bootProjectId(baseUrl)
 
   const created = (await (
-    await fetch(`${baseUrl}/api/runs`, {
+    await fetch(`${baseUrl}/api/v1/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task: 'Improve the project notes.', workflow: 'quick-task', variants: 2 }),
@@ -107,7 +107,7 @@ beforeAll(async () => {
   expect(created.runs).toHaveLength(2)
   const a = created.runs.find((r) => r.variant === 'A')
   const b = created.runs.find((r) => r.variant === 'B')
-  if (!a || !b) throw new Error('cezar e2e: POST /api/runs did not answer variants A and B')
+  if (!a || !b) throw new Error('cezar e2e: POST /api/v1/runs did not answer variants A and B')
   idA = a.id
   idB = b.id
   groupId = a.groupId
@@ -116,7 +116,7 @@ beforeAll(async () => {
   // session open; finishing parks the run at `review` because the worktree diff is non-empty.
   for (const id of [idA, idB]) await waitForStatus(baseUrl, id, ['waiting'])
   for (const id of [idA, idB]) {
-    await fetch(`${baseUrl}/api/runs/${id}/finish`, { method: 'POST' })
+    await fetch(`${baseUrl}/api/v1/runs/${id}/finish`, { method: 'POST' })
     const parked = await waitForStatus(baseUrl, id, ['review', 'done'])
     if (parked !== 'review') throw new Error(`cezar e2e: variant ${id} settled as done — no diff?`)
   }

@@ -72,9 +72,9 @@ describe('harness API', () => {
       body: JSON.stringify(body),
     });
 
-  describe('GET /api/harness/status', () => {
+  describe('GET /api/v1/harness/status', () => {
     it('reports config absence honestly', async () => {
-      const res = await apiRequest(app, '/api/harness/status');
+      const res = await apiRequest(app, '/api/v1/harness/status');
       expect(res.status).toBe(200);
       const body = (await res.json()) as { configured: boolean; profiles: string[] };
       expect(body.configured).toBe(false);
@@ -100,7 +100,7 @@ describe('harness API', () => {
         }),
         'utf8',
       );
-      const res = await apiRequest(app, '/api/harness/status');
+      const res = await apiRequest(app, '/api/v1/harness/status');
       const body = (await res.json()) as {
         configured: boolean;
         profiles: string[];
@@ -115,14 +115,14 @@ describe('harness API', () => {
     });
 
     it('answers a claude-only roster with no config at all', async () => {
-      const res = await apiRequest(app, '/api/harness/status');
+      const res = await apiRequest(app, '/api/v1/harness/status');
       const body = (await res.json()) as { models: Array<{ id: string; roles: string[] }> };
       expect(body.models).toHaveLength(1);
       expect(body.models[0]).toMatchObject({ id: 'claude', roles: ['host', 'reviewer'] });
     });
 
     it('reports the bundled cez-harness runtime with its pinned vendor commit', async () => {
-      const res = await apiRequest(app, '/api/harness/status');
+      const res = await apiRequest(app, '/api/v1/harness/status');
       const body = (await res.json()) as {
         runtime: { installed: boolean; source: string | null; commit: string | null };
       };
@@ -135,9 +135,9 @@ describe('harness API', () => {
     });
   });
 
-  describe('POST /api/harness/probe', () => {
+  describe('POST /api/v1/harness/probe', () => {
     it('answers standard readiness without any provider config', async () => {
-      const res = await post('/api/harness/probe', { profile: 'standard' });
+      const res = await post('/api/v1/harness/probe', { profile: 'standard' });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { profile: string; ready: boolean; models: Array<{ id: string }> };
       expect(body.profile).toBe('standard');
@@ -146,7 +146,7 @@ describe('harness API', () => {
     });
 
     it('reports a configured profile as unavailable when its bindings are absent', async () => {
-      const res = await post('/api/harness/probe', { profile: 'multi' });
+      const res = await post('/api/v1/harness/probe', { profile: 'multi' });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { ready: boolean; reason?: string };
       expect(body.ready).toBe(false);
@@ -179,28 +179,28 @@ describe('harness API', () => {
         'utf8',
       );
 
-      const res = await post('/api/harness/probe', { profile: 'optimized' });
+      const res = await post('/api/v1/harness/probe', { profile: 'optimized' });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { ready: boolean; profile: string };
       expect(body).toMatchObject({ ready: true, profile: 'optimized' });
     });
 
     it('rejects an unknown profile', async () => {
-      const res = await post('/api/harness/probe', { profile: 'yolo' });
+      const res = await post('/api/v1/harness/probe', { profile: 'yolo' });
       expect(res.status).toBe(400);
     });
   });
 
-  describe('GET /api/runs/:id/harness', () => {
+  describe('GET /api/v1/runs/:id/harness', () => {
     it('returns the ledger when present and 404 when absent', async () => {
       const run = store.createRun({ title: 't', workflow: HARNESS_FIX_ISSUE, task: 'x', steps: [] });
-      expect((await apiRequest(app, `/api/runs/${run.id}/harness`)).status).toBe(404);
+      expect((await apiRequest(app, `/api/v1/runs/${run.id}/harness`)).status).toBe(404);
       saveLedger(
         dataDir,
         run.id,
         createLedger({ workflow: HARNESS_FIX_ISSUE, requestedProfile: 'standard', subject: { kind: 'brief', text: 'x' } }),
       );
-      const res = await apiRequest(app, `/api/runs/${run.id}/harness`);
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/harness`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as { version: number; workflow: string; snapshotSeq: number };
       expect(body.version).toBe(2);
@@ -212,15 +212,15 @@ describe('harness API', () => {
       const run = store.createRun({ title: 't', workflow: HARNESS_FIX_ISSUE, task: 'x', steps: [] });
       const path = join(dataDir, 'runs', `${run.id}.harness.json`);
       writeFileSync(path, '{ interrupted', 'utf8');
-      expect((await apiRequest(app, `/api/runs/${run.id}/harness`)).status).toBe(409);
+      expect((await apiRequest(app, `/api/v1/runs/${run.id}/harness`)).status).toBe(409);
       writeFileSync(path, JSON.stringify({ version: 999 }), 'utf8');
-      expect((await apiRequest(app, `/api/runs/${run.id}/harness`)).status).toBe(409);
+      expect((await apiRequest(app, `/api/v1/runs/${run.id}/harness`)).status).toBe(409);
     });
   });
 
-  describe('POST /api/runs harness parameter', () => {
+  describe('POST /api/v1/runs harness parameter', () => {
     it('threads harness params through to the manager for a harness workflow', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { profile: 'standard', skillProfile: 'open-mercato', issueId: '642' },
@@ -234,7 +234,7 @@ describe('harness API', () => {
     });
 
     it('synthesizes the fail-closed standard harness when the request omits harness options', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
       });
@@ -246,7 +246,7 @@ describe('harness API', () => {
     });
 
     it('rejects a worktree-less harness run before creating it', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         worktree: false,
@@ -257,7 +257,7 @@ describe('harness API', () => {
     });
 
     it('rejects harness params on a non-harness workflow', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: 'quick-task',
         harness: { profile: 'standard' },
@@ -266,7 +266,7 @@ describe('harness API', () => {
     });
 
     it('rejects an invalid profile', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { profile: 'mega' },
@@ -275,7 +275,7 @@ describe('harness API', () => {
     });
 
     it('rejects an invalid skill profile before creating the expensive harness run', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { skillProfile: 'open-mercato-ish' },
@@ -285,7 +285,7 @@ describe('harness API', () => {
     });
 
     it('rejects variants on a harness run — one staged handoff per issue', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'x',
         workflow: HARNESS_FIX_ISSUE,
         variants: 2,
@@ -317,7 +317,7 @@ describe('harness API', () => {
         'utf8',
       );
 
-      const blocked = await post('/api/runs', {
+      const blocked = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { profile: 'standard' },
@@ -326,7 +326,7 @@ describe('harness API', () => {
       expect(((await blocked.json()) as { error: string }).error).toMatch(/before worktree creation/i);
       expect(captured).toBeUndefined();
 
-      const accepted = await post('/api/runs', {
+      const accepted = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: {
@@ -357,10 +357,10 @@ describe('harness API', () => {
 
     it('refuses push and PR while a harness run is still before its review gate', async () => {
       const run = mkHarnessRun('running');
-      const push = await post(`/api/runs/${run.id}/git/push`, {});
+      const push = await post(`/api/v1/runs/${run.id}/git/push`, {});
       expect(push.status).toBe(409);
       expect(((await push.json()) as { error: string }).error).toMatch(/stage-only/);
-      const pr = await post(`/api/runs/${run.id}/pr`, {});
+      const pr = await post(`/api/v1/runs/${run.id}/pr`, {});
       expect(pr.status).toBe(409);
       expect(((await pr.json()) as { error: string }).error).toMatch(/stage-only/);
     });
@@ -375,7 +375,7 @@ describe('harness API', () => {
       ledger.stage = { status: 'staged', stagedPaths: [] };
       ledger.outcome = { status: 'ready', blockingReasons: [] };
       saveLedger(dataDir, run.id, ledger);
-      const push = await post(`/api/runs/${run.id}/git/push`, {});
+      const push = await post(`/api/v1/runs/${run.id}/git/push`, {});
       const body = (await push.json()) as { error?: string };
       expect(body.error ?? '').not.toMatch(/harness|stage-only|contested/i);
     });
@@ -390,7 +390,7 @@ describe('harness API', () => {
       ledger.stage = { status: 'staged', stagedPaths: [] };
       saveLedger(dataDir, run.id, ledger);
 
-      const push = await post(`/api/runs/${run.id}/git/push`, {});
+      const push = await post(`/api/v1/runs/${run.id}/git/push`, {});
       expect(push.status).toBe(409);
       expect(((await push.json()) as { error: string }).error).toMatch(
         /outcome is pending/i,
@@ -417,7 +417,7 @@ describe('harness API', () => {
         'utf8',
       );
 
-      const push = await post(`/api/runs/${run.id}/git/push`, {});
+      const push = await post(`/api/v1/runs/${run.id}/git/push`, {});
       expect(push.status).toBe(409);
       expect(((await push.json()) as { error: string }).error).toMatch(
         /outcome is pending/i,
@@ -438,16 +438,16 @@ describe('harness API', () => {
       };
       saveLedger(dataDir, run.id, ledger);
 
-      const blocked = await post(`/api/runs/${run.id}/git/push`, {});
+      const blocked = await post(`/api/v1/runs/${run.id}/git/push`, {});
       expect(blocked.status).toBe(409);
       expect(((await blocked.json()) as { error: string }).error).toMatch(/contested/i);
 
-      const accepted = await post(`/api/runs/${run.id}/harness/accept-contested`, {
+      const accepted = await post(`/api/v1/runs/${run.id}/harness/accept-contested`, {
         reason: 'Reviewed the remaining risk and accepting it for this draft.',
       });
       expect(accepted.status).toBe(200);
 
-      const push = await post(`/api/runs/${run.id}/git/push`, {});
+      const push = await post(`/api/v1/runs/${run.id}/git/push`, {});
       expect(((await push.json()) as { error?: string }).error ?? '').not.toMatch(/contested/i);
     });
 
@@ -479,7 +479,7 @@ describe('harness API', () => {
       };
       saveLedger(dataDir, run.id, ledger);
 
-      const accepted = await post(`/api/runs/${run.id}/harness/accept-contested`, {
+      const accepted = await post(`/api/v1/runs/${run.id}/harness/accept-contested`, {
         reason: 'The operator accepts this bounded migration risk.',
       });
 
@@ -523,7 +523,7 @@ describe('harness API', () => {
       ledger.claim = held.claim;
       saveLedger(dataDir, run.id, ledger);
 
-      const archived = await post(`/api/runs/${run.id}/archive`, {});
+      const archived = await post(`/api/v1/runs/${run.id}/archive`, {});
 
       expect(archived.status).toBe(200);
       expect(acquireIssueClaim(repoRoot, 'next-run', '642')).toMatchObject({ ok: true });
@@ -554,7 +554,7 @@ describe('harness API', () => {
         ],
       });
 
-      const res = await post(`/api/runs/${run.id}/messages`, {
+      const res = await post(`/api/v1/runs/${run.id}/messages`, {
         text: 'message sent after dequeue',
         images: [],
       });
@@ -594,13 +594,13 @@ describe('harness API', () => {
         }),
       );
 
-      const res = await post(`/api/runs/${run.id}/messages`, {
+      const res = await post(`/api/v1/runs/${run.id}/messages`, {
         text: 'Preserve the compatibility alias.',
       });
 
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ queuedForPhase: true });
-      const ledger = (await apiRequest(app, `/api/runs/${run.id}/harness`));
+      const ledger = (await apiRequest(app, `/api/v1/runs/${run.id}/harness`));
       const body = (await ledger.json()) as {
         pendingMessages: Array<{ text: string; consumedAt?: string }>;
       };
@@ -629,7 +629,7 @@ describe('harness API', () => {
     });
   });
 
-  describe('POST /api/runs harness roles (2026-07-24)', () => {
+  describe('POST /api/v1/runs harness roles (2026-07-24)', () => {
     const roles = {
       orchestrator: { runner: 'claude', model: 'sonnet' },
       implementer: { runner: 'codex', model: '' },
@@ -640,7 +640,7 @@ describe('harness API', () => {
     };
 
     it('threads a sound role selection through to the manager', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { roles },
@@ -650,7 +650,7 @@ describe('harness API', () => {
     });
 
     it('rejects fewer than 2 reviewers', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { roles: { ...roles, reviewers: [roles.reviewers[0]] } },
@@ -660,7 +660,7 @@ describe('harness API', () => {
     });
 
     it('rejects duplicate reviewers', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'x',
         workflow: HARNESS_FIX_ISSUE,
         harness: { roles: { ...roles, reviewers: [roles.reviewers[0], roles.reviewers[0]] } },
@@ -670,7 +670,7 @@ describe('harness API', () => {
     });
 
     it('rejects a single-family council', async () => {
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: {
@@ -707,7 +707,7 @@ describe('harness API', () => {
           { runner: 'harness', model: 'kimi', family: 'moonshot' },
         ],
       };
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { roles: withAdvisor },
@@ -718,7 +718,7 @@ describe('harness API', () => {
 
     it('rejects an advisor ref as orchestrator or implementer', async () => {
       for (const role of ['orchestrator', 'implementer'] as const) {
-        const res = await post('/api/runs', {
+        const res = await post('/api/v1/runs', {
           task: 'x',
           workflow: HARNESS_FIX_ISSUE,
           harness: { roles: { ...roles, [role]: { runner: 'harness', model: 'kimi', family: 'moonshot' } } },
@@ -740,7 +740,7 @@ describe('harness API', () => {
         }),
         'utf8',
       );
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: {
@@ -768,7 +768,7 @@ describe('harness API', () => {
         }),
         'utf8',
       );
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: {
@@ -810,7 +810,7 @@ describe('harness API', () => {
         'utf8',
       );
 
-      const res = await post('/api/runs', {
+      const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { profile: 'optimized' },
@@ -830,7 +830,7 @@ describe('harness API', () => {
    * expensive council member was its verdict, so there was no way to tell
    * whether it had been asked the right question.
    */
-  describe('GET /api/runs/:id/harness/invocations/:invocationId', () => {
+  describe('GET /api/v1/runs/:id/harness/invocations/:invocationId', () => {
     const seedRun = (invocations: unknown[]) => {
       const run = store.createRun({ title: 't', workflow: HARNESS_FIX_ISSUE, task: 'x', steps: [] });
       const artifactDir = join(dataDir, 'runs', `${run.id}-harness`);
@@ -875,7 +875,7 @@ describe('harness API', () => {
       ] as typeof ledger.ledger.invocations;
       saveLedger(dataDir, run.id, ledger.ledger);
 
-      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/inv-1`);
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/harness/invocations/inv-1`);
 
       expect(res.status).toBe(200);
       const body = (await res.json()) as { prompt: string; result: string; reviewerId: string };
@@ -887,7 +887,7 @@ describe('harness API', () => {
     it('404s an invocation id that is not in the ledger', async () => {
       const { run } = seedRun([]);
 
-      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/nope`);
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/harness/invocations/nope`);
 
       expect(res.status).toBe(404);
     });
@@ -901,7 +901,7 @@ describe('harness API', () => {
       ] as typeof ledger.ledger.invocations;
       saveLedger(dataDir, run.id, ledger.ledger);
 
-      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/inv-1`);
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/harness/invocations/inv-1`);
 
       expect(res.status).toBe(200);
       const body = (await res.json()) as { prompt: string | null; result: string | null };
@@ -916,7 +916,7 @@ describe('harness API', () => {
       ledger.ledger.invocations = [reviewer({})] as typeof ledger.ledger.invocations;
       saveLedger(dataDir, run.id, ledger.ledger);
 
-      const res = await apiRequest(app, `/api/runs/${run.id}/harness/invocations/inv-1`);
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/harness/invocations/inv-1`);
 
       expect(res.status).toBe(200);
       expect(((await res.json()) as { prompt: string | null }).prompt).toBeNull();

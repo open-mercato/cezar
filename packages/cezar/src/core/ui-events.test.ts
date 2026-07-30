@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { RunnerId } from './agent-runner.js';
+import type { RunnerId } from './agent-runner.ts';
 import type {
   PlanEntry,
   StopReason,
@@ -18,7 +18,7 @@ import type {
   UiEventType,
   UiItem,
   UiToolItem,
-} from './ui-events.js';
+} from './ui-events.ts';
 
 /** Exact structural equality of two types (the classic conditional trick). */
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2)

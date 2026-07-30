@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { toolDisplay, type ToolDisplay } from './tool-display.js';
+import { toolDisplay, type ToolDisplay } from './tool-display.ts';
 
 describe('toolDisplay', () => {
   describe('known tools across backends', () => {

@@ -2,17 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.js';
-import { type AgentSession } from '../core/claude-cli-runner.js';
-import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.js';
-import { createRunner } from '../core/runner-factory.js';
-import type { RunnerId } from '../core/agent-runner.js';
-import { modelConflictsWithRunner } from '../core/model-presets.js';
+import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.ts';
+import { type AgentSession } from '../core/claude-cli-runner.ts';
+import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { createRunner } from '../core/runner-factory.ts';
+import type { RunnerId } from '../core/agent-runner.ts';
+import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import {
   ModelIdentityError,
   formatModelIdentity,
   normalizeModelForBackend,
-} from '../core/model-identity.js';
+} from '../core/model-identity.ts';
 import {
   HANDOFF_ONLY_INSTRUCTIONS,
   HANDOFF_INSTRUCTIONS,
@@ -20,35 +20,52 @@ import {
   followupsEnabled,
   handoffPath,
   seedHandoffFile,
-} from '../handoff.js';
-import { todosPath } from '../todos.js';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.js';
-import { discoverSkills, type Skill } from '../skills.js';
-import { ensureSkillOnDisk } from '../skills-materialize.js';
-import { seedAgentConfigLocalLayer } from '../agent-config/seed.js';
-import { loadConfig, resolveWorktreeRetention } from '../config.js';
-import { autosaveCommit, createWorktree, remoteDefaultBranch, resolveBaseRef, staleBaseNote, worktreeDiff, worktreeShortstat } from '../git-worktree.js';
-import { getRepoInfo } from '../server/git.js';
-import { loadWorkflows } from './load.js';
-import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.js';
-import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.js';
-import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.js';
-import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.js';
-import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.js';
-import { reviewGateEnabled } from '../runs/review-gate.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { UiEventSink } from '../runs/ui-event-sink.js';
-import type { UiEvent } from '../core/ui-events.js';
-import { runHarnessDriver, type HarnessDriverHost, type HarnessRolesInput } from '../harness/driver.js';
-import { createLedger, readLedger, saveLedger } from '../harness/ledger.js';
-import { HARNESS_FIX_ISSUE, isHarnessWorkflow } from '../harness/workflows.js';
+} from '../handoff.ts';
+import { todosPath } from '../todos.ts';
+import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+import { discoverSkills, type Skill } from '../skills.ts';
+import { ensureSkillOnDisk } from '../skills-materialize.ts';
+import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+import { loadConfig, resolveWorktreeRetention } from '../config.ts';
+import {
+  autosaveCommit,
+  createWorktree,
+  remoteDefaultBranch,
+  resolveBaseRef,
+  staleBaseNote,
+  worktreeDiff,
+  worktreeShortstat,
+} from '../git-worktree.ts';
+import { getHeadCommit, getRepoInfo } from '../server/git.ts';
+import { loadWorkflows } from './load.ts';
+import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
+import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
+import {
+  autoNamingActive,
+  generateRunName,
+  liveTitleUpdatesEnabled,
+  postValidateTitle,
+} from '../runs/auto-name.ts';
+import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { UiEventSink } from '../runs/ui-event-sink.ts';
+import type { UiEvent } from '../core/ui-events.ts';
+import {
+  runHarnessDriver,
+  type HarnessDriverHost,
+  type HarnessRolesInput,
+} from '../harness/driver.ts';
+import { createLedger, readLedger, saveLedger } from '../harness/ledger.ts';
+import { HARNESS_FIX_ISSUE, isHarnessWorkflow } from '../harness/workflows.ts';
 import {
   HARNESS_PROFILES,
   HARNESS_SKILL_PROFILES,
   type HarnessProfile,
   type HarnessSkillProfile,
-} from '../harness/types.js';
-import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
+} from '../harness/types.ts';
+import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 const MAX_HARNESS_BOUNDARY_MESSAGES = 10;
@@ -155,6 +172,15 @@ interface ActiveRun {
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; every degradation/opt-out path does. */
   releaseRepoRoot?: () => void;
+  /** Durable directional-usage accounting state for the current runner
+   * invocation. Provider-local turn ids are unique only within this epoch. */
+  usageInvocation?: {
+    stepId: string;
+    epoch: number;
+    observed: boolean;
+    startedTurns: Set<string>;
+    recordedTurns: Set<string>;
+  };
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever. */
@@ -580,13 +606,16 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      // Persist the explicit opt-out so queued-run restart recovery and the
+      // session Git routes can distinguish it from a removed isolated worktree.
+      worktree: !group && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
-    this.store.updateRun(run.id, { workflowDef: workflow as unknown as Record<string, unknown> });
+    this.store.updateRun(run.id, { workflowDef: workflow });
     // Harness stub (spec 2026-07-23-harness-orchestration): marks the run for
     // the publish guards, list surfaces, and ledger-based recovery. A harness
     // workflow started without explicit parameters runs `standard`.
@@ -604,7 +633,7 @@ export class RunManager {
           workflow: workflow.name,
           skillProfile: input.harness?.skillProfile ?? 'generic',
           ...(input.harness?.issueId ? { issueId: input.harness.issueId } : {}),
-          ...(input.harness?.roles ? { roles: input.harness.roles as unknown as Record<string, unknown> } : {}),
+          ...(input.harness?.roles ? { roles: input.harness.roles } : {}),
           ...(input.harness?.baseAcknowledgement
             ? { baseAcknowledgement: input.harness.baseAcknowledgement }
             : {}),
@@ -657,7 +686,7 @@ export class RunManager {
       (variant) => {
         const hint = VARIANT_HINTS[variant];
         const task = hint ? `${input.task}\n\n${hint}` : input.task;
-        return this.startRun(workflow, { ...input, task }, { groupId, variant });
+        return this.startRun(workflow, { ...input, task, worktree: undefined }, { groupId, variant });
       },
     );
   }
@@ -872,6 +901,9 @@ export class RunManager {
               // recovered queued autonomous run would run non-autonomously (no
               // auto-nudge) and later wrongly park at `review`.
               autonomous: run.autonomous,
+              // Preserve an explicit worktree opt-out across a queued restart.
+              // Missing on older records means the default isolated mode.
+              worktree: run.worktree,
             }),
           });
           this.queue.push(run.id);
@@ -968,10 +1000,11 @@ export class RunManager {
 
   /** The persisted definition when it looks sane, else the catalog by name. */
   private async reviveWorkflow(run: RunRecord): Promise<WorkflowDef | null> {
+    // "Looks sane" is the STORE's job now: it parses `workflowDef` against the definition schema
+    // and `.catch`es a def that no longer fits to `undefined`, so anything present here already
+    // has the `steps` array the old inline `Array.isArray` check was asking for.
     const def = run.workflowDef;
-    if (def && Array.isArray((def as { steps?: unknown }).steps)) {
-      return def as unknown as WorkflowDef;
-    }
+    if (def) return def;
     const { workflows } = await loadWorkflows(this.repoRoot);
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
@@ -1953,6 +1986,8 @@ export class RunManager {
       return;
     }
     const runner = createRunner(continueBackend);
+    state.currentStepId = stepId;
+    this.beginUsageInvocation(runId, state, stepId);
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -1979,7 +2014,6 @@ export class RunManager {
     state.session = session;
     state.sessionEverOpened = true;
     this.flushDeferred(runId);
-    state.currentStepId = stepId;
     state.interrupt = () => session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
@@ -2074,6 +2108,10 @@ export class RunManager {
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
       // repository-root lease serializes these runs so workflows cannot overlap.
+      // Pin the starting commit: the session's Changes and Commits views use it
+      // as their stable lower bound while reading the current working copy.
+      const startingCommit = await getHeadCommit(repo.root);
+      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
       emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
     } else if (repo) {
       emit({
@@ -2364,7 +2402,7 @@ export class RunManager {
         workflow: workflow.name,
         skillProfile,
         ...(issueId ? { issueId } : {}),
-        ...(roles ? { roles: roles as unknown as Record<string, unknown> } : {}),
+        ...(roles ? { roles } : {}),
         ...(baseAcknowledgement ? { baseAcknowledgement } : {}),
       },
     });
@@ -2760,6 +2798,8 @@ export class RunManager {
     }
     const runner = createRunner(stepBackend);
     let session: AgentSession;
+    state.currentStepId = step.id;
+    this.beginUsageInvocation(runId, state, step.id);
     try {
       session = runner.startSession(
         {
@@ -2797,6 +2837,7 @@ export class RunManager {
         },
       );
     } catch (err) {
+      state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
     }
     liveSession = session;
@@ -2870,6 +2911,7 @@ export class RunManager {
   /** Native backend asks arrive before turn-end. Persist and park immediately
    * so the cockpit shows attention and the run releases its workspace slot. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
+    this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
@@ -2879,6 +2921,82 @@ export class RunManager {
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
+  }
+
+  /** Persist the invocation checkpoint before launching a runner. A throw or
+   * process exit before `turn.started` therefore leaves a durable mismatch. */
+  private beginUsageInvocation(runId: string, state: ActiveRun, stepId: string): void {
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === stepId);
+    if (!step) return;
+    const epoch = (step.usageInvocationEpoch ?? 0) + 1;
+    this.persistUsageCheckpoint(runId, stepId, {
+      usageInvocationEpoch: epoch,
+      usageInvocationsStarted: (step.usageInvocationsStarted ?? 0) + 1,
+    });
+    state.usageInvocation = {
+      stepId,
+      epoch,
+      observed: false,
+      startedTurns: new Set(),
+      recordedTurns: new Set(),
+    };
+  }
+
+  /** Fold backend-neutral completed-turn usage into the current step exactly
+   * once. Invocation/turn counters are written before the event reaches the
+   * NDJSON sink so crashes cannot preserve a falsely complete subtotal. */
+  private recordUsageUiEvent(runId: string, state: ActiveRun, event: UiEvent): void {
+    const invocation = state.usageInvocation;
+    if (!invocation) return;
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
+    if (!step) return;
+
+    if (event.type === 'turn.started') {
+      if (invocation.startedTurns.has(event.turnId)) return;
+      invocation.startedTurns.add(event.turnId);
+      const firstObservedTurn = !invocation.observed;
+      invocation.observed = true;
+      this.persistUsageCheckpoint(runId, invocation.stepId, {
+        usageTurnsStarted: (step.usageTurnsStarted ?? 0) + 1,
+        ...(firstObservedTurn
+          ? { usageInvocationsObserved: (step.usageInvocationsObserved ?? 0) + 1 }
+          : {}),
+      });
+      return;
+    }
+
+    if (event.type !== 'turn.completed') return;
+    if (!invocation.startedTurns.has(event.turnId) || invocation.recordedTurns.has(event.turnId)) return;
+    const input = event.usage?.input;
+    const output = event.usage?.output;
+    if (
+      typeof input !== 'number' ||
+      !Number.isFinite(input) ||
+      input < 0 ||
+      typeof output !== 'number' ||
+      !Number.isFinite(output) ||
+      output < 0
+    ) {
+      return;
+    }
+    invocation.recordedTurns.add(event.turnId);
+    this.persistUsageCheckpoint(runId, invocation.stepId, {
+      inputTokens: (step.inputTokens ?? 0) + input,
+      outputTokens: (step.outputTokens ?? 0) + output,
+      usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
+    });
+  }
+
+  /** Usage completeness is a crash boundary, unlike high-frequency token
+   * snapshots: the checkpoint must reach `runs.json` before the runner starts
+   * or the matching UI event is persisted and forwarded. */
+  private persistUsageCheckpoint(
+    runId: string,
+    stepId: string,
+    patch: Partial<Omit<StepState, 'id'>>,
+  ): void {
+    this.store.updateStep(runId, stepId, patch);
+    this.store.flush();
   }
 
   /**
@@ -3114,7 +3232,10 @@ export class RunManager {
           throw err;
         }
         this.queuedImageSeq.set(runId, seq);
-        return { name, url: `/api/runs/${runId}/images/${name}`, path };
+        // Versioned, because that is the only surface served now. The cockpit still upgrades
+        // the unversioned URLs sitting in OLD transcripts when it renders them
+        // (`resolveApiUrl`), but a URL minted today must be fetchable as written.
+        return { name, url: `/api/v1/runs/${runId}/images/${name}`, path };
       }
       return null;
     } catch {

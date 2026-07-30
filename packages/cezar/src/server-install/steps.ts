@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { randomInt } from 'node:crypto';
-import { detectEnvironment, type BackendCheck } from '../core/backend-detect.js';
+import { detectEnvironment, type BackendCheck } from '../core/backend-detect.ts';
 import {
   CANCEL,
   type InstallContext,
   type InstallStep,
   type Runner,
   type StepArtifact,
-} from './types.js';
+} from './types.ts';
 
 /**
  * Platform-agnostic step helpers. The star is `sudoStep`: the wizard runs as a

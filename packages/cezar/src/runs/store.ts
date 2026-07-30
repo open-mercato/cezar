@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.js';
+import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Type-only module (zod + nothing else), so this cannot cycle back into the store.
+import { workflowDefSchema } from '../workflows/types.ts';
 
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
@@ -24,6 +26,8 @@ export type StepStatus =
   | 'cancelled'
   | 'skipped';
 
+const usageCounterSchema = z.number().finite().nonnegative();
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -31,6 +35,13 @@ const stepStateSchema = z.object({
   status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
   iterations: z.number(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
+  usageInvocationsStarted: usageCounterSchema.optional(),
+  usageInvocationsObserved: usageCounterSchema.optional(),
+  usageTurnsStarted: usageCounterSchema.optional(),
+  usageTurnsRecorded: usageCounterSchema.optional(),
+  usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   error: z.string().optional(),
@@ -49,9 +60,27 @@ const stepStateSchema = z.object({
 const queuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
-  /** `/api/runs/:id/images/…` URLs — the base64 never enters `runs.json`. */
+  /** `/api/v1/runs/:id/images/…` URLs — the base64 never enters `runs.json`. */
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
+});
+
+const harnessModelRefSchema = z.object({
+  runner: z.enum(['claude', 'codex', 'opencode', 'harness']),
+  model: z.string(),
+  effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+  family: z.string().optional(),
+  adapterId: z.string().optional(),
+});
+
+const harnessRolesSchema = z.object({
+  orchestrator: harnessModelRefSchema.extend({
+    runner: z.enum(['claude', 'codex', 'opencode']),
+  }),
+  implementer: harnessModelRefSchema.extend({
+    runner: z.enum(['claude', 'codex', 'opencode']),
+  }),
+  reviewers: z.array(harnessModelRefSchema),
 });
 
 const runRecordSchema = z.object({
@@ -101,6 +130,16 @@ const runRecordSchema = z.object({
    *  group-pick winner-park read it). Additive-safe: absent = falsy = not
    *  autonomous. Set at creation from `WorkflowInput.autonomous`. */
   autonomous: z.boolean().optional(),
+  /** Optional provenance for tasks launched by a project GitHub automation. */
+  automation: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number().int().positive(),
+      receiptId: z.string(),
+      event: z.string(),
+      githubUrl: z.string().url(),
+    })
+    .optional(),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
@@ -114,6 +153,8 @@ const runRecordSchema = z.object({
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
   /** First GitHub PR URL spotted in the transcript (the janitor trick). */
   pullRequestUrl: z.string().optional(),
@@ -153,11 +194,14 @@ const runRecordSchema = z.object({
   /** Distinct issue URLs spotted so far — the referenced-issue working set,
    *  persisted like `referencedPrCandidates`. Capped. */
   referencedIssueCandidates: z.array(z.string()).optional(),
-  /** Task worktree (spec 006) — absent when the run executed in the repo root. */
+  /** Explicit execution policy. `false` means the run intentionally uses the repo root;
+   *  absent on older runs and for the default isolated-worktree mode. */
+  worktree: z.literal(false).optional(),
+  /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
   /** The task's own branch (`cez/<id8>`), created off `baseBranch`. */
   branch: z.string().optional(),
-  /** Branch (or commit, when HEAD was detached) the worktree was forked from. */
+  /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
   /** Set when count-based retention (#483) reclaimed this run's worktree
    *  *directory* (the `cez/<id8>` branch is kept). Presence means "materialized
@@ -180,9 +224,25 @@ const runRecordSchema = z.object({
   steps: z.array(stepStateSchema),
   /** Full workflow definition, persisted so a `queued` run can be re-enqueued
    *  after a restart (#367) — including ad-hoc "(planned)" chains that exist
-   *  nowhere else. Kept loose here to avoid an upward import; the run manager
-   *  validates the shape before reviving it. */
-  workflowDef: z.record(z.string(), z.unknown()).optional(),
+   *  nowhere else.
+   *
+   *  Typed, not `z.record(z.string(), z.unknown())`: this key goes out over the
+   *  wire on every run route, and `unknown` is wider than anything the server
+   *  can serialize — which made the route's own type (hono's `JSONValue`, whose
+   *  index signature admits `object | symbol | undefined`) impossible for the
+   *  contract to describe. `.catch(undefined)` keeps an older or hand-edited
+   *  entry from failing the whole index parse: a def that no longer fits simply
+   *  drops, and `reviveWorkflow` falls back to the catalog by name.
+   *
+   *  That drop is PERMANENT, not per-boot — the index is re-serialized from the
+   *  parsed records (`saveNow`), so the next save writes runs.json back without
+   *  it. Harmless for a catalog workflow, which re-resolves by name; fatal for
+   *  the ad-hoc "(planned)" chain this field exists to preserve, which has no
+   *  catalog entry to fall back to. Nothing written since #367 fails the schema
+   *  (`name`, `source` and `steps` have been on every persisted def), so tighten
+   *  `workflowStepSchema` only with that in mind: a narrowing here silently eats
+   *  queued runs rather than degrading them. */
+  workflowDef: workflowDefSchema.optional().catch(undefined),
   /** cez-harness run stub (spec 2026-07-23-harness-orchestration): presence
    *  marks a harness-driven run for the list surfaces, the publish guards and
    *  recovery; the full state lives in the sibling `<id>.harness.json` ledger.
@@ -194,10 +254,9 @@ const runRecordSchema = z.object({
       /** Optional on runs created before selectable phase-skill profiles. */
       skillProfile: z.enum(['generic', 'open-mercato']).optional(),
       issueId: z.string().optional(),
-      /** Role-based selection (2026-07-24), kept loose — the ledger and the
-       *  driver input are authoritative; this copy makes recovery re-queues
-       *  conduct the same roles. */
-      roles: z.record(z.string(), z.unknown()).optional(),
+      /** Role-based selection (2026-07-24). This copy makes recovery re-queues
+       *  conduct the same roles while keeping the run API fully typed. */
+      roles: harnessRolesSchema.optional(),
       baseAcknowledgement: z
         .object({
           configuredBase: z.string(),
@@ -411,6 +470,7 @@ export class RunStore extends EventEmitter {
     runner?: 'claude' | 'codex' | 'opencode';
     generateFollowups?: boolean;
     autonomous?: boolean;
+    worktree?: false;
     groupId?: string;
     variant?: string;
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
@@ -430,6 +490,7 @@ export class RunStore extends EventEmitter {
       runner: input.runner,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
+      worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,
       status: 'queued',
@@ -535,6 +596,28 @@ export class RunStore extends EventEmitter {
     if (!run || !step) return;
     Object.assign(step, this.redactStepPatch(patch));
     run.tokensUsed = run.steps.reduce((sum, s) => sum + s.tokensUsed, 0);
+    const startedAgentSteps = run.steps.filter((candidate) => candidate.kind === 'agent' && candidate.iterations > 0);
+    const directionalComplete =
+      startedAgentSteps.length > 0 &&
+      startedAgentSteps.every(
+        (candidate) =>
+          candidate.usageInvocationsStarted !== undefined &&
+          candidate.usageInvocationsObserved !== undefined &&
+          candidate.usageInvocationsObserved > 0 &&
+          candidate.usageInvocationsStarted === candidate.usageInvocationsObserved &&
+          candidate.usageTurnsStarted !== undefined &&
+          candidate.usageTurnsRecorded !== undefined &&
+          candidate.usageTurnsStarted > 0 &&
+          candidate.usageTurnsStarted === candidate.usageTurnsRecorded &&
+          candidate.inputTokens !== undefined &&
+          candidate.outputTokens !== undefined,
+      );
+    run.inputTokens = directionalComplete
+      ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.inputTokens ?? 0), 0)
+      : undefined;
+    run.outputTokens = directionalComplete
+      ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.outputTokens ?? 0), 0)
+      : undefined;
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
     run.costUsd = cost > 0 ? cost : undefined;
     this.touch(run);

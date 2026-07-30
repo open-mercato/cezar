@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createWorktree } from '../git-worktree.js';
-import { RunStore } from '../runs/store.js';
-import { RunManager } from './run.js';
-import type { WorkflowDef } from './types.js';
+import { createWorktree } from '../git-worktree.ts';
+import { RunStore } from '../runs/store.ts';
+import { RunManager } from './run.ts';
+import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

@@ -28,7 +28,7 @@ const TODO_FULL: TodoItem = {
   suggestedSkill: 'om-fix',
 }
 
-/** Its source task is NOT in `/api/runs` — the legacy "source task deleted" case. */
+/** Its source task is NOT in `/api/v1/runs` — the legacy "source task deleted" case. */
 const TODO_ORPHAN: TodoItem = {
   id: 't2',
   taskId: 'run-gone',
@@ -127,22 +127,22 @@ function stubFetch(
       })
       const override = overrides[`${method} ${path}`]
       if (override) return override()
-      if (method === 'GET' && path === '/api/todos') return jsonResponse(inbox)
-      if (method === 'GET' && path === '/api/runs') return jsonResponse([RUN_1])
+      if (method === 'GET' && path === '/api/v1/todos') return jsonResponse(inbox)
+      if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([RUN_1])
       // The runner/model pills (#401) read the host's backends and the per-runner defaults.
-      if (method === 'GET' && path === '/api/health') return jsonResponse(health(backends))
-      if (method === 'GET' && path === '/api/providers/status') return jsonResponse(providers)
-      if (method === 'GET' && path === '/api/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (method === 'GET' && path === '/api/config') {
+      if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(backends))
+      if (method === 'GET' && path === '/api/v1/providers/status') return jsonResponse(providers)
+      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/config') {
         return jsonResponse({ defaultRunner: backends[0] ?? 'claude', defaultModels })
       }
-      if (method === 'DELETE' && path.startsWith('/api/todos/')) {
-        const id = path.slice('/api/todos/'.length)
+      if (method === 'DELETE' && path.startsWith('/api/v1/todos/')) {
+        const id = path.slice('/api/v1/todos/'.length)
         inbox = inbox.filter((item) => item.id !== id)
         return jsonResponse({ removed: true })
       }
       if (method === 'POST' && path.endsWith('/start')) {
-        const id = path.slice('/api/todos/'.length, -'/start'.length)
+        const id = path.slice('/api/v1/todos/'.length, -'/start'.length)
         if (!inbox.some((item) => item.id === id)) return jsonResponse({ error: 'not found' }, 404)
         inbox = inbox.map((item) =>
           item.id === id ? { ...item, startedTaskId: STARTED_RUN.id } : item,
@@ -157,7 +157,7 @@ function stubFetch(
 
 /** The Run POST the card actually sent — the assertion the #401 tests below turn on. */
 const startBody = (sent: readonly SentRequest[], id: string): unknown =>
-  sent.find((r) => r.method === 'POST' && r.path === `/api/todos/${id}/start`)?.body
+  sent.find((r) => r.method === 'POST' && r.path === `/api/v1/todos/${id}/start`)?.body
 
 /** Open a pill's dropdown and choose an option by its visible label (the house pattern:
  *  Radix opens on pointerDown, and the menu renders in a portal outside the card). Scoped by
@@ -235,7 +235,7 @@ describe('the inbox card list', () => {
     const pr = card.querySelector<HTMLAnchorElement>('[data-slot="todo-pr"]')
     expect(pr?.getAttribute('href')).toBe(TODO_FULL.prUrl)
     expect(pr?.getAttribute('rel')).toContain('noopener')
-    // run-1 exists in /api/runs → a real link into the thread.
+    // run-1 exists in /api/v1/runs → a real link into the thread.
     expect(card.querySelector('[data-slot="todo-source"]')?.getAttribute('href')).toBe('/tasks/run-1')
   })
 
@@ -279,12 +279,12 @@ describe('Run', () => {
     await waitFor(() =>
       expect(document.querySelector('[data-slot="thread-probe"]')).not.toBeNull(),
     )
-    expect(sent).toContainEqual({ path: '/api/todos/t1/start', method: 'POST' })
+    expect(sent).toContainEqual({ path: '/api/v1/todos/t1/start', method: 'POST' })
   })
 
   it('surfaces a start failure as a toast and stays on the inbox', async () => {
     stubFetch({
-      'POST /api/todos/t1/start': () => jsonResponse({ error: 'already started' }, 409),
+      'POST /api/v1/todos/t1/start': () => jsonResponse({ error: 'already started' }, 409),
     })
     renderInbox()
 
@@ -314,7 +314,7 @@ describe('Run — backend selection (#401)', () => {
 
   it('uses project config while boot health is pending', async () => {
     const sent = stubFetch({
-      'GET /api/health': () => new Promise<Response>(() => {}),
+      'GET /api/v1/health': () => new Promise<Response>(() => {}),
     })
     renderInbox()
 
@@ -356,8 +356,8 @@ describe('Run — backend selection (#401)', () => {
   it('a multi-backend host offers the runner pill, and the pick reaches the POST', async () => {
     const sent = stubFetch({
       // Reproduce a non-boot project whose default is Claude while boot health says Codex.
-      'GET /api/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
-      'GET /api/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
+      'GET /api/v1/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
     }, TODOS, ['claude', 'codex'])
     renderInbox()
 
@@ -417,7 +417,7 @@ describe('Run — backend selection (#401)', () => {
 
   it('keeps agent actions unavailable with no connected provider while non-agent actions remain enabled', async () => {
     const sent = stubFetch(
-      { 'GET /api/providers/status': () => jsonResponse(PROVIDERS_NONE) },
+      { 'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE) },
     )
     renderInbox('/p/acme/inbox')
 
@@ -447,7 +447,7 @@ describe('Run — backend selection (#401)', () => {
 
   it('describes a provider route error as failed verification, not disconnection', async () => {
     stubFetch({
-      'GET /api/providers/status': () =>
+      'GET /api/v1/providers/status': () =>
         jsonResponse({ error: 'provider probe failed' }, 404),
     })
     renderInbox()
@@ -532,8 +532,8 @@ describe('Acknowledge', () => {
     fireEvent.click(note.querySelector('[data-action="todo-acknowledge"]')!)
 
     await waitFor(() => expect(cards()).toHaveLength(1))
-    expect(sent).toContainEqual({ path: '/api/todos/t2', method: 'DELETE' })
-    expect(sent).not.toContainEqual({ path: '/api/todos/t2/start', method: 'POST' })
+    expect(sent).toContainEqual({ path: '/api/v1/todos/t2', method: 'DELETE' })
+    expect(sent).not.toContainEqual({ path: '/api/v1/todos/t2/start', method: 'POST' })
   })
 })
 
@@ -549,11 +549,11 @@ describe('Dismiss', () => {
 
     await waitFor(() => expect(cards()).toHaveLength(1))
     expect(cards()[0]!.dataset.id).toBe('t2')
-    expect(sent).toContainEqual({ path: '/api/todos/t1', method: 'DELETE' })
+    expect(sent).toContainEqual({ path: '/api/v1/todos/t1', method: 'DELETE' })
   })
 
   it('surfaces a dismiss failure as a toast and keeps the card', async () => {
-    stubFetch({ 'DELETE /api/todos/t1': () => jsonResponse({ error: 'not found' }, 404) })
+    stubFetch({ 'DELETE /api/v1/todos/t1': () => jsonResponse({ error: 'not found' }, 404) })
     renderInbox()
 
     await waitFor(() => expect(cards()).toHaveLength(2))
@@ -594,7 +594,7 @@ describe('empty and error states', () => {
   it('a failed todos fetch renders the danger state with the server error', async () => {
     // 4xx: the client's retry policy treats it as a considered answer, so the state is
     // immediate — no exponential-backoff retry for the test to wait out.
-    stubFetch({ 'GET /api/todos': () => jsonResponse({ error: 'disk exploded' }, 400) })
+    stubFetch({ 'GET /api/v1/todos': () => jsonResponse({ error: 'disk exploded' }, 400) })
     renderInbox()
 
     const state = await waitFor(() => {
@@ -640,13 +640,13 @@ describe('Add instructions', () => {
         const method = init.method ?? 'GET'
         const body = typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined
         captured.push({ path, method, body })
-        if (method === 'GET' && path === '/api/todos') return jsonResponse(TODOS)
-        if (method === 'GET' && path === '/api/runs') return jsonResponse([RUN_1])
-        if (method === 'GET' && path === '/api/ui-state') return jsonResponse(uiState)
-        if (method === 'GET' && path === '/api/providers/status') {
+        if (method === 'GET' && path === '/api/v1/todos') return jsonResponse(TODOS)
+        if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([RUN_1])
+        if (method === 'GET' && path === '/api/v1/ui-state') return jsonResponse(uiState)
+        if (method === 'GET' && path === '/api/v1/providers/status') {
           return jsonResponse(connectedProviders(['claude']))
         }
-        if (method === 'POST' && path === '/api/todos/t1/start') return jsonResponse({ run: STARTED_RUN }, 201)
+        if (method === 'POST' && path === '/api/v1/todos/t1/start') return jsonResponse({ run: STARTED_RUN }, 201)
         return jsonResponse({ error: 'not found' }, 404)
       }),
     )
@@ -683,7 +683,7 @@ describe('Add instructions', () => {
     fireEvent.click(cards()[0]!.querySelector('[data-action="todo-run"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="thread-probe"]')).not.toBeNull())
 
-    const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/todos/t1/start')
+    const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/todos/t1/start')
     expect(posted?.body).toEqual({
       runner: 'claude',
       prompt: 'Also add a regression test.',
@@ -699,7 +699,7 @@ describe('Add instructions', () => {
     fireEvent.click(cards()[0]!.querySelector('[data-action="todo-run"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="thread-probe"]')).not.toBeNull())
 
-    const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/todos/t1/start')
+    const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/todos/t1/start')
     expect(posted?.body).toEqual({ runner: 'claude' })
   })
 
@@ -786,7 +786,7 @@ const healthResponse = (followups: boolean) =>
 
 describe('the inbox gate (#471)', () => {
   it('says the inbox is off — not "empty" — when the server has it disabled', async () => {
-    const sent = stubFetch({ 'GET /api/health': () => healthResponse(false) })
+    const sent = stubFetch({ 'GET /api/v1/health': () => healthResponse(false) })
     renderInbox()
 
     expect(await screen.findByText('The follow-up inbox is off')).toBeTruthy()
@@ -802,15 +802,15 @@ describe('the inbox gate (#471)', () => {
     // The query parks once health lands. It may already have fired one speculative request
     // before that — the deliberate trade in `InboxRoute` (an enabled server must not wait on
     // health) — but it must not keep polling an endpoint that can only answer [].
-    await waitFor(() => expect(sent.some((r) => r.path === '/api/health')).toBe(true))
-    const afterGate = sent.filter((r) => r.path === '/api/todos').length
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
+    const afterGate = sent.filter((r) => r.path === '/api/v1/todos').length
     expect(afterGate).toBeLessThanOrEqual(1)
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
-    expect(sent.filter((r) => r.path === '/api/todos')).toHaveLength(afterGate)
+    expect(sent.filter((r) => r.path === '/api/v1/todos')).toHaveLength(afterGate)
   })
 
   it('renders the real inbox once the server reports the capability', async () => {
-    stubFetch({ 'GET /api/health': () => healthResponse(true) })
+    stubFetch({ 'GET /api/v1/health': () => healthResponse(true) })
     renderInbox()
 
     await waitFor(() => expect(cards()).toHaveLength(2))
@@ -825,13 +825,13 @@ describe('the inbox gate (#471)', () => {
       releaseHealth = resolve
     })
     stubFetch({
-      'GET /api/health': () => healthResponse(false),
-      'GET /api/todos': () => jsonResponse([]),
+      'GET /api/v1/health': () => healthResponse(false),
+      'GET /api/v1/todos': () => jsonResponse([]),
     })
     // Re-stub health as a deferred answer so the todos query can settle first.
     const realFetch = globalThis.fetch as unknown as (i: RequestInfo | URL, x?: RequestInit) => Promise<Response>
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      if (String(input) === '/api/health') {
+      if (String(input) === '/api/v1/health') {
         await healthPending
         return healthResponse(false)
       }

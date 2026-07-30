@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bareDirFor, isPinnedSha, shouldPassiveFetch } from './skills-remote.js';
+import { bareDirFor, isPinnedSha, shouldPassiveFetch } from './skills-remote.ts';
 
 const TTL = 6 * 60 * 60 * 1_000;
 

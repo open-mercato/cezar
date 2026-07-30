@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { aggregateTreeUsage, parsePsOutput } from './process-usage.js';
+import { aggregateTreeUsage, parsePsOutput } from './process-usage.ts';
 
 describe('parsePsOutput', () => {
   it('parses the unix `ps` shape (pid ppid rssKb cpu)', () => {

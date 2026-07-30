@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractTaskRefs, refineTaskRefs, titleRefNumber } from './task-refs.js';
+import { extractTaskRefs, refineTaskRefs, titleRefNumber } from './task-refs.ts';
 
 /** Spec 2026-07-17-task-auto-naming step 0 — the regex layer the namer is cross-checked against. */
 describe('extractTaskRefs', () => {

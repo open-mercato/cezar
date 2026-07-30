@@ -14,10 +14,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { UiEvent, UiItem, UiToolItem } from '../core/ui-events.js';
-import { createCodexUiState, mapCodexNotification } from '../core/codex-ui-mapper.js';
-import { RunStore } from './store.js';
-import { DELTA_FLUSH_MS, UiEventSink, isV2WireEventType } from './ui-event-sink.js';
+import type { UiEvent, UiItem, UiToolItem } from '../core/ui-events.ts';
+import { createCodexUiState, mapCodexNotification } from '../core/codex-ui-mapper.ts';
+import { RunStore } from './store.ts';
+import { DELTA_FLUSH_MS, UiEventSink, isV2WireEventType } from './ui-event-sink.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 

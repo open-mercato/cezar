@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.js';
+import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.ts';
 
 /** Unit surface of the shared workspace semaphore (spec 2026-07-20, step 2.5).
  *  The cross-manager scheduling behavior (cap across projects, the #347

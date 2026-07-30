@@ -54,18 +54,18 @@ function stubResolverFetch({
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
-      if (path === '/api/providers/status') {
+      if (path === '/api/v1/providers/status') {
         if (providerPending) return new Promise<Response>(() => {})
         return jsonResponse(providers, providerStatus)
       }
-      if (path === '/api/health') {
+      if (path === '/api/v1/health') {
         return jsonResponse({
           defaultRunner: bootDefault,
           checks: [{ name: 'claude', available: true }],
         })
       }
-      if (path === '/api/config') return jsonResponse({ defaultRunner: projectDefault, defaultModels: {} })
-      if (path === '/api/models?runner=codex') {
+      if (path === '/api/v1/config') return jsonResponse({ defaultRunner: projectDefault, defaultModels: {} })
+      if (path === '/api/v1/models?runner=codex') {
         return jsonResponse({ runner: 'codex', models: [], source: 'live', stale: false })
       }
       return jsonResponse({})

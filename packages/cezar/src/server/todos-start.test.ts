@@ -3,16 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import type { TodoItem } from '../todos.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { connectedProviderAuth } from './provider-auth.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import type { TodoItem } from '../todos.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { connectedProviderAuth } from './provider-auth.testkit.ts';
 
 /**
- * `POST /api/todos/:id/start` (spec 007, extended by #401 + #413): the "▶ Run" flow that turns
+ * `POST /api/v1/todos/:id/start` (spec 007, extended by #401 + #413): the "▶ Run" flow that turns
  * an inbox entry into a task. Two optional body knobs share the one request:
  *  - #401 runner/model — the Inbox card's pills pick which backend runs the follow-up; the
  *    parsed override reaches `startRun` verbatim, a bad runner is a 400, and — unlike `/continue`
@@ -24,7 +24,7 @@ import { connectedProviderAuth } from './provider-auth.testkit.js';
  * instructions. 404/409 and the malformed-body 400 are pinned here too. Capturing stub, per the
  * continue-run/start-run pattern.
  */
-describe('POST /api/todos/:id/start', () => {
+describe('POST /api/v1/todos/:id/start', () => {
   let repoRoot: string;
   let dataDir: string;
   let store: RunStore;
@@ -69,7 +69,7 @@ describe('POST /api/todos/:id/start', () => {
   });
 
   const start = (id: string, body?: unknown) =>
-    apiRequest(app, `/api/todos/${encodeURIComponent(id)}/start`, {
+    apiRequest(app, `/api/v1/todos/${encodeURIComponent(id)}/start`, {
       method: 'POST',
       ...(body === undefined
         ? {}
@@ -171,7 +171,7 @@ describe('POST /api/todos/:id/start', () => {
 
   it('rejects a malformed JSON body with a 400 — it must not pass as "no body"', async () => {
     writeTodos([{ id: 't1', summary: 'Ship it' }]);
-    const res = await apiRequest(app, '/api/todos/t1/start', {
+    const res = await apiRequest(app, '/api/v1/todos/t1/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{"prompt": "unterminated',
@@ -183,7 +183,7 @@ describe('POST /api/todos/:id/start', () => {
 
   it('a zero-length body is still the body-less case, not a 400', async () => {
     writeTodos([{ id: 't1', summary: 'Ship it' }]);
-    const res = await apiRequest(app, '/api/todos/t1/start', {
+    const res = await apiRequest(app, '/api/v1/todos/t1/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '',

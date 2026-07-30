@@ -196,10 +196,10 @@ function stubApi(): SentRequest[] {
         method,
         body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
       })
-      if (method === 'GET' && path === '/api/runs/r1') return json(run)
-      if (method === 'GET' && path === '/api/runs/r1/harness') return json(ledger())
-      if (method === 'GET' && path === '/api/runs') return json([run])
-      if (method === 'GET' && path === '/api/providers/status') {
+      if (method === 'GET' && path === '/api/v1/runs/r1') return json(run)
+      if (method === 'GET' && path === '/api/v1/runs/r1/harness') return json(ledger())
+      if (method === 'GET' && path === '/api/v1/runs') return json([run])
+      if (method === 'GET' && path === '/api/v1/providers/status') {
         return json({
           providers: [
             { provider: 'claude', status: 'connected', enabled: true },
@@ -208,7 +208,7 @@ function stubApi(): SentRequest[] {
           ],
         })
       }
-      if (method === 'POST' && path === '/api/runs/r1/harness/accept-contested') {
+      if (method === 'POST' && path === '/api/v1/runs/r1/harness/accept-contested') {
         return json({
           outcome: {
             status: 'contested',
@@ -285,11 +285,11 @@ describe('harness review route', () => {
         sent.find(
           (request) =>
             request.method === 'POST' &&
-            request.path === '/api/runs/r1/harness/accept-contested',
+            request.path === '/api/v1/runs/r1/harness/accept-contested',
         ),
       ).toEqual({
         method: 'POST',
-        path: '/api/runs/r1/harness/accept-contested',
+        path: '/api/v1/runs/r1/harness/accept-contested',
         body: {
           reason: 'Reviewed the fallback and accepting it for the staged draft.',
         },
@@ -310,7 +310,7 @@ describe('high-assurance packet route', () => {
     expect(screen.getByText('src/runs/store.ts')).not.toBeNull()
     expect(screen.getByRole('link', { name: 'Packets' }).getAttribute('aria-current')).toBe('page')
     expect(FakeEventSource.instances).toHaveLength(1)
-    expect(FakeEventSource.instances[0]?.url).toBe('/api/runs/r1/events')
+    expect(FakeEventSource.instances[0]?.url).toBe('/api/v1/runs/r1/events')
 
     act(() => {
       FakeEventSource.instances[0]?.emit('ui-event', {

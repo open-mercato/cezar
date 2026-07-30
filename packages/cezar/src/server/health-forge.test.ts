@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp, type ServerDeps } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp, type ServerDeps } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * Deployment modes + forge seam (cockpit-ui redesign spec): `/api/health`
+ * Deployment modes + forge seam (cockpit-ui redesign spec): `/api/v1/health`
  * gains `forge` and `capabilities.localHandoff` ADDITIVELY (the pre-forge
  * fields are the protected bookmarklet contract, BACKWARD_COMPATIBILITY.md
  * §2), and the open-in-cli local handoff 409s in hosted mode.
@@ -22,16 +22,25 @@ interface HealthBody {
   checks: unknown[];
   defaultRunner?: string;
   forge: { kind: string; available: boolean; reason?: string } | null;
-  capabilities: { localHandoff: boolean; followups: boolean; singleProject: boolean; tokenMetrics: boolean };
+  capabilities: {
+    localHandoff: boolean;
+    followups: boolean;
+    singleProject: boolean;
+    tokenMetrics: boolean;
+    tokenUsageMetrics: boolean;
+    costMetrics: boolean;
+  };
 }
 
-describe('GET /api/health — forge + capabilities', () => {
+describe('GET /api/v1/health — forge + capabilities', () => {
   let repoRoot: string;
   let store: RunStore;
   const savedRemote = process.env.CEZ_REMOTE;
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
   const savedSingleProject = process.env.CEZ_SINGLE_PROJECT;
   const savedHideTokenMetrics = process.env.CEZ_HIDE_TOKEN_METRICS;
+  const savedHideTokenUsage = process.env.CEZ_HIDE_TOKEN_USAGE;
+  const savedHideCost = process.env.CEZ_HIDE_COST;
   const savedDryRun = process.env.CEZ_DRY_RUN;
 
   beforeEach(() => {
@@ -43,6 +52,8 @@ describe('GET /api/health — forge + capabilities', () => {
     delete process.env.CEZ_FOLLOWUPS;
     delete process.env.CEZ_SINGLE_PROJECT;
     delete process.env.CEZ_HIDE_TOKEN_METRICS;
+    delete process.env.CEZ_HIDE_TOKEN_USAGE;
+    delete process.env.CEZ_HIDE_COST;
     // Dry-run keeps the forge probe (and the claude check) off the network,
     // so the assertions are deterministic on any machine.
     process.env.CEZ_DRY_RUN = '1';
@@ -59,6 +70,10 @@ describe('GET /api/health — forge + capabilities', () => {
     else process.env.CEZ_SINGLE_PROJECT = savedSingleProject;
     if (savedHideTokenMetrics === undefined) delete process.env.CEZ_HIDE_TOKEN_METRICS;
     else process.env.CEZ_HIDE_TOKEN_METRICS = savedHideTokenMetrics;
+    if (savedHideTokenUsage === undefined) delete process.env.CEZ_HIDE_TOKEN_USAGE;
+    else process.env.CEZ_HIDE_TOKEN_USAGE = savedHideTokenUsage;
+    if (savedHideCost === undefined) delete process.env.CEZ_HIDE_COST;
+    else process.env.CEZ_HIDE_COST = savedHideCost;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
@@ -67,7 +82,7 @@ describe('GET /api/health — forge + capabilities', () => {
     createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over });
 
   const health = async (over: Partial<ServerDeps> = {}): Promise<HealthBody> => {
-    const res = await apiRequest(makeApp(over), '/api/health');
+    const res = await apiRequest(makeApp(over), '/api/v1/health');
     expect(res.status).toBe(200);
     return (await res.json()) as HealthBody;
   };
@@ -87,6 +102,8 @@ describe('GET /api/health — forge + capabilities', () => {
       followups: false,
       singleProject: false,
       tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 
@@ -133,6 +150,8 @@ describe('GET /api/health — forge + capabilities', () => {
       followups: false,
       singleProject: false,
       tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 
@@ -158,6 +177,8 @@ describe('GET /api/health — forge + capabilities', () => {
       followups: false,
       singleProject: false,
       tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 
@@ -168,6 +189,8 @@ describe('GET /api/health — forge + capabilities', () => {
       followups: false,
       singleProject: false,
       tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 
@@ -183,6 +206,8 @@ describe('GET /api/health — forge + capabilities', () => {
       followups: true,
       singleProject: false,
       tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 
@@ -193,11 +218,29 @@ describe('GET /api/health — forge + capabilities', () => {
       followups: false,
       singleProject: false,
       tokenMetrics: false,
+      tokenUsageMetrics: false,
+      costMetrics: false,
+    });
+  });
+
+  it('reports independent token-only and cost-only presentation policies', async () => {
+    process.env.CEZ_HIDE_TOKEN_USAGE = '1';
+    expect((await health()).capabilities).toMatchObject({
+      tokenMetrics: false,
+      tokenUsageMetrics: false,
+      costMetrics: true,
+    });
+    delete process.env.CEZ_HIDE_TOKEN_USAGE;
+    process.env.CEZ_HIDE_COST = '1';
+    expect((await health()).capabilities).toMatchObject({
+      tokenMetrics: false,
+      tokenUsageMetrics: true,
+      costMetrics: false,
     });
   });
 });
 
-describe('POST /api/runs/:id/open-in-cli — hosted-mode defense in depth', () => {
+describe('POST /api/v1/runs/:id/open-in-cli — hosted-mode defense in depth', () => {
   let repoRoot: string;
   let store: RunStore;
   let runId: string;
@@ -220,7 +263,7 @@ describe('POST /api/runs/:id/open-in-cli — hosted-mode defense in depth', () =
   const post = (over: Partial<ServerDeps> = {}) =>
     apiRequest(
       createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over }),
-      `/api/runs/${runId}/open-in-cli`,
+      `/api/v1/runs/${runId}/open-in-cli`,
       { method: 'POST' },
     );
 
@@ -248,7 +291,7 @@ describe('POST /api/runs/:id/open-in-cli — hosted-mode defense in depth', () =
   it('unknown runs still 404 first', async () => {
     process.env.CEZ_REMOTE = '1';
     const app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
-    const res = await apiRequest(app, '/api/runs/nope/open-in-cli', { method: 'POST' });
+    const res = await apiRequest(app, '/api/v1/runs/nope/open-in-cli', { method: 'POST' });
     expect(res.status).toBe(404);
   });
 });

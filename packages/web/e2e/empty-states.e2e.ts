@@ -35,7 +35,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -85,7 +85,7 @@ afterAll(async () => {
 describe('tasks overview — no tasks yet', () => {
   beforeAll(() => {
     browser.goto(`${baseUrl}${scoped('/')}`)
-    // The empty state is async: it may render only after /api/runs has answered [].
+    // The empty state is async: it may render only after /api/v1/runs has answered [].
     browser.waitForFunction(`document.querySelector('[data-slot="tasks-empty"]') !== null`)
   })
 

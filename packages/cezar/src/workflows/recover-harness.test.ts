@@ -52,7 +52,7 @@ describe('recover() and harness runs', () => {
     });
     store.updateRun(id, {
       status: 'running',
-      workflowDef: def as unknown as Record<string, unknown>,
+      workflowDef: def,
       harness: { profile: 'standard', workflow: HARNESS_FIX_ISSUE, issueId: '642' },
     });
     store.updateStep(id, 'implement', { status: 'running' });
@@ -82,7 +82,7 @@ describe('recover() and harness runs', () => {
     store.updateRun(id, {
       status: 'failed',
       error: 'phase "fix-3" produced no valid result after a retry',
-      workflowDef: def as unknown as Record<string, unknown>,
+      workflowDef: def,
       harness: { profile: 'standard', workflow: HARNESS_FIX_ISSUE, issueId: '642' },
     });
     store.updateStep(id, 'implement', {

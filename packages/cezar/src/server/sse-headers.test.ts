@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
  * Anti-buffering contract for both SSE endpoints (#424): `no-transform` +
@@ -39,15 +39,15 @@ describe('SSE responses defeat intermediary buffering', () => {
     return res.headers;
   }
 
-  it('global /api/events carries no-transform and X-Accel-Buffering: no', async () => {
-    const headers = await headersOf('/api/events');
+  it('global /api/v1/events carries no-transform and X-Accel-Buffering: no', async () => {
+    const headers = await headersOf('/api/v1/events');
     expect(headers.get('cache-control')).toBe('no-cache, no-transform');
     expect(headers.get('x-accel-buffering')).toBe('no');
   });
 
-  it('per-run /api/runs/:id/events carries the same contract', async () => {
+  it('per-run /api/v1/runs/:id/events carries the same contract', async () => {
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
-    const headers = await headersOf(`/api/runs/${run.id}/events`);
+    const headers = await headersOf(`/api/v1/runs/${run.id}/events`);
     expect(headers.get('cache-control')).toBe('no-cache, no-transform');
     expect(headers.get('x-accel-buffering')).toBe('no');
   });

@@ -72,7 +72,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -131,7 +131,7 @@ beforeAll(async () => {
     { env: fixtureServeEnv(repo), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
-  changedFiles = ((await (await fetch(`${baseUrl}/api/repo/changes`)).json()) as { files: unknown[] }).files.length
+  changedFiles = ((await (await fetch(`${baseUrl}/api/v1/repo/changes`)).json()) as { files: unknown[] }).files.length
   expect(changedFiles).toBeGreaterThanOrEqual(FIXTURE_FILES)
 
   browser = AgentBrowser.open(sessionId)

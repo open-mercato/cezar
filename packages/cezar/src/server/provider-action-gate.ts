@@ -1,9 +1,9 @@
 import type {
   ProviderId,
   ProviderStatusResponse,
-} from '../core/provider-auth.js';
-import type { RunRecord } from '../runs/store.js';
-import { stepKind, type WorkflowDef } from '../workflows/types.js';
+} from '../core/provider-auth.ts';
+import type { RunRecord } from '../runs/store.ts';
+import { stepKind, type WorkflowDef } from '../workflows/types.ts';
 
 const ORDER: readonly ProviderId[] = ['claude', 'codex', 'opencode'];
 const LABEL: Record<ProviderId, string> = {

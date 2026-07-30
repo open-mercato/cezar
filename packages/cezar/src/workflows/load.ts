@@ -8,7 +8,7 @@ import {
   stepsIssue,
   workflowFileSchema,
   type WorkflowDef,
-} from './types.js';
+} from './types.ts';
 
 export const WORKFLOWS_DIR = '.ai/cezar/workflows';
 

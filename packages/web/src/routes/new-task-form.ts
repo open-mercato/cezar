@@ -480,8 +480,8 @@ export function normalizeHarnessPresets(raw: unknown): HarnessPreset[] {
     const roles = preset.roles as HarnessRoles | undefined
     if (
       !roles ||
-      !isModelRefShape(roles.orchestrator) ||
-      !isModelRefShape(roles.implementer) ||
+      !isRunnerRefShape(roles.orchestrator) ||
+      !isRunnerRefShape(roles.implementer) ||
       !Array.isArray(roles.reviewers) ||
       !roles.reviewers.every(isModelRefShape)
     ) {
@@ -491,8 +491,8 @@ export function normalizeHarnessPresets(raw: unknown): HarnessPreset[] {
       id: preset.id,
       name: preset.name,
       roles: {
-        orchestrator: sanitizeRef(roles.orchestrator),
-        implementer: sanitizeRef(roles.implementer),
+        orchestrator: sanitizeRunnerRef(roles.orchestrator),
+        implementer: sanitizeRunnerRef(roles.implementer),
         reviewers: roles.reviewers.map(sanitizeRef),
       },
     })
@@ -508,6 +508,20 @@ function sanitizeRef(ref: HarnessModelRef): HarnessModelRef {
     runner: ref.runner,
     model: ref.model,
     ...(ref.runner === 'harness' && typeof ref.family === 'string' ? { family: ref.family } : {}),
+    ...(effort ? { effort } : {}),
+  }
+}
+
+type HarnessRunnerRef = HarnessRoles['orchestrator']
+
+function sanitizeRunnerRef(ref: HarnessRunnerRef): HarnessRunnerRef {
+  const effort =
+    typeof ref.effort === 'string' && HARNESS_EFFORTS.includes(ref.effort)
+      ? ref.effort
+      : undefined
+  return {
+    runner: ref.runner,
+    model: ref.model,
     ...(effort ? { effort } : {}),
   }
 }
@@ -533,6 +547,10 @@ function isModelRefShape(raw: unknown): raw is HarnessModelRef {
   return ['claude', 'codex', 'opencode'].includes(ref.runner)
 }
 
+function isRunnerRefShape(raw: unknown): raw is HarnessRunnerRef {
+  return isModelRefShape(raw) && raw.runner !== 'harness'
+}
+
 /**
  * Warn when a free-tier gateway model is bound to a reviewer slot.
  *
@@ -552,7 +570,10 @@ export function freeTierReviewerWarning(roles: HarnessRoles | null): string | nu
 }
 
 export function defaultHarnessRoles(allOptions: readonly HarnessModelOption[]): HarnessRoles | null {
-  const options = allOptions.filter((o) => o.runner !== 'harness')
+  const options = allOptions.filter(
+    (option): option is HarnessModelOption & { runner: HarnessRunnerRef['runner'] } =>
+      option.runner !== 'harness',
+  )
   const families = [...new Set(options.map((o) => o.family))]
   if (families.length < 2 || options.length < 2) return null
   const byFamily = (family: string) => options.filter((o) => o.family === family)
@@ -675,6 +696,16 @@ export function buildCreateRunBody(opts: {
           }
         : undefined,
   }
+}
+
+/** The automation editor persists the exact New task serialization, with only the transport-
+ * specific `task` key renamed to `prompt`. Images and inbox provenance are deliberately absent:
+ * an automation is a reusable template, not one browser submission. */
+export function buildAutomationTask(
+  opts: Parameters<typeof buildCreateRunBody>[0],
+): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
+  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+  return { prompt: task, ...body }
 }
 
 /** Where a successful POST navigates: the run's thread — for ×2/×3 the FIRST variant's thread,

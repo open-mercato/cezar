@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runDeploy, runInstall, runUninstall, type RunOptions } from './engine.js';
-import { loadServerState } from './state.js';
-import { StepAborted } from './steps.js';
-import { createAutoUi } from './ui.js';
-import type { InstallStep, PlatformStrategy, Runner } from './types.js';
+import { runDeploy, runInstall, runUninstall, type RunOptions } from './engine.ts';
+import { loadServerState } from './state.ts';
+import { StepAborted } from './steps.ts';
+import { createAutoUi } from './ui.ts';
+import type { InstallStep, PlatformStrategy, Runner } from './types.ts';
 
 const noRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
 
@@ -212,7 +212,7 @@ describe('engine', () => {
     const res = await runUninstall(strategyOf([fakeStep('a')]), opts({ instance: 'shop-example-com' }));
     expect(res.status).toBe('complete');
     // the named record file is gone → it no longer reserves a port or lists
-    const { listServerInstances } = await import('./state.js');
+    const { listServerInstances } = await import('./state.ts');
     expect(listServerInstances().some((i) => i.instance === 'shop-example-com')).toBe(false);
   });
 
@@ -249,7 +249,7 @@ describe('engine — ledger preservation and uninstall safety (PR #423 review fi
     expect(loadServerState().steps.a?.created?.artifacts).toHaveLength(1);
     const a2 = fakeStep('a', {
       run: vi.fn(async () => {
-        const { StepCancelled } = await import('./steps.js');
+        const { StepCancelled } = await import('./steps.ts');
         throw new StepCancelled();
       }),
     });

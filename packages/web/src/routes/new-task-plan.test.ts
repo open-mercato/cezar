@@ -100,7 +100,7 @@ describe('pendingPlanOf', () => {
   })
 })
 
-describe('buildPlannedRunBody — the POST /api/runs wire contract for approved plans', () => {
+describe('buildPlannedRunBody — the POST /api/v1/runs wire contract for approved plans', () => {
   const base = {
     task: 'tighten the tests',
     steps: STEPS,

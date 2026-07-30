@@ -1,13 +1,13 @@
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import { forgeKindOfRemote, type ForgeKind } from '../server/forge/index.js';
-import { getRepoInfo } from '../server/git.js';
+import { forgeKindOfRemote, type ForgeKind } from '../server/forge/index.ts';
+import { getRepoInfo } from '../server/git.ts';
 import {
   mergeWriteWorkspaceConfig,
   loadWorkspaceConfig,
   type WorkspaceProject,
-} from './config.js';
+} from './config.ts';
 
 /**
  * Project registry operations over `~/.cezar/config.json` (spec

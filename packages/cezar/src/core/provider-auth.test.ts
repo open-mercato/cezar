@@ -4,7 +4,7 @@ import {
   isRuntimeProviderAuthFailure,
   type ProviderCommandResult,
   type RunProviderCommand,
-} from './provider-auth.js';
+} from './provider-auth.ts';
 
 const connectedResults: Record<string, ProviderCommandResult> = {
   claude: { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },

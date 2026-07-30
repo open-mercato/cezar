@@ -12,7 +12,7 @@
  *  so a stable `cezar-cli` picks up compatible patch releases of the implementation package.
  */
 
-import { stampManifestSet, type ReleaseManifests as ReleaseManifestSet } from './manifests.js';
+import { stampManifestSet, type ReleaseManifests as ReleaseManifestSet } from './manifests.ts';
 
 /** The version-bump modes the Release workflow offers. `existing` publishes the
  *  version already committed to the service manifest (for hand-prepared releases);
@@ -50,7 +50,7 @@ export function computeStableVersion(bump: ReleaseBump, base: string): string | 
   }
 }
 
-export type { ManifestLike, ReleaseManifests } from './manifests.js';
+export type { ManifestLike, ReleaseManifests } from './manifests.ts';
 
 /** Stamp the release set to a stable version.
  *

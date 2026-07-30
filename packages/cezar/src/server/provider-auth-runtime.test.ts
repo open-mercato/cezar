@@ -6,13 +6,13 @@ import {
   ProviderAuthService,
   type ProviderId,
   type RunProviderCommand,
-} from '../core/provider-auth.js';
-import { RunStore } from '../runs/store.js';
+} from '../core/provider-auth.ts';
+import { RunStore } from '../runs/store.ts';
 import {
   ProviderRuntimeAuthObserver,
   recoverWithProviderRuntimeAuthObservation,
   watchProviderRuntimeAuthFailures,
-} from './provider-auth-runtime.js';
+} from './provider-auth-runtime.ts';
 
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',

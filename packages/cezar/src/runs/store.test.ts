@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from './store.js';
+import { RunStore } from './store.ts';
 
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
@@ -17,6 +17,77 @@ const LEGACY_RUN = {
   archived: false,
   steps: [],
 };
+
+describe('RunStore — directional usage persistence', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('round-trips step checkpoints and complete run aggregates through runs.json', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 'metered task',
+      workflow: 'quick-task',
+      task: 'metered task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', {
+      iterations: 1,
+      inputTokens: 120,
+      outputTokens: 30,
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      usageInvocationEpoch: 1,
+    });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir).getRun(run.id);
+    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(reopened?.steps[0]).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 30,
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      usageInvocationEpoch: 1,
+    });
+  });
+
+  it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun(LEGACY_RUN.id)?.inputTokens).toBeUndefined();
+
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 'partial task',
+      workflow: 'quick-task',
+      task: 'partial task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', {
+      iterations: 1,
+      inputTokens: 10,
+      outputTokens: 2,
+      usageInvocationsStarted: 2,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+    });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+    store.updateStep(run.id, 'task', { usageInvocationsObserved: 2, usageTurnsStarted: 2 });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+  });
+});
 
 describe('RunStore — titleSummary + diffStat (#389)', () => {
   let dataDir: string;
@@ -994,7 +1065,7 @@ describe('RunStore — queuedMessages (#472)', () => {
         {
           id: 'm2',
           text: 'see this mock',
-          images: [`/api/runs/${run.id}/images/pasted-1.png`],
+          images: [`/api/v1/runs/${run.id}/images/pasted-1.png`],
           createdAt: '2026-07-21T10:01:00.000Z',
         },
       ],
@@ -1009,7 +1080,7 @@ describe('RunStore — queuedMessages (#472)', () => {
       text: 'and update the changelog',
       createdAt: '2026-07-21T10:00:00.000Z',
     });
-    expect(stack?.[1]?.images).toEqual([`/api/runs/${run.id}/images/pasted-1.png`]);
+    expect(stack?.[1]?.images).toEqual([`/api/v1/runs/${run.id}/images/pasted-1.png`]);
   });
 
   /** The `task` rule (above) extended to the stack: these strings are replayed

@@ -39,7 +39,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -50,7 +50,7 @@ async function waitForHealth(url: string): Promise<void> {
 
 async function waitForStatus(url: string, id: string, wanted: string[]): Promise<string> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const record = (await (await fetch(`${url}/api/runs/${id}`)).json()) as { status: string }
+    const record = (await (await fetch(`${url}/api/v1/runs/${id}`)).json()) as { status: string }
     if (wanted.includes(record.status)) return record.status
     await new Promise((r) => setTimeout(r, 500))
   }
@@ -88,7 +88,7 @@ beforeAll(async () => {
   await waitForHealth(baseUrl)
 
   const created = (await (
-    await fetch(`${baseUrl}/api/runs`, {
+    await fetch(`${baseUrl}/api/v1/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task: 'Improve the project notes.', workflow: 'quick-task' }),
@@ -99,7 +99,7 @@ beforeAll(async () => {
   // Park the run at review: the mock's turn leaves the session open (`waiting`), and the
   // finish settles it as `review` because the worktree diff is non-empty (notes.md).
   await waitForStatus(baseUrl, runId, ['waiting'])
-  await fetch(`${baseUrl}/api/runs/${runId}/finish`, { method: 'POST' })
+  await fetch(`${baseUrl}/api/v1/runs/${runId}/finish`, { method: 'POST' })
   const parked = await waitForStatus(baseUrl, runId, ['review', 'done'])
   if (parked !== 'review') throw new Error('cezar e2e: the dry run settled as done — no diff to review?')
 
@@ -168,7 +168,7 @@ describe('the review gate against a live parked run', () => {
 
   it('the run gates again after the follow-up turn, with a fresh diff', async () => {
     await waitForStatus(baseUrl, runId, ['waiting'])
-    await fetch(`${baseUrl}/api/runs/${runId}/finish`, { method: 'POST' })
+    await fetch(`${baseUrl}/api/v1/runs/${runId}/finish`, { method: 'POST' })
     await waitForStatus(baseUrl, runId, ['review'])
     // Re-entry re-renders the panel AND refetches the diff (legacy reload-on-entry parity).
     browser.waitForFunction(`document.querySelector('[data-slot="review-panel"]') !== null`)

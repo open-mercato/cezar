@@ -60,7 +60,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -144,7 +144,7 @@ beforeAll(async () => {
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
-  const commits = (await (await fetch(`${baseUrl}/api/runs/${RUN_ID}/commits`)).json()) as {
+  const commits = (await (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}/commits`)).json()) as {
     commits: Array<{ sha: string }>
   }
   newestSha = commits.commits[0]?.sha ?? ''
@@ -170,7 +170,7 @@ afterAll(() => {
 
 describe(`the task Commits tab on a ${COMMITS}-commit branch`, () => {
   it('serves every commit from the API — the list really is unbounded', async () => {
-    const payload = (await (await fetch(`${baseUrl}/api/runs/${RUN_ID}/commits`)).json()) as {
+    const payload = (await (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}/commits`)).json()) as {
       commits: unknown[]
     }
     // No server-side cap on this route, which is the whole reason the tab needs windowing.

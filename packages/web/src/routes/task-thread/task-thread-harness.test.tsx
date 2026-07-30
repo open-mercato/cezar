@@ -97,7 +97,7 @@ describe('harness phase-boundary composer', () => {
           body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
         })
         const body =
-          path === '/api/providers/status'
+          path === '/api/v1/providers/status'
             ? {
                 providers: [
                   { provider: 'claude', status: 'connected', enabled: true },
@@ -105,9 +105,9 @@ describe('harness phase-boundary composer', () => {
                   { provider: 'opencode', status: 'not-installed', enabled: true },
                 ],
               }
-            : method === 'POST' && path === '/api/runs/r-boundary/messages'
+            : method === 'POST' && path === '/api/v1/runs/r-boundary/messages'
               ? { queuedForPhase: true }
-              : path === '/api/runs'
+              : path === '/api/v1/runs'
                 ? [run]
                 : {}
         return new Response(JSON.stringify(body), {
@@ -151,10 +151,10 @@ describe('harness phase-boundary composer', () => {
         requests.find(
           (request) =>
             request.method === 'POST' &&
-            request.path === '/api/runs/r-boundary/messages',
+            request.path === '/api/v1/runs/r-boundary/messages',
         ),
       ).toEqual({
-        path: '/api/runs/r-boundary/messages',
+        path: '/api/v1/runs/r-boundary/messages',
         method: 'POST',
         body: {
           text: 'Preserve the public compatibility alias.',

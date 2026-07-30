@@ -3,8 +3,8 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.js';
-import { workspaceConfigPath } from '../paths.js';
+import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
+import { workspaceConfigPath } from '../paths.ts';
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry
@@ -113,7 +113,7 @@ const workspaceConfigSchema = z
     skillsAutoUpdate: z.boolean().optional().catch(undefined),
     // Function-form default/catch: mutators (step 1.3's registerProject) edit
     // these objects in place, so parses must never share one reference.
-    resources: resourcesSchema.default(() => ({})).catch(() => resourcesSchema.parse({})),
+    resources: resourcesSchema.prefault(() => ({})).catch(() => resourcesSchema.parse({})),
     /** Optional New Task policy. Missing keys inherit exact 0/1 environment seeds. */
     composerDefaults: composerDefaultsSchema.default(() => ({})).catch(() => ({})),
     /** Host-wide provider preferences; absent means every provider is enabled. */

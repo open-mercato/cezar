@@ -83,7 +83,7 @@ describe('ProviderBannerContainer', () => {
     })
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/workspace/ui-state',
+        '/api/v1/workspace/ui-state',
         expect.objectContaining({
           method: 'PUT',
           body: JSON.stringify({

@@ -668,7 +668,17 @@ export function HarnessPanel({
               readiness={readinessOf(roles.orchestrator)}
               value={roles.orchestrator}
               options={options.filter((o) => o.runner !== 'harness')}
-              onPick={(ref) => onRoles({ ...roles, orchestrator: ref })}
+              onPick={(ref) => {
+                if (ref.runner === 'harness') return
+                onRoles({
+                  ...roles,
+                  orchestrator: {
+                    runner: ref.runner,
+                    model: ref.model,
+                    ...(ref.effort ? { effort: ref.effort } : {}),
+                  },
+                })
+              }}
               onAddModels={onAddModels}
             />
             <FamilyTag family={modelFamilyOf(roles.orchestrator)} />
@@ -693,7 +703,17 @@ export function HarnessPanel({
               readiness={readinessOf(roles.implementer)}
               value={roles.implementer}
               options={options.filter((o) => o.runner !== 'harness')}
-              onPick={(ref) => onRoles({ ...roles, implementer: ref })}
+              onPick={(ref) => {
+                if (ref.runner === 'harness') return
+                onRoles({
+                  ...roles,
+                  implementer: {
+                    runner: ref.runner,
+                    model: ref.model,
+                    ...(ref.effort ? { effort: ref.effort } : {}),
+                  },
+                })
+              }}
               onAddModels={onAddModels}
             />
             <FamilyTag family={modelFamilyOf(roles.implementer)} />

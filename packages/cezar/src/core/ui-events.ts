@@ -19,7 +19,7 @@
  *     can migrate one panel at a time.
  *
  * This module is pure vocabulary: no runtime imports, no runner coupling.
- * Step 2.4 mirrors it into `web/app/src/protocol/`.
+ * Mirrored into `packages/api-client/src/protocol/`.
  */
 
 /** The backend that produced a session — mirrors `RunnerId` in

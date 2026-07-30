@@ -3,8 +3,8 @@ import { accessSync, constants, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { openInTerminal } from './open-in-terminal.js';
-import { isWsl, translateToWindowsPath } from './wsl.js';
+import { openInTerminal } from './open-in-terminal.ts';
+import { isWsl, translateToWindowsPath } from './wsl.ts';
 
 /**
  * "Open in…" session takeover (#open-in): detect the editors / file managers / terminals on THIS

@@ -100,7 +100,7 @@ function runRecord(id: string, over: Partial<RunRecord> = {}): RunRecord {
 
 const SAMPLE = { cpuPct: 12, rssBytes: 1024, procCount: 3 }
 
-/** The boot project's id, as `GET /api/health` reports it (`bootProject`). Unscoped, the
+/** The boot project's id, as `GET /api/v1/health` reports it (`bootProject`). Unscoped, the
  *  workspace stream's filter compares every stamp against it. */
 const BOOT = 'boot'
 
@@ -176,10 +176,10 @@ afterEach(() => {
 })
 
 describe('useGlobalEvents — connection', () => {
-  it('opens exactly one stream, at /api/workspace/events', () => {
+  it('opens exactly one stream, at /api/v1/workspace/events', () => {
     mount()
     expect(FakeEventSource.instances).toHaveLength(1)
-    expect(FakeEventSource.last.url).toBe('/api/workspace/events')
+    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
     expect(FakeEventSource.last.init).toEqual({ withCredentials: true })
   })
 
@@ -236,7 +236,7 @@ describe('useGlobalEvents — back/forward cache', () => {
     firePageShow(true)
 
     expect(FakeEventSource.instances).toHaveLength(2)
-    expect(FakeEventSource.last.url).toBe('/api/workspace/events')
+    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
   })
 
   it('does nothing on the pageshow of a normal load', () => {

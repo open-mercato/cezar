@@ -3,7 +3,7 @@ import { existsSync, realpathSync, type Dirent } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { isSafeGitRef } from './git-refs.js';
+import { isSafeGitRef } from './git-refs.ts';
 
 /**
  * Git worktree per task (spec 006). Each run gets its own branch

@@ -20,8 +20,6 @@ let browser: AgentBrowser
 let baseUrl: string
 let bootProject: string
 
-const scoped = (path: string) => `/p/${bootProject}${path}`
-
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   bootProject = await bootProjectId(baseUrl)
@@ -35,7 +33,7 @@ afterAll(() => {
 
 describe('command palette', () => {
   it('opens on Ctrl+K, filters to a nav item, and Enter navigates and closes it', () => {
-    browser.goto(baseUrl + scoped('/'))
+    browser.goto(`${baseUrl}/p/${bootProject}/`)
     browser.waitForFunction(`document.querySelector('[data-slot="sidebar"]') !== null`)
     expect(browser.count(ROOT)).toBe(0)
 
@@ -54,7 +52,7 @@ describe('command palette', () => {
     browser.screenshot(`${artifactsDir}/command-palette-filtered.png`)
 
     browser.press('Enter')
-    browser.waitForFunction(`location.pathname === '${scoped('/workflows')}'`)
+    browser.waitForFunction(`location.pathname === '/p/${bootProject}/workflows'`)
     browser.waitForFunction(`document.querySelector('${ROOT}') === null`)
     expect(browser.url()).toContain('/workflows')
     expect(browser.count(ROOT)).toBe(0)

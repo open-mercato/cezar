@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cezarLaunchdPlist, launchdPlist, macosxNgrok } from './macosx-ngrok.js';
-import { availablePlatformIds, getStrategy } from '../strategies.js';
-import { runInstall, runUninstall } from '../engine.js';
-import { loadServerState } from '../state.js';
-import { createAutoUi } from '../ui.js';
-import type { Runner } from '../types.js';
+import { cezarLaunchdPlist, launchdPlist, macosxNgrok } from './macosx-ngrok.ts';
+import { availablePlatformIds, getStrategy } from '../strategies.ts';
+import { runInstall, runUninstall } from '../engine.ts';
+import { loadServerState } from '../state.ts';
+import { createAutoUi } from '../ui.ts';
+import type { Runner } from '../types.ts';
 
 const okRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
 
