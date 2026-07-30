@@ -77,9 +77,9 @@ PR: #742
 
 ### Phase 4: Browser presentation
 
-- [ ] 4.1 Add backward-compatible usage visibility resolution
-- [ ] 4.2 Add shared directional usage presentation
-- [ ] 4.3 Update responsive task-overview layouts
+- [x] 4.1 Add backward-compatible usage visibility resolution — b0822f1b
+- [x] 4.2 Add shared directional usage presentation — b0822f1b
+- [x] 4.3 Update responsive task-overview layouts — b0822f1b
 
 ### Phase 5: Full verification and evidence
 
