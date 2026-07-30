@@ -125,7 +125,7 @@ describe('multi-model start surface', () => {
     expect(screen.getAllByText('Every selected model must be verified.')).toHaveLength(2)
   })
 
-  it('serializes the lineup, never a profile', () => {
+  it('serializes the lineup and the generic development profile independently', () => {
     const payload = buildCreateRunBody({
       task: 'Build the billing module.',
       source: { source: 'workflow', ref: 'harness-implement-feature' },
@@ -140,7 +140,7 @@ describe('multi-model start surface', () => {
     expect(JSON.parse(JSON.stringify(payload))).toEqual({
       task: 'Build the billing module.',
       workflow: 'harness-implement-feature',
-      harness: { roles },
+      harness: { skillProfile: 'generic', roles },
     })
   })
 })

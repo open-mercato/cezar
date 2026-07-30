@@ -98,6 +98,49 @@ export async function discoverSkills(
   repoRoot: string,
   opts: { bundledDir?: string | null } = {},
 ): Promise<Skill[]> {
+  const layers = await discoverSkillLayers(repoRoot, opts);
+  const merged: Skill[] = [];
+  const seen = new Set<string>();
+  for (const skills of layers) {
+    for (const skill of skills) {
+      if (seen.has(skill.name)) continue;
+      seen.add(skill.name);
+      merged.push(skill);
+    }
+  }
+  merged.sort((a, b) => a.name.localeCompare(b.name));
+  return merged;
+}
+
+/**
+ * Every definition of one skill in discovery-precedence order. Harness
+ * preflight uses this only when a repo-local definition is an extension whose
+ * shared base must be composed underneath it; ordinary catalog consumers keep
+ * the local-first, one-name/one-skill surface from `discoverSkills`.
+ */
+export async function discoverSkillCandidates(
+  repoRoot: string,
+  name: string,
+  opts: { bundledDir?: string | null } = {},
+): Promise<Skill[]> {
+  const candidates = (await discoverSkillLayers(repoRoot, opts))
+    .flat()
+    .filter((skill) => skill.name === name);
+  const seen = new Set<string>();
+  return candidates.filter((skill) => {
+    const identity = skill.team
+      ? `team:${skill.team.repo}:${skill.team.commit ?? skill.team.ref}:${skill.team.path}`
+      : `${skill.source}:${resolve(skill.path)}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+async function discoverSkillLayers(
+  repoRoot: string,
+  opts: { bundledDir?: string | null },
+): Promise<Skill[][]> {
   const bundledDir = opts.bundledDir === undefined ? bundledSkillsDir() : opts.bundledDir;
   const [lists, bundledSkills, gatedRepos, uiState] = await Promise.all([
     Promise.all([
@@ -113,17 +156,7 @@ export async function discoverSkills(
     gatedRepos,
     readImportedSkills(uiState),
   );
-  const merged: Skill[] = [];
-  const seen = new Set<string>();
-  for (const skills of [...lists, teamSkills, bundledSkills]) {
-    for (const skill of skills) {
-      if (seen.has(skill.name)) continue;
-      seen.add(skill.name);
-      merged.push(skill);
-    }
-  }
-  merged.sort((a, b) => a.name.localeCompare(b.name));
-  return merged;
+  return [...lists, teamSkills, bundledSkills];
 }
 
 /**

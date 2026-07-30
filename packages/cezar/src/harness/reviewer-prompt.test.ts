@@ -1,18 +1,16 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const RUNTIME = join(
+const HARNESS_SKILL = join(
   import.meta.dirname,
   '..',
   '..',
   'vendor',
   'skills',
   'cez-harness',
-  'scripts',
-  'harness.mjs',
 );
 
 const roots: string[] = [];
@@ -25,23 +23,47 @@ function run(
   command: string,
   args: string[],
   cwd: string,
+  env: Record<string, string> = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    execFile(command, args, { cwd, encoding: 'utf8' }, (error, stdout, stderr) => {
-      const code = error && typeof (error as { code?: unknown }).code === 'number'
-        ? (error as { code: number }).code
-        : error
-          ? 1
-          : 0;
-      resolve({ code, stdout, stderr });
-    });
+    execFile(
+      command,
+      args,
+      { cwd, encoding: 'utf8', env: { ...process.env, ...env } },
+      (error, stdout, stderr) => {
+        const code = error && typeof (error as { code?: unknown }).code === 'number'
+          ? (error as { code: number }).code
+          : error
+            ? 1
+            : 0;
+        resolve({ code, stdout, stderr });
+      },
+    );
   });
 }
 
 describe('advisor reviewer prompt', () => {
-  it('sends the full cez-code-review rubric and records the prompt it sent', async () => {
+  it('sends the complete materialized om-code-review rubric and records the prompt', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-prompt-'));
     roots.push(root);
+    const skillsRoot = join(root, 'skills');
+    const harnessSkill = join(skillsRoot, 'cez-harness');
+    const reviewSkill = join(skillsRoot, 'om-code-review');
+    cpSync(HARNESS_SKILL, harnessSkill, { recursive: true });
+    mkdirSync(join(reviewSkill, 'references'), { recursive: true });
+    writeFileSync(
+      join(reviewSkill, 'SKILL.md'),
+      '# Code Review\nCanonical om-code-review skill body.\n',
+    );
+    writeFileSync(
+      join(reviewSkill, 'references', 'review-checklist.md'),
+      '# Code Review Checklist — Full Reference\nCheck state-machine, retry, recovery, cancellation.\n',
+    );
+    writeFileSync(
+      join(reviewSkill, 'references', 'output-format.md'),
+      '# Review report output format\nReturn a mechanical approve or request-changes verdict.\n',
+    );
+    const runtime = join(harnessSkill, 'scripts', 'harness.mjs');
     const worktree = join(root, 'worktree');
     mkdirSync(worktree, { recursive: true });
     await run('git', ['init', '-q', '-b', 'main'], worktree);
@@ -94,7 +116,7 @@ describe('advisor reviewer prompt', () => {
     const result = await run(
       process.execPath,
       [
-        RUNTIME,
+        runtime,
         'review',
         '--config',
         configPath,
@@ -110,6 +132,7 @@ describe('advisor reviewer prompt', () => {
         promptDir,
       ],
       root,
+      { CEZ_HARNESS_REVIEW_SKILL: 'om-code-review' },
     );
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
@@ -124,9 +147,13 @@ describe('advisor reviewer prompt', () => {
     expect(prompt).toContain('export const value = 2;');
     expect(prompt).toContain('<trusted_rubric>');
     expect(prompt).toContain('SOURCE: SKILL.md');
+    expect(prompt).toContain('Canonical om-code-review skill body.');
     expect(prompt).toContain('SOURCE: review-checklist.md');
+    expect(prompt).toContain('state-machine, retry, recovery, cancellation');
     expect(prompt).toContain('SOURCE: output-format.md');
-    expect(prompt.length).toBeGreaterThan(5_000);
+    expect(prompt).toContain('mechanical approve or request-changes verdict');
+    expect(prompt.length).toBeGreaterThan(1_000);
+    expect(prompt.length).toBeLessThan(180_000);
 
     const council = JSON.parse(readFileSync(join(root, 'out', 'review-result.json'), 'utf8')) as {
       reviewers: Array<{ id: string; promptPath?: string }>;

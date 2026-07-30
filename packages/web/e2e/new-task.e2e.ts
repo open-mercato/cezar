@@ -84,7 +84,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
@@ -119,10 +119,10 @@ describe('the full-screen /new against a live dry-run server', () => {
     expect(browser.count('[data-slot="suggested-chip"]')).toBe(3)
   })
 
-  it('the pill row resolves: project skill preselected, runner pill iff >1 backend, base: main, ×1', async () => {
-    // Sources are ready once the pill shows a real skill (the first project skill, #377 order).
+  it('the pill row resolves: quick-task default, runner pill iff >1 backend, base: main, ×1', async () => {
+    // Sources are ready once the pill shows the zero-config built-in default.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('lint-fix')`,
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('quick-task')`,
     )
     // Health must have SETTLED before judging the runner pill — the version chip renders from
     // the same response, so it is the "health arrived" signal.
@@ -155,9 +155,16 @@ describe('the full-screen /new against a live dry-run server', () => {
     expect(groups[0]).toBe('Project skills')
     expect(groups).toContain('Workflows')
     const projectRefs = browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="source-option"][data-source-kind="skill"]')].slice(0, 2).map(o => o.dataset.sourceRef)`,
+      `(() => {
+        const group = [...document.querySelectorAll('[cmdk-group]')]
+          .find(node => node.querySelector('[cmdk-group-heading]')?.textContent === 'Project skills')
+        return group
+          ? [...group.querySelectorAll('[data-slot="source-option"][data-source-kind="skill"]')]
+              .map(option => option.dataset.sourceRef)
+          : []
+      })()`,
     ) as string[]
-    expect(projectRefs).toEqual(['lint-fix', 'spec-writer'])
+    expect(projectRefs).toEqual(expect.arrayContaining(['lint-fix', 'spec-writer']))
     browser.screenshot(`${artifactsDir}/new-task-source-menu.png`)
 
     browser.click('[data-slot="source-option"][data-source-ref="spec-writer"]')

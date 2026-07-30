@@ -302,7 +302,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   // review) — an exact `=== '1'` made `CEZ_AGENT_ENV_FULL=true` silently do
   // nothing, which is a confusing way to fail open-vs-closed.
   if (isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'))) {
-    return { ...source, ...extra };
+    return hardenHarnessEnv({ ...source, ...extra });
   }
 
   const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude;
@@ -333,7 +333,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   }
   // Per-run env last — it is cezar's own, never a host secret, and must win.
   for (const [name, value] of Object.entries(extra)) out[name] = value;
-  return out;
+  return hardenHarnessEnv(out);
 
   /** `name` is matched normalized; the caller keeps the original spelling. */
   function allow(name: string): boolean {
@@ -355,5 +355,24 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     if (BASE_ALLOW_NAMES.has(key)) return true;
     if (matchesPrefix(key, BASE_ALLOW_PREFIXES) && !looksSecret(key)) return true;
     return false;
+  }
+
+  function hardenHarnessEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    if (extra.CEZ_HARNESS_STAGE_ONLY !== '1') return env;
+    for (const key of [
+      'GITHUB_TOKEN',
+      'GH_TOKEN',
+      'GH_ENTERPRISE_TOKEN',
+      'SSH_AUTH_SOCK',
+      'SSH_AGENT_PID',
+    ]) {
+      delete env[key];
+    }
+    env.GIT_ALLOW_PROTOCOL = '';
+    env.GIT_TERMINAL_PROMPT = '0';
+    env.GIT_ASKPASS = '/usr/bin/false';
+    env.SSH_ASKPASS = '/usr/bin/false';
+    env.SSH_AUTH_SOCK = '';
+    return env;
   }
 }

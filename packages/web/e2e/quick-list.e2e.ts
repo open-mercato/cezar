@@ -18,7 +18,8 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
  * state. And "whatever runs happen to be in the dev checkout" is not a fixture: it is whatever the
  * last person did.
  *
- * So: a throwaway data dir, a fixture `runs.json`, one `node dist/index.js serve --repo <tmp>`.
+ * So: a throwaway data dir, a fixture `runs.json`, one
+ * `node packages/cezar/dist/index.js serve --repo <tmp>`.
  * The fixture is not invented data — `runs.json` is cezar's documented state contract (a
  * `RunRecord[]`, the exact shape `GET /api/runs` answers with and `src/runs/store.ts` parses with
  * zod). If a record here were wrong, the store would drop it and these assertions would fail.
@@ -184,7 +185,7 @@ beforeAll(async () => {
 
   const port = await freePort()
   baseUrl = `http://localhost:${port}`
-  server = spawn(process.execPath, [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'], {
+  server = spawn(process.execPath, [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'], {
     // Dry-run + a pinned CEZ_HOME, exactly as the shared test env does — see `fixtureServeEnv`.
     // Nothing in this spec starts a run, but the boot probes the backends.
     env: fixtureServeEnv(dataRoot),
@@ -526,7 +527,7 @@ describe('empty quick-list', () => {
     emptyUrl = `http://localhost:${port}`
     emptyServer = spawn(
       process.execPath,
-      [join(repoRoot, 'dist/index.js'), 'serve', '--repo', emptyRoot, '--port', String(port), '--no-open'],
+      [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', emptyRoot, '--port', String(port), '--no-open'],
       { env: fixtureServeEnv(emptyRoot), stdio: 'ignore' }
     )
     await waitForHealth(emptyUrl)

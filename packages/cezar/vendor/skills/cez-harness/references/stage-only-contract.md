@@ -22,12 +22,11 @@ This contract is loaded by both wrapper skills before creating their worktree.
 7. Require all of these checks to pass:
    - current `HEAD`, refs, and reflogs equal the captured starting state;
    - the staged diff is non-empty;
-   - every staged path came from the allowlist.
-   Whitespace findings in the staged diff and non-ignored unstaged or
-   untracked leftovers are reported as WARNINGS on the stage result, never as
-   refusals: the staged handoff feeds a human gate, and that gate judges
-   cosmetic and completeness questions better than a fatal last-step check
-   that hands it nothing.
+   - every staged path came from the allowlist;
+   - no non-ignored unstaged or untracked files remain.
+   Whitespace findings are reported as warnings, but completeness is an
+   integrity invariant: a ready staged handoff must contain the whole
+   reviewed change.
 8. Report the absolute worktree path, branch, staged paths, validation evidence,
    suggested commit message, prepared pull-request body, and issue-claim state.
 

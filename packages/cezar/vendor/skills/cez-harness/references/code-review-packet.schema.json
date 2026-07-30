@@ -10,7 +10,7 @@
       "additionalProperties": false,
       "required": ["name", "version", "rubricSha256"],
       "properties": {
-        "name": { "const": "cez-code-review" },
+        "name": { "enum": ["cez-code-review", "om-code-review"] },
         "version": { "const": 1 },
         "rubricSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }

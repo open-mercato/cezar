@@ -43,6 +43,19 @@ describe('buildClaudeArgs approval gate', () => {
     const idx = args.indexOf('--permission-mode');
     expect(args[idx + 1]).toBe('acceptEdits');
   });
+
+  it('loads only the invocation policy for stage-only harness sessions', () => {
+    const args = buildClaudeArgs({
+      ...spec,
+      env: { CEZ_HARNESS_CLAUDE_SETTINGS: '/tmp/harness-settings.json' },
+    });
+    expect(args.slice(args.indexOf('--settings'), args.indexOf('--settings') + 4)).toEqual([
+      '--settings',
+      '/tmp/harness-settings.json',
+      '--setting-sources',
+      '',
+    ]);
+  });
 });
 
 /**

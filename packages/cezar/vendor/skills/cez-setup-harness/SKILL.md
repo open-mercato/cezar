@@ -11,8 +11,7 @@ access to in cezar's **Multi-model** lineup, and have the run work end to end.
 
 Nothing else is a prerequisite. There is **no pipeline, tracker, base branch, or
 `.ai/agentic.config.json` to set up first** — cezar owns its own run
-orchestration. If a previous version of this skill sent you to
-`cez-setup-pipeline`, ignore that: it does not apply here.
+orchestration.
 
 ## Arguments
 

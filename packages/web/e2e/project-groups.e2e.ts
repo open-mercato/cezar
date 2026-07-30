@@ -46,12 +46,12 @@ let followupsAvailable = false
 const scoped = (projectId: string, path: string) => `/p/${projectId}${path}`
 
 /** The nav every group renders — the same health-gated list the flat shell uses. */
-function expectedNavHrefs(projectId: string): string[] {
+function expectedNavHrefs(projectId: string, forge: boolean): string[] {
   return [
     scoped(projectId, '/'),
     ...(followupsAvailable ? [scoped(projectId, '/inbox')] : []),
     scoped(projectId, '/git'),
-    ...(forgeAvailable ? [scoped(projectId, '/github')] : []),
+    ...(forge ? [scoped(projectId, '/github')] : []),
     scoped(projectId, '/skills'),
     scoped(projectId, '/workflows'),
     scoped(projectId, '/settings'),
@@ -219,11 +219,12 @@ describe('the grouped multi-project sidebar', () => {
     if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/git'))
     setGroupExpanded(ALPHA.id, true)
-    // The GitHub row waits on the health answer — settle it before sampling any group's nav,
-    // exactly as the flat-shell specs do.
+    // Forge availability is project-scoped (#698): the boot repo has the
+    // detected GitHub remote, while the two empty seeded repos deliberately do
+    // not. Settle the boot row before sampling either group.
     if (forgeAvailable) {
       browser.waitForFunction(
-        `document.querySelector('${groupBody(ALPHA.id)} a[href="${scoped(ALPHA.id, '/github')}"]') !== null`
+        `document.querySelector('${groupBody(bootProject)} a[href="${scoped(bootProject, '/github')}"]') !== null`
       )
     }
 
@@ -233,8 +234,8 @@ describe('the grouped multi-project sidebar', () => {
       )
 
     // The whole point of a group: it links into a project that is NOT the active one.
-    expect(hrefs(bootProject)).toEqual(expectedNavHrefs(bootProject))
-    expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(ALPHA.id))
+    expect(hrefs(bootProject)).toEqual(expectedNavHrefs(bootProject, forgeAvailable))
+    expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(ALPHA.id, false))
 
     // `/git` is a flat, project-agnostic route, so exactly one Git row may claim the URL — the
     // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked.

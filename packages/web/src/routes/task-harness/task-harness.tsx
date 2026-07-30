@@ -475,6 +475,7 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
   const accept = useAcceptContestedHarness(runId)
   const { status } = ledger.outcome
   const accepted = Boolean(ledger.outcome.acceptedAt)
+  const specPaused = ledger.outcome.pendingDecision?.kind === 'spec'
 
   if (status === 'ready') {
     return (
@@ -509,6 +510,8 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
               ? 'Contested result accepted'
               : status === 'blocked'
                 ? 'This run is blocked'
+                : specPaused
+                  ? 'Implementation paused — specification risk needs a decision'
                 : `Publishing is blocked — ${reasons.length} unresolved ${
                     reasons.length === 1 ? 'finding' : 'findings'
                   }`}
@@ -516,7 +519,9 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
           <p className="mt-1 max-w-[76ch] text-[13px] leading-relaxed text-muted-foreground">
             {accepted
               ? `Accepted ${ledger.outcome.acceptedAt}: ${ledger.outcome.acceptanceReason}`
-              : 'The staged work is preserved. Send the run back to resolve these, or record why publishing is safe anyway.'}
+              : specPaused
+                ? 'No implementation has started. Accepting records the decision and resumes the same hash-bound run.'
+                : 'The staged work is preserved. Send the run back to resolve these, or record why publishing is safe anyway.'}
           </p>
 
           {!accepted ? (
@@ -541,9 +546,13 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
               onSubmit={(event) => {
                 event.preventDefault()
                 accept.mutate(reason, {
-                  onSuccess: () => {
+                  onSuccess: (result) => {
                     setReason('')
-                    toast('Contested harness result accepted. Publishing controls are now unlocked.')
+                    toast(
+                      result.resumed
+                        ? 'Specification risk accepted. The implementation run resumed.'
+                        : 'Contested harness result accepted. Publishing controls are now unlocked.',
+                    )
                   },
                   onError: (error) => toast(error.message, { tone: 'danger' }),
                 })
@@ -553,7 +562,11 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
                 aria-label="Reason for accepting contested result"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                placeholder="Explain why publishing is safe despite the unresolved findings…"
+                placeholder={
+                  specPaused
+                    ? 'Explain why implementation may proceed despite the unresolved specification risk…'
+                    : 'Explain why publishing is safe despite the unresolved findings…'
+                }
                 className="min-h-16 flex-1 resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs outline-none focus:border-ring"
               />
               <Button
@@ -563,7 +576,7 @@ function OutcomeBanner({ runId, ledger }: { runId: string; ledger: HarnessLedger
                 disabled={reason.trim().length < 3 || accept.isPending}
               >
                 <GitPullRequestArrowIcon aria-hidden="true" />
-                Accept risk
+                {specPaused ? 'Accept and resume' : 'Accept risk'}
               </Button>
             </form>
           ) : null}

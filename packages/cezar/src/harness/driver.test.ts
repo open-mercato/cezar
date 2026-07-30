@@ -37,6 +37,41 @@ interface FakeCall {
   kind: 'agent' | 'op';
   id: string;
   args?: string[];
+  skill?: string;
+}
+
+const ISSUE_PHASE_SKILLS = [
+  'om-verify-in-repo',
+  'om-root-cause',
+  'om-fix',
+  'om-code-review',
+] as const;
+
+function writeTestSkill(skillsRoot: string, name: string, body = `# ${name}\n`): void {
+  const target = join(skillsRoot, name);
+  mkdirSync(target, { recursive: true });
+  writeFileSync(
+    join(target, 'SKILL.md'),
+    `---\nname: ${name}\n---\n${body}`,
+    'utf8',
+  );
+  if (name === 'om-code-review' || name === 'cez-code-review') {
+    mkdirSync(join(target, 'references'), { recursive: true });
+    writeFileSync(
+      join(target, 'references', 'review-checklist.md'),
+      '# complete shared review checklist\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(target, 'references', 'output-format.md'),
+      '# complete shared review output format\n',
+      'utf8',
+    );
+  }
+}
+
+function materializeTestSkill(dir: string, name: string, body = `# ${name}\n`): void {
+  writeTestSkill(join(dir, '.claude', 'skills'), name, body);
 }
 
 function makeHarness(dir: string) {
@@ -51,6 +86,12 @@ function makeHarness(dir: string) {
   const defaultResults: Record<string, unknown> = {
     qualify: { outcome: 'work_needed', evidence: 'bug reproduced on main' },
     diagnose: { summary: 'race in flushQueued', files: ['src/runs/store.ts'], regressionTest: 'store.replay-race' },
+    'pre-implement': {
+      status: 'ready',
+      summary: 'spec is implementation-ready',
+      reportPath: 'pre-implement.md',
+      findings: [],
+    },
     implement: { changedPaths: ['src/runs/store.ts', 'test/unit/store.test.ts'], suggestedCommit: 'fix(runs): guard replay' },
     'fix-final': { changedPaths: ['src/runs/store.ts'], summary: 'closing fixes applied' },
     'packet-plan': {
@@ -83,7 +124,7 @@ function makeHarness(dir: string) {
     isCancelled: () => false,
     emit: (event) => events.push(event),
     runAgent: async (req) => {
-      calls.push({ kind: 'agent', id: req.phaseId });
+      calls.push({ kind: 'agent', id: req.phaseId, skill: req.skill });
       const base = req.phaseId.replace(/-\d+$/, '');
       const behavior = agentBehavior.get(req.phaseId) ?? agentBehavior.get(base);
       if (behavior) return behavior(req);
@@ -121,6 +162,7 @@ function makeHarness(dir: string) {
   const setPacketRunBehavior = (fn: typeof packetRunBehavior) => {
     packetRunBehavior = fn;
   };
+  let runtimeEnv: Record<string, string> | undefined;
 
   const deps: HarnessDriverDeps = {
     bundledSkillsRoot: null,
@@ -130,8 +172,10 @@ function makeHarness(dir: string) {
     // `sealDigest` below lets a test simulate tampering.
     sealRuntime: () => ({ script: join(dir, 'sealed-harness.mjs'), sha256: sealDigest() }),
     scriptDigest: () => sealDigest(),
-    createRuntime: () => ({
-      run: async (op: string, args: string[]) => {
+    createRuntime: (opts) => {
+      runtimeEnv = opts.env;
+      return {
+        run: async (op: string, args: string[]) => {
         ops.push({ kind: 'op', id: op, args });
         calls.push({ kind: 'op', id: op, args });
         if (op === 'capture') {
@@ -144,24 +188,42 @@ function makeHarness(dir: string) {
             /result file at (?:the path in )?(.+?\.json) of the shape:/.exec(prompt)?.[1];
           if (resultPath) {
             mkdirSync(dirname(resultPath), { recursive: true });
+            const regression = prompt.includes('"testCommand"');
+            if (regression) {
+              const testPath = join(dir, 'test/unit/store.test.ts');
+              mkdirSync(dirname(testPath), { recursive: true });
+              writeFileSync(testPath, 'test("replay race", () => {});', 'utf8');
+            }
             writeFileSync(
               resultPath,
-              JSON.stringify({
-                changedPaths: ['src/fix.ts'],
-                summary: 'implemented by trusted worker adapter',
-              }),
+              JSON.stringify(
+                regression
+                  ? {
+                      changedPaths: ['test/unit/store.test.ts'],
+                      summary: 'reproduces the replay race',
+                      testCommand: 'test:regression-red',
+                      failurePattern: 'replay race',
+                    }
+                  : {
+                      changedPaths: ['src/fix.ts'],
+                      summary: 'implemented by trusted worker adapter',
+                    },
+              ),
               'utf8',
             );
           }
         }
         if (op === 'stage') {
           const output = args[args.indexOf('--output') + 1];
+          const pathsFile = args[args.indexOf('--paths-file') + 1];
           if (output) {
             writeFileSync(
               output,
               JSON.stringify({
                 status: 'ready',
-                stagedPaths: [],
+                stagedPaths: pathsFile
+                  ? readFileSync(pathsFile, 'utf8').split(/\r?\n/).filter(Boolean)
+                  : [],
                 ...(stageWarnings.length > 0 ? { warnings: [...stageWarnings] } : {}),
               }),
               'utf8',
@@ -257,15 +319,21 @@ function makeHarness(dir: string) {
           );
         }
         return { ok: true, exitCode: 0, stdout: '{}', stderr: '', durationMs: 5 };
-      },
-      kill: () => undefined,
-    }),
+        },
+        kill: () => undefined,
+      };
+    },
     loadAgentic: async () => ({ baseBranch: 'main', validationCommands: ['echo ok'], agentHarness: undefined }),
     validate: async (commands: string[]) =>
-      commands.map((command) => ({ command, status: 'passed' as const, exitCode: 0, evidence: 'ok' })),
+      commands.map((command) =>
+        command === 'test:regression-red'
+          ? { command, status: 'failed' as const, exitCode: 1, evidence: 'replay race' }
+          : { command, status: 'passed' as const, exitCode: 0, evidence: 'ok' },
+      ),
     exportConfig: async () => null,
     snapshotReviewSubject: async () => 'stable-review-subject',
     snapshotStageSubject: async () => 'stable-stage-subject',
+    discoverChangedPaths: (_cwd, declaredPaths) => [...declaredPaths],
     createProber: () => ({
       probe: async (ref) => probeVerdicts.get(probeKey(ref)) ?? { status: 'ready', detail: 'stub' },
       probeAll: async (refs) =>
@@ -277,6 +345,11 @@ function makeHarness(dir: string) {
         ),
       clearCache: () => undefined,
     }),
+    acquireClaim: (_cwd, _runId, issueId) => ({
+      ok: true,
+      claim: { path: join(dir, '.claim'), held: true, issueId },
+    }),
+    releaseClaim: () => ({ ok: true }),
   };
 
   return {
@@ -291,6 +364,7 @@ function makeHarness(dir: string) {
     probeVerdicts,
     setCouncilBehavior,
     setPacketRunBehavior,
+    runtimeEnv: () => runtimeEnv,
     tamperRuntime: (digest = 'tampered-sha') => {
       sealedDigest = digest;
     },
@@ -309,7 +383,13 @@ describe('harness driver — standard fix-issue graph', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const input = { workflow: HARNESS_FIX_ISSUE, task: 'Fix issue #642', profile: 'standard' as const, issueId: '642' };
+  const input = {
+    workflow: HARNESS_FIX_ISSUE,
+    task: 'Fix issue #642',
+    profile: 'standard' as const,
+    skillProfile: 'open-mercato' as const,
+    issueId: '642',
+  };
   const highAssuranceAgentic = () => ({
     baseBranch: 'main',
     validationCommands: ['echo ok'],
@@ -341,26 +421,25 @@ describe('harness driver — standard fix-issue graph', () => {
   /**
    * Regression (2026-07-28, the day three deployed runtime fixes reached zero
    * runs): the catalog resolves skills local-first, so a stale project-local
-   * `.claude/skills/cez-harness` — replanted by any root-cwd session invoking a
-   * cez-* skill — silently outranked the bundled runtime for every harness run.
-   * The driver now copies its own skills from the bundled tree unconditionally,
-   * overwriting whatever the worktree holds.
+   * `.claude/skills/cez-harness` — replanted by any root-cwd session invoking
+   * the wrapper — silently outranked the bundled runtime for every harness run.
+   * The driver now copies the Cezar wrapper from the bundled tree
+   * unconditionally while canonical om-* judgment skills use discovery.
    */
   it('replaces a stale worktree runtime with the bundled copy at preflight', async () => {
     const h = makeHarness(dir);
     const bundledRoot = join(dir, 'fake-bundled');
-    for (const name of ['cez-harness', 'cez-verify-in-repo', 'cez-root-cause', 'cez-fix', 'cez-code-review']) {
-      mkdirSync(join(bundledRoot, name, 'scripts'), { recursive: true });
-      writeFileSync(join(bundledRoot, name, 'SKILL.md'), `# ${name} (bundled, current)\n`, 'utf8');
-      writeFileSync(join(bundledRoot, name, 'scripts', 'harness.mjs'), `// bundled-current ${name}\n`, 'utf8');
-    }
+    mkdirSync(join(bundledRoot, 'cez-harness', 'scripts'), { recursive: true });
+    writeFileSync(join(bundledRoot, 'cez-harness', 'SKILL.md'), '# cez-harness (bundled, current)\n', 'utf8');
+    writeFileSync(join(bundledRoot, 'cez-harness', 'scripts', 'harness.mjs'), '// bundled-current cez-harness\n', 'utf8');
     h.deps.bundledSkillsRoot = bundledRoot;
     const stale = join(dir, '.claude', 'skills', 'cez-harness');
     mkdirSync(join(stale, 'scripts'), { recursive: true });
     writeFileSync(join(stale, 'scripts', 'harness.mjs'), '// FROZEN 12:22 SNAPSHOT\n', 'utf8');
-    let ensureSkillCalls = 0;
-    h.host.ensureSkill = async () => {
-      ensureSkillCalls += 1;
+    const ensuredSkills: string[] = [];
+    h.host.ensureSkill = async (name) => {
+      ensuredSkills.push(name);
+      materializeTestSkill(dir, name);
       return true;
     };
 
@@ -369,7 +448,106 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(error).toBeNull();
     expect(readFileSync(join(stale, 'scripts', 'harness.mjs'), 'utf8')).toContain('bundled-current');
     expect(readFileSync(join(stale, 'scripts', 'harness.mjs'), 'utf8')).not.toContain('FROZEN');
-    expect(ensureSkillCalls).toBe(0);
+    expect(ensuredSkills).toEqual(ISSUE_PHASE_SKILLS);
+    expect(h.runtimeEnv()?.CEZ_HARNESS_REVIEW_SKILL).toBe('om-code-review');
+  });
+
+  it('uses complete generic phase skills without putting workflow instructions in the task brief', async () => {
+    const h = makeHarness(dir);
+    const ensuredSkills: string[] = [];
+    h.host.ensureSkill = async (name) => {
+      ensuredSkills.push(name);
+      materializeTestSkill(dir, name);
+      return true;
+    };
+
+    const error = await runHarnessDriver(
+      h.host,
+      { ...input, skillProfile: 'generic', task: 'Customers need CSV exports.' },
+      h.deps,
+    );
+
+    expect(error).toBeNull();
+    expect(ensuredSkills).toEqual([
+      'cez-harness',
+      'cez-verify-in-repo',
+      'cez-root-cause',
+      'cez-fix',
+      'cez-code-review',
+    ]);
+    expect(h.runtimeEnv()?.CEZ_HARNESS_REVIEW_SKILL).toBe('cez-code-review');
+    expect(
+      h.calls.find((call) => call.kind === 'agent' && call.id === 'qualify')?.skill,
+    ).toBe('cez-verify-in-repo');
+  });
+
+  it('composes a repo-local om-code-review extension over the complete shared skill', async () => {
+    const h = makeHarness(dir);
+    const bundledRoot = join(dir, 'fake-bundled');
+    mkdirSync(join(bundledRoot, 'cez-harness', 'scripts'), { recursive: true });
+    writeFileSync(join(bundledRoot, 'cez-harness', 'SKILL.md'), '# wrapper\n', 'utf8');
+    writeFileSync(join(bundledRoot, 'cez-harness', 'scripts', 'harness.mjs'), '// runtime\n', 'utf8');
+    h.deps.bundledSkillsRoot = bundledRoot;
+
+    const sharedRoot = join(dir, 'shared-skills');
+    writeTestSkill(sharedRoot, 'om-code-review', '# complete shared review workflow\n');
+    h.host.ensureSkill = async (name) => {
+      materializeTestSkill(
+        dir,
+        name,
+        name === 'om-code-review' ? '# repository extension rules\n' : `# ${name}\n`,
+      );
+      if (name === 'om-code-review') {
+        rmSync(join(dir, '.claude', 'skills', name, 'references'), {
+          recursive: true,
+          force: true,
+        });
+      }
+      return true;
+    };
+    h.deps.discoverSkillCandidates = async (_repoRoot, name) =>
+      name === 'om-code-review'
+        ? [
+            {
+              name,
+              body: '# repository extension rules',
+              path: join(dir, '.claude', 'skills', name, 'SKILL.md'),
+              source: 'ai',
+            },
+            {
+              name,
+              body: '# complete shared review workflow',
+              path: join(sharedRoot, name, 'SKILL.md'),
+              source: 'global',
+            },
+          ]
+        : [];
+    let reviewSystemPrompt = '';
+    h.agentBehavior.set('review', (req) => {
+      reviewSystemPrompt = req.skillSystemPrompt ?? '';
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({ verdict: 'approve', findings: [] }),
+        'utf8',
+      );
+      return null;
+    });
+
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBeNull();
+    expect(reviewSystemPrompt).toContain('complete shared review workflow');
+    expect(reviewSystemPrompt).toContain('repository extension rules');
+    expect(
+      readFileSync(
+        join(
+          harnessArtifactDir(h.host.dataDir, h.host.runId),
+          'trusted-skills',
+          'om-code-review',
+          'references',
+          'review-checklist.md',
+        ),
+        'utf8',
+      ),
+    ).toContain('complete shared review checklist');
   });
 
   it('runs the full graph in order and stages the declared allowlist', async () => {
@@ -383,6 +561,12 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(order.indexOf('qualify')).toBeLessThan(order.indexOf('diagnose'));
     expect(order.indexOf('diagnose')).toBeLessThan(order.indexOf('implement'));
     expect(order.indexOf('implement')).toBeLessThan(order.indexOf('review'));
+    expect(h.calls.filter((call) => call.kind === 'agent').map((call) => call.skill)).toEqual([
+      'om-verify-in-repo',
+      'om-root-cause',
+      'om-fix',
+      'om-code-review',
+    ]);
 
     const stage = h.ops.find((o) => o.id === 'stage');
     expect(stage?.args).toContain('--paths-file');
@@ -442,6 +626,42 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(error).toMatch(/qualify/);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
     expect(ledger?.phases.find((p) => p.id === 'qualify')?.status).toBe('failed');
+  });
+
+  it('rejects an oversized phase artifact without parsing it into memory', async () => {
+    const h = makeHarness(dir);
+    let attempts = 0;
+    h.agentBehavior.set('qualify', (req) => {
+      attempts += 1;
+      writeFileSync(req.resultPath, 'x'.repeat(2_000_001), 'utf8');
+      return null;
+    });
+
+    const error = await runHarnessDriver(h.host, input, h.deps);
+
+    expect(attempts).toBe(2);
+    expect(error).toMatch(/exceeding the 2000000-byte safety limit/);
+    expect(h.calls.map((call) => call.id)).not.toContain('diagnose');
+  });
+
+  it('budgets the pinned skill prompt together with the phase prompt before model work', async () => {
+    const h = makeHarness(dir);
+    const bundledRoot = join(dir, 'oversized-bundled');
+    writeTestSkill(bundledRoot, 'cez-harness');
+    h.deps.bundledSkillsRoot = bundledRoot;
+    h.host.ensureSkill = async (name) => {
+      materializeTestSkill(
+        dir,
+        name,
+        name === 'om-verify-in-repo' ? 'x'.repeat(180_000) : `# ${name}\n`,
+      );
+      return true;
+    };
+
+    const error = await runHarnessDriver(h.host, input, h.deps);
+
+    expect(error).toMatch(/qualify.*exceeding the 180000-byte input budget/);
+    expect(h.calls.filter((call) => call.kind === 'agent')).toHaveLength(0);
   });
 
   it('tells the retry session what the first attempt got wrong', async () => {
@@ -552,7 +772,7 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(ledger?.stage.status).toBe('staged');
   });
 
-  it('runs the closing fixes after maxFixRounds and stages READY — review > fixes, no publish gate', async () => {
+  it('preserves a contested reviewed handoff when the fix budget is exhausted', async () => {
     const h = makeHarness(dir);
     h.agentBehavior.set('review', (req) => {
       writeFileSync(
@@ -571,17 +791,14 @@ describe('harness driver — standard fix-issue graph', () => {
     const error = await runHarnessDriver(h.host, input, h.deps);
     expect(error).toBeNull();
     expect(h.calls.filter((c) => c.id.startsWith('review'))).toHaveLength(3);
-    // The council's last findings get a CLOSING FIX instead of a contested gate.
-    expect(h.calls.map((c) => c.id)).toContain('fix-final');
+    expect(h.calls.map((c) => c.id)).not.toContain('fix-final');
     expect(h.calls.map((c) => c.id)).toContain('stage');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('review budget exhausted') && n.includes('still broken'))).toBe(true);
-    expect(notes.some((n) => n.includes('closing fixes applied'))).toBe(true);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
-    expect(ledger?.outcome.status).toBe('ready');
-    expect(ledger?.stage.prBody).toContain('Closing fixes');
+    expect(ledger?.outcome.status).toBe('contested');
     expect(ledger?.stage.prBody).toContain('still broken');
-    expect(ledger?.decisions.some((d) => d.kind === 'review.closing-fixes')).toBe(true);
+    expect(ledger?.decisions.some((d) => d.kind === 'review.closing-fixes')).toBe(false);
   });
 
   /**
@@ -761,10 +978,10 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(error).toBeNull();
     expect(h.calls.filter((c) => c.id.startsWith('review')).length).toBeGreaterThan(1);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
-    // The coercion forces the full fix loop; the closing fix then gets the last
-    // word and the finding rides the handoff instead of gating publishing.
-    expect(h.calls.map((c) => c.id)).toContain('fix-final');
-    expect(ledger?.outcome.status).toBe('ready');
+    // The coercion forces the full reviewed fix loop; unresolved findings
+    // remain contested instead of being cleared by an unreviewed final pass.
+    expect(h.calls.map((c) => c.id)).not.toContain('fix-final');
+    expect(ledger?.outcome.status).toBe('contested');
     expect(ledger?.stage.prBody).toContain('Auth check removed');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('coerced to "request_changes"'))).toBe(true);
@@ -1452,11 +1669,15 @@ describe('harness driver — standard fix-issue graph', () => {
     ).toMatchObject({ attempt: 1, status: 'completed' });
   });
 
-  it('reruns code review when the materialized review rubric changes', async () => {
-    const rubricDir = join(dir, '.claude', 'skills', 'cez-code-review');
-    mkdirSync(rubricDir, { recursive: true });
-    writeFileSync(join(rubricDir, 'SKILL.md'), '# Review rubric v1\n', 'utf8');
+  it('reuses the preflight-pinned review rubric when the worktree copy is tampered with', async () => {
+    const bundledRoot = join(dir, 'pinned-bundled');
+    writeTestSkill(bundledRoot, 'cez-harness', '# cez-harness pinned v1\n');
     const first = makeHarness(dir);
+    first.deps.bundledSkillsRoot = bundledRoot;
+    first.host.ensureSkill = async (name) => {
+      materializeTestSkill(dir, name, `# ${name} pinned v1\n`);
+      return true;
+    };
     let reviewAttempts = 0;
     first.agentBehavior.set('review', (req) => {
       reviewAttempts += 1;
@@ -1476,16 +1697,33 @@ describe('harness driver — standard fix-issue graph', () => {
       ),
     ).toMatchObject({ attempt: 2, status: 'completed' });
 
-    writeFileSync(join(rubricDir, 'SKILL.md'), '# Review rubric v2\n', 'utf8');
+    const rubricPath = join(dir, '.claude', 'skills', 'om-code-review', 'SKILL.md');
+    writeFileSync(rubricPath, '# malicious worktree rubric\n', 'utf8');
     const resumed = makeHarness(dir);
+    resumed.deps.bundledSkillsRoot = bundledRoot;
     expect(await runHarnessDriver(resumed.host, input, resumed.deps)).toBeNull();
 
-    expect(resumed.calls.map((call) => call.id)).toContain('review');
+    expect(resumed.calls.map((call) => call.id)).not.toContain('review');
+    expect(readFileSync(rubricPath, 'utf8')).toContain('malicious worktree rubric');
     expect(
       loadLedger(resumed.host.dataDir, resumed.host.runId)?.invocations.find(
         (invocation) => invocation.phaseId === 'review',
       ),
-    ).toMatchObject({ attempt: 1, status: 'completed' });
+    ).toMatchObject({ attempt: 2, status: 'completed' });
+
+    const pinnedRubric = join(
+      harnessArtifactDir(first.host.dataDir, first.host.runId),
+      'trusted-skills',
+      'om-code-review',
+      'SKILL.md',
+    );
+    writeFileSync(pinnedRubric, '# tampered pinned rubric\n', 'utf8');
+    const compromised = makeHarness(dir);
+    compromised.deps.bundledSkillsRoot = bundledRoot;
+    expect(await runHarnessDriver(compromised.host, input, compromised.deps)).toMatch(
+      /pinned skill "om-code-review" is missing or changed/,
+    );
+    expect(compromised.calls.filter((call) => call.kind === 'agent')).toHaveLength(0);
   });
 
   it('terminates a token-matched orphaned paid invocation before recovery reruns it', async () => {
@@ -1521,6 +1759,7 @@ describe('harness driver — standard fix-issue graph', () => {
     );
     expect(recovered).toMatchObject({ status: 'completed', attempt: 1 });
     expect(recovered?.process).toBeUndefined();
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.skillProfile).toBe('open-mercato');
   });
 
   it('persists a runner PID and ownership token before awaiting paid agent work', async () => {
@@ -1559,6 +1798,7 @@ describe('harness driver — standard fix-issue graph', () => {
     const ledger = createLedger({
       workflow: HARNESS_FIX_ISSUE,
       requestedProfile: 'standard',
+      skillProfile: 'open-mercato',
       subject: { kind: 'issue', id: '642', text: input.task },
     });
     ledger.invocations.push({
@@ -1591,6 +1831,7 @@ describe('harness driver — standard fix-issue graph', () => {
     const ledger = createLedger({
       workflow: HARNESS_FIX_ISSUE,
       requestedProfile: 'standard',
+      skillProfile: 'open-mercato',
       subject: { kind: 'issue', id: '642', text: input.task },
     });
     ledger.pendingMessages.push({
@@ -1665,6 +1906,7 @@ describe('harness driver — standard fix-issue graph', () => {
     const ledger = createLedger({
       workflow: HARNESS_FIX_ISSUE,
       requestedProfile: 'standard',
+      skillProfile: 'open-mercato',
       subject: { kind: 'issue', id: '642', text: input.task },
     });
     ledger.pendingMessages.push({
@@ -1842,6 +2084,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     workflow: HARNESS_FIX_ISSUE,
     task: 'Fix issue #642',
     profile: 'standard' as const,
+    skillProfile: 'open-mercato' as const,
     issueId: '642',
     roles,
   };
@@ -1937,7 +2180,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       reviewers: [
         { runner: 'claude' as const, model: 'opus' },
         { runner: 'codex' as const, model: 'gpt-5.6-sol' },
-        { runner: 'opencode' as const, model: 'opencode/mimo-v2.5-free' },
+        { runner: 'codex' as const, model: 'gpt-5.5-mini' },
       ],
     },
   };
@@ -1957,8 +2200,8 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
         verdict: 'approve',
         reviewers: ids.map((id) => ({
           id,
-          status: id.includes('mimo') ? 'failed' : 'completed',
-          ...(id.includes('mimo') ? {} : { review: { verdict: 'approve', findings: [] } }),
+          status: id.includes('mini') ? 'failed' : 'completed',
+          ...(id.includes('mini') ? {} : { review: { verdict: 'approve', findings: [] } }),
         })),
       },
     }));
@@ -1968,7 +2211,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(error).toBeNull();
     expect(h.calls.map((c) => c.id)).toContain('stage');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
-    expect(notes.some((n) => n.includes('DEGRADED') && n.includes('mimo'))).toBe(true);
+    expect(notes.some((n) => n.includes('DEGRADED') && n.includes('mini'))).toBe(true);
   });
 
   it('resumes a partial council without rerunning completed paid reviewers', async () => {
@@ -1998,10 +2241,10 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(second).toBeNull();
     expect(councilCalls).toHaveLength(2);
     expect(councilCalls[0]).toEqual(
-      expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-opencode-mimo-v2.5-free']),
+      expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-codex-gpt-5.5-mini']),
     );
     expect(councilCalls[1]).toEqual(
-      expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-opencode-mimo-v2.5-free']),
+      expect.arrayContaining(['cez-codex-gpt-5.6-sol', 'cez-codex-gpt-5.5-mini']),
     );
     expect(h.calls.filter((call) => call.kind === 'agent' && call.id === 'review')).toHaveLength(1);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
@@ -2015,8 +2258,8 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
   /* ---- council decisions (2026-07-29): quorum failures the user resolves ---- */
 
-  /** Advisors permanently down (an `opencode serve` outage): every council op
-   *  answers with both advisor members failed. */
+  /** Structured reviewer transports permanently down: every council op
+   *  answers with both non-session members failed. */
   const advisorsAlwaysFail = (h: ReturnType<typeof makeHarness>) => {
     const councilCalls: string[][] = [];
     h.setCouncilBehavior((ids) => {
@@ -2049,7 +2292,11 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       completedCount: 1,
       canProceed: true,
     });
-    expect(ledger?.outcome.pendingDecision?.failed).toHaveLength(2);
+    expect(
+      ledger?.outcome.pendingDecision?.kind === 'council'
+        ? ledger.outcome.pendingDecision.failed
+        : [],
+    ).toHaveLength(2);
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('paused for your decision'))).toBe(true);
   });
@@ -2138,7 +2385,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(error).toMatch(/did not reach quorum/);
     const pending = loadLedger(h.host.dataDir, h.host.runId)?.outcome.pendingDecision;
     expect(pending).toMatchObject({ kind: 'council', completedCount: 0, canProceed: false });
-    expect(pending?.failed).toHaveLength(3);
+    expect(pending?.kind === 'council' ? pending.failed : []).toHaveLength(3);
   });
 
   /** The runner-session pool and the advisor council must run CONCURRENTLY
@@ -2321,16 +2568,16 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       h.deps,
     );
 
-    expect(error).toBeNull();
-    expect(h.calls.map((c) => c.id)).toContain('stage');
-    const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
-    expect(notes.some((n) => n.includes('did not converge') && n.includes('UNRESOLVED'))).toBe(true);
-    // A spec disagreement from the first minutes never gates publishing at the
-    // end: the open questions ride the handoff, the outcome stays ready.
+    expect(error).toMatch(/explicit acceptance is required/);
+    expect(h.calls.map((c) => c.id)).not.toContain('implement');
+    expect(h.calls.map((c) => c.id)).not.toContain('stage');
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
-    expect(ledger?.outcome.status).toBe('ready');
-    expect(ledger?.stage.prBody).toContain('open questions');
-    expect(ledger?.decisions.some((d) => d.kind === 'spec-council.unresolved')).toBe(true);
+    expect(ledger?.outcome.status).toBe('contested');
+    expect(ledger?.outcome.pendingDecision).toMatchObject({
+      kind: 'spec',
+      gate: 'council',
+      round: 3,
+    });
   });
 
   it('does not retry a timeout on the session path — a spent budget is not bought twice', async () => {
@@ -2348,7 +2595,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
   /**
    * Regression (run a6978de6, 2026-07-28): the spec session obeyed the
-   * cez-spec-writing Open Questions gate, ended BOTH attempts by asking the
+   * om-spec-writing Open Questions gate, ended BOTH attempts by asking the
    * user four design questions — in a session nobody reads live — and the run
    * died as "produced no valid result after a retry". The phase contract now
    * outranks the gate: it forbids asking outright and gives the gate a legal
@@ -2466,11 +2713,32 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
   it('fails preflight with the upstream error when a bound model is unreachable', async () => {
     const h = makeHarness(dir);
-    h.probeVerdicts.set('opencode/opencode/mimo-v2.5-free', {
+    h.probeVerdicts.set('codex/gpt-5.5-mini', {
       status: 'failed',
       detail: 'POST /session/:id/message → 500 no such column: replacement_seq',
     });
     const unreachable = {
+      ...input,
+      roles: {
+        ...roles,
+        reviewers: [
+          { runner: 'claude' as const, model: 'opus' },
+          { runner: 'codex' as const, model: 'gpt-5.5-mini' },
+        ],
+      },
+    };
+
+    const error = await runHarnessDriver(h.host, unreachable, h.deps);
+
+    expect(error).toContain('codex/gpt-5.5-mini');
+    expect(error).toContain('replacement_seq');
+    expect(h.calls.map((c) => c.id)).not.toContain('qualify');
+    expect(h.calls.map((c) => c.id)).not.toContain('stage');
+  });
+
+  it('rejects OpenCode before any paid harness phase because it cannot enforce stage-only isolation', async () => {
+    const h = makeHarness(dir);
+    const unsafe = {
       ...input,
       roles: {
         ...roles,
@@ -2481,12 +2749,10 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       },
     };
 
-    const error = await runHarnessDriver(h.host, unreachable, h.deps);
+    const error = await runHarnessDriver(h.host, unsafe, h.deps);
 
-    expect(error).toContain('opencode/opencode/mimo-v2.5-free');
-    expect(error).toContain('replacement_seq');
-    expect(h.calls.map((c) => c.id)).not.toContain('qualify');
-    expect(h.calls.map((c) => c.id)).not.toContain('stage');
+    expect(error).toMatch(/OpenCode.*stage-only isolation/i);
+    expect(h.calls.map((call) => call.id)).not.toContain('qualify');
   });
 
   it('records the probe verdict per model in the ledger instead of assuming ready', async () => {
@@ -2657,8 +2923,18 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
         }
         if (op === 'stage') {
           const output = args[args.indexOf('--output') + 1];
+          const pathsFile = args[args.indexOf('--paths-file') + 1];
           if (output) {
-            writeFileSync(output, JSON.stringify({ status: 'ready', stagedPaths: [] }), 'utf8');
+            writeFileSync(
+              output,
+              JSON.stringify({
+                status: 'ready',
+                stagedPaths: pathsFile
+                  ? readFileSync(pathsFile, 'utf8').split(/\r?\n/).filter(Boolean)
+                  : [],
+              }),
+              'utf8',
+            );
           }
         }
         if (op === 'review') {
@@ -2944,6 +3220,23 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     const featureInput = { ...advisorInput, workflow: HARNESS_IMPLEMENT_FEATURE };
     const error = await runHarnessDriver(h.host, featureInput, h.deps);
     expect(error).toBeNull();
+    const phaseOrder = h.calls.map((call) => call.id);
+    expect(phaseOrder.indexOf('pre-implement')).toBeGreaterThan(phaseOrder.indexOf('spec-review-2'));
+    expect(phaseOrder.indexOf('implement')).toBeGreaterThan(phaseOrder.indexOf('pre-implement'));
+    expect(
+      new Set(
+        h.calls
+          .filter((call) => call.kind === 'agent' && call.skill)
+          .map((call) => call.skill),
+      ),
+    ).toEqual(
+      new Set([
+        'om-spec-writing',
+        'om-pre-implement-spec',
+        'om-implement-spec',
+        'om-code-review',
+      ]),
+    );
 
     for (const o of h.ops) if (o.id === 'review') reviewArgs.push(o.args ?? []);
     expect(reviewArgs).toHaveLength(3); // spec ×2 rounds + implementation ×1
@@ -2960,6 +3253,54 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       'spec',
       'implementation',
     ]);
+  });
+
+  it('pauses before implementation when the pre-implementation audit is blocked', async () => {
+    const h = makeHarness(dir);
+    h.agentBehavior.set('spec', (req) => {
+      mkdirSync(join(dir, '.ai', 'specs'), { recursive: true });
+      writeFileSync(join(dir, '.ai', 'specs', 'feat.md'), '# feature\n', 'utf8');
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({
+          summary: 'feature spec',
+          specPath: '.ai/specs/feat.md',
+          files: ['.ai/specs/feat.md'],
+        }),
+      );
+      return null;
+    });
+    h.agentBehavior.set('pre-implement', (req) => {
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({
+          status: 'blocked',
+          summary: 'migration rollback is unspecified',
+          reportPath: 'pre-implement.md',
+          findings: [
+            {
+              severity: 'blocker',
+              title: 'No rollback contract',
+              evidence: 'The spec changes persistence without a recovery path.',
+            },
+          ],
+        }),
+      );
+      return null;
+    });
+
+    const error = await runHarnessDriver(
+      h.host,
+      { ...input, workflow: HARNESS_IMPLEMENT_FEATURE },
+      h.deps,
+    );
+
+    expect(error).toMatch(/explicit acceptance is required/);
+    expect(h.calls.map((call) => call.id)).not.toContain('implement');
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.outcome.pendingDecision).toMatchObject({
+      kind: 'spec',
+      gate: 'pre-implement',
+    });
   });
 
   it('preflights an unbound advisor to a clean setup hint, before any op runs', async () => {

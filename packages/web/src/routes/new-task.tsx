@@ -201,6 +201,7 @@ export function NewTaskRoute() {
     draft.composerMode ?? (harnessWorkflowName(rawSource) !== null ? 'multi' : 'task')
   const harnessMode =
     draft.harnessMode ?? HARNESS_MODES.find((m) => m.workflow === rawSource.ref)?.id ?? 'fix-issue'
+  const harnessSkillProfile = draft.harnessSkillProfile ?? 'generic'
   const selectedSkill = source.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
@@ -549,6 +550,7 @@ export function NewTaskRoute() {
           variants: 1,
           images,
           harnessRoles,
+          harnessSkillProfile,
           harnessBaseAcknowledgement:
             staleBase?.stale && staleBase.configured && staleBase.remoteDefault
               ? {
@@ -919,6 +921,8 @@ export function NewTaskRoute() {
           <HarnessPanel
             mode={harnessMode}
             onMode={(next) => update({ harnessMode: next })}
+            skillProfile={harnessSkillProfile}
+            onSkillProfile={(next) => update({ harnessSkillProfile: next })}
             probe={harnessProbe.data}
             base={harnessStatusData?.base}
             baseAcknowledgementReason={harnessBaseReason}

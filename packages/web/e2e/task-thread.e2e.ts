@@ -84,7 +84,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
@@ -253,6 +253,24 @@ describe('task thread', () => {
   })
 
   it('the step rail maps the record steps to checklist rows over the progress bar', () => {
+    // Terminal workflows are intentionally collapsed by default. Expand the
+    // disclosure before asserting its rows; querying hidden/unmounted content
+    // made this smoke test depend on the old always-open behavior.
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="workflow-steps"]') !== null`,
+    )
+    if (
+      browser.evaluate(
+        `document.querySelector('[data-slot="workflow-steps"]').dataset.state`,
+      ) !== 'open'
+    ) {
+      browser.click(
+        '[data-slot="workflow-steps"] [data-slot="collapsible-trigger"]',
+      )
+    }
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="workflow-steps"]')?.dataset.state === 'open'`,
+    )
     const rail = browser.evaluate(`(() => {
       const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
       return {

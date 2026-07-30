@@ -48,6 +48,7 @@ const IMPLEMENT_FEATURE_DEF: WorkflowDef = {
     { id: 'preflight', name: 'Preflight', command: OP('preflight') },
     { id: 'capture', name: 'Capture', command: OP('capture') },
     { id: 'spec', name: 'Specify', prompt: '{{task}}' },
+    { id: 'pre-implement', name: 'Pre-implementation audit', prompt: '{{task}}' },
     { id: 'implement', name: 'Implement', prompt: '{{task}}' },
     { id: 'validate', name: 'Validate', command: OP('validate') },
     { id: 'review', name: 'Review', prompt: '{{task}}' },

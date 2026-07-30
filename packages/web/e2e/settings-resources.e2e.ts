@@ -53,6 +53,12 @@ async function waitForConfig(check: (config: ConfigAnswer) => boolean): Promise<
   throw new Error('GET /api/config never showed the expected worktreeRetention')
 }
 
+function waitForRetentionSettled(value: number): void {
+  browser.waitForFunction(
+    `document.querySelector('[data-slot="resources-worktree-retention"]')?.value === '${value}' && document.querySelector('[data-slot="resources-worktree-retention"]')?.disabled === false`,
+  )
+}
+
 const gotoResources = () => {
   browser.goto(`${baseUrl}/settings/worktrees`)
   browser.waitForFunction(`document.querySelector('[data-slot="worktrees-section"]') !== null`)
@@ -74,6 +80,7 @@ describe('project settings → worktrees: retention against the live dry-run ser
     browser.fill('[data-slot="resources-worktree-retention"]', '4')
     browser.click('[data-action="resources-save-retention"]')
     await waitForConfig((c) => c.worktreeRetention === 4)
+    waitForRetentionSettled(4)
   })
 
   it('0 saves as unlimited (a real value, not a clear)', async () => {
@@ -81,6 +88,7 @@ describe('project settings → worktrees: retention against the live dry-run ser
     browser.click('[data-action="resources-save-retention"]')
     const config = await waitForConfig((c) => c.worktreeRetention === 0)
     expect(config.worktreeRetention).toBe(0)
+    waitForRetentionSettled(0)
   })
 
   it('a cold load renders the persisted count — the field is a view of config.json', async () => {
@@ -88,6 +96,7 @@ describe('project settings → worktrees: retention against the live dry-run ser
     browser.fill('[data-slot="resources-worktree-retention"]', '7')
     browser.click('[data-action="resources-save-retention"]')
     await waitForConfig((c) => c.worktreeRetention === 7)
+    waitForRetentionSettled(7)
 
     gotoResources()
     expect(

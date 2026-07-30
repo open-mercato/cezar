@@ -41,13 +41,18 @@ import { UiEventSink } from '../runs/ui-event-sink.js';
 import type { UiEvent } from '../core/ui-events.js';
 import { runHarnessDriver, type HarnessDriverHost, type HarnessRolesInput } from '../harness/driver.js';
 import { createLedger, readLedger, saveLedger } from '../harness/ledger.js';
-import { isHarnessWorkflow } from '../harness/workflows.js';
-import { HARNESS_PROFILES, type HarnessProfile } from '../harness/types.js';
+import { HARNESS_FIX_ISSUE, isHarnessWorkflow } from '../harness/workflows.js';
+import {
+  HARNESS_PROFILES,
+  HARNESS_SKILL_PROFILES,
+  type HarnessProfile,
+  type HarnessSkillProfile,
+} from '../harness/types.js';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
 
 const CHECK_OUTPUT_CAP = 20_000;
-const MAX_HARNESS_BOUNDARY_MESSAGES = 20;
-const MAX_HARNESS_BOUNDARY_MESSAGE_CHARS = 200_000;
+const MAX_HARNESS_BOUNDARY_MESSAGES = 10;
+const MAX_HARNESS_BOUNDARY_MESSAGE_CHARS = 40_000;
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 /**
@@ -212,6 +217,7 @@ export interface StartRunInput {
    *  the `standard` graph. */
   harness?: {
     profile?: HarnessProfile;
+    skillProfile?: HarnessSkillProfile;
     roles?: HarnessRolesInput;
     issueId?: string;
     baseAcknowledgement?: {
@@ -522,6 +528,24 @@ export class RunManager {
     input: StartRunInput,
     group?: { groupId: string; variant: string },
   ): RunRecord {
+    if (isHarnessWorkflow(workflow.name)) {
+      if (input.worktree === false) {
+        throw new Error('harness workflows require an isolated git worktree');
+      }
+      if (workflow.name === HARNESS_FIX_ISSUE && !input.harness?.issueId) {
+        const issueNumber = extractTaskRefs(input.task).issueNumber;
+        if (issueNumber === undefined) {
+          throw new Error('harness fix workflow requires a concrete issue id');
+        }
+        input = {
+          ...input,
+          harness: {
+            ...input.harness,
+            issueId: String(issueNumber),
+          },
+        };
+      }
+    }
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
@@ -559,6 +583,7 @@ export class RunManager {
         harness: {
           profile: inferredProfile,
           workflow: workflow.name,
+          skillProfile: input.harness?.skillProfile ?? 'generic',
           ...(input.harness?.issueId ? { issueId: input.harness.issueId } : {}),
           ...(input.harness?.roles ? { roles: input.harness.roles as unknown as Record<string, unknown> } : {}),
           ...(input.harness?.baseAcknowledgement
@@ -1491,6 +1516,13 @@ export class RunManager {
           : createLedger({
               workflow: run.harness.workflow,
               requestedProfile: profile,
+              skillProfile:
+                run.harness.skillProfile &&
+                (HARNESS_SKILL_PROFILES as readonly string[]).includes(
+                  run.harness.skillProfile,
+                )
+                  ? (run.harness.skillProfile as HarnessSkillProfile)
+                  : undefined,
               subject: run.harness.issueId
                 ? { kind: 'issue', id: run.harness.issueId, text: run.task }
                 : { kind: 'brief', text: run.task },
@@ -2290,12 +2322,28 @@ export class RunManager {
         ? (requested as HarnessProfile)
         : 'standard';
     const issueId = input.harness?.issueId ?? recorded?.issueId;
+    const recordedSkillProfile =
+      recorded?.skillProfile &&
+      (HARNESS_SKILL_PROFILES as readonly string[]).includes(recorded.skillProfile)
+        ? (recorded.skillProfile as HarnessSkillProfile)
+        : undefined;
+    const ledgerRead = readLedger(this.dataDir, runId);
+    const ledgerSkillProfile =
+      ledgerRead.status === 'valid'
+        ? ledgerRead.ledger.skillProfile ?? 'open-mercato'
+        : undefined;
+    const skillProfile: HarnessSkillProfile =
+      input.harness?.skillProfile ??
+      recordedSkillProfile ??
+      ledgerSkillProfile ??
+      'generic';
     const baseAcknowledgement =
       input.harness?.baseAcknowledgement ?? recorded?.baseAcknowledgement;
     this.store.updateRun(runId, {
       harness: {
         profile,
         workflow: workflow.name,
+        skillProfile,
         ...(issueId ? { issueId } : {}),
         ...(roles ? { roles: roles as unknown as Record<string, unknown> } : {}),
         ...(baseAcknowledgement ? { baseAcknowledgement } : {}),
@@ -2340,6 +2388,7 @@ export class RunManager {
             resultPath: req.resultPath,
             concurrent: req.concurrent,
             onSpawn: req.onSpawn,
+            skillSystemPrompt: req.skillSystemPrompt,
           },
         );
       },
@@ -2376,6 +2425,7 @@ export class RunManager {
       workflow: workflow.name,
       task: input.task,
       profile,
+      skillProfile,
       issueId,
       roles,
       baseAcknowledgement,
@@ -2422,12 +2472,17 @@ export class RunManager {
        *  reaches it. */
       concurrent?: boolean;
       onSpawn?: (pid: number, processGroup: boolean) => void;
+      /** Preflight-pinned harness skill prompt. Bypasses catalog precedence so
+       *  a project-local shadow cannot replace the skill after it is hashed. */
+      skillSystemPrompt?: string;
     } = {},
   ): Promise<string | null> {
     const concurrentPhase = opts.concurrent === true;
     let liveSession: AgentSession | undefined;
     let systemPrompt: string | undefined;
-    if (step.skill) {
+    if (opts.skillSystemPrompt) {
+      systemPrompt = opts.skillSystemPrompt;
+    } else if (step.skill) {
       const skill = skills.find((s) => s.name === step.skill);
       if (skill) {
         // The body alone often does not identify the selected skill. Keep its

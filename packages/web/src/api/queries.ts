@@ -516,7 +516,13 @@ export function useAcceptContestedHarness(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (reason: string) => acceptContestedHarness(id, reason),
-    onSuccess: ({ outcome, decisions }) => {
+    onSuccess: ({ outcome, decisions, resumed }) => {
+      if (resumed) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.detail(id) })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })
+        return
+      }
       // BOTH halves, or publishing never unlocks (review 2026-07-27): the gate
       // requires the matching `accept-contested` decision row as well as the
       // acceptance stamp on `outcome`, and this query never refetches on its own

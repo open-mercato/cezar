@@ -5,9 +5,9 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -34,7 +34,12 @@ import {
   type ReconcileHarnessProcessResult,
 } from './runtime.js';
 import { excludeFromGit } from '../skills-remote.js';
-import { bundledSkillsDir } from '../skills.js';
+import {
+  bundledSkillsDir,
+  discoverSkillCandidates,
+  parseFrontmatter,
+  type Skill,
+} from '../skills.js';
 import { HARNESS_FIX_ISSUE, HARNESS_IMPLEMENT_FEATURE } from './workflows.js';
 import { createModelProber, sharedHarnessProbeCache, type ModelProber } from './probe.js';
 import { synthesizeReviewerBinding } from './reviewer-binding.js';
@@ -49,12 +54,38 @@ import { providerFamilyOf } from './model-family.js';
 import { createLiveTransport } from './probe-transports.js';
 import { resolveHarnessPlan } from './profile-plan.js';
 import { validationCheckSchema } from './types.js';
+import { canonicalizeAdvisorRefs } from './advisor-identity.js';
+import {
+  HARNESS_RESULT_LIMITS,
+  promptBudgetError,
+  promptExcerpt,
+} from './prompt-budget.js';
+import { harnessStageResultSchema, samePathSet } from './stage-result.js';
+import { loadTrustedHarnessSkill } from './skill-binding.js';
+import { acquireIssueClaim, releaseIssueClaim } from './issue-claim.js';
+import { harnessPhaseSkills } from './skill-routing.js';
+import { createClaudeStageOnlySettings } from './claude-guard.js';
 import type {
   HarnessInvocation,
   HarnessLedger,
   HarnessProfile,
+  HarnessSkillProfile,
   HarnessValidationCheck,
 } from './types.js';
+
+const HARNESS_JSON_ARTIFACT_MAX_BYTES = 2_000_000;
+
+function readHarnessArtifactText(
+  path: string,
+  maxBytes = HARNESS_JSON_ARTIFACT_MAX_BYTES,
+): string {
+  const stat = lstatSync(path);
+  if (!stat.isFile()) throw new Error(`artifact is not a regular file: ${path}`);
+  if (stat.size > maxBytes) {
+    throw new Error(`artifact is ${stat.size} bytes, exceeding the ${maxBytes}-byte safety limit`);
+  }
+  return readFileSync(path, 'utf8');
+}
 
 /**
  * The harness phase driver (spec 2026-07-23-harness-orchestration): cezar's
@@ -64,9 +95,11 @@ import type {
  *  - THIS module owns control flow — phase order, the bounded fix loop, the
  *    one automatic retry after a malformed phase result, resume-from-ledger,
  *    cancellation checks between phases;
- *  - the vendored cez-* skills own judgment — every agent phase is a FRESH
- *    session (the host never passes a resumed transcript) whose brief is
- *    assembled from on-disk artifacts;
+ *  - the selected complete phase skills own judgment — generic Cezar
+ *    playbooks by default, exact canonical om-* playbooks when explicitly
+ *    selected. Every agent phase is a FRESH session (the host never passes a
+ *    resumed transcript) whose brief is assembled from on-disk artifacts and
+ *    whose exact skill tree is pinned;
  *  - the installed `harness.mjs` owns mechanics — capture and stage run
  *    verbatim, and their JSON artifacts stay authoritative.
  *
@@ -82,6 +115,9 @@ export interface HarnessAgentPhaseRequest {
   resultPath: string;
   timeoutMs: number;
   env: Record<string, string>;
+  /** Exact trusted skill prompt for a force-materialized bundled skill. When
+   *  present the host must not resolve the normal local-first catalog entry. */
+  skillSystemPrompt?: string;
   /** Role-based model routing (2026-07-24): the backend + model this phase
    *  runs on. Absent → the run's default (claude). */
   runner?: 'claude' | 'codex' | 'opencode';
@@ -169,7 +205,7 @@ interface RuntimeLike {
 /** Injectable seams (tests swap these; production uses the real modules). */
 export interface HarnessDriverDeps {
   resolveScript?: (cwd: string) => string | null;
-  /** Where the harness's own cez-* skills are copied from — ALWAYS, overwriting
+  /** Where the harness's own cez-* wrapper is copied from — ALWAYS, overwriting
    *  whatever the worktree holds (2026-07-28: catalog-resolved copies froze a
    *  stale runtime into four consecutive runs). `null` disables the refresh and
    *  falls back to `host.ensureSkill` (tests). Undefined → the real bundled dir. */
@@ -190,15 +226,25 @@ export interface HarnessDriverDeps {
   createProber?: (opts: { advisors: Record<string, unknown>; cwd: string }) => ModelProber;
   snapshotReviewSubject?: (cwd: string) => Promise<string>;
   snapshotStageSubject?: (cwd: string) => Promise<string>;
+  /** Return the complete Git-derived changed-path set. The declared paths are
+   *  supplied only so tests can model Git without creating a repository;
+   *  production deliberately ignores them. */
+  discoverChangedPaths?: (cwd: string, declaredPaths: readonly string[]) => string[] | null;
+  discoverSkillCandidates?: (repoRoot: string, name: string) => Promise<Skill[]>;
   reconcileProcess?: (
     identity: HarnessProcessIdentity,
   ) => Promise<ReconcileHarnessProcessResult>;
+  acquireClaim?: typeof acquireIssueClaim;
+  releaseClaim?: typeof releaseIssueClaim;
 }
 
 export interface HarnessDriverInput {
   workflow: string;
   task: string;
   profile: HarnessProfile;
+  /** Selects the complete judgment playbooks for every fixed graph phase.
+   * Missing is the generic, project-neutral default. */
+  skillProfile?: HarnessSkillProfile;
   issueId?: string;
   /** Role-based conduction (2026-07-24). Present → the driver runs every
    *  phase on its role's model and one fresh review pass per reviewer;
@@ -302,6 +348,34 @@ export async function snapshotHarnessStageSubject(cwd: string): Promise<string> 
   return hash.digest('hex');
 }
 
+function currentChangedPaths(cwd: string): string[] | null {
+  try {
+    const tracked = execFileSync('git', ['diff', '--name-only', '-z', 'HEAD', '--'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+    })
+      .split('\0')
+      .filter(Boolean);
+    const untracked = execFileSync(
+      'git',
+      ['ls-files', '--others', '--exclude-standard', '-z', '--'],
+      {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+      },
+    )
+      .split('\0')
+      .filter(Boolean);
+    return [...new Set([...tracked, ...untracked])].sort();
+  } catch {
+    return null;
+  }
+}
+
 /** The independence axis a council quorum counts. Delegates to the ONE shared
  *  definition (review 2026-07-27): returning `ref.runner` here counted a host
  *  `claude/sonnet` reviewer and a gateway-resold `opencode/claude-sonnet-4-5`
@@ -313,49 +387,90 @@ export function councilFamilyOf(ref: HarnessReviewerRef): string {
 
 const qualifyResultSchema = z.object({
   outcome: z.enum(['work_needed', 'no_action']),
-  evidence: z.string(),
+  evidence: z.string().max(HARNESS_RESULT_LIMITS.summary),
 });
 
 const diagnoseResultSchema = z.object({
-  summary: z.string(),
-  files: z.array(z.string()),
-  regressionTest: z.string().optional(),
+  summary: z.string().max(HARNESS_RESULT_LIMITS.summary),
+  files: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.path))
+    .max(HARNESS_RESULT_LIMITS.paths),
+  regressionTest: z.string().max(HARNESS_RESULT_LIMITS.text).optional(),
 });
 
 const specResultSchema = z.object({
-  summary: z.string(),
-  specPath: z.string().optional(),
-  files: z.array(z.string()).optional(),
-  openQuestions: z.array(z.string().min(1)).optional(),
+  summary: z.string().max(HARNESS_RESULT_LIMITS.summary),
+  specPath: z.string().min(1).max(HARNESS_RESULT_LIMITS.path),
+  files: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.path))
+    .max(HARNESS_RESULT_LIMITS.paths)
+    .optional(),
+  openQuestions: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.text))
+    .max(HARNESS_RESULT_LIMITS.questions)
+    .optional(),
+});
+
+const preImplementResultSchema = z.object({
+  status: z.enum(['ready', 'blocked']),
+  summary: z.string().max(HARNESS_RESULT_LIMITS.summary),
+  reportPath: z.string().min(1).max(HARNESS_RESULT_LIMITS.path),
+  findings: z
+    .array(
+      z.object({
+        severity: z.enum(['blocker', 'major', 'minor', 'nit']),
+        title: z.string().min(1).max(HARNESS_RESULT_LIMITS.shortText),
+        evidence: z.string().max(HARNESS_RESULT_LIMITS.text).default(''),
+      }),
+    )
+    .max(HARNESS_RESULT_LIMITS.findings)
+    .default([]),
 });
 
 const implementResultSchema = z.object({
-  changedPaths: z.array(z.string().min(1)).min(1),
-  summary: z.string().optional(),
-  suggestedCommit: z.string().optional(),
+  changedPaths: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.path))
+    .min(1)
+    .max(HARNESS_RESULT_LIMITS.paths),
+  summary: z.string().max(HARNESS_RESULT_LIMITS.summary).optional(),
+  suggestedCommit: z.string().max(HARNESS_RESULT_LIMITS.shortText).optional(),
 });
 
 const fixResultSchema = implementResultSchema.extend({
-  changedPaths: z.array(z.string().min(1)),
+  changedPaths: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.path))
+    .max(HARNESS_RESULT_LIMITS.paths),
 });
 
 const packetManifestSchema = z.object({
   version: z.literal(1),
   id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/),
-  title: z.string().min(1),
-  objective: z.string().min(1),
+  title: z.string().min(1).max(HARNESS_RESULT_LIMITS.shortText),
+  objective: z.string().min(1).max(HARNESS_RESULT_LIMITS.text),
   risk: z.enum(['low', 'medium', 'high', 'critical']),
-  allowedPaths: z.array(z.string().min(1)).min(1),
-  invariants: z.array(z.string().min(1)).min(1),
-  acceptanceCriteria: z.array(z.string().min(1)).min(1),
-  dependencies: z.array(z.string()).default([]),
-  nonGoals: z.array(z.string()).default([]),
-  referencePatterns: z.array(z.string()).default([]),
-  worker: z.string().optional(),
+  allowedPaths: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.path))
+    .min(1)
+    .max(HARNESS_RESULT_LIMITS.paths),
+  invariants: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.text))
+    .min(1)
+    .max(50),
+  acceptanceCriteria: z
+    .array(z.string().min(1).max(HARNESS_RESULT_LIMITS.text))
+    .min(1)
+    .max(50),
+  dependencies: z.array(z.string().max(HARNESS_RESULT_LIMITS.shortText)).max(50).default([]),
+  nonGoals: z.array(z.string().max(HARNESS_RESULT_LIMITS.text)).max(50).default([]),
+  referencePatterns: z
+    .array(z.string().max(HARNESS_RESULT_LIMITS.text))
+    .max(50)
+    .default([]),
+  worker: z.string().max(HARNESS_RESULT_LIMITS.shortText).optional(),
 });
 
 const packetPlanResultSchema = z.object({
-  summary: z.string().min(1),
+  summary: z.string().min(1).max(HARNESS_RESULT_LIMITS.summary),
   packets: z.array(packetManifestSchema).min(1).max(12),
 });
 
@@ -378,12 +493,12 @@ type PacketManifest = z.infer<typeof packetManifestSchema>;
  */
 const findingLocationSchema = z
   .union([
-    z.string(),
+    z.string().max(HARNESS_RESULT_LIMITS.path),
     z
       .object({
-        path: z.string(),
+        path: z.string().max(HARNESS_RESULT_LIMITS.path),
         line: z.number().int().nullable().optional(),
-        symbol: z.string().nullable().optional(),
+        symbol: z.string().max(HARNESS_RESULT_LIMITS.shortText).nullable().optional(),
       })
       .passthrough(),
   ])
@@ -399,11 +514,12 @@ const reviewResultSchema = z.object({
     .array(
       z.object({
         severity: z.enum(['blocker', 'major', 'minor', 'nit']),
-        title: z.string(),
+        title: z.string().min(1).max(HARNESS_RESULT_LIMITS.shortText),
         location: findingLocationSchema.optional(),
-        evidence: z.string().optional(),
+        evidence: z.string().max(HARNESS_RESULT_LIMITS.text).optional(),
       }),
     )
+    .max(HARNESS_RESULT_LIMITS.findings)
     .default([]),
 });
 
@@ -486,7 +602,7 @@ const PHASE_SESSION_CONTRACT = [
   '- Never end a turn while a subagent or background job you started is still running — wait for it in this session and fold its output in first.',
   '- Do not schedule wake-ups or defer work to a later session.',
   // The non-interactive clause exists because a skill CAN mandate the opposite.
-  // cez-spec-writing carries a hard Open Questions gate ("present the open
+  // om-spec-writing carries a hard Open Questions gate ("present the open
   // questions to the user and stop"), and a spec session followed it faithfully
   // — twice, once per attempt — ending each turn with a CEZ:ASK nobody could
   // ever answer and no result file. The phase contract must outrank the skill
@@ -530,7 +646,12 @@ export async function runHarnessDriver(
   const exportConfig = deps.exportConfig ?? exportTrustedConfig;
   const snapshotReviewSubject = deps.snapshotReviewSubject ?? snapshotHarnessReviewSubject;
   const snapshotStageSubject = deps.snapshotStageSubject ?? snapshotHarnessStageSubject;
+  const discoverChangedPaths =
+    deps.discoverChangedPaths ?? ((cwd: string) => currentChangedPaths(cwd));
+  const discoverCandidates = deps.discoverSkillCandidates ?? discoverSkillCandidates;
   const reconcileProcess = deps.reconcileProcess ?? reconcileHarnessProcess;
+  const acquireClaim = deps.acquireClaim ?? acquireIssueClaim;
+  const releaseClaim = deps.releaseClaim ?? releaseIssueClaim;
   const createProber =
     deps.createProber ??
     ((opts) =>
@@ -544,6 +665,9 @@ export async function runHarnessDriver(
 
   const artifactDir = harnessArtifactDir(host.dataDir, host.runId);
   mkdirSync(artifactDir, { recursive: true });
+  const noGitHubAuthDir = join(artifactDir, 'no-github-auth');
+  mkdirSync(noGitHubAuthDir, { recursive: true });
+  const claudeGuard = createClaudeStageOnlySettings(artifactDir, host.cwd);
 
   const ledgerRead = readLedger(host.dataDir, host.runId);
   if (ledgerRead.status === 'corrupt') {
@@ -558,16 +682,37 @@ export async function runHarnessDriver(
   if (ledgerRead.status === 'valid' && ledgerRead.ledger.requestedProfile !== input.profile) {
     return `harness recovery blocked: ledger requested ${ledgerRead.ledger.requestedProfile}, not ${input.profile}`;
   }
+  // `skillProfile` did not exist before the selector. Every ledger from that
+  // era used the canonical om-* phase skills, including ledgers interrupted
+  // before preflight had pinned any skill names. Treating an empty legacy
+  // ledger as generic would silently switch its playbooks on recovery.
+  const legacySkillProfile = (ledger: HarnessLedger): HarnessSkillProfile =>
+    ledger.skillProfile ?? 'open-mercato';
+  const recordedSkillProfile =
+    ledgerRead.status === 'valid' ? legacySkillProfile(ledgerRead.ledger) : undefined;
+  const skillProfile = input.skillProfile ?? recordedSkillProfile ?? 'generic';
+  if (
+    ledgerRead.status === 'valid' &&
+    recordedSkillProfile !== undefined &&
+    recordedSkillProfile !== skillProfile
+  ) {
+    return (
+      `harness recovery blocked: ledger uses the "${recordedSkillProfile}" skill profile, ` +
+      `not "${skillProfile}"`
+    );
+  }
   const ledger: HarnessLedger =
     ledgerRead.status === 'valid'
       ? ledgerRead.ledger
       : createLedger({
           workflow: input.workflow,
           requestedProfile: input.profile,
+          skillProfile,
           subject: input.issueId
             ? { kind: 'issue', id: input.issueId, text: input.task }
             : { kind: 'brief', text: input.task },
         });
+  ledger.skillProfile ??= skillProfile;
   const mergeOperatorMutations = (): void => {
     const current = readLedger(host.dataDir, host.runId);
     if (current.status !== 'valid' || current.ledger === ledger) return;
@@ -616,6 +761,16 @@ export async function runHarnessDriver(
     ledger.outcome = outcome;
     persist();
     host.emit({ type: 'harness.outcome.updated', outcome: ledger.outcome });
+  };
+  const releaseHeldIssueClaim = (): void => {
+    if (!ledger.claim?.held || !ledger.claim.path) return;
+    const released = releaseClaim(ledger.claim.path, host.runId);
+    if (!released.ok) {
+      host.emit({ type: 'note', message: `issue claim release failed: ${released.error}` });
+      return;
+    }
+    ledger.claim.held = false;
+    persist();
   };
   const upsertCouncil = (
     kind: string,
@@ -672,37 +827,9 @@ export async function runHarnessDriver(
     createHash('sha256').update(value).digest('hex');
   const hashFile = (path: string): string | null => {
     try {
-      return sha256(readFileSync(path));
-    } catch {
-      return null;
-    }
-  };
-  const hashMaterializedSkill = (name: string): string | null => {
-    const root = join(host.cwd, '.claude', 'skills', name);
-    if (!existsSync(root)) return null;
-    const hash = createHash('sha256');
-    const visit = (relative: string): void => {
-      const path = relative ? join(root, relative) : root;
       const stat = lstatSync(path);
-      hash.update(`\0${relative}\0`);
-      if (stat.isSymbolicLink()) {
-        hash.update('symlink\0');
-        hash.update(readlinkSync(path));
-        return;
-      }
-      if (stat.isDirectory()) {
-        hash.update('directory\0');
-        for (const entry of readdirSync(path).sort()) {
-          visit(relative ? join(relative, entry) : entry);
-        }
-        return;
-      }
-      hash.update('file\0');
-      hash.update(readFileSync(path));
-    };
-    try {
-      visit('');
-      return hash.digest('hex');
+      if (!stat.isFile() || stat.size > HARNESS_JSON_ARTIFACT_MAX_BYTES * 4) return null;
+      return sha256(readFileSync(path));
     } catch {
       return null;
     }
@@ -740,7 +867,7 @@ export async function runHarnessDriver(
       return null;
     }
     try {
-      const parsed = schema.safeParse(JSON.parse(readFileSync(invocation.artifactPath, 'utf8')));
+      const parsed = schema.safeParse(JSON.parse(readHarnessArtifactText(invocation.artifactPath)));
       if (parsed.success) return parsed.data;
     } catch {
     }
@@ -843,9 +970,24 @@ export async function runHarnessDriver(
     request: HarnessAgentPhaseRequest,
   ): Promise<string | null> => {
     const token = randomUUID();
+    const trustedPrompt =
+      request.skillSystemPrompt ??
+      (request.skill ? trustedSkillPrompts.get(request.skill) : undefined);
     return host.runAgent({
       ...request,
-      env: { ...request.env, CEZ_PROCESS_TOKEN: token },
+      ...(trustedPrompt ? { skillSystemPrompt: trustedPrompt } : {}),
+      env: {
+        ...request.env,
+        ...claudeGuard.env,
+        CEZ_PROCESS_TOKEN: token,
+        CEZ_HARNESS_STAGE_ONLY: '1',
+        GIT_ALLOW_PROTOCOL: '',
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: '/usr/bin/false',
+        SSH_ASKPASS: '/usr/bin/false',
+        SSH_AUTH_SOCK: '',
+        GH_CONFIG_DIR: noGitHubAuthDir,
+      },
       onSpawn: (pid, processGroup) => {
         invocation.process = {
           pid,
@@ -937,9 +1079,17 @@ export async function runHarnessDriver(
   ): { result: z.infer<S> | null; failure: string | null; salvaged: boolean } => {
     let text: string;
     try {
-      text = readFileSync(resultPath, 'utf8');
-    } catch {
-      return { result: null, failure: 'ended without writing its result file', salvaged: false };
+      text = readHarnessArtifactText(resultPath);
+    } catch (error) {
+      return {
+        result: null,
+        failure: existsSync(resultPath)
+          ? `wrote an unsafe result artifact (${
+              error instanceof Error ? error.message : String(error)
+            })`
+          : 'ended without writing its result file',
+        salvaged: false,
+      };
     }
     if (text.trim().length === 0) {
       return { result: null, failure: 'ended with an empty result file', salvaged: false };
@@ -1037,7 +1187,7 @@ export async function runHarnessDriver(
       : [
           '',
           'Operator messages queued at the previous phase boundary:',
-          ...messages.map((message) => `- [${message.id}] ${message.text}`),
+          ...messages.map((message) => `- [${message.id}] ${promptExcerpt(message.text)}`),
           'Treat these as user instructions for this phase. The ids make replay after a crash detectable.',
         ].join('\n');
   const completeBoundaryMessages = (
@@ -1092,10 +1242,12 @@ export async function runHarnessDriver(
     const renderedPrompt = `${phasePrompt
       .replaceAll('$CEZ_HARNESS_RESULT_FILE', sessionResultPath)
       .replaceAll('$CEZ_HARNESS_ARTIFACT_DIR', artifactDir)}\n\n${PHASE_SESSION_CONTRACT}`;
+    const budgetError = promptBudgetError(completeModelPrompt(skill, renderedPrompt));
+    if (budgetError) return { error: `${phaseId}: ${budgetError}` };
     const modelId = ref ? roleRefId(ref) : 'claude';
     const invocationId = `agent:${phaseId}:${modelId}`;
     let reviewSubjectSha256: string | undefined;
-    if (skill === 'cez-code-review') {
+    if (skill === phaseSkills.codeReview) {
       try {
         reviewSubjectSha256 = await snapshotReviewSubject(host.cwd);
       } catch (error) {
@@ -1111,16 +1263,14 @@ export async function runHarnessDriver(
         inputHashVersion: 2,
         phaseId,
         skill,
+        skillSha256: skill ? skillHash(skill) : null,
         prompt: renderedPrompt,
         runner: ref?.runner ?? 'claude',
         model: ref?.model ?? '',
         adapterId: ref?.adapterId ?? null,
         effort: ref?.effort ?? null,
         reviewSubjectSha256: reviewSubjectSha256 ?? null,
-        rubricSha256:
-          skill === 'cez-code-review'
-            ? hashMaterializedSkill('cez-code-review') ?? 'missing'
-            : null,
+        rubricSha256: skill === phaseSkills.codeReview ? skillHash(phaseSkills.codeReview) : null,
       }),
     );
     const reusable = reusableInvocation(invocationId, invocationInputSha256, schema);
@@ -1220,6 +1370,12 @@ export async function runHarnessDriver(
               timeoutKey === 'implement' || timeoutKey === 'fix',
             )}`
           : renderedPrompt;
+      const attemptBudgetError = promptBudgetError(
+        completeModelPrompt(skill, attemptPrompt),
+      );
+      if (attemptBudgetError) {
+        return { error: `${phaseId}: ${attemptBudgetError}` };
+      }
       startPhase(ledger, { id: phaseId, name, kind: 'agent', skill });
       persist();
       host.setStepStatus(phaseId, 'running');
@@ -1246,7 +1402,7 @@ export async function runHarnessDriver(
           artifactDir,
           `worker-prompt-${phaseId}-${invocation.attempt}.md`,
         );
-        writeFileSync(promptPath, attemptPrompt, 'utf8');
+        writeFileSync(promptPath, completeModelPrompt(skill, attemptPrompt), 'utf8');
         const result = await runtime.run(
           'worker',
           [
@@ -1357,7 +1513,9 @@ export async function runHarnessDriver(
             : `phase "${phaseId}" ${lastContractFailure} after the informed retry`,
       });
     }
-    const error = `phase "${phaseId}" produced no valid result after a retry`;
+    const error =
+      `phase "${phaseId}" produced no valid result after a retry` +
+      (lastContractFailure ? `: ${lastContractFailure}` : '');
     finishPhase(ledger, phaseId, 'failed', error);
     persist();
     host.setStepStatus(phaseId, 'failed', error);
@@ -1415,6 +1573,34 @@ export async function runHarnessDriver(
   if (input.workflow !== HARNESS_FIX_ISSUE && !isFeature) {
     return `unknown harness workflow: ${input.workflow}`;
   }
+  if (!isFeature && !input.issueId) {
+    return 'harness fix workflow requires a concrete issue id';
+  }
+  const phaseSkills = harnessPhaseSkills(skillProfile);
+  const trustedSkillsRoot = join(artifactDir, 'trusted-skills');
+  const trustedSkillPrompts = new Map<string, string>();
+  const trustedSkillHashes = new Map<string, string>();
+  const skillHash = (name: string): string =>
+    trustedSkillHashes.get(name) ?? 'missing';
+  const completeModelPrompt = (skill: string | undefined, prompt: string): string => {
+    const systemPrompt = skill ? trustedSkillPrompts.get(skill) : undefined;
+    return systemPrompt
+      ? [
+          systemPrompt,
+          '',
+          '---',
+          '',
+          'Cezar wrapper contract:',
+          '- Cezar is the external flow runner. It owns issue claims, tracker state, the authoritative validation gate, review reconciliation, staging, and every delivery action.',
+          '- Do not assign issues, add/remove labels, post tracker comments, run setup skills, commit, push, publish, create/merge a PR, or perform any other external write.',
+          '- You may run focused local tests needed to complete this phase. Cezar will run the immutable configured validation gate afterward; do not substitute claims for its evidence.',
+          '- The phase task below narrows the selected skill to this run boundary. Its result-file schema is the machine-readable output contract for this invocation.',
+          '',
+          'Phase task:',
+          prompt,
+        ].join('\n')
+      : prompt;
+  };
 
   let roles = input.roles;
   if (roles) {
@@ -1480,12 +1666,26 @@ export async function runHarnessDriver(
     }
   }
   const preflightError = await opPhase('preflight', 'Preflight', async () => {
-    const needed = isFeature
-      ? ['cez-harness', 'cez-spec-writing', 'cez-code-review']
-      : ['cez-harness', 'cez-verify-in-repo', 'cez-root-cause', 'cez-fix', 'cez-code-review'];
+    const selectedSkills = isFeature
+      ? [
+          phaseSkills.specWriting,
+          phaseSkills.preImplement,
+          phaseSkills.implementSpec,
+          phaseSkills.codeReview,
+        ]
+      : [
+          phaseSkills.qualify,
+          phaseSkills.diagnose,
+          phaseSkills.fix,
+          phaseSkills.codeReview,
+        ];
+    const needed = [...new Set(['cez-harness', ...selectedSkills])];
     /**
-     * The harness's own skills come from the BUNDLED tree, copied fresh into
-     * the worktree every driver execution — never from the catalog.
+     * Cezar's harness wrapper and generic phase skills come from the BUNDLED
+     * tree, copied during the initial preflight — never from the catalog. The
+     * canonical om-* phase skills take the normal discovery path, then every
+     * selected skill is copied outside the model-writable worktree and
+     * hash-bound for the lifetime of the run.
      *
      * The catalog resolves local-first, which is right for skills users author
      * and fatal for the runtime cezar ships: any root-cwd session that invokes
@@ -1496,15 +1696,74 @@ export async function runHarnessDriver(
      * ever read — the last of them died at stage, two hours in, on a check the
      * fix had made advisory five hours earlier. A provenance warning fired into
      * the run log and helped nobody. Resolution order was the bug; only pinning
-     * the source fixes it.
-     *
-     * Overwriting also refreshes stale worktree copies on resume. The known
-     * cost: after an upgrade, rubric hashes change, so a resumed run re-runs
-     * reviews instead of reusing them — reviews against the current rubric,
-     * paid knowingly, which beats mechanics frozen at whatever bug they had.
+     * the source fixes it. The initial preflight also copies every selected
+     * skill outside the model-writable worktree. Resumes load those exact bytes
+     * instead of trusting a materialized directory an earlier phase could edit.
      */
     const bundledRoot =
       deps.bundledSkillsRoot === undefined ? bundledSkillsDir() : deps.bundledSkillsRoot;
+    const pinMaterializedSkill = (name: string): void => {
+      const materialized = join(host.cwd, '.claude', 'skills', name);
+      const pinned = join(trustedSkillsRoot, name);
+      rmSync(pinned, { recursive: true, force: true });
+      mkdirSync(trustedSkillsRoot, { recursive: true });
+      cpSync(materialized, pinned, { recursive: true });
+      const binding = loadTrustedHarnessSkill(trustedSkillsRoot, name);
+      trustedSkillPrompts.set(name, binding.systemPrompt);
+      trustedSkillHashes.set(name, binding.sha256);
+      ledger.trustedSkills[name] = binding.sha256;
+    };
+    const composeCompleteCodeReviewSkill = async (): Promise<string | null> => {
+      const target = join(host.cwd, '.claude', 'skills', phaseSkills.codeReview);
+      const required = [
+        'SKILL.md',
+        join('references', 'review-checklist.md'),
+        join('references', 'output-format.md'),
+      ];
+      if (required.every((path) => existsSync(join(target, path)))) return null;
+      const extensionPath = join(target, 'SKILL.md');
+      if (!existsSync(extensionPath)) {
+        return `required Open Mercato skill "${phaseSkills.codeReview}" was discovered but not materialized`;
+      }
+      const extensionRaw = readFileSync(extensionPath, 'utf8');
+      const candidates = await discoverCandidates(host.cwd, phaseSkills.codeReview);
+      const base = candidates.find((candidate) => {
+        if (!candidate.path.endsWith('SKILL.md') || candidate.team) return false;
+        const root = dirname(candidate.path);
+        return required.every((path) => existsSync(join(root, path)));
+      });
+      if (!base) {
+        return (
+          `required Open Mercato skill "${phaseSkills.codeReview}" is only a repo-local extension; ` +
+          'install or sync the complete open-mercato/skills definition with its references'
+        );
+      }
+      const baseRoot = realpathSync(dirname(base.path));
+      const baseRaw = readFileSync(join(baseRoot, 'SKILL.md'), 'utf8');
+      rmSync(target, { recursive: true, force: true });
+      cpSync(baseRoot, target, { recursive: true });
+      if (baseRaw !== extensionRaw) {
+        const extension = parseFrontmatter(extensionRaw).body.trim();
+        if (extension) {
+          writeFileSync(
+            join(target, 'SKILL.md'),
+            [
+              baseRaw.trimEnd(),
+              '',
+              '---',
+              '',
+              '## Repository-local Open Mercato extension',
+              '',
+              extension,
+              '',
+            ].join('\n'),
+            'utf8',
+          );
+        }
+      }
+      await excludeFromGit(host.cwd, `.claude/skills/${phaseSkills.codeReview}/`);
+      return null;
+    };
     for (const name of needed) {
       const bundledSkill = bundledRoot === null ? null : join(bundledRoot, name);
       if (bundledSkill && existsSync(join(bundledSkill, 'SKILL.md'))) {
@@ -1513,6 +1772,7 @@ export async function runHarnessDriver(
           rmSync(target, { recursive: true, force: true });
           cpSync(bundledSkill, target, { recursive: true });
           await excludeFromGit(host.cwd, `.claude/skills/${name}/`);
+          pinMaterializedSkill(name);
           continue;
         } catch {
         }
@@ -1520,7 +1780,29 @@ export async function runHarnessDriver(
       if (!(await host.ensureSkill(name))) {
         return {
           ok: false,
-          error: `required skill "${name}" is missing — the bundled copy ships in vendor/skills (reinstall cezar or rerun scripts/vendor-skills.mjs), or provide it via a skills repo`,
+          error:
+            name === 'cez-harness'
+              ? 'required Cezar harness wrapper "cez-harness" is missing — reinstall Cezar or rerun scripts/vendor-skills.mjs'
+              : skillProfile === 'open-mercato'
+                ? `required Open Mercato skill "${name}" is missing — install or sync open-mercato/skills, or run from an Open Mercato checkout that provides it`
+                : `required bundled generic skill "${name}" is missing — reinstall Cezar or rerun scripts/vendor-skills.mjs`,
+        };
+      }
+      if (
+        skillProfile === 'open-mercato' &&
+        name === phaseSkills.codeReview &&
+        existsSync(join(host.cwd, '.claude', 'skills', name, 'SKILL.md'))
+      ) {
+        const compositionError = await composeCompleteCodeReviewSkill();
+        if (compositionError) return { ok: false, error: compositionError };
+      }
+      try {
+        pinMaterializedSkill(name);
+      } catch {
+        if (bundledRoot === null) continue;
+        return {
+          ok: false,
+          error: `required skill "${name}" was discovered but its materialized SKILL.md could not be pinned`,
         };
       }
     }
@@ -1576,7 +1858,11 @@ export async function runHarnessDriver(
         agentic = rootAgentic;
         workingTreeConfig = true;
         const copyPath = join(artifactDir, 'working-agentic.config.json');
-        writeFileSync(copyPath, readFileSync(join(host.repoRoot, '.ai', 'agentic.config.json'), 'utf8'), 'utf8');
+        writeFileSync(
+          copyPath,
+          readHarnessArtifactText(join(host.repoRoot, '.ai', 'agentic.config.json')),
+          'utf8',
+        );
         ledger.trustedConfig = {
           baseRef: 'working-tree (uncommitted)',
           path: copyPath,
@@ -1631,6 +1917,17 @@ export async function runHarnessDriver(
       };
     }
     if (roles) {
+      if (
+        [roles.orchestrator, roles.implementer, ...roles.reviewers].some(
+          (ref) => ref.runner === 'opencode',
+        )
+      ) {
+        return {
+          ok: false,
+          error:
+            'OpenCode cannot enforce Cezar’s stage-only isolation; use Claude, Codex, or a configured advisor',
+        };
+      }
       // Advisor reviewers execute through the runtime council and need their
       // bindings in the config (spec 2026-07-24-advisor-reviewers) — fail the
       // preflight with the setup hint rather than a mid-council surprise.
@@ -1645,6 +1942,18 @@ export async function runHarnessDriver(
           };
         }
       }
+      const canonical = canonicalizeAdvisorRefs(
+        roles.reviewers,
+        (agentic.agentHarness?.models ?? {}) as Record<string, unknown>,
+      );
+      if (!canonical.ok) return { ok: false, error: canonical.error };
+      roles = { ...roles, reviewers: canonical.refs as HarnessReviewerRef[] };
+      ledger.roles = {
+        ...(ledger.roles ?? {}),
+        orchestrator: { ...roles.orchestrator },
+        implementer: { ...roles.implementer },
+        reviewers: roles.reviewers.map((reviewer) => ({ ...reviewer })),
+      };
     }
     if (roles) {
       const prober = createProber({
@@ -1758,13 +2067,43 @@ export async function runHarnessDriver(
         };
       }
     }
-    if (input.issueId) ledger.claim = { held: false, issueId: input.issueId };
     persist();
     host.emit({ type: 'harness.readiness.updated', profile: ledger.effectiveProfile, models: ledger.models });
     return { ok: true };
   });
   if (preflightError === 'cancelled') return null;
   if (preflightError) return preflightError;
+  for (const name of [...new Set(['cez-harness', ...(
+    isFeature
+      ? [phaseSkills.specWriting, phaseSkills.preImplement, phaseSkills.implementSpec, phaseSkills.codeReview]
+      : [phaseSkills.qualify, phaseSkills.diagnose, phaseSkills.fix, phaseSkills.codeReview]
+  )])]) {
+    try {
+      const binding = loadTrustedHarnessSkill(trustedSkillsRoot, name);
+      const expectedHash = ledger.trustedSkills[name];
+      if (expectedHash && expectedHash !== binding.sha256) {
+        return `harness recovery blocked: pinned skill "${name}" is missing or changed`;
+      }
+      if (!expectedHash && deps.bundledSkillsRoot !== null) {
+        return `harness recovery blocked: completed preflight did not record a hash for skill "${name}"`;
+      }
+      trustedSkillPrompts.set(name, binding.systemPrompt);
+      trustedSkillHashes.set(name, binding.sha256);
+    } catch {
+      if (deps.bundledSkillsRoot === null) continue;
+      return `harness recovery blocked: pinned skill "${name}" is missing or unreadable`;
+    }
+  }
+  if (input.issueId) {
+    const claimed = acquireClaim(host.cwd, host.runId, input.issueId);
+    if (!claimed.ok) return claimed.error;
+    ledger.claim = {
+      held: true,
+      issueId: input.issueId,
+      path: claimed.claim.path,
+    };
+    persist();
+  }
 
   // The runtime is SEALED out of the worktree before anything can rewrite it
   // (review 2026-07-27). Spawning `<worktree>/.claude/skills/.../harness.mjs`
@@ -1772,15 +2111,21 @@ export async function runHarnessDriver(
   // sandbox — to whatever the codex worker or an injected agent phase had
   // written there since preflight.
   const sealed = sealRuntime(host.cwd, artifactDir);
-  if (!sealed) return 'cez-harness runtime disappeared after preflight';
+  if (!sealed) {
+    releaseHeldIssueClaim();
+    return 'cez-harness runtime disappeared after preflight';
+  }
   ledger.runtimeScript = { path: sealed.script, sha256: sealed.sha256 };
   persist();
   const rawRuntime = createRuntime({
     script: sealed.script,
     cwd: host.cwd,
-    env: harnessChildEnvironment(
-      harnessConfigEnvironmentNames(runtimeAgentic.agentHarness),
-    ),
+    env: {
+      ...harnessChildEnvironment(
+        harnessConfigEnvironmentNames(runtimeAgentic.agentHarness),
+      ),
+      CEZ_HARNESS_REVIEW_SKILL: phaseSkills.codeReview,
+    },
   });
   const runtime: RuntimeLike = {
     kill: () => rawRuntime.kill(),
@@ -2038,7 +2383,7 @@ export async function runHarnessDriver(
     try {
       const resultStat = lstatSync(resultFile);
       const parsed = councilResultSchema.safeParse(
-        JSON.parse(readFileSync(resultFile, 'utf8')) as unknown,
+        JSON.parse(readHarnessArtifactText(resultFile)) as unknown,
       );
       if (resultStat.isFile() && parsed.success) {
         recoverableCouncil = parsed.data;
@@ -2066,10 +2411,10 @@ export async function runHarnessDriver(
           rubricSha256:
             op.kindTag === 'spec'
               ? {
-                  specification: hashMaterializedSkill('cez-spec-writing') ?? 'missing',
-                  review: hashMaterializedSkill('cez-code-review') ?? 'missing',
+                  specification: skillHash(phaseSkills.specWriting),
+                  review: skillHash(phaseSkills.codeReview),
                 }
-              : hashMaterializedSkill('cez-code-review') ?? 'missing',
+              : skillHash(phaseSkills.codeReview),
         }),
       );
       const artifactPath = join(artifactDir, `invocation-${sha256(id).slice(0, 20)}.json`);
@@ -2173,7 +2518,7 @@ export async function runHarnessDriver(
       // `.ai/agentic.config.json` at all — the ordinary cezar project — must
       // still get a council. Only a configured ADVISOR needs the repo file.
       const configJson = (existsSync(configSource)
-        ? (JSON.parse(readFileSync(configSource, 'utf8')) as object)
+        ? (JSON.parse(readHarnessArtifactText(configSource)) as object)
         : {}) as {
         agentHarness?: {
           models?: Record<string, { timeoutMs?: unknown } | undefined>;
@@ -2266,7 +2611,15 @@ export async function runHarnessDriver(
         }
         return { rows, error };
       }
-      const raw = existsSync(resultFile) ? (JSON.parse(readFileSync(resultFile, 'utf8')) as unknown) : null;
+      let raw: unknown = null;
+      let resultReadError: string | null = null;
+      if (existsSync(resultFile)) {
+        try {
+          raw = JSON.parse(readHarnessArtifactText(resultFile)) as unknown;
+        } catch (readError) {
+          resultReadError = readError instanceof Error ? readError.message : String(readError);
+        }
+      }
       const parsedCouncil = raw === null ? null : councilResultSchema.safeParse(raw);
       if (!parsedCouncil?.success) {
         if (result.ok && raw !== null && parsedCouncil && !parsedCouncil.success) {
@@ -2279,7 +2632,9 @@ export async function runHarnessDriver(
             `it does not match the expected shape: ${issues}. ` +
             `The council itself completed; this is a cezar/runtime contract mismatch.`;
         } else if (result.ok && raw === null) {
-          error = `advisor council wrote no result file at ${resultFile}`;
+          error = resultReadError
+            ? `advisor council result could not be read safely: ${resultReadError}`
+            : `advisor council wrote no result file at ${resultFile}`;
         } else {
           error = `advisor council failed: ${(result.error ?? result.stderr.slice(-300)).trim() || `exit ${result.exitCode}, no diagnostics on stderr`}`;
         }
@@ -2458,7 +2813,7 @@ export async function runHarnessDriver(
       join(packetRunDir, 'packets', packetId, 'packet-result.json');
     const readPacket = (packetId: string): Record<string, unknown> | null => {
       try {
-        const value = JSON.parse(readFileSync(packetResultPath(packetId), 'utf8'));
+        const value = JSON.parse(readHarnessArtifactText(packetResultPath(packetId)));
         return value && typeof value === 'object' && !Array.isArray(value)
           ? (value as Record<string, unknown>)
           : null;
@@ -2686,7 +3041,7 @@ export async function runHarnessDriver(
         );
         let evidenceMatches = false;
         try {
-          const evidence = JSON.parse(readFileSync(gateEvidencePath, 'utf8')) as {
+          const evidence = JSON.parse(readHarnessArtifactText(gateEvidencePath)) as {
             packetId?: unknown;
             diffSha256?: unknown;
             status?: unknown;
@@ -3200,14 +3555,13 @@ export async function runHarnessDriver(
     let suggestedCommit: string | undefined;
     let implementSummary: string | undefined;
     let diagnosisSummary: string;
-
     if (isFeature) {
       const spec = await agentPhase(
         'spec',
         'Specify',
-        'cez-spec-writing',
+        phaseSkills.specWriting,
         [
-          `Write the specification for this feature brief, following the cez-spec-writing skill in full.`,
+          `Write the specification for this feature brief, following the selected ${phaseSkills.specWriting} skill in full.`,
           ``,
           `Feature brief:`,
           input.task,
@@ -3220,7 +3574,7 @@ export async function runHarnessDriver(
           `Save the spec inside THIS worktree — its root is ${host.cwd}. Resolve the repository's spec`,
           `location relative to that root; never write to any other checkout, even if a repo-root check`,
           `points outside this directory (this worktree's .git is a file, not a directory, which fools that check).`,
-          `This session is non-interactive, so the cez-spec-writing Open Questions gate cannot stop on the user: answer each open question yourself with the most defensible assumption, record question + chosen assumption in the spec's Open Questions section, and list them in the result's "openQuestions".`,
+          `This session is non-interactive, so any Open Questions gate cannot stop on the user: answer each open question yourself with the most defensible assumption, record question + chosen assumption in the spec's Open Questions section, and list them in the result's "openQuestions".`,
           `When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
           `{"summary": "<one-paragraph spec summary>", "specPath": "<repo-relative path of the spec file>", "files": ["<spec file>"], "openQuestions": ["<question> — assumed: <the assumption you proceeded under>"]}`,
         ].join('\n'),
@@ -3231,6 +3585,7 @@ export async function runHarnessDriver(
       if ('cancelled' in (spec as object)) return null;
       if ('error' in (spec as object)) return (spec as { error: string }).error;
       const specResult = spec as z.infer<typeof specResultSchema>;
+      let finalSpecPath = specResult.specPath;
       diagnosisSummary = specResult.summary;
       for (const f of specResult.files ?? []) allowlist.add(f);
       if (specResult.openQuestions?.length) {
@@ -3253,7 +3608,7 @@ export async function runHarnessDriver(
       // `standard` keeps the single-author spec and goes straight to build.
       if (roles && roles.reviewers.length > 0) {
         const MAX_SPEC_ROUNDS = 3;
-        let specPath = specResult.specPath;
+        let specPath = finalSpecPath;
         /**
          * A returned path is a claim; verify the file is actually THERE before a
          * council pays to review it (2026-07-25).
@@ -3309,14 +3664,14 @@ export async function runHarnessDriver(
               id: councilId,
               name: councilName,
               kind: 'agent',
-              skill: 'cez-spec-writing',
+              skill: phaseSkills.specWriting,
             });
             persist();
             host.setStepStatus(councilId, 'running');
             emitPhase(councilId);
           }
           const specPromptText = `${[
-              `You are a FRESH review context. Review the feature SPECIFICATION at ${specPath} (read it from this worktree) to staff-engineer standard: risks, backward compatibility, gaps, implementation-readiness, and simplicity — the cez-spec-writing review format.`,
+              `You are a FRESH review context. Review the feature SPECIFICATION at ${specPath} (read it from this worktree) to staff-engineer standard: risks, backward compatibility, gaps, implementation-readiness, and simplicity — the ${phaseSkills.specWriting} review format.`,
               ``,
               `The feature brief: ${input.task}`,
               ``,
@@ -3337,6 +3692,14 @@ export async function runHarnessDriver(
             const label = roleRefId(reviewer);
             const resultPath = join(artifactDir, `phase-${councilId}-r${idx + 1}-result.json`);
             const renderedPrompt = `${specPromptText.replaceAll('$CEZ_HARNESS_RESULT_FILE', resultPath)}\n\n${PHASE_SESSION_CONTRACT}`;
+            const budgetError = promptBudgetError(
+              completeModelPrompt(phaseSkills.specWriting, renderedPrompt),
+            );
+            if (budgetError) {
+              outcomes.push({ label, family: councilFamilyOf(reviewer), status: 'failed', reason: budgetError });
+              councilReviewers.push({ id: label, status: 'failed', reason: budgetError });
+              return;
+            }
             const invocationId = `reviewer:${councilId}:${label}`;
             const inputSha256 = sha256(
               JSON.stringify({
@@ -3346,7 +3709,7 @@ export async function runHarnessDriver(
                 reviewer,
                 prompt: renderedPrompt,
                 subjectSha256: specSubjectSha256,
-                rubricSha256: hashMaterializedSkill('cez-spec-writing') ?? 'missing',
+                rubricSha256: skillHash(phaseSkills.specWriting),
               }),
             );
             let parsed = reusableInvocation(invocationId, inputSha256, reviewResultSchema);
@@ -3370,6 +3733,13 @@ export async function runHarnessDriver(
                 attempt > 1 && lastContractFailure
                   ? `${renderedPrompt}${resultContractRetryAppendix(lastContractFailure, resultPath, false)}`
                   : renderedPrompt;
+              const attemptBudgetError = promptBudgetError(
+                completeModelPrompt(phaseSkills.specWriting, attemptPrompt),
+              );
+              if (attemptBudgetError) {
+                lastFailure = attemptBudgetError;
+                break;
+              }
               const invocation = beginInvocation({
                 id: invocationId,
                 phaseId: councilId,
@@ -3382,7 +3752,7 @@ export async function runHarnessDriver(
                   family: councilFamilyOf(reviewer),
                 },
                 inputSha256,
-                prompt: attemptPrompt,
+                prompt: completeModelPrompt(phaseSkills.specWriting, attemptPrompt),
               });
               // A failed prior attempt can leave a result file behind; attempt 2 of run
               // 0fe16fb7 read one, announced "the file already exists", and set about
@@ -3392,7 +3762,7 @@ export async function runHarnessDriver(
                 concurrent: true,
                 phaseId: councilId,
                 name: `${councilName} — ${label}`,
-                skill: 'cez-spec-writing',
+                skill: phaseSkills.specWriting,
                 prompt: attemptPrompt,
                 resultPath,
                 timeoutMs: PHASE_TIMEOUTS_MS.review ?? 30 * 60_000,
@@ -3566,48 +3936,45 @@ export async function runHarnessDriver(
           });
           if (specVerdict === 'approve') break;
           if (sround === MAX_SPEC_ROUNDS) {
-            // Do NOT discard the run (2026-07-25). Observed live: three rounds
-            // of genuine revision, one reviewer approving and converging, and a
-            // second raising three fresh majors every round — variations on the
-            // same themes, with no criterion it would ever sign off on. The
-            // spec was materially better each round and was thrown away anyway.
-            //
-            // The LAST revision already answered the previous round's findings
-            // (review > fixes, user contract 2026-07-29) — so the build simply
-            // proceeds. The open questions stay loud: they are threaded into
-            // every later review prompt and into the handoff, but they no
-            // longer mark the whole run contested — a spec disagreement from
-            // minute ten must not gate publishing a build that every later
-            // council approved.
-            const contested = specFindings
+            const blockingFindings = specFindings
               .filter((f) => f.severity === 'blocker' || f.severity === 'major')
-              .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`)
-              .join('; ');
-            unresolvedSpecFindings.push(
-              ...specFindings
-                .filter((f) => f.severity === 'blocker' || f.severity === 'major')
-                .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`),
+              .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`);
+            unresolvedSpecFindings.push(...blockingFindings);
+            const accepted = ledger.decisions.some(
+              (decision) =>
+                decision.kind === 'spec.accept' &&
+                decision.detail === `council:${sround}`,
             );
-            ledger.decisions.push({
-              at: new Date().toISOString(),
-              kind: 'spec-council.unresolved',
-              by: 'driver',
-              detail: contested || 'reviewers split on the verdict without blocking findings',
-            });
-            persist();
+            if (!accepted) {
+              const reasons =
+                blockingFindings.length > 0
+                  ? blockingFindings
+                  : ['specification reviewers did not converge on implementation readiness'];
+              setOutcome({
+                status: 'contested',
+                blockingReasons: reasons,
+                pendingDecision: {
+                  kind: 'spec',
+                  gate: 'council',
+                  round: sround,
+                  findings: reasons,
+                },
+              });
+              return `spec council did not converge after ${MAX_SPEC_ROUNDS} rounds; explicit acceptance is required before implementation`;
+            }
             host.emit({
               type: 'note',
               stepId: councilId,
               message:
-                `spec council did not converge in ${MAX_SPEC_ROUNDS} rounds — proceeding with the spec as revised, ` +
-                `UNRESOLVED: ${contested || 'no blocking findings, reviewers still split on the verdict'}`,
+                `spec council did not converge in ${MAX_SPEC_ROUNDS} rounds — proceeding only because ` +
+                `the user explicitly accepted the unresolved specification risk`,
             });
             break;
           }
           const revise = await agentPhase(
             `spec-${sround + 1}`,
             `Revise spec (round ${sround} feedback)`,
-            'cez-spec-writing',
+            phaseSkills.specWriting,
             [
               `The spec council requested changes on the specification at ${specPath}. Address every finding, update the spec file in place, and keep it implementation-accurate.`,
               ``,
@@ -3628,21 +3995,72 @@ export async function runHarnessDriver(
           if ('error' in (revise as object)) return (revise as { error: string }).error;
           const revised = revise as z.infer<typeof specResultSchema>;
           specPath = revised.specPath;
+          finalSpecPath = specPath;
           diagnosisSummary = revised.summary;
           for (const f of revised.files ?? []) allowlist.add(f);
         }
+      }
+
+      const preImplement = await agentPhase(
+        'pre-implement',
+        'Pre-implementation audit',
+        phaseSkills.preImplement,
+        [
+          `Audit the completed specification at ${finalSpecPath} before implementation.`,
+          `Use the selected pre-implementation skill in full: verify backward compatibility,`,
+          `security, data/API contracts, migration and rollback safety, testability, and whether`,
+          `the plan is concrete enough to implement without guessing.`,
+          ``,
+          `Feature brief: ${input.task}`,
+          ``,
+          `This phase is read-only. Save the detailed report under $CEZ_HARNESS_ARTIFACT_DIR.`,
+          `When done, write a result file at $CEZ_HARNESS_RESULT_FILE of the shape:`,
+          `{"status":"ready|blocked","summary":"…","reportPath":"<absolute or artifact-relative report path>","findings":[{"severity":"blocker|major|minor","title":"…","evidence":"…"}]}`,
+          `Use "blocked" whenever a blocker or major design gap remains.`,
+        ].join('\n'),
+        preImplementResultSchema,
+        'spec',
+        roles?.orchestrator,
+      );
+      if ('cancelled' in (preImplement as object)) return null;
+      if ('error' in (preImplement as object)) return (preImplement as { error: string }).error;
+      const preImplementResult = preImplement as z.infer<typeof preImplementResultSchema>;
+      const preImplementBlockers = preImplementResult.findings.filter(
+        (finding) => finding.severity === 'blocker' || finding.severity === 'major',
+      );
+      if (
+        (preImplementResult.status === 'blocked' || preImplementBlockers.length > 0) &&
+        !ledger.decisions.some(
+          (decision) => decision.kind === 'spec.accept' && decision.detail === 'pre-implement:1',
+        )
+      ) {
+        const findings = preImplementBlockers.map(
+          (finding) => `[${finding.severity}] ${finding.title}: ${finding.evidence}`,
+        );
+        setOutcome({
+          status: 'contested',
+          blockingReasons: findings.length > 0 ? findings : [preImplementResult.summary],
+          pendingDecision: {
+            kind: 'spec',
+            gate: 'pre-implement',
+            round: 1,
+            findings: findings.length > 0 ? findings : [preImplementResult.summary],
+          },
+        });
+        return 'pre-implementation audit found unresolved specification risks; explicit acceptance is required before implementation';
       }
     } else {
       const qualify = await agentPhase(
         'qualify',
         'Qualify',
-        'cez-verify-in-repo',
+          phaseSkills.qualify,
         [
-          `Qualify this tracker issue with the cez-verify-in-repo skill: decide whether it is a real, still-unfixed defect on the current branch.`,
+          `Qualify this tracker issue with the ${phaseSkills.qualify} skill: decide whether it is a real, still-unfixed defect on the current branch.`,
           ``,
           `Issue:`,
           input.task,
           ``,
+          `Cezar already holds the run-local issue lease. Skip the skill's tracker claim and all tracker mutations.`,
           `Read-only triage — change nothing. When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
           `{"outcome": "work_needed" | "no_action", "evidence": "<one-paragraph evidence summary>"}`,
           `Use "no_action" when the issue is already fixed, already owned by someone else, covered by an open PR, or not actually a defect.`,
@@ -3667,15 +4085,16 @@ export async function runHarnessDriver(
       const diagnose = await agentPhase(
         'diagnose',
         'Diagnose',
-        'cez-root-cause',
+        phaseSkills.diagnose,
         [
-          `Diagnose the root cause of this issue with the cez-root-cause skill. Read-only — locate the cause and the minimal change surface; do not fix anything yet.`,
+          `Diagnose the root cause of this issue with the ${phaseSkills.diagnose} skill. Read-only — locate the cause and the minimal change surface; do not fix anything yet.`,
           ``,
           `Issue:`,
           input.task,
           ``,
           `Qualification evidence: ${qualifyResult.evidence}`,
           ``,
+          `Use the supplied issue text and evidence as the chain input. Do not claim or mutate the tracker.`,
           `Write your full diagnosis brief to a markdown file under $CEZ_HARNESS_ARTIFACT_DIR, then write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
           `{"summary": "<evidence-backed root-cause summary>", "files": ["<repo-relative files to change>"], "regressionTest": "<proposed regression test, optional>"}`,
         ].join('\n'),
@@ -3686,18 +4105,13 @@ export async function runHarnessDriver(
       if ('cancelled' in (diagnose as object)) return null;
       if ('error' in (diagnose as object)) return (diagnose as { error: string }).error;
       diagnosisSummary = (diagnose as z.infer<typeof diagnoseResultSchema>).summary;
+
     }
 
     const agentic = runtimeAgentic;
     type AttributedFinding = ReviewResult['findings'][number] & { by?: string };
     let reviewFindings: AttributedFinding[] = [];
     let survivingBlockers: AttributedFinding[] = [];
-    /** The last council's blocking findings when the review budget ran out —
-     *  the CLOSING FIX answers them and the run moves on (review > fixes,
-     *  user contract 2026-07-29). The om harness this ports always gave the
-     *  fixer the last word; the contested publish gate was cezar-only friction. */
-    let closingFindings: AttributedFinding[] = [];
-    let closingFix: { findings: string[]; response: string } | null = null;
     const packetized = ledger.effectiveProfile === 'high-assurance';
     if (packetized) {
       const packetError = await runHighAssurancePackets(agentic, diagnosisSummary, allowlist);
@@ -3824,7 +4238,7 @@ export async function runHarnessDriver(
         ? [
             isFeature
               ? `Implement this feature in the current worktree, following the specification summary below.`
-              : `Fix this issue in the current worktree with the cez-fix skill: regression test first (observe it fail for the diagnosed reason), then the minimal fix, then the repository's validation.`,
+              : `Fix this issue in the current worktree with the ${phaseSkills.fix} skill. Add the mandatory regression test and prove the complete fix through its validation workflow.`,
             ``,
             `Task:`,
             input.task,
@@ -3870,7 +4284,7 @@ export async function runHarnessDriver(
         const implement = await agentPhase(
           implementId,
           isFirst ? 'Implement' : `Fixes (round ${round - 1} feedback)`,
-          'cez-fix',
+          isFeature ? phaseSkills.implementSpec : phaseSkills.fix,
           implementPrompt,
           isFirst ? implementResultSchema : fixResultSchema,
           isFirst ? 'implement' : 'fix',
@@ -3888,7 +4302,6 @@ export async function runHarnessDriver(
 
       const implementDrift = await gitDriftError(implementId);
       if (implementDrift) return implementDrift;
-
       const validateId = isFirst ? 'validate' : `validate-${round}`;
       let validationFailed: string | null = null;
       const validationArtifactSchema = z.object({
@@ -4064,10 +4477,10 @@ export async function runHarnessDriver(
         return reason;
       }
       const codeReviewRubricSha256 =
-        hashMaterializedSkill('cez-code-review') ?? 'missing';
+        skillHash(phaseSkills.codeReview);
 
       const reviewPromptText = [
-        `You are a FRESH review context with no implementation transcript — review this worktree's complete uncommitted diff against the base branch with the cez-code-review skill, in full.`,
+        `You are a FRESH review context with no implementation transcript — review this worktree's complete uncommitted diff against the base branch with the ${phaseSkills.codeReview} skill, in full.`,
         ``,
         `The task under review: ${input.task}`,
         `Validation gate: ${
@@ -4079,7 +4492,7 @@ export async function runHarnessDriver(
         ``,
         `Confirm findings against the code itself. When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
         `{"verdict": "approve" | "request_changes", "findings": [{"severity": "blocker|major|minor|nit", "title": "…", "location": "path:line", "evidence": "…"}]}`,
-        `Verdict follows cez-code-review mechanically: any blocker or major finding means "request_changes"; only minor/nit findings (or none) means "approve".`,
+        `Verdict follows ${phaseSkills.codeReview} mechanically: any blocker or major finding means "request_changes"; only minor/nit findings (or none) means "approve".`,
       ].join('\n') + priorRoundsAppendix();
 
       let mergedFindings: AttributedFinding[];
@@ -4113,7 +4526,7 @@ export async function runHarnessDriver(
             id: reviewId,
             name: councilName,
             kind: 'agent',
-            skill: 'cez-code-review',
+            skill: phaseSkills.codeReview,
           });
           persist();
           host.setStepStatus(reviewId, 'running');
@@ -4136,6 +4549,14 @@ export async function runHarnessDriver(
           const renderedPrompt = `${councilReviewPromptText
             .replaceAll('$CEZ_HARNESS_RESULT_FILE', resultPath)
             .replaceAll('$CEZ_HARNESS_ARTIFACT_DIR', artifactDir)}\n\n${PHASE_SESSION_CONTRACT}`;
+          const budgetError = promptBudgetError(
+            completeModelPrompt(phaseSkills.codeReview, renderedPrompt),
+          );
+          if (budgetError) {
+            outcomes.push({ label, family: councilFamilyOf(reviewer), status: 'failed', reason: budgetError });
+            councilReviewers.push({ id: label, status: 'failed', reason: budgetError });
+            return;
+          }
           const invocationId = `reviewer:${reviewId}:${label}`;
           const inputSha256 = sha256(
             JSON.stringify({
@@ -4170,6 +4591,13 @@ export async function runHarnessDriver(
               attempt > 1 && lastContractFailure
                 ? `${renderedPrompt}${resultContractRetryAppendix(lastContractFailure, resultPath, false)}`
                 : renderedPrompt;
+            const attemptBudgetError = promptBudgetError(
+              completeModelPrompt(phaseSkills.codeReview, attemptPrompt),
+            );
+            if (attemptBudgetError) {
+              lastFailure = attemptBudgetError;
+              break;
+            }
             const invocation = beginInvocation({
               id: invocationId,
               phaseId: reviewId,
@@ -4182,7 +4610,7 @@ export async function runHarnessDriver(
                 family: councilFamilyOf(reviewer),
               },
               inputSha256,
-              prompt: attemptPrompt,
+              prompt: completeModelPrompt(phaseSkills.codeReview, attemptPrompt),
             });
             // Same lesson as the spec council (run 0fe16fb7): a failed prior
             // attempt can leave a result file behind that derails attempt 2.
@@ -4191,7 +4619,7 @@ export async function runHarnessDriver(
               concurrent: true,
               phaseId: reviewId,
               name: `Review — ${label}`,
-              skill: 'cez-code-review',
+              skill: phaseSkills.codeReview,
               prompt: attemptPrompt,
               resultPath,
               timeoutMs: PHASE_TIMEOUTS_MS.review ?? 30 * 60_000,
@@ -4375,7 +4803,7 @@ export async function runHarnessDriver(
         const review = await agentPhase(
           reviewId,
           isFirst ? 'Review (round 1)' : `Review (round ${round})`,
-          'cez-code-review',
+          phaseSkills.codeReview,
           reviewPromptText,
           reviewResultSchema,
           'review',
@@ -4438,19 +4866,13 @@ export async function runHarnessDriver(
         break;
       }
       if (round >= ledger.loops.maxFixRounds + validationRepairRounds) {
-        // The review budget is spent. The fixer gets the LAST WORD (review >
-        // fixes): one closing fix answers these findings after the loop, the
-        // validation gate re-proves the tree, and the run completes with the
-        // whole exchange recorded — no publish gate. The validation GATE is
-        // different and still fails the run — that one is objective.
         const surviving = blocking.map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`).join('; ');
-        closingFindings = blocking;
         host.emit({
           type: 'note',
           stepId: reviewId,
           message:
-            `review budget exhausted after ${ledger.loops.maxFixRounds} rounds — the closing fixes get ` +
-            `the last word, unreviewed by the council: ${surviving}`,
+            `review budget exhausted after ${ledger.loops.maxFixRounds} rounds — preserving the ` +
+            `reviewed worktree as contested; no unreviewed fixer is allowed to clear blockers: ${surviving}`,
         });
         break;
       }
@@ -4462,128 +4884,6 @@ export async function runHarnessDriver(
         response: '',
       });
       reviewFindings = blocking;
-    }
-
-    if (closingFindings.length > 0) {
-      const closingFindingLines = closingFindings.map(
-        (f) =>
-          `- [${f.severity}] ${f.title}${f.location ? ` (${f.location})` : ''}${f.evidence ? ` — ${f.evidence}` : ''}${f.by ? ` — raised by ${f.by}` : ''}`,
-      );
-      const closing = await agentPhase(
-        'fix-final',
-        'Final fixes',
-        'cez-fix',
-        [
-          `The review budget is spent; these are the council's final blocking findings. Address them in the current worktree — this is the run's closing pass and it will NOT be re-reviewed, so keep every change minimal and safe.`,
-          ``,
-          `Findings:`,
-          ...closingFindingLines,
-          ``,
-          `When a finding cites a "full output:" log path, read that log for the complete failure detail before re-running long suites.`,
-          `Hard boundaries: edit only this worktree; create NO commit; perform NO push or PR; do not weaken or delete tests.`,
-          `When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
-          `{"changedPaths": ["<every repo-relative file you changed>"], "summary": "<what you fixed and any finding you deliberately left, with why>"}`,
-        ].join('\n'),
-        fixResultSchema,
-        'fix',
-        roles?.implementer,
-      );
-      if ('cancelled' in (closing as object)) return null;
-      if ('error' in (closing as object)) return (closing as { error: string }).error;
-      const closingResult = closing as z.infer<typeof fixResultSchema>;
-      for (const path of closingResult.changedPaths) addToAllowlist(path, 'fix-final');
-      const closingDrift = await gitDriftError('fix-final');
-      if (closingDrift) return closingDrift;
-
-      // The gate re-proves the closing pass — the one authority that still
-      // fails the run here, because it is objective.
-      const closingChecksPath = join(artifactDir, 'validation-validate-final.json');
-      let closingGateError: string | null = null;
-      const closingValidate = await opPhase('validate-final', 'Validate (final)', async () => {
-        if (agentic.validationCommands.length === 0) return { ok: true };
-        const invocation = beginInvocation({
-          id: 'validation:validate-final',
-          phaseId: 'validate-final',
-          role: 'validation',
-          binding: { runner: 'bash' },
-          inputSha256: sha256(
-            JSON.stringify({
-              inputHashVersion: 2,
-              operation: 'validate-final',
-              commands: agentic.validationCommands,
-            }),
-          ),
-        });
-        const controller = new AbortController();
-        const offClosingInterrupt = host.onInterrupt(() => controller.abort());
-        try {
-          const checks = await validate(agentic.validationCommands, host.cwd, {
-            signal: controller.signal,
-            env: harnessChildEnvironment(harnessConfigEnvironmentNames(agentic.agentHarness)),
-            logDir: artifactDir,
-            logPrefix: 'validation-validate-final-',
-            onSpawn: (identity) => {
-              invocation.process = { ...identity };
-              persist();
-              emitInvocation(invocation);
-            },
-            onExit: () => {
-              invocation.process = undefined;
-              persist();
-              emitInvocation(invocation);
-            },
-          });
-          if (host.isCancelled()) {
-            finishInvocation(invocation, 'interrupted', { error: 'run cancelled during the final validation' });
-            return { ok: true };
-          }
-          closingGateError = describeGateVerdict(checks, 'validate-final');
-          ledger.validation = checks;
-          writeJsonAtomic(closingChecksPath, {
-            version: 1,
-            status: checks.every((check) => check.status === 'passed') ? 'passed' : 'failed',
-            checks,
-          });
-          finishInvocation(invocation, 'completed', { artifactPath: closingChecksPath });
-          return { ok: true };
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          finishInvocation(invocation, 'failed', { error: detail });
-          return { ok: false, error: `the final validation could not run: ${detail}` };
-        } finally {
-          offClosingInterrupt();
-        }
-      });
-      if (closingValidate === 'cancelled') return null;
-      if (closingValidate) {
-        setOutcome({ status: 'blocked', blockingReasons: [closingValidate] });
-        return closingValidate;
-      }
-      if (closingGateError) {
-        const reason = `the closing fixes broke the validation gate: ${closingGateError}`;
-        setOutcome({ status: 'blocked', blockingReasons: [reason] });
-        return reason;
-      }
-      closingFix = {
-        findings: closingFindings.map(
-          (f) => `[${f.severity}] ${f.title} (raised by ${f.by})`,
-        ),
-        response: closingResult.summary ?? '(no summary recorded)',
-      };
-      ledger.decisions.push({
-        at: new Date().toISOString(),
-        kind: 'review.closing-fixes',
-        by: 'driver',
-        detail: closingFix.findings.join('; '),
-      });
-      persist();
-      host.emit({
-        type: 'note',
-        message:
-          `closing fixes applied and the gate re-proved — moving on. The council did not re-review ` +
-          `this pass; the findings and the fixer's response ride the handoff.`,
-      });
-      survivingBlockers = [];
     }
 
     if (survivingBlockers.length > 0 && ledger.outcome.status === 'pending') {
@@ -4612,6 +4912,31 @@ export async function runHarnessDriver(
       return reason;
     }
 
+    const discoveredPaths = discoverChangedPaths(host.cwd, [...allowlist]);
+    if (discoveredPaths === null) {
+      const reason =
+        'could not derive the complete changed-path set from git; refusing to stage a model-declared subset';
+      setOutcome({ status: 'blocked', blockingReasons: [reason] });
+      return reason;
+    }
+    const omitted = discoveredPaths.filter((path) => !allowlist.has(path));
+    if (omitted.length > 0) {
+      host.emit({
+        type: 'note',
+        stepId: 'stage',
+        message:
+          `phase result allowlists omitted ${omitted.length} changed path(s); Cezar derived the ` +
+          `complete handoff from git and will stage them too:\n- ${omitted.join('\n- ')}`,
+      });
+    }
+    allowlist.clear();
+    for (const path of discoveredPaths) allowlist.add(path);
+    const unsafeStagePath = [...allowlist].find(
+      (path) => /[\x00-\x1f\x7f]/.test(path) || path.startsWith('/') || path.split(/[\\/]/).includes('..'),
+    );
+    if (unsafeStagePath) {
+      return `cannot stage unsafe changed path: ${JSON.stringify(unsafeStagePath)}`;
+    }
     const allowlistPath = join(artifactDir, 'allowlist.txt');
     writeFileSync(allowlistPath, `${[...allowlist].sort().join('\n')}\n`, 'utf8');
     const stageResultPath = join(artifactDir, 'stage-result.json');
@@ -4638,7 +4963,7 @@ export async function runHarnessDriver(
     const recoveredStage = reusableInvocation(
       stageInvocationId,
       stageInputSha256,
-      z.record(z.string(), z.unknown()),
+      harnessStageResultSchema,
     );
     if (
       recoveredStage &&
@@ -4741,16 +5066,36 @@ export async function runHarnessDriver(
     // leftovers outside the handoff — run aad28178). They ride the run log AND
     // the prepared PR body, so the human gate sees them wherever it reads.
     let stageWarnings: string[] = [];
+    let stagedPaths: string[] = [];
     try {
-      const stageResult = JSON.parse(readFileSync(stageResultPath, 'utf8')) as {
-        warnings?: unknown;
-      };
-      if (Array.isArray(stageResult.warnings)) {
-        stageWarnings = stageResult.warnings.filter(
-          (entry): entry is string => typeof entry === 'string',
-        );
+      const parsedStage = harnessStageResultSchema.safeParse(
+        JSON.parse(readHarnessArtifactText(stageResultPath)),
+      );
+      if (!parsedStage.success) {
+        const reason = `stage result is invalid: ${parsedStage.error.issues
+          .slice(0, 3)
+          .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+          .join('; ')}`;
+        ledger.stage = { ...ledger.stage, status: 'failed', error: reason };
+        setOutcome({ status: 'blocked', blockingReasons: [reason] });
+        return reason;
       }
-    } catch {
+      stageWarnings = parsedStage.data.warnings ?? [];
+      stagedPaths = parsedStage.data.stagedPaths;
+      if (!samePathSet(stagedPaths, [...allowlist])) {
+        const reason =
+          'stage result is incomplete: staged paths do not exactly match the complete git-derived handoff';
+        ledger.stage = { ...ledger.stage, status: 'failed', error: reason };
+        setOutcome({ status: 'blocked', blockingReasons: [reason] });
+        return reason;
+      }
+    } catch (error) {
+      const reason = `could not read stage result: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      ledger.stage = { ...ledger.stage, status: 'failed', error: reason };
+      setOutcome({ status: 'blocked', blockingReasons: [reason] });
+      return reason;
     }
     for (const warning of stageWarnings) {
       host.emit({ type: 'note', stepId: 'stage', message: `staged with a warning — ${warning}` });
@@ -4760,7 +5105,7 @@ export async function runHarnessDriver(
       status: 'staged',
       startStatePath,
       allowlistPath,
-      stagedPaths: [...allowlist].sort(),
+      stagedPaths,
       suggestedCommit:
         suggestedCommit ?? (isFeature ? `feat: ${input.task.split('\n')[0]}` : `fix: ${input.task.split('\n')[0]}`),
       prBody: [
@@ -4782,15 +5127,6 @@ export async function runHarnessDriver(
                     `Risk accepted by the user at ${ledger.outcome.acceptedAt}: ${ledger.outcome.acceptanceReason ?? '(no reason recorded)'}`,
                   ]
                 : []),
-            ]
-          : []),
-        ...(closingFix
-          ? [
-              ``,
-              `## Closing fixes (review budget exhausted — unreviewed by the council)`,
-              ...closingFix.findings.map((finding) => `- ${finding}`),
-              ``,
-              `Fixer's response: ${closingFix.response}`,
             ]
           : []),
         ...(unresolvedSpecFindings.length > 0
@@ -4818,6 +5154,7 @@ export async function runHarnessDriver(
     });
     return null;
   } finally {
+    if (ledger.stage.status !== 'staged') releaseHeldIssueClaim();
     offInterrupt();
   }
 }

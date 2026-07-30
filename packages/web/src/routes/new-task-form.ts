@@ -7,6 +7,7 @@ import type {
   HarnessProbeResponse,
   HarnessProfile,
   HarnessRoles,
+  HarnessSkillProfile,
   HarnessStatusResponse,
   ImageInput,
   Runner,
@@ -625,6 +626,7 @@ export function buildCreateRunBody(opts: {
    *  (The named `profile` alternative was dropped from the composer 2026-07-27; the server
    *  still accepts it from scripted callers.) */
   harnessRoles?: HarnessRoles
+  harnessSkillProfile?: HarnessSkillProfile
   harnessBaseAcknowledgement?: {
     configuredBase: string
     remoteDefault: string
@@ -645,6 +647,7 @@ export function buildCreateRunBody(opts: {
     generateFollowups,
     todoId,
     harnessRoles,
+    harnessSkillProfile,
     harnessBaseAcknowledgement,
   } = opts
   return {
@@ -663,14 +666,13 @@ export function buildCreateRunBody(opts: {
     todoId: todoId || undefined,
     harness:
       harnessWorkflowName(source) !== null
-        ? harnessRoles || harnessBaseAcknowledgement
-          ? {
-              ...(harnessRoles ? { roles: harnessRoles } : {}),
-              ...(harnessBaseAcknowledgement
-                ? { baseAcknowledgement: harnessBaseAcknowledgement }
-                : {}),
-            }
-          : undefined
+        ? {
+            skillProfile: harnessSkillProfile ?? 'generic',
+            ...(harnessRoles ? { roles: harnessRoles } : {}),
+            ...(harnessBaseAcknowledgement
+              ? { baseAcknowledgement: harnessBaseAcknowledgement }
+              : {}),
+          }
         : undefined,
   }
 }

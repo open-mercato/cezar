@@ -156,7 +156,7 @@
         "mimo"
       ],
       "maxParallel": 5,
-      "maxInputBytes": 700000,
+      "maxInputBytes": 180000,
       "reviewPolicy": {
         "mode": "all-required",
         "requiredReviewers": [
@@ -180,7 +180,7 @@
         "mimo"
       ],
       "maxParallel": 5,
-      "maxInputBytes": 700000,
+      "maxInputBytes": 180000,
       "reviewPolicy": {
         "mode": "all-required",
         "requiredReviewers": [
@@ -204,7 +204,7 @@
         "mimo"
       ],
       "maxParallel": 5,
-      "maxInputBytes": 700000,
+      "maxInputBytes": 180000,
       "reviewPolicy": {
         "mode": "all-required",
         "requiredReviewers": [

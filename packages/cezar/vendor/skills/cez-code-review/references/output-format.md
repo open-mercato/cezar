@@ -1,8 +1,8 @@
 # Review report output format
 
 The report skeleton `cez-code-review` produces at workflow step 8. Callers
-(`om-auto-review-pr`, `om-review-prs`, the self-review steps of
-`om-auto-create-pr` / `om-auto-continue-pr`) consume the verdict and the
+(`the automated review stage`, `the batch review workflow`, the self-review steps of
+`the implementation workflow` / `the continuation workflow`) consume the verdict and the
 blocker/major findings from this structure.
 
 Use this structure for every review:

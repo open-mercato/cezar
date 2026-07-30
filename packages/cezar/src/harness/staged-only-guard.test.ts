@@ -88,17 +88,13 @@ describe('staged-only git guard', () => {
   });
 
   /**
-   * Regression (run aad28178, 2026-07-28): two hours of green work — councils,
-   * three fix rounds, full validation — refused at handoff over trailing
-   * whitespace in a spec markdown file and blank lines at EOF. Cosmetic and
-   * completeness findings are warnings on the stage result now; the human gate
-   * judges them. Only integrity failures still refuse.
+   * Regression (run aad28178, 2026-07-28): cosmetic whitespace must not discard
+   * an otherwise complete handoff. The human review gate can judge it.
    */
-  it('stages a whitespace-dirty diff and leftovers with warnings instead of refusing', async () => {
+  it('stages a whitespace-dirty complete diff with a warning', async () => {
     const { repo, worktree, startState } = await fixture();
     // Trailing whitespace + blank line at EOF — exactly what killed aad28178.
     writeFileSync(join(worktree, 'spec.md'), '**Date**: 2026-07-28 \ntext\n\n', 'utf8');
-    writeFileSync(join(worktree, 'scratch-notes.txt'), 'model scratchpad\n', 'utf8');
     const paths = join(repo, 'paths.txt');
     writeFileSync(paths, 'spec.md\n');
     const staged = await runtime(
@@ -113,8 +109,24 @@ describe('staged-only git guard', () => {
     const warnings = (result.warnings ?? []).join('\n');
     expect(warnings).toContain('whitespace findings');
     expect(warnings).toContain('trailing whitespace');
-    expect(warnings).toContain('NOT part of the staged handoff');
-    expect(warnings).toContain('scratch-notes.txt');
+  });
+
+  it('refuses a handoff that leaves changed paths unstaged', async () => {
+    const { repo, worktree, startState } = await fixture();
+    writeFileSync(join(worktree, 'spec.md'), 'complete product change\n', 'utf8');
+    writeFileSync(join(worktree, 'scratch-notes.txt'), 'model scratchpad\n', 'utf8');
+    const paths = join(repo, 'paths.txt');
+    writeFileSync(paths, 'spec.md\n');
+
+    const staged = await runtime(
+      ['stage', '--worktree', worktree, '--start-state', startState, '--paths-file', paths],
+      repo,
+    );
+
+    expect(staged.code).not.toBe(0);
+    expect(staged.stdout).toBe('');
+    expect(staged.stderr).toContain('Unstaged or untracked files remain');
+    expect(staged.stderr).toContain('scratch-notes.txt');
   });
 
   it('drops created-then-deleted allowlist ghosts with a warning instead of refusing', async () => {

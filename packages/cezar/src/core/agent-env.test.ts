@@ -79,6 +79,25 @@ describe('buildChildEnv — least-privilege child env (#427)', () => {
     expect(env.PATH).toBe('/override');
   });
 
+  it('removes publish credentials and SSH access for stage-only harness phases', () => {
+    const env = buildChildEnv({
+      backend: 'claude',
+      source: {
+        ...HOST,
+        GITHUB_TOKEN: 'gho_token',
+        GH_TOKEN: 'gh_token',
+        SSH_AGENT_PID: '42',
+      },
+      extraEnv: { CEZ_HARNESS_STAGE_ONLY: '1' },
+    });
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.SSH_AGENT_PID).toBeUndefined();
+    expect(env.SSH_AUTH_SOCK).toBe('');
+    expect(env.GIT_ALLOW_PROTOCOL).toBe('');
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+
   it('opt-in CEZ_ENV_PASSTHROUGH forwards named extras', () => {
     const src = { ...HOST, MY_TOOLCHAIN_DIR: '/opt/tc', CEZ_ENV_PASSTHROUGH: 'MY_TOOLCHAIN_DIR' };
     const env = buildChildEnv({ backend: 'claude', source: src });

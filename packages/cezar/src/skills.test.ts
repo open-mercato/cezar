@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  discoverSkillCandidates,
   discoverSkills,
   filterImportedTeamSkills,
   readImportedSkills,
@@ -146,7 +147,7 @@ describe('discoverSkills local entrypoints', () => {
     await mkdir(join(bundled, 'cez-harness'), { recursive: true });
     await writeFile(
       join(bundled, 'cez-harness', 'SKILL.md'),
-      '---\nname: cez-harness\ndescription: bundled runtime\nrequires: [cez-code-review]\n---\nbody',
+      '---\nname: cez-harness\ndescription: bundled runtime\nrequires: [om-code-review]\n---\nbody',
     );
     const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
     tempDirs.push(repoRoot);
@@ -154,12 +155,42 @@ describe('discoverSkills local entrypoints', () => {
     const skills = await discoverSkills(repoRoot, { bundledDir: bundled });
     const found = skills.find((s) => s.name === 'cez-harness');
     expect(found?.source).toBe('bundled');
-    expect(found?.requires).toEqual(['cez-code-review']);
+    expect(found?.requires).toEqual(['om-code-review']);
 
     await mkdir(join(repoRoot, '.ai/skills/cez-harness'), { recursive: true });
     await writeFile(join(repoRoot, '.ai/skills/cez-harness/SKILL.md'), '---\nname: cez-harness\n---\nlocal');
     const again = await discoverSkills(repoRoot, { bundledDir: bundled });
     expect(again.find((s) => s.name === 'cez-harness')?.source).toBe('ai');
+  });
+
+  it('can return every same-name definition for explicit extension composition', async () => {
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-bundled-'));
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(bundled, repoRoot);
+    await mkdir(join(bundled, 'om-code-review'), { recursive: true });
+    await writeFile(
+      join(bundled, 'om-code-review', 'SKILL.md'),
+      '---\nname: om-code-review\n---\nshared',
+    );
+    await mkdir(join(repoRoot, '.ai/skills/om-code-review'), { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ai/skills/om-code-review/SKILL.md'),
+      '---\nname: om-code-review\n---\nextension',
+    );
+
+    const candidates = await discoverSkillCandidates(repoRoot, 'om-code-review', {
+      bundledDir: bundled,
+    });
+
+    expect([candidates[0]?.source, candidates[0]?.body.trim()]).toEqual([
+      'ai',
+      'extension',
+    ]);
+    expect(
+      candidates.some(
+        (skill) => skill.source === 'bundled' && skill.body.trim() === 'shared',
+      ),
+    ).toBe(true);
   });
 
   it('disables bundled scanning when bundledDir is null', async () => {

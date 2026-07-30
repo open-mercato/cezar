@@ -4,7 +4,7 @@
     {
       "name": "cezar",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["tsx", "src/index.ts", "serve", "--no-open"],
+      "runtimeArgs": ["tsx", "packages/cezar/src/index.ts", "serve", "--no-open"],
       "port": 4321
     },
     {

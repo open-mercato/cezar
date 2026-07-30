@@ -57,11 +57,7 @@ async function materializeOne(cwd: string, skill: Skill): Promise<boolean> {
     return false; // dangling install
   }
   const target = join(cwd, '.claude', 'skills', skill.name);
-  try {
-    const cwdReal = await realpath(cwd);
-    if (srcDir === resolve(target) || srcDir.startsWith(`${cwdReal}/`)) return true;
-  } catch {
-  }
+  if (srcDir === resolve(target)) return true;
   try {
     const existing = await stat(target).catch(() => null);
     if (existing?.isDirectory()) return true; // idempotent across phases/restarts

@@ -566,9 +566,10 @@ describe('a bundled directory skill materializes with its requires closure into 
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    for (const name of ['cez-setup-harness', 'cez-harness', 'cez-code-review']) {
+    for (const name of ['cez-setup-harness', 'cez-harness']) {
       expect(existsSync(join(repoRoot, '.claude', 'skills', name, 'SKILL.md'))).toBe(true);
     }
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'om-code-review', 'SKILL.md'))).toBe(false);
     expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-setup-pipeline', 'SKILL.md'))).toBe(false);
     expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-harness', 'scripts', 'harness.mjs'))).toBe(true);
   }, 30_000);

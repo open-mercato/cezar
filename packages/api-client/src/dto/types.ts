@@ -196,6 +196,7 @@ export interface RunRecord {
   harness?: {
     profile: string
     workflow: string
+    skillProfile?: HarnessSkillProfile
     issueId?: string
     roles?: Record<string, unknown>
     baseAcknowledgement?: { configuredBase: string; remoteDefault: string; reason: string }
@@ -1008,6 +1009,9 @@ export interface CreateRunInput {
    *  legacy `profile` remains accepted for scripted callers. */
   harness?: {
     profile?: HarnessProfile
+    /** Generic Cezar playbooks by default; exact canonical om-* playbooks only
+     * when Open Mercato is selected explicitly. */
+    skillProfile?: HarnessSkillProfile
     roles?: HarnessRoles
     issueId?: string
     baseAcknowledgement?: { configuredBase: string; remoteDefault: string; reason: string }
@@ -1056,6 +1060,7 @@ export interface MessageInput {
 
 /** The five operating profiles of the cez-harness pipeline. */
 export type HarnessProfile = 'standard' | 'optimized' | 'multi' | 'multi-optimized' | 'high-assurance'
+export type HarnessSkillProfile = 'generic' | 'open-mercato'
 
 /** One model in the harness roster — `GET /api/harness/status` (config-derived; claude the
  *  host always leads) and `POST /api/harness/probe` (with live `readiness`). */
@@ -1244,13 +1249,21 @@ export interface HarnessCouncilPendingDecision {
   [key: string]: unknown
 }
 
+export interface HarnessSpecPendingDecision {
+  kind: 'spec'
+  gate: 'council' | 'pre-implement'
+  round: number
+  findings: string[]
+  [key: string]: unknown
+}
+
 export interface HarnessOutcomeRecord {
   status: 'pending' | 'ready' | 'blocked' | 'contested' | 'no-action'
   blockingReasons: string[]
   acceptedAt?: string
   acceptedBy?: 'user'
   acceptanceReason?: string
-  pendingDecision?: HarnessCouncilPendingDecision
+  pendingDecision?: HarnessCouncilPendingDecision | HarnessSpecPendingDecision
   [key: string]: unknown
 }
 
@@ -1273,6 +1286,7 @@ export interface HarnessLedgerResponse {
   workflow: string
   requestedProfile: string
   effectiveProfile: string
+  skillProfile?: HarnessSkillProfile
   phases: HarnessPhaseRecord[]
   models: HarnessModelRecord[]
   councils: HarnessCouncilRecord[]

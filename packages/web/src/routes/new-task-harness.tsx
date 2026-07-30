@@ -18,6 +18,7 @@ import type {
   HarnessPreset,
   HarnessProbeResponse,
   HarnessRoles,
+  HarnessSkillProfile,
 } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { chipClass } from '@/components/picker-pill'
@@ -496,6 +497,8 @@ function PresetRow({
 export function HarnessPanel({
   mode,
   onMode,
+  skillProfile = 'generic',
+  onSkillProfile = () => {},
   probe,
   base,
   baseAcknowledgementReason = '',
@@ -511,6 +514,8 @@ export function HarnessPanel({
 }: {
   mode: HarnessMode['id']
   onMode: (mode: HarnessMode['id']) => void
+  skillProfile?: HarnessSkillProfile
+  onSkillProfile?: (profile: HarnessSkillProfile) => void
   probe?: HarnessProbeResponse
   base?: {
     configured: string | null
@@ -562,6 +567,51 @@ export function HarnessPanel({
             <span className="mt-0.5 block text-[11.5px] leading-snug text-soft-foreground">{option.desc}</span>
           </button>
         ))}
+      </div>
+
+      <div className="mx-4 mt-3 border-t border-border pt-3" data-slot="harness-skill-profile">
+        <div className="mb-2">
+          <span className="text-[11px] font-semibold tracking-[0.05em] text-soft-foreground uppercase">
+            Development profile
+          </span>
+          <p className="mt-0.5 text-[11.5px] leading-snug text-soft-foreground">
+            Your prompt stays a requirement brief; this selects the complete playbooks each structured phase follows.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 max-md:grid-cols-1" role="radiogroup" aria-label="Development profile">
+          {([
+            {
+              id: 'generic',
+              label: 'Generic project',
+              desc: 'Repository-native specification, audit, implementation, testing, and review.',
+            },
+            {
+              id: 'open-mercato',
+              label: 'Open Mercato',
+              desc: 'Canonical om-* skills and this repository’s Open Mercato extensions.',
+            },
+          ] as const).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              role="radio"
+              data-skill-profile={option.id}
+              aria-checked={skillProfile === option.id}
+              onClick={() => onSkillProfile(option.id)}
+              className={cn(
+                'rounded-lg border px-3 py-2 text-left transition-colors',
+                skillProfile === option.id
+                  ? 'border-violet/60 bg-violet/5 shadow-xs'
+                  : 'border-border bg-card-2 hover:bg-muted',
+              )}
+            >
+              <span className="text-[12.5px] font-semibold text-foreground">{option.label}</span>
+              <span className="mt-0.5 block text-[11px] leading-snug text-soft-foreground">
+                {option.desc}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {roles ? (

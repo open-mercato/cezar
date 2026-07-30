@@ -72,7 +72,8 @@ describe('the new-task draft store', () => {
       generateFollowups: null,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
   })
 
@@ -89,7 +90,8 @@ describe('the new-task draft store', () => {
       generateFollowups: false,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
     const first = readDraft()
     expect(first.text).toBe('fix it')
@@ -112,7 +114,8 @@ describe('the new-task draft store', () => {
       generateFollowups: true,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
     clearDraftText()
     expect(readDraft()).toEqual({
@@ -127,7 +130,8 @@ describe('the new-task draft store', () => {
       generateFollowups: true,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
   })
 
@@ -144,7 +148,8 @@ describe('the new-task draft store', () => {
       generateFollowups: false,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
     // A fresh page has no in-memory cache but keeps localStorage: resetDraft removes storage, so
     // instead drop only the cache by round-tripping through a raw storage read.
@@ -175,7 +180,8 @@ describe('the new-task draft store', () => {
       generateFollowups: null,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
 
     resetDraft()
@@ -192,7 +198,8 @@ describe('the new-task draft store', () => {
       generateFollowups: null,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
   })
 })

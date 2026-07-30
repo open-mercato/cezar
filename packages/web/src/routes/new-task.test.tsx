@@ -443,7 +443,8 @@ describe('picker data flows', () => {
       planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
       composerMode: null,
       harnessMode: null,
-  harnessRoles: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -737,7 +738,7 @@ describe('submit', () => {
     writeDraft({
       text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, model: null,
       variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
-      composerMode: null, harnessMode: null, harnessRoles: null,
+      composerMode: null, harnessMode: null, harnessSkillProfile: null, harnessRoles: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()

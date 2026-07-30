@@ -1,4 +1,9 @@
-import type { HarnessModelRef, HarnessRoles, Runner } from '@open-mercato/cezar-api-client'
+import type {
+  HarnessModelRef,
+  HarnessRoles,
+  HarnessSkillProfile,
+  Runner,
+} from '@open-mercato/cezar-api-client'
 import type { TaskSource } from './new-task-form'
 
 /**
@@ -35,6 +40,8 @@ export interface NewTaskDraft {
    *  on 'multi', everything else on 'task'). */
   composerMode: 'task' | 'multi' | null
   harnessMode: 'fix-issue' | 'implement-feature' | null
+  /** Which complete phase playbooks the structured graph uses. */
+  harnessSkillProfile: HarnessSkillProfile | null
   /** The role-based model selection (2026-07-24). null → derived defaults from
    *  the available catalog. Kept as picked even while momentarily invalid —
    *  the panel shows the rule, the submit enforces it. */
@@ -90,6 +97,7 @@ const EMPTY: NewTaskDraft = {
   generateFollowups: null,
   composerMode: null,
   harnessMode: null,
+  harnessSkillProfile: null,
   harnessRoles: null,
 }
 
@@ -128,6 +136,10 @@ function normalize(raw: unknown): NewTaskDraft {
     composerMode: obj.composerMode === 'task' || obj.composerMode === 'multi' ? obj.composerMode : null,
     harnessMode:
       obj.harnessMode === 'fix-issue' || obj.harnessMode === 'implement-feature' ? obj.harnessMode : null,
+    harnessSkillProfile:
+      obj.harnessSkillProfile === 'generic' || obj.harnessSkillProfile === 'open-mercato'
+        ? obj.harnessSkillProfile
+        : null,
     harnessRoles: isHarnessRoles(obj.harnessRoles) ? obj.harnessRoles : null,
   }
 }

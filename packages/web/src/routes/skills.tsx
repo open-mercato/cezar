@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftIcon, DownloadIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon, ZapIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -64,16 +64,34 @@ function SkillsCatalog() {
   const projects = useProjects()
   const scope = useProjectScope()
   const updateProjectId = scope.projectId ?? projects.data?.bootProject ?? ''
+  const rowsRef = useRef<HTMLUListElement>(null)
+  const scrollRestoreRef = useRef<number | null>(null)
 
   const refresh = useMutation({
     mutationFn: () => refreshSkills(),
+    onMutate: () => {
+      scrollRestoreRef.current = rowsRef.current?.scrollTop ?? null
+    },
     onSuccess: (catalog) => {
       // The POST answers the merged catalog — seed the shared query instead of refetching.
       queryClient.setQueryData(queryKeys.skills, catalog)
       toast('Team skills refreshed.')
     },
-    onError: (error) => toast(error.message, { tone: 'danger' }),
+    onError: (error) => {
+      scrollRestoreRef.current = null
+      toast(error.message, { tone: 'danger' })
+    },
   })
+
+  // A refresh can insert team skills above the current viewport. Browser scroll anchoring
+  // then moves `scrollTop` even though React kept the same <ul>; restore the captured offset
+  // after the refreshed rows commit, before paint.
+  useLayoutEffect(() => {
+    const scrollTop = scrollRestoreRef.current
+    if (scrollTop === null || !rowsRef.current) return
+    scrollRestoreRef.current = null
+    rowsRef.current.scrollTop = scrollTop
+  }, [skillsQuery.data])
 
   if (skillsQuery.isError) {
     return (
@@ -143,7 +161,7 @@ function SkillsCatalog() {
           </button>
         </div>
 
-        <ul data-slot="skill-rows" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        <ul ref={rowsRef} data-slot="skill-rows" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {skillsQuery.isPending ? (
             <li className="px-2.5 py-2 text-[13px] text-soft-foreground">Loading…</li>
           ) : shown.length > 0 ? (

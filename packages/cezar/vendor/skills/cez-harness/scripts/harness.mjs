@@ -13,17 +13,19 @@ const REVIEW_SCHEMA = readFileSync(SCHEMA_FILE, 'utf8')
 const REVIEW_PACKET_SCHEMA_FILE = resolve(HERE, '../references/code-review-packet.schema.json')
 const FRESH_REVIEW_SCHEMA_FILE = resolve(HERE, '../references/fresh-review-result.schema.json')
 const CODE_REVIEW_CONTRACT_VERSION = 1
+const CODE_REVIEW_SKILL = process.env.CEZ_HARNESS_REVIEW_SKILL || 'cez-code-review'
+if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(CODE_REVIEW_SKILL)) throw new Error('Invalid CEZ_HARNESS_REVIEW_SKILL')
 const CODE_REVIEW_FILES = [
-  resolve(HERE, '../../cez-code-review/SKILL.md'),
-  resolve(HERE, '../../cez-code-review/references/review-checklist.md'),
-  resolve(HERE, '../../cez-code-review/references/output-format.md')
+  resolve(HERE, `../../${CODE_REVIEW_SKILL}/SKILL.md`),
+  resolve(HERE, `../../${CODE_REVIEW_SKILL}/references/review-checklist.md`),
+  resolve(HERE, `../../${CODE_REVIEW_SKILL}/references/output-format.md`)
 ]
-// Loaded lazily so lease-recovery and staging commands work without a co-installed cez-code-review.
+// Loaded lazily so lease-recovery and staging commands work without the selected code-review skill.
 let codeReviewRubricCache = null
 function codeReviewRubric() {
   if (codeReviewRubricCache) return codeReviewRubricCache
   const rubric = CODE_REVIEW_FILES.map((path) => {
-    if (!existsSync(path)) throw new Error(`Installed cez-code-review contract is incomplete: ${path}`)
+    if (!existsSync(path)) throw new Error(`Installed ${CODE_REVIEW_SKILL} contract is incomplete: ${path}`)
     return `SOURCE: ${basename(path)}\n${readFileSync(path, 'utf8')}`
   }).join('\n\n')
   codeReviewRubricCache = { rubric, sha256: createHash('sha256').update(rubric).digest('hex') }
@@ -282,7 +284,7 @@ function resolveProfile(config, name) {
     workers: profile.workers || [],
     reviewers: profile.reviewers || [],
     maxParallel: Math.max(1, Number(profile.maxParallel || 3)),
-    maxInputBytes: Number(profile.maxInputBytes || 700000),
+    maxInputBytes: Number(profile.maxInputBytes || 180000),
     reviewPolicy: profile.reviewPolicy || { mode: 'advisory' },
     concurrency: {
       reviewers: Number(profile.concurrency?.reviewers || profile.maxParallel || 3)
@@ -299,7 +301,7 @@ function expandCommand(command, values) {
 const SAFE_CLI_ENV_NAMES = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP',
   'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'COLORTERM', 'NO_COLOR',
-  'FORCE_COLOR', 'CI', 'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME',
+  'FORCE_COLOR', 'CI', 'XDG_CONFIG_HOME',
   'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'HTTP_PROXY', 'HTTPS_PROXY',
   'NO_PROXY', 'ALL_PROXY', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE',
   'SSL_CERT_DIR'
@@ -320,11 +322,18 @@ function sanitizedCliEnvironment(additions, trustedNames = []) {
 function workerEnvironment(additions, trustedNames = []) {
   return sanitizedCliEnvironment({
     GIT_TERMINAL_PROMPT: '0',
-    GIT_CONFIG_COUNT: '2',
+    GIT_ALLOW_PROTOCOL: '',
+    SSH_AUTH_SOCK: '',
+    GH_CONFIG_DIR: join(tmpdir(), 'cez-harness-no-gh-auth'),
+    GIT_CONFIG_COUNT: '4',
     GIT_CONFIG_KEY_0: 'protocol.allow',
     GIT_CONFIG_VALUE_0: 'never',
     GIT_CONFIG_KEY_1: 'credential.helper',
     GIT_CONFIG_VALUE_1: '',
+    GIT_CONFIG_KEY_2: 'credential.interactive',
+    GIT_CONFIG_VALUE_2: 'never',
+    GIT_CONFIG_KEY_3: 'core.askPass',
+    GIT_CONFIG_VALUE_3: '/usr/bin/false',
     ...additions
   }, trustedNames)
 }
@@ -508,8 +517,8 @@ function validateReviewPacket(value, subject) {
   if (value.version !== 1) throw new Error('Code-review packet version must be 1')
   assertPlainObject(value.contract, 'Code-review packet contract')
   assertNoUnknownKeys(value.contract, ['name', 'version', 'rubricSha256'], 'Code-review packet contract')
-  if (value.contract.name !== 'cez-code-review' || value.contract.version !== CODE_REVIEW_CONTRACT_VERSION) throw new Error('Code-review packet must use cez-code-review contract version 1')
-  if (value.contract.rubricSha256 !== codeReviewRubric().sha256) throw new Error('Code-review packet rubric does not match the installed cez-code-review skill')
+  if (value.contract.name !== CODE_REVIEW_SKILL || value.contract.version !== CODE_REVIEW_CONTRACT_VERSION) throw new Error(`${CODE_REVIEW_SKILL} packet must use contract version 1`)
+  if (value.contract.rubricSha256 !== codeReviewRubric().sha256) throw new Error(`${CODE_REVIEW_SKILL} packet rubric does not match the installed skill`)
   assertPlainObject(value.subject, 'Code-review packet subject')
   assertNoUnknownKeys(value.subject, ['kind', 'sha256', 'bytes'], 'Code-review packet subject')
   if (!['spec', 'diagnosis', 'implementation'].includes(value.subject.kind)) throw new Error('Code-review packet subject.kind is invalid')
@@ -533,7 +542,7 @@ function validateReviewPacket(value, subject) {
   })
   return {
     version: 1,
-    contract: { name: 'cez-code-review', version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256 },
+    contract: { name: CODE_REVIEW_SKILL, version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256 },
     subject: { kind: value.subject.kind, sha256: subjectSha256, bytes: value.subject.bytes },
     criteria: value.criteria,
     validationGate,
@@ -543,7 +552,7 @@ function validateReviewPacket(value, subject) {
 
 function reviewContractFromPacket(packet, packetSha256) {
   return {
-    name: 'cez-code-review',
+    name: CODE_REVIEW_SKILL,
     version: CODE_REVIEW_CONTRACT_VERSION,
     rubricSha256: codeReviewRubric().sha256,
     packetSha256,
@@ -583,7 +592,7 @@ function validateFreshReview(value, contract) {
     fallbackReason: value.reviewer.fallbackReason ?? null,
     provenanceStatus: value.reviewer.provenanceStatus,
     role: 'reviewer',
-    lens: 'cez-code-review host pass',
+    lens: `${CODE_REVIEW_SKILL} host pass`,
     selfCheck: false,
     policyEligible: false,
     freshContext: true,
@@ -598,7 +607,7 @@ function validateFreshReview(value, contract) {
 
 function buildReviewPrompt(criteria, subject, lens = null, partial = false) {
   return [
-    'You are a fresh independent reviewer executing the installed cez-code-review skill contract. The long documents come first; your instructions and the output contract follow after them.',
+    `You are a fresh independent reviewer executing the installed ${CODE_REVIEW_SKILL} skill contract. The long documents come first; your instructions and the output contract follow after them.`,
     '',
     '<review_packet>',
     criteria || '(none supplied)',
@@ -665,7 +674,7 @@ async function runCommandAdapter(model, commandKey, { worktree, prompt = '', env
       cwd: worktree,
       input: prompt,
       timeoutMs: Number(timeoutMs ?? model.timeoutMs ?? 600000),
-      env: env === 'worker'
+      env: env === 'worker' || commandKey === 'review'
         ? workerEnvironment(additions, [model.credentialEnv, model.binaryEnv].filter(Boolean))
         : sanitizedCliEnvironment(additions, [model.credentialEnv, model.binaryEnv].filter(Boolean)),
       inheritEnv: false
@@ -913,10 +922,27 @@ function splitText(text, maxBytes) {
 }
 
 function buildReviewerPrompts(model, criteria, subject, maxInputBytes, lens = null) {
-  const parts = splitText(subject, Number(model.maxInputBytes || maxInputBytes))
-  return {
-    prompts: parts.map((part, index) => buildReviewPrompt(criteria, parts.length === 1 ? part : `Part ${index + 1} of ${parts.length}:\n${part}`, lens, parts.length > 1))
+  const budget = Number(model.maxInputBytes || maxInputBytes)
+  const fixedPrompt = buildReviewPrompt(criteria, '', lens, false)
+  const fixedBytes = Buffer.byteLength(fixedPrompt, 'utf8')
+  const subjectBudget = budget - fixedBytes - 16384
+  if (subjectBudget < 1024) {
+    throw new Error(`Reviewer prompt fixed context uses ${fixedBytes} bytes, leaving no safe subject budget inside ${budget}`)
   }
+  const parts = splitText(subject, subjectBudget)
+  const prompts = parts.map((part, index) =>
+    buildReviewPrompt(
+      criteria,
+      parts.length === 1 ? part : `Part ${index + 1} of ${parts.length}:\n${part}`,
+      lens,
+      parts.length > 1
+    )
+  )
+  for (const prompt of prompts) {
+    const bytes = Buffer.byteLength(prompt, 'utf8')
+    if (bytes > budget) throw new Error(`Reviewer prompt is ${bytes} bytes, exceeding the ${budget}-byte model budget`)
+  }
+  return { prompts }
 }
 
 const NON_RETRYABLE_REVIEWER_STATUSES = new Set(['completed', 'skipped'])
@@ -964,15 +990,9 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
     selfCheck: workerFamilies.includes(model.family),
     policyEligible: true,
     freshContext: true,
-    reviewContract: reviewContract || { name: 'cez-code-review', version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256, subjectSha256: sha256(subject) },
+    reviewContract: reviewContract || { name: CODE_REVIEW_SKILL, version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256, subjectSha256: sha256(subject) },
     parts: built.prompts.length
   }
-  // Persist what the model was ACTUALLY sent. The caller only ever sees the
-  // criteria it passed in, which is the `<review_packet>` section — a handful
-  // of lines — while `buildReviewPrompt` also wraps in the review subject, the
-  // whole cez-code-review rubric and the output contract. A host that showed
-  // the caller's fragment as "the prompt" made a rubric-backed review look like
-  // it had been asked for an opinion with no criteria at all.
   if (promptDir) {
     try {
       mkdirSync(promptDir, { recursive: true })
@@ -982,7 +1002,6 @@ async function runReviewer(id, model, criteria, subject, worktree, workerFamilie
         : built.prompts.map((prompt, index) => `=== part ${index + 1} of ${built.prompts.length} ===\n${prompt}`).join('\n\n'))
       envelope.promptPath = promptPath
     } catch {
-      // Diagnostics only — never fail a paid review over a transcript file.
     }
   }
   const invocations = await pool(built.prompts, 2, (prompt) => invokeReviewerWithRetries(id, model, prompt, worktree, retry))
@@ -1612,7 +1631,7 @@ function writePacketCycleArtifacts(packetDir, cycle) {
 async function commandPacketRun(args, config) {
   const profile = resolveProfile(config, String(args.profile || 'high-assurance'))
   if (!profile.packetPolicy) throw new Error(`Profile ${profile.name} does not enable packetPolicy`)
-  // Preflight the lazily-loaded rubric so a missing cez-code-review install fails
+  // Preflight the lazily-loaded rubric so a missing selected code-review skill fails
   // here, before any lease is acquired or worker budget is spent.
   codeReviewRubric()
   if (!args.manifest || args.manifest === true) throw new Error('--manifest <path> is required')
@@ -1798,7 +1817,7 @@ function commandPacketRelease(args) {
 
 function reviewContextPaths(args, config, worktree) {
   const realWorktree = realpathSync(worktree)
-  const optional = ['AGENTS.md', 'CLAUDE.md', 'CODE_REVIEW.md', 'BACKWARD_COMPATIBILITY.md', '.ai/skills/cez-code-review/SKILL.md']
+  const optional = ['AGENTS.md', 'CLAUDE.md', 'CODE_REVIEW.md', 'BACKWARD_COMPATIBILITY.md', `.ai/skills/${CODE_REVIEW_SKILL}/SKILL.md`]
   const required = []
   if (typeof config.reviewChecklist === 'string' && config.reviewChecklist.trim()) required.push(config.reviewChecklist.trim())
   if (args['context-paths-file'] && args['context-paths-file'] !== true) {
@@ -1848,7 +1867,7 @@ function commandPrepareReview(args, config) {
   })
   const packet = {
     version: 1,
-    contract: { name: 'cez-code-review', version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256 },
+    contract: { name: CODE_REVIEW_SKILL, version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256 },
     subject: { kind: subjectKind, sha256: sha256(subject), bytes: Buffer.byteLength(subject, 'utf8') },
     criteria,
     validationGate: loadReviewValidationEvidence(args, subjectKind),
@@ -1889,7 +1908,7 @@ async function commandReview(args, config) {
   const subject = loadSubject(args, worktree)
   if (!subject.trim()) throw new Error('Review subject is empty')
   let criteria = args['criteria-file'] && args['criteria-file'] !== true ? readFileSync(resolve(String(args['criteria-file'])), 'utf8') : ''
-  let reviewContract = { name: 'cez-code-review', version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256, subjectSha256: sha256(subject) }
+  let reviewContract = { name: CODE_REVIEW_SKILL, version: CODE_REVIEW_CONTRACT_VERSION, rubricSha256: codeReviewRubric().sha256, subjectSha256: sha256(subject) }
   let hostReviewPath = null
   if (args['review-packet'] && args['review-packet'] !== true) {
     if (args['criteria-file'] && args['criteria-file'] !== true) throw new Error('Use the criteria embedded in --review-packet, not --criteria-file')
@@ -2044,21 +2063,10 @@ async function commandWorker(args, config) {
  *  `head`. */
 const GIT_STATE_VERSION = 2
 
-/** `<refname>\t<sha>` for one ref, or `[]` when it does not exist. */
 function refLines(worktree, ref) {
   return git(['for-each-ref', '--format=%(refname)%09%(objectname)', ref], worktree).trim().split(/\r?\n/).filter(Boolean)
 }
 
-/**
- * One ref's reflog, newest first, each entry as `<sha>\t<subject>`.
- *
- * `%gs` (the subject) replaces `%gD` (the `name@{N}` selector) deliberately.
- * Selectors are positional, so a single new entry renumbers every older one:
- * under the previous format one stray operation changed every line of the
- * snapshot permanently, and even a `reset --hard` back to the exact starting
- * commit could not restore it. The guard became unpassable for the rest of the
- * run rather than reporting a recoverable state.
- */
 function reflogLines(worktree, ref) {
   let out = ''
   try {
@@ -2069,25 +2077,6 @@ function reflogLines(worktree, ref) {
   return out.trim().split(/\r?\n/).filter(Boolean)
 }
 
-/**
- * The staged-only integrity snapshot, scoped to THIS run's worktree.
- *
- * Breadth was the bug. This used to snapshot every local head, every tag, the
- * stash and `reflog --all`. Under one session driving one worktree that is
- * harmless; under cezar it is fatal. cezar runs N task worktrees off a single
- * object store while the human keeps working in the main checkout, and all of
- * that churn is globally visible from inside a linked worktree: a sibling
- * session starting appears as `refs/heads/cez/<id>` plus
- * `worktrees/<id>/HEAD@{n}`, and `reflog --all` additionally reports
- * `main-worktree/HEAD` — the user's own checkout. One ordinary commit by the
- * user on an unrelated branch was enough to make the final `stage` refuse a
- * correct diff after hours of council spend.
- *
- * What the contract actually protects is narrow: this run must not have
- * committed, reset, or re-pointed *its own* branch. HEAD, this worktree's own
- * branch ref, and this worktree's own reflogs say exactly that. Nothing outside
- * the worktree can say anything about it.
- */
 function captureGitState(worktree) {
   const branch = git(['branch', '--show-current'], worktree).trim()
   const branchRef = branch ? `refs/heads/${branch}` : null
@@ -2103,26 +2092,11 @@ function captureGitState(worktree) {
   }
 }
 
-/**
- * Why the worktree no longer matches its captured start state — one readable
- * reason per drift, empty when clean. The old guard reported only that
- * *something* somewhere had changed, which told an operator nothing about
- * whether their own commit or the run itself was responsible.
- *
- * Only reflog *additions* count. A vanished old entry is `git gc` expiring
- * history, not a mutation by this run, and the branch's own entries are minutes
- * old so they are never the ones expired. The mutation this protects against —
- * a commit — always shows up in `head`/`refs` anyway.
- */
 function gitStateDrift(startState, currentState) {
   const drift = []
   if (startState.head !== currentState.head) {
     drift.push(`HEAD moved ${String(startState.head).slice(0, 12)} → ${String(currentState.head).slice(0, 12)} — this run created or reset a commit`)
   }
-  // A start-state written by an older runtime snapshotted the whole repository.
-  // Comparing it field-by-field against a worktree-scoped capture would report
-  // drift that never happened, so trust only `head` — the field that carries
-  // the contract — and let a resumed run finish.
   if (Number(startState.version) !== GIT_STATE_VERSION) return drift
   if (startState.branch !== currentState.branch) {
     drift.push(`checked-out branch changed ${startState.branch || '(detached)'} → ${currentState.branch || '(detached)'}`)
@@ -2136,9 +2110,6 @@ function gitStateDrift(startState, currentState) {
     const before = Array.isArray(startLogs[ref]) ? startLogs[ref] : []
     const addedCount = current.length - before.length
     if (addedCount <= 0) continue
-    // Newest first, so the captured list must still be the tail. When it is
-    // not, the log was rewritten rather than appended to and per-entry blame
-    // would be a guess.
     const tail = current.slice(addedCount)
     if (tail.join('\n') !== before.join('\n')) {
       drift.push(`${ref} reflog was rewritten during the run`)
@@ -2186,7 +2157,7 @@ function commandVerify(args) {
 function validateStagePath(worktree, entry) {
   const normalized = entry.trim()
   if (!normalized) return null
-  if (normalized.includes('\0') || /[\r\n]/.test(normalized)) throw new Error('Stage path cannot contain control characters')
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) throw new Error('Stage path cannot contain control characters')
   if (isAbsolute(normalized)) throw new Error(`Stage path must be relative: ${normalized}`)
   const absolute = resolve(worktree, normalized)
   const rel = relative(worktree, absolute)
@@ -2208,16 +2179,10 @@ function commandStage(args) {
   const drift = gitStateDrift(startState, currentState)
   if (drift.length) throw new Error(`Git refs or reflogs changed during staged-only run:\n- ${drift.join('\n- ')}`)
   // The allowlist is a UNION across every implement/fix round, so it can name
-  // ghosts: a scratch file created in round one and deleted in round three is
-  // still listed, exists nowhere, and is tracked by nothing — and `git add`
-  // fails the whole handoff over a pathspec that matches nothing. A deleted
-  // TRACKED file stays: adding it stages the deletion, which is real product.
   const tracked = new Set(git(['ls-files', '-z', '--'], worktree).toString().split('\0').filter(Boolean))
   const ghosts = paths.filter((path) => !existsSync(join(worktree, path)) && !tracked.has(path))
   const addable = paths.filter((path) => !ghosts.includes(path))
   if (!addable.length) throw new Error('Stage allowlist is empty after dropping entries that no longer exist')
-  // One immediate retry: `git add` can lose a race for index.lock to an editor
-  // or a status poll holding the worktree open — transient by nature.
   try {
     git(['add', '--', ...addable.map((path) => `:(literal)${path}`)], worktree)
   } catch (error) {
@@ -2226,14 +2191,9 @@ function commandStage(args) {
   }
   const staged = git(['diff', '--cached', '--name-status'], worktree).trim()
   if (!staged) throw new Error('Staged diff is empty')
-  // Cosmetic and completeness findings are WARNINGS, not refusals (run
-  // aad28178, 2026-07-28): a two-hour run — councils passed, three fix rounds,
-  // full validation green — was refused at handoff over trailing whitespace in
-  // a spec markdown file and blank lines at EOF. The human gate this staging
-  // feeds exists precisely to judge such things; a fatal check at the last
-  // step hands them nothing instead. Only genuine integrity failures still
-  // refuse: git-state drift, an empty diff, and staged paths escaping the
-  // allowlist.
+  // Cosmetic whitespace findings are warnings (run aad28178, 2026-07-28).
+  // Completeness remains an integrity failure: a handoff that omits changed
+  // files is not the subject the reviewers approved.
   const warnings = []
   if (ghosts.length) {
     warnings.push(`allowlist entries dropped — created during the run, deleted again before the handoff:\n${ghosts.join('\n')}`)
@@ -2252,11 +2212,7 @@ function commandStage(args) {
     const index = line.slice(0, 2)
     return index === '??' || index[1] !== ' '
   })
-  if (residual.length) {
-    // The worktree survives the handoff, so nothing here is lost — but the
-    // human must know the staged diff is not the whole story.
-    warnings.push(`files changed by the run but NOT part of the staged handoff — review whether they belong:\n${residual.join('\n')}`)
-  }
+  if (residual.length) throw new Error(`Unstaged or untracked files remain:\n${residual.join('\n')}`)
   const result = { status: 'ready', startHead, currentHead, branch: git(['branch', '--show-current'], worktree).trim(), worktree, stagedPaths, ...(warnings.length ? { warnings } : {}) }
   if (args.output && args.output !== true) {
     const output = resolve(String(args.output))

@@ -36,7 +36,11 @@ rl.on('line', (line) => {
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
   } else if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
-    const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
+    const expectedSandbox =
+      process.env.CEZ_CODEX_NETWORK === '0' ||
+      process.env.CEZ_HARNESS_STAGE_ONLY === '1'
+        ? 'workspace-write'
+        : 'danger-full-access';
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
       return;

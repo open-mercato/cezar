@@ -75,7 +75,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
@@ -124,10 +124,10 @@ describe('plan mode against a live dry-run server', () => {
     browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="mode-plan"]') !== null`)
     // Sources must have LOADED before submitting — a plan submit races the workflows/skills
-    // queries otherwise and is (correctly) rejected with the "still loading" toast. The pill
-    // showing the fixture's project skill is the ready signal (same trick as new-task.e2e).
+    // queries otherwise and is (correctly) rejected with the "still loading" toast. The
+    // zero-config quick-task default is the ready signal.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('lint-fix')`,
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('quick-task')`,
     )
 
     expect(browser.evaluate(`document.querySelector('[data-slot="mode-plan"]').getAttribute('aria-checked')`)).toBe('false')

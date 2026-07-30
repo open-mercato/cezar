@@ -55,6 +55,27 @@ describe('HarnessPanel (role-based)', () => {
     expect(onMode).toHaveBeenCalledWith('implement-feature')
   })
 
+  it('defaults to generic skills and reports an explicit Open Mercato profile pick', () => {
+    const onSkillProfile = vi.fn()
+    render(
+      <HarnessPanel
+        mode="fix-issue"
+        onMode={noop}
+        skillProfile="generic"
+        onSkillProfile={onSkillProfile}
+        roles={roles}
+        onRoles={noop}
+        options={options}
+      />,
+    )
+    expect(
+      screen.getByRole('radio', { name: /generic project/i }).getAttribute('aria-checked'),
+    ).toBe('true')
+    fireEvent.click(screen.getByRole('radio', { name: /open mercato/i }))
+    expect(onSkillProfile).toHaveBeenCalledWith('open-mercato')
+    expect(screen.getByText(/requirement brief/i)).toBeTruthy()
+  })
+
   it('renders one picker per role with the current models', () => {
     render(<HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={noop} options={options} />)
     expect(screen.getByRole('button', { name: 'Orchestrator model' }).textContent).toContain('claude · sonnet')

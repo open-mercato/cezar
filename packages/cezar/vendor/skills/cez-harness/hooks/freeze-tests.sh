@@ -3,7 +3,7 @@
 #
 # Gated by a SENTINEL FILE, not an env var: a PreToolUse hook runs in the host's
 # own process, so an exported variable inside a Bash tool call can never reach it.
-# The orchestrator touches `<worktree>/.om-freeze-tests` after the regression test
+# The orchestrator touches `<worktree>/.cez-freeze-tests` after the regression test
 # has been observed failing and removes it before staging; while the sentinel is
 # present at or above the target file, edits to test files are denied so the fix
 # loop cannot weaken the test it is supposed to satisfy.
@@ -34,8 +34,8 @@ printf '%s' "$fp" | grep -qE '(\.spec\.|\.test\.|/__tests__/|/__integration__/|/
 dir="$(dirname "$fp" 2>/dev/null || true)"
 [ -n "$dir" ] || exit 0
 while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-  if [ -e "$dir/.om-freeze-tests" ]; then
-    echo "[cez-harness] test files are frozen during the fix phase (found $dir/.om-freeze-tests) — fix product code, not tests. Remove the sentinel to edit tests." >&2
+  if [ -e "$dir/.cez-freeze-tests" ]; then
+    echo "[cez-harness] test files are frozen during the fix phase (found $dir/.cez-freeze-tests) — fix product code, not tests. Remove the sentinel to edit tests." >&2
     exit 2
   fi
   parent="$(dirname "$dir")"

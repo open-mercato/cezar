@@ -76,9 +76,15 @@ describe('global Resources monitoring controls', () => {
     gotoResources()
     choose('[data-slot="resources-max-monitoring"]', '3')
     await waitForResources((resources) => resources.maxMonitoringSessions === 3)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="resources-max-monitoring"]')?.value === '3' && document.querySelector('[data-slot="resources-monitoring-wake-mode"]')?.disabled === false`,
+    )
 
     choose('[data-slot="resources-monitoring-wake-mode"]', 'interval')
     browser.fill('[data-slot="resources-monitoring-wake-interval"]', '7')
+    browser.waitForFunction(
+      `document.querySelector('[data-action="resources-save-monitoring-wake"]')?.disabled === false`,
+    )
     browser.click('[data-action="resources-save-monitoring-wake"]')
     await waitForResources((resources) => resources.monitoringWakeIntervalMinutes === 7)
 

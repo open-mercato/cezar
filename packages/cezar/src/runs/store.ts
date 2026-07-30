@@ -191,6 +191,8 @@ const runRecordSchema = z.object({
     .object({
       profile: z.string(),
       workflow: z.string(),
+      /** Optional on runs created before selectable phase-skill profiles. */
+      skillProfile: z.enum(['generic', 'open-mercato']).optional(),
       issueId: z.string().optional(),
       /** Role-based selection (2026-07-24), kept loose — the ledger and the
        *  driver input are authoritative; this copy makes recovery re-queues

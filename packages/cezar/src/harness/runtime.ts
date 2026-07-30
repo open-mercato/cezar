@@ -292,9 +292,9 @@ export function harnessScriptDigest(script: string): string | null {
  * runtime path plus its digest (review 2026-07-27).
  *
  * The whole `.claude/skills` subtree comes along, not just `harness.mjs`: the
- * runtime resolves `../references/*.schema.json` and
- * `../../cez-code-review/references/*.md` relative to its own location, so the
- * layout has to survive the move.
+ * runtime resolves `../references/*.schema.json` and the selected
+ * `../../<profile>-code-review/references/*.md` relative to its own location,
+ * so the layout has to survive the move.
  *
  * This alone stops the sandboxed codex worker (`--sandbox workspace-write --cd
  * {worktree}`), which cannot reach outside the worktree at all. An agent phase

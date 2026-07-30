@@ -439,7 +439,14 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
       harnessRoles: roles,
     })
     expect(harness.workflow).toBe('harness-fix-issue')
-    expect(harness.harness).toEqual({ roles })
+    expect(harness.harness).toEqual({ skillProfile: 'generic', roles })
+    const openMercato = buildCreateRunBody({
+      ...base,
+      source: { source: 'workflow', ref: 'harness-fix-issue' },
+      harnessSkillProfile: 'open-mercato',
+      harnessRoles: roles,
+    })
+    expect(openMercato.harness).toEqual({ skillProfile: 'open-mercato', roles })
     const plain = buildCreateRunBody({
       ...base,
       source: { source: 'workflow', ref: 'quick-task' },
@@ -554,7 +561,7 @@ describe('harness role selection (role-based multi-model, 2026-07-24)', () => {
       images: [],
       harnessRoles: roles,
     })
-    expect(body.harness).toEqual({ roles })
+    expect(body.harness).toEqual({ skillProfile: 'generic', roles })
   })
 })
 

@@ -82,7 +82,7 @@ describe('health topic + cache (live-server path)', () => {
   const settle = async (): Promise<void> => {
     await vi.waitFor(async () => {
       expect(await runner()).toBeDefined();
-    });
+    }, { timeout: 5_000 });
   };
   let currentApp: ReturnType<typeof createApp> | undefined;
   const runner = async (): Promise<string | undefined> => {

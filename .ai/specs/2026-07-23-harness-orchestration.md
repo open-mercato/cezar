@@ -4,7 +4,19 @@ Companion mockups: [`docs/mockups/harness-thread.html`](../../docs/mockups/harne
 
 > **2026-07-24 amendment — advisor reviewers**: role-based runs can seat configured `agentHarness` bindings (kimi-subscription, deepseek-api, Zen presets) as reviewers, executed as one packet-less runtime council — see [`2026-07-24-advisor-reviewers.md`](2026-07-24-advisor-reviewers.md).
 >
-> **2026-07-24 amendment — vendored cez-\* skills** (spec [`2026-07-24-vendored-cez-skills.md`](2026-07-24-vendored-cez-skills.md)): cezar no longer resolves the collection from the machine (global installs, symlinks, an unmerged upstream branch). The 8 harness skills ship inside the package under cezar-unique names — `om-harness → cez-harness`, `om-setup-agent-harness → cez-setup-harness`, `om-code-review → cez-code-review`, etc. — generated into `vendor/skills/` from a pinned upstream commit by `scripts/vendor-skills.mjs` (a mechanical token rename; upstream stays canonical, the copies are build artifacts, never hand-edited prose). Where this document says `om-<name>` for something cezar executes, the running system uses `cez-<name>`; references to the upstream product keep the om names.
+> **2026-07-30 amendment — selectable development profile.** The task prompt remains only the user's business, defect, or product requirements; it never has to explain the harness sequence. The Multi-model start surface separately persists `skillProfile: generic | open-mercato` (default `generic`). The fixed graph selects complete playbooks by profile:
+>
+> | Phase | Generic project | Open Mercato |
+> | --- | --- | --- |
+> | specification | `cez-spec-writing` | `om-spec-writing` |
+> | pre-implementation audit | `cez-pre-implement-spec` | `om-pre-implement-spec` |
+> | implementation | `cez-implement-spec` | `om-implement-spec` |
+> | review | `cez-code-review` | `om-code-review` |
+> | issue qualification | `cez-verify-in-repo` | `om-verify-in-repo` |
+> | root cause | `cez-root-cause` | `om-root-cause` |
+> | fix | `cez-fix` | `om-fix` |
+>
+> Generic skills are complete, bundled project-neutral playbooks, not abbreviated prompts. The Open Mercato option uses the exact mature `om-*` trees discovered from the normal catalog; a repo-local `om-code-review` extension is composed over the complete shared definition. Preflight materializes every selected directory and reference, copies it outside the model-writable worktree, and pins its tree hash before any paid judgment phase. The profile is immutable across recovery. Cezar's `cez-harness` runtime and `cez-setup-harness` model configurator remain shared by both profiles.
 
 ## TLDR
 The staged-only multi-model harness (om-fix-issue / om-implement-feature + `harness.mjs`) is today conducted by a single Claude context in the desktop app. Over 10–14 h runs that context compacts: it loses its place in the workflow, drops loop counters, and stops rendering the reviewer tables in the contracted format. This spec moves the **conductor** into cezar: a TS-defined phase driver inside `RunManager` owns sequencing, bounded loops, council policy, and report rendering; every judgment phase (qualify, root-cause, implement, fresh review) runs as a **fresh, bounded claude session** whose input is a distilled brief assembled from on-disk artifacts; every deterministic phase (probe, capture, prepare-review, review council, packet-run, stage) is a direct child-process call into the unchanged `harness.mjs`. No LLM context ever outlives its phase, all state lives in a persisted harness ledger + NDJSON events, and the UI renders councils and per-model activity from JSON — so nothing can compact away and nothing can drift. The wrapper skills in the skills repo stay canonical for non-cezar users; cezar re-uses their phase *content* (the installed om-* skills) and their runtime verbatim.
@@ -23,7 +35,7 @@ Cezar already has the machinery the conductor lacks: a persistent run state mach
 Add a **harness driver** to cezar: two built-in workflows (`harness-fix-issue`, `harness-implement-feature`) executed by a TS phase graph instead of the linear YAML step list. Three ownership rules:
 
 1. **Cezar owns control flow.** Phase sequencing, the `≤3` council/fix loops, redispatch-once, retry policy, profile gating, human decision points, cancellation and claim cleanup — all TS in `src/harness/driver.ts`, driven by `RunManager` like any other run.
-2. **The installed skills own judgment.** Qualify (`om-verify-in-repo`), diagnose (`om-root-cause`), implement/fix (`om-fix`), spec (`om-spec-writing`), and the mandatory fresh host review (`om-code-review`) each run as a **new claude session** — new `--session-id`, never `--resume` across phases — with the skill plus a TS-assembled phase brief as input. Skills stay canonical in the skills repo; cezar adds no forked workflow prose.
+2. **The selected complete skills own judgment.** The generic `cez-*` or explicit Open Mercato `om-*` phase skill runs as a **new agent session** — never a resumed transcript across phases — with the full skill plus a TS-assembled phase brief as input. Cezar adds the deterministic boundary contract, not a replacement summary of the playbook.
 3. **`harness.mjs` owns mechanics.** Probe, capture, prepare-review, the advisor council, worker packets, packet-run/gate, and stage are spawned directly by cezar as child processes, exactly as the wrapper skills would; their JSON artifacts are the authoritative state cezar ingests and streams.
 
 **Alternatives considered and rejected:**
@@ -61,13 +73,14 @@ Six seams, all additive.
 | Freshness by promise | Freshness by construction (new `--session-id`, no `--resume`) |
 
 ## Data Model
-`HarnessLedger` (versioned, additive to everything else; `RunRecord` gains one optional `harness?: { profile, workflow }` stub for list surfaces):
+`HarnessLedger` (versioned, additive to everything else; `RunRecord` gains one optional `harness?: { profile, skillProfile, workflow }` stub for list surfaces):
 
 ```jsonc
 {
   "version": 1,
   "workflow": "harness-fix-issue",
   "requestedProfile": "multi-optimized",
+  "skillProfile": "open-mercato",
   "effectiveProfile": "multi-optimized",          // differs only after an explicit user fallback decision
   "subject": { "kind": "issue", "id": "642", "title": "…" },
   "trustedConfig": { "baseRef": "main@9f21c3a", "path": "…/trusted-config.json", "overlay": false },
@@ -96,7 +109,7 @@ All additive, project-scoped:
 
 - `GET /harness/status` — is the collection installed (om-harness resolvable), does `.ai/agentic.config.json` carry `agentHarness`, which profiles are defined, last probe result per profile (cached).
 - `POST /harness/probe { profile }` — run `harness.mjs probe` against the trusted snapshot; returns and caches the readiness table JSON. Used by the new-task surface before start; the driver re-probes at run start regardless (the cache is UX, not a gate).
-- `POST /runs` — `startRunSchema` (`server.ts:311`) gains an optional `harness: { profile: 'standard'|'optimized'|'multi'|'multi-optimized'|'high-assurance', issueId?: string }`, valid only with the two harness workflow names. Variants are rejected for harness runs (one staged handoff per issue; the claim protocol forbids competing claimants anyway).
+- `POST /runs` — `startRunSchema` gains an optional `harness: { profile, skillProfile?: 'generic'|'open-mercato', issueId? }`, valid only with the two harness workflow names. Missing `skillProfile` means `generic`; variants are rejected for harness runs.
 - `GET /runs/:id/harness` — the current ledger (refetch-on-reconnect companion to the event stream, same pattern as `useRun` + `useRunEvents`).
 - Decisions reuse the **existing ask mechanism**: the driver emits `ask.requested` v2 events (profile-unready reroute, fallback consent, force-claim, blocked-council repair, packet-release) and answers arrive through the existing `POST /runs/:id/messages`; the driver records each into `ledger.decisions`. No new decision endpoint.
 - Guard (Architecture §6): `POST /runs/:id/git/push` and `POST /runs/:id/pr` return 409 for a harness run before it reaches `review`.
@@ -106,7 +119,7 @@ Design targets in `docs/mockups/` (same token sheet and shell as the existing fi
 
 - **`harness-thread.html` — the run view.** The meta-row gains a violet **profile pill**; the step rail becomes the **phase rail** (every phase with state glyphs, the active one shimmering, elapsed time — the rail is `RunRecord.steps`, so this is mostly free). New **Models dock** (sibling of the agents dock, `agents-dock.tsx` pattern): one row per ledger model — role tag (HOST / WORKER / REVIEWER), binding in mono, live activity ("implementing packet 2/3 — src/runs/store.ts", "council: completed in 3m 12s", "waiting for council"), attempt badges. Councils and packet dispatches appear in-thread as cards (verdict pill + one-line summary) that expand.
 - **`harness-council.html` — the Review tab.** Round stepper (Round 1 → `request_changes` → fixes → Round 2 ●), the **reviewer-status table** (reviewer, family, context=fresh, requested vs observed model, provider, status incl. `retrying 2/4`, duration) rendered *above* the **findings-by-model matrix** — `●` raised / `—` completed-no-finding / `!` failed / `○` skipped / `◐` same-family self-check — with severity chips, per-finding resolution, and single-reviewer (minority) findings visually preserved. The fresh-Claude validation-gate table sits alongside. All of it renders from `councils[]` JSON; the symbols and ordering follow `references/reporting.md` mechanically.
-- **`harness-new-task.html` — the start surface.** Workflow entries "Fix issue (staged, multi-model)" / "Implement feature (staged, multi-model)"; a profile segmented control; the **readiness table** card (per-model ✅/🟥 with probe notes) shown *before* start — with 🟥 rows the primary action becomes **Configure harness** (which starts `om-setup-agent-harness` as a normal interactive cezar run) and "Use standard instead" is the explicit, recorded fallback, per the reroute contract.
+- **`harness-new-task.html` — the start surface.** Workflow entries "Fix issue (staged, multi-model)" / "Implement feature (staged, multi-model)"; a Development profile control (Generic project / Open Mercato) independent from the model/conduction profile; and the **readiness table** card shown before start. Configure harness runs `cez-setup-harness`; the user's textarea remains a requirement brief.
 - **`harness-packets.html` — the Packets tab** (high-assurance only): packet cards with the ledger state machine (planned → claimed → implementing → reviewing → fixing → awaiting_validation → gated / blocked), risk chip, allowed-path leases, budget bars, reviewer lenses, fix cycles, gate-evidence coverage; `packet-release` as an explicit destructive action on blocked packets.
 - **Review-gate finish.** At `review`, the header actions surface the suggested commit subject and prepared PR body from the ledger; after push+PR, a "Release issue claim" chip completes the checklist.
 

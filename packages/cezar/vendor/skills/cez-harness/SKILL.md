@@ -1,7 +1,6 @@
 ---
 name: cez-harness
 description: Shared internal runtime for configurable staged-only implementation workers, evidence-gated work packets, and multi-model review councils. Use indirectly through om-fix-issue, om-implement-feature, or cez-setup-harness; do not use it to publish, commit, push, or open a pull request.
-requires: [cez-code-review]
 ---
 
 # Agent Harness
@@ -48,7 +47,7 @@ Keep the generated JSON result as the source of truth. Render Markdown from that
 `hooks/` ships the preventive layer of the stage-only contract, installed into a
 repository by `cez-setup-harness`: `block-push-and-pr.sh` denies `git push`
 and PR creation at the tool boundary, and `freeze-tests.sh` denies test-file
-edits while a `.om-freeze-tests` sentinel exists at or above the target file.
+edits while a `.cez-freeze-tests` sentinel exists at or above the target file.
 `hooks-settings-snippet.json` holds the `PreToolUse` wiring.
 
 ## Rules

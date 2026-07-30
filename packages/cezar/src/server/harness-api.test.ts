@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLedger, readLedger, saveLedger } from '../harness/ledger.js';
+import { acquireIssueClaim } from '../harness/issue-claim.js';
 import { HARNESS_FIX_ISSUE } from '../harness/workflows.js';
 import { RunStore } from '../runs/store.js';
 import type { RunManager, StartRunInput } from '../workflows/run.js';
@@ -38,6 +39,7 @@ describe('harness API', () => {
       sendMessage: () => false,
       enqueueMessage: () => null,
       deferMessage: () => false,
+      continueRun: () => ({ ok: true }),
     } as unknown as RunManager;
     app = createApp({
       repoRoot,
@@ -221,10 +223,14 @@ describe('harness API', () => {
       const res = await post('/api/runs', {
         task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
-        harness: { profile: 'standard', issueId: '642' },
+        harness: { profile: 'standard', skillProfile: 'open-mercato', issueId: '642' },
       });
       expect(res.status).toBe(201);
-      expect(captured?.harness).toEqual({ profile: 'standard', issueId: '642' });
+      expect(captured?.harness).toEqual({
+        profile: 'standard',
+        skillProfile: 'open-mercato',
+        issueId: '642',
+      });
     });
 
     it('synthesizes the fail-closed standard harness when the request omits harness options', async () => {
@@ -235,12 +241,24 @@ describe('harness API', () => {
       expect(res.status).toBe(201);
       expect(captured?.harness).toMatchObject({
         profile: 'standard',
+        skillProfile: 'generic',
       });
+    });
+
+    it('rejects a worktree-less harness run before creating it', async () => {
+      const res = await post('/api/runs', {
+        task: 'Fix issue #642',
+        workflow: HARNESS_FIX_ISSUE,
+        worktree: false,
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toMatch(/isolated git worktree/);
+      expect(captured).toBeUndefined();
     });
 
     it('rejects harness params on a non-harness workflow', async () => {
       const res = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: 'quick-task',
         harness: { profile: 'standard' },
       });
@@ -249,11 +267,21 @@ describe('harness API', () => {
 
     it('rejects an invalid profile', async () => {
       const res = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { profile: 'mega' },
       });
       expect(res.status).toBe(400);
+    });
+
+    it('rejects an invalid skill profile before creating the expensive harness run', async () => {
+      const res = await post('/api/runs', {
+        task: 'Fix issue #642',
+        workflow: HARNESS_FIX_ISSUE,
+        harness: { skillProfile: 'open-mercato-ish' },
+      });
+      expect(res.status).toBe(400);
+      expect(captured).toBeUndefined();
     });
 
     it('rejects variants on a harness run — one staged handoff per issue', async () => {
@@ -290,7 +318,7 @@ describe('harness API', () => {
       );
 
       const blocked = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { profile: 'standard' },
       });
@@ -299,7 +327,7 @@ describe('harness API', () => {
       expect(captured).toBeUndefined();
 
       const accepted = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: {
           profile: 'standard',
@@ -422,6 +450,84 @@ describe('harness API', () => {
       const push = await post(`/api/runs/${run.id}/git/push`, {});
       expect(((await push.json()) as { error?: string }).error ?? '').not.toMatch(/contested/i);
     });
+
+    it('records a spec-risk reason and resumes a pre-implementation pause', async () => {
+      const run = store.createRun({
+        title: 't',
+        workflow: HARNESS_FIX_ISSUE,
+        task: 'Fix issue #642',
+        steps: [],
+      });
+      store.updateRun(run.id, {
+        status: 'failed',
+        harness: { profile: 'standard', workflow: HARNESS_FIX_ISSUE, issueId: '642' },
+      });
+      const ledger = createLedger({
+        workflow: HARNESS_FIX_ISSUE,
+        requestedProfile: 'standard',
+        subject: { kind: 'issue', id: '642', text: 'Fix issue #642' },
+      });
+      ledger.outcome = {
+        status: 'contested',
+        blockingReasons: ['rollback behavior is unspecified'],
+        pendingDecision: {
+          kind: 'spec',
+          gate: 'pre-implement',
+          round: 1,
+          findings: ['rollback behavior is unspecified'],
+        },
+      };
+      saveLedger(dataDir, run.id, ledger);
+
+      const accepted = await post(`/api/runs/${run.id}/harness/accept-contested`, {
+        reason: 'The operator accepts this bounded migration risk.',
+      });
+
+      expect(accepted.status).toBe(200);
+      expect(await accepted.json()).toMatchObject({ resumed: true });
+      const saved = readLedger(dataDir, run.id);
+      expect(saved.status).toBe('valid');
+      if (saved.status !== 'valid') throw new Error('expected valid ledger');
+      expect(saved.ledger.outcome.status).toBe('pending');
+      expect(saved.ledger.decisions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'spec.accept', detail: 'pre-implement:1' }),
+          expect.objectContaining({
+            kind: 'spec.accept.reason',
+            detail: 'The operator accepts this bounded migration risk.',
+          }),
+        ]),
+      );
+    });
+
+    it('releases an issue claim when an inactive harness run is archived', async () => {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: repoRoot, stdio: 'ignore' });
+      const run = store.createRun({
+        title: 't',
+        workflow: HARNESS_FIX_ISSUE,
+        task: 'Fix issue #642',
+        steps: [],
+      });
+      store.updateRun(run.id, {
+        status: 'review',
+        harness: { profile: 'standard', workflow: HARNESS_FIX_ISSUE, issueId: '642' },
+      });
+      const held = acquireIssueClaim(repoRoot, run.id, '642');
+      expect(held.ok).toBe(true);
+      if (!held.ok) throw new Error(held.error);
+      const ledger = createLedger({
+        workflow: HARNESS_FIX_ISSUE,
+        requestedProfile: 'standard',
+        subject: { kind: 'issue', id: '642', text: 'Fix issue #642' },
+      });
+      ledger.claim = held.claim;
+      saveLedger(dataDir, run.id, ledger);
+
+      const archived = await post(`/api/runs/${run.id}/archive`, {});
+
+      expect(archived.status).toBe(200);
+      expect(acquireIssueClaim(repoRoot, 'next-run', '642')).toMatchObject({ ok: true });
+    });
   });
 
   describe('phase-boundary messages', () => {
@@ -535,7 +641,7 @@ describe('harness API', () => {
 
     it('threads a sound role selection through to the manager', async () => {
       const res = await post('/api/runs', {
-        task: 'Build the CSV export module',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { roles },
       });
@@ -545,7 +651,7 @@ describe('harness API', () => {
 
     it('rejects fewer than 2 reviewers', async () => {
       const res = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { roles: { ...roles, reviewers: [roles.reviewers[0]] } },
       });
@@ -565,7 +671,7 @@ describe('harness API', () => {
 
     it('rejects a single-family council', async () => {
       const res = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: {
           roles: {
@@ -582,6 +688,18 @@ describe('harness API', () => {
     });
 
     it('accepts a harness advisor reviewer whose family counts toward diversity (2026-07-24)', async () => {
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai', 'agentic.config.json'),
+        JSON.stringify({
+          agentHarness: {
+            models: {
+              kimi: { family: 'moonshot', roles: ['reviewer'], adapter: 'preset' },
+            },
+          },
+        }),
+        'utf8',
+      );
       const withAdvisor = {
         ...roles,
         reviewers: [
@@ -590,7 +708,7 @@ describe('harness API', () => {
         ],
       };
       const res = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: { roles: withAdvisor },
       });
@@ -609,15 +727,100 @@ describe('harness API', () => {
       }
     });
 
-    it('rejects an advisor ref without a family (the diversity axis)', async () => {
+    it('derives an omitted advisor family from trusted configuration', async () => {
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai', 'agentic.config.json'),
+        JSON.stringify({
+          agentHarness: {
+            models: {
+              kimi: { family: 'moonshot', roles: ['reviewer'], adapter: 'preset' },
+            },
+          },
+        }),
+        'utf8',
+      );
       const res = await post('/api/runs', {
-        task: 'x',
+        task: 'Fix issue #642',
         workflow: HARNESS_FIX_ISSUE,
         harness: {
           roles: { ...roles, reviewers: [{ runner: 'claude', model: 'opus' }, { runner: 'harness', model: 'kimi' }] },
         },
       });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(201);
+      expect(captured?.harness?.roles?.reviewers[1]).toMatchObject({
+        runner: 'harness',
+        model: 'kimi',
+        family: 'moonshot',
+      });
+    });
+
+    it('rejects a client-supplied advisor family that disagrees with trusted configuration', async () => {
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai', 'agentic.config.json'),
+        JSON.stringify({
+          agentHarness: {
+            models: {
+              kimi: { family: 'moonshot', roles: ['reviewer'], adapter: 'preset' },
+            },
+          },
+        }),
+        'utf8',
+      );
+      const res = await post('/api/runs', {
+        task: 'Fix issue #642',
+        workflow: HARNESS_FIX_ISSUE,
+        harness: {
+          roles: {
+            ...roles,
+            reviewers: [
+              { runner: 'claude', model: 'opus' },
+              { runner: 'harness', model: 'kimi', family: 'openai' },
+            ],
+          },
+        },
+      });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toMatch(/trusted configuration/);
+    });
+
+    it('rejects a configured profile that resolves to OpenCode before probing or starting', async () => {
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai', 'agentic.config.json'),
+        JSON.stringify({
+          agentHarness: {
+            models: {
+              unsafe: {
+                family: 'openrouter',
+                roles: ['worker'],
+                commands: { worker: ['opencode', 'run'] },
+              },
+            },
+            profiles: {
+              optimized: {
+                workers: ['unsafe'],
+                reviewers: [],
+                reviewPolicy: { mode: 'advisory' },
+              },
+            },
+          },
+        }),
+        'utf8',
+      );
+
+      const res = await post('/api/runs', {
+        task: 'Fix issue #642',
+        workflow: HARNESS_FIX_ISSUE,
+        harness: { profile: 'optimized' },
+      });
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toMatch(
+        /OpenCode.*stage-only isolation/i,
+      );
+      expect(captured).toBeUndefined();
     });
   });
 

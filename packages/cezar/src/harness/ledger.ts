@@ -7,6 +7,7 @@ import {
   type HarnessLedger,
   type HarnessPhase,
   type HarnessProfile,
+  type HarnessSkillProfile,
 } from './types.js';
 
 /**
@@ -24,6 +25,7 @@ export function ledgerPath(dataDir: string, runId: string): string {
 export function createLedger(init: {
   workflow: string;
   requestedProfile: HarnessProfile;
+  skillProfile?: HarnessSkillProfile;
   subject: HarnessLedger['subject'];
 }): HarnessLedger {
   return harnessLedgerSchema.parse({
@@ -31,6 +33,7 @@ export function createLedger(init: {
     workflow: init.workflow,
     requestedProfile: init.requestedProfile,
     effectiveProfile: init.requestedProfile,
+    ...(init.skillProfile ? { skillProfile: init.skillProfile } : {}),
     subject: init.subject,
   });
 }

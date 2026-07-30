@@ -20,4 +20,4 @@ Additional checks for a fix produced from an analyzer brief:
 - No data-scoping or permission-check rules weakened; the project's data-access conventions followed in every changed production file.
 - Fix remains minimal — edit only what the analyzer named plus tests; refactors belong in their own PR.
 
-The automated second review pass (`om-auto-review-pr` in autofix mode) is **not** part of this step — it runs later in the chain, after `om-open-pr`, driven by `om-auto-fix-issue` or the external flow runner.
+The automated second review pass (`the automated review stage` in autofix mode) is **not** part of this step — it runs later in the chain, after `the delivery step`, driven by `the issue-fix workflow` or the external flow runner.

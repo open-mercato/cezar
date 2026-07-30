@@ -77,9 +77,17 @@ describe('the repo view against the live dry-run server', () => {
         `[...document.querySelectorAll('[data-slot="repo-changes"] h2')].some((h) => h.textContent === 'Working tree clean')`,
       )
     } else {
-      browser.waitForFunction(
-        `document.querySelectorAll('[data-slot="diff-file"]').length === ${changes.files.length}`,
+      browser.waitForFunction(`document.querySelector('[data-slot="diff-files"]') !== null`)
+      const virtualized = browser.evaluate(
+        `document.querySelector('[data-slot="diff-files"]').dataset.virtualized`,
       )
+      const mountedFiles = browser.count('[data-slot="diff-file"]')
+      if (virtualized === 'true') {
+        expect(mountedFiles).toBeGreaterThan(0)
+        expect(mountedFiles).toBeLessThan(changes.files.length)
+      } else {
+        expect(mountedFiles).toBe(changes.files.length)
+      }
       expect(browser.count('[data-slot="changes-tree"]')).toBe(1)
     }
 

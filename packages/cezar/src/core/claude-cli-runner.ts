@@ -386,6 +386,13 @@ export function buildClaudeArgs(
   if (spec.systemPrompt) {
     args.push('--append-system-prompt', spec.systemPrompt);
   }
+  if (spec.env?.CEZ_HARNESS_CLAUDE_SETTINGS) {
+    args.push('--settings', spec.env.CEZ_HARNESS_CLAUDE_SETTINGS);
+    // Harness isolation must not be widened by a target repository's local
+    // Claude settings (for example sandbox allowWrite/excludedCommands).
+    // `--settings` above remains the sole invocation-specific policy source.
+    args.push('--setting-sources', '');
+  }
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the
   // existing on-disk conversation instead.

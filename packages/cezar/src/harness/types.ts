@@ -28,6 +28,13 @@ export type HarnessProfile = (typeof HARNESS_PROFILES)[number];
 
 export const harnessProfileSchema = z.enum(HARNESS_PROFILES);
 
+/** Which judgment playbooks the fixed harness graph executes. Generic is the
+ * safe Cezar default; Open Mercato is an explicit opt-in because its skills
+ * encode framework-specific architecture and repository conventions. */
+export const HARNESS_SKILL_PROFILES = ['generic', 'open-mercato'] as const;
+export type HarnessSkillProfile = (typeof HARNESS_SKILL_PROFILES)[number];
+export const harnessSkillProfileSchema = z.enum(HARNESS_SKILL_PROFILES);
+
 const harnessPhaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -169,17 +176,25 @@ const harnessOutcomeSchema = z
      *  the survivors"; the decision endpoint records the choice and resumes
      *  the run. Absent on every other blocked outcome. */
     pendingDecision: z
-      .object({
-        kind: z.literal('council'),
-        council: z.enum(['spec', 'implementation']),
-        round: z.number().int().min(1),
-        failed: z.array(
-          z.object({ label: z.string(), reason: z.string().optional() }),
-        ),
-        completedCount: z.number().int().min(0),
-        /** False when every reviewer failed — there is nothing to proceed WITH. */
-        canProceed: z.boolean(),
-      })
+      .discriminatedUnion('kind', [
+        z.object({
+          kind: z.literal('council'),
+          council: z.enum(['spec', 'implementation']),
+          round: z.number().int().min(1),
+          failed: z.array(
+            z.object({ label: z.string(), reason: z.string().optional() }),
+          ),
+          completedCount: z.number().int().min(0),
+          /** False when every reviewer failed — there is nothing to proceed WITH. */
+          canProceed: z.boolean(),
+        }),
+        z.object({
+          kind: z.literal('spec'),
+          gate: z.enum(['council', 'pre-implement']),
+          round: z.number().int().min(1),
+          findings: z.array(z.string().min(1).max(4_000)).max(50),
+        }),
+      ])
       .optional(),
   })
   .passthrough();
@@ -188,6 +203,9 @@ const harnessLedgerBaseShape = {
   workflow: z.string().min(1),
   requestedProfile: harnessProfileSchema,
   effectiveProfile: harnessProfileSchema,
+  /** Optional only for ledgers created before selectable skill profiles. The
+   * driver preserves those runs' historical Open Mercato routing. */
+  skillProfile: harnessSkillProfileSchema.optional(),
   /** The role-based selection the run was started with (2026-07-24): who
    *  orchestrates, who implements, who reviews. Loose — the driver input is
    *  authoritative; this is the report copy. */
@@ -205,6 +223,10 @@ const harnessLedgerBaseShape = {
       sha256: z.string().min(1).optional(),
     })
     .optional(),
+  /** SHA-256 of each complete, preflight-pinned skill directory. The pinned
+   * copy lives outside the model-writable worktree and is the only prompt
+   * source used on resume. */
+  trustedSkills: z.record(z.string(), z.string().min(1)).default({}),
   /** The harness runtime this run executes, pinned (2026-07-27).
    *
    * The runtime used to be spawned straight from
@@ -233,7 +255,13 @@ const harnessLedgerBaseShape = {
   loops: z
     .object({ fixRounds: z.number().int().min(0), maxFixRounds: z.number().int().min(1) })
     .default({ fixRounds: 0, maxFixRounds: 3 }),
-  claim: z.object({ held: z.boolean(), issueId: z.string().optional() }).optional(),
+  claim: z
+    .object({
+      held: z.boolean(),
+      issueId: z.string().optional(),
+      path: z.string().optional(),
+    })
+    .optional(),
   stage: harnessStageSchema.default({ status: 'pending' }),
   decisions: z.array(harnessDecisionSchema).default([]),
 };

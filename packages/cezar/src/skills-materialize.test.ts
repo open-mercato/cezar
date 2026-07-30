@@ -66,15 +66,15 @@ describe('ensureSkillOnDisk', () => {
       requires: ['cez-harness'],
     });
     const runtime = dirSkill('cez-harness', await writeDirSkill(store, 'cez-harness'), {
-      requires: ['cez-code-review'],
+      requires: ['om-code-review'],
     });
-    const review = dirSkill('cez-code-review', await writeDirSkill(store, 'cez-code-review'), {
+    const review = dirSkill('om-code-review', await writeDirSkill(store, 'om-code-review'), {
       requires: ['cez-setup-harness'],
     });
     const cwd = await tmp('cez-mat-cwd-');
 
     expect(await ensureSkillOnDisk(cwd, setup, [setup, runtime, review])).toBe(true);
-    for (const name of ['cez-setup-harness', 'cez-harness', 'cez-code-review']) {
+    for (const name of ['cez-setup-harness', 'cez-harness', 'om-code-review']) {
       expect((await stat(join(cwd, '.claude', 'skills', name, 'SKILL.md'))).isFile()).toBe(true);
     }
   });
@@ -90,7 +90,7 @@ describe('ensureSkillOnDisk', () => {
     await expect(stat(join(cwd, '.git'))).rejects.toThrow();
   });
 
-  it('returns true without copying for single-file skills and for skills already inside cwd', async () => {
+  it('leaves flat skills alone and materializes repo-local directory skills', async () => {
     const cwd = await tmp('cez-mat-cwd-');
     const flat: Skill = {
       name: 'flat',
@@ -103,7 +103,12 @@ describe('ensureSkillOnDisk', () => {
     const insideDir = await writeDirSkill(join(cwd, '.ai', 'skills'), 'local-dir');
     const inside = dirSkill('local-dir', insideDir, { source: 'ai' });
     expect(await ensureSkillOnDisk(cwd, inside, [inside])).toBe(true);
-    await expect(stat(join(cwd, '.claude', 'skills', 'local-dir'))).rejects.toThrow();
+    expect(
+      (await stat(join(cwd, '.claude', 'skills', 'local-dir', 'SKILL.md'))).isFile(),
+    ).toBe(true);
+    expect(
+      (await stat(join(cwd, '.claude', 'skills', 'local-dir', 'references', 'a.md'))).isFile(),
+    ).toBe(true);
   });
 
   it('degrades to false when a requires name is missing from the catalog', async () => {

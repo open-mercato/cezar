@@ -9,7 +9,7 @@ import { harnessScriptDigest, resolveHarnessScript, sealHarnessRuntime } from '.
  * Review finding (2026-07-27), sandbox escape.
  *
  * The runtime resolves its schemas relative to its own location
- * (`../references/*.schema.json` and `../../cez-code-review/references/*.md`),
+ * (`../references/*.schema.json` and `../../om-code-review/references/*.md`),
  * so sealing only `harness.mjs` would move it somewhere it cannot run. The whole
  * skill tree comes along and the relative layout is preserved.
  */
@@ -25,10 +25,10 @@ describe('sealHarnessRuntime', () => {
     dest = mkdtempSync(join(tmpdir(), 'cez-seal-dest-'));
     mkdirSync(skillFile('cez-harness', 'scripts'), { recursive: true });
     mkdirSync(skillFile('cez-harness', 'references'), { recursive: true });
-    mkdirSync(skillFile('cez-code-review', 'references'), { recursive: true });
+    mkdirSync(skillFile('om-code-review', 'references'), { recursive: true });
     writeFileSync(skillFile('cez-harness', 'scripts', 'harness.mjs'), 'export const real = 1\n');
     writeFileSync(skillFile('cez-harness', 'references', 'review-result.schema.json'), '{}');
-    writeFileSync(skillFile('cez-code-review', 'references', 'review-checklist.md'), '# checklist');
+    writeFileSync(skillFile('om-code-review', 'references', 'review-checklist.md'), '# checklist');
   });
 
   afterEach(() => {
@@ -52,7 +52,7 @@ describe('sealHarnessRuntime', () => {
     expect(readFileSync(join(runtimeDir, '..', 'references', 'review-result.schema.json'), 'utf8')).toBe('{}');
     expect(
       readFileSync(
-        join(runtimeDir, '..', '..', 'cez-code-review', 'references', 'review-checklist.md'),
+        join(runtimeDir, '..', '..', 'om-code-review', 'references', 'review-checklist.md'),
         'utf8',
       ),
     ).toBe('# checklist');

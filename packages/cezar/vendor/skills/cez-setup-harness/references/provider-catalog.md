@@ -102,7 +102,7 @@ arbitrary `enforcedBy` string is not enforcement.
 - `optimized`: selected worker, advisory review policy.
 - `multi`: every selected reviewer, all required to complete — the runtime
   retries failed invocations and a council missing any selected reviewer
-  yields no verdict. The wrapper's fresh Claude `cez-code-review` result is
+  yields no verdict. The wrapper's fresh Claude `om-code-review` result is
   mandatory and hash-bound but sits outside the provider policy. Every advisor
   receives the same full rubric and packet in a fresh invocation.
 - `multi-optimized`: selected worker plus selected reviewers; the worker's family does not count as independent review.

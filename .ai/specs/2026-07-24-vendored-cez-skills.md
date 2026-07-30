@@ -1,5 +1,32 @@
 # Vendored cez-* Skills (Self-Contained Harness) Implementation Plan
 
+> **Superseded in part on 2026-07-30.** The implementation-plan details below
+> are historical. The current harness has an explicit development profile:
+> `generic` (default) or `open-mercato`. Cezar always vendors
+> `cez-harness` and `cez-setup-harness`, plus complete project-neutral generic
+> judgment skills. It does not use short substitute prompts.
+>
+> Generic feature runs use `cez-spec-writing` → `cez-pre-implement-spec` →
+> `cez-implement-spec` → `cez-code-review`; generic issue runs use
+> `cez-verify-in-repo` → `cez-root-cause` → `cez-fix` → `cez-code-review`.
+> The missing generic pre-implementation and implementation playbooks are
+> Cezar-owned and preserved across regeneration; the other generic playbooks
+> are generated from the mature shared skills.
+>
+> When the user explicitly selects Open Mercato, the workflow invokes complete
+> canonical skills by their exact names:
+>
+> - feature: `om-spec-writing` → `om-pre-implement-spec` →
+>   `om-implement-spec` → `om-code-review`;
+> - issue: `om-verify-in-repo` → `om-root-cause` → `om-fix` →
+>   `om-code-review`.
+>
+> Preflight materializes the selected directories (including references), pins
+> their complete trees outside the model-writable worktree, and records their
+> hashes plus the selected profile for recovery. The Cezar wrapper owns control
+> flow, local claims, authoritative validation, review reconciliation, and
+> staged-only delivery.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make cezar's harness self-contained: the skills it needs ship inside the package under cezar-unique `cez-*` names (no dependence on `~/.claude/skills`, symlinks, or an unmerged upstream branch), materialize on disk in every run worktree, and the two config bugs that broke run `9788d87f` (stale `develop` base, setup-in-worktree) are fixed.

@@ -335,7 +335,11 @@ class CodexSession implements AgentSession {
       // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
       // keeps container installs working when bubblewrap cannot create a UID map (#563).
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
+      sandbox:
+        this.spec.env?.CEZ_HARNESS_STAGE_ONLY === '1' ||
+        process.env.CEZ_CODEX_NETWORK === '0'
+          ? 'workspace-write'
+          : 'danger-full-access',
       approvalPolicy: 'never',
       // Reasoning effort (user feedback 2026-07-24): the seam's neutral tier
       // mapped to codex's own levels (`max` → `xhigh`), camelCase like the

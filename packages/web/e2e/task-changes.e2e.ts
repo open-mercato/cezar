@@ -94,7 +94,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     // CEZ_REVIEW_GATE=1 because this spec is ABOUT the gate: it is opt-in (#489, default OFF),
     // so pinning it here is what makes the parked-at-review fixture reproducible instead of
     // depending on whatever the operator happens to export.
@@ -228,7 +228,9 @@ describe('the Changes tab against a live dry run', () => {
   })
 
   it('the Files tab opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]`)
+    browser.evaluate(
+      `document.querySelector('[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]').click()`,
+    )
     browser.waitForFunction(`document.querySelector('[data-route="task-files"] [data-slot="files-tree"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/files`)}`)
     expect(

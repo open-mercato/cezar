@@ -127,7 +127,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', repo, '--port', String(port), '--no-open'],
+    [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', repo, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(repo), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)

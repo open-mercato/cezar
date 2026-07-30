@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 import record from './fixtures/subagents-run.record.json'
 
 /**
@@ -59,6 +59,9 @@ let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
 let baseUrl: string
+let bootProject: string
+
+const scoped = (path: string) => `/p/${bootProject}${path}`
 
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-agents-'))
@@ -73,10 +76,11 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(1440, 900)
@@ -91,14 +95,24 @@ afterAll(() => {
 const DOCK = '[data-slot="agents-dock"]'
 const ROW = '[data-slot="agent-item"]'
 
+function expandDock(): void {
+  browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+  if (browser.evaluate(`document.querySelector('${DOCK}').dataset.state`) === 'collapsed') {
+    browser.click(`${DOCK} > button`)
+  }
+  browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
+}
+
 describe('the Agents dock against a replayed fan-out', () => {
   it('docks both sub-agents with odometer, type badge, activity and tool count', () => {
-    browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
-    // The dock mounts only once the replay has produced the fan-out.
-    browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+    // The redesign starts collapsed: the one-line summary is the default, and expanding
+    // materializes the per-agent rows.
+    browser.waitForFunction(`document.querySelector('${DOCK}')?.dataset.state === 'collapsed'`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="agents-count"]')?.textContent.includes('2/2')`,
     )
+    expandDock()
 
     const rows = JSON.parse(
       browser.evaluate(`JSON.stringify([...document.querySelectorAll('${ROW}')].map((row) => ({
@@ -122,8 +136,8 @@ describe('the Agents dock against a replayed fan-out', () => {
   }, 120_000)
 
   it('a row opens the drill-down sheet with that agent’s output and nobody else’s', () => {
-    browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
-    browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+    expandDock()
 
     // The second agent's row — a real dialog-opening button.
     browser.click(`${ROW}:nth-of-type(2) button`)
@@ -153,8 +167,8 @@ describe('the Agents dock against a replayed fan-out', () => {
   }, 120_000)
 
   it('collapses to a one-line odometer', () => {
-    browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
-    browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+    expandDock()
 
     browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 0`)

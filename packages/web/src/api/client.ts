@@ -392,10 +392,12 @@ export function acceptContestedHarness(
 ): Promise<{
   outcome: HarnessLedgerResponse['outcome']
   decisions?: HarnessLedgerResponse['decisions']
+  resumed?: boolean
 }> {
   return mutate<{
     outcome: HarnessLedgerResponse['outcome']
     decisions?: HarnessLedgerResponse['decisions']
+    resumed?: boolean
   }>('POST', runPath(id, '/harness/accept-contested'), { reason })
 }
 

@@ -44,7 +44,7 @@ import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.js';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.js';
 import { isV2WireEventType } from '../runs/ui-event-sink.js';
-import type { RunManager } from '../workflows/run.js';
+import type { RunManager, StartRunInput } from '../workflows/run.js';
 import { createLedger, readLedger, saveLedger } from '../harness/ledger.js';
 import { loadAgenticConfig, resolveHarnessRuntimeInfo } from '../harness/runtime.js';
 import {
@@ -57,8 +57,15 @@ import { createLiveTransport } from '../harness/probe-transports.js';
 import { resolveHarnessPlan } from '../harness/profile-plan.js';
 import { harnessArtifactDir } from '../harness/driver.js';
 import { providerFamilyOf } from '../harness/model-family.js';
-import { HARNESS_PROFILES, harnessProfileSchema } from '../harness/types.js';
-import { isHarnessWorkflow } from '../harness/workflows.js';
+import { canonicalizeAdvisorRefs } from '../harness/advisor-identity.js';
+import { releaseIssueClaim } from '../harness/issue-claim.js';
+import {
+  HARNESS_PROFILES,
+  harnessProfileSchema,
+  harnessSkillProfileSchema,
+} from '../harness/types.js';
+import { HARNESS_FIX_ISSUE, isHarnessWorkflow } from '../harness/workflows.js';
+import { extractTaskRefs } from '../runs/task-refs.js';
 import {
   remoteDefaultBranch,
   removeWorktree,
@@ -419,6 +426,21 @@ const streamSSENoBuffer: typeof streamSSE = (c, cb, onError) => {
   return res;
 };
 
+function releaseHarnessIssueClaim(dataDir: string, runId: string): void {
+  const read = readLedger(dataDir, runId);
+  if (
+    read.status !== 'valid' ||
+    !read.ledger.claim?.held ||
+    !read.ledger.claim.path
+  ) {
+    return;
+  }
+  const released = releaseIssueClaim(read.ledger.claim.path, runId);
+  if (!released.ok) return;
+  read.ledger.claim.held = false;
+  saveLedger(dataDir, runId, read.ledger);
+}
+
 // A run starts from a named workflow OR an inline chain of steps (spec 008 —
 // the approved plan is posted as-is, never written to a file).
 const harnessModelRefSchema = z.object({
@@ -436,7 +458,7 @@ const harnessModelRefSchema = z.object({
 const harnessAdvisorRefSchema = z.object({
   runner: z.literal('harness'),
   model: z.string().min(1).max(200),
-  family: z.string().min(1).max(80),
+  family: z.string().min(1).max(80).optional(),
 });
 
 const harnessFamilyOf = providerFamilyOf;
@@ -463,12 +485,6 @@ const harnessRolesSchema = z
         return;
       }
       seen.add(key);
-    }
-    if (new Set(roles.reviewers.map(harnessFamilyOf)).size < 2) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'reviewers must span at least two different model families (e.g. Anthropic + OpenAI)',
-      });
     }
   });
 
@@ -533,6 +549,7 @@ const startRunSchema = z
     harness: z
       .object({
         profile: harnessProfileSchema.optional(),
+        skillProfile: harnessSkillProfileSchema.optional(),
         roles: harnessRolesSchema.optional(),
         issueId: z.string().trim().min(1).max(200).optional(),
         baseAcknowledgement: z
@@ -2343,10 +2360,24 @@ export function createApp(deps: ServerDeps) {
 
   // Registered before the `/:id/...` routes so "archive-finished" never
   // matches as a run id.
-  api.post('/runs/archive-finished', (c) => c.json({ archived: c.get('project').store.archiveFinished() }));
+  api.post('/runs/archive-finished', (c) => {
+    const { dataDir, store } = c.get('project');
+    const releasable = store
+      .listRuns()
+      .filter(
+        (run) =>
+          run.harness &&
+          !run.archived &&
+          ['done', 'failed', 'cancelled'].includes(run.status),
+      )
+      .map((run) => run.id);
+    const archived = store.archiveFinished();
+    for (const runId of releasable) releaseHarnessIssueClaim(dataDir, runId);
+    return c.json({ archived });
+  });
 
   api.post('/runs/:id/archive', async (c) => {
-    const { store } = c.get('project');
+    const { dataDir, store, manager } = c.get('project');
     const id = c.req.param('id');
     // An empty/absent body archives (the common case); a malformed body degrades
     // to `{}` just as before, but a wrong-typed `archived` is now a 400 (#429).
@@ -2355,6 +2386,7 @@ export function createApp(deps: ServerDeps) {
       return c.json({ error: parsed.error.issues.map((i) => i.message).join('; ') }, 400);
     }
     const run = store.setArchived(id, parsed.data.archived !== false);
+    if (run?.archived && !manager.isActive(id)) releaseHarnessIssueClaim(dataDir, id);
     return run ? c.json(run) : c.json({ error: 'not found' }, 404);
   });
 
@@ -2388,9 +2420,10 @@ export function createApp(deps: ServerDeps) {
     if (isHarnessWorkflow(workflow.name) && (parsed.data.variants ?? 1) > 1) {
       return c.json({ error: 'parallel variants are not available for harness runs — one staged handoff per task' }, 400);
     }
-    const harnessInput = isHarnessWorkflow(workflow.name)
+    let harnessInput = isHarnessWorkflow(workflow.name)
       ? {
           ...(parsed.data.harness ?? {}),
+          skillProfile: parsed.data.harness?.skillProfile ?? 'generic',
           profile:
             parsed.data.harness?.profile ??
             (parsed.data.harness?.roles
@@ -2400,6 +2433,22 @@ export function createApp(deps: ServerDeps) {
               : ('standard' as const)),
         }
       : undefined;
+    if (harnessInput && parsed.data.worktree === false) {
+      return c.json(
+        { error: 'harness workflows require an isolated git worktree' },
+        400,
+      );
+    }
+    if (harnessInput && workflow.name === HARNESS_FIX_ISSUE && !harnessInput.issueId) {
+      const issueNumber = extractTaskRefs(parsed.data.task).issueNumber;
+      if (issueNumber === undefined) {
+        return c.json(
+          { error: 'harness fix workflow requires a concrete issue id' },
+          400,
+        );
+      }
+      harnessInput = { ...harnessInput, issueId: String(issueNumber) };
+    }
     const cezarConfig = await loadConfig(repoRoot);
     if (harnessInput && cezarConfig.baseBranch) {
       const [remoteDefault, resolvedBase] = await Promise.all([
@@ -2444,6 +2493,39 @@ export function createApp(deps: ServerDeps) {
     );
     if (harnessInput) {
       const agentic = await loadAgenticConfig(repoRoot);
+      if (harnessInput.roles) {
+        const canonical = canonicalizeAdvisorRefs(
+          harnessInput.roles.reviewers,
+          (agentic.agentHarness?.models ?? {}) as Record<string, unknown>,
+        );
+        if (!canonical.ok) {
+          return c.json({ error: `harness start blocked: ${canonical.error}` }, 409);
+        }
+        const roles = { ...harnessInput.roles, reviewers: canonical.refs };
+        if (
+          [roles.orchestrator, roles.implementer, ...roles.reviewers].some(
+            (ref) => ref.runner === 'opencode',
+          )
+        ) {
+          return c.json(
+            {
+              error:
+                'harness start blocked: OpenCode cannot enforce Cezar’s stage-only isolation; use Claude, Codex, or a configured advisor',
+            },
+            409,
+          );
+        }
+        if (new Set(roles.reviewers.map(harnessFamilyOf)).size < 2) {
+          return c.json(
+            {
+              error:
+                'reviewers must span at least two trusted model families (e.g. Anthropic + OpenAI)',
+            },
+            400,
+          );
+        }
+        harnessInput = { ...harnessInput, roles };
+      }
       for (const provider of providersRequiredByHarness(harnessInput, agentic.agentHarness)) {
         requiredProviders.add(provider);
       }
@@ -2463,6 +2545,15 @@ export function createApp(deps: ServerDeps) {
         resolved.plan.implementer,
         ...resolved.plan.reviewers,
       ];
+      if (refs.some((ref) => ref.runner === 'opencode')) {
+        return c.json(
+          {
+            error:
+              'harness start blocked: OpenCode cannot enforce Cezar’s stage-only isolation; use Claude, Codex, or a configured advisor',
+          },
+          409,
+        );
+      }
       const prober = deps.harnessProber ?? createModelProber({
         transport: createLiveTransport({
           advisors: (agentic.agentHarness?.models ?? {}) as Parameters<
@@ -2499,7 +2590,11 @@ export function createApp(deps: ServerDeps) {
       type: 'image',
       source: { type: 'base64', media_type: img.mediaType, data: img.data },
     }));
-    const input = {
+    // Advisor family is optional at the HTTP boundary so callers need not
+    // repeat trusted configuration. The block above canonicalizes every
+    // explicit role lineup before it reaches RunManager.
+    const normalizedHarnessInput = harnessInput as StartRunInput['harness'];
+    const input: StartRunInput = {
       task: parsed.data.task,
       model: parsed.data.model,
       runner: parsed.data.runner,
@@ -2507,7 +2602,7 @@ export function createApp(deps: ServerDeps) {
       systemPrompt: parsed.data.systemPrompt,
       worktree: parsed.data.worktree,
       autonomous: parsed.data.autonomous,
-      harness: harnessInput,
+      harness: normalizedHarnessInput,
       // Opt-in inbox (#471): the capability is the ceiling, so a client asking
       // for follow-ups on a server that has them off gets a plain `false`
       // rather than an error — the run is still perfectly valid without them.
@@ -2780,6 +2875,7 @@ export function createApp(deps: ServerDeps) {
         const ledger = createLedger({
           workflow: run.harness.workflow,
           requestedProfile: profile.data,
+          skillProfile: run.harness.skillProfile,
           subject: run.harness.issueId
             ? {
                 kind: 'issue',
@@ -2911,11 +3007,12 @@ export function createApp(deps: ServerDeps) {
 
   // "Finish": gracefully close a waiting session — the run completes as done.
   api.post('/runs/:id/finish', (c) => {
-    const { store, manager } = c.get('project');
+    const { dataDir, store, manager } = c.get('project');
     const id = c.req.param('id');
     if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
     const finished = manager.finish(id);
     if (!finished) return c.json({ error: 'no open session' }, 409);
+    releaseHarnessIssueClaim(dataDir, id);
     return c.json({ finished: true });
   });
 
@@ -3502,7 +3599,7 @@ export function createApp(deps: ServerDeps) {
   });
 
   api.post('/runs/:id/harness/accept-contested', async (c) => {
-    const { dataDir, store } = c.get('project');
+    const { dataDir, store, manager } = c.get('project');
     const id = c.req.param('id');
     const run = store.getRun(id);
     if (!run) return c.json({ error: 'not found' }, 404);
@@ -3527,6 +3624,57 @@ export function createApp(deps: ServerDeps) {
     }
     if (read.ledger.outcome.status !== 'contested') {
       return c.json({ error: 'harness outcome is not contested' }, 409);
+    }
+    const pendingSpec = read.ledger.outcome.pendingDecision;
+    if (pendingSpec?.kind === 'spec') {
+      if (read.ledger.stage.status !== 'pending' || run.status !== 'failed') {
+        return c.json(
+          { error: 'specification risk can be accepted only while implementation is paused' },
+          409,
+        );
+      }
+      const at = new Date().toISOString();
+      const previousOutcome = read.ledger.outcome;
+      const decisionStart = read.ledger.decisions.length;
+      read.ledger.decisions.push({
+        at,
+        kind: 'spec.accept',
+        by: 'user',
+        detail:
+          pendingSpec.gate === 'council'
+            ? `council:${pendingSpec.round}`
+            : `pre-implement:${pendingSpec.round}`,
+      });
+      read.ledger.decisions.push({
+        at,
+        kind: 'spec.accept.reason',
+        by: 'user',
+        detail: parsed.data.reason,
+      });
+      read.ledger.outcome = { status: 'pending', blockingReasons: [] };
+      saveLedger(dataDir, id, read.ledger);
+      const resumed = manager.continueRun(id);
+      if (!resumed.ok) {
+        // A failed resume must leave the decision actionable. Otherwise the
+        // ledger says "pending" and a later retry cannot accept the contested
+        // gate again, permanently stranding an expensive run.
+        read.ledger.decisions.splice(decisionStart);
+        read.ledger.outcome = previousOutcome;
+        saveLedger(dataDir, id, read.ledger);
+        return c.json(
+          { error: `acceptance recorded but the run could not resume: ${resumed.error}` },
+          409,
+        );
+      }
+      store.appendEvent(id, {
+        type: 'harness.outcome.updated',
+        outcome: read.ledger.outcome,
+      });
+      return c.json({
+        outcome: read.ledger.outcome,
+        decisions: read.ledger.decisions,
+        resumed: true,
+      });
     }
     if (run.status !== 'review' || read.ledger.stage.status !== 'staged') {
       return c.json(
@@ -3702,19 +3850,21 @@ export function createApp(deps: ServerDeps) {
       type: 'note',
       message: `draft PR created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
     });
+    releaseHarnessIssueClaim(dataDir, id);
     return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
   });
 
   // Archived tasks keep their worktree for inspection; this is the explicit
   // "🧹 Remove worktree" cleanup (spec 006).
   api.post('/runs/:id/remove-worktree', async (c) => {
-    const { root: repoRoot, store, manager } = c.get('project');
+    const { root: repoRoot, dataDir, store, manager } = c.get('project');
     const id = c.req.param('id');
     const run = store.getRun(id);
     if (!run) return c.json({ error: 'not found' }, 404);
     if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
     if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
     store.updateRun(id, { worktreePath: undefined, branch: undefined });
+    releaseHarnessIssueClaim(dataDir, id);
     return c.json({ removed: true });
   });
 

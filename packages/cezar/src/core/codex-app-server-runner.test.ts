@@ -43,4 +43,18 @@ describe('a teardown cezar initiated (codex app-server)', () => {
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
   }, 15_000);
+
+  it('forces the restricted sandbox for stage-only harness phases', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'review without publishing',
+        cwd: process.cwd(),
+        env: { CEZ_HARNESS_STAGE_ONLY: '1' },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
+  }, 15_000);
 });

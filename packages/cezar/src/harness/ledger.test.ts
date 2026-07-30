@@ -34,6 +34,7 @@ describe('harness ledger', () => {
     const ledger = createLedger({
       workflow: 'harness-fix-issue',
       requestedProfile: 'standard',
+      skillProfile: 'open-mercato',
       subject: { kind: 'issue', id: '642', text: 'Fix issue #642' },
     });
     saveLedger(dataDir, runId, ledger);
@@ -43,6 +44,7 @@ describe('harness ledger', () => {
     expect(loaded?.workflow).toBe('harness-fix-issue');
     expect(loaded?.requestedProfile).toBe('standard');
     expect(loaded?.effectiveProfile).toBe('standard');
+    expect(loaded?.skillProfile).toBe('open-mercato');
     expect(loaded?.subject).toEqual({ kind: 'issue', id: '642', text: 'Fix issue #642' });
     expect(loaded?.phases).toEqual([]);
     expect(loaded?.loops).toEqual({ fixRounds: 0, maxFixRounds: 3 });
@@ -122,7 +124,7 @@ describe('harness ledger', () => {
       requestedProfile: 'standard',
       subject: { kind: 'brief', text: 'x' },
     });
-    const phase = startPhase(ledger, { id: 'qualify', name: 'Qualify', kind: 'agent', skill: 'cez-verify-in-repo' });
+    const phase = startPhase(ledger, { id: 'qualify', name: 'Qualify', kind: 'agent', skill: 'om-verify-in-repo' });
     expect(phase.status).toBe('running');
     expect(phase.attempts).toBe(1);
     expect(ledger.phases).toHaveLength(1);
