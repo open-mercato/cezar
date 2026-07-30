@@ -62,7 +62,7 @@ const clearFilter = () => {
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
-  bootProject = ((await (await fetch(`${baseUrl}/api/projects`)).json()) as { bootProject: string })
+  bootProject = ((await (await fetch(`${baseUrl}/api/v1/projects`)).json()) as { bootProject: string })
     .bootProject
   expect(bootProject).toBeTruthy()
   createdSkillsDir = !existsSync(skillsDir)
@@ -178,7 +178,7 @@ describe('settings → bookmarklets against the live dry-run server', () => {
 describe('legacy flat bookmarklet URLs keep landing (BACKWARD_COMPATIBILITY.md §1)', () => {
   it("the generated key is the server's own — the target scope will accept it", async () => {
     const scoped = (await (
-      await fetch(`${baseUrl}/api/p/${encodeURIComponent(bootProject)}/launch-key`)
+      await fetch(`${baseUrl}/api/v1/p/${encodeURIComponent(bootProject)}/launch-key`)
     ).json()) as { key: string }
     expect(scoped.key).toBeTruthy()
 

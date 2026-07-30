@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { seedAgentConfigLocalLayer } from './seed.js';
+import { seedAgentConfigLocalLayer } from './seed.ts';
 
 let repo: string;
 const env = process.env;

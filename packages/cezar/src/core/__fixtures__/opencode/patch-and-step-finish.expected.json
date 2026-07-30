@@ -58,6 +58,15 @@
   {
     "type": "turn.completed",
     "turnId": "turn_1",
-    "stopReason": "end_turn"
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 1500,
+      "output": 240,
+      "total": 2460,
+      "cacheRead": 600,
+      "cacheWrite": 120,
+      "reasoning": 0
+    },
+    "costUsd": 0.0035
   }
 ]

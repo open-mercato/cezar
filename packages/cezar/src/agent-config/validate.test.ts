@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stripJsonComments, validateConfig } from './validate.js';
+import { stripJsonComments, validateConfig } from './validate.ts';
 
 describe('stripJsonComments', () => {
   it('removes line and block comments', () => {

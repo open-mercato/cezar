@@ -8,16 +8,16 @@ import type {
   AgentToolCallRecord,
   ContentBlock,
   SessionOptions,
-} from './agent-runner.js';
-import { prependSystemPrompt } from './agent-runner.js';
+} from './agent-runner.ts';
+import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
   AUTO_END_DELAY_MS,
   DEFAULT_RUN_TIMEOUT_MS,
   KILL_GRACE_MS,
-} from './claude-cli-runner.js';
-import { parseAskRequest, type AskQuestion } from './ask.js';
-import { readNdjson } from './ndjson.js';
-import { V1TextCoalescer } from './v1-text-coalescer.js';
+} from './claude-cli-runner.ts';
+import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { readNdjson } from './ndjson.ts';
+import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   CodexAppServerRpc,
   codexSpawnError,
@@ -26,14 +26,14 @@ import {
   spawnCodexAppServer,
   type CodexAppServerMessage,
   waitForCodexAppServerExit,
-} from './codex-app-server-transport.js';
+} from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
   type CodexUiMapperState,
-} from './codex-ui-mapper.js';
+} from './codex-ui-mapper.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -120,6 +120,10 @@ class CodexSession implements AgentSession {
   private eofKillTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  /** Set the moment WE signal the child (EOF watchdog, cancel, kill switch).
+   *  codex handles the signal and exits 143, so without this the runner reads
+   *  its own teardown as a codex failure (#703). */
+  private terminatedByCezar = false;
   /** Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
    *  byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
    *  lands in R2 step 2.1). */
@@ -156,7 +160,10 @@ class CodexSession implements AgentSession {
         this.interrupt();
         this.child.stdout.destroy();
         killTimer = setTimeout(() => {
-          if (this.child.exitCode == null && !this.child.killed) this.child.kill('SIGKILL');
+          if (this.child.exitCode == null && !this.child.killed) {
+            this.terminatedByCezar = true;
+            this.child.kill('SIGKILL');
+          }
         }, KILL_GRACE_MS);
         killTimer.unref?.();
       }, limitMs);
@@ -227,6 +234,17 @@ class CodexSession implements AgentSession {
         return base;
       }
 
+      // Our own EOF watchdog / cancel signal coming back as 143/137 — the
+      // teardown cezar asked for, not a codex failure (#703).
+      if (this.terminatedByCezar && isSignalTerminationExit(exitCode)) {
+        this.emit({
+          type: 'note',
+          message: `codex app-server did not exit on its own after close; terminated by cezar (code ${exitCode})`,
+        });
+        this.emit({ type: 'done' });
+        return base;
+      }
+
       if (exitCode !== 0 && exitCode !== null) {
         const stderr = stderrChunks.join('').trim();
         const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
@@ -277,10 +295,16 @@ class CodexSession implements AgentSession {
     this.rejectPendingUserInput('session ended');
     this.stdinOpen = false;
     try {
-      endCodexAppServer(this.child, (term, kill) => {
-        this.eofTermTimer = term;
-        this.eofKillTimer = kill;
-      });
+      endCodexAppServer(
+        this.child,
+        (term, kill) => {
+          this.eofTermTimer = term;
+          this.eofKillTimer = kill;
+        },
+        () => {
+          this.terminatedByCezar = true;
+        },
+      );
     } catch {
       // already gone
     }
@@ -295,7 +319,10 @@ class CodexSession implements AgentSession {
         () => undefined,
       );
     }
-    if (!this.child.killed) this.child.kill('SIGTERM');
+    if (!this.child.killed) {
+      this.terminatedByCezar = true;
+      this.child.kill('SIGTERM');
+    }
   }
 
   // ---- protocol -----------------------------------------------------------

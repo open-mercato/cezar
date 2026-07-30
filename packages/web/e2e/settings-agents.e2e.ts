@@ -6,7 +6,7 @@ import { AgentBrowser, readTestEnv } from './agent-browser'
 
 /**
  * Settings → Agents (R6 Step 1.5) end-to-end against the shared dry-run environment: edit each
- * knob through the real form and read the write back from `GET /api/config` — the server's
+ * knob through the real form and read the write back from `GET /api/v1/config` — the server's
  * truth, not the query cache — then prove a cold load renders the persisted values.
  *
  * Reachability: fully reachable — the section needs no forge and no agent CLI; the base-branch
@@ -50,15 +50,15 @@ interface ConfigAnswer {
 }
 
 /** The PUT behind a control is fire-and-forget from the UI's point of view — poll the additive
- *  GET /api/config until the write lands rather than assume it beat this assertion. */
+ *  GET /api/v1/config until the write lands rather than assume it beat this assertion. */
 async function waitForConfig(check: (config: ConfigAnswer) => boolean): Promise<ConfigAnswer> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const res = await fetch(`${baseUrl}/api/config`)
+    const res = await fetch(`${baseUrl}/api/v1/config`)
     const config = (await res.json()) as ConfigAnswer
     if (check(config)) return config
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  throw new Error('GET /api/config never showed the expected knobs')
+  throw new Error('GET /api/v1/config never showed the expected knobs')
 }
 
 /** Set a native <select> the way a user would, through React's synthetic change — the native
@@ -87,7 +87,7 @@ describe('settings → agents against the live dry-run server', () => {
     expect(browser.count('[data-slot="agents-base-branch"]')).toBe(1)
   })
 
-  it('default runner: click writes config.json and GET /api/config reads it back', async () => {
+  it('default runner: click writes config.json and GET /api/v1/config reads it back', async () => {
     gotoAgents()
     browser.click('[data-slot="agents-runner"] [data-value="codex"]')
     await waitForConfig((c) => c.defaultRunner === 'codex')

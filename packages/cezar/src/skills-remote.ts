@@ -3,8 +3,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { loadConfig, type SkillsRepoSource } from './config.js';
-import { parseFrontmatter, type Skill } from './skills.js';
+import { loadConfig, type SkillsRepoSource } from './config.ts';
+import { parseFrontmatter, type Skill } from './skills.ts';
 
 /**
  * Team skills from remote git repos (spec 005), janitor-style: a bare clone

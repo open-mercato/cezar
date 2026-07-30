@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDraftPr } from './github.js';
-import type { RunRecord } from '../../runs/store.js';
+import { createDraftPr } from './github.ts';
+import type { RunRecord } from '../../runs/store.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

@@ -34,6 +34,8 @@ const run = (status: RunStatus, extra: Partial<ApiRun> = {}): ApiRun => ({
   status,
   createdAt: '2026-07-14T12:00:00.000Z',
   tokensUsed: 27_000,
+  inputTokens: 24_600,
+  outputTokens: 2_400,
   archived: false,
   steps: [step({ sessionId: 'sess-1' })],
   ...extra,
@@ -64,8 +66,8 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       })
       const override = overrides[path]
       if (override) return override()
-      if (method === 'GET' && path === '/api/runs') return jsonResponse([])
-      if (method === 'GET' && path === '/api/providers/status') {
+      if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
+      if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse({
           providers: [
             { provider: 'claude', status: 'connected', enabled: true },
@@ -138,7 +140,7 @@ describe('editable title (#389)', () => {
       expect(sent.filter((r) => r.method === 'PATCH')).toHaveLength(1)
     })
     expect(sent.find((r) => r.method === 'PATCH')).toMatchObject({
-      path: '/api/runs/r1',
+      path: '/api/v1/runs/r1',
       body: { title: 'New name' },
     })
     // Back to the heading immediately — the edit UI does not wait for the server.
@@ -229,7 +231,7 @@ describe('actions hit their endpoints', () => {
     renderHeader(run('waiting'))
     fireEvent.click(actionBar().getByRole('button', { name: 'Finish' }))
     await waitFor(() => {
-      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/runs/r1/finish')).toBe(true)
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toBe(true)
     })
   })
 
@@ -240,13 +242,13 @@ describe('actions hit their endpoints', () => {
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
     await waitFor(() => {
-      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/runs/r1/continue')).toBe(true)
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')).toBe(true)
     })
   })
 
   it('disables desktop Continue and its mutation guard blocks a forced click without a provider', async () => {
     const sent = stubFetch({
-      '/api/providers/status': () =>
+      '/api/v1/providers/status': () =>
         jsonResponse({
           providers: [
             { provider: 'claude', status: 'disconnected', enabled: true },
@@ -263,12 +265,12 @@ describe('actions hit their endpoints', () => {
     fireEvent.click(button)
     await act(() => Promise.resolve())
 
-    expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
+    expect(sent.some((request) => request.path === '/api/v1/runs/r1/continue')).toBe(false)
   })
 
   it('disables mobile Continue and does not post when its menu item is selected', async () => {
     const sent = stubFetch({
-      '/api/providers/status': () =>
+      '/api/v1/providers/status': () =>
         jsonResponse({
           providers: [
             { provider: 'claude', status: 'disconnected', enabled: true },
@@ -285,12 +287,12 @@ describe('actions hit their endpoints', () => {
     fireEvent.click(item)
     await act(() => Promise.resolve())
 
-    expect(sent.some((request) => request.path === '/api/runs/r1/continue')).toBe(false)
+    expect(sent.some((request) => request.path === '/api/v1/runs/r1/continue')).toBe(false)
   })
 
   it('sends a connected fallback runner when the run provider is disconnected', async () => {
     const sent = stubFetch({
-      '/api/providers/status': () =>
+      '/api/v1/providers/status': () =>
         jsonResponse({
           providers: [
             { provider: 'claude', status: 'disconnected', enabled: true },
@@ -306,7 +308,7 @@ describe('actions hit their endpoints', () => {
     fireEvent.click(button)
 
     await waitFor(() =>
-      expect(sent.find((request) => request.path === '/api/runs/r1/continue')?.body).toEqual({
+      expect(sent.find((request) => request.path === '/api/v1/runs/r1/continue')?.body).toEqual({
         runner: 'codex',
       }),
     )
@@ -317,7 +319,7 @@ describe('actions hit their endpoints', () => {
     renderHeader(run('done', { archived: true }))
     fireEvent.click(actionBar().getByRole('button', { name: 'Unarchive' }))
     await waitFor(() => {
-      expect(sent.find((r) => r.path === '/api/runs/r1/archive')?.body).toEqual({ archived: false })
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
   })
 
@@ -327,11 +329,11 @@ describe('actions hit their endpoints', () => {
     fireEvent.click(actionBar().getByRole('button', { name: 'Cancel' }))
 
     // Nothing sent yet; the AlertDialog (never a native confirm) is up instead.
-    expect(sent.some((r) => r.path === '/api/runs/r1/cancel')).toBe(false)
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/cancel')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel the run' }))
     await waitFor(() => {
-      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/runs/r1/cancel')).toBe(true)
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/cancel')).toBe(true)
     })
   })
 
@@ -344,7 +346,7 @@ describe('actions hit their endpoints', () => {
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
-      expect(sent.some((r) => r.method === 'DELETE' && r.path === '/api/runs/r1')).toBe(true)
+      expect(sent.some((r) => r.method === 'DELETE' && r.path === '/api/v1/runs/r1')).toBe(true)
     })
     // The run is gone — the header sent us home rather than leaving a dead page up.
     await waitFor(() => {
@@ -376,7 +378,7 @@ describe('actions hit their endpoints', () => {
 
   it('a mutation failure surfaces the server message as a danger toast', async () => {
     stubFetch({
-      '/api/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
+      '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
     })
     renderHeader(run('done'))
     const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
@@ -400,7 +402,7 @@ describe('Terminal — the copy-command 409 fallback', () => {
   it('copies the server-sent command to the clipboard and says so', async () => {
     const command = "cd '/tmp/wt' && claude --resume sess-1"
     stubFetch({
-      '/api/runs/r1/open-in-cli': () =>
+      '/api/v1/runs/r1/open-in-cli': () =>
         jsonResponse({ error: 'no terminal emulator found', command }, 409),
     })
     const writeText = vi.fn(() => Promise.resolve())
@@ -418,7 +420,7 @@ describe('Terminal — the copy-command 409 fallback', () => {
   it('with no clipboard access the toast carries the command itself', async () => {
     const command = "cd '/tmp/wt' && claude --resume sess-1"
     stubFetch({
-      '/api/runs/r1/open-in-cli': () =>
+      '/api/v1/runs/r1/open-in-cli': () =>
         jsonResponse({ error: 'no terminal emulator found', command }, 409),
     })
     vi.stubGlobal('navigator', {}) // http, denied permission — no clipboard at all
@@ -431,7 +433,7 @@ describe('Terminal — the copy-command 409 fallback', () => {
 
   it('a 409 without a command is an ordinary error toast', async () => {
     stubFetch({
-      '/api/runs/r1/open-in-cli': () => jsonResponse({ error: 'no agent session to resume' }, 409),
+      '/api/v1/runs/r1/open-in-cli': () => jsonResponse({ error: 'no agent session to resume' }, 409),
     })
     renderHeader(run('done'))
     await clickTerminalResume()
@@ -459,8 +461,8 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
 
   it('labels the CLI matching the run\'s own runner "(resume)"; a foreign CLI stays plain', async () => {
     stubFetch({
-      '/api/open-targets': () => jsonResponse(openTargets(['cli:claude', 'cli:codex'])),
-      '/api/providers/status': () => jsonResponse({
+      '/api/v1/open-targets': () => jsonResponse(openTargets(['cli:claude', 'cli:codex'])),
+      '/api/v1/providers/status': () => jsonResponse({
         providers: [
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
@@ -477,7 +479,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   })
 
   it('a run with no session yet: not even the matching CLI claims to resume', async () => {
-    stubFetch({ '/api/open-targets': () => jsonResponse(openTargets(['cli:claude'])) })
+    stubFetch({ '/api/v1/open-targets': () => jsonResponse(openTargets(['cli:claude'])) })
     renderHeader(run('done', { runner: 'claude', worktreePath: '/tmp/wt', steps: [step()] }))
     const menu = await openMenu()
     expect(await within(menu).findByRole('menuitem', { name: 'Claude CLI' })).not.toBeNull()
@@ -485,8 +487,8 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
 
   it('picking a CLI target POSTs /open-in with that target id, resuming or not', async () => {
     const sent = stubFetch({
-      '/api/open-targets': () => jsonResponse(openTargets(['cli:codex'])),
-      '/api/providers/status': () => jsonResponse({
+      '/api/v1/open-targets': () => jsonResponse(openTargets(['cli:codex'])),
+      '/api/v1/providers/status': () => jsonResponse({
         providers: [
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
@@ -499,7 +501,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
     // Cross-runner (this run is Claude): Codex opens fresh, not "(resume)".
     fireEvent.click(await within(menu).findByRole('menuitem', { name: 'Codex CLI' }))
     await waitFor(() => {
-      expect(sent.find((r) => r.path === '/api/runs/r1/open-in')?.body).toEqual({ target: 'cli:codex' })
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/open-in')?.body).toEqual({ target: 'cli:codex' })
     })
   })
 
@@ -508,13 +510,13 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
     ['disconnected', { provider: 'codex', status: 'disconnected', enabled: true }],
   ] as const)('keeps non-agent targets while hiding %s Codex handoff targets', async (_case, codex) => {
     stubFetch({
-      '/api/open-targets': () => jsonResponse({
+      '/api/v1/open-targets': () => jsonResponse({
         targets: [
           { id: 'cli:codex', label: 'Codex CLI' },
           { id: 'idea', label: 'IntelliJ IDEA', icon: 'idea' },
         ],
       }),
-      '/api/providers/status': () => jsonResponse({
+      '/api/v1/providers/status': () => jsonResponse({
         providers: [
           { provider: 'claude', status: 'connected', enabled: true },
           codex,
@@ -534,7 +536,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
 describe('Open in… menu per-target icons (#361)', () => {
   it('renders a known target with its mapped icon, falls back for an unrecognized icon key, and POSTs the clicked id', async () => {
     const sent = stubFetch({
-      '/api/open-targets': () =>
+      '/api/v1/open-targets': () =>
         jsonResponse({
           targets: [
             { id: 'idea', label: 'IntelliJ IDEA', icon: 'idea' },
@@ -556,7 +558,7 @@ describe('Open in… menu per-target icons (#361)', () => {
 
     fireEvent.click(ideaItem)
     await waitFor(() => {
-      expect(sent.find((r) => r.path === '/api/runs/r1/open-in')?.body).toEqual({ target: 'idea' })
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/open-in')?.body).toEqual({ target: 'idea' })
     })
   })
 })
@@ -564,7 +566,7 @@ describe('Open in… menu per-target icons (#361)', () => {
 describe('notes panel', () => {
   it('toggles open, fetches the handoff and renders it as markdown', async () => {
     stubFetch({
-      '/api/runs/r1/handoff': () =>
+      '/api/v1/runs/r1/handoff': () =>
         new Response('# Handoff notes\n\nStill **todo**: the composer.', {
           status: 200,
           headers: { 'content-type': 'text/markdown; charset=utf-8' },
@@ -586,7 +588,7 @@ describe('notes panel', () => {
 
   it('an unseeded handoff file reads as an honest empty state', async () => {
     stubFetch({
-      '/api/runs/r1/handoff': () => new Response('', { status: 200 }),
+      '/api/v1/runs/r1/handoff': () => new Response('', { status: 200 }),
     })
     renderHeader(run('running'))
     fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
@@ -595,7 +597,7 @@ describe('notes panel', () => {
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
-  it('meta shows workflow · branch chip · ± · tokens · cost, with runner/model tucked into the agent badge', () => {
+  it('meta shows workflow · branch chip · ± · input/output · cost, with runner/model tucked into the agent badge', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -613,13 +615,35 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(meta.textContent).not.toContain('gpt-5.2-codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
-    expect(meta.textContent).toContain('27.0k tokens')
+    expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
     expect(meta.textContent).toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
 
     const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+  })
+
+  it('omits token and cost text when health disables token metrics', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true,
+            followups: false,
+            singleProject: false,
+            tokenMetrics: false,
+          },
+        }),
+    })
+    renderHeader(run('done', { costUsd: 0.04 }))
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() => {
+      expect(meta.textContent).not.toContain('IN 24.6k')
+      expect(meta.textContent).not.toContain('$0.04')
+    })
+    expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
   })
 
   it.each([
@@ -681,8 +705,11 @@ describe('meta line, tabs, pill and resume hint', () => {
   // record without a runner must name the repo's DEFAULT agent — hardcoding 'claude' here would
   // confidently name the wrong agent on a codex/opencode repo, which is the exact question the
   // badge exists to answer.
-  it('a run with no explicit runner names the repo default from health, not a hardcoded claude', async () => {
-    stubFetch({ '/api/health': () => jsonResponse({ defaultRunner: 'codex' }) })
+  it('a run with no explicit runner names the active project config default, not boot health', async () => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ defaultRunner: 'claude' }),
+      '/api/v1/config': () => jsonResponse({ defaultRunner: 'codex', defaultModels: {} }),
+    })
     renderHeader(run('done', { runner: undefined }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     const badge = await within(meta).findByRole('button', { name: /Agent: codex, model auto/ })
@@ -708,7 +735,7 @@ describe('meta line, tabs, pill and resume hint', () => {
 
   it('a queued run shows its position in the pill, from the shared runs list', async () => {
     stubFetch({
-      '/api/runs': () =>
+      '/api/v1/runs': () =>
         jsonResponse([
           run('queued', { id: 'earlier', createdAt: '2026-07-14T11:00:00.000Z' }),
           run('queued'),

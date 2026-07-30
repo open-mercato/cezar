@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { createCezarClient } from '@open-mercato/cezar-api-client';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
-import { ProjectContexts } from './project-context.js';
-import type { AppType } from './app-type.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import { ProjectContexts } from './project-context.ts';
+import type { AppType } from './app-type.ts';
+import { createApp } from './server.ts';
 
 /**
  * The typed client, end to end (spec 2026-07-23-independent-server-web-packages, Phase 1).
  *
- * This is the test the hand-written mirror (`web/app/src/api/types.ts`) and its drift guard
+ * This is the test the hand-written mirror (`packages/api-client/src/dto/types.ts`) and its drift guard
  * exist to replace. It proves the two halves of the claim "the routes ARE the contract":
  *
  *   1. RUNTIME — a client built from `AppType` reaches the real handlers and gets the real
@@ -78,7 +78,7 @@ describe('createCezarClient<AppType>', () => {
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
 
-  // The generous timeout is `/api/health`'s: a cold read shells out to detect the installed
+  // The generous timeout is `/api/v1/health`'s: a cold read shells out to detect the installed
   // agent CLIs and read git state, which is seconds of real work on a busy machine.
   it(
     'reaches a workspace-level route and infers its response',
@@ -122,5 +122,28 @@ describe('createCezarClient<AppType>', () => {
     // (BACKWARD_COMPATIBILITY.md §2) rather than being advertised to new ones.
     // @ts-expect-error — `client.api['agent-config']` is not part of the typed contract.
     expect(() => client.api['agent-config']).toBeDefined();
+  });
+
+  it('does not offer the legacy surface for workspace routes either', () => {
+    // Workspace families are mounted through a deliberately UN-chained holder on the `/api`
+    // side (see `workspaceLegacy` in server.ts). Mounting them straight onto the chain would
+    // have typed their legacy spelling too — this is the assertion that keeps that split real.
+    // @ts-expect-error — `client.api.projects` is the frozen spelling, not the typed contract.
+    expect(() => client.api.projects).toBeDefined();
+  });
+
+  it('covers the whole surface now that every family is chained', async () => {
+    // Phase 3 converted all 77 registrations, so the typed client is no longer a proof of
+    // concept over three families — these are a project family and a workspace family that
+    // were loose statements until then.
+    const runs = await client.api.v1.runs.$get();
+    expect(runs.status).toBe(200);
+    expectTypeOf(await runs.json()).not.toBeAny();
+
+    const projects = await client.api.v1.projects.$get();
+    expect(projects.status).toBe(200);
+    const body = await projects.json();
+    expectTypeOf(body).not.toBeAny();
+    expect(body).toHaveProperty('projects');
   });
 });

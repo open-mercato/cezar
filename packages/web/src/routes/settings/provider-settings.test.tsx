@@ -64,20 +64,20 @@ function serve({
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url.startsWith('/api/providers/status') && method === 'GET') {
+      if (url.startsWith('/api/v1/providers/status') && method === 'GET') {
         const refreshing = url.endsWith('?refresh=1')
         return json(
           refreshing && refreshStatus !== undefined ? refreshStatus : status,
           refreshing ? (refreshStatusCode ?? statusCode) : statusCode,
         )
       }
-      if (url === '/api/providers/connect' && method === 'POST') {
+      if (url === '/api/v1/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
       }
-      if (/^\/api\/providers\/(claude|codex|opencode)\/enabled$/.test(url) && method === 'PUT') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode)\/enabled$/.test(url) && method === 'PUT') {
         return enabledResponses.shift() ?? json(status)
       }
-      if (/^\/api\/providers\/(claude|codex|opencode)\/retry$/.test(url) && method === 'POST') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode)\/retry$/.test(url) && method === 'POST') {
         return json(retry, retryCode)
       }
       return new Promise<never>(() => {})
@@ -209,11 +209,11 @@ describe('ProviderSettings', () => {
     )
     expect(requests.find((request) => request.method === 'POST')).toEqual({
       method: 'POST',
-      url: '/api/providers/connect',
+      url: '/api/v1/providers/connect',
       body: { provider: 'codex' },
     })
     await waitFor(() =>
-      expect(requests.filter((request) => request.url === '/api/providers/status')).toHaveLength(2),
+      expect(requests.filter((request) => request.url === '/api/v1/providers/status')).toHaveLength(2),
     )
   })
 
@@ -285,7 +285,7 @@ describe('ProviderSettings', () => {
 
     fireEvent.click(await within(card('codex')).findByRole('button', { name: 'Check again' }))
     await waitFor(() =>
-      expect(requests.some((request) => request.url === '/api/providers/status?refresh=1')).toBe(true),
+      expect(requests.some((request) => request.url === '/api/v1/providers/status?refresh=1')).toBe(true),
     )
   })
 
@@ -299,7 +299,7 @@ describe('ProviderSettings', () => {
     const codexCard = card('codex')
     fireEvent.click(await within(codexCard).findByRole('button', { name: 'Check again' }))
     await waitFor(() =>
-      expect(requests.some((request) => request.url === '/api/providers/status?refresh=1')).toBe(true),
+      expect(requests.some((request) => request.url === '/api/v1/providers/status?refresh=1')).toBe(true),
     )
 
     expect(within(codexCard).getByText('Not connected')).toBeTruthy()
@@ -320,7 +320,7 @@ describe('ProviderSettings', () => {
     expect(await within(card('claude')).findByText('Disabled')).toBeTruthy()
     expect(requests).toContainEqual({
       method: 'PUT',
-      url: '/api/providers/claude/enabled',
+      url: '/api/v1/providers/claude/enabled',
       body: { enabled: false },
     })
 
@@ -411,7 +411,7 @@ describe('ProviderSettings', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Use Codex' }))
 
     await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(1))
-    expect(requests.at(-1)).toMatchObject({ url: '/api/providers/claude/enabled', body: { enabled: false } })
+    expect(requests.at(-1)).toMatchObject({ url: '/api/v1/providers/claude/enabled', body: { enabled: false } })
 
     await act(() => first.resolve(json({
       providers: [
@@ -421,7 +421,7 @@ describe('ProviderSettings', () => {
       ],
     })))
     await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(2))
-    expect(requests.at(-1)).toMatchObject({ url: '/api/providers/codex/enabled', body: { enabled: false } })
+    expect(requests.at(-1)).toMatchObject({ url: '/api/v1/providers/codex/enabled', body: { enabled: false } })
 
     await act(() => second.resolve(json({
       providers: [
@@ -529,7 +529,7 @@ describe('ProviderSettings', () => {
     await waitFor(() =>
       expect(requests).toContainEqual({
         method: 'POST',
-        url: '/api/providers/opencode/retry',
+        url: '/api/v1/providers/opencode/retry',
         body: { authFailureId: 'open-1' },
       }),
     )

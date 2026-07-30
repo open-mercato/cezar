@@ -1,14 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { cezarHomeDir, workspaceConfigPath } from '../paths.js';
-import { readUiState } from '../ui-state.js';
-import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.js';
-import { mergeWriteWorkspaceUiState } from './ui-state.js';
+import { workspaceUiStateSchema } from '@open-mercato/cezar-contract';
+import { cezarHomeDir, workspaceConfigPath } from '../paths.ts';
+import { readUiState } from '../ui-state.ts';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
+import { mergeWriteWorkspaceUiState } from './ui-state.ts';
 
 // Step 1.4 exported the global ui-state merge-write from here; step 2.7 moved
 // it to its cleaner home (src/workspace/ui-state.ts, next to the read path the
 // workspace routes share). Re-exported so existing importers keep working.
-export { mergeWriteWorkspaceUiState } from './ui-state.js';
+export { mergeWriteWorkspaceUiState } from './ui-state.ts';
 
 /**
  * Workspace config migrations (spec 2026-07-20-multi-project-workspace,
@@ -114,13 +115,24 @@ const migration001: WorkspaceMigration = {
     });
     if (!bootRepoRoot) return;
     const repoUiState = await readUiState(bootRepoRoot);
-    const uiKeys = (['appearance', 'notifications'] as const).filter(
-      (key) => repoUiState[key] !== undefined,
-    );
-    if (uiKeys.length === 0) return; // nothing to import — don't create the file
+    // The two prefs that went GLOBAL at step 3.5, read out of the per-repo bag and validated with
+    // the DESTINATION's own field schemas. `notifications` is not named by the per-repo contract
+    // at all (it left at 3.5), so it arrives through the open catchall as `unknown` — parsing it
+    // here is what makes it assignable, and it is also the honest thing: `GET /workspace/ui-state`
+    // promises these two keys' shapes, so a hand-edited value must not be promoted into the global
+    // file unchecked. A value that does not parse is simply not imported — never a failed boot.
+    const shape = workspaceUiStateSchema.shape;
+    const importable: Record<string, unknown> = {};
+    const appearance = shape.appearance.safeParse(repoUiState.appearance);
+    if (appearance.success && appearance.data !== undefined) importable.appearance = appearance.data;
+    const notifications = shape.notifications.safeParse(repoUiState.notifications);
+    if (notifications.success && notifications.data !== undefined) {
+      importable.notifications = notifications.data;
+    }
+    if (Object.keys(importable).length === 0) return; // nothing to import — don't create the file
     await mergeWriteWorkspaceUiState((state) => {
-      for (const key of uiKeys) {
-        if (state[key] === undefined) state[key] = repoUiState[key];
+      for (const [key, value] of Object.entries(importable)) {
+        if (state[key] === undefined) state[key] = value;
       }
     });
   },

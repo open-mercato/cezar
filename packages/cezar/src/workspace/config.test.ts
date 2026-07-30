@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { workspaceConfigPath } from '../paths.js';
+import { workspaceConfigPath } from '../paths.ts';
 import {
   atomicTmpPath,
   defaultWorkspaceConfig,
@@ -10,7 +10,7 @@ import {
   effectiveComposerDefault,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
-} from './config.js';
+} from './config.ts';
 
 /**
  * `~/.cezar/config.json` house rules under test (spec

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
+  buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
   MODELS_BY_RUNNER,
@@ -133,7 +134,7 @@ describe('resolveSource (candidate validation + cold quick-task default)', () =>
   })
 })
 
-describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends', () => {
+describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sends', () => {
   it('workflow source → { workflow, task }, defaults omitted', () => {
     const body = buildCreateRunBody({
       task: 'do the thing',
@@ -180,6 +181,14 @@ describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends'
       runner: 'codex', defaultRunner: 'codex', variants: 1, images: [],
     })
     expect(body.runner).toBeUndefined()
+  })
+
+  it('keeps an explicit runner pick even when it equals the default snapshot', () => {
+    const body = buildCreateRunBody({
+      task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
+      runner: 'codex', runnerExplicit: true, defaultRunner: 'codex', variants: 1, images: [],
+    })
+    expect(body.runner).toBe('codex')
   })
 
   it('sends a connected fallback that differs from the server default, even when it is the only choice', () => {
@@ -266,5 +275,27 @@ describe('pushRecentSource (recency, #picker)', () => {
 
   it('handles an undefined starting list', () => {
     expect(pushRecentSource(undefined, s('a'))).toEqual([s('a')])
+  })
+})
+
+describe('buildAutomationTask', () => {
+  it('uses the New task serializer while dropping one-shot transport fields', () => {
+    expect(buildAutomationTask({
+      task: 'Review {{github.url}}',
+      source: { source: 'skill', ref: 'om-code-review' },
+      model: 'opus',
+      runner: 'claude',
+      defaultRunner: 'claude',
+      variants: 2,
+      images: [{ mediaType: 'image/png', data: 'ignored' }],
+      autonomous: true,
+      todoId: 'ignored',
+    })).toEqual({
+      prompt: 'Review {{github.url}}',
+      steps: [{ id: 'task', name: 'om-code-review', skill: 'om-code-review', prompt: '{{task}}' }],
+      model: 'opus',
+      variants: 2,
+      autonomous: true,
+    })
   })
 })

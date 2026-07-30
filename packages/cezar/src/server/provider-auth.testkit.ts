@@ -2,7 +2,7 @@ import {
   PROVIDER_IDS,
   ProviderAuthService,
   type ProviderStatusResponse,
-} from '../core/provider-auth.js';
+} from '../core/provider-auth.ts';
 
 class ConnectedProviderAuthService extends ProviderAuthService {
   override status(): Promise<ProviderStatusResponse> {

@@ -3,20 +3,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { workspaceConfigPath, workspaceUiStatePath } from '../paths.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp, type WorkspaceConfigResponse } from './server.js';
+import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp, type WorkspaceConfigResponse } from './server.ts';
 
 /**
  * The workspace settings API (multi-project spec, step 2.7):
- * `GET/PUT /api/workspace/config` — the settings slice of `~/.cezar/config.json`
+ * `GET/PUT /api/v1/workspace/config` — the settings slice of `~/.cezar/config.json`
  * with the `projectsDir` writability probe and the semaphore `refresh()` hook —
- * and `GET/PUT /api/workspace/ui-state`, the global GUI state with the same
+ * and `GET/PUT /api/v1/workspace/ui-state`, the global GUI state with the same
  * merge/key-cap semantics as the per-repo ui-state route. All workspace-level:
- * single-mount, never under `/api/p/`.
+ * single-mount, never under `/api/v1/p/`.
  */
 describe('the workspace settings API (step 2.7)', () => {
   const savedHome = process.env.CEZ_HOME;
@@ -74,15 +74,15 @@ describe('the workspace settings API (step 2.7)', () => {
 
   const rawConfig = () => JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as Record<string, unknown>;
 
-  const getConfig = () => apiRequest(app, '/api/workspace/config');
+  const getConfig = () => apiRequest(app, '/api/v1/workspace/config');
   const putConfig = (body: unknown) =>
-    apiRequest(app, '/api/workspace/config', {
+    apiRequest(app, '/api/v1/workspace/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
 
-  // ---- GET/PUT /api/workspace/config ---------------------------------------
+  // ---- GET/PUT /api/v1/workspace/config ---------------------------------------
 
   it('GET answers the zero-config defaults when no file exists — and never the registry', async () => {
     const res = await getConfig();
@@ -107,7 +107,7 @@ describe('the workspace settings API (step 2.7)', () => {
         worktreeRetentionDefault: 10,
       },
     });
-    // Absolute project roots belong on /api/projects; schemaVersion is a
+    // Absolute project roots belong on /api/v1/projects; schemaVersion is a
     // migration cursor, not a setting.
     expect(body.projects).toBeUndefined();
     expect(body.schemaVersion).toBeUndefined();
@@ -301,7 +301,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('a malformed body answers 400 {error}', async () => {
-    const res = await apiRequest(app, '/api/workspace/config', {
+    const res = await apiRequest(app, '/api/v1/workspace/config', {
       method: 'PUT',
       body: 'nonsense',
     });
@@ -309,11 +309,11 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await res.json()) as { error: string }).toHaveProperty('error');
   });
 
-  // ---- GET/PUT /api/workspace/ui-state -------------------------------------
+  // ---- GET/PUT /api/v1/workspace/ui-state -------------------------------------
 
-  const getUiState = () => apiRequest(app, '/api/workspace/ui-state');
+  const getUiState = () => apiRequest(app, '/api/v1/workspace/ui-state');
   const putUiState = (body: unknown) =>
-    apiRequest(app, '/api/workspace/ui-state', {
+    apiRequest(app, '/api/v1/workspace/ui-state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -339,7 +339,71 @@ describe('the workspace settings API (step 2.7)', () => {
       sidebar: { collapsed: { cezar: true } },
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
-    expect(await (await apiRequest(app, '/api/ui-state')).json()).toEqual({});
+    expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
+  });
+
+  it('round-trips a bounded last project location including query and hash', async () => {
+    const lastLocation = {
+      projectId: 'storefront',
+      pathname: '/p/storefront/runs/run-123',
+      search: '?tab=events',
+      hash: '#tool-call-9',
+    };
+
+    const res = await putUiState({ lastLocation });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ lastLocation });
+    expect(await (await getUiState()).json()).toMatchObject({ lastLocation });
+    expect(rawUiState()).toMatchObject({ lastLocation });
+  });
+
+  it.each([
+    ['an empty project id', { projectId: '', pathname: '/p/storefront/' }],
+    ['an overlong project id', { projectId: 'p'.repeat(65), pathname: '/p/storefront/' }],
+    ['a non-project pathname', { projectId: 'storefront', pathname: '/settings/global' }],
+    ['an overlong pathname', { projectId: 'storefront', pathname: `/p/storefront/${'x'.repeat(2035)}` }],
+    ['a search without its prefix', { projectId: 'storefront', pathname: '/p/storefront/', search: 'tab=runs' }],
+    [
+      'an overlong search',
+      { projectId: 'storefront', pathname: '/p/storefront/', search: `?${'x'.repeat(4096)}` },
+    ],
+    ['a hash without its prefix', { projectId: 'storefront', pathname: '/p/storefront/', hash: 'run-1' }],
+    [
+      'an overlong hash',
+      { projectId: 'storefront', pathname: '/p/storefront/', hash: `#${'x'.repeat(2048)}` },
+    ],
+    ['a non-string field', { projectId: 'storefront', pathname: 42 }],
+    ['an unknown field', { projectId: 'storefront', pathname: '/p/storefront/', extra: true }],
+  ])('rejects lastLocation with %s without writing state', async (_case, lastLocation) => {
+    const res = await putUiState({ lastLocation });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toHaveProperty('error');
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
+  });
+
+  // Every Settings → Appearance preference has to be listed in `appearanceSchema`: the top-level
+  // `.passthrough()` does NOT reach inside `appearance`, so an unlisted key is stripped here and
+  // then wiped from the file by the shallow merge. The cockpit adopts this response as
+  // authoritative, so a stripped key visibly reverts the control the user just touched — which is
+  // exactly what happened to `width` before it was added. The client-side settings test stubs
+  // `fetch` with an echo, so this route-level round-trip is the only place that can catch it.
+  it('round-trips every appearance preference — accent, density AND reading width', async () => {
+    const res = await putUiState({ appearance: { accent: 'violet', density: 'compact', width: 'wide' } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      appearance: { accent: 'violet', density: 'compact', width: 'wide' },
+    });
+    expect(rawUiState()).toEqual({
+      appearance: { accent: 'violet', density: 'compact', width: 'wide' },
+    });
+  });
+
+  it('rejects an out-of-enum reading width instead of silently dropping it', async () => {
+    const res = await putUiState({ appearance: { width: 'ultrawide' } });
+    expect(res.status).toBe(400);
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
   });
 
   it('accepts bounded provider auth failure dismissals', async () => {

@@ -11,7 +11,7 @@ import {
   serverStatePath,
   workspaceConfigPath,
   workspaceUiStatePath,
-} from './paths.js';
+} from './paths.ts';
 
 describe('paths', () => {
   const original = process.env.CEZ_HOME;

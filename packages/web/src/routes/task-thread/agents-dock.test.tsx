@@ -23,6 +23,8 @@ const dock = () => document.querySelector('[data-slot="agents-dock"]')
 const head = () => document.querySelector<HTMLButtonElement>('[data-slot="agents-dock"] > button')!
 const rows = () => Array.from(document.querySelectorAll('[data-slot="agent-item"]'))
 const glyph = (row: Element) => row.querySelector('[data-slot="agent-glyph"]')!
+/** The dock is collapsed by default now — open it to inspect the per-agent rows. */
+const expand = () => fireEvent.click(head())
 
 describe('AgentsDock — visibility', () => {
   it('renders nothing at all when there is no fan-out', () => {
@@ -37,7 +39,7 @@ describe('AgentsDock — visibility', () => {
 })
 
 describe('AgentsDock — the collapsed head', () => {
-  it('shows the odometer and the first working agent’s activity', () => {
+  it('is collapsed by default: the slim head carries the odometer and the working agent’s activity', () => {
     render(
       <AgentsDock
         runId={freshRun()}
@@ -48,7 +50,10 @@ describe('AgentsDock — the collapsed head', () => {
         ]}
       />,
     )
-    fireEvent.click(head()) // jsdom defaults to expanded (desktop) — collapse it
+    // No click — the dock opens collapsed, so the rows are not mounted…
+    expect(head().getAttribute('aria-expanded')).toBe('false')
+    expect(rows()).toHaveLength(0)
+    // …but the one-line head still answers "what's running right now?".
     expect(document.querySelector('[data-slot="agents-count"]')!.textContent).toContain('1/3')
     expect(document.querySelector('[data-slot="agents-current"]')!.textContent).toContain('Reviewing store layer')
   })
@@ -69,6 +74,9 @@ describe('AgentsDock — the collapsed head', () => {
 
   it('toggles expanded/collapsed and reports it to assistive tech', () => {
     render(<AgentsDock runId="run-toggle" agents={[agent()]} />)
+    expect(head().getAttribute('aria-expanded')).toBe('false')
+    expect(rows()).toHaveLength(0)
+    fireEvent.click(head())
     expect(head().getAttribute('aria-expanded')).toBe('true')
     expect(rows()).toHaveLength(1)
     fireEvent.click(head())
@@ -88,6 +96,7 @@ describe('AgentsDock — expanded rows', () => {
         ]}
       />,
     )
+    expand()
     const [first, second] = rows()
     expect(first!.textContent).toContain('Audit the auth flow')
     expect(first!.querySelector('[data-slot="agent-type"]')!.textContent).toBe('general-purpose')
@@ -100,11 +109,13 @@ describe('AgentsDock — expanded rows', () => {
 
   it('renders "starting…" for an agent with no attributed output yet', () => {
     render(<AgentsDock runId={freshRun()} agents={[agent({ activity: undefined })]} />)
+    expand()
     expect(document.querySelector('[data-slot="agent-activity"]')!.textContent).toBe('starting…')
   })
 
   it('omits the type badge when the backend declares none (codex)', () => {
     render(<AgentsDock runId={freshRun()} agents={[agent({ agentType: undefined })]} />)
+    expand()
     expect(document.querySelector('[data-slot="agent-type"]')).toBeNull()
   })
 
@@ -119,6 +130,7 @@ describe('AgentsDock — expanded rows', () => {
         ]}
       />,
     )
+    expand()
     const [running, completed, failed] = rows().map(glyph)
     // The running glyph is the pulsing half-disc; the other two are stroked paths.
     expect(running!.querySelector('.fill-pending')).not.toBeNull()
@@ -134,6 +146,7 @@ describe('AgentsDock — expanded rows', () => {
 
   it('renders a stalled agent as interrupted — not pulsing, not a checkmark', () => {
     render(<AgentsDock runId={freshRun()} agents={[agent({ status: 'running', stalled: true })]} />)
+    expand()
     const svg = glyph(rows()[0]!)
     expect(svg.getAttribute('data-stalled')).toBe('true')
     // Not the live glyph: no pulse, no amber fill — the run ended, nothing is working.
@@ -148,11 +161,13 @@ describe('AgentsDock — expanded rows', () => {
     render(
       <AgentsDock runId={freshRun()} agents={[agent({ status: 'running', stalled: true, activity: 'Ran npm test' })]} />,
     )
+    expand()
     expect(document.querySelector('[data-slot="agent-activity"]')!.textContent).toBe('Ran npm test')
   })
 
   it('exposes each status on the row for styling and tests', () => {
     render(<AgentsDock runId={freshRun()} agents={[agent({ status: 'declined' })]} />)
+    expand()
     expect(rows()[0]!.getAttribute('data-status')).toBe('declined')
   })
 })
@@ -160,12 +175,14 @@ describe('AgentsDock — expanded rows', () => {
 describe('AgentsDock — row interaction', () => {
   it('rows are static display when no handler is passed (Phase 1)', () => {
     render(<AgentsDock runId={freshRun()} agents={[agent()]} />)
+    expand()
     expect(rows()[0]!.querySelector('button')).toBeNull()
   })
 
   it('rows become dialog-opening buttons once a handler is passed (Phase 2)', () => {
     const opened: string[] = []
     render(<AgentsDock runId={freshRun()} agents={[agent({ id: 'agent-42' })]} onSelect={(id) => opened.push(id)} />)
+    expand()
     const button = rows()[0]!.querySelector('button')!
     expect(button.getAttribute('aria-haspopup')).toBe('dialog')
     fireEvent.click(button)
@@ -174,16 +191,16 @@ describe('AgentsDock — row interaction', () => {
 })
 
 describe('AgentsDock — collapse memory', () => {
-  it('remembers the collapse choice per run across remounts', () => {
+  it('remembers an explicit expand per run across remounts', () => {
     const { unmount } = render(<AgentsDock runId="run-memory" agents={[agent()]} />)
-    fireEvent.click(head()) // collapse
+    fireEvent.click(head()) // expand (default is collapsed)
     unmount()
     render(<AgentsDock runId="run-memory" agents={[agent()]} />)
-    expect(head().getAttribute('aria-expanded')).toBe('false')
+    expect(head().getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('does not leak that choice to a different run', () => {
+  it('does not leak that choice to a different run — a fresh run opens collapsed', () => {
     render(<AgentsDock runId="run-other" agents={[agent()]} />)
-    expect(head().getAttribute('aria-expanded')).toBe('true')
+    expect(head().getAttribute('aria-expanded')).toBe('false')
   })
 })

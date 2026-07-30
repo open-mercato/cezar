@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync,
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadWorkspaceConfig } from './config.js';
-import { clearProjectProbeCache, registerProject } from './projects.js';
-import { runProjectsCommand, type ProjectsCommandIo } from './projects-cli.js';
+import { loadWorkspaceConfig } from './config.ts';
+import { clearProjectProbeCache, registerProject } from './projects.ts';
+import { runProjectsCommand, type ProjectsCommandIo } from './projects-cli.ts';
 
 /**
  * `cezar projects` (spec 2026-07-20-multi-project-workspace, step 5.2): the

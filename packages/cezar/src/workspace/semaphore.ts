@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadWorkspaceConfig } from './config.js';
+import { loadWorkspaceConfig } from './config.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,

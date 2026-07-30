@@ -49,7 +49,7 @@ Or from a git checkout on the box:
 ```bash
 git clone https://github.com/open-mercato/cezar && cd cezar
 npm install && npm run build
-node dist/index.js server-install --platform ubuntu-vps
+node packages/cezar/dist/index.js server-install --platform ubuntu-vps
 ```
 
 ### What each step does
@@ -152,7 +152,7 @@ Once a new cezar is available (a fresh local build, or a newly published
 
 ```bash
 npx cezar-cli server-deploy --platform ubuntu-vps
-#   from a checkout:  node dist/index.js server-deploy --platform ubuntu-vps
+#   from a checkout:  node packages/cezar/dist/index.js server-deploy --platform ubuntu-vps
 #   npm script:       npm run server-deploy -- --platform ubuntu-vps
 ```
 
@@ -160,10 +160,13 @@ npx cezar-cli server-deploy --platform ubuntu-vps
 answer, and re-runs the same authenticated end-to-end check as install — so a
 green deploy means the cockpit is actually serving the new version.
 
-- **From a checkout** the service runs `<node> <repo>/dist/index.js` — so build
+- **From a checkout** the service runs `<node> <repo>/packages/cezar/dist/index.js` — so build
   first, then deploy: `git pull && npm run build && npx cezar-cli server-deploy --platform ubuntu-vps`.
-- **Via npx** the service runs `npx --yes cezar-cli` — a restart pulls the latest
-  published version, so `server-deploy` alone is enough.
+- **Via npx** the service runs `npx --yes cezar-cli`. npx caches the resolved
+  package under `~/.npm/_npx` and reuses it on restart, so `server-deploy` first
+  **clears that cached `cezar-cli` build** and then restarts — the next launch
+  re-resolves the latest published version. (Before this, a restart silently
+  kept running the cached version — see #696.) `server-deploy` alone is enough.
 
 The installer is also **idempotent** if you need to change the setup itself:
 
@@ -231,7 +234,7 @@ What differs per instance:
 ## Uninstall
 
 ```bash
-node dist/index.js server-uninstall --platform ubuntu-vps
+node packages/cezar/dist/index.js server-uninstall --platform ubuntu-vps
 ```
 
 Removes what cezar **owns**: the nginx vhost, htpasswd, systemd unit, and boot
@@ -255,5 +258,6 @@ break other vhosts).
 | nginx won't start: `Address already in use` | Another proxy (Dokploy/Coolify → Traefik, Caddy) owns :80/:443. Re-run with `--external-proxy` (see above). `sudo ss -ltnp \| grep -E ':80\|:443'` shows who holds them. |
 | `run server-install as a normal sudo-capable user, not root` | You're `root`. `adduser cezar && usermod -aG sudo cezar`, `su - cezar`, log your agent CLI in **as that user**, then re-run. |
 | External-proxy install: proxy returns 502 | Traefik runs in a container and can't reach `127.0.0.1`. Reinstall with `--bind-host 172.17.0.1` (or your `docker0` address). |
+| Cockpit stuck on an old version after `server-deploy` | npx-based unit whose cache wasn't refreshed (fixed in #696 — `server-deploy` now clears it). Manual: `rm -rf ~/.npm/_npx` as the service user, then `sudo systemctl restart cezar-<instance>`. |
 
 ← Back to [Remote access overview](./README.md)

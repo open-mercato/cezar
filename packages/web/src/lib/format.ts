@@ -20,8 +20,8 @@ export function shortAge(iso: string | undefined, now: number = Date.now()): str
 }
 
 /**
- * Compact token count — `812` / `96.2k` / `1.4M`. The unit-less form the mockups use where the
- * column already says what it is (a variant row: `claude · 96.2k`).
+ * Compact token count — `812` / `96.2k` / `1.4M`. Directional usage supplies the semantic
+ * context around this deliberately unit-less number (`IN 96.2k · OUT 1.8k`).
  *
  * Truncates rather than rounds: `999_999` reads `999.9k`, never a `1000.0k` that is really 1M.
  */

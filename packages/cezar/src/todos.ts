@@ -130,7 +130,7 @@ export async function removeTodo(dataDir: string, id: string): Promise<boolean> 
 /** The task text "▶ Run" turns an entry into: the suggested prompt (or the summary when the
  *  entry carries none), plus the suggested args as a trailing line. The single server-side
  *  source for `POST /api/todos/:id/start`; the cockpit's prefill copy
- *  (`web/app/src/routes/inbox.tsx`, #374) lives in another process and cannot import this, so
+ *  (`packages/web/src/routes/inbox.tsx`, #374) lives in another process and cannot import this, so
  *  the two are pinned to the shared cases in `test/fixtures/todo-task-text.json`. */
 export function todoTaskText(
   todo: Pick<TodoItem, 'summary' | 'suggestedPrompt' | 'suggestedArgs'>,

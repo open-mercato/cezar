@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { agentHomePaths } from '../paths.js';
-import { CONFIG_FILES, type ConfigFileDef } from './catalog.js';
-import { hashBytes, statConfigPath } from './files.js';
+import { agentHomePaths } from '../paths.ts';
+import { CONFIG_FILES, type ConfigFileDef } from './catalog.ts';
+import { hashBytes, statConfigPath } from './files.ts';
 
 /**
  * Assembles the `GET /api/agent-config` payload: every catalog file's current

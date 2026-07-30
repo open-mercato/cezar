@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { serverStatePath } from '../paths.js';
+import { serverStatePath } from '../paths.ts';
 import {
   acquireLock,
   deleteServerState,
@@ -13,8 +13,8 @@ import {
   LockHeldError,
   nextFreeInstancePort,
   saveServerState,
-} from './state.js';
-import { freshServerState } from './types.js';
+} from './state.ts';
+import { freshServerState } from './types.ts';
 
 describe('server state', () => {
   let home: string;

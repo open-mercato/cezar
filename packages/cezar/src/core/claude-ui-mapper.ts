@@ -38,8 +38,8 @@ import type {
   UiToolItem,
   UiTurnCompletedEvent,
   UiUsageUpdatedEvent,
-} from './ui-events.js';
-import { toolDisplay } from './tool-display.js';
+} from './ui-events.ts';
+import { toolDisplay } from './tool-display.ts';
 
 export interface ClaudeUiMapperState {
   /** Used when `system/init` lacks `session_id` (the dry-run mock does). */

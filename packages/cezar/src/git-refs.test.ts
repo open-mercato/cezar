@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSafeGitRef } from './git-refs.js';
+import { isSafeGitRef } from './git-refs.ts';
 
 /**
  * Dash-guard for git revision args (#431). A `-`/`--`-prefixed base/from ref

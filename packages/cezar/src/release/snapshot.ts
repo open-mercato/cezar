@@ -12,7 +12,7 @@
  *  `@open-mercato/cezar` rename (PR #501) lands independently of this pipeline.
  */
 
-import { stampManifestSet, type ReleaseManifests as ReleaseManifestSet } from './manifests.js';
+import { stampManifestSet, type ReleaseManifests as ReleaseManifestSet } from './manifests.ts';
 
 /** The CI facts the decision needs, straight from GitHub Actions' env/event. */
 export interface SnapshotContext {
@@ -78,7 +78,7 @@ function resolveChannel(ctx: SnapshotContext): { channel: string; distTag: strin
   return null;
 }
 
-export type { ManifestLike, ReleaseManifests } from './manifests.js';
+export type { ManifestLike, ReleaseManifests } from './manifests.ts';
 
 /** Stamp the release set to the snapshot version.
  *

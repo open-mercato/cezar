@@ -3,7 +3,7 @@ import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { isSafeGitRef } from '../git-refs.js';
+import { isSafeGitRef } from '../git-refs.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec

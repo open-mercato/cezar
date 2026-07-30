@@ -36,7 +36,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -130,7 +130,7 @@ describe('the full-screen /new against a live dry-run server', () => {
     // The rule under test is legacy's: pill iff the HOST offers >1 backend. The host's own
     // CLIs are what they are (codex/opencode may genuinely be installed here), so assert
     // consistency with the live health answer rather than assuming a bare machine.
-    const health = (await (await fetch(`${baseUrl}/api/health`)).json()) as {
+    const health = (await (await fetch(`${baseUrl}/api/v1/health`)).json()) as {
       checks: Array<{ name: string; available: boolean }>
     }
     const runners = ['claude', 'codex', 'opencode'].filter((id) =>
@@ -176,7 +176,7 @@ describe('the full-screen /new against a live dry-run server', () => {
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
     expect(runId).not.toBe('')
     // API readback: the run started from the PICKED skill, as the one-step inline chain.
-    const record = (await (await fetch(`${baseUrl}/api/runs/${runId}`)).json()) as {
+    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${runId}`)).json()) as {
       task: string
       workflowDef?: { steps?: Array<Record<string, unknown>> }
     }
@@ -186,7 +186,7 @@ describe('the full-screen /new against a live dry-run server', () => {
     ])
 
     // And the source persisted as lastTask, so the next visit preselects it.
-    const uiState = (await (await fetch(`${baseUrl}/api/ui-state`)).json()) as {
+    const uiState = (await (await fetch(`${baseUrl}/api/v1/ui-state`)).json()) as {
       lastTask?: { source: string; ref: string }
     }
     expect(uiState.lastTask).toEqual({ source: 'skill', ref: 'spec-writer' })
@@ -213,7 +213,7 @@ describe('the full-screen /new against a live dry-run server', () => {
 
 describe('the bookmarklet contract on full /new loads (spec 011, Step 1.3)', () => {
   const runCount = async (): Promise<number> =>
-    ((await (await fetch(`${baseUrl}/api/runs`)).json()) as unknown[]).length
+    ((await (await fetch(`${baseUrl}/api/v1/runs`)).json()) as unknown[]).length
 
   it('auto=1 with the REAL launch key starts a run unattended and lands in its thread', async () => {
     // The documented on-disk contract: the server bakes this secret into the bookmarklets it
@@ -229,7 +229,7 @@ describe('the bookmarklet contract on full /new loads (spec 011, Step 1.3)', () 
     browser.waitForFunction(`location.pathname.startsWith('${scoped('/tasks/')}')`)
 
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
-    const record = (await (await fetch(`${baseUrl}/api/runs/${runId}`)).json()) as {
+    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${runId}`)).json()) as {
       task: string
       workflowDef?: { steps?: Array<Record<string, unknown>> }
     }

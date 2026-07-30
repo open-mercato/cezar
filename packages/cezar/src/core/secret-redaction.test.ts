@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectSecretValues, redactDeep, redactSecrets, REDACTED } from './secret-redaction.js';
+import { collectSecretValues, redactDeep, redactSecrets, REDACTED } from './secret-redaction.ts';
 
 /**
  * #427: credentials must never be persisted to a run's NDJSON transcript.

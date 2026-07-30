@@ -25,6 +25,15 @@ async function makeFixture(version = '0.1.5'): Promise<string> {
     `${JSON.stringify({ name: 'fake-monorepo', private: true, version: '0.0.0' }, null, 2)}\n`,
   );
 
+  // The contract package joins the stamped set: private, so never published, but versioned in
+  // lockstep and depended on by the api-client.
+  await mkdir(join(root, 'packages', 'contract'), { recursive: true });
+  await writeFile(
+    join(root, 'packages', 'contract', 'package.json'),
+    `${JSON.stringify({ name: '@scope/fake-contract', version: '0.9.9', private: true, files: ['index.js'] }, null, 2)}\n`,
+  );
+  await writeFile(join(root, 'packages', 'contract', 'index.js'), 'export {};\n');
+
   await mkdir(join(root, 'packages', 'api-client'), { recursive: true });
   await writeFile(
     join(root, 'packages', 'api-client', 'package.json'),

@@ -49,14 +49,16 @@ describe('the per-run open-card cache', () => {
   })
 
   it('a user-closed card beats a would-be default-open on revisit', () => {
-    const failed = item({ status: 'failed', error: 'boom' }) // failed opens itself by default
-    const first = render(card('r1', failed))
+    // A running execute WITH output opens itself by default (the live tail) — the one default-open
+    // case left now that failures start closed.
+    const streaming = item({ status: 'running', output: 'installing…' })
+    const first = render(card('r1', streaming))
     expect(state()).toBe('open')
     fireEvent.click(trigger())
     expect(state()).toBe('closed')
     first.unmount()
 
-    render(card('r1', failed))
+    render(card('r1', streaming))
     expect(state()).toBe('closed')
   })
 

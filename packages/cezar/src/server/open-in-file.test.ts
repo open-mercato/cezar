@@ -2,26 +2,26 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp, type ServerDeps } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp, type ServerDeps } from './server.ts';
 
 /**
- * `POST /api/runs/:id/open-in` with `target: 'default'` (#365): the diff pane's "open in OS
+ * `POST /api/v1/runs/:id/open-in` with `target: 'default'` (#365): the diff pane's "open in OS
  * default app" action for one worktree file. Must (a) 409 in hosted mode before ever touching
  * the filesystem, (b) reject any path that doesn't resolve inside the run's own worktree, and
  * (c) actually launch the OS opener only for a real in-worktree file — `openFileInDefaultApp`
  * is mocked so the suite never actually spawns a real GUI app.
  */
 vi.mock('./open-in-app.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./open-in-app.js')>();
+  const actual = await importOriginal<typeof import('./open-in-app.ts')>();
   return { ...actual, openFileInDefaultApp: vi.fn().mockResolvedValue(true) };
 });
 
-import { openFileInDefaultApp } from './open-in-app.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { openFileInDefaultApp } from './open-in-app.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
-describe("POST /api/runs/:id/open-in — target 'default' (local-mode file open, #365)", () => {
+describe("POST /api/v1/runs/:id/open-in — target 'default' (local-mode file open, #365)", () => {
   let repoRoot: string;
   let store: RunStore;
   let runId: string;
@@ -52,7 +52,7 @@ describe("POST /api/runs/:id/open-in — target 'default' (local-mode file open,
   const post = (body: unknown, over: Partial<ServerDeps> = {}) =>
     apiRequest(
       createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over }),
-      `/api/runs/${runId}/open-in`,
+      `/api/v1/runs/${runId}/open-in`,
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
     );
 
@@ -163,7 +163,7 @@ describe("POST /api/runs/:id/open-in — target 'default' (local-mode file open,
 
   it('404s for an unknown run before any gate', async () => {
     const app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
-    const res = await apiRequest(app, '/api/runs/nope/open-in', {
+    const res = await apiRequest(app, '/api/v1/runs/nope/open-in', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target: 'default', path: 'logo.png' }),

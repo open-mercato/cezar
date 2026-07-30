@@ -2,17 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.js';
-import { type AgentSession } from '../core/claude-cli-runner.js';
-import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.js';
-import { createRunner } from '../core/runner-factory.js';
-import type { RunnerId } from '../core/agent-runner.js';
-import { modelConflictsWithRunner } from '../core/model-presets.js';
+import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.ts';
+import { type AgentSession } from '../core/claude-cli-runner.ts';
+import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { createRunner } from '../core/runner-factory.ts';
+import type { RunnerId } from '../core/agent-runner.ts';
+import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import {
   ModelIdentityError,
   formatModelIdentity,
   normalizeModelForBackend,
-} from '../core/model-identity.js';
+} from '../core/model-identity.ts';
 import {
   HANDOFF_ONLY_INSTRUCTIONS,
   HANDOFF_INSTRUCTIONS,
@@ -20,26 +20,26 @@ import {
   followupsEnabled,
   handoffPath,
   seedHandoffFile,
-} from '../handoff.js';
-import { todosPath } from '../todos.js';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.js';
-import { discoverSkills, type Skill } from '../skills.js';
-import { materializeSkillDir } from '../skills-remote.js';
-import { seedAgentConfigLocalLayer } from '../agent-config/seed.js';
-import { loadConfig, resolveWorktreeRetention } from '../config.js';
-import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.js';
-import { getRepoInfo } from '../server/git.js';
-import { loadWorkflows } from './load.js';
-import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.js';
-import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.js';
-import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.js';
-import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.js';
-import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.js';
-import { reviewGateEnabled } from '../runs/review-gate.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { UiEventSink } from '../runs/ui-event-sink.js';
-import type { UiEvent } from '../core/ui-events.js';
-import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
+} from '../handoff.ts';
+import { todosPath } from '../todos.ts';
+import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+import { discoverSkills, type Skill } from '../skills.ts';
+import { materializeSkillDir } from '../skills-remote.ts';
+import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+import { loadConfig, resolveWorktreeRetention } from '../config.ts';
+import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
+import { getHeadCommit, getRepoInfo } from '../server/git.ts';
+import { loadWorkflows } from './load.ts';
+import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
+import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
+import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
+import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { UiEventSink } from '../runs/ui-event-sink.ts';
+import type { UiEvent } from '../core/ui-events.ts';
+import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 /** An interactive session that hears nothing from the user closes itself. */
@@ -133,6 +133,15 @@ interface ActiveRun {
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; every degradation/opt-out path does. */
   releaseRepoRoot?: () => void;
+  /** Durable directional-usage accounting state for the current runner
+   * invocation. Provider-local turn ids are unique only within this epoch. */
+  usageInvocation?: {
+    stepId: string;
+    epoch: number;
+    observed: boolean;
+    startedTurns: Set<string>;
+    recordedTurns: Set<string>;
+  };
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever. */
@@ -155,9 +164,8 @@ export interface StartRunInput {
    *  `resolveExtraSystemPrompt` for the precedence contract. */
   systemPrompt?: string;
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
-   *  working tree instead of an isolated worktree — for read-only skills that
-   *  don't need a branch. Undefined/`true` keeps the default per-task worktree.
-   *  Ignored for variants (they always isolate). */
+   *  working tree instead of an isolated worktree. Undefined/`true` keeps the
+   *  default per-task worktree. Ignored for variants (they always isolate). */
   worktree?: boolean;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
@@ -274,6 +282,22 @@ const VARIANT_HINTS: Record<string, string | undefined> = {
   C: 'Approach hint: prefer a thorough, structural approach.',
 };
 
+const RESTART_CONTINUATION_PROMPT =
+  'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+
+interface PendingContinuation {
+  stepId: string;
+  sessionId: string | undefined;
+  backend: RunnerId;
+  prompt: string;
+  images: ContentBlock[];
+}
+
+interface PersistedImages {
+  blocks: ContentBlock[];
+  attachments: PersistedAttachment[];
+}
+
 /**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
  * at a time, persisting every event to the RunStore (which the SSE endpoints
@@ -304,6 +328,10 @@ export class RunManager {
   /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
   private readonly monitoring = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
+  /** Interrupted agent turns recovered after a process restart. Unlike an
+   *  explicit user Continue, these are bulk scheduler work and must re-enter
+   *  through `pump()` so both workspace and per-project caps are honored. */
+  private readonly pendingContinuations = new Map<string, PendingContinuation>();
   /** Per-run image counter behind `pasted-<n>` / `screenshot-<n>` (#472). Lives on
    *  the manager rather than the `ActiveRun` so a *queued* run — which has no
    *  `ActiveRun` at all — can persist attachments. Seeded lazily from disk. */
@@ -384,6 +412,7 @@ export class RunManager {
     this.starting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
+    this.pendingContinuations.clear();
     this.memoryPausing.clear();
     this.lastNamerKey.clear();
   }
@@ -469,13 +498,16 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      // Persist the explicit opt-out so queued-run restart recovery and the
+      // session Git routes can distinguish it from a removed isolated worktree.
+      worktree: !group && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
-    this.store.updateRun(run.id, { workflowDef: workflow as unknown as Record<string, unknown> });
+    this.store.updateRun(run.id, { workflowDef: workflow });
     // Initial pasted images must be visible while the run is still queued (#612),
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
@@ -522,7 +554,7 @@ export class RunManager {
       (variant) => {
         const hint = VARIANT_HINTS[variant];
         const task = hint ? `${input.task}\n\n${hint}` : input.task;
-        return this.startRun(workflow, { ...input, task }, { groupId, variant });
+        return this.startRun(workflow, { ...input, task, worktree: undefined }, { groupId, variant });
       },
     );
   }
@@ -607,9 +639,35 @@ export class RunManager {
           const runId = this.queue.shift();
           if (!runId) break;
           const job = this.pendingJobs.get(runId);
+          const continuation = this.pendingContinuations.get(runId);
           this.pendingJobs.delete(runId);
-          if (!job) continue;
+          this.pendingContinuations.delete(runId);
+          if (!job && !continuation) continue;
           this.starting.add(runId);
+          if (continuation) {
+            const hydrated = this.hydrateQueuedContinuation(runId, continuation);
+            void this.runContinuation(
+              runId,
+              hydrated.stepId,
+              hydrated.sessionId,
+              hydrated.backend,
+              hydrated.prompt,
+              hydrated.images,
+              hydrated.persistedImages,
+              hydrated.persistedAttachments,
+            ).catch((err: unknown) => {
+              const message = err instanceof Error ? err.message : String(err);
+              this.store.updateRun(runId, {
+                status: 'failed',
+                error: `continue crashed: ${message}`,
+                finishedAt: new Date().toISOString(),
+              });
+              this.starting.delete(runId);
+              this.dropActive(runId);
+            });
+            continue;
+          }
+          if (!job) continue;
           // Rebuild the prompt from the store at the last instant (#472), so an edit
           // or a stacked message that landed while the run waited is honored. Entered
           // in the same synchronous tick as the `pendingJobs.delete` above, so no
@@ -655,6 +713,35 @@ export class RunManager {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const run of live) {
       if (run.status === 'queued') {
+        // A second restart can find a continuation that the first restart put
+        // behind a capacity gate. Its executable details are process-local,
+        // but the queued continue step and preceding provider session are
+        // durable, so reconstruct that job before considering workflow revival.
+        const queuedContinuation = [...run.steps]
+          .reverse()
+          .find((step) => step.status === 'pending' && step.id.startsWith('continue-'));
+        const sessionStep = queuedContinuation
+          ? [...run.steps]
+              .reverse()
+              .find((step) => step.id !== queuedContinuation.id && step.sessionId)
+          : undefined;
+        if (queuedContinuation && sessionStep?.sessionId) {
+          const backend = run.runner ?? 'claude';
+          const sessionBackend = sessionStep.backend ?? backend;
+          this.pendingContinuations.set(run.id, {
+            stepId: queuedContinuation.id,
+            sessionId: sessionBackend === backend ? sessionStep.sessionId : undefined,
+            backend,
+            prompt: RESTART_CONTINUATION_PROMPT,
+            images: [],
+          });
+          this.queue.push(run.id);
+          this.store.appendEvent(run.id, {
+            type: 'lifecycle',
+            message: 'cezar restarted — interrupted continuation re-queued',
+          });
+          continue;
+        }
         const workflow = await this.reviveWorkflow(run);
         if (workflow) {
           // Re-apply the inbox ceiling (#471). `execute()` gates again at spawn time, so the
@@ -682,6 +769,9 @@ export class RunManager {
               // recovered queued autonomous run would run non-autonomously (no
               // auto-nudge) and later wrongly park at `review`.
               autonomous: run.autonomous,
+              // Preserve an explicit worktree opt-out across a queued restart.
+              // Missing on older records means the default isolated mode.
+              worktree: run.worktree,
             }),
           });
           this.queue.push(run.id);
@@ -726,9 +816,13 @@ export class RunManager {
         finishedAt,
         currentStepId: undefined,
       });
-      const resumed = this.continueRun(run.id, {
-        text: 'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.',
-      });
+      const resumed = this.continueRun(
+        run.id,
+        {
+          text: RESTART_CONTINUATION_PROMPT,
+        },
+        true,
+      );
       this.store.appendEvent(run.id, {
         type: 'lifecycle',
         message: resumed.ok
@@ -741,10 +835,11 @@ export class RunManager {
 
   /** The persisted definition when it looks sane, else the catalog by name. */
   private async reviveWorkflow(run: RunRecord): Promise<WorkflowDef | null> {
+    // "Looks sane" is the STORE's job now: it parses `workflowDef` against the definition schema
+    // and `.catch`es a def that no longer fits to `undefined`, so anything present here already
+    // has the `steps` array the old inline `Array.isArray` check was asking for.
     const def = run.workflowDef;
-    if (def && Array.isArray((def as { steps?: unknown }).steps)) {
-      return def as unknown as WorkflowDef;
-    }
+    if (def) return def;
     const { workflows } = await loadWorkflows(this.repoRoot);
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
@@ -848,6 +943,7 @@ export class RunManager {
     if (queuedAt >= 0) {
       this.queue.splice(queuedAt, 1);
       this.pendingJobs.delete(runId);
+      this.pendingContinuations.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
       return true;
@@ -890,34 +986,17 @@ export class RunManager {
       .filter((part) => part.length > 0)
       .join('\n\n');
 
-    const readImages = (urls: string[], kind: 'task' | 'queued'): ContentBlock[] => {
-      const images: ContentBlock[] = [];
-      for (const url of urls) {
-        const name = url.split('/').pop();
-        if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
-        try {
-          const data = readFileSync(join(this.dataDir, 'runs', `${runId}-images`, name));
-          images.push({
-            type: 'image',
-            source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
-          });
-        } catch {
-          // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
-          // or the file is unreadable — start with the text and say which image went.
-          this.store.appendEvent(runId, {
-            type: 'note',
-            message: `${kind} attachment ${name} could not be read — starting without it`,
-          });
-        }
-      }
-      return images;
-    };
-
     // Keep the original in-memory blocks for a live process (including the
     // best-effort case where persistence failed). Recovery has no such copy,
     // so rebuild it from the durable task-image URLs.
-    const images = input.images?.length ? input.images : readImages(run.taskImages ?? [], 'task');
-    const stackedImages = readImages(stack.flatMap((m) => m.images ?? []), 'queued');
+    const images = input.images?.length
+      ? input.images
+      : this.readPersistedImages(runId, run.taskImages ?? [], 'task').blocks;
+    const stackedImages = this.readPersistedImages(
+      runId,
+      stack.flatMap((m) => m.images ?? []),
+      'queued',
+    ).blocks;
 
     return {
       ...input,
@@ -927,15 +1006,81 @@ export class RunManager {
     };
   }
 
+  /** Apply edits and messages made while a restart continuation waits for
+   * capacity. The durable record remains the source of truth, just as it is for
+   * an ordinary queued workflow (#472), so a second restart reconstructs and
+   * hydrates the same amendments instead of dropping them. */
+  private hydrateQueuedContinuation(
+    runId: string,
+    continuation: PendingContinuation,
+  ): PendingContinuation & {
+    persistedImages: ContentBlock[];
+    persistedAttachments: PersistedAttachment[];
+  } {
+    const run = this.store.getRun(runId);
+    if (!run) {
+      return { ...continuation, persistedImages: [], persistedAttachments: [] };
+    }
+    const stack = run.queuedMessages ?? [];
+    const amendedTask = [run.task, ...stack.map((message) => message.text)]
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join('\n\n');
+    const prompt = amendedTask
+      ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
+      : continuation.prompt;
+    const persisted = this.readPersistedImages(
+      runId,
+      stack.flatMap((message) => message.images ?? []),
+      'queued',
+    );
+    return {
+      ...continuation,
+      prompt,
+      persistedImages: persisted.blocks,
+      persistedAttachments: persisted.attachments,
+    };
+  }
+
+  private readPersistedImages(
+    runId: string,
+    urls: string[],
+    kind: 'task' | 'queued',
+  ): PersistedImages {
+    const blocks: ContentBlock[] = [];
+    const attachments: PersistedAttachment[] = [];
+    for (const url of urls) {
+      const name = url.split('/').pop();
+      if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
+      const path = join(this.dataDir, 'runs', `${runId}-images`, name);
+      try {
+        const data = readFileSync(path);
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
+        });
+        attachments.push({ name, url, path });
+      } catch {
+        // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
+        // or the file is unreadable — start with the text and say which image went.
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `${kind} attachment ${name} could not be read — starting without it`,
+        });
+      }
+    }
+    return { blocks, attachments };
+  }
+
   /**
    * Still waiting for a slot? Checked against the engine's own queue rather than
    * the record's `status` (#472): the record is written by `execute()` a tick
    * after `pump()` dequeues, so a status read can see `queued` for a run that has
-   * already started. `pendingJobs` is deleted synchronously at dequeue, so it is
-   * the authoritative answer for "can this prompt still be amended".
+   * already started. The pending maps are deleted synchronously at dequeue, so
+   * they are the authoritative answer for "can this prompt still be amended".
    */
   private isQueued(runId: string): boolean {
-    return this.pendingJobs.has(runId);
+    return this.pendingJobs.has(runId) || this.pendingContinuations.has(runId);
   }
 
   /** Split `ContentBlock[]` into the persisted shape a stacked message holds. */
@@ -1200,6 +1345,9 @@ export class RunManager {
   continueRun(
     runId: string,
     opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string } = {},
+    /** Restart recovery may discover several interrupted tasks at once. Those
+     *  continuations are queued; an explicit user Continue remains immediate. */
+    deferForCapacity = false,
   ): { ok: boolean; error?: string } {
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
@@ -1254,13 +1402,32 @@ export class RunManager {
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
+    const prompt = opts.text?.trim() || 'Continue.';
+    const images = opts.images ?? [];
+    if (deferForCapacity) {
+      this.pendingContinuations.set(runId, {
+        stepId,
+        sessionId: resume ? sessionStep.sessionId : undefined,
+        backend: targetRunner,
+        prompt,
+        images,
+      });
+      this.queue.push(runId);
+      this.store.updateRun(runId, {
+        status: 'queued',
+        error: undefined,
+        finishedAt: undefined,
+        currentStepId: undefined,
+      });
+      return { ok: true };
+    }
     void this.runContinuation(
       runId,
       stepId,
       resume ? sessionStep.sessionId : undefined,
       targetRunner,
-      opts.text?.trim() || 'Continue.',
-      opts.images ?? [],
+      prompt,
+      images,
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -1285,6 +1452,11 @@ export class RunManager {
      *  reopened session's opening message, exactly like a live-session
      *  message's attachments. */
     images: ContentBlock[] = [],
+    /** Queued-message screenshots were persisted when they were enqueued and
+     *  reconstructed at dequeue. Keep them separate from fresh `images` so
+     *  opening a recovered continuation does not persist duplicate files. */
+    persistedImages: ContentBlock[] = [],
+    persistedAttachments: PersistedAttachment[] = [],
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -1304,6 +1476,7 @@ export class RunManager {
         : this.repoRoot;
     const state: ActiveRun = { cancelled: false, interrupt: () => undefined, cwd };
     this.active.set(runId, state);
+    this.starting.delete(runId);
     if (state.cwd === this.repoRoot) {
       this.store.appendEvent(runId, {
         type: 'note',
@@ -1343,15 +1516,17 @@ export class RunManager {
     // images rather than a bare count, and handed to the agent BOTH as base64 blocks (so it can
     // view them) and as absolute paths appended to the prompt (so it can operate on them — and
     // because codex/opencode drop image blocks before they reach the model).
-    const attachments = images
+    const freshAttachments = images
       .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
       .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
       .filter((saved): saved is PersistedAttachment => saved !== null);
+    const openingImages = [...images, ...persistedImages];
+    const attachments = [...freshAttachments, ...persistedAttachments];
     this.store.appendEvent(runId, {
       type: 'user-message',
       stepId,
       text: prompt,
-      imageCount: images.filter((b) => b.type === 'image').length,
+      imageCount: openingImages.filter((b) => b.type === 'image').length,
       ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
     });
 
@@ -1490,6 +1665,8 @@ export class RunManager {
       return;
     }
     const runner = createRunner(continueBackend);
+    state.currentStepId = stepId;
+    this.beginUsageInvocation(runId, state, stepId);
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -1500,7 +1677,7 @@ export class RunManager {
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length ? `${prompt}\n\n${pastedAttachmentsText(attachments)}` : prompt,
-        ...(images.length ? { images } : {}),
+        ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
         additionalDirectories: [join(this.dataDir, 'runs')],
@@ -1516,7 +1693,6 @@ export class RunManager {
     state.session = session;
     state.sessionEverOpened = true;
     this.flushDeferred(runId);
-    state.currentStepId = stepId;
     state.interrupt = () => session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
@@ -1605,10 +1781,18 @@ export class RunManager {
     // established; only explicit opt-out and non-Git modes run in place.
     const repo = await getRepoInfo(this.repoRoot);
     if (repo && input.worktree === false) {
-      // Composer opt-out: run in the repo working tree, no branch/worktree
-      // (read-only skills — review, summarize — that never need isolation).
+      // Composer opt-out: run in the repo working tree, no branch/worktree. The
+      // repository-root lease serializes these runs so workflows cannot overlap.
+      // Pin the starting commit: the session's Changes and Commits views use it
+      // as their stable lower bound while reading the current working copy.
+      const startingCommit = await getHeadCommit(repo.root);
+      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
       emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
     } else if (repo) {
+      emit({
+        type: 'note',
+        message: `worktree on — using an isolated task worktree (${input.worktree === true ? 'explicit request' : 'default'})`,
+      });
       // Fork from the configured base branch (config.json `baseBranch`, e.g.
       // `develop`) — also the target of the eventual draft PR. Unresolvable
       // (typo, not fetched) → note + the currently checked-out branch.
@@ -2000,6 +2184,8 @@ export class RunManager {
     }
     const runner = createRunner(stepBackend);
     let session: AgentSession;
+    state.currentStepId = step.id;
+    this.beginUsageInvocation(runId, state, step.id);
     try {
       session = runner.startSession(
         {
@@ -2032,6 +2218,7 @@ export class RunManager {
         },
       );
     } catch (err) {
+      state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
     }
     state.session = session;
@@ -2083,6 +2270,7 @@ export class RunManager {
   /** Native backend asks arrive before turn-end. Persist and park immediately
    * so the cockpit shows attention and the run releases its workspace slot. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
+    this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
@@ -2092,6 +2280,82 @@ export class RunManager {
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
+  }
+
+  /** Persist the invocation checkpoint before launching a runner. A throw or
+   * process exit before `turn.started` therefore leaves a durable mismatch. */
+  private beginUsageInvocation(runId: string, state: ActiveRun, stepId: string): void {
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === stepId);
+    if (!step) return;
+    const epoch = (step.usageInvocationEpoch ?? 0) + 1;
+    this.persistUsageCheckpoint(runId, stepId, {
+      usageInvocationEpoch: epoch,
+      usageInvocationsStarted: (step.usageInvocationsStarted ?? 0) + 1,
+    });
+    state.usageInvocation = {
+      stepId,
+      epoch,
+      observed: false,
+      startedTurns: new Set(),
+      recordedTurns: new Set(),
+    };
+  }
+
+  /** Fold backend-neutral completed-turn usage into the current step exactly
+   * once. Invocation/turn counters are written before the event reaches the
+   * NDJSON sink so crashes cannot preserve a falsely complete subtotal. */
+  private recordUsageUiEvent(runId: string, state: ActiveRun, event: UiEvent): void {
+    const invocation = state.usageInvocation;
+    if (!invocation) return;
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
+    if (!step) return;
+
+    if (event.type === 'turn.started') {
+      if (invocation.startedTurns.has(event.turnId)) return;
+      invocation.startedTurns.add(event.turnId);
+      const firstObservedTurn = !invocation.observed;
+      invocation.observed = true;
+      this.persistUsageCheckpoint(runId, invocation.stepId, {
+        usageTurnsStarted: (step.usageTurnsStarted ?? 0) + 1,
+        ...(firstObservedTurn
+          ? { usageInvocationsObserved: (step.usageInvocationsObserved ?? 0) + 1 }
+          : {}),
+      });
+      return;
+    }
+
+    if (event.type !== 'turn.completed') return;
+    if (!invocation.startedTurns.has(event.turnId) || invocation.recordedTurns.has(event.turnId)) return;
+    const input = event.usage?.input;
+    const output = event.usage?.output;
+    if (
+      typeof input !== 'number' ||
+      !Number.isFinite(input) ||
+      input < 0 ||
+      typeof output !== 'number' ||
+      !Number.isFinite(output) ||
+      output < 0
+    ) {
+      return;
+    }
+    invocation.recordedTurns.add(event.turnId);
+    this.persistUsageCheckpoint(runId, invocation.stepId, {
+      inputTokens: (step.inputTokens ?? 0) + input,
+      outputTokens: (step.outputTokens ?? 0) + output,
+      usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
+    });
+  }
+
+  /** Usage completeness is a crash boundary, unlike high-frequency token
+   * snapshots: the checkpoint must reach `runs.json` before the runner starts
+   * or the matching UI event is persisted and forwarded. */
+  private persistUsageCheckpoint(
+    runId: string,
+    stepId: string,
+    patch: Partial<Omit<StepState, 'id'>>,
+  ): void {
+    this.store.updateStep(runId, stepId, patch);
+    this.store.flush();
   }
 
   /**
@@ -2317,7 +2581,10 @@ export class RunManager {
           throw err;
         }
         this.queuedImageSeq.set(runId, seq);
-        return { name, url: `/api/runs/${runId}/images/${name}`, path };
+        // Versioned, because that is the only surface served now. The cockpit still upgrades
+        // the unversioned URLs sitting in OLD transcripts when it renders them
+        // (`resolveApiUrl`), but a URL minted today must be fetchable as written.
+        return { name, url: `/api/v1/runs/${runId}/images/${name}`, path };
       }
       return null;
     } catch {

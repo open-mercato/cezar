@@ -242,7 +242,10 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   )
   const sendMessage = useSendMessage(run.id)
   const activeProvider = useActiveProviderAvailability(run)
-  const activeProviderBlocked = (sessionOpen || queued) && !activeProvider.usable
+  // A queued send only amends the persisted prompt; it invokes no provider and therefore
+  // remains available even when provider discovery cannot authorize a live session. Once the
+  // session is open, mirror the server's active-backend gate as before.
+  const activeProviderBlocked = sessionOpen && !activeProvider.usable
   const continuationProviderBlocked = hasContinuation && !continueAction.canContinue
   const providerBlocked = activeProviderBlocked || continuationProviderBlocked
   const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason
@@ -288,7 +291,7 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
-      <div className="mx-auto flex w-full max-w-[820px] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
+      <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
         <ThreadCardCache runId={run.id}>
           <ThreadRows runId={run.id} rows={rows} mode={mode} controls={scroll} />
         </ThreadCardCache>
@@ -382,7 +385,7 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
             <JumpToLatestPill onJump={scroll.jumpToLatest} />
           </div>
         ) : null}
-        <div className="mx-auto flex w-full max-w-[820px] flex-col gap-2.5">
+        <div className="mx-auto flex w-full max-w-[var(--measure)] flex-col gap-2.5">
           {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />

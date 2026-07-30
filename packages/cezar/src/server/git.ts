@@ -53,6 +53,15 @@ export async function getRepoInfo(dir: string): Promise<RepoInfo | null> {
   }
 }
 
+/** The current commit, pinned as a full SHA. Null outside a repository or before its first commit. */
+export async function getHeadCommit(root: string): Promise<string | null> {
+  try {
+    return (await git(root, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getStatus(root: string): Promise<StatusEntry[]> {
   const out = await git(root, ['status', '--porcelain']);
   return out

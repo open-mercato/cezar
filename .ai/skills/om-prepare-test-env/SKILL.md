@@ -1,3 +1,4 @@
 # Repository test-environment notes
 
 - Launch the built cezar server through `.ai/scripts/test-env-up.sh`; its app process must use `nohup` with stdin detached so it survives non-interactive bootstrap shells. This prevents a descriptor from reporting a server that is terminated as soon as the bootstrap command exits.
+- Fresh worktrees have no workspace links or runtime dependencies. The generated entrypoint must run the compound `npm ci && npm run build` chain through `sh -c`, include `packages/contract/src` in its build fingerprint, and require `node_modules/zod/package.json` as a cache artifact. This prevents `@open-mercato/cezar-contract` from resolving as missing/unknown during `tsc` and prevents a cached build from starting without runtime dependencies. Do not require `packages/api-client/dist`: the web build aliases that workspace to source and the root build does not emit that directory.

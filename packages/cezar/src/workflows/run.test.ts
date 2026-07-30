@@ -1,16 +1,35 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { ContentBlock } from '../core/agent-runner.js';
-import { createWorktree } from '../git-worktree.js';
-import { RunStore, type RunRecord } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { parseTaskMarkers } from '../runs/task-markers.js';
-import { appendTurnText, RunManager } from './run.js';
-import type { WorkflowDef } from './types.js';
+import type { ContentBlock } from '../core/agent-runner.ts';
+import type { UiEvent } from '../core/ui-events.ts';
+import { createWorktree } from '../git-worktree.ts';
+import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { parseTaskMarkers } from '../runs/task-markers.ts';
+import { appendTurnText, RunManager } from './run.ts';
+import type { WorkflowDef } from './types.ts';
+
+type UsageAccountingHarness = {
+  beginUsageInvocation(runId: string, state: Record<string, unknown>, stepId: string): void;
+  handleRunnerUiEvent(
+    runId: string,
+    state: Record<string, unknown>,
+    sink: { handle(event: UiEvent): void },
+    event: UiEvent,
+  ): void;
+};
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -38,6 +57,182 @@ describe('appendTurnText', () => {
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
   });
+});
+
+describe('RunManager directional usage accounting', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let internal: UsageAccountingHarness;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-usage-accounting-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    internal = manager as unknown as UsageAccountingHarness;
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  function fixture() {
+    const run = store.createRun({
+      title: 'usage',
+      workflow: 'quick-task',
+      task: 'usage',
+      steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'work', { iterations: 1, status: 'running' });
+    const state: Record<string, unknown> = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const sink = { handle: (_event: UiEvent) => undefined };
+    return { run, state, sink };
+  }
+
+  it('deduplicates starts and completions while summing multiple turns in one invocation', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    const started: UiEvent = { type: 'turn.started', turnId: 'turn_1' };
+    internal.handleRunnerUiEvent(run.id, state, sink, started);
+    internal.handleRunnerUiEvent(run.id, state, sink, started);
+    const completed: UiEvent = {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 10, output: 2, total: 12 },
+    };
+    internal.handleRunnerUiEvent(run.id, state, sink, completed);
+    internal.handleRunnerUiEvent(run.id, state, sink, completed);
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_2' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_2',
+      stopReason: 'end_turn',
+      usage: { input: 5, output: 1, total: 6 },
+    });
+
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 2,
+      usageTurnsRecorded: 2,
+      inputTokens: 15,
+      outputTokens: 3,
+    });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 15, outputTokens: 3 });
+  });
+
+  it('keeps the run aggregate absent after a pre-turn failure even when a later invocation is metered', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    // The first startSession attempt fails before emitting turn.started.
+    internal.beginUsageInvocation(run.id, state, 'work');
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 8, output: 2, total: 10 },
+    });
+
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 2,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      inputTokens: 8,
+      outputTokens: 2,
+    });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+    expect(store.getRun(run.id)?.outputTokens).toBeUndefined();
+  });
+
+  it('writes each completeness checkpoint before launching or forwarding its boundary event', () => {
+    const { run, state } = fixture();
+    store.flush();
+
+    internal.beginUsageInvocation(run.id, state, 'work');
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 1,
+    });
+
+    const persistedAtSink: StepState[] = [];
+    const sink = {
+      handle: (_event: UiEvent) => {
+        const persisted = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.steps[0];
+        if (persisted) persistedAtSink.push(persisted);
+      },
+    };
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 8, output: 2, total: 10 },
+    });
+
+    expect(persistedAtSink[0]).toMatchObject({
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+    });
+    expect(persistedAtSink[1]).toMatchObject({
+      usageTurnsRecorded: 1,
+      inputTokens: 8,
+      outputTokens: 2,
+    });
+  });
+
+  it('tracks an unmetered turn without recording it and ignores a completion that never started', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'ghost',
+      stopReason: 'end_turn',
+      usage: { input: 99, output: 9, total: 108 },
+    });
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+    });
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+    });
+    expect(store.getRun(run.id)?.steps[0]?.usageTurnsRecorded).toBeUndefined();
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+  });
+});
+
+it('parallel variants ignore a worktree opt-out and retain isolated mode', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'cez-variant-isolation-'));
+  const store = RunStore.open(join(repoRoot, '.ai/cezar'));
+  try {
+    const manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    const records = manager.startVariants(
+      {
+        name: 'quick-task',
+        description: 'x',
+        source: 'built-in',
+        steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
+      },
+      { task: 'compare approaches', worktree: false },
+      2,
+    );
+
+    expect(records.map((record) => record.worktree)).toEqual([undefined, undefined]);
+  } finally {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 /**
@@ -106,7 +301,7 @@ describe('RunManager.recordTurnEnd', () => {
 
   it('never overwrites a user-edited title (PATCH sets titleSummary too)', async () => {
     const record = await makeWorktreeRun();
-    // What PATCH /api/runs/:id does on a rename:
+    // What PATCH /api/v1/runs/:id does on a rename:
     store.updateRun(record.id, { title: 'My name', titleSummary: 'My name', titleOrigin: 'user' });
     await manager.recordTurnEnd(record.id, TURN_TEXT);
     expect(store.getRun(record.id)?.titleSummary).toBe('My name');
@@ -483,6 +678,9 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
     }
 
     const finished = store.getRun(record.id);
+    expect(finished?.worktree).toBe(false);
+    expect(finished?.worktreePath).toBeUndefined();
+    expect(finished?.baseBranch).toMatch(/^[0-9a-f]{40}$/);
     // Neither step failed or was skipped — the reported bug looked exactly
     // like this from the RunRecord's point of view (both `done`) while the
     // second step's session had done nothing; the assertion below on
@@ -845,7 +1043,7 @@ describe('RunManager.persistImage without a session (#472)', () => {
     const second = persist('run-a', 'pasted');
     expect(first?.name).toBe('pasted-1.png');
     expect(second?.name).toBe('pasted-2.png');
-    expect(first?.url).toBe('/api/runs/run-a/images/pasted-1.png');
+    expect(first?.url).toBe('/api/v1/runs/run-a/images/pasted-1.png');
   });
 
   /** The count-based bug this replaces: one file on disk named `pasted-3.png` is a
@@ -940,8 +1138,93 @@ describe('RunManager queued-stack mutators (#472)', () => {
   it('persists attached images and records their URLs', () => {
     const r = seedQueued();
     const msg = manager.enqueueMessage(r.id, [image(), { type: 'text', text: 'like this' }]);
-    expect(msg?.images).toEqual([`/api/runs/${r.id}/images/pasted-1.png`]);
+    expect(msg?.images).toEqual([`/api/v1/runs/${r.id}/images/pasted-1.png`]);
     expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(true);
+  });
+
+  it('hydrates edits and stacked messages into a queued restart continuation', async () => {
+    const r = store.createRun({
+      title: 'interrupted task',
+      workflow: 'quick-task',
+      task: 'original recovery goal',
+      steps: [],
+    });
+    store.updateRun(r.id, { status: 'queued' });
+
+    type PendingContinuation = {
+      stepId: string;
+      sessionId: string | undefined;
+      backend: 'claude';
+      prompt: string;
+      images: ContentBlock[];
+    };
+    const internals = manager as unknown as {
+      pendingContinuations: Map<string, PendingContinuation>;
+      queue: string[];
+      pump(): Promise<void>;
+      runContinuation(
+        runId: string,
+        stepId: string,
+        sessionId: string | undefined,
+        backend: 'claude',
+        prompt: string,
+        images: ContentBlock[],
+        persistedImages: ContentBlock[],
+        persistedAttachments: Array<{ name: string; url: string; path: string }>,
+      ): Promise<void>;
+    };
+    internals.pendingContinuations.set(r.id, {
+      stepId: 'continue-1',
+      sessionId: 'session-interrupted',
+      backend: 'claude',
+      prompt: 'restart recovery',
+      images: [],
+    });
+    internals.queue.push(r.id);
+
+    expect(manager.editTask(r.id, 'amended recovery goal')).toBe(true);
+    expect(
+      manager.enqueueMessage(r.id, [image(), { type: 'text', text: 'also verify the queue' }]),
+    ).not.toBeNull();
+
+    let delivered:
+      | {
+          prompt: string;
+          images: ContentBlock[];
+          persistedImages: ContentBlock[];
+          persistedAttachments: Array<{ name: string; url: string; path: string }>;
+        }
+      | undefined;
+    internals.runContinuation = async (
+      _runId,
+      _stepId,
+      _sessionId,
+      _backend,
+      prompt,
+      images,
+      persistedImages,
+      persistedAttachments,
+    ) => {
+      delivered = { prompt, images, persistedImages, persistedAttachments };
+    };
+    await internals.pump();
+
+    expect(delivered?.prompt).toBe(
+      'restart recovery\n\nCurrent task and queued updates:\n\n' +
+        'amended recovery goal\n\nalso verify the queue',
+    );
+    expect(delivered?.images).toEqual([]);
+    expect(delivered?.persistedImages).toEqual([image()]);
+    expect(delivered?.persistedAttachments).toEqual([
+      {
+        name: 'pasted-1.png',
+        url: `/api/v1/runs/${r.id}/images/pasted-1.png`,
+        path: join(imagesDir(r.id), 'pasted-1.png'),
+      },
+    ]);
+    expect(readdirSync(imagesDir(r.id))).toEqual(['pasted-1.png']);
+    expect(internals.pendingContinuations.has(r.id)).toBe(false);
+    expect(manager.editTask(r.id, 'too late')).toBe(false);
   });
 
   it('refuses every mutation once the run has been dequeued', () => {
@@ -1191,7 +1474,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pasted-1.png'), 'the-bytes');
-    stack(r.id, { text: 'see the mock', images: [`/api/runs/${r.id}/images/pasted-1.png`] });
+    stack(r.id, { text: 'see the mock', images: [`/api/v1/runs/${r.id}/images/pasted-1.png`] });
 
     const images = hydrate(r.id, r.task).stackedImages;
     expect(images).toHaveLength(1);
@@ -1206,7 +1489,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pasted-1.png'), 'the-task-bytes');
-    store.updateRun(r.id, { taskImages: [`/api/runs/${r.id}/images/pasted-1.png`] });
+    store.updateRun(r.id, { taskImages: [`/api/v1/runs/${r.id}/images/pasted-1.png`] });
 
     expect(hydrate(r.id, r.task).images).toEqual([
       {
@@ -1223,7 +1506,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
   /** Degrade, never fail the boot (AGENTS.md). */
   it('skips an unreadable attachment, notes it, and still starts', () => {
     const r = store.createRun({ title: 't', workflow: 'w', task: 'look at this', steps: [] });
-    stack(r.id, { text: 'see the mock', images: [`/api/runs/${r.id}/images/gone-1.png`] });
+    stack(r.id, { text: 'see the mock', images: [`/api/v1/runs/${r.id}/images/gone-1.png`] });
 
     const hydrated = hydrate(r.id, r.task);
     expect(hydrated.task).toBe('look at this\n\nsee the mock');
@@ -1324,7 +1607,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
 
   const WORKFLOW = {
     name: '(planned)',
-    source: 'built-in',
+    source: 'built-in' as const,
     steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
   };
 
@@ -1341,7 +1624,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
     const r = store.createRun({ title: 't', workflow: '(planned)', task: 'the original task', steps: [] });
     store.updateRun(r.id, {
       status: 'queued',
-      workflowDef: WORKFLOW as unknown as Record<string, unknown>,
+      workflowDef: WORKFLOW,
       queuedMessages: [
         { id: 'm1', text: 'the stacked bit', createdAt: '2026-07-21T10:00:00.000Z' },
       ],

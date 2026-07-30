@@ -6,26 +6,22 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
+    ".": "./src/index.ts",
     "./package.json": "./package.json"
   },
   "files": [
-    "dist",
-    "README.md"
+    "src"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@open-mercato/cezar-contract": "^0.9.1",
     "hono": "^4.6.0"
   },
   "devDependencies": {

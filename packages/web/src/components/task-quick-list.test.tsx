@@ -257,6 +257,9 @@ describe('TaskQuickList', () => {
         status: 'running',
         runner: 'claude',
         tokensUsed: 96_249,
+        inputTokens: 92_000,
+        outputTokens: 4_249,
+        costUsd: 0.31,
       }),
       run({
         id: 'vb',
@@ -266,6 +269,9 @@ describe('TaskQuickList', () => {
         status: 'running',
         runner: 'codex',
         tokensUsed: 41_800,
+        inputTokens: 40_000,
+        outputTokens: 1_800,
+        costUsd: 0.12,
       }),
     ]
 
@@ -286,8 +292,8 @@ describe('TaskQuickList', () => {
       expect(screen.getByRole('button', { expanded: true })).not.toBeNull()
 
       // The letter chip, its own dot, and what actually differs between the variants.
-      expect(row('va')?.textContent).toBe('Aclaude · 96.2k')
-      expect(row('vb')?.textContent).toBe('Bcodex · 41.8k')
+      expect(row('va')?.textContent).toBe('Aclaude · IN 92.0k · OUT 4.2k · $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex · IN 40.0k · OUT 1.8k · $0.12')
       expect(dotOf('va')?.getAttribute('data-tone')).toBe('violet')
       // Each variant is still its own deep link.
       expect(row('vb')?.querySelector('a')?.getAttribute('href')).toBe('/tasks/vb')
@@ -305,10 +311,21 @@ describe('TaskQuickList', () => {
       expect(link.closest('button')).toBeNull()
     })
 
-    it('omits the token count from a variant that has not spent anything yet', () => {
-      renderList({ runs: variants().map((v, i) => ({ ...v, tokensUsed: i === 0 ? 0 : v.tokensUsed })) })
+    it('omits unknown token directions while preserving independently visible cost', () => {
+      renderList({
+        runs: variants().map((v, i) =>
+          i === 0 ? { ...v, inputTokens: undefined, outputTokens: undefined } : v,
+        ),
+      })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude')
+      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
+    })
+
+    it('gates variant token directions and cost independently', () => {
+      renderList({ runs: variants(), showTokens: false, showCost: true })
+      fireEvent.click(screen.getByRole('button', { expanded: false }))
+      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex · $0.12')
     })
   })
 
@@ -398,7 +415,7 @@ describe('TaskQuickListContainer', () => {
     return render(<TaskQuickListContainer />, { wrapper })
   }
 
-  it('renders nothing until /api/runs answers — no invented rows, no premature empty state', () => {
+  it('renders nothing until /api/v1/runs answers — no invented rows, no premature empty state', () => {
     fetchMock.mockImplementation(() => new Promise(() => {}))
     renderContainer([])
     expect(screen.queryByText('No tasks yet — describe one.')).toBeNull()
@@ -408,7 +425,7 @@ describe('TaskQuickListContainer', () => {
   it('renders the live run list', async () => {
     renderContainer([run({ id: 'live', title: 'A real run', status: 'running' })])
     expect(await screen.findByText('A real run')).not.toBeNull()
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/runs')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/runs')
   })
 
   it('lights the row for the task open at /tasks/:id, including its child routes', async () => {

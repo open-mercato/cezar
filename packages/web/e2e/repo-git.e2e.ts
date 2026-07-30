@@ -52,7 +52,7 @@ afterAll(() => {
 
 describe('the repo view against the live dry-run server', () => {
   it('/git renders the header from live git state and an honest Changes segment', async () => {
-    const repo = await api<RepoPayload>('/api/repo')
+    const repo = await api<RepoPayload>('/api/v1/repo')
     expect(repo.info).not.toBeNull()
 
     browser.goto(`${baseUrl}${scoped('/git')}`)
@@ -71,7 +71,7 @@ describe('the repo view against the live dry-run server', () => {
     ).toBe(scoped('/git'))
 
     // The working tree may be clean or dirty — assert the view tells the same story the API does.
-    const changes = await api<{ files: unknown[] }>('/api/repo/changes')
+    const changes = await api<{ files: unknown[] }>('/api/v1/repo/changes')
     if (changes.files.length === 0) {
       browser.waitForFunction(
         `[...document.querySelectorAll('[data-slot="repo-changes"] h2')].some((h) => h.textContent === 'Working tree clean')`,
@@ -87,7 +87,7 @@ describe('the repo view against the live dry-run server', () => {
   })
 
   it('/git/commits lists this repository’s real commits', async () => {
-    const repo = await api<RepoPayload>('/api/repo')
+    const repo = await api<RepoPayload>('/api/v1/repo')
     expect(repo.log.length).toBeGreaterThan(0)
 
     browser.goto(`${baseUrl}${scoped('/git/commits')}`)
@@ -102,11 +102,11 @@ describe('the repo view against the live dry-run server', () => {
 
   it('opens one commit’s structured diff (a non-merge commit, found honestly)', async () => {
     // Merge commits honestly answer zero files — pick the newest commit that carries a diff.
-    const repo = await api<RepoPayload>('/api/repo')
+    const repo = await api<RepoPayload>('/api/v1/repo')
     let picked: { hash: string; subject: string; files: Array<{ path: string }> } | null = null
     for (const entry of repo.log) {
       const commit = await api<{ subject: string; files: Array<{ path: string }> }>(
-        `/api/repo/commit/${entry.hash}?structured=1`,
+        `/api/v1/repo/commit/${entry.hash}?structured=1`,
       )
       if (commit.files.length > 0) {
         picked = { hash: entry.hash, subject: commit.subject, files: commit.files }
@@ -136,7 +136,7 @@ describe('the repo view against the live dry-run server', () => {
   })
 
   it('/git/branches renders the live branch list with the checkout marked current', async () => {
-    const repo = await api<RepoPayload>('/api/repo')
+    const repo = await api<RepoPayload>('/api/v1/repo')
     expect(repo.branches.length).toBeGreaterThan(0)
 
     browser.goto(`${baseUrl}${scoped('/git/branches')}`)
@@ -154,14 +154,14 @@ describe('the repo view against the live dry-run server', () => {
         ),
       ).toBe(repo.info.branch)
     }
-    // The base-branch picker exists — /api/repo carries baseBranch, so the control is honest.
+    // The base-branch picker exists — /api/v1/repo carries baseBranch, so the control is honest.
     expect(browser.count('[data-slot="base-branch-picker"]')).toBe(1)
   })
 
   it('below md the repo view forces unified+wrap, hides the toggles, and never overflows', async () => {
     browser.setViewport(IPHONE.width, IPHONE.height)
     try {
-      const changes = await api<{ files: unknown[] }>('/api/repo/changes')
+      const changes = await api<{ files: unknown[] }>('/api/v1/repo/changes')
       browser.goto(`${baseUrl}${scoped('/git')}`)
       browser.waitForFunction(`document.querySelector('[data-slot="repo-changes"]') !== null`)
 

@@ -1,12 +1,11 @@
 import { useState } from 'react'
 
-import { useSendMessage } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
-import { useActiveProviderAvailability } from './active-provider'
+import { useAskAnswer } from './ask-answer'
 import type { ThreadAsk } from './thread-state'
 import type { UiAskQuestion } from '@open-mercato/cezar-api-client'
 
@@ -22,20 +21,18 @@ function formatAnswer(question: UiAskQuestion, labels: string[]): string {
  * questions, or a multi-select question) collects every answer and resolves on
  * one **Send** that posts a single combined message — the reducer resolves the
  * whole card on that one user message, so partial answers can never leak. Either
- * way the answer rides the normal reply seam (`useSendMessage` →
- * `POST /api/runs/:id/messages`), and the composer below stays enabled for a
- * free-form "Other". Once resolved, the card collapses to a compact summary.
+ * way the answer rides `useAskAnswer`, which picks the seam the run's state
+ * allows: the live reply while the engine owns a session, and a resume once it
+ * has closed — a question outlives its session, so answering one that the agent
+ * asked before an idle timeout or a restart reopens the session with the answer
+ * as its opening prompt. The composer below stays available for a free-form
+ * "Other". Once resolved, the card collapses to a compact summary.
  */
 export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
-  const sendMessage = useSendMessage(run.id)
-  const provider = useActiveProviderAvailability(run)
-  const providerBlocked = !provider.usable
-  const questions = ask.questions
-  // One-tap only when there is a single single-select question; every other
-  // shape needs a combined Send so no question's answer is dropped.
-  const oneTap = questions.length === 1 && questions[0]?.multiSelect !== true
-  const [selections, setSelections] = useState<Record<number, string[]>>({})
-
+  // An answered card is a static summary — split so the delivery hook (two mutations and a
+  // provider-status subscription) only mounts for a question that can still be answered.
+  // Threads accumulate asks; every resolved one would otherwise carry live machinery for a
+  // question nobody can answer again.
   if (ask.resolved) {
     return (
       <div
@@ -50,6 +47,18 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       </div>
     )
   }
+  return <PendingAsk ask={ask} run={run} />
+}
+
+/** The unanswered card: option chips wired to whichever delivery seam the run's state allows. */
+function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
+  const delivery = useAskAnswer(run)
+  const blocked = delivery.blockedBy !== undefined
+  const questions = ask.questions
+  // One-tap only when there is a single single-select question; every other
+  // shape needs a combined Send so no question's answer is dropped.
+  const oneTap = questions.length === 1 && questions[0]?.multiSelect !== true
+  const [selections, setSelections] = useState<Record<number, string[]>>({})
 
   const setQuestion = (index: number, labels: string[]) =>
     setSelections((prev) => ({ ...prev, [index]: labels }))
@@ -57,14 +66,19 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   const allAnswered = questions.every((_, index) => (selections[index]?.length ?? 0) > 0)
 
   const sendAll = () =>
-    void sendMessage.mutateAsync({
-      text: questions.map((q, index) => formatAnswer(q, selections[index] ?? [])).join('\n'),
-    })
+    void delivery.send(
+      questions.map((q, index) => formatAnswer(q, selections[index] ?? [])).join('\n'),
+    )
+
+  // The session ended before the question was answered — say so, because sending the
+  // answer now does more than reply: it reopens the agent's session to deliver it.
+  const resuming = delivery.mode === 'resume'
 
   return (
     <div
       data-slot="ask-card"
       data-resolved="false"
+      data-delivery={delivery.mode}
       className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
     >
       <div className="mb-2.5 flex items-center gap-2">
@@ -75,33 +89,57 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
           <AskQuestionBlock
             key={question.id ?? index}
             question={question}
-            disabled={sendMessage.isPending || providerBlocked}
+            disabled={delivery.isPending || blocked}
             selected={selections[index] ?? []}
             onSelect={(labels) => {
-              if (providerBlocked) return
-              if (oneTap) void sendMessage.mutateAsync({ text: formatAnswer(question, labels) })
+              if (blocked) return
+              if (oneTap) void delivery.send(formatAnswer(question, labels))
               else setQuestion(index, labels)
             }}
           />
         ))}
       </div>
-      {oneTap ? null : (
+      {oneTap ? (
+        resuming ? (
+          <p data-slot="ask-resume-hint" className="mt-3 text-[11.5px] text-soft-foreground">
+            The session has ended — your answer reopens it and goes to the agent.
+          </p>
+        ) : null
+      ) : (
         <div className="mt-3 flex items-center gap-2.5">
-          <Button size="sm" disabled={sendMessage.isPending || providerBlocked || !allAnswered} onClick={sendAll}>
-            Send answer
+          <Button size="sm" disabled={delivery.isPending || blocked || !allAnswered} onClick={sendAll}>
+            {resuming ? 'Send answer & reopen' : 'Send answer'}
           </Button>
-          <span className="text-[11.5px] text-soft-foreground">
-            {questions.length > 1 ? 'answer each question' : 'pick one or more'} — or type a reply below
+          {/* The slot names the resume state, so a selector for it can never match the ordinary
+              "pick one or more" hint a live run shows. */}
+          <span
+            data-slot={resuming ? 'ask-resume-hint' : 'ask-hint'}
+            className="text-[11.5px] text-soft-foreground"
+          >
+            {resuming
+              ? 'the session has ended — sending reopens it'
+              : `${questions.length > 1 ? 'answer each question' : 'pick one or more'} — or type a reply below`}
           </span>
         </div>
       )}
-      {providerBlocked ? (
+      {delivery.blockedBy === 'provider' ? (
         <div data-slot="ask-provider-gate" className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          <span>{provider.reason}</span>
+          <span>{delivery.reason}</span>
           <Link to="/settings/agents#providers" className="font-medium text-foreground underline underline-offset-4">
             Configure providers
           </Link>
         </div>
+      ) : null}
+      {delivery.blockedBy === 'no-session' ? (
+        <p data-slot="ask-no-session" className="mt-3 text-xs text-muted-foreground">
+          {delivery.reason}
+        </p>
+      ) : null}
+      {/* A dropped answer used to be silent — the tap did nothing and said nothing. */}
+      {delivery.error ? (
+        <p data-slot="ask-error" role="alert" className="mt-3 text-xs text-danger">
+          {delivery.error}
+        </p>
       ) : null}
     </div>
   )
