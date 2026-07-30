@@ -765,14 +765,15 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
   it('does not end the parent turn when a sub-agent child thread completes its turn (#600)', async () => {
     const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 60_000 });
     const v1: AgentEvent[] = [];
+    const v2: UiEvent[] = [];
     const session = runner.startSession(
       { userPrompt: 'mock:child-turn', cwd: process.cwd() },
       (event) => v1.push(event),
-      { autoEndAfterFirstTurn: true },
+      { autoEndAfterFirstTurn: true, onUiEvent: (event) => v2.push(event) },
     );
     await session.result;
 
-    // The child thread (th_child) emits its own turn/completed, but only the run's
+    // v1: the child thread (th_child) emits its own turn/completed, but only the run's
     // own main thread (th_mock_1) may produce a turn-end — otherwise the run parks
     // under "Needs you" while it is visibly still working.
     const turnEnds = v1.filter((event) => event.type === 'turn-end');
@@ -780,6 +781,13 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
     // The parent's post-child activity still streamed through.
     const text = v1.flatMap((event) => (event.type === 'text' ? [event.text] : [])).join('');
     expect(text).toContain('Still working after the sub-agent.');
+
+    // v2: the child turn must not corrupt the parent's normalized stream either — exactly
+    // one turn.started and one turn.completed, both for the parent turn (turn_mock_1).
+    const v2Started = v2.filter((event) => event.type === 'turn.started');
+    const v2Completed = v2.filter((event) => event.type === 'turn.completed');
+    expect(v2Started).toEqual([{ type: 'turn.started', turnId: 'turn_mock_1' }]);
+    expect(v2Completed).toEqual([{ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' }]);
   }, 30_000);
 
   it('keeps autonomous full-access permissions when resuming a thread', async () => {
