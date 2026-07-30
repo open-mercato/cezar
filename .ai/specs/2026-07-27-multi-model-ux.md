@@ -1,7 +1,6 @@
 # Multi-Model Harness UI/UX
 
 Status: IMPLEMENTED (2026-07-27) · Branch: `feat/multi-modal`
-Mockups: `.ai/specs/assets/2026-07-27-multi-model-ux/`
 
 ## TLDR
 
@@ -253,16 +252,3 @@ bottom drawer. Confirm that is preferred over keeping the Review tab.
 | Accepting a contested result never unlocked publishing | server returns `decisions`; client patches both halves |
 | Presets holding an advisor reviewer were silently discarded | `isModelRefShape` accepts `runner: 'harness'` with a family |
 | Setup dialog claimed "no models available" when advisors existed | runner families and advisor families counted separately |
-
-## Mockups
-
-| File | Shows |
-|---|---|
-| `mockup-01-run-shell.html` | Session tab: unified width, one status bar, transcript + run rail |
-| `mockup-02-review.html` | Review tab: verdict banner, blocking findings, council table, reviewer drawer |
-| `mockup-03-composer.html` | Multi-model composer with no profile picker, inline readiness, cost estimate |
-| `mockup-04-phase-timeline.html` | The full-run timeline that replaces the horizontal rail |
-
-All four use the cockpit's own tokens (`web/app/src/styles/index.css`) —
-`--background #0d0d0d`, `--card #171717`, `--primary #a8f372`, Inter +
-JetBrains Mono, 8/10/12/16px radii, borders over shadows.

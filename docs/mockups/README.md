@@ -11,10 +11,6 @@ Built on real cezar data (run `2d012907`'s actual NDJSON events, real skill name
 | [`git-changes.html`](git-changes.html) | Session Changes tab: file tree, word-level diff, commit/push/Create PR action bar | #390 |
 | [`tasks-home.html`](tasks-home.html) | Task table with editable titles, ± stats, live CPU/Mem; sidebar quick-list with variant groups | #389 |
 | [`settings-skills.html`](settings-skills.html) | Settings tab with registry sub-nav; skills project-first/bold | #377 |
-| [`harness-thread.html`](harness-thread.html) | Harness run thread: phase rail, readiness table, diagnosis-council card, worker-packet cards, Models dock | spec 2026-07-23-harness-orchestration |
-| [`harness-council.html`](harness-council.html) | Review tab: round stepper, reviewer-status table, findings-by-model matrix (`●/◐/—/○/!`), validation gate | spec 2026-07-23-harness-orchestration |
-| [`harness-new-task.html`](harness-new-task.html) | Harness start surface: profile segments, probe readiness table with missing-binding reroute, stage-only note | spec 2026-07-23-harness-orchestration |
-| [`harness-packets.html`](harness-packets.html) | High-assurance Packets tab: lifecycle strip, packet cards with leases/budgets/lenses, blocked packet + release | spec 2026-07-23-harness-orchestration |
 
 Screenshots (Playwright, 2× scale) in [`screenshots/`](screenshots/): `*-desktop.png` 1440×900 dark, `*-iphone.png` 390×844, `*-light.png` light theme, plus `thread-desktop-tools.png` (tool cards in view) and `new-task-desktop-clean.png` (dropdown closed).
 
