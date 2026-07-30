@@ -20,20 +20,14 @@
  * Like the other opt-in capabilities, activation is strict: no other spelling
  * enables it.
  *
- * `tokenMetrics` (#481): token counts and monetary cost stay visible by
- * default. `CEZ_HIDE_TOKEN_METRICS=1` is an embedded-cockpit presentation
- * policy: it hides those values in the browser without changing collection,
- * persistence, events, or API run records.
+ * Usage presentation: token counts and monetary cost stay visible by default.
+ * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
+ * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
+ * changes collection, persistence, events, or API run records.
  */
 
 import { followupsEnabled } from '../handoff.ts';
-
-export interface Capabilities {
-  localHandoff: boolean;
-  followups: boolean;
-  singleProject: boolean;
-  tokenMetrics: boolean;
-}
+import type { Capabilities } from '@open-mercato/cezar-contract';
 
 /** Every IPv4 address in 127.0.0.0/8, anchored. Anchoring is load-bearing: a
  *  `startsWith('127.')` test also matches attacker-controlled *hostnames* like
@@ -131,12 +125,17 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *  flag was off never subscribed and get no live inbox updates until they reconnect. Hence
  *  the UI's "set CEZ_FOLLOWUPS=1 and restart cezar" wording — treat it as a boot-time flag. */
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
+  const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
+  const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
+  const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
     localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
-    tokenMetrics: env.CEZ_HIDE_TOKEN_METRICS !== '1',
+    tokenMetrics: tokenUsageMetrics && costMetrics,
+    tokenUsageMetrics,
+    costMetrics,
   };
 }

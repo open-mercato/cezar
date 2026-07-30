@@ -689,6 +689,8 @@ describe('workspace projects API', () => {
         followups: false,
         singleProject: false,
         tokenMetrics: true,
+        tokenUsageMetrics: true,
+        costMetrics: true,
       });
       // New fields: registered projects enumerated, boot project named.
       expect(body.projects.map((p) => p.id).sort()).toEqual([boot.id, other.id].sort());
