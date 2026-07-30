@@ -74,11 +74,6 @@ export function finishedRunCount(runs: readonly RunRecord[]): number {
   return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status)).length
 }
 
-/** The repo root (`https://github.com/owner/repo`) of any github.com issue/PR URL, else undefined. */
-function githubRepoBase(url: string | undefined): string | undefined {
-  return url?.match(/^(https:\/\/github\.com\/[^/]+\/[^/]+)(?:\/|$)/)?.[1]
-}
-
 /** The URL a PR *display* chip shows: the PR the task created, else the PR the conversation
  *  is about (#407 — review/continue tasks reference an existing PR instead of opening one).
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
@@ -92,23 +87,13 @@ export function taskPrUrl(run: RunRecord): string | undefined {
   return run.referencedPullRequestUrl
 }
 
-/** Display-only issue association. Action gates must continue to use their created-resource
- * fields directly; this accessor exists only for links painted by the cockpit. */
+/** Display-only issue association: the issue URL discovered for this run (#526 surfaces it in
+ *  the closed-session footer). Authoritative only — a transcript-derived PR/candidate URL is NOT
+ *  used to synthesize an issue link, because it may point at another repository and would recreate
+ *  the "wrong link" defect. A marker-only issue whose `…/issues/N` link was never scanned stays
+ *  unlinked here rather than risk a cross-repo guess. Action gates use created-resource fields. */
 export function taskIssueUrl(run: RunRecord): string | undefined {
-  if (run.referencedIssueUrl) return run.referencedIssueUrl
-  // #526: an issue-subject run (om-prepare-issue) knows its issue number from the CEZ:ISSUE
-  // marker even when no full `…/issues/N` link was ever scanned into referencedIssueUrl.
-  // Synthesize the link from any same-repo GitHub URL already on the record so the created
-  // issue stays reachable from the cockpit instead of vanishing.
-  const number = run.markerRefs?.issue ?? run.issueNumber
-  if (!number) return undefined
-  const base = githubRepoBase(
-    run.pullRequestUrl ??
-      run.referencedPullRequestUrl ??
-      run.referencedPrCandidates?.[0] ??
-      run.referencedIssueCandidates?.[0],
-  )
-  return base ? `${base}/issues/${number}` : undefined
+  return run.referencedIssueUrl
 }
 
 export interface TaskReference {

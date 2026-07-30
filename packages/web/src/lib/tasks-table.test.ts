@@ -219,27 +219,19 @@ describe('taskIssueUrl', () => {
     )
   })
 
-  it('is undefined when the task has no issue URL and no repo to synthesize from', () => {
+  it('is undefined when the task has no discovered issue URL', () => {
     expect(taskIssueUrl(run({ issueNumber: 544 }))).toBeUndefined()
   })
 
-  it('synthesizes the issue link from the CEZ:ISSUE marker + a same-repo URL on the record (#526)', () => {
-    // The om-prepare-issue #524 record: issue known via the marker, but no `…/issues/524`
-    // link was ever scanned. The incidental PR shares the repo, so the issue is reachable.
+  it('never derives an issue link from a transcript PR — it could be another repo (#526)', () => {
+    // A CEZ:ISSUE marker plus an incidental cross-repo PR must NOT produce
+    // `https://github.com/other/repo/issues/524` — that recreates the wrong-link defect.
     const r = run({
       markerRefs: { issue: 524 },
-      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
-    })
-    expect(taskIssueUrl(r)).toBe('https://github.com/o/r/issues/524')
-  })
-
-  it('prefers a real discovered issue URL over the synthesized one (#526)', () => {
-    const r = run({
-      markerRefs: { issue: 524 },
-      referencedIssueUrl: 'https://github.com/o/r/issues/524',
       referencedPullRequestUrl: 'https://github.com/other/repo/pull/1',
+      referencedPrCandidates: ['https://github.com/other/repo/pull/1'],
     })
-    expect(taskIssueUrl(r)).toBe('https://github.com/o/r/issues/524')
+    expect(taskIssueUrl(r)).toBeUndefined()
   })
 })
 

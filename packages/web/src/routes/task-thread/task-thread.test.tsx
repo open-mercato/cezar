@@ -97,6 +97,21 @@ describe('ThreadView', () => {
     )
   })
 
+  it('an issue-subject closed run links its issue in the footer, never the incidental PR (#526)', () => {
+    const issueRun = run('done', {
+      markerRefs: { issue: 524 },
+      referencedIssueUrl: 'https://github.com/o/r/issues/524',
+      // An unrelated PR that only appeared in the transcript — it must not surface.
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    renderView(<ThreadView run={issueRun} thread={reduceThread([line(1, 'done')])} />)
+
+    const issueLink = document.querySelector('[data-slot="issue-link"]')
+    expect(issueLink?.getAttribute('href')).toBe('https://github.com/o/r/issues/524')
+    // Defect B: the incidental PR is not linked in the footer.
+    expect(document.querySelector('[data-slot="thread-footer"] [data-slot="pr-link"]')).toBeNull()
+  })
+
   it('renders the task as the leading user bubble and the v1 reply as another', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     const bubbles = document.querySelectorAll('[data-slot="user-bubble"]')
