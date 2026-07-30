@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
 import { atomicWriteJsonSync, loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
@@ -94,6 +96,30 @@ describe('cezar home write safety', () => {
     expect(() => atomicWriteJsonSync(target, { projects: [] })).toThrow(/refusing to write/);
     expect(readFileSync(target, 'utf8')).toBe(existing);
   });
+
+  it('survives a real, timing-out suite run: the home registry is never created', () => {
+    // The reproduction from the bug report, run for real: the workspace CLI
+    // suite with a timeout short enough that every case is killed mid-write,
+    // pointed at a throwaway HOME and started with no CEZ_HOME at all — the way
+    // `npm test` runs on a developer's machine. Before the fix this run left a
+    // `<home>/.cezar/config.json` holding the fixture's projects.
+    const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const vitestBin = join(packageRoot, '..', '..', 'node_modules', '.bin', 'vitest');
+    const env = { ...process.env, HOME: fakeUserHome };
+    delete env.CEZ_HOME;
+    delete env.VITEST;
+
+    const run = spawnSync(vitestBin, ['run', 'src/workspace/projects-cli.test.ts', '--testTimeout=15'], {
+      cwd: packageRoot,
+      env,
+      encoding: 'utf8',
+    });
+
+    // The nested suite is EXPECTED to fail — 15ms cannot finish a `git init`.
+    // What matters is what it left behind outside its sandbox.
+    expect(run.error).toBeUndefined();
+    expect(existsSync(join(fakeUserHome, '.cezar'))).toBe(false);
+  }, 180_000);
 
   it('allows writes outside the real cezar home, and is inert outside vitest', () => {
     process.env.HOME = fakeUserHome;
