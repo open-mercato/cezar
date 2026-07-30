@@ -107,7 +107,7 @@ describe('cezar home write safety', () => {
     // (~1s, against ~40s for the whole file).
     const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
     const vitestBin = join(packageRoot, '..', '..', 'node_modules', '.bin', 'vitest');
-    const env = { ...process.env, HOME: fakeUserHome };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeUserHome };
     delete env.CEZ_HOME;
     delete env.VITEST;
 
