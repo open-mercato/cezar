@@ -201,8 +201,9 @@ describe('health topic + cache (live-server path)', () => {
 
     const health = topics.get('health');
     if (!health) throw new Error('no health topic registered');
-    const viaSocket = (await health.snapshot()) as { defaultRunner?: string };
-    expect(viaSocket.defaultRunner).toBe(await runner());
+    const viaSocket = await health.snapshot();
+    const response = await apiRequest(app, '/api/v1/health');
+    expect(await response.json()).toEqual(viaSocket);
   });
 
   it('shares one compute between concurrent reads (in-flight dedupe)', async () => {

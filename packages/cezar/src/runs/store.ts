@@ -26,6 +26,8 @@ export type StepStatus =
   | 'cancelled'
   | 'skipped';
 
+const usageCounterSchema = z.number().finite().nonnegative();
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -33,6 +35,13 @@ const stepStateSchema = z.object({
   status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
   iterations: z.number(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
+  usageInvocationsStarted: usageCounterSchema.optional(),
+  usageInvocationsObserved: usageCounterSchema.optional(),
+  usageTurnsStarted: usageCounterSchema.optional(),
+  usageTurnsRecorded: usageCounterSchema.optional(),
+  usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   error: z.string().optional(),
@@ -126,6 +135,8 @@ const runRecordSchema = z.object({
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
   /** First GitHub PR URL spotted in the transcript (the janitor trick). */
   pullRequestUrl: z.string().optional(),
@@ -533,6 +544,28 @@ export class RunStore extends EventEmitter {
     if (!run || !step) return;
     Object.assign(step, this.redactStepPatch(patch));
     run.tokensUsed = run.steps.reduce((sum, s) => sum + s.tokensUsed, 0);
+    const startedAgentSteps = run.steps.filter((candidate) => candidate.kind === 'agent' && candidate.iterations > 0);
+    const directionalComplete =
+      startedAgentSteps.length > 0 &&
+      startedAgentSteps.every(
+        (candidate) =>
+          candidate.usageInvocationsStarted !== undefined &&
+          candidate.usageInvocationsObserved !== undefined &&
+          candidate.usageInvocationsObserved > 0 &&
+          candidate.usageInvocationsStarted === candidate.usageInvocationsObserved &&
+          candidate.usageTurnsStarted !== undefined &&
+          candidate.usageTurnsRecorded !== undefined &&
+          candidate.usageTurnsStarted > 0 &&
+          candidate.usageTurnsStarted === candidate.usageTurnsRecorded &&
+          candidate.inputTokens !== undefined &&
+          candidate.outputTokens !== undefined,
+      );
+    run.inputTokens = directionalComplete
+      ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.inputTokens ?? 0), 0)
+      : undefined;
+    run.outputTokens = directionalComplete
+      ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.outputTokens ?? 0), 0)
+      : undefined;
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
     run.costUsd = cost > 0 ? cost : undefined;
     this.touch(run);

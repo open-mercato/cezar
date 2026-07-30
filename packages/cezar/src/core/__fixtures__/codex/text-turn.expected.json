@@ -102,6 +102,13 @@
   {
     "type": "turn.completed",
     "turnId": "turn_01J8ZC0WXP",
-    "stopReason": "end_turn"
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 1800,
+      "output": 410,
+      "total": 2210,
+      "cacheRead": 900,
+      "reasoning": 120
+    }
   }
 ]

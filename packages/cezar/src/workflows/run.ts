@@ -30,7 +30,7 @@ import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
-import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.ts';
+import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
@@ -133,6 +133,15 @@ interface ActiveRun {
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; every degradation/opt-out path does. */
   releaseRepoRoot?: () => void;
+  /** Durable directional-usage accounting state for the current runner
+   * invocation. Provider-local turn ids are unique only within this epoch. */
+  usageInvocation?: {
+    stepId: string;
+    epoch: number;
+    observed: boolean;
+    startedTurns: Set<string>;
+    recordedTurns: Set<string>;
+  };
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever. */
@@ -1656,6 +1665,8 @@ export class RunManager {
       return;
     }
     const runner = createRunner(continueBackend);
+    state.currentStepId = stepId;
+    this.beginUsageInvocation(runId, state, stepId);
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -1682,7 +1693,6 @@ export class RunManager {
     state.session = session;
     state.sessionEverOpened = true;
     this.flushDeferred(runId);
-    state.currentStepId = stepId;
     state.interrupt = () => session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
@@ -2174,6 +2184,8 @@ export class RunManager {
     }
     const runner = createRunner(stepBackend);
     let session: AgentSession;
+    state.currentStepId = step.id;
+    this.beginUsageInvocation(runId, state, step.id);
     try {
       session = runner.startSession(
         {
@@ -2206,6 +2218,7 @@ export class RunManager {
         },
       );
     } catch (err) {
+      state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
     }
     state.session = session;
@@ -2257,6 +2270,7 @@ export class RunManager {
   /** Native backend asks arrive before turn-end. Persist and park immediately
    * so the cockpit shows attention and the run releases its workspace slot. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
+    this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
@@ -2266,6 +2280,82 @@ export class RunManager {
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
+  }
+
+  /** Persist the invocation checkpoint before launching a runner. A throw or
+   * process exit before `turn.started` therefore leaves a durable mismatch. */
+  private beginUsageInvocation(runId: string, state: ActiveRun, stepId: string): void {
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === stepId);
+    if (!step) return;
+    const epoch = (step.usageInvocationEpoch ?? 0) + 1;
+    this.persistUsageCheckpoint(runId, stepId, {
+      usageInvocationEpoch: epoch,
+      usageInvocationsStarted: (step.usageInvocationsStarted ?? 0) + 1,
+    });
+    state.usageInvocation = {
+      stepId,
+      epoch,
+      observed: false,
+      startedTurns: new Set(),
+      recordedTurns: new Set(),
+    };
+  }
+
+  /** Fold backend-neutral completed-turn usage into the current step exactly
+   * once. Invocation/turn counters are written before the event reaches the
+   * NDJSON sink so crashes cannot preserve a falsely complete subtotal. */
+  private recordUsageUiEvent(runId: string, state: ActiveRun, event: UiEvent): void {
+    const invocation = state.usageInvocation;
+    if (!invocation) return;
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
+    if (!step) return;
+
+    if (event.type === 'turn.started') {
+      if (invocation.startedTurns.has(event.turnId)) return;
+      invocation.startedTurns.add(event.turnId);
+      const firstObservedTurn = !invocation.observed;
+      invocation.observed = true;
+      this.persistUsageCheckpoint(runId, invocation.stepId, {
+        usageTurnsStarted: (step.usageTurnsStarted ?? 0) + 1,
+        ...(firstObservedTurn
+          ? { usageInvocationsObserved: (step.usageInvocationsObserved ?? 0) + 1 }
+          : {}),
+      });
+      return;
+    }
+
+    if (event.type !== 'turn.completed') return;
+    if (!invocation.startedTurns.has(event.turnId) || invocation.recordedTurns.has(event.turnId)) return;
+    const input = event.usage?.input;
+    const output = event.usage?.output;
+    if (
+      typeof input !== 'number' ||
+      !Number.isFinite(input) ||
+      input < 0 ||
+      typeof output !== 'number' ||
+      !Number.isFinite(output) ||
+      output < 0
+    ) {
+      return;
+    }
+    invocation.recordedTurns.add(event.turnId);
+    this.persistUsageCheckpoint(runId, invocation.stepId, {
+      inputTokens: (step.inputTokens ?? 0) + input,
+      outputTokens: (step.outputTokens ?? 0) + output,
+      usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
+    });
+  }
+
+  /** Usage completeness is a crash boundary, unlike high-frequency token
+   * snapshots: the checkpoint must reach `runs.json` before the runner starts
+   * or the matching UI event is persisted and forwarded. */
+  private persistUsageCheckpoint(
+    runId: string,
+    stepId: string,
+    patch: Partial<Omit<StepState, 'id'>>,
+  ): void {
+    this.store.updateStep(runId, stepId, patch);
+    this.store.flush();
   }
 
   /**

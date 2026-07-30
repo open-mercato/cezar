@@ -28,6 +28,8 @@ function variant(letter: string, status: RunStatus, extra: Partial<GroupVariant>
     status,
     archived: false,
     tokensUsed: letter === 'A' ? 96_249 : 41_800,
+    inputTokens: letter === 'A' ? 92_000 : 40_000,
+    outputTokens: letter === 'A' ? 4_249 : 1_800,
     costUsd: letter === 'A' ? 0.31 : 0.12,
     diffStat: letter === 'A' ? STAT_A : STAT_B,
     handoffExcerpt: `- 2026-07-14 — variant ${letter}: implemented the change`,
@@ -131,8 +133,8 @@ describe('the compare columns', () => {
     expect(a?.querySelector('[data-slot="pill"]')?.textContent).toContain('needs review')
     expect(b?.querySelector('[data-slot="pill"]')?.textContent).toContain('done')
 
-    // Tokens/cost per column.
-    expect(a?.textContent).toContain('96.2k')
+    // Directional tokens and cost per column.
+    expect(a?.textContent).toContain('IN 92.0k · OUT 4.2k')
     expect(a?.textContent).toContain('$0.31')
 
     // The legacy `git diff --stat` text verbatim in the mono block, labeled as git's own words.
@@ -168,7 +170,7 @@ describe('the compare columns', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-slot="variant-token-metrics"]')).toBeNull()
     })
-    expect(columns()[0]?.textContent).not.toContain('96.2k')
+    expect(columns()[0]?.textContent).not.toContain('IN 92.0k')
     expect(columns()[0]?.textContent).not.toContain('$0.31')
   })
 

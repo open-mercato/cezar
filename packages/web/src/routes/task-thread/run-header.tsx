@@ -64,12 +64,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toaster'
+import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
-import { compactTokens } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
-import { tokenMetricsVisible } from '@/lib/token-metrics'
+import { usageMetricVisibility } from '@/lib/token-metrics'
 import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
@@ -115,6 +115,7 @@ export function RunHeader({
   // whole queue, not of this record.
   const runs = useRuns()
   const health = useHealth()
+  const metricVisibility = usageMetricVisibility(health.data)
   const queuePosition =
     run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
@@ -142,7 +143,11 @@ export function RunHeader({
           </span>
         </div>
 
-        <MetaRow run={run} showTokenMetrics={tokenMetricsVisible(health.data)} />
+        <MetaRow
+          run={run}
+          showTokens={metricVisibility.tokens}
+          showCost={metricVisibility.cost}
+        />
         <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
@@ -472,7 +477,15 @@ function EditableTitle({ run }: { run: ApiRun }) {
  *  not a placeholder. Runner and model no longer sit in the loose dot-list (#416): they read as
  *  a status for the *active* session, so they move into the agent badge next to the token
  *  count, revealed on hover/focus rather than always-on text. */
-function MetaRow({ run, showTokenMetrics }: { run: ApiRun; showTokenMetrics: boolean }) {
+function MetaRow({
+  run,
+  showTokens,
+  showCost,
+}: {
+  run: ApiRun
+  showTokens: boolean
+  showCost: boolean
+}) {
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -525,17 +538,16 @@ function MetaRow({ run, showTokenMetrics }: { run: ApiRun; showTokenMetrics: boo
   }
 
   const usage: ReactNode[] = []
-  if (showTokenMetrics && run.tokensUsed > 0) {
-    // Tokens WITHOUT the mockup's context gauge, on purpose: the gauge needs "used / window",
-    // and RunRecord carries only the lifetime `tokensUsed` — no context-window size, no
-    // per-session usage. When the protocol starts persisting one, the bar goes here.
+  if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
     usage.push(
-      <span key="tokens" className="tabular-nums">
-        {compactTokens(run.tokensUsed)} tokens
-      </span>,
+      <DirectionalUsage
+        key="tokens"
+        inputTokens={run.inputTokens}
+        outputTokens={run.outputTokens}
+      />,
     )
   }
-  if (showTokenMetrics && run.costUsd) {
+  if (showCost && run.costUsd) {
     usage.push(
       <span key="cost" className="tabular-nums">
         {formatCost(run.costUsd)}

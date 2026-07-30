@@ -53,6 +53,11 @@ export const capabilitiesSchema = z.object({
    * visible.
    */
   tokenMetrics: z.boolean(),
+  /** Current token-count presentation policy. Required on current servers;
+   * older payload tolerance belongs in the browser resolver. */
+  tokenUsageMetrics: z.boolean(),
+  /** Current backend-reported-cost presentation policy. */
+  costMetrics: z.boolean(),
 });
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
 
