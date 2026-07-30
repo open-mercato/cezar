@@ -57,6 +57,8 @@ Show truthful raw input/output token totals and backend-reported cost for each C
 
 ## Progress
 
+PR: #742
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Backend-normalized per-turn usage
