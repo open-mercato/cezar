@@ -303,16 +303,21 @@ describe('workspace config', () => {
       expect(statSync(workspaceConfigBackupPath()).mode & 0o777).toBe(0o600);
     });
 
-    it('does not snapshot an empty registry, so unregistering the last project is not undone', async () => {
+    it('refreshes the snapshot when the last project is unregistered, so it cannot resurrect (#731)', async () => {
       await registerOne();
       await mergeWriteWorkspaceConfig((config) => {
         config.projects = [];
       });
-      // The snapshot still holds the old entry…
+      // The snapshot now mirrors the emptied registry — no stale entry survives.
       expect(
         (JSON.parse(readFileSync(workspaceConfigBackupPath(), 'utf8')) as WorkspaceConfig).projects,
-      ).toHaveLength(1);
-      // …but a config that parses and is simply empty is the user's own state.
+      ).toEqual([]);
+      // A config that parses and is simply empty is the user's own state.
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+      // And losing config.json entirely must NOT bring the removed project back
+      // from a stale snapshot — recovery settles on the empty registry the user
+      // intended, which was the #731 data-integrity defect.
+      rmSync(workspaceConfigPath());
       expect((await loadWorkspaceConfig()).projects).toEqual([]);
     });
 

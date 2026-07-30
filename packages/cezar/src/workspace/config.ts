@@ -303,13 +303,17 @@ export async function mergeWriteWorkspaceConfig(
   const current = await loadWorkspaceConfig(path);
   const next = mutator(current) ?? current;
   atomicWriteJsonSync(path, next);
-  if (next.projects.length > 0) {
-    try {
-      atomicWriteJsonSync(workspaceConfigBackupPath(path), next);
-    } catch {
-      // Best-effort: the registry itself is already safely on disk, and a
-      // failed snapshot must never turn a successful write into an error.
-    }
+  // Refresh the snapshot after EVERY successful write, including an emptied
+  // registry (#731). Skipping the empty case left a stale non-empty backup:
+  // removing the last project, then losing config.json, resurrected the project
+  // the user had deliberately unregistered. An empty snapshot is not restored on
+  // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
+  // registry the user intended rather than the old projects.
+  try {
+    atomicWriteJsonSync(workspaceConfigBackupPath(path), next);
+  } catch {
+    // Best-effort: the registry itself is already safely on disk, and a
+    // failed snapshot must never turn a successful write into an error.
   }
   return next;
 }
