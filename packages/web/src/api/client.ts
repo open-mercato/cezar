@@ -662,7 +662,10 @@ export async function getGithubSearch(
     await cez.api.v1.p[':projectId'].github.search.$get(
       {
         param: { projectId: queryScope() },
-        query: { kind, q: query, limit: params.limit === undefined ? undefined : String(params.limit) },
+        // The search route validates `limit` with `z.coerce.number()`, so the typed client's
+        // query input is `number | undefined` — pass the number, not a stringified copy (the
+        // `/github` list route below coerces from a bare string, hence the difference).
+        query: { kind, q: query, limit: params.limit },
       },
       init(opts),
     ),
