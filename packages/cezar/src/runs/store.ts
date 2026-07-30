@@ -169,7 +169,7 @@ const runRecordSchema = z.object({
   worktreePath: z.string().optional(),
   /** The task's own branch (`cez/<id8>`), created off `baseBranch`. */
   branch: z.string().optional(),
-  /** Branch (or commit, when HEAD was detached) the worktree was forked from. */
+  /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
   /** Set when count-based retention (#483) reclaimed this run's worktree
    *  *directory* (the `cez/<id8>` branch is kept). Presence means "materialized

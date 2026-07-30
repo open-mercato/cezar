@@ -730,8 +730,8 @@ export function getRunHandoff(id: string, opts?: ReadOptions): Promise<string> {
   return requestText(runPath(id, '/handoff'), { method: 'GET', signal: opts?.signal })
 }
 
-/** The run's structured worktree-vs-base diff (R5): per-file status/±/patch + the aggregate
- *  stat. 409 (as an ApiError with the server's reason) when the run has no worktree. */
+/** The run's structured working-directory-vs-base diff (R5): per-file status/±/patch + the
+ *  aggregate stat. Worktree-off runs read the repo checkout they executed in. */
 export async function getRunChanges(id: string, opts?: ReadOptions): Promise<ChangesPayload> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].changes.$get(

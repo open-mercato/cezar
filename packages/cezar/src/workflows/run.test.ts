@@ -491,6 +491,8 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
     }
 
     const finished = store.getRun(record.id);
+    expect(finished?.worktreePath).toBeUndefined();
+    expect(finished?.baseBranch).toMatch(/^[0-9a-f]{40}$/);
     // Neither step failed or was skipped — the reported bug looked exactly
     // like this from the RunRecord's point of view (both `done`) while the
     // second step's session had done nothing; the assertion below on

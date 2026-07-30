@@ -480,9 +480,9 @@ export function useRunDiff(id: string | undefined) {
   })
 }
 
-/** The structured worktree diff behind the Changes tab (R5). A 409 ("no worktree — …") is a
- *  real answer here, not a network hiccup — retrying cannot change it, so retries are off and
- *  the view renders the server's own reason. */
+/** The structured session diff behind the Changes tab (R5). A 409 (for example, a reclaimed
+ *  worktree whose directory is unavailable) is a real answer, not a network hiccup — retrying
+ *  cannot change it, so retries are off and the view renders the server's own reason. */
 export function useRunChanges(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.changes(id ?? ''),
@@ -528,7 +528,7 @@ export function useGroup(groupId: string | undefined) {
 }
 
 /** A run's commit list (Commits tab). Polls while active so new commits appear as the agent
- *  autosaves. A 409 ("no worktree") is a real answer retries can't change. */
+ *  works. A 409 from an unavailable backing directory is a real answer retries can't change. */
 export function useRunCommits(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.commits(id ?? ''),

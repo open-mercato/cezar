@@ -434,9 +434,16 @@ describe('session git API routes', () => {
   let store: RunStore;
   let app: Hono;
   let run: RunRecord;
+  let repoBaseSha: string;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-gitapi-'));
+    initRepo(repoRoot);
+    writeFileSync(join(repoRoot, '.gitignore'), '.ai/\nwt/\n');
+    writeFileSync(join(repoRoot, 'root-base.txt'), 'base\n');
+    g(repoRoot, 'add', '-A');
+    g(repoRoot, 'commit', '-m', 'root base');
+    repoBaseSha = g(repoRoot, 'rev-parse', 'HEAD').trim();
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     app = createApp({
       repoRoot,
@@ -495,12 +502,41 @@ describe('session git API routes', () => {
     expect(body.repointedHead).toEqual({ headBranch: 'review/pr-42', taskBranch: 'task' });
   });
 
-  it('runs without a worktree get 409 + reason (JSON, never HTML) on every session-git route', async () => {
+  it('runs without a worktree read Changes, Files and Commits from the current checkout', async () => {
     const bare = store.createRun({ title: 'b', workflow: 'quick-task', task: 'b', steps: [] });
+    store.updateRun(bare.id, { baseBranch: repoBaseSha });
+
+    writeFileSync(join(repoRoot, 'committed.txt'), 'session commit\n');
+    g(repoRoot, 'add', 'committed.txt');
+    g(repoRoot, 'commit', '-m', 'session commit');
+    writeFileSync(join(repoRoot, 'untracked.txt'), 'working copy\n');
+
+    const changes = await apiRequest(app, `/api/v1/runs/${bare.id}/changes`);
+    expect(changes.status).toBe(200);
+    const changed = (await changes.json()) as ChangesPayload;
+    expect(changed.files.map((file) => file.path)).toEqual(['committed.txt', 'untracked.txt']);
+    // The read uses a scratch index, so surfacing an untracked file never stages it.
+    expect(g(repoRoot, 'status', '--porcelain', 'untracked.txt').startsWith('??')).toBe(true);
+
+    const files = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=untracked.txt`);
+    expect(files.status).toBe(200);
+    expect((await files.json()) as object).toMatchObject({ type: 'file', content: 'working copy\n' });
+
+    const commits = await apiRequest(app, `/api/v1/runs/${bare.id}/commits`);
+    expect(commits.status).toBe(200);
+    const commitList = (await commits.json()) as { commits: Array<{ sha: string; subject: string }> };
+    expect(commitList.commits).toHaveLength(1);
+    expect(commitList.commits[0]?.subject).toBe('session commit');
+
+    const detail = await apiRequest(app, `/api/v1/runs/${bare.id}/commit/${commitList.commits[0]!.sha}`);
+    expect(detail.status).toBe(200);
+    expect((await detail.json()) as object).toMatchObject({
+      subject: 'session commit',
+      files: [{ path: 'committed.txt', status: 'added' }],
+    });
+
+    // Mutations still require an isolated worktree/branch.
     for (const req of [
-      apiRequest(app, `/api/v1/runs/${bare.id}/changes`),
-      apiRequest(app, `/api/v1/runs/${bare.id}/files`),
-      apiRequest(app, `/api/v1/runs/${bare.id}/commits`),
       commit(bare.id, { message: 'x' }),
       apiRequest(app, `/api/v1/runs/${bare.id}/git/push`, { method: 'POST' }),
     ]) {
