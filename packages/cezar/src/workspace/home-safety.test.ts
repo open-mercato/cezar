@@ -98,22 +98,24 @@ describe('cezar home write safety', () => {
   });
 
   it('survives a real, timing-out suite run: the home registry is never created', () => {
-    // The reproduction from the bug report, run for real: the workspace CLI
-    // suite with a timeout short enough that every case is killed mid-write,
+    // The reproduction from the bug report, run for real: part of the workspace
+    // CLI suite with a timeout short enough that every case is killed mid-write,
     // pointed at a throwaway HOME and started with no CEZ_HOME at all — the way
-    // `npm test` runs on a developer's machine. Before the fix this run left a
-    // `<home>/.cezar/config.json` holding the fixture's projects.
+    // `npm test` runs on a developer's machine. On the code before the fix this
+    // command wrote `<home>/.cezar/config.json` holding the fixture's projects
+    // on 5 runs out of 5; the `remove` cases are the cheapest set that does it
+    // (~1s, against ~40s for the whole file).
     const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
     const vitestBin = join(packageRoot, '..', '..', 'node_modules', '.bin', 'vitest');
     const env = { ...process.env, HOME: fakeUserHome };
     delete env.CEZ_HOME;
     delete env.VITEST;
 
-    const run = spawnSync(vitestBin, ['run', 'src/workspace/projects-cli.test.ts', '--testTimeout=15'], {
-      cwd: packageRoot,
-      env,
-      encoding: 'utf8',
-    });
+    const run = spawnSync(
+      vitestBin,
+      ['run', 'src/workspace/projects-cli.test.ts', '--testTimeout=15', '-t', 'remove'],
+      { cwd: packageRoot, env, encoding: 'utf8' },
+    );
 
     // The nested suite is EXPECTED to fail — 15ms cannot finish a `git init`.
     // What matters is what it left behind outside its sandbox.
