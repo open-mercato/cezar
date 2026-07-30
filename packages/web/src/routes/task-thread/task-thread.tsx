@@ -20,7 +20,7 @@ import { Composer } from '@/components/composer/composer'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
-import { taskPrUrl } from '@/lib/tasks-table'
+import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
@@ -327,6 +327,19 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
                 className="font-medium text-foreground underline-offset-2 hover:underline"
               >
                 PR ↗
+              </a>
+            ) : null}
+            {/* #526: an issue-subject run (om-prepare-issue) links the issue it created — it
+                declares no PR, so without this the created issue was unreachable from the UI. */}
+            {isHttpUrl(taskIssueUrl(run)) ? (
+              <a
+                data-slot="issue-link"
+                href={taskIssueUrl(run)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-foreground underline-offset-2 hover:underline"
+              >
+                Issue ↗
               </a>
             ) : null}
           </div>

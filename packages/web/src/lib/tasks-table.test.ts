@@ -182,6 +182,34 @@ describe('taskPrUrl', () => {
   it('is undefined when the task has no PR association at all', () => {
     expect(taskPrUrl(run())).toBeUndefined()
   })
+
+  it('does not adopt an incidental PR for an issue-subject run that declared no PR (#526)', () => {
+    // om-prepare-issue for #524: CEZ:ISSUE declared, no CEZ:PR — #454 was only incidental
+    // transcript text and must never surface as "the run's PR".
+    const r = run({
+      markerRefs: { issue: 524 },
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+      referencedPrCandidates: ['https://github.com/o/r/pull/454'],
+    })
+    expect(taskPrUrl(r)).toBeUndefined()
+  })
+
+  it('still shows the referenced PR when the run also declared a PR marker (#526)', () => {
+    const r = run({
+      markerRefs: { issue: 524, pr: 454 },
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    expect(taskPrUrl(r)).toBe('https://github.com/o/r/pull/454')
+  })
+
+  it('a created PR always wins, even for an issue-subject run (#526)', () => {
+    const r = run({
+      markerRefs: { issue: 524 },
+      pullRequestUrl: 'https://github.com/o/r/pull/900',
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    expect(taskPrUrl(r)).toBe('https://github.com/o/r/pull/900')
+  })
 })
 
 describe('taskIssueUrl', () => {
@@ -191,8 +219,27 @@ describe('taskIssueUrl', () => {
     )
   })
 
-  it('is undefined when the task has no issue URL association', () => {
+  it('is undefined when the task has no issue URL and no repo to synthesize from', () => {
     expect(taskIssueUrl(run({ issueNumber: 544 }))).toBeUndefined()
+  })
+
+  it('synthesizes the issue link from the CEZ:ISSUE marker + a same-repo URL on the record (#526)', () => {
+    // The om-prepare-issue #524 record: issue known via the marker, but no `…/issues/524`
+    // link was ever scanned. The incidental PR shares the repo, so the issue is reachable.
+    const r = run({
+      markerRefs: { issue: 524 },
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    expect(taskIssueUrl(r)).toBe('https://github.com/o/r/issues/524')
+  })
+
+  it('prefers a real discovered issue URL over the synthesized one (#526)', () => {
+    const r = run({
+      markerRefs: { issue: 524 },
+      referencedIssueUrl: 'https://github.com/o/r/issues/524',
+      referencedPullRequestUrl: 'https://github.com/other/repo/pull/1',
+    })
+    expect(taskIssueUrl(r)).toBe('https://github.com/o/r/issues/524')
   })
 })
 
