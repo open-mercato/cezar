@@ -8,6 +8,11 @@
 #             terminate the healthy server immediately after the script exits.
 #   2026-07-21 start a new session when setsid is available; some task runners reap
 #             every process left in the bootstrap shell's process group despite nohup.
+#   2026-07-30 run npm ci before building and cache-check installed runtime dependencies;
+#             fresh worktrees have no workspace links, so tsc otherwise resolves contract
+#             imports as missing/unknown and a cached build cannot start without node_modules.
+#   2026-07-30 execute the compound preparation chain through sh -c and stop requiring an
+#             api-client dist artifact that this source-aliased workspace does not produce.
 set -eu
 
 # ---- project-specific parameters -------------------------------------------
@@ -30,16 +35,16 @@ HEALTH_PATH="/api/v1/health"
 HEALTH_TIMEOUT=60
 TEST_ENV_CACHE_TTL_SECONDS=${TEST_ENV_CACHE_TTL_SECONDS:-600}
 
-# The preparation chain: api-client `tsc` → packages/api-client/dist, server `tsc` → packages/cezar/dist/,
-# `vite build` → packages/cezar/web/dist/. All three are required — the server serves the React cockpit
-# from packages/cezar/web/dist and falls back to the legacy UI without it, so a missing web build would
-# silently test the wrong page.
-BUILD_COMMAND="npm run build"
-BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/web/dist/index.html packages/api-client/dist/index.js"
+# The preparation chain: install workspace links/dependencies, server `tsc` →
+# packages/cezar/dist/, then `vite build` → packages/cezar/web/dist/. All are required — a
+# fresh worktree has no node_modules, and the server serves the React cockpit from
+# packages/cezar/web/dist (missing it would silently test the fallback hint page).
+BUILD_COMMAND="npm ci && npm run build"
+BUILD_ARTIFACTS="node_modules/zod/package.json packages/cezar/dist/index.js packages/cezar/web/dist/index.html"
 # Fingerprint inputs — a change to any of these invalidates the cached build. Each workspace
 # contributes its own sources AND its own manifest: a dependency moved between packages
 # changes what gets bundled without touching a single source file.
-BUILD_INPUT_PATHS="packages/cezar/src packages/cezar/package.json packages/cezar/tsconfig.json packages/api-client/src packages/api-client/package.json packages/web/src packages/web/index.html packages/web/vite.config.ts packages/web/package.json package.json package-lock.json"
+BUILD_INPUT_PATHS="packages/contract/src packages/contract/package.json packages/cezar/src packages/cezar/package.json packages/cezar/tsconfig.json packages/api-client/src packages/api-client/package.json packages/web/src packages/web/index.html packages/web/vite.config.ts packages/web/package.json package.json package-lock.json"
 
 # CEZ_DRY_RUN=1 swaps the agent CLIs for the bundled mock, so booting needs no
 # `claude` login and reaches no network — the whole point for CI/e2e.
@@ -228,7 +233,7 @@ ensure_build() {
     return 0
   fi
   log "building ($BUILD_COMMAND)"
-  (cd "$REPO_ROOT" && $BUILD_COMMAND >"$QA_DIR/test-env-build.log" 2>&1) || {
+  (cd "$REPO_ROOT" && sh -c "$BUILD_COMMAND" >"$QA_DIR/test-env-build.log" 2>&1) || {
     log "build failed — see .ai/qa/test-env-build.log"
     tail -20 "$QA_DIR/test-env-build.log" >&2 || true
     exit 1
@@ -374,7 +379,7 @@ write_descriptor() {
       testRunner: { name: "other", config: "packages/web/e2e/vitest.config.ts" },
       platform: "wsl2",
       startedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-      notes: "Booted from a production build with CEZ_DRY_RUN=1, so the agent CLIs are mocked and no login/network is needed. No backing services. Stop with .ai/scripts/test-env-down.sh. App log: .ai/qa/test-env-app.log.",
+      notes: "Booted from a production build after npm ci with CEZ_DRY_RUN=1, so workspace links/runtime dependencies are present, the agent CLIs are mocked, and no agent login/network is needed. No backing services. Stop with .ai/scripts/test-env-down.sh. App log: .ai/qa/test-env-app.log.",
     }, null, 2) + "\n");
   ' "$ENV_DESCRIPTOR" "$BASE_URL" "$PORT" "$APP_PID" \
     "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node packages/cezar/dist/index.js --port $PORT --no-open" \
