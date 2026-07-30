@@ -67,8 +67,8 @@ PR: #742
 
 ### Phase 2: Contracts, persistence, and durable accounting
 
-- [ ] 2.1 Extend run contracts and persistence schemas
-- [ ] 2.2 Add durable RunManager usage accounting
+- [x] 2.1 Extend run contracts and persistence schemas — c1345a2c
+- [x] 2.2 Add durable RunManager usage accounting — 38d41d68
 
 ### Phase 3: Capabilities and compatibility documentation
 
