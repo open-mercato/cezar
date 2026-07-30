@@ -56,27 +56,29 @@ Stop a cezar test run from overwriting the developer's real `~/.cezar/config.jso
 
 ## Progress
 
+PR: #731
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: One path per merge-write, and a sandbox guard
 
-- [ ] 1.1 Resolve the workspace config path once per merge-write
-- [ ] 1.2 Refuse vitest writes into the real `~/.cezar`
-- [ ] 1.3 Unit-test the frozen path and the guard
+- [x] 1.1 Resolve the workspace config path once per merge-write — e2817299
+- [x] 1.2 Refuse vitest writes into the real `~/.cezar` — e2817299
+- [x] 1.3 Unit-test the frozen path and the guard — e2817299
 
 ### Phase 2: Keep the suite pinned
 
-- [ ] 2.1 Pin `CEZ_HOME` from a vitest setup file
-- [ ] 2.2 Opt out the tests that assert the unpinned default
+- [x] 2.1 Pin `CEZ_HOME` from a vitest setup file — 4ec1552c
+- [x] 2.2 Opt out the tests that assert the unpinned default — 4ec1552c
 
 ### Phase 3: Registry backup and self-heal
 
-- [ ] 3.1 Snapshot a non-empty registry to `config.json.bak`
-- [ ] 3.2 Restore from the snapshot when the config is missing, empty, or corrupt
-- [ ] 3.3 Unit-test the backup and the restore
+- [x] 3.1 Snapshot a non-empty registry to `config.json.bak` — 613a187d
+- [x] 3.2 Restore from the snapshot when the config is missing, empty, or corrupt — 613a187d
+- [x] 3.3 Unit-test the backup and the restore — 613a187d
 
 ### Phase 4: Regression proof and docs
 
-- [ ] 4.1 In-process regression test for a mid-flight unpin
-- [ ] 4.2 Nested-vitest regression test for a timing-out suite
-- [ ] 4.3 Document the guard and the backup file
+- [x] 4.1 In-process regression test for a mid-flight unpin — 9a2227ea
+- [x] 4.2 Nested-vitest regression test for a timing-out suite — 9a2227ea
+- [x] 4.3 Document the guard and the backup file — 9a2227ea
