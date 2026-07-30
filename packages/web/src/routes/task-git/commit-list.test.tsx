@@ -66,10 +66,23 @@ describe('CommitList', () => {
   })
 
   it('keeps task and repo commit links inside the active project', () => {
-    const repoCommit = commits(1)[0]!
-    const scopedCommits = [
-      repoCommit,
-      { ...repoCommit, sha: 'task-sha', href: '/tasks/run-1/commits/task-sha' },
+    const scopedCommits: CommitListItem[] = [
+      {
+        sha: 'repo-sha',
+        shaLabel: 'repo-sha',
+        subject: 'repo commit',
+        author: 'ada',
+        when: '2h ago',
+        href: '/git/commits/repo-sha',
+      },
+      {
+        sha: 'task-sha',
+        shaLabel: 'task-sha',
+        subject: 'task commit',
+        author: 'ada',
+        when: '2h ago',
+        href: '/tasks/run-1/commits/task-sha',
+      },
     ]
 
     render(
@@ -79,7 +92,7 @@ describe('CommitList', () => {
     )
 
     const links = document.querySelectorAll<HTMLAnchorElement>('[data-slot="commit-row"]')
-    expect(links.item(0).getAttribute('href')).toBe('/p/secondary/git/commits/sha0')
+    expect(links.item(0).getAttribute('href')).toBe('/p/secondary/git/commits/repo-sha')
     expect(links.item(1).getAttribute('href')).toBe('/p/secondary/tasks/run-1/commits/task-sha')
   })
 
