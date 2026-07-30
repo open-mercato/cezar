@@ -8,6 +8,8 @@
 #             terminate the healthy server immediately after the script exits.
 #   2026-07-21 start a new session when setsid is available; some task runners reap
 #             every process left in the bootstrap shell's process group despite nohup.
+#   2026-07-30 stop requiring packages/api-client/dist after the contract-workspace
+#             migration made the client typecheck-only; server + web are the runtime artifacts.
 set -eu
 
 # ---- project-specific parameters -------------------------------------------
@@ -35,7 +37,7 @@ TEST_ENV_CACHE_TTL_SECONDS=${TEST_ENV_CACHE_TTL_SECONDS:-600}
 # from packages/cezar/web/dist and falls back to the legacy UI without it, so a missing web build would
 # silently test the wrong page.
 BUILD_COMMAND="npm run build"
-BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/web/dist/index.html packages/api-client/dist/index.js"
+BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/web/dist/index.html"
 # Fingerprint inputs — a change to any of these invalidates the cached build. Each workspace
 # contributes its own sources AND its own manifest: a dependency moved between packages
 # changes what gets bundled without touching a single source file.
