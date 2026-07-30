@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ProviderAuthService,
   isRuntimeProviderAuthFailure,
+  providerAuthChecksDisabled,
   type ProviderCommandResult,
   type RunProviderCommand,
 } from './provider-auth.ts';
@@ -23,6 +24,7 @@ const connectedResults: Record<string, ProviderCommandResult> = {
 };
 
 const originalEnv = {
+  CEZ_AGENT_MODELS_LOCKED: process.env.CEZ_AGENT_MODELS_LOCKED,
   CEZ_DRY_RUN: process.env.CEZ_DRY_RUN,
   CEZ_CLAUDE_BIN: process.env.CEZ_CLAUDE_BIN,
   CEZ_CODEX_BIN: process.env.CEZ_CODEX_BIN,
@@ -30,6 +32,7 @@ const originalEnv = {
 };
 
 beforeEach(() => {
+  delete process.env.CEZ_AGENT_MODELS_LOCKED;
   delete process.env.CEZ_DRY_RUN;
   delete process.env.CEZ_CLAUDE_BIN;
   delete process.env.CEZ_CODEX_BIN;
@@ -649,6 +652,33 @@ describe('ProviderAuthService', () => {
     expect(createAuthFailureId).not.toHaveBeenCalled();
     await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'connected' } });
   });
+
+  it('keeps exact CEZ_AGENT_MODELS_LOCKED=1 connected without credential probes or runtime invalidation', async () => {
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    const runCommand = runner();
+    const createAuthFailureId = vi.fn(() => 'unused-incident');
+    const service = new ProviderAuthService({ runCommand, createAuthFailureId });
+
+    expect(providerAuthChecksDisabled()).toBe(true);
+    expect(service.reportRuntimeAuthFailure('claude')).toBeNull();
+    await expect(service.status({ refresh: true })).resolves.toEqual({
+      providers: [
+        { provider: 'claude', status: 'connected' },
+        { provider: 'codex', status: 'connected' },
+        { provider: 'opencode', status: 'connected' },
+      ],
+    });
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(createAuthFailureId).not.toHaveBeenCalled();
+  });
+
+  it.each(['0', 'true', 'yes', ''])(
+    'does not disable provider checks for CEZ_AGENT_MODELS_LOCKED=%j',
+    (value) => {
+      process.env.CEZ_AGENT_MODELS_LOCKED = value;
+      expect(providerAuthChecksDisabled()).toBe(false);
+    },
+  );
 
   it('coalesces ordinary and refresh callers while a probe is in flight', async () => {
     let release!: () => void;

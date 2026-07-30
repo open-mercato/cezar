@@ -32,6 +32,7 @@ import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
+  providerAuthChecksDisabled,
   type ProviderId,
   type ProviderStatusResponse,
 } from '../core/provider-auth.ts';
@@ -987,6 +988,12 @@ export function createApp(deps: ServerDeps) {
     mergeWrite: mergeWriteWorkspaceConfig,
   };
   const providerStatus = async (options?: { refresh?: boolean }): Promise<ProviderStatusResponse> => {
+    if (providerAuthChecksDisabled()) {
+      return applyProviderEnablement(
+        await providerAuth.status(options?.refresh ? { refresh: true } : undefined),
+        [],
+      );
+    }
     const [discovered, workspace] = await Promise.all([
       providerAuth.status(options?.refresh ? { refresh: true } : undefined),
       workspaceConfig.load(),

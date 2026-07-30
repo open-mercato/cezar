@@ -45,6 +45,7 @@ describe('provider action gating', () => {
   let startRun: ReturnType<typeof vi.fn>;
   let sendMessage: ReturnType<typeof vi.fn>;
   let continueRun: ReturnType<typeof vi.fn>;
+  const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
 
@@ -75,6 +76,7 @@ describe('provider action gating', () => {
   };
 
   beforeEach(() => {
+    delete process.env.CEZ_AGENT_MODELS_LOCKED;
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_FOLLOWUPS = '1';
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-provider-action-gating-'));
@@ -97,6 +99,8 @@ describe('provider action gating', () => {
   afterEach(() => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    if (savedModelsLocked === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+    else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedFollowups === undefined) delete process.env.CEZ_FOLLOWUPS;
@@ -121,6 +125,25 @@ describe('provider action gating', () => {
 
     await expectDisabled(response);
     expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it('keeps every runner selectable under the explicit model lock despite provider preferences', async () => {
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    const response = await apiRequest(app, '/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        task: 'Task',
+        runner: 'codex',
+        steps: [{ id: 'task', prompt: '{{task}}' }],
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(startRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ runner: 'codex', model: undefined }),
+    );
   });
 
   it('blocks a mixed inline workflow when one agent step uses a disabled provider', async () => {
