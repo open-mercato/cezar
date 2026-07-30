@@ -150,6 +150,14 @@ export type UiState = z.infer<typeof uiStateSchema>;
  * SHALLOWLY at the top level server-side, so a writer must send the whole `sidebar` object (or the
  * whole `importedSkills` array), never a leaf.
  */
+export const workspaceLastLocationSchema = z.strictObject({
+  projectId: z.string().min(1).max(64),
+  pathname: z.string().min(1).max(2048).startsWith('/p/'),
+  search: z.string().max(4096).startsWith('?').optional(),
+  hash: z.string().max(2048).startsWith('#').optional(),
+});
+export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
+
 export const workspaceUiStateSchema = z.looseObject({
   /** The sidebar's per-project collapse map (step 3.3) — `true` collapses a group, `false` pins
    *  it open, absent means the default (the active project expands, the rest collapse). Loose for
@@ -173,6 +181,9 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Settings → Notifications, GLOBAL since step 3.5 — one answer for the whole workspace, since
    *  the delivering browser is one browser whichever project you are looking at. */
   notifications: z.looseObject({ enabled: z.boolean().optional() }).optional(),
+  /** Last settled project-scoped page. Used only when entering at the exact bare root;
+   *  explicit deep links always win. */
+  lastLocation: workspaceLastLocationSchema.optional(),
   /** The user's curated selection of default (vendor) skills. Tri-state: ABSENT means "not
    *  curated", so every default skill shows; a PRESENT array (even `[]`) means only those names
    *  show from that repo. */

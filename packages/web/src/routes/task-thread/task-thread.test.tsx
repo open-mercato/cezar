@@ -4,8 +4,16 @@ import type { ReactElement } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ProjectScopeProvider } from '@/api/project-scope-context'
+import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
-import type { ApiRun, ProviderStatusResponse, RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
+import type {
+  ApiRun,
+  HealthResponse,
+  ProviderStatusResponse,
+  RunEvent,
+  RunStatus,
+} from '@open-mercato/cezar-api-client'
 
 import { buildThreadRows, TaskThreadRoute, ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
@@ -17,7 +25,10 @@ afterEach(() => {
 
 /** ThreadView now hosts the run header, whose hooks need a query client (mutations, the runs
  *  list) and a router (tabs, delete-navigates-home). Data assertions still drive the reduced
- *  fixture states directly — the providers are plumbing, not fixtures. */
+ *  fixture states directly — the providers are plumbing, not fixtures.
+ *
+ *  `health` is served on `/api/v1/health`: the footer's issue link is synthesized against the
+ *  project's own repo remote (#526), so a test that wants one must say which repo this is. */
 function renderView(
   ui: ReactElement,
   providerStatus: ProviderStatusResponse = {
@@ -27,14 +38,16 @@ function renderView(
       { provider: 'opencode', status: 'not-installed', enabled: true },
     ],
   },
+  health: Partial<HealthResponse> = {},
 ) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
+      const path = String(input)
       const body =
-        String(input) === '/api/v1/providers/status'
-          ? providerStatus
-          : []
+        path === '/api/v1/providers/status' ? providerStatus
+        : path === '/api/v1/health' ? health
+        : []
       return Promise.resolve(
         new Response(JSON.stringify(body), {
           status: 200,
@@ -43,11 +56,17 @@ function renderView(
       )
     }),
   )
-  return render(
-    <QueryClientProvider client={createQueryClient()}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-  )
+  // The client is handed back so a test can await a specific query landing in the cache —
+  // the only honest barrier for asserting that something is absent *after* data arrived.
+  const queryClient = createQueryClient()
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>{ui}</MemoryRouter>
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  }
 }
 
 const run = (status: RunStatus, extra: Partial<ApiRun> = {}): ApiRun =>
@@ -95,6 +114,21 @@ describe('ThreadView', () => {
     expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
       '/settings/agents#providers',
     )
+  })
+
+  it('an issue-subject closed run links its DISCOVERED issue URL, never the incidental PR (#526)', () => {
+    const issueRun = run('done', {
+      markerRefs: { issue: 524 },
+      referencedIssueUrl: 'https://github.com/o/r/issues/524',
+      // An unrelated PR that only appeared in the transcript — it must not surface.
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    renderView(<ThreadView run={issueRun} thread={reduceThread([line(1, 'done')])} />)
+
+    const issueLink = document.querySelector('[data-slot="issue-link"]')
+    expect(issueLink?.getAttribute('href')).toBe('https://github.com/o/r/issues/524')
+    // Defect B: the incidental PR is not linked in the footer.
+    expect(document.querySelector('[data-slot="thread-footer"] [data-slot="pr-link"]')).toBeNull()
   })
 
   it('renders the task as the leading user bubble and the v1 reply as another', () => {
@@ -546,6 +580,89 @@ describe('ThreadView', () => {
     const footer = document.querySelector('[data-slot="thread-footer"]')
     expect(footer?.textContent).toBe('Session failed — checks failed')
     expect(footer?.className).toContain('text-danger')
+  })
+
+  /**
+   * #526 at the surface the user actually reported: run `6ab44452` (`om-prepare-issue`) created
+   * issue #524, declared `CEZ:ISSUE` and no `CEZ:PR`, and had one incidental PR (#454) scraped
+   * out of its duplicate-search output. The footer linked #454 and never linked #524. Asserting
+   * on the rendered anchors — not just the helpers — is what makes deleting or miswiring the
+   * JSX fail.
+   */
+  it('an issue-subject closed run SYNTHESIZES its issue link from the project repo (#526)', async () => {
+    renderView(
+      <ThreadView
+        run={run('done', {
+          issueNumber: 524,
+          markerRefs: { issue: 524 },
+          referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/454',
+          referencedPrCandidates: ['https://github.com/open-mercato/cezar/pull/454'],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+      undefined,
+      { repo: { root: '/repo', branch: 'main', remote: 'git@github.com:open-mercato/cezar.git' } },
+    )
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="issue-link"]')).not.toBeNull()
+    })
+    const footer = document.querySelector('[data-slot="thread-footer"]')
+    expect(footer?.querySelector('[data-slot="issue-link"]')?.getAttribute('href')).toBe(
+      'https://github.com/open-mercato/cezar/issues/524',
+    )
+    expect(footer?.querySelector('[data-slot="issue-link"]')?.textContent).toContain('Issue')
+    expect(footer?.querySelector('[data-slot="pr-link"]')).toBeNull()
+  })
+
+  /**
+   * `/health` is workspace-level — the server builds it from the BOOT project's root whatever
+   * the URL is scoped to. So a task belonging to another registered project must synthesize
+   * nothing: a link built from the boot project's remote would name a completely different
+   * repository, which is #526's defect wearing a different hat.
+   */
+  it('a task in a non-boot project synthesizes no issue link — health names the wrong repo (#526)', async () => {
+    const issueRun = run('done', { markerRefs: { issue: 524 } })
+    const health = {
+      bootProject: 'cezar',
+      repo: { root: '/repo', branch: 'main', remote: 'git@github.com:open-mercato/cezar.git' },
+    }
+
+    // Control — unscoped IS the boot project, so health's remote really is this task's repo.
+    renderView(<ThreadView run={issueRun} thread={reduceThread(EVENTS)} />, undefined, health)
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="issue-link"]')?.getAttribute('href')).toBe(
+        'https://github.com/open-mercato/cezar/issues/524',
+      )
+    })
+    cleanup()
+
+    // Scoped to a DIFFERENT registered project: same health, and the link must stay away.
+    const { queryClient } = renderView(
+      <ProjectScopeProvider projectId="other-project">
+        <ThreadView run={issueRun} thread={reduceThread(EVENTS)} />
+      </ProjectScopeProvider>,
+      undefined,
+      health,
+    )
+    // Health HAS arrived under this scope — the missing link is a refusal, not a slow render.
+    await waitFor(() => expect(queryClient.getQueryData(queryKeys.health)).toBeDefined())
+    expect(document.querySelector('[data-slot="issue-link"]')).toBeNull()
+  })
+
+  it('a PR-subject closed run still gets its PR link and no invented issue link (#526)', () => {
+    renderView(
+      <ThreadView
+        run={run('done', { pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/900' })}
+        thread={reduceThread(EVENTS)}
+      />,
+      undefined,
+      { repo: { root: '/repo', branch: 'main', remote: 'git@github.com:open-mercato/cezar.git' } },
+    )
+    const footer = document.querySelector('[data-slot="thread-footer"]')
+    expect(footer?.querySelector('[data-slot="pr-link"]')?.getAttribute('href')).toBe(
+      'https://github.com/open-mercato/cezar/pull/900',
+    )
+    expect(footer?.querySelector('[data-slot="issue-link"]')).toBeNull()
   })
 
   it('running → no footer (the stream itself is the status), and no invented empty state', () => {

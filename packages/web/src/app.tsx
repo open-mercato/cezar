@@ -6,6 +6,7 @@ import { GlobalEventsProvider } from './api/global-events'
 import { createQueryClient } from './api/query-client'
 import { AppShellContainer } from './components/app-shell-container'
 import { AppearanceProvider } from './components/appearance-provider'
+import { LastLocationController } from './components/last-location-controller'
 import { RunNotifications } from './components/run-notifications'
 import { ThemeProvider } from './components/theme-provider'
 import { Toaster } from './components/ui/toaster'
@@ -41,6 +42,7 @@ export function App() {
               half of the same boot contract — mirror pre-paints, server truth reconciles. */}
           <AppearanceProvider>
             <BrowserRouter>
+              <LastLocationController />
               <AppShellContainer>
                 <AppRoutes />
               </AppShellContainer>

@@ -58,6 +58,8 @@ import {
   retryProviderAuth,
 } from './client'
 import { queryScope } from '@open-mercato/cezar-api-client'
+import { useProjectScope } from './project-scope-context'
+import { githubRepoBase } from '@/lib/tasks-table'
 import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
@@ -418,6 +420,25 @@ export function useHealth() {
     queryKey: queryKeys.health,
     queryFn: ({ signal }) => getHealth({ signal }),
   })
+}
+
+/**
+ * The GitHub web root (`https://github.com/owner/repo`) of the project currently on screen, or
+ * undefined when it cannot be proven — the only authority `taskIssueUrl` may synthesize a link
+ * against (#526).
+ *
+ * The boot-project guard is the load-bearing part. `/health` is WORKSPACE-level (project-scope.ts
+ * `WORKSPACE_LEVEL`): the server always builds it from `bootRoot`, so its `repo.remote` names the
+ * project cezar launched in, whichever project the URL is scoped to. Handing a non-boot project's
+ * task a link built from the boot project's repo would point at a completely different repository
+ * — the same wrong-link defect #526 exists to kill. Until a per-project remote is served, a
+ * scoped view synthesizes nothing.
+ */
+export function useProjectRepoBase(): string | undefined {
+  const health = useHealth().data
+  const { projectId } = useProjectScope()
+  const isBootProject = projectId === null || projectId === health?.bootProject
+  return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
 }
 
 /** The local "Open in…" targets (#open-in). Machine-level and stable, so it caches broadly;

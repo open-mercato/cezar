@@ -25,7 +25,7 @@ import {
   normalizePromptTemplates,
   type PromptTemplate,
 } from '@/lib/prompt-templates'
-import { isProjectSkill, multiWordFilter, partitionSkillsForDisplay, skillKeywords } from '@/lib/skills'
+import { isProjectSkill, partitionSkillsForDisplay, searchSkills, skillKeywords } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
 /**
@@ -290,9 +290,13 @@ function TemplateSkillsPicker({
   onToggle: (name: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
-  // The #519 display tiers — the same most-used → project → global order every picker renders.
-  const { mostUsed, project, global } = partitionSkillsForDisplay(skills, skillUsage)
+  // #668: rank the full catalog in JS first, then split into the #519 tiers — otherwise the
+  // Most used tier is built from the unfiltered set and survives a query (cmdk's own sort is
+  // unreliable here, so we drive the filter ourselves like the other pickers).
+  const matched = searchSkills(skills, search, skillUsage)
+  const { mostUsed, project, global } = partitionSkillsForDisplay(matched, skillUsage)
 
   const skillItem = (skill: Skill, emphasized: boolean) => {
     const isSelected = selected.includes(skill.name)
@@ -323,7 +327,13 @@ function TemplateSkillsPicker({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setSearch('')
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -342,14 +352,21 @@ function TemplateSkillsPicker({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">
-        <Command filter={multiWordFilter}>
-          <CommandInput placeholder="search skills…" onInput={() => listRef.current?.scrollTo(0, 0)} />
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="search skills…"
+            value={search}
+            onValueChange={setSearch}
+            onInput={() => listRef.current?.scrollTo(0, 0)}
+          />
           <CommandList
             ref={listRef}
             data-slot="prompt-template-skill-menu"
             className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]"
           >
-            <CommandEmpty>Nothing matches.</CommandEmpty>
+            {mostUsed.length === 0 && project.length === 0 && global.length === 0 ? (
+              <CommandEmpty>Nothing matches.</CommandEmpty>
+            ) : null}
             {mostUsed.length > 0 ? (
               <CommandGroup heading="Most used">
                 {mostUsed.map((skill) => skillItem(skill, isProjectSkill(skill)))}

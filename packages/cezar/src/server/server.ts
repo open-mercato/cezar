@@ -575,6 +575,15 @@ const workspaceUiStateSchema = z
     appearance: appearanceSchema.optional(),
     notifications: z.object({ enabled: z.boolean().optional() }).passthrough().optional(),
     dismissedProviderAuthFailures: providerAuthDismissalsSchema.optional(),
+    lastLocation: z
+      .object({
+        projectId: z.string().min(1).max(64),
+        pathname: z.string().min(1).max(2048).startsWith('/p/'),
+        search: z.string().max(4096).startsWith('?').optional(),
+        hash: z.string().max(2048).startsWith('#').optional(),
+      })
+      .strict()
+      .optional(),
     // Sidebar per-project collapse map, keyed by project id (slug ≤ 64 chars).
     // Entry-capped like `skillUsage`: the map is written straight to a file the
     // cockpit GETs on every load, so it must stay bounded on every axis.
