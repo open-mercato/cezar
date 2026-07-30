@@ -3465,7 +3465,7 @@ export function createApp(deps: ServerDeps) {
   const worktreeOf = (run: RunRecord): string | null =>
     run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : null;
   const workingDirectoryOf = (run: RunRecord, repoRoot: string): string | null =>
-    run.worktreePath === undefined
+    run.worktree === false
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';

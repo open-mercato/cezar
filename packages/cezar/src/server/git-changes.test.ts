@@ -503,7 +503,13 @@ describe('session git API routes', () => {
   });
 
   it('runs without a worktree read Changes, Files and Commits from the current checkout', async () => {
-    const bare = store.createRun({ title: 'b', workflow: 'quick-task', task: 'b', steps: [] });
+    const bare = store.createRun({
+      title: 'b',
+      workflow: 'quick-task',
+      task: 'b',
+      worktree: false,
+      steps: [],
+    });
     store.updateRun(bare.id, { baseBranch: repoBaseSha });
 
     writeFileSync(join(repoRoot, 'committed.txt'), 'session commit\n');
@@ -526,9 +532,11 @@ describe('session git API routes', () => {
     expect(commits.status).toBe(200);
     const commitList = (await commits.json()) as { commits: Array<{ sha: string; subject: string }> };
     expect(commitList.commits).toHaveLength(1);
-    expect(commitList.commits[0]?.subject).toBe('session commit');
+    const sessionCommit = commitList.commits[0];
+    expect(sessionCommit?.subject).toBe('session commit');
+    if (!sessionCommit) throw new Error('expected the session commit');
 
-    const detail = await apiRequest(app, `/api/v1/runs/${bare.id}/commit/${commitList.commits[0]!.sha}`);
+    const detail = await apiRequest(app, `/api/v1/runs/${bare.id}/commit/${sessionCommit.sha}`);
     expect(detail.status).toBe(200);
     expect((await detail.json()) as object).toMatchObject({
       subject: 'session commit',
@@ -539,6 +547,27 @@ describe('session git API routes', () => {
     for (const req of [
       commit(bare.id, { message: 'x' }),
       apiRequest(app, `/api/v1/runs/${bare.id}/git/push`, { method: 'POST' }),
+    ]) {
+      const res = await req;
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toContain('no worktree');
+    }
+  });
+
+  it('runs whose isolated worktree was removed never fall through to the current checkout', async () => {
+    const removed = store.createRun({ title: 'removed', workflow: 'quick-task', task: 'removed', steps: [] });
+    store.updateRun(removed.id, {
+      worktreePath: join(repoRoot, 'removed-worktree'),
+      branch: 'cez/removed',
+      baseBranch: repoBaseSha,
+    });
+    store.updateRun(removed.id, { worktreePath: undefined, branch: undefined });
+
+    for (const req of [
+      apiRequest(app, `/api/v1/runs/${removed.id}/changes`),
+      apiRequest(app, `/api/v1/runs/${removed.id}/files`),
+      apiRequest(app, `/api/v1/runs/${removed.id}/commits`),
+      apiRequest(app, `/api/v1/runs/${removed.id}/commit/${repoBaseSha}`),
     ]) {
       const res = await req;
       expect(res.status).toBe(409);

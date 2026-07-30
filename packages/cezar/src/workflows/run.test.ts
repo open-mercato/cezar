@@ -48,6 +48,31 @@ describe('appendTurnText', () => {
   });
 });
 
+it('parallel variants ignore a worktree opt-out and retain isolated mode', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'cez-variant-isolation-'));
+  const store = RunStore.open(join(repoRoot, '.ai/cezar'));
+  try {
+    const manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    const records = manager.startVariants(
+      {
+        name: 'quick-task',
+        description: 'x',
+        source: 'built-in',
+        steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
+      },
+      { task: 'compare approaches', worktree: false },
+      2,
+    );
+
+    expect(records.map((record) => record.worktree)).toEqual([undefined, undefined]);
+  } finally {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 /**
  * Turn-end bookkeeping (#389, task auto-naming spec) against a REAL fixture
  * repo: `recordTurnEnd` is the exact method both agent-event paths fire on
@@ -491,6 +516,7 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
     }
 
     const finished = store.getRun(record.id);
+    expect(finished?.worktree).toBe(false);
     expect(finished?.worktreePath).toBeUndefined();
     expect(finished?.baseBranch).toMatch(/^[0-9a-f]{40}$/);
     // Neither step failed or was skipped — the reported bug looked exactly
