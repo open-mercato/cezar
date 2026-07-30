@@ -384,9 +384,20 @@ class CodexSession implements AgentSession {
     this.rpc.respond({ id: pending.rpcId, error: { code: -32000, message } });
   }
 
+  /** True when a turn notification belongs to a sub-agent CHILD thread rather than this run's
+   *  own main thread — its lifecycle must not start or end the parent turn (#600). The app-server
+   *  multiplexes every thread over one connection, so a spawned skill's child `turn/completed`
+   *  would otherwise emit a `turn-end` and park the actively-working run under "Needs you".
+   *  Fail-open: an absent `threadId` (the single-thread wire shape) or our own id counts as ours. */
+  private isForeignThreadTurn(params: Record<string, unknown>): boolean {
+    const eventThreadId = stringField(params, 'threadId');
+    return !!eventThreadId && !!this.threadId && eventThreadId !== this.threadId;
+  }
+
   private handleNotification(method: string, params: Record<string, unknown>): void {
     switch (method) {
       case 'turn/started': {
+        if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
         break;
       }
@@ -434,6 +445,7 @@ class CodexSession implements AgentSession {
       }
       case 'turn/completed':
       case 'turn/failed': {
+        if (this.isForeignThreadTurn(params)) break; // don't end the parent turn on a child turn (#600)
         this.pendingUserInput = undefined;
         this.activeTurnId = undefined;
         // An interrupted/failed item never sees item/completed — surface its
