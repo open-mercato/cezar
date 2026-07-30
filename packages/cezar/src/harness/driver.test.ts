@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadLedger, saveLedger, createLedger, startPhase, finishPhase } from './ledger.js';
 import { HARNESS_FIX_ISSUE, HARNESS_IMPLEMENT_FEATURE } from './workflows.js';
 import {
+  harnessAgentOutputDir,
   harnessArtifactDir,
   runHarnessDriver,
   snapshotHarnessReviewSubject,
@@ -707,7 +708,7 @@ describe('harness driver — standard fix-issue graph', () => {
       error: expect.stringContaining('ended without a valid result file'),
     });
     const resultPath = join(
-      harnessArtifactDir(h.host.dataDir, h.host.runId),
+      harnessAgentOutputDir(h.host.dataDir, h.host.runId),
       'phase-qualify-result.json',
     );
     writeFileSync(
@@ -772,7 +773,7 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(ledger?.stage.status).toBe('staged');
   });
 
-  it('preserves a contested reviewed handoff when the fix budget is exhausted', async () => {
+  it('applies the third code-review cycle findings before staging', async () => {
     const h = makeHarness(dir);
     h.agentBehavior.set('review', (req) => {
       writeFileSync(
@@ -782,7 +783,7 @@ describe('harness driver — standard fix-issue graph', () => {
       );
       return null;
     });
-    for (const id of ['fix-2', 'fix-3']) {
+    for (const id of ['fix-2', 'fix-3', 'fix-final']) {
       h.agentBehavior.set(id, (req) => {
         writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/runs/store.ts'] }), 'utf8');
         return null;
@@ -791,14 +792,14 @@ describe('harness driver — standard fix-issue graph', () => {
     const error = await runHarnessDriver(h.host, input, h.deps);
     expect(error).toBeNull();
     expect(h.calls.filter((c) => c.id.startsWith('review'))).toHaveLength(3);
-    expect(h.calls.map((c) => c.id)).not.toContain('fix-final');
+    expect(h.calls.map((c) => c.id)).toContain('fix-final');
     expect(h.calls.map((c) => c.id)).toContain('stage');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
-    expect(notes.some((n) => n.includes('review budget exhausted') && n.includes('still broken'))).toBe(true);
+    expect(notes.some((n) => n.includes('applying its confirmed findings'))).toBe(true);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
-    expect(ledger?.outcome.status).toBe('contested');
-    expect(ledger?.stage.prBody).toContain('still broken');
-    expect(ledger?.decisions.some((d) => d.kind === 'review.closing-fixes')).toBe(false);
+    expect(ledger?.outcome.status).toBe('ready');
+    expect(ledger?.stage.prBody).not.toContain('still broken');
+    expect(ledger?.decisions.some((d) => d.kind === 'review.closing-fixes')).toBe(true);
   });
 
   /**
@@ -829,7 +830,7 @@ describe('harness driver — standard fix-issue graph', () => {
       );
       return null;
     });
-    for (const id of ['fix-2', 'fix-3', 'fix-4']) {
+    for (const id of ['fix-2', 'fix-3', 'fix-4', 'fix-final']) {
       h.agentBehavior.set(id, (req) => {
         writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/runs/store.ts'] }), 'utf8');
         return null;
@@ -953,7 +954,7 @@ describe('harness driver — standard fix-issue graph', () => {
    * outcome was recorded. The verdict is derived from the findings now, exactly
    * as the vendored runtime already did for advisor reviews.
    */
-  it('coerces a self-contradicting "approve" and never stages blockers as ready', async () => {
+  it('coerces a self-contradicting "approve" and applies its third-cycle findings', async () => {
     const h = makeHarness(dir);
     h.agentBehavior.set('review', (req) => {
       writeFileSync(
@@ -966,7 +967,7 @@ describe('harness driver — standard fix-issue graph', () => {
       );
       return null;
     });
-    for (const id of ['fix-2', 'fix-3']) {
+    for (const id of ['fix-2', 'fix-3', 'fix-final']) {
       h.agentBehavior.set(id, (req) => {
         writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/runs/store.ts'] }), 'utf8');
         return null;
@@ -978,11 +979,11 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(error).toBeNull();
     expect(h.calls.filter((c) => c.id.startsWith('review')).length).toBeGreaterThan(1);
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
-    // The coercion forces the full reviewed fix loop; unresolved findings
-    // remain contested instead of being cleared by an unreviewed final pass.
-    expect(h.calls.map((c) => c.id)).not.toContain('fix-final');
-    expect(ledger?.outcome.status).toBe('contested');
-    expect(ledger?.stage.prBody).toContain('Auth check removed');
+    // The coercion forces all three review-and-repair cycles, including the
+    // scheduled closing repair for the third review's confirmed findings.
+    expect(h.calls.map((c) => c.id)).toContain('fix-final');
+    expect(ledger?.outcome.status).toBe('ready');
+    expect(ledger?.stage.prBody).not.toContain('Auth check removed');
     const notes = h.events.filter((e) => e.type === 'note').map((e) => String(e.message));
     expect(notes.some((n) => n.includes('coerced to "request_changes"'))).toBe(true);
   });
@@ -1620,7 +1621,7 @@ describe('harness driver — standard fix-issue graph', () => {
     expect(await runHarnessDriver(first.host, input, first.deps)).toBeNull();
 
     const qualifyPath = join(
-      harnessArtifactDir(first.host.dataDir, first.host.runId),
+      harnessAgentOutputDir(first.host.dataDir, first.host.runId),
       'phase-qualify-result.json',
     );
     writeFileSync(
@@ -2504,19 +2505,19 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
   });
 
   /**
-   * Regression: three rounds of genuine spec revision were discarded because
-   * one reviewer raised three fresh majors every round and would never sign
-   * off. Delivery is stage-only — the human is the final gate — so a
-   * non-converging council must hand over the work, not delete it.
+   * Regression (run 475853b0): round three was treated as a terminal verdict,
+   * so Cezar paid to discover factual spec defects and then refused to schedule
+   * the corresponding repair. The budget is three audit-and-repair cycles:
+   * findings from audit three must reach spec-4, with no fourth audit.
    */
-  it('stages the work when the council will not converge, naming what is unresolved', async () => {
+  it('applies the third pre-implementation council findings before implementation', async () => {
     const h = makeHarness(dir);
     let round = 0;
     h.setCouncilBehavior((ids) => {
       round += 1;
-      // Rounds 1–3 are the spec council refusing to converge; anything after is
-      // the implementation review, which approves so the run reaches staging.
-      const stillObjecting = round <= 3;
+      // Calls 1–3 are spec audits and calls 4–6 are implementation reviews.
+      // Every paid review cycle objects, so both terminal repairs must run.
+      const stillObjecting = round <= 6;
       return {
         ok: true,
         result: {
@@ -2561,6 +2562,24 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       );
       return null;
     });
+    h.agentBehavior.set('spec-4', (req) => {
+      writeFileSync(
+        req.resultPath,
+        JSON.stringify({ summary: 's4', specPath: '.ai/specs/feat.md', files: [] }),
+        'utf8',
+      );
+      return null;
+    });
+    for (const id of ['fix-2', 'fix-3', 'fix-final']) {
+      h.agentBehavior.set(id, (req) => {
+        writeFileSync(
+          req.resultPath,
+          JSON.stringify({ changedPaths: ['src/a.ts'], summary: `${id} applied` }),
+          'utf8',
+        );
+        return null;
+      });
+    }
 
     const error = await runHarnessDriver(
       h.host,
@@ -2568,16 +2587,21 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       h.deps,
     );
 
-    expect(error).toMatch(/explicit acceptance is required/);
-    expect(h.calls.map((c) => c.id)).not.toContain('implement');
-    expect(h.calls.map((c) => c.id)).not.toContain('stage');
+    expect(error).toBeNull();
+    expect(h.calls.filter((c) => c.id.startsWith('spec-review'))).toHaveLength(3);
+    expect(h.calls.map((c) => c.id)).toContain('spec-4');
+    expect(h.calls.map((c) => c.id)).toContain('implement');
+    expect(
+      h.calls.filter((c) => c.kind === 'agent' && /^review(?:-\d+)?$/.test(c.id)),
+    ).toHaveLength(3);
+    expect(h.calls.map((c) => c.id)).toContain('fix-final');
+    expect(h.calls.find((c) => c.id === 'fix-final')?.skill).toBe('om-implement-spec');
+    expect(h.calls.map((c) => c.id)).toContain('stage');
     const ledger = loadLedger(h.host.dataDir, h.host.runId);
-    expect(ledger?.outcome.status).toBe('contested');
-    expect(ledger?.outcome.pendingDecision).toMatchObject({
-      kind: 'spec',
-      gate: 'council',
-      round: 3,
-    });
+    expect(ledger?.outcome.status).toBe('ready');
+    expect(ledger?.decisions).toContainEqual(
+      expect.objectContaining({ kind: 'spec.closing-fixes', detail: 'round:3' }),
+    );
   });
 
   it('does not retry a timeout on the session path — a spent budget is not bought twice', async () => {
@@ -2604,6 +2628,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
   it('tells every phase session it is non-interactive and must not ask', async () => {
     const h = makeHarness(dir);
     let specPrompt = '';
+    let specReviewPrompt = '';
     h.agentBehavior.set('spec', (req) => {
       specPrompt = req.prompt;
       writeFileSync(
@@ -2612,6 +2637,11 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
         'utf8',
       );
       writeFileSync(join(dir, '.ai', 'specs', 'f.md'), '# spec\n', 'utf8');
+      return null;
+    });
+    h.agentBehavior.set('spec-review', (req) => {
+      specReviewPrompt = req.prompt;
+      writeFileSync(req.resultPath, JSON.stringify({ verdict: 'approve', findings: [] }), 'utf8');
       return null;
     });
     h.agentBehavior.set('review', (req) => {
@@ -2624,6 +2654,13 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(specPrompt).toContain('NON-INTERACTIVE');
     expect(specPrompt).toContain('never emit CEZ:ASK');
     expect(specPrompt).toContain('record each question and the assumption');
+    for (const prompt of [specPrompt, specReviewPrompt]) {
+      expect(prompt).toContain(`Active repository root: ${dir}`);
+      expect(prompt).toContain('Use repo-relative paths from this directory');
+      expect(prompt).toContain('never derive a sibling path or append "-harness"');
+      expect(prompt).toContain('already injected in your system instructions');
+      expect(prompt).toContain('do not invoke the Skill tool or read a SKILL.md file');
+    }
   });
 
   it('carries the spec author\'s recorded assumptions to the run log and the reviewer', async () => {
@@ -3156,7 +3193,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(h.calls.map((c) => c.id)).not.toContain('stage');
   });
 
-  it('feature runs hold a spec council (≤3 rounds) before implementation — parity with the upstream multi wrapper', async () => {
+  it('feature runs use pre-implementation councils before implementation', async () => {
     const h = makeHarness(dir);
     bindKimi(h);
     h.agentBehavior.set('spec', (req) => {
@@ -3221,8 +3258,13 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     const error = await runHarnessDriver(h.host, featureInput, h.deps);
     expect(error).toBeNull();
     const phaseOrder = h.calls.map((call) => call.id);
-    expect(phaseOrder.indexOf('pre-implement')).toBeGreaterThan(phaseOrder.indexOf('spec-review-2'));
-    expect(phaseOrder.indexOf('implement')).toBeGreaterThan(phaseOrder.indexOf('pre-implement'));
+    const specReviewCalls = h.calls.filter(
+      (call) => call.kind === 'agent' && call.id.startsWith('spec-review'),
+    );
+    expect(phaseOrder).not.toContain('pre-implement');
+    expect(phaseOrder.indexOf('implement')).toBeGreaterThan(phaseOrder.indexOf('spec-review-2'));
+    expect(specReviewCalls).toHaveLength(2);
+    expect(specReviewCalls.every((call) => call.skill === 'om-pre-implement-spec')).toBe(true);
     expect(
       new Set(
         h.calls
@@ -3255,7 +3297,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     ]);
   });
 
-  it('pauses before implementation when the pre-implementation audit is blocked', async () => {
+  it('keeps the standalone pre-implementation gate for non-council workflows', async () => {
     const h = makeHarness(dir);
     h.agentBehavior.set('spec', (req) => {
       mkdirSync(join(dir, '.ai', 'specs'), { recursive: true });
@@ -3291,7 +3333,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
     const error = await runHarnessDriver(
       h.host,
-      { ...input, workflow: HARNESS_IMPLEMENT_FEATURE },
+      { ...input, workflow: HARNESS_IMPLEMENT_FEATURE, roles: undefined },
       h.deps,
     );
 

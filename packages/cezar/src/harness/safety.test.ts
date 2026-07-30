@@ -1,5 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -87,25 +94,33 @@ describe('harness safety primitives', () => {
     expect(acquireIssueClaim(cwd, 'run-b', '642')).toMatchObject({ ok: true });
   });
 
-  it('materializes a strict Claude sandbox and rejects writes outside the worktree', () => {
+  it('materializes a strict Claude sandbox and rejects writes outside its two roots', () => {
     const root = tempDir('cez-claude-guard-');
     const worktree = join(root, 'worktree');
     const artifacts = join(root, 'artifacts');
+    const output = join(artifacts, 'agent-output');
     mkdirSync(worktree);
-    const guard = createClaudeStageOnlySettings(artifacts, worktree);
+    const guard = createClaudeStageOnlySettings(artifacts, worktree, output);
     const settings = JSON.parse(readFileSync(guard.settingsPath, 'utf8')) as {
-      sandbox: {
+      sandbox?: {
         enabled: boolean;
         failIfUnavailable: boolean;
         allowUnsandboxedCommands: boolean;
+        filesystem: { allowWrite: string[] };
       };
       hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> };
     };
-    expect(settings.sandbox).toMatchObject({
-      enabled: true,
-      failIfUnavailable: true,
-      allowUnsandboxedCommands: false,
-    });
+    if (process.platform === 'darwin') {
+      expect(settings.sandbox).toBeUndefined();
+      expect(guard.env.CLAUDE_CODE_SHELL_PREFIX).toBe(guard.sandboxWrapperPath);
+    } else {
+      expect(settings.sandbox).toMatchObject({
+        enabled: true,
+        failIfUnavailable: true,
+        allowUnsandboxedCommands: false,
+        filesystem: { allowWrite: [output] },
+      });
+    }
     const command = settings.hooks.PreToolUse[0]!.hooks[0]!.command;
     const guardPath = JSON.parse(command.slice('node '.length)) as string;
     const invoke = (toolInput: Record<string, string>) =>
@@ -115,6 +130,7 @@ describe('harness safety primitives', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     expect(() => invoke({ file_path: join(worktree, 'src', 'safe.ts') })).not.toThrow();
+    expect(() => invoke({ file_path: join(output, 'phase-result.json') })).not.toThrow();
     expect(() => invoke({ file_path: join(root, 'outside.ts') })).toThrow();
     expect(() => invoke({ command: 'git push origin HEAD' })).toThrow();
     expect(() => invoke({ command: 'git -C . push origin HEAD' })).toThrow();
@@ -124,6 +140,75 @@ describe('harness safety primitives', () => {
     expect(() => invoke({ command: 'gh pr review 42 --approve' })).toThrow();
     expect(() => invoke({ command: 'gh issue view 42 --json title' })).not.toThrow();
     expect(() => invoke({ command: 'printf "git"; echo push' })).not.toThrow();
+
+    if (process.platform === 'darwin') {
+      const wrapper = guard.sandboxWrapperPath!;
+      const worktreeFile = join(worktree, 'safe.txt');
+      const outputFile = join(output, 'result.json');
+      const outsideFile = join(root, 'outside.txt');
+      const claudeCwdMarker = join('/tmp', `claude-cez-${process.pid}-cwd`);
+      const unrelatedTmpFile = join('/tmp', `cez-unrelated-${process.pid}`);
+      temporary.push(claudeCwdMarker, unrelatedTmpFile);
+      execFileSync(wrapper, [`printf safe > ${JSON.stringify(worktreeFile)}`], {
+        env: { ...process.env, ANTHROPIC_API_KEY: 'must-not-reach-tools' },
+      });
+      execFileSync(wrapper, [`printf result > ${JSON.stringify(outputFile)}`], {
+        env: process.env,
+      });
+      execFileSync(wrapper, [`printf cwd > ${JSON.stringify(claudeCwdMarker)}`], {
+        env: process.env,
+      });
+      expect(existsSync(worktreeFile)).toBe(true);
+      expect(existsSync(outputFile)).toBe(true);
+      expect(existsSync(claudeCwdMarker)).toBe(true);
+      expect(() =>
+        execFileSync(wrapper, [`printf unsafe > ${JSON.stringify(outsideFile)}`], {
+          env: process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }),
+      ).toThrow();
+      expect(existsSync(outsideFile)).toBe(false);
+      expect(() =>
+        execFileSync(wrapper, [`printf unsafe > ${JSON.stringify(unrelatedTmpFile)}`], {
+          env: process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }),
+      ).toThrow();
+      expect(existsSync(unrelatedTmpFile)).toBe(false);
+      expect(() =>
+        execFileSync(wrapper, ['test -z "$ANTHROPIC_API_KEY"'], {
+          env: { ...process.env, ANTHROPIC_API_KEY: 'must-not-reach-tools' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it('retains Claude native sandboxing with the phase-output allowance off macOS', () => {
+    const root = tempDir('cez-claude-native-sandbox-');
+    const worktree = join(root, 'worktree');
+    const artifacts = join(root, 'artifacts');
+    const output = join(artifacts, 'agent-output');
+    mkdirSync(worktree);
+
+    const guard = createClaudeStageOnlySettings(artifacts, worktree, output, 'linux');
+    const settings = JSON.parse(readFileSync(guard.settingsPath, 'utf8')) as {
+      sandbox: {
+        enabled: boolean;
+        failIfUnavailable: boolean;
+        allowUnsandboxedCommands: boolean;
+        filesystem: { allowWrite: string[] };
+      };
+    };
+
+    expect(settings.sandbox).toMatchObject({
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      filesystem: { allowWrite: [output] },
+    });
+    expect(guard.env.CLAUDE_CODE_SHELL_PREFIX).toBeUndefined();
+    expect(guard.sandboxWrapperPath).toBeUndefined();
   });
 
   it('routes generic repositories to complete bundled Cezar skills by default', () => {

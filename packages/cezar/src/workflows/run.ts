@@ -181,6 +181,25 @@ const phaseResultNudge = (resultPath: string): string =>
     `Then write the result file at ${resultPath} and end your turn.`,
   ].join(' ');
 
+/** A small command rejected by posix_spawn never reached the shell. Retrying
+ * with different quoting, languages or paths only spends another model turn. */
+export function harnessInfrastructureToolFailure(
+  result: string,
+  commandBytes: number | undefined,
+): string | null {
+  if (
+    /E2BIG: argument list too long, posix_spawn/i.test(result) &&
+    commandBytes !== undefined &&
+    commandBytes <= 64 * 1024
+  ) {
+    return (
+      `agent shell infrastructure failed before executing a ${commandBytes}-byte command ` +
+      '(E2BIG from posix_spawn); the phase was stopped to prevent repeated paid retries'
+    );
+  }
+  return null;
+}
+
 export interface StartRunInput {
   task: string;
   model?: string;
@@ -2531,6 +2550,8 @@ export class RunManager {
     const phaseResultPath = !interactive ? opts.resultPath : undefined;
     let phaseNudges = 0;
     let phaseTurnSeq = 0;
+    let phaseInfrastructureFailure: string | null = null;
+    const phaseToolCommandBytes = new Map<string, number>();
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
     const startTokens = stepRecord?.tokensUsed ?? 0;
@@ -2543,6 +2564,33 @@ export class RunManager {
         (event.type === 'text' || event.type === 'tool-call' || event.type === 'token-usage')
       ) {
         phaseTurnSeq += 1;
+      }
+      if (phaseResultPath && event.type === 'tool-call' && event.tool === 'Bash') {
+        const command =
+          typeof event.input === 'object' &&
+          event.input !== null &&
+          'command' in event.input &&
+          typeof event.input.command === 'string'
+            ? event.input.command
+            : undefined;
+        if (command !== undefined) {
+          phaseToolCommandBytes.set(event.id, Buffer.byteLength(command));
+        }
+      }
+      if (phaseResultPath && event.type === 'tool-result' && event.isError) {
+        const failure = harnessInfrastructureToolFailure(
+          event.result,
+          phaseToolCommandBytes.get(event.toolCallId),
+        );
+        if (failure && !phaseInfrastructureFailure) {
+          phaseInfrastructureFailure = failure;
+          emit({
+            type: 'note',
+            stepId: step.id,
+            message: failure,
+          });
+          liveSession?.interrupt();
+        }
       }
       if (event.type === 'image') {
         const saved = this.persistImage(runId, event.mediaType, event.data);
@@ -2783,7 +2831,7 @@ export class RunManager {
       // events to the RunManager — only it knows how the session settled).
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
-      return null;
+      return phaseInfrastructureFailure;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sink.sessionEnded('error', message); // alongside v1's fatal `error`

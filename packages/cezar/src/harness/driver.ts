@@ -626,6 +626,13 @@ export function harnessArtifactDir(dataDir: string, runId: string): string {
   return join(dataDir, 'runs', `${runId}-harness`);
 }
 
+/** The only model-writable part of the durable harness artifact tree. Cezar
+ * keeps ledgers, trusted skills/config and validation evidence in the parent,
+ * outside this boundary. */
+export function harnessAgentOutputDir(dataDir: string, runId: string): string {
+  return join(harnessArtifactDir(dataDir, runId), 'agent-output');
+}
+
 /** Executes the harness phase graph. Returns an error message (run fails),
  *  or null — success, cancellation, and the no-action early stop all settle
  *  through the caller's normal paths. */
@@ -665,9 +672,27 @@ export async function runHarnessDriver(
 
   const artifactDir = harnessArtifactDir(host.dataDir, host.runId);
   mkdirSync(artifactDir, { recursive: true });
+  const agentOutputDir = harnessAgentOutputDir(host.dataDir, host.runId);
+  mkdirSync(agentOutputDir, { recursive: true });
+  const phaseLocationContract = (skill: string | undefined): string =>
+    [
+      'Harness location contract:',
+      `- Active repository root: ${host.cwd}. Use repo-relative paths from this directory; it is the only checkout this phase may inspect or edit.`,
+      ...(host.repoRoot !== host.cwd
+        ? [
+            `- The original checkout at ${host.repoRoot} is not this phase's subject. Do not read from or write to it.`,
+          ]
+        : []),
+      `- Phase-output directory: ${agentOutputDir}. Use the exact spec, report, and result paths supplied in the task; never derive a sibling path or append "-harness" to the worktree.`,
+      ...(skill
+        ? [
+            `- The complete ${skill} playbook is already injected in your system instructions. Follow it directly; do not invoke the Skill tool or read a SKILL.md file.`,
+          ]
+        : []),
+    ].join('\n');
   const noGitHubAuthDir = join(artifactDir, 'no-github-auth');
   mkdirSync(noGitHubAuthDir, { recursive: true });
-  const claudeGuard = createClaudeStageOnlySettings(artifactDir, host.cwd);
+  const claudeGuard = createClaudeStageOnlySettings(artifactDir, host.cwd, agentOutputDir);
 
   const ledgerRead = readLedger(host.dataDir, host.runId);
   if (ledgerRead.status === 'corrupt') {
@@ -1024,7 +1049,8 @@ export async function runHarnessDriver(
     persist();
   };
 
-  const resultPathFor = (phaseId: string) => join(artifactDir, `phase-${phaseId}-result.json`);
+  const resultPathFor = (phaseId: string) =>
+    join(agentOutputDir, `phase-${phaseId}-result.json`);
 
   /**
    * Pull the first schema-valid JSON object out of arbitrary session output.
@@ -1146,7 +1172,7 @@ export async function runHarnessDriver(
       `RESULT-CONTRACT RETRY: the previous session for this phase ${failure}, so nothing could be accepted from it.`,
       ...(editsPersist
         ? [
-            'Any worktree edits that session made are still present — verify and finish them instead of redoing the work.',
+            'The previous session’s worktree edits and phase-output artifacts are still present. Do not repeat the phase from scratch: inspect only what is needed to verify the existing work, finish any missing piece, and write the result JSON.',
           ]
         : []),
       `This session MUST end by writing the result file at ${resultPath}: exactly one JSON object matching the contract above — no markdown fences, no commentary, nothing else in the file.`,
@@ -1241,7 +1267,7 @@ export async function runHarnessDriver(
     const phasePrompt = `${prompt}${boundaryAppendix}`;
     const renderedPrompt = `${phasePrompt
       .replaceAll('$CEZ_HARNESS_RESULT_FILE', sessionResultPath)
-      .replaceAll('$CEZ_HARNESS_ARTIFACT_DIR', artifactDir)}\n\n${PHASE_SESSION_CONTRACT}`;
+      .replaceAll('$CEZ_HARNESS_ARTIFACT_DIR', agentOutputDir)}\n\n${phaseLocationContract(skill)}\n\n${PHASE_SESSION_CONTRACT}`;
     const budgetError = promptBudgetError(completeModelPrompt(skill, renderedPrompt));
     if (budgetError) return { error: `${phaseId}: ${budgetError}` };
     const modelId = ref ? roleRefId(ref) : 'claude';
@@ -1367,7 +1393,7 @@ export async function runHarnessDriver(
           ? `${renderedPrompt}${resultContractRetryAppendix(
               lastContractFailure,
               sessionResultPath,
-              timeoutKey === 'implement' || timeoutKey === 'fix',
+              true,
             )}`
           : renderedPrompt;
       const attemptBudgetError = promptBudgetError(
@@ -1391,9 +1417,12 @@ export async function runHarnessDriver(
         },
         inputSha256: invocationInputSha256,
       });
-      writeFileSync(resultPath, '', 'utf8');
+      // A pre-created empty file makes Claude's built-in Write tool demand a
+      // Read before it will write. Start absent instead: appearance of the
+      // file is also the turn-driven session's completion signal.
+      rmSync(resultPath, { force: true });
       if (sessionResultPath !== resultPath) {
-        writeFileSync(sessionResultPath, '', 'utf8');
+        rmSync(sessionResultPath, { force: true });
       }
       const reviewSubjectBefore = reviewSubjectSha256;
       let failure: string | null;
@@ -1445,7 +1474,7 @@ export async function runHarnessDriver(
           timeoutMs: PHASE_TIMEOUTS_MS[timeoutKey] ?? 30 * 60_000,
           env: {
             CEZ_HARNESS_RESULT_FILE: resultPath,
-            CEZ_HARNESS_ARTIFACT_DIR: artifactDir,
+            CEZ_HARNESS_ARTIFACT_DIR: agentOutputDir,
           },
           ...(ref
             ? { runner: ref.runner, model: ref.model, effort: ref.effort }
@@ -3541,15 +3570,12 @@ export async function runHarnessDriver(
       if (!allowlistOrigin.has(path)) allowlistOrigin.set(path, phaseId);
     };
     /**
-     * Blocking findings the SPEC council never resolved.
+     * Explicit assumptions and accepted specification risks that implementation
+     * reviewers must retain.
      *
-     * The spec loop can exit non-converged and proceed by design (the human is
-     * the final gate). But those findings then vanished, and on 71edb02c the
-     * very first unresolved one — "extraction error persistence and API
-     * ownership are contradictory" — was the exact contradiction the
-     * implementation councils then burned both their rounds oscillating over.
-     * Carrying it forward lets the implementation reviewers see that the design
-     * question was already known to be open.
+     * On 71edb02c a known open design question vanished before implementation,
+     * and the implementation councils then burned their rounds rediscovering
+     * and oscillating over it. Carrying assumptions forward prevents that.
      */
     const unresolvedSpecFindings: string[] = [];
     let suggestedCommit: string | undefined;
@@ -3561,7 +3587,7 @@ export async function runHarnessDriver(
         'Specify',
         phaseSkills.specWriting,
         [
-          `Write the specification for this feature brief, following the selected ${phaseSkills.specWriting} skill in full.`,
+          `Write the specification for this feature brief, following the already-injected ${phaseSkills.specWriting} instructions in full.`,
           ``,
           `Feature brief:`,
           input.task,
@@ -3603,9 +3629,11 @@ export async function runHarnessDriver(
       }
 
       // Spec council (2026-07-24, parity with the upstream multi wrapper):
-      // the council reviews the SPECIFICATION itself in a bounded revise loop
-      // (≤3 rounds) BEFORE any implementation starts. Role-based runs only —
-      // `standard` keeps the single-author spec and goes straight to build.
+      // each of the three bounded cycles is a pre-implementation audit followed
+      // by a spec-writing repair when findings remain. The final cycle still
+      // gets its repair; the budget limits fresh audits, not fixes for findings
+      // Cezar has already paid to discover. Role-based runs only — `standard`
+      // keeps one standalone pre-implementation audit.
       if (roles && roles.reviewers.length > 0) {
         const MAX_SPEC_ROUNDS = 3;
         let specPath = finalSpecPath;
@@ -3664,14 +3692,14 @@ export async function runHarnessDriver(
               id: councilId,
               name: councilName,
               kind: 'agent',
-              skill: phaseSkills.specWriting,
+              skill: phaseSkills.preImplement,
             });
             persist();
             host.setStepStatus(councilId, 'running');
             emitPhase(councilId);
           }
           const specPromptText = `${[
-              `You are a FRESH review context. Review the feature SPECIFICATION at ${specPath} (read it from this worktree) to staff-engineer standard: risks, backward compatibility, gaps, implementation-readiness, and simplicity — the ${phaseSkills.specWriting} review format.`,
+              `You are a FRESH review context. Audit the feature SPECIFICATION at ${specPath} (read it from this worktree) to staff-engineer standard, following the already-injected ${phaseSkills.preImplement} instructions in full: risks, backward compatibility, security, data/API contracts, migration and rollback safety, testability, gaps, implementation-readiness, and simplicity.`,
               ``,
               `The feature brief: ${input.task}`,
               ``,
@@ -3690,10 +3718,10 @@ export async function runHarnessDriver(
           const specRunnerWork = pool(specRunnerReviewers, MAX_PARALLEL_REVIEWERS, async (reviewer, idx) => {
             if (host.isCancelled()) return;
             const label = roleRefId(reviewer);
-            const resultPath = join(artifactDir, `phase-${councilId}-r${idx + 1}-result.json`);
-            const renderedPrompt = `${specPromptText.replaceAll('$CEZ_HARNESS_RESULT_FILE', resultPath)}\n\n${PHASE_SESSION_CONTRACT}`;
+            const resultPath = join(agentOutputDir, `phase-${councilId}-r${idx + 1}-result.json`);
+            const renderedPrompt = `${specPromptText.replaceAll('$CEZ_HARNESS_RESULT_FILE', resultPath)}\n\n${phaseLocationContract(phaseSkills.preImplement)}\n\n${PHASE_SESSION_CONTRACT}`;
             const budgetError = promptBudgetError(
-              completeModelPrompt(phaseSkills.specWriting, renderedPrompt),
+              completeModelPrompt(phaseSkills.preImplement, renderedPrompt),
             );
             if (budgetError) {
               outcomes.push({ label, family: councilFamilyOf(reviewer), status: 'failed', reason: budgetError });
@@ -3709,7 +3737,7 @@ export async function runHarnessDriver(
                 reviewer,
                 prompt: renderedPrompt,
                 subjectSha256: specSubjectSha256,
-                rubricSha256: skillHash(phaseSkills.specWriting),
+                rubricSha256: skillHash(phaseSkills.preImplement),
               }),
             );
             let parsed = reusableInvocation(invocationId, inputSha256, reviewResultSchema);
@@ -3734,7 +3762,7 @@ export async function runHarnessDriver(
                   ? `${renderedPrompt}${resultContractRetryAppendix(lastContractFailure, resultPath, false)}`
                   : renderedPrompt;
               const attemptBudgetError = promptBudgetError(
-                completeModelPrompt(phaseSkills.specWriting, attemptPrompt),
+                completeModelPrompt(phaseSkills.preImplement, attemptPrompt),
               );
               if (attemptBudgetError) {
                 lastFailure = attemptBudgetError;
@@ -3752,7 +3780,7 @@ export async function runHarnessDriver(
                   family: councilFamilyOf(reviewer),
                 },
                 inputSha256,
-                prompt: completeModelPrompt(phaseSkills.specWriting, attemptPrompt),
+                prompt: completeModelPrompt(phaseSkills.preImplement, attemptPrompt),
               });
               // A failed prior attempt can leave a result file behind; attempt 2 of run
               // 0fe16fb7 read one, announced "the file already exists", and set about
@@ -3762,11 +3790,11 @@ export async function runHarnessDriver(
                 concurrent: true,
                 phaseId: councilId,
                 name: `${councilName} — ${label}`,
-                skill: phaseSkills.specWriting,
+                skill: phaseSkills.preImplement,
                 prompt: attemptPrompt,
                 resultPath,
                 timeoutMs: PHASE_TIMEOUTS_MS.review ?? 30 * 60_000,
-                env: { CEZ_HARNESS_RESULT_FILE: resultPath, CEZ_HARNESS_ARTIFACT_DIR: artifactDir },
+                env: { CEZ_HARNESS_RESULT_FILE: resultPath, CEZ_HARNESS_ARTIFACT_DIR: agentOutputDir },
                 runner: reviewer.runner,
                 model: reviewer.model,
                 effort: reviewer.effort,
@@ -3935,42 +3963,6 @@ export async function runHarnessDriver(
             council: { round: sround, kind: 'spec', reviewers: councilReviewers, verdict: specVerdict, findings: specFindings },
           });
           if (specVerdict === 'approve') break;
-          if (sround === MAX_SPEC_ROUNDS) {
-            const blockingFindings = specFindings
-              .filter((f) => f.severity === 'blocker' || f.severity === 'major')
-              .map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`);
-            unresolvedSpecFindings.push(...blockingFindings);
-            const accepted = ledger.decisions.some(
-              (decision) =>
-                decision.kind === 'spec.accept' &&
-                decision.detail === `council:${sround}`,
-            );
-            if (!accepted) {
-              const reasons =
-                blockingFindings.length > 0
-                  ? blockingFindings
-                  : ['specification reviewers did not converge on implementation readiness'];
-              setOutcome({
-                status: 'contested',
-                blockingReasons: reasons,
-                pendingDecision: {
-                  kind: 'spec',
-                  gate: 'council',
-                  round: sround,
-                  findings: reasons,
-                },
-              });
-              return `spec council did not converge after ${MAX_SPEC_ROUNDS} rounds; explicit acceptance is required before implementation`;
-            }
-            host.emit({
-              type: 'note',
-              stepId: councilId,
-              message:
-                `spec council did not converge in ${MAX_SPEC_ROUNDS} rounds — proceeding only because ` +
-                `the user explicitly accepted the unresolved specification risk`,
-            });
-            break;
-          }
           const revise = await agentPhase(
             `spec-${sround + 1}`,
             `Revise spec (round ${sround} feedback)`,
@@ -3998,56 +3990,76 @@ export async function runHarnessDriver(
           finalSpecPath = specPath;
           diagnosisSummary = revised.summary;
           for (const f of revised.files ?? []) allowlist.add(f);
+          if (sround === MAX_SPEC_ROUNDS) {
+            if (!ledger.decisions.some((decision) => decision.kind === 'spec.closing-fixes')) {
+              ledger.decisions.push({
+                at: new Date().toISOString(),
+                kind: 'spec.closing-fixes',
+                by: 'driver',
+                detail: `round:${sround}`,
+              });
+            }
+            persist();
+            host.emit({
+              type: 'note',
+              stepId: `spec-${sround + 1}`,
+              message:
+                `applied the findings from pre-implementation audit ${sround}/${MAX_SPEC_ROUNDS}; ` +
+                `the audit budget is exhausted, so implementation continues without buying a fourth audit`,
+            });
+          }
         }
       }
 
-      const preImplement = await agentPhase(
-        'pre-implement',
-        'Pre-implementation audit',
-        phaseSkills.preImplement,
-        [
-          `Audit the completed specification at ${finalSpecPath} before implementation.`,
-          `Use the selected pre-implementation skill in full: verify backward compatibility,`,
-          `security, data/API contracts, migration and rollback safety, testability, and whether`,
-          `the plan is concrete enough to implement without guessing.`,
-          ``,
-          `Feature brief: ${input.task}`,
-          ``,
-          `This phase is read-only. Save the detailed report under $CEZ_HARNESS_ARTIFACT_DIR.`,
-          `When done, write a result file at $CEZ_HARNESS_RESULT_FILE of the shape:`,
-          `{"status":"ready|blocked","summary":"…","reportPath":"<absolute or artifact-relative report path>","findings":[{"severity":"blocker|major|minor","title":"…","evidence":"…"}]}`,
-          `Use "blocked" whenever a blocker or major design gap remains.`,
-        ].join('\n'),
-        preImplementResultSchema,
-        'spec',
-        roles?.orchestrator,
-      );
-      if ('cancelled' in (preImplement as object)) return null;
-      if ('error' in (preImplement as object)) return (preImplement as { error: string }).error;
-      const preImplementResult = preImplement as z.infer<typeof preImplementResultSchema>;
-      const preImplementBlockers = preImplementResult.findings.filter(
-        (finding) => finding.severity === 'blocker' || finding.severity === 'major',
-      );
-      if (
-        (preImplementResult.status === 'blocked' || preImplementBlockers.length > 0) &&
-        !ledger.decisions.some(
-          (decision) => decision.kind === 'spec.accept' && decision.detail === 'pre-implement:1',
-        )
-      ) {
-        const findings = preImplementBlockers.map(
-          (finding) => `[${finding.severity}] ${finding.title}: ${finding.evidence}`,
+      if (!roles || roles.reviewers.length === 0) {
+        const preImplement = await agentPhase(
+          'pre-implement',
+          'Pre-implementation audit',
+          phaseSkills.preImplement,
+          [
+            `Audit the completed specification at ${finalSpecPath} before implementation.`,
+            `Follow the already-injected pre-implementation instructions in full: verify backward compatibility,`,
+            `security, data/API contracts, migration and rollback safety, testability, and whether`,
+            `the plan is concrete enough to implement without guessing.`,
+            ``,
+            `Feature brief: ${input.task}`,
+            ``,
+            `This phase is read-only. Save the detailed report under $CEZ_HARNESS_ARTIFACT_DIR.`,
+            `When done, write a result file at $CEZ_HARNESS_RESULT_FILE of the shape:`,
+            `{"status":"ready|blocked","summary":"…","reportPath":"<absolute or artifact-relative report path>","findings":[{"severity":"blocker|major|minor","title":"…","evidence":"…"}]}`,
+            `Use "blocked" whenever a blocker or major design gap remains.`,
+          ].join('\n'),
+          preImplementResultSchema,
+          'spec',
+          roles?.orchestrator,
         );
-        setOutcome({
-          status: 'contested',
-          blockingReasons: findings.length > 0 ? findings : [preImplementResult.summary],
-          pendingDecision: {
-            kind: 'spec',
-            gate: 'pre-implement',
-            round: 1,
-            findings: findings.length > 0 ? findings : [preImplementResult.summary],
-          },
-        });
-        return 'pre-implementation audit found unresolved specification risks; explicit acceptance is required before implementation';
+        if ('cancelled' in (preImplement as object)) return null;
+        if ('error' in (preImplement as object)) return (preImplement as { error: string }).error;
+        const preImplementResult = preImplement as z.infer<typeof preImplementResultSchema>;
+        const preImplementBlockers = preImplementResult.findings.filter(
+          (finding) => finding.severity === 'blocker' || finding.severity === 'major',
+        );
+        if (
+          (preImplementResult.status === 'blocked' || preImplementBlockers.length > 0) &&
+          !ledger.decisions.some(
+            (decision) => decision.kind === 'spec.accept' && decision.detail === 'pre-implement:1',
+          )
+        ) {
+          const findings = preImplementBlockers.map(
+            (finding) => `[${finding.severity}] ${finding.title}: ${finding.evidence}`,
+          );
+          setOutcome({
+            status: 'contested',
+            blockingReasons: findings.length > 0 ? findings : [preImplementResult.summary],
+            pendingDecision: {
+              kind: 'spec',
+              gate: 'pre-implement',
+              round: 1,
+              findings: findings.length > 0 ? findings : [preImplementResult.summary],
+            },
+          });
+          return 'pre-implementation audit found unresolved specification risks; explicit acceptance is required before implementation';
+        }
       }
     } else {
       const qualify = await agentPhase(
@@ -4142,6 +4154,13 @@ export async function runHarnessDriver(
     let validationRepairRounds = 0;
     const MAX_VALIDATION_REPAIR_ROUNDS = 2;
     const validationRepairPhases = new Set<string>();
+    const recordedClosingRepair = ledger.decisions.find(
+      (decision) => decision.kind === 'review.closing-fixes',
+    );
+    const recordedClosingRound = recordedClosingRepair?.detail?.match(/^round:(\d+)$/)?.[1];
+    let closingRepairStartRound = recordedClosingRound
+      ? Number(recordedClosingRound) + 1
+      : undefined;
 
     /**
      * The gate's verdict over a round's checks, measured against the baseline:
@@ -4229,9 +4248,26 @@ export async function runHarnessDriver(
       return lines.join('\n');
     };
 
-    for (let round = 1; round <= ledger.loops.maxFixRounds + validationRepairRounds; round += 1) {
+    /** One extra fix/validate iteration is admitted after the final paid
+     * review. Validation-only repair rounds can extend either side without
+     * purchasing another review. */
+    const implementationLoopLimit = (): number =>
+      Math.max(
+        ledger.loops.maxFixRounds +
+          validationRepairRounds +
+          (closingRepairStartRound === undefined ? 0 : 1),
+        (closingRepairStartRound ?? 0) + validationRepairRounds,
+      );
+
+    for (let round = 1; round <= implementationLoopLimit(); round += 1) {
       const isFirst = round === 1;
-      const implementId = isFirst ? 'implement' : `fix-${round}`;
+      const isClosingRepair =
+        closingRepairStartRound !== undefined && round >= closingRepairStartRound;
+      const implementId = isFirst
+        ? 'implement'
+        : round === closingRepairStartRound
+          ? 'fix-final'
+          : `fix-${round}`;
       const reviewId = isFirst ? 'review' : `review-${round}`;
 
       const implementPrompt = isFirst
@@ -4283,7 +4319,11 @@ export async function runHarnessDriver(
       } else {
         const implement = await agentPhase(
           implementId,
-          isFirst ? 'Implement' : `Fixes (round ${round - 1} feedback)`,
+          isFirst
+            ? 'Implement'
+            : round === closingRepairStartRound
+              ? `Closing fixes (round ${round - 1} feedback)`
+              : `Fixes (round ${round - 1} feedback)`,
           isFeature ? phaseSkills.implementSpec : phaseSkills.fix,
           implementPrompt,
           isFirst ? implementResultSchema : fixResultSchema,
@@ -4302,7 +4342,11 @@ export async function runHarnessDriver(
 
       const implementDrift = await gitDriftError(implementId);
       if (implementDrift) return implementDrift;
-      const validateId = isFirst ? 'validate' : `validate-${round}`;
+      const validateId = isFirst
+        ? 'validate'
+        : round === closingRepairStartRound
+          ? 'validate-final'
+          : `validate-${round}`;
       let validationFailed: string | null = null;
       const validationArtifactSchema = z.object({
         version: z.literal(1),
@@ -4470,6 +4514,17 @@ export async function runHarnessDriver(
         });
         continue;
       }
+      if (isClosingRepair) {
+        survivingBlockers = [];
+        host.emit({
+          type: 'note',
+          stepId: validateId,
+          message:
+            `validated the fixes for code-review cycle ${ledger.loops.maxFixRounds}/${ledger.loops.maxFixRounds}; ` +
+            `the review budget is exhausted, so staging continues without buying a fourth review`,
+        });
+        break;
+      }
       const validationEvidenceSha256 = hashFile(validationPath);
       if (!validationEvidenceSha256) {
         const reason = `validation evidence is missing before ${reviewId}`;
@@ -4480,7 +4535,7 @@ export async function runHarnessDriver(
         skillHash(phaseSkills.codeReview);
 
       const reviewPromptText = [
-        `You are a FRESH review context with no implementation transcript — review this worktree's complete uncommitted diff against the base branch with the ${phaseSkills.codeReview} skill, in full.`,
+        `You are a FRESH review context with no implementation transcript — review this worktree's complete uncommitted diff against the base branch, following the already-injected ${phaseSkills.codeReview} instructions in full.`,
         ``,
         `The task under review: ${input.task}`,
         `Validation gate: ${
@@ -4545,10 +4600,10 @@ export async function runHarnessDriver(
         const runnerReviewerWork = pool(runnerReviewers, MAX_PARALLEL_REVIEWERS, async (reviewer, idx) => {
           if (host.isCancelled()) return;
           const label = roleRefId(reviewer);
-          const resultPath = join(artifactDir, `phase-${reviewId}-r${idx + 1}-result.json`);
+          const resultPath = join(agentOutputDir, `phase-${reviewId}-r${idx + 1}-result.json`);
           const renderedPrompt = `${councilReviewPromptText
             .replaceAll('$CEZ_HARNESS_RESULT_FILE', resultPath)
-            .replaceAll('$CEZ_HARNESS_ARTIFACT_DIR', artifactDir)}\n\n${PHASE_SESSION_CONTRACT}`;
+            .replaceAll('$CEZ_HARNESS_ARTIFACT_DIR', agentOutputDir)}\n\n${phaseLocationContract(phaseSkills.codeReview)}\n\n${PHASE_SESSION_CONTRACT}`;
           const budgetError = promptBudgetError(
             completeModelPrompt(phaseSkills.codeReview, renderedPrompt),
           );
@@ -4623,7 +4678,7 @@ export async function runHarnessDriver(
               prompt: attemptPrompt,
               resultPath,
               timeoutMs: PHASE_TIMEOUTS_MS.review ?? 30 * 60_000,
-              env: { CEZ_HARNESS_RESULT_FILE: resultPath, CEZ_HARNESS_ARTIFACT_DIR: artifactDir },
+              env: { CEZ_HARNESS_RESULT_FILE: resultPath, CEZ_HARNESS_ARTIFACT_DIR: agentOutputDir },
               runner: reviewer.runner,
               model: reviewer.model,
               effort: reviewer.effort,
@@ -4866,15 +4921,23 @@ export async function runHarnessDriver(
         break;
       }
       if (round >= ledger.loops.maxFixRounds + validationRepairRounds) {
-        const surviving = blocking.map((f) => `[${f.severity}] ${f.title} (raised by ${f.by})`).join('; ');
+        closingRepairStartRound = round + 1;
+        if (!ledger.decisions.some((decision) => decision.kind === 'review.closing-fixes')) {
+          ledger.decisions.push({
+            at: new Date().toISOString(),
+            kind: 'review.closing-fixes',
+            by: 'driver',
+            detail: `round:${round}`,
+          });
+        }
+        persist();
         host.emit({
           type: 'note',
           stepId: reviewId,
           message:
-            `review budget exhausted after ${ledger.loops.maxFixRounds} rounds — preserving the ` +
-            `reviewed worktree as contested; no unreviewed fixer is allowed to clear blockers: ${surviving}`,
+            `code-review cycle ${ledger.loops.maxFixRounds}/${ledger.loops.maxFixRounds} found blocking issues — ` +
+            `applying its confirmed findings in one closing fix pass, then validating without buying a fourth review`,
         });
-        break;
       }
       roundHistory.push({
         round,

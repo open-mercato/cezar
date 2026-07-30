@@ -324,6 +324,28 @@ exactly once at the next phase boundary without emitting a duplicate bubble.
 - 2026-07-26: Completed recovery, package, cockpit, and fresh-context
   verification. The repository's pre-existing browser-smoke baseline remains
   separately tracked; harness component/integration coverage is green.
+- 2026-07-30: Hardened phase completion after live run
+  `9274bfa3-3d0c-4e80-a9f2-6fc2736a3d3d`: model-authored results now live in
+  a dedicated agent-output subtree instead of Cezar's trusted artifact root,
+  result files start absent so Claude Write can create them, macOS Claude Bash
+  runs through Anthropic's standalone sandbox runtime to avoid the native
+  2.1.193 `E2BIG` spawn regression, and small-command `E2BIG` failures stop the
+  phase immediately instead of consuming the informed retry.
+- 2026-07-30: Corrected the bounded council semantics after live run
+  `475853b0-fdab-4821-85e4-c9cd9b474fbe`: the three spec cycles now use
+  `*-pre-implement-spec` and each request-changes verdict, including cycle
+  three, receives a `*-spec-writing` repair. Likewise, findings from the third
+  `*-code-review` cycle receive a closing implementation repair and validation.
+  The bounds limit fresh paid reviews; they no longer discard findings already
+  paid for at the terminal review.
+- 2026-07-30: Corrected macOS shell bookkeeping after live run
+  `c9652713-8def-4dcd-ae36-574ccad3f5a3`: the standalone sandbox permits only
+  Claude's canonical `/private/tmp/claude-*-cwd` marker shape, so successful
+  Bash commands are not misreported as failed while unrelated temporary writes
+  remain denied. Every phase also receives one concise location contract naming
+  its worktree and output root and stating that its complete playbook is already
+  injected; agents no longer need to guess checkout/artifact paths or invoke an
+  unavailable Skill tool.
 
 ## Implementation Status
 
@@ -333,5 +355,5 @@ exactly once at the next phase boundary without emitting a duplicate bubble.
 | Phase B — Supervision and truthful gates | Complete | 2026-07-26 | Process groups, PID/token reconciliation for paid subprocesses, dynamic provider gating, stale-base acknowledgement, contested outcomes, and publish guards implemented. |
 | Phase C — Profile execution | Complete | 2026-07-26 | All five trusted-config profiles and resumable, path-disjoint high-assurance packets implemented. |
 | Phase D — Cockpit | Complete | 2026-07-26 | Readiness, phase/model status, snapshot/event reconciliation, Review, Packets, recovery, and boundary messaging surfaces implemented with component integration tests. |
-| Phase E — Vendored runtime hardening | Complete | 2026-07-26 | Explicit environment forwarding, review-mutation detection, bounded provider output/JSON extraction, and checked regeneration patches implemented. |
+| Phase E — Vendored runtime hardening | Complete | 2026-07-30 | Explicit environment forwarding, review-mutation detection, bounded provider output/JSON extraction, checked regeneration patches, isolated agent-output artifacts, and sandboxed macOS shell fallback implemented. |
 | Phase F — Verification | Complete with baseline exceptions | 2026-07-26 | Typecheck, full Vitest, core unit, production build/pack, release-package E2E, focused harness/cockpit suites, diff checks, and fresh-context adversarial review pass. The existing browser suite still has unrelated legacy fixture/order/cleanup failures (178 passed, 5 skipped, 16 failed, plus 2 cleanup-suite failures); no harness component regression failed. |

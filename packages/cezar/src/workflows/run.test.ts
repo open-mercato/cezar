@@ -17,7 +17,7 @@ import { createWorktree } from '../git-worktree.js';
 import { RunStore, type RunRecord } from '../runs/store.js';
 import { WorkspaceSemaphore } from '../workspace/semaphore.js';
 import { parseTaskMarkers } from '../runs/task-markers.js';
-import { appendTurnText, RunManager } from './run.js';
+import { appendTurnText, harnessInfrastructureToolFailure, RunManager } from './run.js';
 import type { WorkflowDef } from './types.js';
 
 const run = promisify(execFile);
@@ -45,6 +45,27 @@ describe('appendTurnText', () => {
     expect(appendTurnText('', 'first')).toBe('first');
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
+  });
+});
+
+describe('harnessInfrastructureToolFailure', () => {
+  it('stops deterministic E2BIG shell failures for small commands', () => {
+    expect(
+      harnessInfrastructureToolFailure(
+        "E2BIG: argument list too long, posix_spawn '/bin/zsh'",
+        3,
+      ),
+    ).toMatch(/stopped to prevent repeated paid retries/);
+  });
+
+  it('does not classify an actually oversized command or an ordinary tool failure', () => {
+    expect(
+      harnessInfrastructureToolFailure(
+        "E2BIG: argument list too long, posix_spawn '/bin/zsh'",
+        70 * 1024,
+      ),
+    ).toBeNull();
+    expect(harnessInfrastructureToolFailure('exit 1', 3)).toBeNull();
   });
 });
 
