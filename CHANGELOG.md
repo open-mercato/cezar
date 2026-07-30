@@ -42,6 +42,20 @@
   value). The point is that the typed client can now check request bodies, params and queries at
   compile time.
 
+## 🐛 Fixes
+- 🐛 **Running the test suite no longer wipes your project registry.** A merge-write resolved
+  `~/.cezar/config.json` twice — once to read, once to write, after the `await` — and
+  `cezarHomeDir()` re-reads `CEZ_HOME` on every call, so a test that lost its sandbox pin
+  mid-flight (a timeout was enough) read the temp home and wrote the real one, replacing every
+  project with the fixture's. The path is now resolved once per merge-write, the whole server
+  suite runs with `CEZ_HOME` pinned to a per-worker sandbox, and a write into the real `~/.cezar`
+  from a vitest process is refused outright. The same one-path fix lands in the `ui-state.json` twin.
+- 🐛 **The registry survives a lost config file.** Every merge-write that leaves projects behind
+  also writes `~/.cezar/config.json.bak`, and cezar restores from that snapshot when the config
+  file is missing, empty, or corrupt. Removing `~/.cezar` still resets cezar completely; removing
+  only `config.json` no longer loses the project list. A config that parses and is simply empty is
+  left alone — that is a user who removed their last project, not a lost registry.
+
 # 0.9.1 (2026-07-24)
 
 ## Highlights

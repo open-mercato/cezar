@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
-import { workspaceConfigPath } from '../paths.ts';
+import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry
@@ -164,25 +164,84 @@ export function defaultWorkspaceConfig(): WorkspaceConfig {
 }
 
 /**
+ * The last-known-good copy of a NON-EMPTY registry, written beside the config
+ * by every successful merge-write. The registry is cheap to rebuild in theory
+ * ("open the project again"), but in practice it is a hand-curated list, and a
+ * single bad write — a crash between `writeFileSync` and `rename`, a full
+ * disk, a stray process — costs the user every entry. One extra file, no
+ * configuration, and `loadWorkspaceConfig` falls back to it.
+ *
+ * Removing `~/.cezar` still resets cezar completely; removing only
+ * `config.json` no longer does, because this snapshot restores it.
+ *
+ * A cezar older than this change does not refresh the snapshot, so on a machine
+ * that alternates between versions it can lag behind the registry — which only
+ * shows if the config file is also lost, and the worst case is a project the
+ * user unregistered reappearing. Cheap next to losing the whole list.
+ */
+export function workspaceConfigBackupPath(path: string = workspaceConfigPath()): string {
+  return `${path}.bak`;
+}
+
+function parseWorkspaceConfig(raw: string): WorkspaceConfig | null {
+  try {
+    const parsed = workspaceConfigSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The snapshot is only worth restoring while it still holds projects — an
+ *  empty one carries no information the defaults do not already have. */
+async function loadWorkspaceConfigBackup(path: string): Promise<WorkspaceConfig | null> {
+  let raw: string;
+  try {
+    raw = await readFile(workspaceConfigBackupPath(path), 'utf8');
+  } catch {
+    return null;
+  }
+  const parsed = parseWorkspaceConfig(raw);
+  return parsed && parsed.projects.length > 0 ? parsed : null;
+}
+
+/**
  * Read `~/.cezar/config.json` on demand — never cached, never throws. A
  * missing file is the zero-config default (silent); an unreadable or
  * malformed one degrades to the same default with a one-line warning and is
  * left on disk untouched (the next successful merge-write replaces it).
+ *
+ * Before degrading, a missing, empty, or corrupt file is restored from the
+ * `config.json.bak` snapshot when that still holds projects. The restore is
+ * read-only: the recovered registry is handed back in memory and lands on disk
+ * again through the next merge-write, so a read never writes. A file that
+ * parses and simply has no projects is NOT restored — that is a user who
+ * removed their last project, not a lost registry.
+ *
+ * `path` defaults to the current `workspaceConfigPath()`, but a caller that
+ * will also WRITE passes the path it resolved itself — see
+ * `mergeWriteWorkspaceConfig` for why resolving it twice is a data-loss bug.
  */
-export async function loadWorkspaceConfig(): Promise<WorkspaceConfig> {
-  const path = workspaceConfigPath();
-  let raw: string;
+export async function loadWorkspaceConfig(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
+  let raw: string | null = null;
   try {
     raw = await readFile(path, 'utf8');
   } catch {
-    return defaultWorkspaceConfig();
+    // missing/unreadable — the backup below is the next chance
   }
-  try {
-    const parsed = workspaceConfigSchema.safeParse(JSON.parse(raw));
-    if (parsed.success) return parsed.data;
-  } catch {
-    // malformed JSON — fall through to the warning + defaults
+  if (raw !== null && raw.trim() !== '') {
+    const parsed = parseWorkspaceConfig(raw);
+    if (parsed) return parsed;
   }
+  const restored = await loadWorkspaceConfigBackup(path);
+  if (restored) {
+    const cause = raw === null ? 'is missing' : 'is empty or corrupt';
+    console.warn(
+      `[cez] workspace config ${path} ${cause} — restored ${restored.projects.length} project(s) from ${workspaceConfigBackupPath(path)}`,
+    );
+    return restored;
+  }
+  if (raw === null) return defaultWorkspaceConfig();
   console.warn(`[cez] workspace config ${path} is corrupt — using defaults (registry rebuilds)`);
   return defaultWorkspaceConfig();
 }
@@ -206,6 +265,7 @@ export function atomicTmpPath(path: string): string {
  *  shared by the workspace config and ui-state writers. Throws on write
  *  failure (e.g. a read-only home) — degrading is the caller's policy. */
 export function atomicWriteJsonSync(path: string, value: unknown): void {
+  assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -226,12 +286,34 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
  * boot). The mutator may mutate its argument in place or return a replacement.
  * Returns the config that was written. Throws on write failure (e.g. a
  * read-only home) — degrading is the caller's policy, per house rules.
+ *
+ * The path is resolved ONCE, before the `await`, and the same value feeds the
+ * read and the write. Resolving it twice used to lose the whole registry:
+ * `workspaceConfigPath()` re-reads `CEZ_HOME` on every call, so if the variable
+ * changed while the read was in flight — a test's `afterEach` dropping its pin
+ * after a timeout is the way this happens in practice — the read came from one
+ * home and the write landed in another, replacing that file's registry with a
+ * config it never held. One resolution keeps a merge-write inside exactly one
+ * file, whatever the environment does mid-flight.
  */
 export async function mergeWriteWorkspaceConfig(
   mutator: (config: WorkspaceConfig) => WorkspaceConfig | void,
 ): Promise<WorkspaceConfig> {
-  const current = await loadWorkspaceConfig();
+  const path = workspaceConfigPath();
+  const current = await loadWorkspaceConfig(path);
   const next = mutator(current) ?? current;
-  atomicWriteJsonSync(workspaceConfigPath(), next);
+  atomicWriteJsonSync(path, next);
+  // Refresh the snapshot after EVERY successful write, including an emptied
+  // registry (#731). Skipping the empty case left a stale non-empty backup:
+  // removing the last project, then losing config.json, resurrected the project
+  // the user had deliberately unregistered. An empty snapshot is not restored on
+  // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
+  // registry the user intended rather than the old projects.
+  try {
+    atomicWriteJsonSync(workspaceConfigBackupPath(path), next);
+  } catch {
+    // Best-effort: the registry itself is already safely on disk, and a
+    // failed snapshot must never turn a successful write into an error.
+  }
   return next;
 }

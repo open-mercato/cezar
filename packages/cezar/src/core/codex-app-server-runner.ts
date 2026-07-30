@@ -180,6 +180,12 @@ class CodexSession implements AgentSession {
             } catch {
               continue; // not JSON-RPC — skip
             }
+            // A sub-agent child thread's turn lifecycle must reach neither channel (#600):
+            // v1 would emit a bogus `turn-end`, and the v2 mapper — which carries no thread
+            // identity — would record the child turn as the parent's, clearing its turn-scoped
+            // plan/reasoning state and resetting the current turn id. Child ITEM events still
+            // flow, so nested sub-agent activity keeps rendering.
+            if (this.isForeignTurnLifecycle(msg)) continue;
             this.emitUi((state) => mapCodexNotification(msg, state));
             this.dispatch(msg);
           }
@@ -418,9 +424,29 @@ class CodexSession implements AgentSession {
     this.rpc.respond({ id: pending.rpcId, error: { code: -32000, message } });
   }
 
+  /** True when a turn notification belongs to a sub-agent CHILD thread rather than this run's
+   *  own main thread — its lifecycle must not start or end the parent turn (#600). The app-server
+   *  multiplexes every thread over one connection, so a spawned skill's child `turn/completed`
+   *  would otherwise emit a `turn-end` and park the actively-working run under "Needs you".
+   *  Fail-open: an absent `threadId` (the single-thread wire shape) or our own id counts as ours. */
+  private isForeignThreadTurn(params: Record<string, unknown>): boolean {
+    const eventThreadId = stringField(params, 'threadId');
+    return !!eventThreadId && !!this.threadId && eventThreadId !== this.threadId;
+  }
+
+  /** A `turn/started|completed|failed` notification for a sub-agent child thread — dropped
+   *  before either channel processes it (#600). Only turn lifecycle is filtered; child item
+   *  events still map, so nested sub-agent activity keeps rendering. */
+  private isForeignTurnLifecycle(msg: CodexAppServerMessage): boolean {
+    const method = typeof msg.method === 'string' ? msg.method : undefined;
+    if (!method || !TURN_LIFECYCLE_METHODS.has(method)) return false;
+    return this.isForeignThreadTurn((msg.params ?? {}) as Record<string, unknown>);
+  }
+
   private handleNotification(method: string, params: Record<string, unknown>): void {
     switch (method) {
       case 'turn/started': {
+        if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
         break;
       }
@@ -468,6 +494,7 @@ class CodexSession implements AgentSession {
       }
       case 'turn/completed':
       case 'turn/failed': {
+        if (this.isForeignThreadTurn(params)) break; // don't end the parent turn on a child turn (#600)
         this.pendingUserInput = undefined;
         this.activeTurnId = undefined;
         // An interrupted/failed item never sees item/completed — surface its
@@ -546,6 +573,10 @@ function userInputAnswers(questions: AskQuestion[], text: string): Record<string
 
 /** ThreadItem `type`s that are conversation text, not tool activity. */
 const NON_TOOL_ITEMS = new Set(['agentMessage', 'userMessage', 'reasoning', 'plan']);
+
+/** Turn-lifecycle notification methods — the only frames whose child-thread copies must be
+ *  dropped so a sub-agent turn can't be mistaken for the parent's (#600). */
+const TURN_LIFECYCLE_METHODS = new Set(['turn/started', 'turn/completed', 'turn/failed']);
 
 const REASONING_SUMMARIES = new Set(['auto', 'concise', 'detailed', 'none']);
 

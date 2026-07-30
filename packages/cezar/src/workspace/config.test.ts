@@ -10,6 +10,8 @@ import {
   effectiveComposerDefault,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
+  workspaceConfigBackupPath,
+  type WorkspaceConfig,
 } from './config.ts';
 
 /**
@@ -286,5 +288,79 @@ describe('workspace config', () => {
     }));
     expect(written.projectsDir).toBe('/srv/checkouts');
     expect((await loadWorkspaceConfig()).projectsDir).toBe('/srv/checkouts');
+  });
+
+  describe('registry backup and self-heal', () => {
+    const registerOne = () =>
+      mergeWriteWorkspaceConfig((config) => {
+        config.projects.push(project('shop'));
+      });
+
+    it('snapshots a non-empty registry beside the config on every merge-write', async () => {
+      await registerOne();
+      const snapshot = JSON.parse(readFileSync(workspaceConfigBackupPath(), 'utf8')) as WorkspaceConfig;
+      expect(snapshot.projects.map((p) => p.id)).toEqual(['shop']);
+      expect(statSync(workspaceConfigBackupPath()).mode & 0o777).toBe(0o600);
+    });
+
+    it('refreshes the snapshot when the last project is unregistered, so it cannot resurrect (#731)', async () => {
+      await registerOne();
+      await mergeWriteWorkspaceConfig((config) => {
+        config.projects = [];
+      });
+      // The snapshot now mirrors the emptied registry — no stale entry survives.
+      expect(
+        (JSON.parse(readFileSync(workspaceConfigBackupPath(), 'utf8')) as WorkspaceConfig).projects,
+      ).toEqual([]);
+      // A config that parses and is simply empty is the user's own state.
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+      // And losing config.json entirely must NOT bring the removed project back
+      // from a stale snapshot — recovery settles on the empty registry the user
+      // intended, which was the #731 data-integrity defect.
+      rmSync(workspaceConfigPath());
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+    });
+
+    it('restores the registry when the config file went missing', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await registerOne();
+      rmSync(workspaceConfigPath());
+
+      const restored = await loadWorkspaceConfig();
+      expect(restored.projects.map((p) => p.id)).toEqual(['shop']);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('restored 1 project(s)'));
+    });
+
+    it('restores the registry from an empty or corrupt config file', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await registerOne();
+
+      write('');
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.id)).toEqual(['shop']);
+
+      write('{ not json');
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.id)).toEqual(['shop']);
+    });
+
+    it('writes the recovered registry back on the next merge-write, so a restart keeps it', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await registerOne();
+      rmSync(workspaceConfigPath());
+
+      await mergeWriteWorkspaceConfig((config) => {
+        config.projects.push(project('warehouse'));
+      });
+      const onDisk = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as WorkspaceConfig;
+      expect(onDisk.projects.map((p) => p.id)).toEqual(['shop', 'warehouse']);
+    });
+
+    it('falls back to the defaults when neither the config nor a usable snapshot exists', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      writeFileSync(workspaceConfigBackupPath(), JSON.stringify({ projects: [] }), 'utf8');
+      write('{ not json');
+
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('is corrupt'));
+    });
   });
 });
