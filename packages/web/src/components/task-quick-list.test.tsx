@@ -257,6 +257,9 @@ describe('TaskQuickList', () => {
         status: 'running',
         runner: 'claude',
         tokensUsed: 96_249,
+        inputTokens: 92_000,
+        outputTokens: 4_249,
+        costUsd: 0.31,
       }),
       run({
         id: 'vb',
@@ -266,6 +269,9 @@ describe('TaskQuickList', () => {
         status: 'running',
         runner: 'codex',
         tokensUsed: 41_800,
+        inputTokens: 40_000,
+        outputTokens: 1_800,
+        costUsd: 0.12,
       }),
     ]
 
@@ -286,8 +292,8 @@ describe('TaskQuickList', () => {
       expect(screen.getByRole('button', { expanded: true })).not.toBeNull()
 
       // The letter chip, its own dot, and what actually differs between the variants.
-      expect(row('va')?.textContent).toBe('Aclaude · 96.2k')
-      expect(row('vb')?.textContent).toBe('Bcodex · 41.8k')
+      expect(row('va')?.textContent).toBe('Aclaude · IN 92.0k · OUT 4.2k · $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex · IN 40.0k · OUT 1.8k · $0.12')
       expect(dotOf('va')?.getAttribute('data-tone')).toBe('violet')
       // Each variant is still its own deep link.
       expect(row('vb')?.querySelector('a')?.getAttribute('href')).toBe('/tasks/vb')
@@ -305,17 +311,21 @@ describe('TaskQuickList', () => {
       expect(link.closest('button')).toBeNull()
     })
 
-    it('omits the token count from a variant that has not spent anything yet', () => {
-      renderList({ runs: variants().map((v, i) => ({ ...v, tokensUsed: i === 0 ? 0 : v.tokensUsed })) })
+    it('omits unknown token directions while preserving independently visible cost', () => {
+      renderList({
+        runs: variants().map((v, i) =>
+          i === 0 ? { ...v, inputTokens: undefined, outputTokens: undefined } : v,
+        ),
+      })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude')
+      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
     })
 
-    it('omits every variant token count when the health capability disables metrics', () => {
-      renderList({ runs: variants(), showTokenMetrics: false })
+    it('gates variant token directions and cost independently', () => {
+      renderList({ runs: variants(), showTokens: false, showCost: true })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude')
-      expect(row('vb')?.textContent).toBe('Bcodex')
+      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex · $0.12')
     })
   })
 

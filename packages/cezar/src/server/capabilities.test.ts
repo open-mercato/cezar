@@ -160,6 +160,8 @@ describe('resolveCapabilities — followups (#471)', () => {
       followups: true,
       singleProject: false,
       tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 });
@@ -181,23 +183,44 @@ describe('resolveCapabilities — singleProject', () => {
   );
 });
 
-describe('resolveCapabilities — tokenMetrics (#481)', () => {
-  it('is visible by default', () => {
-    expect(resolveCapabilities({}).tokenMetrics).toBe(true);
+describe('resolveCapabilities — usage presentation', () => {
+  it('shows token usage and cost by default', () => {
+    expect(resolveCapabilities({})).toMatchObject({
+      tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
+    });
   });
 
-  it('is hidden with CEZ_HIDE_TOKEN_METRICS=1', () => {
-    expect(resolveCapabilities({ CEZ_HIDE_TOKEN_METRICS: '1' }).tokenMetrics).toBe(false);
-  });
+  it.each([
+    [{ CEZ_HIDE_TOKEN_METRICS: '1' }, false, false, false],
+    [{ CEZ_HIDE_TOKEN_USAGE: '1' }, false, false, true],
+    [{ CEZ_HIDE_COST: '1' }, false, true, false],
+    [{ CEZ_HIDE_TOKEN_USAGE: '1', CEZ_HIDE_COST: '1' }, false, false, false],
+    [{ CEZ_HIDE_TOKEN_METRICS: '1', CEZ_HIDE_TOKEN_USAGE: '0', CEZ_HIDE_COST: '0' }, false, false, false],
+  ] as const)(
+    'resolves strict visibility for %o',
+    (env, tokenMetrics, tokenUsageMetrics, costMetrics) => {
+      expect(resolveCapabilities(env)).toMatchObject({ tokenMetrics, tokenUsageMetrics, costMetrics });
+    },
+  );
 
   it.each(['0', 'true', 'yes', '', 'on'])(
     'stays visible for CEZ_HIDE_TOKEN_METRICS=%j — only an exact "1" opts out',
     (value) => {
-      expect(resolveCapabilities({ CEZ_HIDE_TOKEN_METRICS: value }).tokenMetrics).toBe(true);
+      expect(resolveCapabilities({
+        CEZ_HIDE_TOKEN_METRICS: value,
+        CEZ_HIDE_TOKEN_USAGE: value,
+        CEZ_HIDE_COST: value,
+      })).toMatchObject({ tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true });
     },
   );
 
   it('does not change telemetry visibility when another deployment capability is enabled', () => {
-    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FOLLOWUPS: '1' }).tokenMetrics).toBe(true);
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FOLLOWUPS: '1' })).toMatchObject({
+      tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
+    });
   });
 });

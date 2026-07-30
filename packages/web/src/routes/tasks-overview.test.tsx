@@ -136,6 +136,8 @@ describe('TasksOverview — the table', () => {
           branch: 'cez/8f31ab02',
           diffStat: { adds: 128, dels: 14, files: 6 },
           tokensUsed: 184_700,
+          inputTokens: 184_700,
+          outputTokens: 2_400,
           costUsd: 0.31,
           pullRequestUrl: 'https://github.com/o/r/pull/402',
           createdAt: ago(40 * 60_000),
@@ -145,7 +147,7 @@ describe('TasksOverview — the table', () => {
       ],
     })
 
-    // Status | Task | Workflow | Branch | ± | PR | Tokens | Cost | CPU | Mem | Started
+    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | CPU | Mem | Started
     expect(cellsOf('full')).toEqual([
       'needs review',
       'Structured changes endpoint',
@@ -153,7 +155,7 @@ describe('TasksOverview — the table', () => {
       'cez/8f31ab02',
       '+128 −14', // the ± column (R2 #389) — adds and dels, the mockup's pair
       '#402',
-      '184.7k',
+      '184.7k / 2.4k',
       '$0.31',
       '—', // no live sample, CPU has no persisted peak
       '—',
@@ -162,7 +164,7 @@ describe('TasksOverview — the table', () => {
     // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
     // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '0', '—', '—', '—', '26m'])
+    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
@@ -172,7 +174,8 @@ describe('TasksOverview — the table', () => {
 
   it('removes token/cost headers and cells while preserving table and queue semantics', () => {
     renderOverview({
-      showTokenMetrics: false,
+      showTokens: false,
+      showCost: false,
       runs: [
         run({ id: 'hidden', title: 'Hidden metrics', tokensUsed: 184_700, costUsd: 0.31 }),
         run({ id: 'queued-hidden', status: 'queued', tokensUsed: 12_000, costUsd: 0.02 }),
@@ -200,6 +203,38 @@ describe('TasksOverview — the table', () => {
     expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
     expect(queued.textContent).not.toContain('12.0k')
     expect(queued.textContent).not.toContain('$0.02')
+  })
+
+  it.each([
+    { name: 'both visible', showTokens: true, showCost: true, headers: ['IN / OUT', 'Cost'], tokens: true, cost: true },
+    { name: 'tokens only', showTokens: true, showCost: false, headers: ['IN / OUT'], tokens: true, cost: false },
+    { name: 'cost only', showTokens: false, showCost: true, headers: ['Cost'], tokens: false, cost: true },
+    { name: 'both hidden', showTokens: false, showCost: false, headers: [], tokens: false, cost: false },
+  ])('keeps desktop and mobile metrics independent when $name', ({ showTokens, showCost, headers, tokens, cost }) => {
+    renderOverview({
+      showTokens,
+      showCost,
+      runs: [
+        run({
+          id: 'visibility',
+          branch: 'cez/visibility',
+          inputTokens: 184_700,
+          outputTokens: 2_400,
+          costUsd: 0.31,
+        }),
+      ],
+    })
+
+    const allHeaders = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
+      (cell) => cell.textContent,
+    )
+    expect(allHeaders.filter((header) => header === 'IN / OUT' || header === 'Cost')).toEqual(headers)
+    const rowText = tableRow('visibility')?.textContent ?? ''
+    const cardText = card('visibility')?.textContent ?? ''
+    expect(rowText.includes('184.7k / 2.4k')).toBe(tokens)
+    expect(cardText.includes('IN 184.7k · OUT 2.4k')).toBe(tokens)
+    expect(rowText.includes('$0.31')).toBe(cost)
+    expect(cardText.includes('$0.31')).toBe(cost)
   })
 
   it('shows the auto-summary title once a turn produced one, falling back to the raw title', () => {
@@ -574,6 +609,9 @@ describe('TasksOverview — mobile cards and FAB', () => {
           branch: 'cez/8f31ab02',
           diffStat: { adds: 128, dels: 14, files: 6 },
           tokensUsed: 184_700,
+          inputTokens: 184_700,
+          outputTokens: 2_400,
+          costUsd: 0.31,
           pullRequestUrl: 'https://github.com/o/r/pull/402',
           createdAt: ago(40 * 60_000),
           finishedAt: ago(12 * 60_000),
@@ -590,14 +628,16 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(c.textContent).toContain('cez/8f31ab02')
     // The meta row carries the diff pair, like the mockup card (branch · ± · tokens).
     expect(c.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+128 −14')
-    expect(c.textContent).toContain('184.7k')
+    expect(c.textContent).toContain('IN 184.7k · OUT 2.4k')
+    expect(c.textContent).toContain('$0.31')
     expect(c.textContent).toContain('12m')
     expect(c.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/r/pull/402')
   })
 
   it('removes token text and its separator from cards when metrics are hidden', () => {
     renderOverview({
-      showTokenMetrics: false,
+      showTokens: false,
+      showCost: false,
       runs: [
         run({
           id: 'hidden-card',

@@ -34,6 +34,8 @@ const run = (status: RunStatus, extra: Partial<ApiRun> = {}): ApiRun => ({
   status,
   createdAt: '2026-07-14T12:00:00.000Z',
   tokensUsed: 27_000,
+  inputTokens: 24_600,
+  outputTokens: 2_400,
   archived: false,
   steps: [step({ sessionId: 'sess-1' })],
   ...extra,
@@ -595,7 +597,7 @@ describe('notes panel', () => {
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
-  it('meta shows workflow · branch chip · ± · tokens · cost, with runner/model tucked into the agent badge', () => {
+  it('meta shows workflow · branch chip · ± · input/output · cost, with runner/model tucked into the agent badge', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -613,7 +615,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(meta.textContent).not.toContain('gpt-5.2-codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
-    expect(meta.textContent).toContain('27.0k tokens')
+    expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
     expect(meta.textContent).toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
@@ -638,7 +640,7 @@ describe('meta line, tabs, pill and resume hint', () => {
 
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     await waitFor(() => {
-      expect(meta.textContent).not.toContain('27.0k tokens')
+      expect(meta.textContent).not.toContain('IN 24.6k')
       expect(meta.textContent).not.toContain('$0.04')
     })
     expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
