@@ -39,14 +39,14 @@ const SKILLS: Skill[] = [
   { name: 'om-review', body: '', path: '/p/om-review.md', source: 'cezar' },
 ]
 
-/** The composer fetches `/api/skills` (only once `/` has been typed) and `/api/ui-state`
+/** The composer fetches `/api/v1/skills` (only once `/` has been typed) and `/api/v1/ui-state`
  *  (#519: the autocomplete's usage order + bump). `uiState: null` answers the GET with a 404
  *  (the "ui-state unavailable" case); PUT bodies are recorded in `uiStatePuts`. */
 function stubSkillsFetch(uiState: Record<string, unknown> | null = {}) {
   const uiStatePuts: unknown[] = []
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
-    if (url.includes('/api/ui-state')) {
+    if (url.includes('/api/v1/ui-state')) {
       if ((init?.method ?? 'GET') === 'PUT') uiStatePuts.push(JSON.parse(String(init?.body)))
       const status = uiState === null ? 404 : 200
       const body = uiState === null ? JSON.stringify({ error: 'nope' }) : JSON.stringify(uiState)
@@ -54,7 +54,7 @@ function stubSkillsFetch(uiState: Record<string, unknown> | null = {}) {
         new Response(body, { status, headers: { 'content-type': 'application/json' } }),
       )
     }
-    const body = url.includes('/api/skills') ? JSON.stringify(SKILLS) : '[]'
+    const body = url.includes('/api/v1/skills') ? JSON.stringify(SKILLS) : '[]'
     return Promise.resolve(
       new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }),
     )
@@ -238,7 +238,7 @@ describe('/ skills autocomplete (#380)', () => {
   it('opens at a word boundary, fetches skills lazily, lists project skills first and bold', async () => {
     const { fetchMock, textarea } = renderComposer()
     // No `/` yet — no skills fetch.
-    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes('/api/skills'))).toHaveLength(0)
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes('/api/v1/skills'))).toHaveLength(0)
 
     type(textarea, 'please /')
     const items = await screen.findAllByText(/om-fix|om-review|global-deploy/)

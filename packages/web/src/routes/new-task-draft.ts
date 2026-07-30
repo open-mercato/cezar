@@ -90,7 +90,7 @@ const STORAGE_KEY = 'cez-new-task-draft'
  * cezar composer when the project pill swaps scope — so each project gets its own key.
  *
  * `null` (the argument's default) keeps the BARE legacy key. That is the same "unscoped means
- * byte-identical" invariant the rest of step 3.1 keeps (`scopeApiPath`, `queryScope`): the boot
+ * byte-identical" invariant the rest of step 3.1 keeps (`apiPath`, `queryScope`): the boot
  * project mounts unscoped, so its draft stays exactly where it has always been and a task typed
  * before this upgrade is still there after it. Only non-boot projects pay the suffix.
  */

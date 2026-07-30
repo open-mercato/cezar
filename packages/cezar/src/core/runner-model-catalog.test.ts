@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RunnerModelCatalog, type ModelOption } from './runner-model-catalog.js';
+import { RunnerModelCatalog, type ModelOption } from './runner-model-catalog.ts';
 
 const models: ModelOption[] = [
   { id: 'gpt-latest', label: 'GPT Latest', description: 'Latest model' },

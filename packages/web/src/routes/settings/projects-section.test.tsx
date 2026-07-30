@@ -57,9 +57,9 @@ const PROJECTS: ProjectListEntry[] = [
 ]
 
 type Answers = {
-  /** What `PUT /api/workspace/config` answers — a 400 stands in for the writability probe. */
+  /** What `PUT /api/v1/workspace/config` answers — a 400 stands in for the writability probe. */
   putConfig?: { status: number; payload: unknown }
-  /** What `DELETE /api/projects/:id` answers. */
+  /** What `DELETE /api/v1/projects/:id` answers. */
   del?: { status: number; payload: unknown }
 }
 
@@ -76,7 +76,19 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
-    resources: { maxParallel: 2, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+    composerDefaults: {
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: 'source-dependent',
+      inheritedWorktree: false,
+    },
+    resources: {
+      maxParallel: 2,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: null,
+      memoryLimitMb: null,
+      worktreeRetentionDefault: 10,
+    },
   }
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
@@ -87,15 +99,15 @@ function serve(answers: Answers = {}) {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/projects' && method === 'GET') return json(registry)
-      if (url === '/api/workspace/config' && method === 'GET') return json(config)
-      if (url === '/api/workspace/config' && method === 'PUT') {
+      if (url === '/api/v1/projects' && method === 'GET') return json(registry)
+      if (url === '/api/v1/workspace/config' && method === 'GET') return json(config)
+      if (url === '/api/v1/workspace/config' && method === 'PUT') {
         if (answers.putConfig) return json(answers.putConfig.payload, answers.putConfig.status)
         config.browseRoot = String(body?.browseRoot ?? config.browseRoot)
         config.projectsDir = String(body?.projectsDir ?? config.projectsDir)
         return json(config)
       }
-      if (url.startsWith('/api/projects/') && method === 'PATCH') {
+      if (url.startsWith('/api/v1/projects/') && method === 'PATCH') {
         const id = url.split('/').pop() ?? ''
         const entry = registry.projects.find((p) => p.id === id)
         if (!entry) return json({ error: `unknown project: ${id}` }, 404)
@@ -104,7 +116,7 @@ function serve(answers: Answers = {}) {
         else entry.maxParallel = mp as number
         return json({ project: entry })
       }
-      if (url.startsWith('/api/projects/') && method === 'DELETE') {
+      if (url.startsWith('/api/v1/projects/') && method === 'DELETE') {
         const answer = answers.del ?? { status: 200, payload: { removed: true, id: url.split('/').pop() } }
         if (answer.status === 200) {
           registry.projects = registry.projects.filter((p) => !url.endsWith(`/${p.id}`))
@@ -175,7 +187,7 @@ describe('Global settings → Projects', () => {
   })
 
   it('renders the 400 reason from the writability probe INLINE, verbatim', async () => {
-    // The exact shape `PUT /api/workspace/config` answers with when the probe fails (step 2.7).
+    // The exact shape `PUT /api/v1/workspace/config` answers with when the probe fails (step 2.7).
     const reason = 'not writable: EACCES: permission denied, mkdir \'/opt/checkouts\''
     serve({ putConfig: { status: 400, payload: { error: reason } } })
     renderProjects()
@@ -194,7 +206,7 @@ describe('Global settings → Projects', () => {
     expect(rootInput()!.value).toBe('/opt/checkouts')
     expect(rootInput()!.getAttribute('aria-invalid')).toBe('true')
     // A rejected save changed no authoritative data, so it must not refresh the registry.
-    expect(requests.filter((r) => r.method === 'GET' && r.url === '/api/projects')).toHaveLength(0)
+    expect(requests.filter((r) => r.method === 'GET' && r.url === '/api/v1/projects')).toHaveLength(0)
   })
 
   it('clears the inline error as soon as the value changes again', async () => {
@@ -222,7 +234,7 @@ describe('Global settings → Projects', () => {
     expect(browseInput()!.getAttribute('aria-invalid')).toBe('true')
   })
 
-  it('saves a valid checkout root through PUT /api/workspace/config', async () => {
+  it('saves a valid checkout root through PUT /api/v1/workspace/config', async () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rootInput()).not.toBeNull())
@@ -230,14 +242,14 @@ describe('Global settings → Projects', () => {
     fireEvent.change(rootInput()!, { target: { value: '~/code' } })
     fireEvent.click(saveRoot()!)
     await waitFor(() =>
-      expect(requests.filter((r) => r.method === 'PUT' && r.url === '/api/workspace/config')).toEqual([
-        { method: 'PUT', url: '/api/workspace/config', body: { projectsDir: '~/code' } },
+      expect(requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')).toEqual([
+        { method: 'PUT', url: '/api/v1/workspace/config', body: { projectsDir: '~/code' } },
       ]),
     )
     // The clone dialog reads projectsDir from this response, not workspace/config. Refreshing
     // it here keeps the next Add project opening coherent without a whole-app reload (#567).
     await waitFor(() =>
-      expect(requests.filter((r) => r.method === 'GET' && r.url === '/api/projects')).toHaveLength(1),
+      expect(requests.filter((r) => r.method === 'GET' && r.url === '/api/v1/projects')).toHaveLength(1),
     )
     expect(inlineError()).toBeNull()
   })
@@ -255,12 +267,12 @@ describe('Global settings → Projects', () => {
     fireEvent.change(browseInput()!, { target: { value: '~/source' } })
     fireEvent.click(saveBrowse()!)
     await waitFor(() =>
-      expect(requests.filter((r) => r.method === 'PUT' && r.url === '/api/workspace/config')).toEqual([
-        { method: 'PUT', url: '/api/workspace/config', body: { browseRoot: '~/source' } },
+      expect(requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')).toEqual([
+        { method: 'PUT', url: '/api/v1/workspace/config', body: { browseRoot: '~/source' } },
       ]),
     )
     expect(rootInput()!.value).toBe('~/cezar/projects')
-    expect(requests.filter((r) => r.method === 'GET' && r.url === '/api/projects')).toHaveLength(0)
+    expect(requests.filter((r) => r.method === 'GET' && r.url === '/api/v1/projects')).toHaveLength(0)
     await waitFor(() => expect(client.getQueryState(workspaceQueryKeys.fsBrowse(null))?.isInvalidated).toBe(true))
   })
 
@@ -279,7 +291,7 @@ describe('Global settings → Projects', () => {
     expect(deletes()).toEqual([])
 
     fireEvent.click(confirmButton()!)
-    await waitFor(() => expect(deletes().map((r) => r.url)).toEqual(['/api/projects/shop-backend']))
+    await waitFor(() => expect(deletes().map((r) => r.url)).toEqual(['/api/v1/projects/shop-backend']))
     await waitFor(() => expect(row('shop-backend')).toBeNull())
   })
 
@@ -322,7 +334,7 @@ describe('Global settings → Projects', () => {
     fireEvent.change(select!, { target: { value: '1' } })
     await waitFor(() =>
       expect(patches()).toEqual([
-        { method: 'PATCH', url: '/api/projects/shop-backend', body: { maxParallel: 1 } },
+        { method: 'PATCH', url: '/api/v1/projects/shop-backend', body: { maxParallel: 1 } },
       ]),
     )
     // …and the row reflects the persisted value after the query refreshes.
@@ -333,7 +345,7 @@ describe('Global settings → Projects', () => {
     await waitFor(() =>
       expect(patches().at(-1)).toEqual({
         method: 'PATCH',
-        url: '/api/projects/shop-backend',
+        url: '/api/v1/projects/shop-backend',
         body: { maxParallel: null },
       }),
     )

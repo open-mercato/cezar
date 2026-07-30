@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
 
-import { getApiScope, setApiScope } from '@open-mercato/cezar-api-client'
+import { API_PREFIX, getApiScope, setApiScope } from '@open-mercato/cezar-api-client'
 
 /**
  * The React face of the project scope (multi-project spec, step 3.1): components read
@@ -16,7 +16,7 @@ export interface ProjectScope {
   apiBase: string
 }
 
-const UNSCOPED: ProjectScope = { projectId: null, apiBase: '/api' }
+const UNSCOPED: ProjectScope = { projectId: null, apiBase: API_PREFIX }
 
 export const ProjectScopeContext = createContext<ProjectScope>(UNSCOPED)
 
@@ -63,7 +63,8 @@ export function ProjectScopeProvider({
   useEffect(() => () => setApiScope(null), [])
 
   const value = useMemo<ProjectScope>(
-    () => (projectId === null ? UNSCOPED : { projectId, apiBase: `/api/p/${encodeURIComponent(projectId)}` }),
+    // Built from the same prefix the request path uses — the version is one fact, not two.
+    () => (projectId === null ? UNSCOPED : { projectId, apiBase: `${API_PREFIX}/p/${encodeURIComponent(projectId)}` }),
     [projectId],
   )
   return <ProjectScopeContext.Provider value={value}>{children}</ProjectScopeContext.Provider>

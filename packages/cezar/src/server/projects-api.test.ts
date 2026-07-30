@@ -12,15 +12,15 @@ import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.js';
-import { workspaceConfigPath } from '../paths.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import type { CloneRunner } from './checkout.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { workspaceConfigPath } from '../paths.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import type { CloneRunner } from './checkout.ts';
 import {
   WorkspaceEventBus,
   createApp,
@@ -28,11 +28,11 @@ import {
   type RegisterProjectResponse,
   type ServerDeps,
   type UpdateProjectResponse,
-} from './server.js';
+} from './server.ts';
 
 /**
  * Multi-project workspace API (spec 2026-07-20-multi-project-workspace, step
- * 1.6): the new `GET /api/projects` registry listing, and `/api/health`'s
+ * 1.6): the new `GET /api/v1/projects` registry listing, and `/api/v1/health`'s
  * additive `projects` + `bootProject` fields — with the #431 guarantee that
  * health (the one CORS-open route) never carries a project's absolute root.
  */
@@ -99,18 +99,18 @@ describe('workspace projects API', () => {
     });
 
   const getProjects = async (over: Partial<ServerDeps> = {}): Promise<ProjectsResponse> => {
-    const res = await apiRequest(makeApp(over), '/api/projects');
+    const res = await apiRequest(makeApp(over), '/api/v1/projects');
     expect(res.status).toBe(200);
     return (await res.json()) as ProjectsResponse;
   };
 
   const getHealth = async (over: Partial<ServerDeps> = {}): Promise<HealthBody> => {
-    const res = await apiRequest(makeApp(over), '/api/health');
+    const res = await apiRequest(makeApp(over), '/api/v1/health');
     expect(res.status).toBe(200);
     return (await res.json()) as HealthBody;
   };
 
-  describe('GET /api/projects', () => {
+  describe('GET /api/v1/projects', () => {
     it('answers an empty registry with projects:[] and defaults — never a 404', async () => {
       const body = await getProjects();
       expect(body.projects).toEqual([]);
@@ -155,7 +155,7 @@ describe('workspace projects API', () => {
       expect(registered.id).toBe(allocateProjectSlug(repoRoot, []));
       expect(body.bootProject).toBe(allocateProjectSlug(repoRoot, [registered.id]));
 
-      const scoped = await apiRequest(makeApp({ contexts }), `/api/p/${registered.id}/repo`);
+      const scoped = await apiRequest(makeApp({ contexts }), `/api/v1/p/${registered.id}/repo`);
       expect(scoped.status).toBe(200);
       expect(contexts.peek(registered.id)?.root).toBe(await realpath(registeredRoot));
       contexts.disposeAll();
@@ -212,7 +212,7 @@ describe('workspace projects API', () => {
       };
       process.env.CEZ_SINGLE_PROJECT = '1';
 
-      const res = await apiRequest(makeApp({ cloneRunner }), '/api/projects/checkout', {
+      const res = await apiRequest(makeApp({ cloneRunner }), '/api/v1/projects/checkout', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: 'open-mercato/cezar' }),
@@ -230,7 +230,7 @@ describe('workspace projects API', () => {
       process.env.CEZ_SINGLE_PROJECT = '1';
       const res = await apiRequest(
         makeApp(),
-        `/api/fs/browse?path=${encodeURIComponent(otherRoot)}`,
+        `/api/v1/fs/browse?path=${encodeURIComponent(otherRoot)}`,
       );
 
       expect(res.status).toBe(409);
@@ -240,9 +240,9 @@ describe('workspace projects API', () => {
     });
   });
 
-  describe('POST /api/projects — the folder-browser dialog (step 4.2)', () => {
+  describe('POST /api/v1/projects — the folder-browser dialog (step 4.2)', () => {
     const post = async (body: unknown, over: Partial<ServerDeps> = {}) => {
-      const res = await apiRequest(makeApp(over), '/api/projects', {
+      const res = await apiRequest(makeApp(over), '/api/v1/projects', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -342,7 +342,7 @@ describe('workspace projects API', () => {
     });
 
     it('hosted mode: a folder outside browseRoot is refused, one inside is registered', async () => {
-      // Hosted narrows `/api/fs/browse` to browseRoot; the register route
+      // Hosted narrows `/api/v1/fs/browse` to browseRoot; the register route
       // re-checks the same containment, or a hand-made POST would walk around
       // the narrowing entirely.
       const checkoutRoot = join(home, 'checkouts');
@@ -419,7 +419,7 @@ describe('workspace projects API', () => {
     });
   });
 
-  describe('DELETE /api/projects/:projectId — Settings → Projects remove (step 4.4)', () => {
+  describe('DELETE /api/v1/projects/:projectId — Settings → Projects remove (step 4.4)', () => {
     /** Every file under `dir`, path → contents. The removal contract is "no file on disk is
      *  touched", so the assertion has to be about FILES, not just about the root surviving. */
     const snapshot = (dir: string): Record<string, string> => {
@@ -455,7 +455,7 @@ describe('workspace projects API', () => {
     });
 
     const del = async (id: string, over: Partial<ServerDeps> = {}) => {
-      const res = await apiRequest(makeApp(over), `/api/projects/${id}`, {
+      const res = await apiRequest(makeApp(over), `/api/v1/projects/${id}`, {
         method: 'DELETE',
       });
       return {
@@ -551,9 +551,9 @@ describe('workspace projects API', () => {
     });
   });
 
-  describe('PATCH /api/projects/:projectId — per-project maxParallel (2026-07-22)', () => {
+  describe('PATCH /api/v1/projects/:projectId — per-project maxParallel (2026-07-22)', () => {
     /** A semaphore whose refresh() is observable — the route MUST call it so a
-     *  new ceiling applies without a restart (mirrors PUT /api/workspace/config). */
+     *  new ceiling applies without a restart (mirrors PUT /api/v1/workspace/config). */
     const countingSemaphore = () => {
       let refreshes = 0;
       const semaphore = new WorkspaceSemaphore({
@@ -566,7 +566,7 @@ describe('workspace projects API', () => {
     };
 
     const patch = async (id: string, body: unknown, over: Partial<ServerDeps> = {}) => {
-      const res = await apiRequest(makeApp(over), `/api/projects/${id}`, {
+      const res = await apiRequest(makeApp(over), `/api/v1/projects/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -646,7 +646,7 @@ describe('workspace projects API', () => {
     });
   });
 
-  describe('GET /api/health — additive projects + bootProject', () => {
+  describe('GET /api/v1/health — additive projects + bootProject', () => {
     it('pins flagged health listings to the explicit boot identity', async () => {
       const boot = await registerProject(repoRoot);
       await registerProject(otherRoot);

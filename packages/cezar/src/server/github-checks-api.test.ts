@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import type { GithubChecksData } from './github.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import type { GithubChecksData } from './github.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * `GET /api/github/checks?prs=…` (#664). The contract under test: the `prs` list is zod-free but
+ * `GET /api/v1/github/checks?prs=…` (#664). The contract under test: the `prs` list is zod-free but
  * strictly validated at the boundary (positive integers, non-empty, ≤100 — 400 on anything else,
  * never a throw), and — driven through `CEZ_DRY_RUN=1` so no `gh` is touched — a `GithubChecksData`
  * payload mapping each requested PR number to its glyph. The gh-shelling and degrade paths live in
@@ -44,7 +44,7 @@ describe('the github checks API', () => {
 
   it('returns a number → glyph map for the requested PRs (dry-run mock)', async () => {
     // The dry-run catalog has PR #128 passing and PR #124 failing.
-    const res = await apiRequest(app, '/api/github/checks?prs=128,124');
+    const res = await apiRequest(app, '/api/v1/github/checks?prs=128,124');
     expect(res.status).toBe(200);
     const body = (await res.json()) as GithubChecksData;
     expect(body.available).toBe(true);
@@ -54,7 +54,7 @@ describe('the github checks API', () => {
   });
 
   it('answers a PR with no CI (or unknown) as null, not an error', async () => {
-    const res = await apiRequest(app, '/api/github/checks?prs=99999');
+    const res = await apiRequest(app, '/api/v1/github/checks?prs=99999');
     expect(res.status).toBe(200);
     const body = (await res.json()) as GithubChecksData;
     expect(body.available).toBe(true);
@@ -63,28 +63,28 @@ describe('the github checks API', () => {
   });
 
   it('400s when the prs query is missing', async () => {
-    const res = await apiRequest(app, '/api/github/checks');
+    const res = await apiRequest(app, '/api/v1/github/checks');
     expect(res.status).toBe(400);
   });
 
   it('400s on a non-numeric prs entry', async () => {
-    const res = await apiRequest(app, '/api/github/checks?prs=12,abc');
+    const res = await apiRequest(app, '/api/v1/github/checks?prs=12,abc');
     expect(res.status).toBe(400);
   });
 
   it('400s on an empty prs list', async () => {
-    const res = await apiRequest(app, '/api/github/checks?prs=');
+    const res = await apiRequest(app, '/api/v1/github/checks?prs=');
     expect(res.status).toBe(400);
   });
 
   it('400s when more than 100 PRs are requested', async () => {
     const many = Array.from({ length: 101 }, (_, i) => i + 1).join(',');
-    const res = await apiRequest(app, `/api/github/checks?prs=${many}`);
+    const res = await apiRequest(app, `/api/v1/github/checks?prs=${many}`);
     expect(res.status).toBe(400);
   });
 
   it('rejects a zero or negative PR number', async () => {
-    expect((await apiRequest(app, '/api/github/checks?prs=0')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/checks?prs=-3')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/checks?prs=0')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/checks?prs=-3')).status).toBe(400);
   });
 });

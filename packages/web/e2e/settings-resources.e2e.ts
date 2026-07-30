@@ -8,7 +8,7 @@ import { AgentBrowser, readTestEnv } from './agent-browser'
  * Project settings → Worktrees: retention (#483) end-to-end against the shared dry-run
  * environment. The field moved out of Resources into its own project section in step 3.5
  * (retention sizes one repo's worktree pool; the host-wide knobs went global). Drives the "Keep last N worktrees" field through the real form and reads the
- * write back from `GET /api/config` (the server's truth, not the query cache), proves a cold
+ * write back from `GET /api/v1/config` (the server's truth, not the query cache), proves a cold
  * load renders the persisted value, and checks the worktrees management panel renders (rows or
  * the empty state) with the keep-limit footer.
  *
@@ -45,12 +45,12 @@ interface ConfigAnswer {
 
 async function waitForConfig(check: (config: ConfigAnswer) => boolean): Promise<ConfigAnswer> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const res = await fetch(`${baseUrl}/api/config`)
+    const res = await fetch(`${baseUrl}/api/v1/config`)
     const config = (await res.json()) as ConfigAnswer
     if (check(config)) return config
     await new Promise((r) => setTimeout(r, 250))
   }
-  throw new Error('GET /api/config never showed the expected worktreeRetention')
+  throw new Error('GET /api/v1/config never showed the expected worktreeRetention')
 }
 
 const gotoResources = () => {
@@ -69,7 +69,7 @@ describe('project settings → worktrees: retention against the live dry-run ser
     expect(browser.count('[data-slot="worktrees-footer"]')).toBe(1)
   })
 
-  it('editing the count and saving persists through PUT /api/config', async () => {
+  it('editing the count and saving persists through PUT /api/v1/config', async () => {
     gotoResources()
     browser.fill('[data-slot="resources-worktree-retention"]', '4')
     browser.click('[data-action="resources-save-retention"]')

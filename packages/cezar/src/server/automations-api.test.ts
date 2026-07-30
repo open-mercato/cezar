@@ -2,13 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AutomationCoordinator } from '../automations/coordinator.js';
-import { WorkspaceAutomationScheduler } from '../automations/scheduler.js';
-import { AutomationStore } from '../automations/store.js';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp, WorkspaceEventBus } from './server.js';
+import { AutomationCoordinator } from '../automations/coordinator.ts';
+import { WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
+import { AutomationStore } from '../automations/store.ts';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp, WorkspaceEventBus } from './server.ts';
 
 describe('GitHub automation API', () => {
   let root: string;
@@ -45,40 +45,43 @@ describe('GitHub automation API', () => {
   });
 
   it('creates paused definitions and rejects malformed bounds', async () => {
-    const bad = await apiRequest(app(), '/api/automations', json({ ...input, intervalSeconds: 5 }));
+    const bad = await apiRequest(app(), '/api/v1/automations', json({ ...input, intervalSeconds: 5 }));
     expect(bad.status).toBe(400);
-    const response = await apiRequest(app(), '/api/automations', json(input));
+    const response = await apiRequest(app(), '/api/v1/automations', json(input));
     expect(response.status).toBe(201);
     expect(((await response.json()) as any).automation).toMatchObject({ enabled: false, revision: 1 });
   });
 
   it('enforces optimistic concurrency and establishes a baseline on enable', async () => {
-    const created = ((await (await apiRequest(app(), '/api/automations', json(input))).json()) as any).automation;
+    const created = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
     const stale = await apiRequest(
       app(),
-      `/api/automations/${created.id}`,
+      `/api/v1/automations/${created.id}`,
       json({ ...input, expectedRevision: 9 }, 'PUT'),
     );
     expect(stale.status).toBe(409);
-    const enabled = await apiRequest(app(), `/api/automations/${created.id}/enable`, { method: 'POST' });
+    const enabled = await apiRequest(app(), `/api/v1/automations/${created.id}/enable`, { method: 'POST' });
     expect(enabled.status).toBe(200);
-    const detail = await apiRequest(app(), `/api/automations/${created.id}`);
+    const detail = await apiRequest(app(), `/api/v1/automations/${created.id}`);
     expect(((await detail.json()) as any).state).toMatchObject({ revision: 2, baselineAt: expect.any(String) });
   });
 
   it('runs preview checks asynchronously without writing receipts', async () => {
     const server = app();
-    const created = ((await (await apiRequest(server, '/api/automations', json(input))).json()) as any).automation;
-    const queued = await apiRequest(server, `/api/automations/${created.id}/check`, json({ mode: 'preview' }));
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json(input))).json()) as any).automation;
+    const queued = await apiRequest(server, `/api/v1/automations/${created.id}/check`, json({ mode: 'preview' }));
     expect(queued.status).toBe(202);
     const { checkId } = (await queued.json()) as { checkId: string };
     let check: { status: string } = { status: 'queued' };
-    for (let attempt = 0; attempt < 20 && check.status !== 'error'; attempt += 1) {
+    // Up to 2s, exiting the moment the check fails. The background pass shells out to `git` to
+    // read the repo's remote before it can decide there is none, and 200ms of budget was under
+    // that spawn's cost whenever the rest of the server suites were running beside this one.
+    for (let attempt = 0; attempt < 200 && check.status !== 'error'; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
-      check = (await (await apiRequest(server, `/api/automation-checks/${checkId}`)).json()) as { status: string };
+      check = (await (await apiRequest(server, `/api/v1/automation-checks/${checkId}`)).json()) as { status: string };
     }
     expect(check.status).toBe('error');
-    const list = await apiRequest(server, '/api/automations');
+    const list = await apiRequest(server, '/api/v1/automations');
     expect(((await list.json()) as any).automations).toHaveLength(1);
     expect(readFileOrEmpty(join(root, '.ai/cezar/automation-receipts.ndjson'))).toBe('');
   });
@@ -107,10 +110,10 @@ describe('GitHub automation API', () => {
     });
 
     await scheduler.start();
-    const created = ((await (await apiRequest(server, '/api/automations', json(input))).json()) as any).automation;
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json(input))).json()) as any).automation;
     expect(scheduler.hasTimer()).toBe(false);
 
-    const enabled = await apiRequest(server, `/api/automations/${created.id}/enable`, { method: 'POST' });
+    const enabled = await apiRequest(server, `/api/v1/automations/${created.id}/enable`, { method: 'POST' });
     expect(enabled.status).toBe(200);
     await rescheduled;
     expect(coordinator.store('default')).toBe(automationStore);
@@ -121,7 +124,7 @@ describe('GitHub automation API', () => {
       revision: 2,
       lastSuccessAt: '2026-07-27T00:00:00.000Z',
     });
-    const detail = await apiRequest(server, `/api/automations/${created.id}`);
+    const detail = await apiRequest(server, `/api/v1/automations/${created.id}`);
     expect(((await detail.json()) as any).state.lastSuccessAt).toBe('2026-07-27T00:00:00.000Z');
     scheduler.stop();
   });
@@ -136,7 +139,7 @@ describe('GitHub automation API', () => {
     });
     const response = await apiRequest(
       app({ automationStore }),
-      '/api/automation-log?result=preview',
+      '/api/v1/automation-log?result=preview',
     );
     expect(response.status).toBe(200);
     expect(((await response.json()) as any).records).toEqual([
@@ -151,8 +154,8 @@ describe('GitHub automation API', () => {
       if (event === 'automation-change') changes.push(data);
     });
     const server = app({ workspaceEvents: bus });
-    const created = ((await (await apiRequest(server, '/api/automations', json(input))).json()) as any).automation;
-    const response = await apiRequest(server, `/api/automations/${created.id}`, { method: 'DELETE' });
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json(input))).json()) as any).automation;
+    const response = await apiRequest(server, `/api/v1/automations/${created.id}`, { method: 'DELETE' });
     expect(response.status).toBe(204);
     expect(changes.at(-1)).toEqual({
       project: 'default',

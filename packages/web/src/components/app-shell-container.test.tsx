@@ -34,12 +34,14 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/home/me/Projects/cezar',
   repo: { root: '/home/me/Projects/cezar', branch: 'feat/cockpit', remote: 'origin' },
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
 }
 
 /** One registered project — the degenerate workspace every existing install upgrades into. */
@@ -73,9 +75,9 @@ function serve(routes: Record<string, unknown>): void {
   fetchMock.mockImplementation(async (input) => {
     const path = String(input)
     const response =
-      path === '/api/providers/status'
+      path === '/api/v1/providers/status'
         ? (routes[path] ?? PROVIDERS)
-        : path === '/api/workspace/ui-state'
+        : path === '/api/v1/workspace/ui-state'
           ? (routes[path] ?? {})
           : routes[path]
     if (response === undefined) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
@@ -160,8 +162,8 @@ describe('skillsUpdateMarkerOf', () => {
 })
 
 describe('sidebar wiring', () => {
-  it('renders the repo and version chips from /api/health', async () => {
-    serve({ '/api/health': HEALTH, '/api/todos': [] })
+  it('renders the repo and version chips from /api/v1/health', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
@@ -170,8 +172,8 @@ describe('sidebar wiring', () => {
     expect(versionChip()?.textContent).toBe('v0.1.3')
   })
 
-  it('renders the inbox badge from /api/todos', async () => {
-    serve({ '/api/health': HEALTH, '/api/todos': TODOS })
+  it('renders the inbox badge from /api/v1/todos', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': TODOS })
     renderShell()
 
     await waitFor(() => expect(navBadge()).not.toBeNull())
@@ -182,8 +184,8 @@ describe('sidebar wiring', () => {
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.
   it('drops the Inbox nav item and its badge when the server has follow-ups off', async () => {
     serve({
-      '/api/health': { ...HEALTH, capabilities: { localHandoff: true, followups: false } },
-      '/api/todos': TODOS,
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, followups: false } },
+      '/api/v1/todos': TODOS,
     })
     renderShell()
 
@@ -197,8 +199,8 @@ describe('sidebar wiring', () => {
 
   it('never asks for todos on a server with the inbox off', async () => {
     serve({
-      '/api/health': { ...HEALTH, capabilities: { localHandoff: true, followups: false } },
-      '/api/todos': TODOS,
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, followups: false } },
+      '/api/v1/todos': TODOS,
     })
     renderShell()
 
@@ -206,11 +208,11 @@ describe('sidebar wiring', () => {
     // The badge query is keyed on the capability, so it never runs — unlike the /inbox route,
     // nothing here needs the list before health has spoken.
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
-    expect(asked).not.toContain('/api/todos')
+    expect(asked).not.toContain('/api/v1/todos')
   })
 
   it('renders no badge for an empty inbox', async () => {
-    serve({ '/api/health': HEALTH, '/api/todos': [] })
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
@@ -249,13 +251,13 @@ describe('sidebar wiring', () => {
   // branch for navigation: flat nav, one quick-list, repo chip, no group headers.
   it('keeps the sidebar flat when single-project mode pins the registry to the boot project', async () => {
     serve({
-      '/api/health': {
+      '/api/v1/health': {
         ...HEALTH,
         capabilities: { ...HEALTH.capabilities, singleProject: true },
       },
-      '/api/todos': [],
-      '/api/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
-      '/api/runs': [],
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+      '/api/v1/runs': [],
     })
     renderShell()
 
@@ -268,13 +270,13 @@ describe('sidebar wiring', () => {
 
   it('hides add-project chrome when health reports single-project mode', async () => {
     serve({
-      '/api/health': {
+      '/api/v1/health': {
         ...HEALTH,
         capabilities: { ...HEALTH.capabilities, singleProject: true },
       },
-      '/api/todos': [],
-      '/api/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
-      '/api/runs': [],
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+      '/api/v1/runs': [],
     })
     renderShell()
 
@@ -286,15 +288,15 @@ describe('sidebar wiring', () => {
 
   it('renders one collapsible group per project once the workspace has two', async () => {
     serve({
-      '/api/health': HEALTH,
-      '/api/todos': [],
-      '/api/projects': {
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
         projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' }],
         bootProject: 'cezar',
         projectsDir: '/home/me/cezar/projects',
       },
-      '/api/workspace/ui-state': {},
-      '/api/p/cezar/runs': [],
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/p/cezar/runs': [],
     })
     renderShell()
 
@@ -309,7 +311,7 @@ describe('sidebar wiring', () => {
   })
 
   it('shows the version chip even outside a git repo', async () => {
-    serve({ '/api/health': { ...HEALTH, repo: null }, '/api/todos': [] })
+    serve({ '/api/v1/health': { ...HEALTH, repo: null }, '/api/v1/todos': [] })
     renderShell()
 
     // Running cezar outside a repo is supported: no repo chip, but the rest of the chrome is
@@ -321,9 +323,9 @@ describe('sidebar wiring', () => {
 
   it('wires the provider query into the AppShell banner slot', async () => {
     serve({
-      '/api/health': HEALTH,
-      '/api/todos': [],
-      '/api/providers/status': {
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/providers/status': {
         providers: [
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'not-installed', enabled: true },
@@ -340,9 +342,9 @@ describe('sidebar wiring', () => {
 
   it('shows a runtime authentication incident in the global banner slot', async () => {
     serve({
-      '/api/health': HEALTH,
-      '/api/todos': [],
-      '/api/providers/status': {
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/providers/status': {
         providers: [
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
@@ -361,9 +363,9 @@ describe('sidebar wiring', () => {
 
   it('keeps the shell and route content when provider status fails', async () => {
     serve({
-      '/api/health': HEALTH,
-      '/api/todos': [],
-      '/api/providers/status': new Response(JSON.stringify({ error: 'unavailable' }), { status: 500 }),
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/providers/status': new Response(JSON.stringify({ error: 'unavailable' }), { status: 500 }),
     })
     const client = createQueryClient()
     client.setDefaultOptions({
@@ -382,9 +384,9 @@ describe('sidebar wiring', () => {
   it('keeps the shell and route content when a successful provider response is malformed', async () => {
     const secret = 'unexpected-provider-payload'
     serve({
-      '/api/health': HEALTH,
-      '/api/todos': [],
-      '/api/providers/status': { providers: [null, { provider: 'future', status: secret }] },
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/providers/status': { providers: [null, { provider: 'future', status: secret }] },
     })
     const client = createQueryClient()
     client.setDefaultOptions({
@@ -412,13 +414,13 @@ describe('document title wiring', () => {
 
   it('combines the selected project with scoped page context', async () => {
     serve({
-      '/api/health': HEALTH_WITH_BOOT,
-      '/api/todos': [],
-      '/api/projects': {
+      '/api/v1/health': HEALTH_WITH_BOOT,
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
         ...REGISTRY,
         projects: [{ ...PROJECT, id: 'shop', name: 'Storefront' }],
       },
-      '/api/runs': [],
+      '/api/v1/runs': [],
     })
     renderShell('/p/shop/git')
 
@@ -426,7 +428,7 @@ describe('document title wiring', () => {
   })
 
   it('falls back to the boot repository name when the registry is unavailable', async () => {
-    serve({ '/api/health': HEALTH_WITH_BOOT, '/api/todos': [], '/api/runs': [] })
+    serve({ '/api/v1/health': HEALTH_WITH_BOOT, '/api/v1/todos': [], '/api/v1/runs': [] })
     renderShell('/p/cezar/')
 
     await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
@@ -434,10 +436,10 @@ describe('document title wiring', () => {
 
   it('keeps global settings and a no-repo task route free of invented project context', async () => {
     serve({
-      '/api/health': { ...HEALTH_WITH_BOOT, repo: null },
-      '/api/todos': [],
-      '/api/projects': REGISTRY,
-      '/api/runs': [],
+      '/api/v1/health': { ...HEALTH_WITH_BOOT, repo: null },
+      '/api/v1/todos': [],
+      '/api/v1/projects': REGISTRY,
+      '/api/v1/runs': [],
     })
     const global = renderShell('/settings/global/projects')
 
@@ -450,10 +452,10 @@ describe('document title wiring', () => {
 
   it('updates after in-app navigation without remounting the shell', async () => {
     serve({
-      '/api/health': HEALTH_WITH_BOOT,
-      '/api/todos': [],
-      '/api/projects': REGISTRY,
-      '/api/runs': [],
+      '/api/v1/health': HEALTH_WITH_BOOT,
+      '/api/v1/todos': [],
+      '/api/v1/projects': REGISTRY,
+      '/api/v1/runs': [],
     })
     renderShell('/p/cezar/')
 
@@ -465,14 +467,14 @@ describe('document title wiring', () => {
   it('reacts to live project and task title cache updates', async () => {
     const initialRun = run()
     serve({
-      '/api/health': HEALTH_WITH_BOOT,
-      '/api/todos': [],
-      '/api/projects': {
+      '/api/v1/health': HEALTH_WITH_BOOT,
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
         ...REGISTRY,
         projects: [{ ...PROJECT, id: 'shop', name: 'Storefront' }],
       },
-      '/api/runs': [],
-      '/api/p/shop/runs': [initialRun],
+      '/api/v1/runs': [],
+      '/api/v1/p/shop/runs': [initialRun],
     })
     const { client } = renderShell('/p/shop/tasks/run-1')
 

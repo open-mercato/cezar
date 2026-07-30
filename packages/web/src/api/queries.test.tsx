@@ -120,7 +120,7 @@ describe('useRunnerModels', () => {
     const { result } = renderHook(() => useRunnerModels(), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.models[0]?.id).toBe('gpt-future')
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/models?runner=codex')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=codex')
   })
 })
 
@@ -149,7 +149,7 @@ describe('provider status workspace query', () => {
     })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/providers/status')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/providers/status')
     expect(workspaceQueryKeys.providerStatus).toEqual(['workspace', 'providers', 'status'])
     expect(client.getQueryData(['workspace', 'providers', 'status'])).toEqual(PROVIDERS)
 
@@ -243,7 +243,7 @@ describe('provider status workspace query', () => {
 
     act(() => result.current.mutate())
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/providers/status?refresh=1')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/providers/status?refresh=1')
     expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(refreshed)
   })
 
@@ -319,7 +319,7 @@ describe('provider status workspace query', () => {
 
     act(() => result.current.mutate({ provider: 'claude', authFailureId: 'incident-1' }))
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(fetchMock).toHaveBeenCalledWith('/api/providers/claude/retry', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/providers/claude/retry', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ authFailureId: 'incident-1' }),
     }))
@@ -446,10 +446,10 @@ describe('useSkills', () => {
   it('renders the fast catalog, then converges when the cold team cache is ready', async () => {
     let resolveReady!: (response: Response) => void
     fetchMock.mockImplementation(async (input) => {
-      if (String(input) === '/api/skills') {
+      if (String(input) === '/api/v1/skills') {
         return json([{ name: 'local', source: 'ai', body: '', path: '/repo/local.md' }])
       }
-      if (String(input) === '/api/skills?wait=1') {
+      if (String(input) === '/api/v1/skills?wait=1') {
         return new Promise<Response>((resolve) => {
           resolveReady = resolve
         })
@@ -471,7 +471,7 @@ describe('useSkills', () => {
     await waitFor(() =>
       expect(result.current.data?.map((skill) => skill.name)).toEqual(['local', 'om-fix']),
     )
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/skills', '/api/skills?wait=1'])
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/skills', '/api/v1/skills?wait=1'])
   })
 })
 
@@ -520,7 +520,7 @@ describe('useHealth', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.version).toBe('0.1.3')
     expect(result.current.data?.repo?.branch).toBe('main')
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/health')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/health')
   })
 
   it('surfaces an ApiError rather than pretending it has data', async () => {
@@ -547,7 +547,7 @@ describe('useHealth', () => {
   })
 
   // #369 moved server-side: the branch-switched-in-a-terminal case is now the `health` topic on
-  // /api/ws (ws.ts) pushing a changed snapshot, not a per-tab refetchInterval. The ONE root-level
+  // /api/v1/ws (ws.ts) pushing a changed snapshot, not a per-tab refetchInterval. The ONE root-level
   // useHealthSubscription folds those pushes into the same cache useHealth reads; the poll is gone.
   it('useHealthSubscription folds pushed frames into the cache instead of polling', async () => {
     vi.useFakeTimers()
@@ -619,7 +619,7 @@ describe('useHealth', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(FakeHealthSocket.instances).toHaveLength(0)
-    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/health', expect.objectContaining({
       credentials: 'include',
     }))
   })
@@ -649,7 +649,7 @@ describe('usePutAgentConfigFile', () => {
     const { result } = renderHook(() => usePutAgentConfigFile(file.id), { wrapper: scopedWrapper })
     act(() => result.current.mutate({ content: file.content, version: 'previous' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/p/proj-a/agent-config/claude.project.settings')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/p/proj-a/agent-config/claude.project.settings')
 
     setApiScope('proj-b')
     resolveFetch(json(file))
@@ -670,7 +670,7 @@ describe('useRuns', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data).toHaveLength(1)
     expect(result.current.data?.[0]?.title).toBe('Fix it')
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/runs')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/runs')
   })
 })
 
@@ -682,13 +682,13 @@ describe('useRun', () => {
       initialProps: {},
     })
 
-    // A route param that has not resolved yet must not become `GET /api/runs/undefined`.
+    // A route param that has not resolved yet must not become `GET /api/v1/runs/undefined`.
     expect(result.current.fetchStatus).toBe('idle')
     expect(fetchMock).not.toHaveBeenCalled()
 
     rerender({ id: 'run-1' })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/runs/run-1')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/runs/run-1')
   })
 })
 
@@ -707,7 +707,7 @@ describe('usePatchRun', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
     const [path, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit]
-    expect(path).toBe('/api/runs/run-1')
+    expect(path).toBe('/api/v1/runs/run-1')
     expect(init.method).toBe('PATCH')
     expect(JSON.parse(init.body as string)).toEqual({ title: 'New name' })
     // `runs.all` is a prefix of the list, detail and diff keys — one call reaches them all.

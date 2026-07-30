@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { branchFor, createWorktree, removeWorktree } from '../git-worktree.js';
+import { branchFor, createWorktree, removeWorktree } from '../git-worktree.ts';
 import {
   isReclaimable,
   rematerializeReclaimedWorktree,
   type RematerializeStore,
-} from './retention.js';
-import type { RunRecord } from './store.js';
+} from './retention.ts';
+import type { RunRecord } from './store.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

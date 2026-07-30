@@ -8,16 +8,16 @@ import type {
   AgentToolCallRecord,
   ContentBlock,
   SessionOptions,
-} from './agent-runner.js';
-import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.js';
+} from './agent-runner.ts';
+import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
   AUTO_END_DELAY_MS,
   DEFAULT_RUN_TIMEOUT_MS,
   KILL_GRACE_MS,
-} from './claude-cli-runner.js';
-import { parseAskRequest, type AskQuestion } from './ask.js';
-import { readNdjson } from './ndjson.js';
-import { V1TextCoalescer } from './v1-text-coalescer.js';
+} from './claude-cli-runner.ts';
+import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { readNdjson } from './ndjson.ts';
+import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   CodexAppServerRpc,
   codexSpawnError,
@@ -26,14 +26,14 @@ import {
   spawnCodexAppServer,
   type CodexAppServerMessage,
   waitForCodexAppServerExit,
-} from './codex-app-server-transport.js';
+} from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
   type CodexUiMapperState,
-} from './codex-ui-mapper.js';
+} from './codex-ui-mapper.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */

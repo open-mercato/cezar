@@ -10,14 +10,14 @@ import type {
   AgentToolCallRecord,
   ContentBlock,
   SessionOptions,
-} from './agent-runner.js';
+} from './agent-runner.ts';
 
 // Re-exported for backends and the run manager that still import them from here.
-export type { AgentSession, SessionOptions } from './agent-runner.js';
-import { isSignalTerminationExit } from './agent-runner.js';
-import { buildChildEnv } from './agent-env.js';
-import { costWeightedTokens, type RawUsage } from './usage.js';
-import { readNdjson } from './ndjson.js';
+export type { AgentSession, SessionOptions } from './agent-runner.ts';
+import { isSignalTerminationExit } from './agent-runner.ts';
+import { buildChildEnv } from './agent-env.ts';
+import { costWeightedTokens, type RawUsage } from './usage.ts';
+import { readNdjson } from './ndjson.ts';
 import {
   claudeTurnStarted,
   createClaudeUiState,
@@ -25,7 +25,7 @@ import {
   stringifyToolResultContent,
   toolResultImageBlocks,
   type ClaudeUiMapping,
-} from './claude-ui-mapper.js';
+} from './claude-ui-mapper.ts';
 
 /** Default wall-clock cap for a single run before SIGTERM → SIGKILL.
  *  Interactive sessions pass `timeoutMs: 0` to disable it entirely. */

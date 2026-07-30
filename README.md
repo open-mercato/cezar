@@ -356,11 +356,12 @@ Settings split along the same line: **Agents**, **Worktrees**, **Bookmarklets**,
 **Projects** and **Keyboard** are yours or the machine's and live at
 `/settings/global`.
 
-**Old URLs keep working.** Every unprefixed path — `/`, `/tasks/<id>`,
-`/settings`, and the whole `/api/…` surface — still answers exactly as before,
-bound to the project cezar was started in; the cockpit redirects flat paths to
-their `/p/<boot>/…` twin. Existing bookmarks, bookmarklets and scripts need no
-change.
+**Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
+`/settings` — still answers, bound to the project cezar was started in; the
+cockpit redirects flat paths to their `/p/<boot>/…` twin, so existing bookmarks
+and bookmarklets need no change. The HTTP API is the exception: it moved to
+`/api/v1/…` (see the CHANGELOG), so a script that calls it needs the extra
+segment.
 
 > **Hosted cockpit?** The folder picker is confined to the independent browse
 > root. Set `CEZ_BROWSE_ROOT` narrowly before first boot (or save it in
@@ -447,6 +448,7 @@ Useful environment variables:
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Agents toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Skip the `open-mercato/skills` banner on `cezar serve` startup. (The cockpit no longer shows a banner — its skills now live on the Skills page's Manage panel — so this env var is the terminal banner's only switch.) |
+| `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
 
 ---
 

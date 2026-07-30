@@ -13,7 +13,7 @@ import { readSharedProjects, snapshotSharedHome, writeSharedProjects } from './w
  * This is the one spec that WANTS more than one registered project: the run's globalSetup pins
  * the shared env to the flat single-project shape, and this file overrides it for its own
  * duration by seeding two throwaway git repos into the registry alongside the boot project.
- * `GET /api/projects` reads the registry per request, so the seed takes effect on the next page
+ * `GET /api/v1/projects` reads the registry per request, so the seed takes effect on the next page
  * load — no server restart — and `afterAll` puts the operator's scratch home back byte for byte.
  *
  * What is worth proving here rather than in `project-groups.test.tsx`: that the registry file,
@@ -67,7 +67,7 @@ function makeRepo(name: string): string {
 }
 
 async function workspaceUiState(): Promise<{ sidebar?: { collapsed?: Record<string, boolean> } }> {
-  return (await (await fetch(`${baseUrl}/api/workspace/ui-state`)).json()) as {
+  return (await (await fetch(`${baseUrl}/api/v1/workspace/ui-state`)).json()) as {
     sidebar?: { collapsed?: Record<string, boolean> }
   }
 }
@@ -75,7 +75,7 @@ async function workspaceUiState(): Promise<{ sidebar?: { collapsed?: Record<stri
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   bootProject = await bootProjectId(baseUrl)
-  const health = (await fetch(`${baseUrl}/api/health`).then((r) => r.json())) as {
+  const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
     forge: { available: boolean } | null
     capabilities: { followups: boolean; singleProject: boolean }
   }

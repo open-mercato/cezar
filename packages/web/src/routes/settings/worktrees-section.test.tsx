@@ -17,7 +17,7 @@ import { AppRoutes } from '@/routes'
  *
  * The field moved out of Resources into its own PROJECT section in step 3.5 (retention sizes
  * one repo's worktree pool). Its store did not move: every save below is a PUT to the
- * project-scoped `/api/config`, which is exactly the half of the split this pins.
+ * project-scoped `/api/v1/config`, which is exactly the half of the split this pins.
  */
 
 let requests: Array<{ method: string; url: string; body?: unknown }> = []
@@ -45,8 +45,8 @@ function serve(config: Partial<ConfigResponse> = {}) {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/config' && method === 'GET') return json(state)
-      if (url === '/api/config' && method === 'PUT') {
+      if (url === '/api/v1/config' && method === 'GET') return json(state)
+      if (url === '/api/v1/config' && method === 'PUT') {
         if (body?.worktreeRetention !== undefined) {
           state.worktreeRetention = body.worktreeRetention as number
         }
@@ -59,7 +59,7 @@ function serve(config: Partial<ConfigResponse> = {}) {
 
 /** Seeds the step-3.2 route gates — boot id (legacy redirect) + registry (known-check) — so a
  *  flat entry URL lands scoped immediately. The boot project mounts UNSCOPED, so the exact
- *  `/api/*` paths this file's fetch stub matches stay byte-identical. */
+ *  `/api/v1/*` paths this file's fetch stub matches stay byte-identical. */
 function gateSeededClient() {
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, { bootProject: 'boot' })
@@ -88,7 +88,7 @@ const saveButton = () =>
   document.querySelector<HTMLButtonElement>('[data-action="resources-save-retention"]')
 const puts = () =>
   requests.filter(
-    (r) => r.method === 'PUT' && r.url === '/api/config' && (r.body as { worktreeRetention?: unknown })?.worktreeRetention !== undefined,
+    (r) => r.method === 'PUT' && r.url === '/api/v1/config' && (r.body as { worktreeRetention?: unknown })?.worktreeRetention !== undefined,
   )
 
 afterEach(() => {
@@ -106,7 +106,7 @@ describe('Project settings → Worktrees: keep-last-N-worktrees (#483)', () => {
     expect(saveButton()!.disabled).toBe(true)
   })
 
-  it('saves the entered count through PUT /api/config', async () => {
+  it('saves the entered count through PUT /api/v1/config', async () => {
     serve({ worktreeRetention: 10 })
     renderAt('/settings/worktrees')
     await waitFor(() => expect(retentionInput()).not.toBeNull())

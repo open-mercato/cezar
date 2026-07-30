@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentBackend } from './agent-runner.js';
+import type { AgentBackend } from './agent-runner.ts';
 import {
   BACKEND_MODEL_MAP,
   ModelIdentityError,
@@ -8,7 +8,7 @@ import {
   parseModelIdentity,
   resolveModelIdentity,
   toBackendModel,
-} from './model-identity.js';
+} from './model-identity.ts';
 
 /**
  * The canonical provider/model identity (#405): one shared parser/normaliser

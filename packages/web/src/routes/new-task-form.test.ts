@@ -134,7 +134,7 @@ describe('resolveSource (candidate validation + cold quick-task default)', () =>
   })
 })
 
-describe('buildCreateRunBody — the exact POST /api/runs payloads legacy sends', () => {
+describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sends', () => {
   it('workflow source → { workflow, task }, defaults omitted', () => {
     const body = buildCreateRunBody({
       task: 'do the thing',

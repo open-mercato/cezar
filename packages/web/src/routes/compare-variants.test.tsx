@@ -76,9 +76,9 @@ function stubFetch(groupBody: GroupResponse, overrides: Record<string, () => Res
       })
       const override = overrides[`${method} ${path}`]
       if (override) return override()
-      if (method === 'GET' && path === '/api/groups/g1') return jsonResponse(groupBody)
-      if (method === 'GET' && path === '/api/runs') return jsonResponse([])
-      if (method === 'GET' && /^\/api\/runs\/[^/]+\/diff$/.test(path)) return new Response(DIFF, { status: 200 })
+      if (method === 'GET' && path === '/api/v1/groups/g1') return jsonResponse(groupBody)
+      if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
+      if (method === 'GET' && /^\/api\/v1\/runs\/[^/]+\/diff$/.test(path)) return new Response(DIFF, { status: 200 })
       return jsonResponse({})
     }),
   )
@@ -153,7 +153,7 @@ describe('the compare columns', () => {
 
   it('removes token and cost metadata when health disables it', async () => {
     stubFetch(group(variant('A', 'review'), variant('B', 'done')), {
-      'GET /api/health': () =>
+      'GET /api/v1/health': () =>
         jsonResponse({
           capabilities: {
             localHandoff: true,
@@ -198,7 +198,7 @@ describe('the compare columns', () => {
   })
 
   it('renders the 404 as a neutral CenteredState with a way home', async () => {
-    stubFetch(group(), { 'GET /api/groups/g1': () => jsonResponse({ error: 'not found' }, 404) })
+    stubFetch(group(), { 'GET /api/v1/groups/g1': () => jsonResponse({ error: 'not found' }, 404) })
     renderCompare()
     await waitFor(() => expect(screen.queryByText('No such variant group')).not.toBeNull())
     expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/')
@@ -228,7 +228,7 @@ describe('✔ Pick this one', () => {
 
   it('confirms, POSTs the picked runId, and navigates to the winner at review', async () => {
     const sent = stubFetch(group(variant('A', 'review'), variant('B', 'done')), {
-      'POST /api/groups/g1/pick': () =>
+      'POST /api/v1/groups/g1/pick': () =>
         jsonResponse({ winner: { id: 'va', status: 'review' } }),
     })
     renderCompare()
@@ -245,7 +245,7 @@ describe('✔ Pick this one', () => {
     expect(screen.getByTestId('thread-probe').textContent).toBe('va')
 
     const post = sent.find((r) => r.method === 'POST')
-    expect(post?.path).toBe('/api/groups/g1/pick')
+    expect(post?.path).toBe('/api/v1/groups/g1/pick')
     expect(post?.body).toEqual({ runId: 'va' })
   })
 
@@ -262,7 +262,7 @@ describe('✔ Pick this one', () => {
 
   it("surfaces the server's own 409 words verbatim and stays on the compare view", async () => {
     stubFetch(group(variant('A', 'review'), variant('B', 'done')), {
-      'POST /api/groups/g1/pick': () =>
+      'POST /api/v1/groups/g1/pick': () =>
         jsonResponse({ error: 'this variant is still active — wait for it to finish first' }, 409),
     })
     renderCompare()
@@ -298,7 +298,7 @@ describe('the full diffs', () => {
     expect(document.querySelector('[data-slot="diff-file-path"]')?.textContent).toBe('notes.md')
     // Only the expanded variant's diff was fetched — the review gate's cards, per variant.
     expect(sent.filter((r) => r.path.endsWith('/diff')).map((r) => r.path)).toEqual([
-      '/api/runs/va/diff',
+      '/api/v1/runs/va/diff',
     ])
   })
 })

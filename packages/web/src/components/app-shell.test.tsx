@@ -226,7 +226,7 @@ describe('AppShell', () => {
     it('renders the repo chip and version chip from props', () => {
       renderShell('/', { repo: { name: 'cezar', branch: 'main' }, version: '1.2.3' })
       expect(screen.getByText('cezar / main')).toBeTruthy()
-      // The chip prefixes the raw semver from /api/health — `v1.2.3`, mono, muted.
+      // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
     })
 

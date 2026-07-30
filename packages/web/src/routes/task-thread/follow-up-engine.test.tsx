@@ -48,6 +48,8 @@ afterEach(() => {
 
 const HEALTH_MULTI: HealthResponse = {
   version: '0.1.5',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   defaultRunner: 'claude',
@@ -59,7 +61,7 @@ const HEALTH_MULTI: HealthResponse = {
   forge: null,
   // `followups` became a required capability in #471 (merged from main): irrelevant to the
   // Continue pills these tests drive, but the shape must be whole.
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
 }
 
 type Recorded = { method: string; url: string; body?: unknown }
@@ -91,10 +93,10 @@ function serve(
       const method = init.method ?? 'GET'
       const body = init.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/health') return json(health)
-      if (url === '/api/providers/status') return json(providerStatus, providerStatusCode)
-      if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (url === '/api/config' && method === 'GET')
+      if (url === '/api/v1/health') return json(health)
+      if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
+      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/config' && method === 'GET')
         return json({
           baseBranch: null,
           defaultRunner: 'claude',
@@ -103,7 +105,7 @@ function serve(
           maxParallel: 1,
           memoryLimitMb: null,
         })
-      if (url === '/api/runs' && method === 'GET') return json([])
+      if (url === '/api/v1/runs' && method === 'GET') return json([])
       if (url.endsWith('/continue') && method === 'POST') return json({ continued: true })
       return json({}, 200)
     }),

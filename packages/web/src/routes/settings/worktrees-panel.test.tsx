@@ -25,9 +25,9 @@ function serve(data: WorktreesResponse) {
       const url = String(input)
       const method = init?.method ?? 'GET'
       requests.push({ method, url })
-      if (url === '/api/worktrees' && method === 'GET') return json(data)
-      if (url === '/api/worktrees/reclaim' && method === 'POST') return json({ reclaimed: ['r1'] })
-      if (/\/api\/runs\/.+\/remove-worktree$/.test(url) && method === 'POST') return json({ removed: true })
+      if (url === '/api/v1/worktrees' && method === 'GET') return json(data)
+      if (url === '/api/v1/worktrees/reclaim' && method === 'POST') return json({ reclaimed: ['r1'] })
+      if (/\/api\/v1\/runs\/.+\/remove-worktree$/.test(url) && method === 'POST') return json({ removed: true })
       return new Promise<never>(() => {})
     }),
   )
@@ -107,7 +107,7 @@ describe('Settings → Resources: worktrees panel (#483)', () => {
     fireEvent.click(document.querySelector('[data-action="worktrees-reclaim-now"]')!)
     await waitFor(() => expect(confirmButton()).not.toBeNull())
     fireEvent.click(confirmButton()!)
-    await waitFor(() => expect(posts(/\/api\/worktrees\/reclaim$/)).toHaveLength(1))
+    await waitFor(() => expect(posts(/\/api\/v1\/worktrees\/reclaim$/)).toHaveLength(1))
   })
 
   it('does not call the route when the confirm dialog is dismissed', async () => {

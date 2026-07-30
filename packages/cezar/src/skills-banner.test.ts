@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SKILLS_BANNER_LINES, printSkillsBanner, shouldShowSkillsBanner } from './skills-banner.js';
+import { SKILLS_BANNER_LINES, printSkillsBanner, shouldShowSkillsBanner } from './skills-banner.ts';
 
 /**
  * The banner's wiring and its two off switches (#391). `printSkillsBanner` is what `serve` calls,

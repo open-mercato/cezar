@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CANCEL } from './types.js';
-import { createAutoUi, createClackUi, type PromptBackend } from './ui.js';
+import { CANCEL } from './types.ts';
+import { createAutoUi, createClackUi, type PromptBackend } from './ui.ts';
 
 const CANCEL_SYMBOL = Symbol('clack.cancel');
 

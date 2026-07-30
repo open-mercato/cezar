@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.js';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.ts';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 /**
  * Per-project `usage` SSE scoping (spec 2026-07-20-multi-project-workspace,
@@ -111,7 +111,7 @@ describe('usage SSE fan-out is scoped per project', () => {
     // Build the second project's context lazily (first API touch), then give
     // its store a run of its own.
     const other = await registerProject(otherRoot);
-    expect((await apiRequest(app, `/api/p/${other.id}/runs`)).status).toBe(200);
+    expect((await apiRequest(app, `/api/v1/p/${other.id}/runs`)).status).toBe(200);
     const otherStore = contexts.peek(other.id)?.store;
     expect(otherStore).toBeDefined();
     const otherRunId = (otherStore as RunStore).createRun({
@@ -121,8 +121,8 @@ describe('usage SSE fan-out is scoped per project', () => {
       steps: [],
     }).id;
 
-    const bootStream = await openStream('/api/events'); // legacy alias = boot project
-    const otherStream = await openStream(`/api/p/${other.id}/events`);
+    const bootStream = await openStream('/api/v1/events'); // legacy alias = boot project
+    const otherStream = await openStream(`/api/v1/p/${other.id}/events`);
     // The first ping is written after the handler subscribed to the sampler —
     // once it arrives, the fan-out below is guaranteed to reach the stream.
     await bootStream.readUntil('event: ping');
@@ -151,9 +151,9 @@ describe('usage SSE fan-out is scoped per project', () => {
 
   it('a snapshot owned entirely by another project arrives as an empty record (stale samples clear)', async () => {
     const other = await registerProject(otherRoot);
-    expect((await apiRequest(app, `/api/p/${other.id}/runs`)).status).toBe(200);
+    expect((await apiRequest(app, `/api/v1/p/${other.id}/runs`)).status).toBe(200);
 
-    const otherStream = await openStream(`/api/p/${other.id}/events`);
+    const otherStream = await openStream(`/api/v1/p/${other.id}/events`);
     await otherStream.readUntil('event: ping');
 
     // Every run in the snapshot belongs to the boot project.

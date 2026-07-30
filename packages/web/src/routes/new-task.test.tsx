@@ -22,7 +22,7 @@ import { NewTaskRoute } from './new-task'
 /**
  * The /new screen against a mocked API: picker data flows (runner hidden on single-backend
  * hosts, model presets switching per runner, variants gated on git), the EXACT submit bodies
- * (workflow vs skill vs variants — the wire contract with POST /api/runs), lastTask
+ * (workflow vs skill vs variants — the wire contract with POST /api/v1/runs), lastTask
  * persistence, draft survival across unmounts, ?skill/?ref prefill, and the suggested chips.
  */
 
@@ -53,6 +53,8 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   defaultRunner: 'claude',
@@ -61,7 +63,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -161,12 +163,14 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   },
   resources: {
     maxParallel: 2,
+    maxMonitoringSessions: 2,
+    monitoringWakeIntervalMinutes: null,
     memoryLimitMb: null,
     worktreeRetentionDefault: 10,
   },
 }
 
-/** The shape `POST /api/plan` answers (spec 008) — three steps so reorder/remove are provable. */
+/** The shape `POST /api/v1/plan` answers (spec 008) — three steps so reorder/remove are provable. */
 const PLAN = {
   steps: [
     { id: 'implement', name: 'Implement', prompt: '{{task}}' },
@@ -214,16 +218,16 @@ function serve(overrides: {
   workflows?: WorkflowsResponse
   repo?: RepoResponse
   uiState?: Record<string, unknown>
-  /** Non-2xx `GET /api/ui-state` answers (the query-errored path: `data` stays undefined). */
+  /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
   createRun?: unknown
-  /** Non-2xx `POST /api/runs` answers (the auto-start failure path). */
+  /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
   createRunStatus?: number
-  /** What `GET /api/launch-key` answers — the bookmarklet auto-start secret. */
+  /** What `GET /api/v1/launch-key` answers — the bookmarklet auto-start secret. */
   launchKey?: string
-  /** `POST /api/plan` — a payload, or a handler for delayed/failing answers. */
+  /** `POST /api/v1/plan` — a payload, or a handler for delayed/failing answers. */
   plan?: unknown | (() => Promise<Response>)
-  /** `POST /api/workflows` — answers in call order (409-then-201 for the overwrite flow). */
+  /** `POST /api/v1/workflows` — answers in call order (409-then-201 for the overwrite flow). */
   saveWorkflow?: Array<{ status: number; body: unknown }>
 } = {}) {
   const data = {
@@ -255,37 +259,37 @@ function serve(overrides: {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/health') {
+      if (url === '/api/v1/health') {
         return typeof data.health === 'function' ? data.health() : json(data.health)
       }
-      if (url === '/api/providers/status') {
+      if (url === '/api/v1/providers/status') {
         return typeof data.providerStatus === 'function'
           ? data.providerStatus()
           : json(data.providerStatus, data.providerStatusStatus)
       }
-      if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (url === '/api/skills') return json(data.skills)
-      if (url === '/api/workflows' && method === 'GET') return json(data.workflows)
-      if (url === '/api/workflows' && method === 'POST') {
+      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/skills') return json(data.skills)
+      if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
+      if (url === '/api/v1/workflows' && method === 'POST') {
         const answer = data.saveWorkflow[Math.min(saves, data.saveWorkflow.length - 1)]!
         saves += 1
         return json(answer.body, answer.status)
       }
-      if (url === '/api/plan' && method === 'POST') {
+      if (url === '/api/v1/plan' && method === 'POST') {
         return typeof data.plan === 'function' ? (data.plan as () => Promise<Response>)() : json(data.plan)
       }
-      if (url === '/api/repo') return json(data.repo)
-      if (url === '/api/launch-key') return json({ key: data.launchKey })
-      if (url === '/api/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
-      if (url === '/api/ui-state' && method === 'PUT') return json(body ?? {})
-      if (url === '/api/runs' && method === 'POST') return json(data.createRun, data.createRunStatus)
-      if (url === '/api/config' && method === 'GET')
+      if (url === '/api/v1/repo') return json(data.repo)
+      if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
+      if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
+      if (url === '/api/v1/ui-state' && method === 'PUT') return json(body ?? {})
+      if (url === '/api/v1/runs' && method === 'POST') return json(data.createRun, data.createRunStatus)
+      if (url === '/api/v1/config' && method === 'GET')
         return typeof data.config === 'function'
           ? data.config()
           : json({ ...CONFIG, ...data.config })
-      if (url === '/api/config' && method === 'PUT')
+      if (url === '/api/v1/config' && method === 'PUT')
         return json({ baseBranch: (body as { baseBranch: string | null }).baseBranch, defaultRunner: 'claude' })
-      if (url === '/api/workspace/config' && method === 'GET') return json(data.workspaceConfig)
+      if (url === '/api/v1/workspace/config' && method === 'GET') return json(data.workspaceConfig)
       return json({ error: `unmocked ${method} ${url}` }, 404)
     }),
   )
@@ -328,10 +332,10 @@ async function pillReady(label = 'quick-task') {
 
 const startTask = async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
-  await waitFor(() => expect(requests.some((r) => r.method === 'POST' && r.url === '/api/runs')).toBe(true))
+  await waitFor(() => expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(true))
 }
 
-const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '/api/runs')?.body
+const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '/api/v1/runs')?.body
 
 // ---- the hero surface -------------------------------------------------------------------------
 
@@ -463,7 +467,7 @@ describe('picker data flows', () => {
     expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
   })
 
-  it('base branch pill shows config default (falling back to the checkout) and PUTs /api/config', async () => {
+  it('base branch pill shows config default (falling back to the checkout) and PUTs /api/v1/config', async () => {
     serve({ repo: { ...REPO, baseBranch: 'develop' } })
     renderNewTask()
     await pillReady()
@@ -480,10 +484,10 @@ describe('picker data flows', () => {
     ])
     fireEvent.click(options[0] as HTMLElement)
     await waitFor(() =>
-      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/config')).toBe(true),
+      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/config')).toBe(true),
     )
-    // find the PUT specifically — the composer also GETs /api/config for the model presets.
-    expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/config')?.body).toEqual({
+    // find the PUT specifically — the composer also GETs /api/v1/config for the model presets.
+    expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/config')?.body).toEqual({
       baseBranch: null,
     })
   })
@@ -713,7 +717,7 @@ describe('submit', () => {
     })
     await waitFor(() => expect(location()).toBe('/tasks/run-9'))
     await waitFor(() =>
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body).toEqual({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toEqual({
         lastTask: { source: 'skill', ref: 'om-fix' },
         // The run also lands at the head of the recency list (picker sort)...
         recentSources: [{ source: 'skill', ref: 'om-fix' }],
@@ -742,7 +746,7 @@ describe('submit', () => {
     await startTask()
 
     await waitFor(() => expect(location()).toBe('/tasks/run-9'))
-    const put = requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')
+    const put = requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')
     // The other prefs still persist — only the unknowable map is left alone.
     expect(put?.body).not.toHaveProperty('skillUsage')
   })
@@ -902,7 +906,7 @@ describe('submit', () => {
 
     expect((postedBody() as Record<string, unknown>).generateFollowups).toBe(false)
     await waitFor(() =>
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body).toMatchObject({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toMatchObject({
         lastGenerateFollowups: false,
       }),
     )
@@ -976,7 +980,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, followups: false, singleProject: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, followups: false, singleProject: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -1014,10 +1018,10 @@ describe('submit', () => {
     await startTask()
 
     await waitFor(() =>
-      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/ui-state')).toBe(true),
+      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')).toBe(true),
     )
     const persisted = requests
-      .filter((r) => r.method === 'PUT' && r.url === '/api/ui-state')
+      .filter((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')
       .map((r) => r.body as Record<string, unknown>)
     for (const body of persisted) expect(body).not.toHaveProperty('lastGenerateFollowups')
   })
@@ -1054,12 +1058,12 @@ describe('drafts and prefill', () => {
     // auto=1 with the WRONG key resolves to the blocked/prefill path — never a run.
     await pillReady('deploy')
     expect(textarea().value).toBe('https://github.com/o/r/issues/5')
-    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/runs')).toBe(false)
+    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(false)
   })
 
   // #374: the composer is the middle of the inbox round trip — the Run link carries `todo=`,
   // and the started run must carry it back so the entry is marked started and leaves the inbox.
-  it('?todo= prefill: the entry id rides along to POST /api/runs so the inbox entry is marked', async () => {
+  it('?todo= prefill: the entry id rides along to POST /api/v1/runs so the inbox entry is marked', async () => {
     serve()
     renderNewTask('/new?skill=deploy&ref=ship%20it&todo=t1')
     await pillReady('deploy')
@@ -1110,8 +1114,8 @@ describe('drafts and prefill', () => {
 // ---- bookmarklet auto-start (spec 011, Step 1.3 — legacy handleDeepLink parity) -----------------
 
 describe('bookmarklet auto-start', () => {
-  const runsPosted = () => requests.filter((r) => r.method === 'POST' && r.url === '/api/runs')
-  const keyFetched = () => requests.some((r) => r.method === 'GET' && r.url === '/api/launch-key')
+  const runsPosted = () => requests.filter((r) => r.method === 'POST' && r.url === '/api/v1/runs')
+  const keyFetched = () => requests.some((r) => r.method === 'GET' && r.url === '/api/v1/launch-key')
 
   it('waits for provider status before a valid signed bookmarklet starts', async () => {
     let release!: (response: Response) => void
@@ -1124,7 +1128,7 @@ describe('bookmarklet auto-start', () => {
     renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
 
     await waitFor(() =>
-      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true),
+      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true),
     )
     expect(keyFetched()).toBe(false)
     expect(runsPosted()).toHaveLength(0)
@@ -1150,8 +1154,8 @@ describe('bookmarklet auto-start', () => {
     const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
 
     await waitFor(() => {
-      expect(requests.some((request) => request.url === '/api/config')).toBe(true)
-      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/config')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true)
     })
     await act(async () => {
       delayedProviders.release(PROVIDERS_CONNECTED)
@@ -1180,8 +1184,8 @@ describe('bookmarklet auto-start', () => {
     const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
 
     await waitFor(() => {
-      expect(requests.some((request) => request.url === '/api/config')).toBe(true)
-      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/config')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true)
     })
     await act(async () => {
       delayedProviders.release(PROVIDERS_CONNECTED)
@@ -1217,7 +1221,7 @@ describe('bookmarklet auto-start', () => {
     ])
     expect(location()).toBe('/tasks/r1')
     // Unattended starts do not rewrite the sticky lastTask (legacy parity).
-    expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/ui-state')).toBe(false)
+    expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')).toBe(false)
   })
 
   it('uses an explicit connected fallback when the saved server default is disconnected', async () => {
@@ -1426,15 +1430,15 @@ describe('the Start | Plan first toggle', () => {
 })
 
 describe('the plan flow', () => {
-  it('submit in plan mode POSTs /api/plan (never /api/runs) and opens the review overlay', async () => {
+  it('submit in plan mode POSTs /api/v1/plan (never /api/v1/runs) and opens the review overlay', async () => {
     serve()
     renderNewTask()
     await planTask('Tighten the flaky suite')
 
-    expect(requests.find((r) => r.url === '/api/plan')?.body).toEqual({
+    expect(requests.find((r) => r.url === '/api/v1/plan')?.body).toEqual({
       task: 'Tighten the flaky suite',
     })
-    expect(requests.some((r) => r.url === '/api/runs' && r.method === 'POST')).toBe(false)
+    expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(false)
 
     // Task line, rationale, numbered cards with skill/check badges and hints.
     expect(document.querySelector('[data-slot="plan-task"]')?.textContent).toBe(
@@ -1523,7 +1527,7 @@ describe('the plan flow', () => {
     fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
 
     await waitFor(() =>
-      expect(requests.some((r) => r.url === '/api/runs' && r.method === 'POST')).toBe(true),
+      expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(true),
     )
     expect(postedBody()).toEqual({
       task: 'Tighten the flaky suite',
@@ -1574,7 +1578,7 @@ describe('the plan flow', () => {
     start.removeAttribute('disabled')
     fireEvent.click(start)
 
-    expect(requests.some((request) => request.url === '/api/runs')).toBe(false)
+    expect(requests.some((request) => request.url === '/api/v1/runs')).toBe(false)
   })
 
   it('▶ Start carries the follow-up opt-out from the composer and remembers it', async () => {
@@ -1589,7 +1593,7 @@ describe('the plan flow', () => {
 
     await waitFor(() => expect((postedBody() as Record<string, unknown>).generateFollowups).toBe(false))
     await waitFor(() =>
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body).toEqual({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toEqual({
         lastGenerateFollowups: false,
       }),
     )
@@ -1603,7 +1607,7 @@ describe('the plan flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
     await waitFor(() => expect(screen.queryByText('Proposed chain')).toBeNull())
     expect(textarea().value).toBe('keep this text')
-    expect(requests.some((r) => r.url === '/api/runs' && r.method === 'POST')).toBe(false)
+    expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(false)
   })
 })
 
@@ -1619,9 +1623,9 @@ describe('save as chain', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
-      expect(requests.some((r) => r.url === '/api/workflows' && r.method === 'POST')).toBe(true),
+      expect(requests.some((r) => r.url === '/api/v1/workflows' && r.method === 'POST')).toBe(true),
     )
-    expect(requests.find((r) => r.url === '/api/workflows' && r.method === 'POST')?.body).toEqual({
+    expect(requests.find((r) => r.url === '/api/v1/workflows' && r.method === 'POST')?.body).toEqual({
       name: 'my chain',
       steps: PLAN.steps,
     })
@@ -1649,7 +1653,7 @@ describe('save as chain', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }))
 
     await waitFor(() => {
-      const saves = requests.filter((r) => r.url === '/api/workflows' && r.method === 'POST')
+      const saves = requests.filter((r) => r.url === '/api/v1/workflows' && r.method === 'POST')
       expect(saves).toHaveLength(2)
       expect(saves[1]?.body).toEqual({ name: 'my chain', steps: PLAN.steps, overwrite: true })
     })

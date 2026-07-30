@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isWsl, toPosixPath, toWindowsPath, wslDistroName } from './wsl.js';
+import { isWsl, toPosixPath, toWindowsPath, wslDistroName } from './wsl.ts';
 
 describe('isWsl', () => {
   it('is false on any non-Linux platform, regardless of env', () => {

@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
-import { agentHomePaths } from '../paths.js';
-import { CONFIG_FILES } from './catalog.js';
+import { agentHomePaths } from '../paths.ts';
+import { CONFIG_FILES } from './catalog.ts';
 
 /**
  * Seed the agents' gitignored personal config layer into a run's worktree

@@ -92,148 +92,148 @@ describe('request shapes', () => {
     method: string
     body?: unknown
   }> = [
-    { name: 'getHealth', call: () => getHealth(), path: '/api/health', method: 'GET' },
+    { name: 'getHealth', call: () => getHealth(), path: '/api/v1/health', method: 'GET' },
     {
       name: 'getProviderStatus',
       call: () => getProviderStatus(),
-      path: '/api/providers/status',
+      path: '/api/v1/providers/status',
       method: 'GET',
     },
     {
       name: 'getProviderStatus (refresh)',
       call: () => getProviderStatus(true),
-      path: '/api/providers/status?refresh=1',
+      path: '/api/v1/providers/status?refresh=1',
       method: 'GET',
     },
     {
       name: 'connectProvider',
       call: () => connectProvider('codex'),
-      path: '/api/providers/connect',
+      path: '/api/v1/providers/connect',
       method: 'POST',
       body: { provider: 'codex' },
     },
     {
       name: 'setProviderEnabled',
       call: () => setProviderEnabled('codex', false),
-      path: '/api/providers/codex/enabled',
+      path: '/api/v1/providers/codex/enabled',
       method: 'PUT',
       body: { enabled: false },
     },
     {
       name: 'retryProviderAuth',
       call: () => retryProviderAuth('claude', 'incident-1'),
-      path: '/api/providers/claude/retry',
+      path: '/api/v1/providers/claude/retry',
       method: 'POST',
       body: { authFailureId: 'incident-1' },
     },
-    { name: 'getRunnerModels', call: () => getRunnerModels(), path: '/api/models?runner=codex', method: 'GET' },
-    { name: 'getRuns', call: () => getRuns(), path: '/api/runs', method: 'GET' },
-    { name: 'getRun', call: () => getRun('run-1'), path: '/api/runs/run-1', method: 'GET' },
-    { name: 'getRunDiff', call: () => getRunDiff('run-1'), path: '/api/runs/run-1/diff', method: 'GET' },
-    { name: 'getRunHandoff', call: () => getRunHandoff('run-1'), path: '/api/runs/run-1/handoff', method: 'GET' },
-    { name: 'getUiState', call: () => getUiState(), path: '/api/ui-state', method: 'GET' },
-    { name: 'getWorkflows', call: () => getWorkflows(), path: '/api/workflows', method: 'GET' },
-    { name: 'getSkills', call: () => getSkills(), path: '/api/skills', method: 'GET' },
+    { name: 'getRunnerModels', call: () => getRunnerModels(), path: '/api/v1/models?runner=codex', method: 'GET' },
+    { name: 'getRuns', call: () => getRuns(), path: '/api/v1/runs', method: 'GET' },
+    { name: 'getRun', call: () => getRun('run-1'), path: '/api/v1/runs/run-1', method: 'GET' },
+    { name: 'getRunDiff', call: () => getRunDiff('run-1'), path: '/api/v1/runs/run-1/diff', method: 'GET' },
+    { name: 'getRunHandoff', call: () => getRunHandoff('run-1'), path: '/api/v1/runs/run-1/handoff', method: 'GET' },
+    { name: 'getUiState', call: () => getUiState(), path: '/api/v1/ui-state', method: 'GET' },
+    { name: 'getWorkflows', call: () => getWorkflows(), path: '/api/v1/workflows', method: 'GET' },
+    { name: 'getSkills', call: () => getSkills(), path: '/api/v1/skills', method: 'GET' },
     {
       name: 'getSkillsWhenReady',
       call: () => getSkillsWhenReady(),
-      path: '/api/skills?wait=1',
+      path: '/api/v1/skills?wait=1',
       method: 'GET',
     },
-    { name: 'refreshSkills', call: () => refreshSkills(), path: '/api/skills/refresh', method: 'POST' },
-    { name: 'getTodos', call: () => getTodos(), path: '/api/todos', method: 'GET' },
-    { name: 'getRepo', call: () => getRepo(), path: '/api/repo', method: 'GET' },
-    { name: 'getGroup', call: () => getGroup('grp-1'), path: '/api/groups/grp-1', method: 'GET' },
+    { name: 'refreshSkills', call: () => refreshSkills(), path: '/api/v1/skills/refresh', method: 'POST' },
+    { name: 'getTodos', call: () => getTodos(), path: '/api/v1/todos', method: 'GET' },
+    { name: 'getRepo', call: () => getRepo(), path: '/api/v1/repo', method: 'GET' },
+    { name: 'getGroup', call: () => getGroup('grp-1'), path: '/api/v1/groups/grp-1', method: 'GET' },
     {
       name: 'pickVariant',
       call: () => pickVariant('grp-1', 'run-a'),
-      path: '/api/groups/grp-1/pick',
+      path: '/api/v1/groups/grp-1/pick',
       method: 'POST',
       body: { runId: 'run-a' },
     },
-    { name: 'getGithub (no params)', call: () => getGithub(), path: '/api/github', method: 'GET' },
+    { name: 'getGithub (no params)', call: () => getGithub(), path: '/api/v1/github', method: 'GET' },
     {
       name: 'getGithub (limit + refresh)',
       call: () => getGithub({ limit: 5, refresh: true }),
-      path: '/api/github?limit=5&refresh=1',
+      path: '/api/v1/github?limit=5&refresh=1',
       method: 'GET',
     },
     // `refresh: false` must not become `refresh=0` — the server tests `=== '1'`, but sending a
     // parameter we do not mean is how a "false" ends up read as truthy somewhere downstream.
-    { name: 'getGithub (refresh false)', call: () => getGithub({ refresh: false }), path: '/api/github', method: 'GET' },
+    { name: 'getGithub (refresh false)', call: () => getGithub({ refresh: false }), path: '/api/v1/github', method: 'GET' },
     {
       name: 'getGithubChecks (#664)',
       call: () => getGithubChecks([7, 12]),
-      path: '/api/github/checks?prs=7%2C12',
+      path: '/api/v1/github/checks?prs=7%2C12',
       method: 'GET',
     },
     {
       name: 'putUiState',
       call: () => putUiState({ runsView: 'table' }),
-      path: '/api/ui-state',
+      path: '/api/v1/ui-state',
       method: 'PUT',
       body: { runsView: 'table' },
     },
     {
       name: 'createRun',
       call: () => createRun({ task: 'do it', workflow: 'quick-task', variants: 2 }),
-      path: '/api/runs',
+      path: '/api/v1/runs',
       method: 'POST',
       body: { task: 'do it', workflow: 'quick-task', variants: 2 },
     },
-    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/runs/run-1/cancel', method: 'POST' },
+    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/v1/runs/run-1/cancel', method: 'POST' },
     {
       name: 'archiveRun (default)',
       call: () => archiveRun('run-1'),
-      path: '/api/runs/run-1/archive',
+      path: '/api/v1/runs/run-1/archive',
       method: 'POST',
       body: { archived: true },
     },
     {
       name: 'archiveRun (unarchive)',
       call: () => archiveRun('run-1', false),
-      path: '/api/runs/run-1/archive',
+      path: '/api/v1/runs/run-1/archive',
       method: 'POST',
       body: { archived: false },
     },
     {
       name: 'archiveFinished',
       call: () => archiveFinished(),
-      path: '/api/runs/archive-finished',
+      path: '/api/v1/runs/archive-finished',
       method: 'POST',
     },
-    { name: 'finishRun', call: () => finishRun('run-1'), path: '/api/runs/run-1/finish', method: 'POST' },
+    { name: 'finishRun', call: () => finishRun('run-1'), path: '/api/v1/runs/run-1/finish', method: 'POST' },
     {
       name: 'continueRun (no text)',
       call: () => continueRun('run-1'),
-      path: '/api/runs/run-1/continue',
+      path: '/api/v1/runs/run-1/continue',
       method: 'POST',
       body: {},
     },
     {
       name: 'continueRun (with text)',
       call: () => continueRun('run-1', { text: 'keep going' }),
-      path: '/api/runs/run-1/continue',
+      path: '/api/v1/runs/run-1/continue',
       method: 'POST',
       body: { text: 'keep going' },
     },
     {
       name: 'continueRun (runner + model override, #401)',
       call: () => continueRun('run-1', { runner: 'codex', model: 'gpt-5.1-codex' }),
-      path: '/api/runs/run-1/continue',
+      path: '/api/v1/runs/run-1/continue',
       method: 'POST',
       body: { runner: 'codex', model: 'gpt-5.1-codex' },
     },
-    { name: 'deleteRun', call: () => deleteRun('run-1'), path: '/api/runs/run-1', method: 'DELETE' },
+    { name: 'deleteRun', call: () => deleteRun('run-1'), path: '/api/v1/runs/run-1', method: 'DELETE' },
     // Inbox actions (R6 1.2): the exact legacy endpoints, ids URL-encoded like every other path.
-    { name: 'removeTodo', call: () => removeTodo('todo/1'), path: '/api/todos/todo%2F1', method: 'DELETE' },
-    { name: 'startTodo', call: () => startTodo('todo/1'), path: '/api/todos/todo%2F1/start', method: 'POST' },
+    { name: 'removeTodo', call: () => removeTodo('todo/1'), path: '/api/v1/todos/todo%2F1', method: 'DELETE' },
+    { name: 'startTodo', call: () => startTodo('todo/1'), path: '/api/v1/todos/todo%2F1/start', method: 'POST' },
     // #413: extra instructions (e.g. an inserted prompt template) ride an optional body;
     // omitted (the case above) sends none at all — the pre-#413 call shape.
     {
       name: 'startTodo (with prompt)',
       call: () => startTodo('todo/1', { prompt: 'Also add tests.' }),
-      path: '/api/todos/todo%2F1/start',
+      path: '/api/v1/todos/todo%2F1/start',
       method: 'POST',
       body: { prompt: 'Also add tests.' },
     },
@@ -241,7 +241,7 @@ describe('request shapes', () => {
       // #401: an Inbox card that picked a backend. No pick → the bodyless POST above, unchanged.
       name: 'startTodo (runner + model override, #401)',
       call: () => startTodo('todo/1', { runner: 'codex', model: 'gpt-5.1-codex' }),
-      path: '/api/todos/todo%2F1/start',
+      path: '/api/v1/todos/todo%2F1/start',
       method: 'POST',
       body: { runner: 'codex', model: 'gpt-5.1-codex' },
     },
@@ -250,27 +250,27 @@ describe('request shapes', () => {
       // reaches the wire never carries an empty model or a redundant runner.
       name: 'startTodo (model only, #401)',
       call: () => startTodo('todo/1', { model: 'opus' }),
-      path: '/api/todos/todo%2F1/start',
+      path: '/api/v1/todos/todo%2F1/start',
       method: 'POST',
       body: { model: 'opus' },
     },
     {
       name: 'openRunInCli',
       call: () => openRunInCli('run-1'),
-      path: '/api/runs/run-1/open-in-cli',
+      path: '/api/v1/runs/run-1/open-in-cli',
       method: 'POST',
     },
     {
       name: 'patchRun',
       call: () => patchRun('run-1', { title: 'New name' }),
-      path: '/api/runs/run-1',
+      path: '/api/v1/runs/run-1',
       method: 'PATCH',
       body: { title: 'New name' },
     },
     {
       name: 'sendMessage',
       call: () => sendMessage('run-1', { text: 'hi' }),
-      path: '/api/runs/run-1/messages',
+      path: '/api/v1/runs/run-1/messages',
       method: 'POST',
       // The server's schema defaults both, but an absent `images` and `[]` are the same
       // request — send the shape the endpoint documents rather than half of it.
@@ -279,14 +279,14 @@ describe('request shapes', () => {
     {
       name: 'sendMessage (images only)',
       call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }] }),
-      path: '/api/runs/run-1/messages',
+      path: '/api/v1/runs/run-1/messages',
       method: 'POST',
       body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }] },
     },
   ]
 
   it.each(cases)('$name hits $method $path', async ({ call, path, method, body }) => {
-    reply(path.startsWith('/api/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
+    reply(path.startsWith('/api/v1/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
     await call()
 
     const sent = lastCall()
@@ -300,13 +300,13 @@ describe('request shapes', () => {
   it('escapes run ids into the path', async () => {
     reply({ cancelled: true })
     await cancelRun('a b/../c')
-    expect(lastCall().path).toBe('/api/runs/a%20b%2F..%2Fc/cancel')
+    expect(lastCall().path).toBe('/api/v1/runs/a%20b%2F..%2Fc/cancel')
   })
 
   it('hands out the byte-identical legacy raw-image URL when unscoped', () => {
     // The one URL this module builds without fetching it (an <img> loads it) — same invariant
     // as every case above: unscoped means exactly the pre-multi-project path.
-    expect(runFileRawUrl('run-1', 'shots/final.png')).toBe('/api/runs/run-1/files?path=shots%2Ffinal.png&raw=1')
+    expect(runFileRawUrl('run-1', 'shots/final.png')).toBe('/api/v1/runs/run-1/files?path=shots%2Ffinal.png&raw=1')
   })
 
   it('forwards an abort signal to fetch', async () => {
@@ -325,31 +325,31 @@ describe('project scope (multi-project spec, step 3.1)', () => {
     setApiScope(null)
   })
 
-  it('prefixes every request path with /api/p/<id> once a scope is active', async () => {
+  it('prefixes every request path with /api/v1/p/<id> once a scope is active', async () => {
     setApiScope('proj-a')
 
     reply({ ok: true })
     await getRuns()
-    expect(lastCall().path).toBe('/api/p/proj-a/runs')
+    expect(lastCall().path).toBe('/api/v1/p/proj-a/runs')
 
     reply({ ok: true })
     await cancelRun('run-1')
-    expect(lastCall().path).toBe('/api/p/proj-a/runs/run-1/cancel')
+    expect(lastCall().path).toBe('/api/v1/p/proj-a/runs/run-1/cancel')
 
     reply({ ok: true })
     await getGithub({ limit: 5 })
-    expect(lastCall().path).toBe('/api/p/proj-a/github?limit=5')
+    expect(lastCall().path).toBe('/api/v1/p/proj-a/github?limit=5')
 
     // The non-send() site scopes the same way — the <img> URL it hands out must hit the
     // scoped route or another project's cockpit would render this project's bytes as a 404.
-    expect(runFileRawUrl('run-1', 'x.png')).toBe('/api/p/proj-a/runs/run-1/files?path=x.png&raw=1')
+    expect(runFileRawUrl('run-1', 'x.png')).toBe('/api/v1/p/proj-a/runs/run-1/files?path=x.png&raw=1')
   })
 
   it('keeps workspace-level routes unprefixed under a scope — health is single-mount', async () => {
     setApiScope('proj-a')
     reply({ version: '0.0.0' })
     await getHealth()
-    expect(lastCall().path).toBe('/api/health')
+    expect(lastCall().path).toBe('/api/v1/health')
   })
 })
 
@@ -526,7 +526,7 @@ describe('errors', () => {
     const error = (await getHealth().catch((e: unknown) => e)) as ApiError
     expect(error).toBeInstanceOf(ApiError)
     expect(error.status).toBe(0)
-    expect(error.message).toContain('/api/health')
+    expect(error.message).toContain('/api/v1/health')
     expect(error.cause).toBe(cause)
   })
 

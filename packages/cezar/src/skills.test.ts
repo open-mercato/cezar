@@ -7,7 +7,7 @@ import {
   filterImportedTeamSkills,
   readImportedSkills,
   type Skill,
-} from './skills.js';
+} from './skills.ts';
 
 /**
  * The opt-out gate's two pure halves (#391 follow-up: the promo banner is gone, replaced by

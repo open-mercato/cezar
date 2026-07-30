@@ -4,17 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.js';
-import { RunStore } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import type { WorkflowDef } from './types.js';
+import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
+import { RunStore } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
   composeSystemPrompt,
   makeRunTitle,
   resolveExtraSystemPrompt,
   skillSystemPrompt,
-} from './run.js';
+} from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -331,7 +331,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
   it('a user rename made before the namer answers is never overwritten', async () => {
     writeFileSync(argsFile, '', 'utf8');
     const record = manager.startRun(skillWorkflow, { task: '437' });
-    // What PATCH /api/runs/:id does, synchronously after creation:
+    // What PATCH /api/v1/runs/:id does, synchronously after creation:
     store.updateRun(record.id, { title: 'My name', titleSummary: 'My name', titleOrigin: 'user' });
 
     const terminal = new Set(['done', 'review', 'failed', 'cancelled']);

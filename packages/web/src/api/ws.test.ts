@@ -72,7 +72,7 @@ const instance = (index: number): FakeWebSocket => {
   return ws
 }
 
-const URL = 'ws://cockpit.test/api/ws'
+const URL = 'ws://cockpit.test/api/v1/ws'
 const IDLE_CLOSE_DELAY_MS = 1_000
 const RECONNECT_DELAY_MS = 3_000
 const HEARTBEAT_TIMEOUT_MS = 70_000

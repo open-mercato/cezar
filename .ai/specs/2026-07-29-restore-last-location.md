@@ -39,8 +39,8 @@ Alternatives considered:
 
 ### Workspace UI-state contract
 
-Extend the existing `WorkspaceUiState` DTO and `workspaceUiStateSchema` with one
-optional top-level key:
+Extend the canonical `WorkspaceUiState` contract schema in `packages/contract`
+with one optional top-level key. The api-client re-exports the inferred type:
 
 ```ts
 interface LastLocation {
@@ -223,9 +223,9 @@ startup behavior working.
 ## 📋 Implementation Plan
 
 1. **Add the typed workspace UI-state field and boundary validation.** Extend the
-   API-client DTO and server schema with bounded `lastLocation`, then add server
-   tests for valid round-trip, malformed input, and size limits. Existing clients
-   and files remain valid because the field is optional.
+   canonical contract and server route schema with bounded `lastLocation`, then
+   add server tests for valid round-trip, malformed input, and size limits.
+   Existing clients and files remain valid because the field is optional.
 2. **Add pure location normalization and root restoration.** Implement helpers
    that compare/validate saved locations against the registry, then update the
    legacy redirect to consult them only for exact `/`. Add router tests for exact

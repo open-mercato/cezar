@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { workflowStepSchema } from '../workflows/types.js';
+import { workflowStepSchema } from '../workflows/types.ts';
 
 export const automationEventSchema = z.enum([
   'pull_request.opened',

@@ -405,7 +405,7 @@ describe('TaskQuickListContainer', () => {
     return render(<TaskQuickListContainer />, { wrapper })
   }
 
-  it('renders nothing until /api/runs answers — no invented rows, no premature empty state', () => {
+  it('renders nothing until /api/v1/runs answers — no invented rows, no premature empty state', () => {
     fetchMock.mockImplementation(() => new Promise(() => {}))
     renderContainer([])
     expect(screen.queryByText('No tasks yet — describe one.')).toBeNull()
@@ -415,7 +415,7 @@ describe('TaskQuickListContainer', () => {
   it('renders the live run list', async () => {
     renderContainer([run({ id: 'live', title: 'A real run', status: 'running' })])
     expect(await screen.findByText('A real run')).not.toBeNull()
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/runs')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/runs')
   })
 
   it('lights the row for the task open at /tasks/:id, including its child routes', async () => {

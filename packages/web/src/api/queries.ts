@@ -410,7 +410,7 @@ export function useHealthSubscription(): void {
  *
  * A pure read: the HTTP query is the authoritative bootstrap and the reconcile target
  * (global-events.tsx invalidates it on reconnect/visibility), and live updates arrive by the
- * one local-only `useHealthSubscription` at the root folding pushed `/api/ws` frames into this same cache
+ * one local-only `useHealthSubscription` at the root folding pushed `/api/v1/ws` frames into this same cache
  * (#369 — this replaced the old 5 s `refetchInterval` per tab). Safe to call from as many
  * components as need health; they all read one cache and none of them touches the socket. */
 export function useHealth() {
@@ -480,9 +480,9 @@ export function useRunDiff(id: string | undefined) {
   })
 }
 
-/** The structured worktree diff behind the Changes tab (R5). A 409 ("no worktree — …") is a
- *  real answer here, not a network hiccup — retrying cannot change it, so retries are off and
- *  the view renders the server's own reason. */
+/** The structured session diff behind the Changes tab (R5). A 409 (for example, a reclaimed
+ *  worktree whose directory is unavailable) is a real answer, not a network hiccup — retrying
+ *  cannot change it, so retries are off and the view renders the server's own reason. */
 export function useRunChanges(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.changes(id ?? ''),
@@ -528,7 +528,7 @@ export function useGroup(groupId: string | undefined) {
 }
 
 /** A run's commit list (Commits tab). Polls while active so new commits appear as the agent
- *  autosaves. A 409 ("no worktree") is a real answer retries can't change. */
+ *  works. A 409 from an unavailable backing directory is a real answer retries can't change. */
 export function useRunCommits(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.commits(id ?? ''),

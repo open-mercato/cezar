@@ -438,11 +438,11 @@ describe('reduceThread — live-stream mechanics', () => {
 
   it('renders v1 image lines (served URL) and skips everything without one', () => {
     const { turns } = reduceThread([
-      line(1, 'image', { name: 'shot.png', url: '/api/runs/r1/images/shot.png' }),
+      line(1, 'image', { name: 'shot.png', url: '/api/v1/runs/r1/images/shot.png' }),
       line(2, 'image', { mediaType: 'image/png', data: 'aGk=' }), // v2 shape: raw base64, no URL
     ])
     expect(turns[0]!.items).toEqual([
-      { kind: 'image', id: 'v1:1', url: '/api/runs/r1/images/shot.png', name: 'shot.png' },
+      { kind: 'image', id: 'v1:1', url: '/api/v1/runs/r1/images/shot.png', name: 'shot.png' },
     ])
   })
 })
@@ -691,15 +691,15 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
       line(1, 'user-message', {
         text: "there's still error",
         imageCount: 1,
-        images: ['/api/runs/r1/images/screenshot-1.png'],
+        images: ['/api/v1/runs/r1/images/screenshot-1.png'],
       }),
     ])
-    expect(turns[0]!.userMessage?.images).toEqual(['/api/runs/r1/images/screenshot-1.png'])
+    expect(turns[0]!.userMessage?.images).toEqual(['/api/v1/runs/r1/images/screenshot-1.png'])
   })
 
   it('image (the URL-bearing v1 line) → a thread image', () => {
-    expect(allItems([line(1, 'image', { url: '/api/runs/r/images/s.png', name: 's.png' })])).toEqual([
-      { kind: 'image', id: 'v1:1', url: '/api/runs/r/images/s.png', name: 's.png' },
+    expect(allItems([line(1, 'image', { url: '/api/v1/runs/r/images/s.png', name: 's.png' })])).toEqual([
+      { kind: 'image', id: 'v1:1', url: '/api/v1/runs/r/images/s.png', name: 's.png' },
     ])
   })
 

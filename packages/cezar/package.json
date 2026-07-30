@@ -38,7 +38,8 @@
     "test:watch": "vitest",
     "test:unit": "node --import tsx --test test/unit/*.test.ts",
     "test:package": "node --import tsx --test test/e2e/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "postbuild": "node scripts/inline-contract.mjs"
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
@@ -47,12 +48,14 @@
     "smol-toml": "^1.7.0",
     "ws": "^8.21.1",
     "yaml": "^2.5.0",
-    "zod": "^3.23.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@open-mercato/cezar-api-client": "^0.9.1",
+    "@open-mercato/cezar-contract": "^0.9.1",
     "@types/node": "^20.14.0",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ContentBlock } from '../core/agent-runner.js';
-import { HANDOFF_INSTRUCTIONS } from '../handoff.js';
-import { RunStore } from '../runs/store.js';
-import type { WorkflowDef } from './types.js';
-import { RunManager, pastedAttachmentsNote, pastedAttachmentsText } from './run.js';
+import type { ContentBlock } from '../core/agent-runner.ts';
+import { HANDOFF_INSTRUCTIONS } from '../handoff.ts';
+import { RunStore } from '../runs/store.ts';
+import type { WorkflowDef } from './types.ts';
+import { RunManager, pastedAttachmentsNote, pastedAttachmentsText } from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -35,7 +35,7 @@ describe('HANDOFF_INSTRUCTIONS pasted-attachments note', () => {
  */
 describe('pastedAttachmentsText / pastedAttachmentsNote', () => {
   it('lists absolute paths and uses singular wording for one file', () => {
-    const text = pastedAttachmentsText([{ name: 'pasted-1.png', url: '/api/x', path: '/abs/pasted-1.png' }]);
+    const text = pastedAttachmentsText([{ name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' }]);
     expect(text).toContain('The user attached 1 pasted file, also saved on disk at:');
     expect(text).toContain('- /abs/pasted-1.png');
     expect(text).not.toContain('files,');
@@ -43,21 +43,21 @@ describe('pastedAttachmentsText / pastedAttachmentsNote', () => {
 
   it('uses plural wording and lists every path for multiple files', () => {
     const text = pastedAttachmentsText([
-      { name: 'pasted-1.png', url: '/api/x', path: '/abs/pasted-1.png' },
-      { name: 'pasted-2.jpg', url: '/api/y', path: '/abs/pasted-2.jpg' },
+      { name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' },
+      { name: 'pasted-2.jpg', url: '/api/v1/y', path: '/abs/pasted-2.jpg' },
     ]);
     expect(text).toContain('The user attached 2 pasted files, also saved on disk at:');
     expect(text).toContain('- /abs/pasted-1.png\n- /abs/pasted-2.jpg');
   });
 
   it('tells the agent to operate on the files, not reconstruct them', () => {
-    const text = pastedAttachmentsText([{ name: 'pasted-1.png', url: '/api/x', path: '/abs/pasted-1.png' }]);
+    const text = pastedAttachmentsText([{ name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' }]);
     expect(text).toMatch(/operate on these files/);
     expect(text).toMatch(/do not attempt to reconstruct/);
   });
 
   it('wraps the same text as a trailing text ContentBlock', () => {
-    const attachments = [{ name: 'pasted-1.png', url: '/api/x', path: '/abs/pasted-1.png' }];
+    const attachments = [{ name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' }];
     expect(pastedAttachmentsNote(attachments)).toEqual({ type: 'text', text: pastedAttachmentsText(attachments) });
   });
 });
@@ -159,7 +159,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     // The task image is durable and renderable before `execute()` gets a slot.
     const queued = store.getRun(record.id);
     expect(queued?.status).toBe('queued');
-    expect(queued?.taskImages).toEqual([`/api/runs/${record.id}/images/pasted-1.png`]);
+    expect(queued?.taskImages).toEqual([`/api/v1/runs/${record.id}/images/pasted-1.png`]);
     expect(existsSync(join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png'))).toBe(true);
 
     await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
@@ -272,7 +272,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
       .split('\n')
       .map((line) => JSON.parse(line) as { type: string; text?: string; images?: string[] })
       .find((event) => event.type === 'user-message' && event.text === 'fix what this shows');
-    expect(userMessage?.images?.[0]).toBe(`/api/runs/${record.id}/images/${filePath.split('/').pop()}`);
+    expect(userMessage?.images?.[0]).toBe(`/api/v1/runs/${record.id}/images/${filePath.split('/').pop()}`);
     expect(ndjson).not.toContain(TINY_PNG_B64);
 
     manager.finish(record.id);

@@ -13,7 +13,7 @@ import { AppRoutes } from '@/routes'
  * Global settings → Resources (step 3.5): `maxParallel` and `memoryLimitMb` moved out of the
  * per-repo config into `~/.cezar/config.json` (spec §"Resource governance" — they protect the
  * host, not a repo). What this pins is the store: every read and write goes to
- * `/api/workspace/config`, and the per-repo `/api/config` is never touched from here — a
+ * `/api/v1/workspace/config`, and the per-repo `/api/v1/config` is never touched from here — a
  * regression there would silently re-introduce a value the engine no longer reads.
  *
  * The route contract itself (bounds, the semaphore refresh) is pinned server-side in
@@ -46,8 +46,8 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/workspace/config' && method === 'GET') return json(state)
-      if (url === '/api/workspace/config' && method === 'PUT') {
+      if (url === '/api/v1/workspace/config' && method === 'GET') return json(state)
+      if (url === '/api/v1/workspace/config' && method === 'PUT') {
         Object.assign(state.resources, (body?.resources ?? {}) as object)
         return json(state)
       }
@@ -86,7 +86,7 @@ const memoryInput = () =>
   document.querySelector<HTMLInputElement>('[data-slot="resources-memory-limit"]')
 const saveMemory = () =>
   document.querySelector<HTMLButtonElement>('[data-action="resources-save-memory"]')
-const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/workspace/config')
+const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
 const monitoringSelect = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-max-monitoring"]')
 const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
 const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
@@ -99,7 +99,7 @@ afterEach(() => {
 })
 
 describe('Global settings → Resources', () => {
-  it('renders the workspace values, read from /api/workspace/config', async () => {
+  it('renders the workspace values, read from /api/v1/workspace/config', async () => {
     serve({ maxParallel: 5, memoryLimitMb: 4096 })
     renderResources()
 
@@ -107,7 +107,7 @@ describe('Global settings → Resources', () => {
     expect(parallelSelect()!.value).toBe('5')
     expect(memoryInput()!.value).toBe('4096')
     // The per-repo config is not even read by this pane.
-    expect(requests.some((r) => r.url === '/api/config')).toBe(false)
+    expect(requests.some((r) => r.url === '/api/v1/config')).toBe(false)
   })
 
   it('saves maxParallel to the WORKSPACE config, never the per-repo one', async () => {
@@ -119,7 +119,7 @@ describe('Global settings → Resources', () => {
 
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { maxParallel: 6 } })
-    expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/config')).toBe(false)
+    expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/config')).toBe(false)
   })
 
   it('links workspace limits to the per-project controls', async () => {

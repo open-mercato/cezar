@@ -7,13 +7,13 @@ import {
   type ProviderConnectionState,
   type ProviderId,
   type RunProviderCommand,
-} from '../core/provider-auth.js';
-import { RunStore } from '../runs/store.js';
-import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
-import { RunManager } from '../workflows/run.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { WorkspaceEventBus, createApp } from './server.js';
+} from '../core/provider-auth.ts';
+import { RunStore } from '../runs/store.ts';
+import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
+import { RunManager } from '../workflows/run.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { WorkspaceEventBus, createApp } from './server.ts';
 
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
@@ -121,7 +121,7 @@ describe('workspace provider API', () => {
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
     server,
-    '/api/providers/connect',
+    '/api/v1/providers/connect',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -131,7 +131,7 @@ describe('workspace provider API', () => {
 
   const retry = (server: ReturnType<typeof app>, provider: string, body: unknown) => apiRequest(
     server,
-    `/api/providers/${provider}/retry`,
+    `/api/v1/providers/${provider}/retry`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -139,12 +139,12 @@ describe('workspace provider API', () => {
     },
   );
 
-  it('GET /api/providers/status returns all provider rows with global enablement', async () => {
+  it('GET /api/v1/providers/status returns all provider rows with global enablement', async () => {
     const workspaceConfig = memoryWorkspaceConfig(['codex']);
     const response = await apiRequest(app({
       providerAuth: service({ claude: 'connected', codex: 'disconnected', opencode: 'not-installed' }),
       workspaceConfig,
-    }), '/api/providers/status');
+    }), '/api/v1/providers/status');
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -161,7 +161,7 @@ describe('workspace provider API', () => {
     });
   });
 
-  it('PUT /api/providers/:provider/enabled updates the global preference and emits one enriched row', async () => {
+  it('PUT /api/v1/providers/:provider/enabled updates the global preference and emits one enriched row', async () => {
     const workspaceConfig = memoryWorkspaceConfig(['codex']);
     const workspaceEvents = new WorkspaceEventBus();
     const seen: unknown[] = [];
@@ -170,7 +170,7 @@ describe('workspace provider API', () => {
     });
     const server = app({ workspaceConfig, workspaceEvents });
 
-    const disabled = await apiRequest(server, '/api/providers/claude/enabled', {
+    const disabled = await apiRequest(server, '/api/v1/providers/claude/enabled', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
@@ -190,7 +190,7 @@ describe('workspace provider API', () => {
       enabled: false,
     }]);
 
-    const enabled = await apiRequest(server, '/api/providers/claude/enabled', {
+    const enabled = await apiRequest(server, '/api/v1/providers/claude/enabled', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: true }),
@@ -211,11 +211,11 @@ describe('workspace provider API', () => {
   });
 
   it.each([
-    ['/api/providers/future/enabled', { enabled: false }],
-    ['/api/providers/claude/enabled', { enabled: 'no' }],
-    ['/api/providers/claude/enabled', undefined],
-    ['/api/providers/claude/enabled', { enabled: false, extra: true }],
-  ])('PUT /api/providers/:provider/enabled rejects invalid input %#', async (path, body) => {
+    ['/api/v1/providers/future/enabled', { enabled: false }],
+    ['/api/v1/providers/claude/enabled', { enabled: 'no' }],
+    ['/api/v1/providers/claude/enabled', undefined],
+    ['/api/v1/providers/claude/enabled', { enabled: false, extra: true }],
+  ])('PUT /api/v1/providers/:provider/enabled rejects invalid input %#', async (path, body) => {
     const response = await apiRequest(app(), path, {
       method: 'PUT',
       headers: body === undefined ? undefined : { 'content-type': 'application/json' },
@@ -226,7 +226,7 @@ describe('workspace provider API', () => {
     expect(await response.json()).toEqual({ error: 'provider and enabled boolean are required' });
   });
 
-  it('PUT /api/providers/:provider/enabled returns a fixed error and emits nothing when preference saving fails', async () => {
+  it('PUT /api/v1/providers/:provider/enabled returns a fixed error and emits nothing when preference saving fails', async () => {
     const workspaceConfig = memoryWorkspaceConfig();
     const mergeWrite = vi.spyOn(workspaceConfig, 'mergeWrite').mockRejectedValue(new Error('read-only home'));
     const workspaceEvents = new WorkspaceEventBus();
@@ -235,7 +235,7 @@ describe('workspace provider API', () => {
       if (event === 'provider-status') seen.push(data);
     });
 
-    const response = await apiRequest(app({ workspaceConfig, workspaceEvents }), '/api/providers/claude/enabled', {
+    const response = await apiRequest(app({ workspaceConfig, workspaceEvents }), '/api/v1/providers/claude/enabled', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
@@ -255,8 +255,8 @@ describe('workspace provider API', () => {
     }));
     const server = app({ providerAuth: service({}, runCommand) });
 
-    await apiRequest(server, '/api/providers/status');
-    await apiRequest(server, '/api/providers/status?refresh=1');
+    await apiRequest(server, '/api/v1/providers/status');
+    await apiRequest(server, '/api/v1/providers/status?refresh=1');
 
     expect(runCommand).toHaveBeenCalledTimes(6);
   });
@@ -269,13 +269,13 @@ describe('workspace provider API', () => {
     }));
     const server = app({ providerAuth: service({}, runCommand) });
 
-    await apiRequest(server, '/api/providers/status');
-    await apiRequest(server, '/api/providers/status');
+    await apiRequest(server, '/api/v1/providers/status');
+    await apiRequest(server, '/api/v1/providers/status');
 
     expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
-  it('POST /api/providers/:provider/retry clears only the current incident without enabling a disabled provider', async () => {
+  it('POST /api/v1/providers/:provider/retry clears only the current incident without enabling a disabled provider', async () => {
     const providerAuth = service({}, undefined, () => 'auth-incident-1');
     const incident = providerAuth.reportRuntimeAuthFailure('claude')?.status.authFailureId;
     const workspaceConfig = memoryWorkspaceConfig(['claude']);
@@ -308,7 +308,7 @@ describe('workspace provider API', () => {
     expect(raw).not.toContain('secret error');
   });
 
-  it('POST /api/providers/:provider/retry rejects a stale incident and retains the latch', async () => {
+  it('POST /api/v1/providers/:provider/retry rejects a stale incident and retains the latch', async () => {
     const providerAuth = service({}, undefined, () => 'auth-incident-1');
     providerAuth.reportRuntimeAuthFailure('claude');
     const server = app({ providerAuth });
@@ -319,7 +319,7 @@ describe('workspace provider API', () => {
     expect(await response.json()).toEqual({
       error: 'Authentication incident changed. Refresh and try again.',
     });
-    await expect((await apiRequest(server, '/api/providers/status')).json()).resolves.toMatchObject({
+    await expect((await apiRequest(server, '/api/v1/providers/status')).json()).resolves.toMatchObject({
       providers: expect.arrayContaining([
         expect.objectContaining({ provider: 'claude', authFailureId: 'auth-incident-1' }),
       ]),
@@ -327,11 +327,11 @@ describe('workspace provider API', () => {
   });
 
   it.each([
-    ['/api/providers/future/retry', { authFailureId: 'auth-incident-1' }],
-    ['/api/providers/claude/retry', {}],
-    ['/api/providers/claude/retry', { authFailureId: '' }],
-    ['/api/providers/claude/retry', { authFailureId: 'auth-incident-1', extra: true }],
-  ])('POST /api/providers/:provider/retry rejects malformed input %#', async (path, body) => {
+    ['/api/v1/providers/future/retry', { authFailureId: 'auth-incident-1' }],
+    ['/api/v1/providers/claude/retry', {}],
+    ['/api/v1/providers/claude/retry', { authFailureId: '' }],
+    ['/api/v1/providers/claude/retry', { authFailureId: 'auth-incident-1', extra: true }],
+  ])('POST /api/v1/providers/:provider/retry rejects malformed input %#', async (path, body) => {
     const response = await apiRequest(app(), path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -373,7 +373,7 @@ describe('workspace provider API', () => {
       hint: 'Authentication was rejected during a run. Reconnect, then try again.',
       authFailureId: 'auth-incident-1',
     }]);
-    await expect((await apiRequest(server, '/api/providers/status')).json()).resolves
+    await expect((await apiRequest(server, '/api/v1/providers/status')).json()).resolves
       .toMatchObject({
         providers: expect.arrayContaining([
           expect.objectContaining({
@@ -416,8 +416,8 @@ describe('workspace provider API', () => {
 
     try {
       const server = app({ providerAuth, contexts });
-      expect((await apiRequest(server, '/api/p/lazy/runs')).status).toBe(200);
-      await expect((await apiRequest(server, '/api/providers/status')).json()).resolves
+      expect((await apiRequest(server, '/api/v1/p/lazy/runs')).status).toBe(200);
+      await expect((await apiRequest(server, '/api/v1/providers/status')).json()).resolves
         .toMatchObject({
           providers: expect.arrayContaining([
             expect.objectContaining({ provider: 'claude', status: 'disconnected' }),
@@ -472,7 +472,7 @@ describe('workspace provider API', () => {
     const failure = providerAuth.reportRuntimeAuthFailure('claude');
     const server = app({ providerAuth });
 
-    const response = await apiRequest(server, '/api/providers/status?refresh=1');
+    const response = await apiRequest(server, '/api/v1/providers/status?refresh=1');
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
@@ -490,18 +490,18 @@ describe('workspace provider API', () => {
 
   it('is workspace-level rather than project-scoped', async () => {
     const server = app();
-    const status = await apiRequest(server, '/api/p/default/providers/status');
-    const connectResponse = await apiRequest(server, '/api/p/default/providers/connect', {
+    const status = await apiRequest(server, '/api/v1/p/default/providers/status');
+    const connectResponse = await apiRequest(server, '/api/v1/p/default/providers/connect', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: 'claude' }),
     });
-    const enabledResponse = await apiRequest(server, '/api/p/default/providers/claude/enabled', {
+    const enabledResponse = await apiRequest(server, '/api/v1/p/default/providers/claude/enabled', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
     });
-    const retryResponse = await apiRequest(server, '/api/p/default/providers/claude/retry', {
+    const retryResponse = await apiRequest(server, '/api/v1/p/default/providers/claude/retry', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ authFailureId: 'auth-incident-1' }),
@@ -513,9 +513,9 @@ describe('workspace provider API', () => {
     expect(retryResponse.status).toBe(404);
   });
 
-  it('does not add provider fields or calls to /api/health', async () => {
+  it('does not add provider fields or calls to /api/v1/health', async () => {
     const runCommand = vi.fn<RunProviderCommand>();
-    const response = await apiRequest(app({ providerAuth: service({}, runCommand) }), '/api/health');
+    const response = await apiRequest(app({ providerAuth: service({}, runCommand) }), '/api/v1/health');
     const body = await response.json() as Record<string, unknown>;
 
     expect(response.status).toBe(200);
@@ -650,7 +650,7 @@ describe('workspace provider API', () => {
   });
 
   it.each([{}, { provider: 'other' }, { provider: 1 }])('rejects invalid body %# with 400', async (body) => {
-    const response = await apiRequest(app(), '/api/providers/connect', {
+    const response = await apiRequest(app(), '/api/v1/providers/connect', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

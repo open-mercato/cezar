@@ -2,11 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp, type ServerDeps } from './server.js';
-import type { SocketHub, TopicPublisher } from './ws.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp, type ServerDeps } from './server.ts';
+import type { SocketHub, TopicPublisher } from './ws.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
  * The LIVE-SERVER health path (spec `2026-07-23-websocket-subscriptions.md`).
@@ -86,7 +86,7 @@ describe('health topic + cache (live-server path)', () => {
   };
   let currentApp: ReturnType<typeof createApp> | undefined;
   const runner = async (): Promise<string | undefined> => {
-    const res = await apiRequest(currentApp!, '/api/health');
+    const res = await apiRequest(currentApp!, '/api/v1/health');
     expect(res.status).toBe(200);
     return ((await res.json()) as { defaultRunner?: string }).defaultRunner;
   };
@@ -193,7 +193,7 @@ describe('health topic + cache (live-server path)', () => {
     expect(published).toHaveLength(0);
   });
 
-  it('the topic snapshot and GET /api/health serve the same payload', async () => {
+  it('the topic snapshot and GET /api/v1/health serve the same payload', async () => {
     setRunner('claude');
     const { app, topics } = build();
     currentApp = app;

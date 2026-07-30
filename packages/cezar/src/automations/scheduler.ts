@@ -1,7 +1,7 @@
-import type { AutomationCoordinator } from './coordinator.js';
-import type { GithubCandidate, GithubPoller, GithubPollResult } from './github-poller.js';
-import type { AutomationStore } from './store.js';
-import type { AutomationDefinition } from './types.js';
+import type { AutomationCoordinator } from './coordinator.ts';
+import type { GithubCandidate, GithubPoller, GithubPollResult } from './github-poller.ts';
+import type { AutomationStore } from './store.ts';
+import type { AutomationDefinition } from './types.ts';
 
 export interface AutomationLaunchResult { runId: string }
 export type AutomationLauncher = (

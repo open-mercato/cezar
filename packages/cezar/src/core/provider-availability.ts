@@ -2,7 +2,7 @@ import type {
   ProviderId,
   ProviderStatus,
   ProviderStatusResponse,
-} from './provider-auth.js';
+} from './provider-auth.ts';
 
 export function applyProviderEnablement(
   response: ProviderStatusResponse,
