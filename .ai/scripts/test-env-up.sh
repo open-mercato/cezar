@@ -8,6 +8,8 @@
 #             terminate the healthy server immediately after the script exits.
 #   2026-07-21 start a new session when setsid is available; some task runners reap
 #             every process left in the bootstrap shell's process group despite nohup.
+#   2026-07-30 follow the contract/server package split: the root build inlines the
+#             private contract into cezar and typechecks (but does not emit) api-client.
 set -eu
 
 # ---- project-specific parameters -------------------------------------------
@@ -30,16 +32,17 @@ HEALTH_PATH="/api/v1/health"
 HEALTH_TIMEOUT=60
 TEST_ENV_CACHE_TTL_SECONDS=${TEST_ENV_CACHE_TTL_SECONDS:-600}
 
-# The preparation chain: api-client `tsc` → packages/api-client/dist, server `tsc` → packages/cezar/dist/,
-# `vite build` → packages/cezar/web/dist/. All three are required — the server serves the React cockpit
-# from packages/cezar/web/dist and falls back to the legacy UI without it, so a missing web build would
-# silently test the wrong page.
+# The preparation chain builds the server (including the inlined private contract) into
+# packages/cezar/dist/ and the cockpit into packages/cezar/web/dist/. Both are required —
+# the server falls back to the built-in missing-UI hint without the web build, so a missing
+# web artifact would silently test the wrong page. The api-client is typechecked and bundled
+# into the web output but deliberately has no emitted dist artifact.
 BUILD_COMMAND="npm run build"
-BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/web/dist/index.html packages/api-client/dist/index.js"
+BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/dist/contract/index.js packages/cezar/web/dist/index.html"
 # Fingerprint inputs — a change to any of these invalidates the cached build. Each workspace
 # contributes its own sources AND its own manifest: a dependency moved between packages
 # changes what gets bundled without touching a single source file.
-BUILD_INPUT_PATHS="packages/cezar/src packages/cezar/package.json packages/cezar/tsconfig.json packages/api-client/src packages/api-client/package.json packages/web/src packages/web/index.html packages/web/vite.config.ts packages/web/package.json package.json package-lock.json"
+BUILD_INPUT_PATHS="packages/cezar/src packages/cezar/package.json packages/cezar/tsconfig.json packages/contract/src packages/contract/package.json packages/contract/tsconfig.json packages/api-client/src packages/api-client/package.json packages/api-client/tsconfig.json packages/web/src packages/web/index.html packages/web/vite.config.ts packages/web/package.json package.json package-lock.json"
 
 # CEZ_DRY_RUN=1 swaps the agent CLIs for the bundled mock, so booting needs no
 # `claude` login and reaches no network — the whole point for CI/e2e.
