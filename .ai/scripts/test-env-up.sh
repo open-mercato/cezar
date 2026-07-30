@@ -30,12 +30,13 @@ HEALTH_PATH="/api/v1/health"
 HEALTH_TIMEOUT=60
 TEST_ENV_CACHE_TTL_SECONDS=${TEST_ENV_CACHE_TTL_SECONDS:-600}
 
-# The preparation chain: api-client `tsc` → packages/api-client/dist, server `tsc` → packages/cezar/dist/,
-# `vite build` → packages/cezar/web/dist/. All three are required — the server serves the React cockpit
+# The preparation chain: server `tsc` → packages/cezar/dist/ and `vite build` →
+# packages/cezar/web/dist/. Both are required — the server serves the React cockpit
 # from packages/cezar/web/dist and falls back to the legacy UI without it, so a missing web build would
-# silently test the wrong page.
+# silently test the wrong page. The Node-free api-client is source-only and bundled into the cockpit;
+# its typecheck deliberately emits no standalone dist artifact.
 BUILD_COMMAND="npm run build"
-BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/web/dist/index.html packages/api-client/dist/index.js"
+BUILD_ARTIFACTS="packages/cezar/dist/index.js packages/cezar/web/dist/index.html"
 # Fingerprint inputs — a change to any of these invalidates the cached build. Each workspace
 # contributes its own sources AND its own manifest: a dependency moved between packages
 # changes what gets bundled without touching a single source file.

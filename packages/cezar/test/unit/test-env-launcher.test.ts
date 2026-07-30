@@ -53,7 +53,7 @@ function makeFixture(withSetsid: boolean): { root: string; path: string } {
     // workspace layout rather than invent its own.
     `#!/bin/sh
 set -eu
-mkdir -p packages/cezar/dist packages/cezar/web/dist packages/api-client/dist
+mkdir -p packages/cezar/dist packages/cezar/web/dist
 cat > packages/cezar/dist/index.js <<'EOF'
 const http = require('node:http');
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
@@ -63,7 +63,6 @@ http.createServer((req, res) => {
 }).listen(port, '127.0.0.1');
 EOF
 printf '<!doctype html>' > packages/cezar/web/dist/index.html
-printf 'export {};' > packages/api-client/dist/index.js
 `,
     { mode: 0o755 },
   );
