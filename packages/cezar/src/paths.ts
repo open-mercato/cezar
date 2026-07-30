@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import type { AgentHomePaths } from './agent-config/catalog.ts';
 
 /**
@@ -36,7 +36,7 @@ export function cezarHomeDir(): string {
 export function assertCezarHomeWriteIsSandboxed(path: string, env: NodeJS.ProcessEnv = process.env): void {
   if (!env.VITEST) return;
   const realHome = join(homedir(), '.cezar');
-  if (path !== realHome && !path.startsWith(`${realHome}/`)) return;
+  if (path !== realHome && !path.startsWith(realHome + sep)) return;
   throw new Error(
     `[cez] refusing to write ${path} from a test run — CEZ_HOME is not pinned to a sandbox. ` +
       'Pin it (the vitest setup file does this by default) so the suite never touches the real cezar home.',

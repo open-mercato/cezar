@@ -101,10 +101,16 @@ describe('cezar home write safety', () => {
     // The reproduction from the bug report, run for real: part of the workspace
     // CLI suite with a timeout short enough that every case is killed mid-write,
     // pointed at a throwaway HOME and started with no CEZ_HOME at all — the way
-    // `npm test` runs on a developer's machine. On the code before the fix this
-    // command wrote `<home>/.cezar/config.json` holding the fixture's projects
-    // on 5 runs out of 5; the `remove` cases are the cheapest set that does it
-    // (~1s, against ~40s for the whole file).
+    // `npm test` runs on a developer's machine. Run against the code as it was
+    // before this change, that command wrote `<home>/.cezar/config.json` holding
+    // the fixture's projects on 5 runs out of 5; the `remove` cases are the
+    // cheapest set that does it (~1s, against ~40s for the whole file).
+    //
+    // The nested run picks up this package's own vitest config, so it exercises
+    // all three defences together (one path per merge-write, the sandbox pin,
+    // the write guard) — which is the claim that matters here: `npm test` does
+    // not touch the user's registry. The per-layer cases above are what fail if
+    // any single defence is removed.
     const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
     const vitestBin = join(packageRoot, '..', '..', 'node_modules', '.bin', 'vitest');
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeUserHome };

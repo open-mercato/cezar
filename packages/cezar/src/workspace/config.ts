@@ -173,6 +173,11 @@ export function defaultWorkspaceConfig(): WorkspaceConfig {
  *
  * Removing `~/.cezar` still resets cezar completely; removing only
  * `config.json` no longer does, because this snapshot restores it.
+ *
+ * A cezar older than this change does not refresh the snapshot, so on a machine
+ * that alternates between versions it can lag behind the registry — which only
+ * shows if the config file is also lost, and the worst case is a project the
+ * user unregistered reappearing. Cheap next to losing the whole list.
  */
 export function workspaceConfigBackupPath(path: string = workspaceConfigPath()): string {
   return `${path}.bak`;
@@ -230,8 +235,9 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
   }
   const restored = await loadWorkspaceConfigBackup(path);
   if (restored) {
+    const cause = raw === null ? 'is missing' : 'is empty or corrupt';
     console.warn(
-      `[cez] workspace config ${path} is missing or unreadable — restored ${restored.projects.length} project(s) from ${workspaceConfigBackupPath(path)}`,
+      `[cez] workspace config ${path} ${cause} — restored ${restored.projects.length} project(s) from ${workspaceConfigBackupPath(path)}`,
     );
     return restored;
   }
