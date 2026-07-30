@@ -7,10 +7,10 @@ import { Link } from '@/lib/project-router'
 import { ApiError } from '@/api/client'
 import {
   useEditQueuedMessage,
-  useHealth,
   usePatchRun,
   useRemoveQueuedMessage,
   useRun,
+  useProjectRepoBase,
   useRuns,
   useSendMessage,
 } from '@/api/queries'
@@ -21,7 +21,7 @@ import { Composer } from '@/components/composer/composer'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
-import { githubRepoBase, taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
+import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
@@ -275,9 +275,8 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
 
   const rows = useMemo(() => buildThreadRows(run, thread, edit), [run, thread, edit])
   // #526: the footer's issue link may be synthesized from the CEZ:ISSUE marker, and the only
-  // repository it may ever name is this cockpit's own — health owns that fact, not the transcript.
-  const repoBase = githubRepoBase(useHealth().data?.repo?.remote)
-  const issueUrl = taskIssueUrl(run, repoBase)
+  // repository it may ever name is the one on screen — never the transcript's.
+  const issueUrl = taskIssueUrl(run, useProjectRepoBase())
   const { search } = useLocation()
   const mode = threadRenderMode(search, rows.length)
   const scroll = useThreadScroll(run.id)

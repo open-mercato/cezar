@@ -37,7 +37,17 @@ import { Fragment, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
-import { queryKeys, useConfig, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
+import {
+  queryKeys,
+  useConfig,
+  useHealth,
+  useOpenTargets,
+  usePatchRun,
+  useProjectRepoBase,
+  useProviderStatus,
+  useRunHandoff,
+  useRuns,
+} from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -68,14 +78,7 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
-import {
-  formatCost,
-  githubRepoBase,
-  prNumber,
-  taskIssueUrl,
-  taskPrUrl,
-  workflowLabel,
-} from '@/lib/tasks-table'
+import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { isHttpUrl } from '@/lib/utils'
 
@@ -494,8 +497,8 @@ function MetaRow({
   showCost: boolean
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
-  // such a link may name is this cockpit's own — health owns that fact, not the transcript.
-  const repoBase = githubRepoBase(useHealth().data?.repo?.remote)
+  // such a link may name is the one on screen — never the transcript's.
+  const repoBase = useProjectRepoBase()
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]

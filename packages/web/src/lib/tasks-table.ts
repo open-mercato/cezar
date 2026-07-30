@@ -74,8 +74,8 @@ export function finishedRunCount(runs: readonly RunRecord[]): number {
   return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status)).length
 }
 
-/** The cockpit's own repository as a web root (`https://github.com/owner/repo`), parsed from the
- *  git remote `/api/health` reports (`repo.remote`). Handles the scheme forms
+/** A git remote as a GitHub web root (`https://github.com/owner/repo`) — the caller passes the
+ *  remote `/api/v1/health` reports (`repo.remote`), via `useProjectRepoBase`. Handles the scheme forms
  *  (`https://`, `ssh://`, credentials, port) and the scp-like `git@github.com:owner/repo.git`;
  *  undefined for every non-github.com host, local path, or absent remote — the cockpit only knows
  *  how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),

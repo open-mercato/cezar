@@ -4,6 +4,8 @@ import type { ReactElement } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ProjectScopeProvider } from '@/api/project-scope-context'
+import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type {
   ApiRun,
@@ -25,7 +27,7 @@ afterEach(() => {
  *  list) and a router (tabs, delete-navigates-home). Data assertions still drive the reduced
  *  fixture states directly — the providers are plumbing, not fixtures.
  *
- *  `health` is served on `/api/health`: the footer's issue link is synthesized against the
+ *  `health` is served on `/api/v1/health`: the footer's issue link is synthesized against the
  *  project's own repo remote (#526), so a test that wants one must say which repo this is. */
 function renderView(
   ui: ReactElement,
@@ -54,11 +56,17 @@ function renderView(
       )
     }),
   )
-  return render(
-    <QueryClientProvider client={createQueryClient()}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-  )
+  // The client is handed back so a test can await a specific query landing in the cache —
+  // the only honest barrier for asserting that something is absent *after* data arrived.
+  const queryClient = createQueryClient()
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>{ui}</MemoryRouter>
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  }
 }
 
 const run = (status: RunStatus, extra: Partial<ApiRun> = {}): ApiRun =>
@@ -604,6 +612,41 @@ describe('ThreadView', () => {
     )
     expect(footer?.querySelector('[data-slot="issue-link"]')?.textContent).toContain('Issue')
     expect(footer?.querySelector('[data-slot="pr-link"]')).toBeNull()
+  })
+
+  /**
+   * `/health` is workspace-level — the server builds it from the BOOT project's root whatever
+   * the URL is scoped to. So a task belonging to another registered project must synthesize
+   * nothing: a link built from the boot project's remote would name a completely different
+   * repository, which is #526's defect wearing a different hat.
+   */
+  it('a task in a non-boot project synthesizes no issue link — health names the wrong repo (#526)', async () => {
+    const issueRun = run('done', { markerRefs: { issue: 524 } })
+    const health = {
+      bootProject: 'cezar',
+      repo: { root: '/repo', branch: 'main', remote: 'git@github.com:open-mercato/cezar.git' },
+    }
+
+    // Control — unscoped IS the boot project, so health's remote really is this task's repo.
+    renderView(<ThreadView run={issueRun} thread={reduceThread(EVENTS)} />, undefined, health)
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="issue-link"]')?.getAttribute('href')).toBe(
+        'https://github.com/open-mercato/cezar/issues/524',
+      )
+    })
+    cleanup()
+
+    // Scoped to a DIFFERENT registered project: same health, and the link must stay away.
+    const { queryClient } = renderView(
+      <ProjectScopeProvider projectId="other-project">
+        <ThreadView run={issueRun} thread={reduceThread(EVENTS)} />
+      </ProjectScopeProvider>,
+      undefined,
+      health,
+    )
+    // Health HAS arrived under this scope — the missing link is a refusal, not a slow render.
+    await waitFor(() => expect(queryClient.getQueryData(queryKeys.health)).toBeDefined())
+    expect(document.querySelector('[data-slot="issue-link"]')).toBeNull()
   })
 
   it('a PR-subject closed run still gets its PR link and no invented issue link (#526)', () => {
