@@ -63,7 +63,7 @@ PR: #742
 
 ### Phase 1: Backend-normalized per-turn usage
 
-- [ ] 1.1 Normalize and test per-turn usage across all backends
+- [x] 1.1 Normalize and test per-turn usage across all backends — 87860f42
 
 ### Phase 2: Contracts, persistence, and durable accounting
 
