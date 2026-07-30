@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
-import { workspaceConfigPath } from '../paths.ts';
+import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry
@@ -168,9 +168,12 @@ export function defaultWorkspaceConfig(): WorkspaceConfig {
  * missing file is the zero-config default (silent); an unreadable or
  * malformed one degrades to the same default with a one-line warning and is
  * left on disk untouched (the next successful merge-write replaces it).
+ *
+ * `path` defaults to the current `workspaceConfigPath()`, but a caller that
+ * will also WRITE passes the path it resolved itself — see
+ * `mergeWriteWorkspaceConfig` for why resolving it twice is a data-loss bug.
  */
-export async function loadWorkspaceConfig(): Promise<WorkspaceConfig> {
-  const path = workspaceConfigPath();
+export async function loadWorkspaceConfig(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
@@ -206,6 +209,7 @@ export function atomicTmpPath(path: string): string {
  *  shared by the workspace config and ui-state writers. Throws on write
  *  failure (e.g. a read-only home) — degrading is the caller's policy. */
 export function atomicWriteJsonSync(path: string, value: unknown): void {
+  assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -226,12 +230,22 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
  * boot). The mutator may mutate its argument in place or return a replacement.
  * Returns the config that was written. Throws on write failure (e.g. a
  * read-only home) — degrading is the caller's policy, per house rules.
+ *
+ * The path is resolved ONCE, before the `await`, and the same value feeds the
+ * read and the write. Resolving it twice used to lose the whole registry:
+ * `workspaceConfigPath()` re-reads `CEZ_HOME` on every call, so if the variable
+ * changed while the read was in flight — a test's `afterEach` dropping its pin
+ * after a timeout is the way this happens in practice — the read came from one
+ * home and the write landed in another, replacing that file's registry with a
+ * config it never held. One resolution keeps a merge-write inside exactly one
+ * file, whatever the environment does mid-flight.
  */
 export async function mergeWriteWorkspaceConfig(
   mutator: (config: WorkspaceConfig) => WorkspaceConfig | void,
 ): Promise<WorkspaceConfig> {
-  const current = await loadWorkspaceConfig();
+  const path = workspaceConfigPath();
+  const current = await loadWorkspaceConfig(path);
   const next = mutator(current) ?? current;
-  atomicWriteJsonSync(workspaceConfigPath(), next);
+  atomicWriteJsonSync(path, next);
   return next;
 }
