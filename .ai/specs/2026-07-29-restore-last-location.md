@@ -64,7 +64,7 @@ mechanism is added.
 The client owns semantic validation because it has the live project registry:
 
 1. `pathnameProjectId(pathname)` must decode to the stored `projectId`.
-2. The project must still exist in `GET /api/projects`.
+2. The project must still exist in `GET /api/v1/projects`.
 3. Its status must be usable (`ok` or `not-git`), never `missing`.
 
 Unknown keys continue to round-trip, and an older file without `lastLocation`
@@ -87,7 +87,7 @@ project is present and usable in the loaded registry. Consequently:
 The controller compares the normalized candidate with the cached value and does
 nothing when they are equal. A short debounce coalesces redirect chains and rapid
 navigation. It optimistically updates the workspace UI-state query cache, sends
-`PUT /api/workspace/ui-state` with only the top-level `lastLocation` patch, adopts
+`PUT /api/v1/workspace/ui-state` with only the top-level `lastLocation` patch, adopts
 the merged response on success, and invalidates the cache quietly on failure.
 Unmount flushes a pending final write.
 
@@ -142,10 +142,10 @@ is required because the field is additive and optional.
 Existing endpoints remain the only public surface:
 
 ```text
-GET /api/workspace/ui-state
+GET /api/v1/workspace/ui-state
 → WorkspaceUiState
 
-PUT /api/workspace/ui-state
+PUT /api/v1/workspace/ui-state
 { "lastLocation": { "projectId", "pathname", "search?", "hash?" } }
 → merged WorkspaceUiState
 ```
@@ -154,7 +154,7 @@ The PUT remains protected by the global request-origin guard and body-size/key
 caps. Zod validation returns the established `{ "error": string }` response with
 status `400` for an empty/oversized project id, a non-project pathname, oversized
 search/hash data, or non-string fields. The route remains workspace-level and is
-never mounted below `/api/p/:projectId`.
+never mounted below `/api/v1/p/:projectId`.
 
 ## 📝 UI/UX
 
