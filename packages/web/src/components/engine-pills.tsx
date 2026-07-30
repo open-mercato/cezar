@@ -58,14 +58,15 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   // scoped start surface must read the active project's `/api/config` instead (#699).
   const defaultRunner = config.data?.defaultRunner
   const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
+  const modelsLocked = config.data?.modelsLocked === true
   return {
     runner,
     runnerExplicit: pick.runner !== null,
-    model: resolveModel(pick.model, runner, config.data?.defaultModels, catalog.data),
+    model: resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data),
     runners,
     defaultRunner,
     canRun: providers.isSuccess && runners.length > 0,
-    modelsLocked: config.data?.modelsLocked === true,
+    modelsLocked,
     providerPending: providers.isPending,
     providerError: providers.isError,
   }
@@ -109,7 +110,6 @@ export function EnginePills({
   const catalog = useRunnerModels()
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
   const unavailable = disabled || !canRun
-  const modelUnavailable = unavailable || modelsLocked === true
 
   return (
     <>
@@ -130,7 +130,8 @@ export function EnginePills({
         // the lookup cannot miss.
         label={models.find((m) => m.id === model)!.label}
         value={model}
-        disabled={modelUnavailable}
+        disabled={unavailable}
+        readOnly={modelsLocked === true}
         disabledHint={modelsLocked ? 'Model selection is locked to native coding-agent settings.' : undefined}
         onPick={(next) => onChange({ ...pick, model: next })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}

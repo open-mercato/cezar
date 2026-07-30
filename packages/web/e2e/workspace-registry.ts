@@ -75,7 +75,7 @@ export function readSharedProjects(): RegistryProject[] {
 
 /**
  * Replace the registry's `projects` array, leaving every other key (schemaVersion, projectsDir,
- * resources) untouched. `GET /api/projects` reads the file per request, so the next page load
+ * resources) untouched. `GET /api/v1/projects` reads the file per request, so the next page load
  * sees this — no server restart.
  */
 export function writeSharedProjects(projects: RegistryProject[]): void {
@@ -122,7 +122,7 @@ export async function setup(): Promise<() => void> {
   let bootProject: string
   try {
     const { baseUrl } = readTestEnv()
-    const body = (await (await fetch(`${baseUrl}/api/projects`)).json()) as { bootProject: string }
+    const body = (await (await fetch(`${baseUrl}/api/v1/projects`)).json()) as { bootProject: string }
     bootProject = body.bootProject
   } catch {
     return () => {}

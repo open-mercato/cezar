@@ -41,7 +41,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -52,7 +52,7 @@ async function waitForHealth(url: string): Promise<void> {
 
 async function waitForStatus(url: string, id: string, wanted: string[]): Promise<string> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const record = (await (await fetch(`${url}/api/runs/${id}`)).json()) as { status: string }
+    const record = (await (await fetch(`${url}/api/v1/runs/${id}`)).json()) as { status: string }
     if (wanted.includes(record.status)) return record.status
     await new Promise((r) => setTimeout(r, 500))
   }
@@ -97,7 +97,7 @@ beforeAll(async () => {
   // Boot the run the composer will talk to. The mock's reply has no CEZ:DONE marker, so after
   // its first turn the session stays open and the run parks at `waiting`.
   const created = (await (
-    await fetch(`${baseUrl}/api/runs`, {
+    await fetch(`${baseUrl}/api/v1/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task: 'Say hello to the composer e2e.', workflow: 'quick-task' }),
@@ -227,9 +227,9 @@ describe('the thread composer against a live waiting session', () => {
   it('a closed session keeps the composer authorable — sending it is Continue', async () => {
     // Finish the waiting session. When the mock's turns touched notes.md the run parks at
     // `review` first (the documented double-finish path) — accept that and finish again.
-    await fetch(`${baseUrl}/api/runs/${runId}/finish`, { method: 'POST' })
+    await fetch(`${baseUrl}/api/v1/runs/${runId}/finish`, { method: 'POST' })
     if ((await waitForStatus(baseUrl, runId, ['done', 'review'])) === 'review') {
-      await fetch(`${baseUrl}/api/runs/${runId}/finish`, { method: 'POST' })
+      await fetch(`${baseUrl}/api/v1/runs/${runId}/finish`, { method: 'POST' })
       await waitForStatus(baseUrl, runId, ['done'])
     }
 

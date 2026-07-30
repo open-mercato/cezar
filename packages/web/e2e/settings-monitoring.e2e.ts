@@ -19,13 +19,13 @@ let baseUrl: string
 let original: WorkspaceConfig['resources']
 
 async function workspaceConfig(): Promise<WorkspaceConfig> {
-  const response = await fetch(`${baseUrl}/api/workspace/config`)
+  const response = await fetch(`${baseUrl}/api/v1/workspace/config`)
   if (!response.ok) throw new Error(`workspace config failed: ${response.status}`)
   return response.json() as Promise<WorkspaceConfig>
 }
 
 async function putResources(resources: Partial<WorkspaceConfig['resources']>): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/workspace/config`, {
+  const response = await fetch(`${baseUrl}/api/v1/workspace/config`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ resources }),

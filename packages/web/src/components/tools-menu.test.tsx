@@ -26,10 +26,12 @@ beforeEach(() => {
   )
 })
 
-/** A `/api/health` answer with both kinds of row: present tools with versions, and a missing
+/** A `/api/v1/health` answer with both kinds of row: present tools with versions, and a missing
  *  one carrying the server's setup hint. The names/hints mirror `src/core/backend-detect.ts`. */
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/home/me/cezar',
   repo: { root: '/home/me/cezar', branch: 'main' },
   defaultRunner: 'claude',
@@ -44,7 +46,7 @@ const HEALTH: HealthResponse = {
     },
   ],
   forge: null,
-  capabilities: { localHandoff: true, followups: false, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: false, singleProject: false },
 }
 
 const ALL_GOOD: HealthResponse = {

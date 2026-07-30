@@ -1,6 +1,6 @@
-import { macosxNgrok } from './platforms/macosx-ngrok.js';
-import { ubuntuVps } from './platforms/ubuntu-vps.js';
-import { PLATFORM_IDS, type PlatformId, type PlatformStrategy } from './types.js';
+import { macosxNgrok } from './platforms/macosx-ngrok.ts';
+import { ubuntuVps } from './platforms/ubuntu-vps.ts';
+import { PLATFORM_IDS, type PlatformId, type PlatformStrategy } from './types.ts';
 
 /**
  * Platform registry. `--platform <id>` is validated against these keys; an

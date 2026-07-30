@@ -11,7 +11,7 @@
  *  - `opencode` — `opencode serve`, HTTP + SSE.
  */
 
-import type { UiEvent } from './ui-events.js';
+import type { UiEvent } from './ui-events.ts';
 
 /** `claude-cli` is the legacy id kept so old run records still parse. */
 export type AgentBackend = 'claude' | 'codex' | 'opencode' | 'claude-cli';

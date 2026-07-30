@@ -31,7 +31,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       // The fixture server is still starting.
     }
@@ -41,7 +41,7 @@ async function waitForHealth(url: string): Promise<void> {
 }
 
 async function putDefaults(autonomous: boolean | null, worktree: boolean | null): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/workspace/config`, {
+  const response = await fetch(`${baseUrl}/api/v1/workspace/config`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ composerDefaults: { autonomous, worktree } }),
@@ -141,7 +141,7 @@ describe('configurable composer run defaults', () => {
       browser.waitForFunction(
         `document.querySelector('[aria-label="Autonomous by default"]')?.value === 'on'`,
       )
-      const config = (await (await fetch(`${baseUrl}/api/workspace/config`)).json()) as {
+      const config = (await (await fetch(`${baseUrl}/api/v1/workspace/config`)).json()) as {
         composerDefaults: { autonomous: boolean | null }
       }
       expect(config.composerDefaults.autonomous).toBe(true)

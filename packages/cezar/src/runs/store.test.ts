@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from './store.js';
+import { RunStore } from './store.ts';
 
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
@@ -994,7 +994,7 @@ describe('RunStore — queuedMessages (#472)', () => {
         {
           id: 'm2',
           text: 'see this mock',
-          images: [`/api/runs/${run.id}/images/pasted-1.png`],
+          images: [`/api/v1/runs/${run.id}/images/pasted-1.png`],
           createdAt: '2026-07-21T10:01:00.000Z',
         },
       ],
@@ -1009,7 +1009,7 @@ describe('RunStore — queuedMessages (#472)', () => {
       text: 'and update the changelog',
       createdAt: '2026-07-21T10:00:00.000Z',
     });
-    expect(stack?.[1]?.images).toEqual([`/api/runs/${run.id}/images/pasted-1.png`]);
+    expect(stack?.[1]?.images).toEqual([`/api/v1/runs/${run.id}/images/pasted-1.png`]);
   });
 
   /** The `task` rule (above) extended to the stack: these strings are replayed

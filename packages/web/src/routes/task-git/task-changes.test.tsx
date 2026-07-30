@@ -39,12 +39,14 @@ const RUN: ApiRun = {
 
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main', remote: 'git@github.com:acme/demo.git' },
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, followups: false, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: false, singleProject: false },
 }
 
 const CHANGES: ChangesPayload = {
@@ -91,10 +93,10 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       sent.push({ path, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
       const override = overrides[`${method} ${path}`]
       if (override) return override()
-      if (method === 'GET' && path === '/api/runs/r1') return jsonResponse(RUN)
-      if (method === 'GET' && path === '/api/runs/r1/changes') return jsonResponse(CHANGES)
-      if (method === 'GET' && path === '/api/health') return jsonResponse(HEALTH)
-      if (method === 'GET' && path === '/api/runs') return jsonResponse([])
+      if (method === 'GET' && path === '/api/v1/runs/r1') return jsonResponse(RUN)
+      if (method === 'GET' && path === '/api/v1/runs/r1/changes') return jsonResponse(CHANGES)
+      if (method === 'GET' && path === '/api/v1/health') return jsonResponse(HEALTH)
+      if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
       return jsonResponse({})
     }),
   )
@@ -164,7 +166,7 @@ describe('the Changes tab route', () => {
 
   it('shows the empty state when the worktree is clean', async () => {
     stubFetch({
-      'GET /api/runs/r1/changes': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
+      'GET /api/v1/runs/r1/changes': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
     })
     renderChangesRoute()
     await waitFor(() =>
@@ -177,7 +179,7 @@ describe('the Changes tab route', () => {
 
   it('explains when a repointed review worktree shows only uncommitted changes', async () => {
     stubFetch({
-      'GET /api/runs/r1/changes': () =>
+      'GET /api/v1/runs/r1/changes': () =>
         jsonResponse({
           files: [],
           stat: { adds: 0, dels: 0, files: 0 },
@@ -194,7 +196,7 @@ describe('the Changes tab route', () => {
 
   it('a 409 ("no worktree") renders the server reason and disables the git actions', async () => {
     stubFetch({
-      'GET /api/runs/r1/changes': () =>
+      'GET /api/v1/runs/r1/changes': () =>
         jsonResponse({ error: 'no worktree — this task ran directly in the repo working tree' }, 409),
     })
     renderChangesRoute()
@@ -209,7 +211,7 @@ describe('the Changes tab route', () => {
 
   it('commit flow: dialog prefilled with the auto-summary, POSTs the edited message, toasts the sha', async () => {
     const sent = stubFetch({
-      'POST /api/runs/r1/git/commit': () => jsonResponse({ committed: true, sha: 'abc1234def5678' }),
+      'POST /api/v1/runs/r1/git/commit': () => jsonResponse({ committed: true, sha: 'abc1234def5678' }),
     })
     renderChangesRoute()
     await waitFor(() => expect(toolbarAction('commit')?.disabled).toBe(false))
@@ -223,7 +225,7 @@ describe('the Changes tab route', () => {
     fireEvent.click(document.querySelector('[data-slot="commit-confirm"]')!)
 
     await waitFor(() => {
-      const post = sent.find((r) => r.method === 'POST' && r.path === '/api/runs/r1/git/commit')
+      const post = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/git/commit')
       expect(post?.body).toEqual({ message: 'feat: polished commit message' })
     })
     await waitFor(() => expect(document.body.textContent).toContain('Committed abc1234'))
@@ -232,7 +234,7 @@ describe('the Changes tab route', () => {
 
   it('a commit 409 surfaces git’s own words as a danger toast and keeps the dialog open', async () => {
     stubFetch({
-      'POST /api/runs/r1/git/commit': () =>
+      'POST /api/v1/runs/r1/git/commit': () =>
         jsonResponse({ error: 'nothing to commit — the working tree is clean' }, 409),
     })
     renderChangesRoute()
@@ -250,14 +252,14 @@ describe('the Changes tab route', () => {
 
   it('push clicks through to POST git/push and toasts the destination', async () => {
     const sent = stubFetch({
-      'POST /api/runs/r1/git/push': () =>
+      'POST /api/v1/runs/r1/git/push': () =>
         jsonResponse({ pushed: true, branch: 'cez/abc12345', remote: 'origin', upstreamSet: true }),
     })
     renderChangesRoute()
     await waitFor(() => expect(toolbarAction('push')?.disabled).toBe(false))
     fireEvent.click(toolbarAction('push')!)
     await waitFor(() =>
-      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/runs/r1/git/push')).toBe(true),
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/git/push')).toBe(true),
     )
     await waitFor(() =>
       expect(document.body.textContent).toContain('Pushed cez/abc12345 to origin (upstream set)'),
@@ -267,19 +269,19 @@ describe('the Changes tab route', () => {
   it('Create PR uses the existing /pr flow and flips to View PR once the record carries the URL', async () => {
     let record: ApiRun = RUN
     const sent = stubFetch({
-      'POST /api/runs/r1/pr': () => {
+      'POST /api/v1/runs/r1/pr': () => {
         // The server completes the run with the PR badge; the invalidated refetch sees it.
         record = { ...RUN, status: 'done', pullRequestUrl: 'https://github.com/acme/demo/pull/9' }
         return jsonResponse({ url: 'https://github.com/acme/demo/pull/9', dryRun: true }, 201)
       },
-      'GET /api/runs/r1': () => jsonResponse(record),
+      'GET /api/v1/runs/r1': () => jsonResponse(record),
     })
     renderChangesRoute()
     await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false))
 
     fireEvent.click(toolbarAction('create-pr')!)
     await waitFor(() =>
-      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/runs/r1/pr')).toBe(true),
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toBe(true),
     )
     await waitFor(() => {
       const link = document.querySelector('[data-slot="git-toolbar"] a[data-action="view-pr"]')
@@ -290,7 +292,7 @@ describe('the Changes tab route', () => {
 
   it('hosted mode (localHandoff: false) hides the overflow menu entirely', async () => {
     stubFetch({
-      'GET /api/health': () =>
+      'GET /api/v1/health': () =>
         jsonResponse({ ...HEALTH, capabilities: { localHandoff: false } }),
     })
     renderChangesRoute()

@@ -14,16 +14,16 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from './agent-runner.js';
-import type { UiEvent } from './ui-events.js';
+import type { AgentEvent } from './agent-runner.ts';
+import type { UiEvent } from './ui-events.ts';
 import {
   claudeTurnStarted,
   createClaudeUiState,
   mapClaudeMessage,
   type ClaudeUiMapperState,
   type ClaudeUiMapping,
-} from './claude-ui-mapper.js';
-import { ClaudeCliRunner } from './claude-cli-runner.js';
+} from './claude-ui-mapper.ts';
+import { ClaudeCliRunner } from './claude-cli-runner.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, '__fixtures__', 'claude');

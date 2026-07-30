@@ -1,9 +1,9 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { cezarHomeDir } from '../paths.js';
-import { acquireLock, deleteServerState, isResolved, loadServerState, saveServerState } from './state.js';
-import { StepAborted, StepCancelled, StepSkipped, defaultRunner } from './steps.js';
-import { createAutoUi, createClackUi } from './ui.js';
+import { cezarHomeDir } from '../paths.ts';
+import { acquireLock, deleteServerState, isResolved, loadServerState, saveServerState } from './state.ts';
+import { StepAborted, StepCancelled, StepSkipped, defaultRunner } from './steps.ts';
+import { createAutoUi, createClackUi } from './ui.ts';
 import {
   CANCEL,
   PreflightError,
@@ -13,7 +13,7 @@ import {
   type ServerState,
   type StepOutcome,
   type Ui,
-} from './types.js';
+} from './types.ts';
 
 /**
  * The engine — pure control flow over a strategy's ordered steps. It never

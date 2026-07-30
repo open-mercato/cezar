@@ -1,9 +1,9 @@
-import { loadWorkflows } from '../workflows/load.js';
-import { stepsIssue, type WorkflowDef } from '../workflows/types.js';
-import type { RunStore } from '../runs/store.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
-import type { GithubCandidate } from './github-poller.js';
-import type { AutomationDefinition } from './types.js';
+import { loadWorkflows } from '../workflows/load.ts';
+import { stepsIssue, type WorkflowDef } from '../workflows/types.ts';
+import type { RunStore } from '../runs/store.ts';
+import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import type { GithubCandidate } from './github-poller.ts';
+import type { AutomationDefinition } from './types.ts';
 
 const PLACEHOLDERS = new Set([
   'github.kind', 'github.number', 'github.title', 'github.url', 'github.author',

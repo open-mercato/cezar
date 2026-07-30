@@ -12,13 +12,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { ContentBlock } from '../core/agent-runner.js';
-import { createWorktree } from '../git-worktree.js';
-import { RunStore, type RunRecord } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { parseTaskMarkers } from '../runs/task-markers.js';
-import { appendTurnText, RunManager } from './run.js';
-import type { WorkflowDef } from './types.js';
+import type { ContentBlock } from '../core/agent-runner.ts';
+import { createWorktree } from '../git-worktree.ts';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { parseTaskMarkers } from '../runs/task-markers.ts';
+import { appendTurnText, RunManager } from './run.ts';
+import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -46,6 +46,31 @@ describe('appendTurnText', () => {
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
   });
+});
+
+it('parallel variants ignore a worktree opt-out and retain isolated mode', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'cez-variant-isolation-'));
+  const store = RunStore.open(join(repoRoot, '.ai/cezar'));
+  try {
+    const manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    const records = manager.startVariants(
+      {
+        name: 'quick-task',
+        description: 'x',
+        source: 'built-in',
+        steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
+      },
+      { task: 'compare approaches', worktree: false },
+      2,
+    );
+
+    expect(records.map((record) => record.worktree)).toEqual([undefined, undefined]);
+  } finally {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 /**
@@ -114,7 +139,7 @@ describe('RunManager.recordTurnEnd', () => {
 
   it('never overwrites a user-edited title (PATCH sets titleSummary too)', async () => {
     const record = await makeWorktreeRun();
-    // What PATCH /api/runs/:id does on a rename:
+    // What PATCH /api/v1/runs/:id does on a rename:
     store.updateRun(record.id, { title: 'My name', titleSummary: 'My name', titleOrigin: 'user' });
     await manager.recordTurnEnd(record.id, TURN_TEXT);
     expect(store.getRun(record.id)?.titleSummary).toBe('My name');
@@ -491,6 +516,9 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
     }
 
     const finished = store.getRun(record.id);
+    expect(finished?.worktree).toBe(false);
+    expect(finished?.worktreePath).toBeUndefined();
+    expect(finished?.baseBranch).toMatch(/^[0-9a-f]{40}$/);
     // Neither step failed or was skipped — the reported bug looked exactly
     // like this from the RunRecord's point of view (both `done`) while the
     // second step's session had done nothing; the assertion below on
@@ -853,7 +881,7 @@ describe('RunManager.persistImage without a session (#472)', () => {
     const second = persist('run-a', 'pasted');
     expect(first?.name).toBe('pasted-1.png');
     expect(second?.name).toBe('pasted-2.png');
-    expect(first?.url).toBe('/api/runs/run-a/images/pasted-1.png');
+    expect(first?.url).toBe('/api/v1/runs/run-a/images/pasted-1.png');
   });
 
   /** The count-based bug this replaces: one file on disk named `pasted-3.png` is a
@@ -948,7 +976,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
   it('persists attached images and records their URLs', () => {
     const r = seedQueued();
     const msg = manager.enqueueMessage(r.id, [image(), { type: 'text', text: 'like this' }]);
-    expect(msg?.images).toEqual([`/api/runs/${r.id}/images/pasted-1.png`]);
+    expect(msg?.images).toEqual([`/api/v1/runs/${r.id}/images/pasted-1.png`]);
     expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(true);
   });
 
@@ -1028,7 +1056,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
     expect(delivered?.persistedAttachments).toEqual([
       {
         name: 'pasted-1.png',
-        url: `/api/runs/${r.id}/images/pasted-1.png`,
+        url: `/api/v1/runs/${r.id}/images/pasted-1.png`,
         path: join(imagesDir(r.id), 'pasted-1.png'),
       },
     ]);
@@ -1284,7 +1312,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pasted-1.png'), 'the-bytes');
-    stack(r.id, { text: 'see the mock', images: [`/api/runs/${r.id}/images/pasted-1.png`] });
+    stack(r.id, { text: 'see the mock', images: [`/api/v1/runs/${r.id}/images/pasted-1.png`] });
 
     const images = hydrate(r.id, r.task).stackedImages;
     expect(images).toHaveLength(1);
@@ -1299,7 +1327,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pasted-1.png'), 'the-task-bytes');
-    store.updateRun(r.id, { taskImages: [`/api/runs/${r.id}/images/pasted-1.png`] });
+    store.updateRun(r.id, { taskImages: [`/api/v1/runs/${r.id}/images/pasted-1.png`] });
 
     expect(hydrate(r.id, r.task).images).toEqual([
       {
@@ -1316,7 +1344,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
   /** Degrade, never fail the boot (AGENTS.md). */
   it('skips an unreadable attachment, notes it, and still starts', () => {
     const r = store.createRun({ title: 't', workflow: 'w', task: 'look at this', steps: [] });
-    stack(r.id, { text: 'see the mock', images: [`/api/runs/${r.id}/images/gone-1.png`] });
+    stack(r.id, { text: 'see the mock', images: [`/api/v1/runs/${r.id}/images/gone-1.png`] });
 
     const hydrated = hydrate(r.id, r.task);
     expect(hydrated.task).toBe('look at this\n\nsee the mock');
@@ -1417,7 +1445,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
 
   const WORKFLOW = {
     name: '(planned)',
-    source: 'built-in',
+    source: 'built-in' as const,
     steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
   };
 
@@ -1434,7 +1462,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
     const r = store.createRun({ title: 't', workflow: '(planned)', task: 'the original task', steps: [] });
     store.updateRun(r.id, {
       status: 'queued',
-      workflowDef: WORKFLOW as unknown as Record<string, unknown>,
+      workflowDef: WORKFLOW,
       queuedMessages: [
         { id: 'm1', text: 'the stacked bit', createdAt: '2026-07-21T10:00:00.000Z' },
       ],

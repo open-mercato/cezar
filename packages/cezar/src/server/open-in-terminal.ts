@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { isWsl, wslDistroName } from './wsl.js';
+import { isWsl, wslDistroName } from './wsl.ts';
 
 /**
  * Open a real terminal window at `cwd` running `command` — the "take over the

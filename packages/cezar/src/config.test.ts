@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.js';
+import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.ts';
 
 /**
  * `config.json` schema roundtrips (R2 2.3: `systemPrompt?`). The invariants
@@ -99,6 +99,20 @@ describe('loadConfig systemPrompt', () => {
       const config = await loadConfig(repoRoot);
       expect(config.defaultModels).toBeUndefined();
       expect(config.maxParallel).toBe(6);
+    });
+  });
+
+  describe('modelsLocked', () => {
+    it('is optional and preserves only boolean values', async () => {
+      expect((await loadConfig(repoRoot)).modelsLocked).toBeUndefined();
+
+      write({ modelsLocked: true });
+      expect((await loadConfig(repoRoot)).modelsLocked).toBe(true);
+
+      write({ modelsLocked: 'yes', defaultRunner: 'codex' });
+      const config = await loadConfig(repoRoot);
+      expect(config.modelsLocked).toBeUndefined();
+      expect(config.defaultRunner).toBe('codex');
     });
   });
 

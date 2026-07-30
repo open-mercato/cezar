@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { AutomationStore } from './store.js';
+import { AutomationStore } from './store.ts';
 
 export interface AutomationProjectSource {
   id: string;

@@ -20,7 +20,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   browser?.close()
-  if (automationId) await fetch(`${baseUrl}/api/automations/${automationId}`, { method: 'DELETE' })
+  if (automationId) await fetch(`${baseUrl}/api/v1/automations/${automationId}`, { method: 'DELETE' })
 })
 
 describe('GitHub automations', () => {
@@ -33,7 +33,7 @@ describe('GitHub automations', () => {
     browser.click('button[type="submit"]')
     browser.waitForFunction(`location.pathname === '/p/${bootProject}/automations'`)
 
-    const created = await fetch(`${baseUrl}/api/automations`).then((response) => response.json()) as {
+    const created = await fetch(`${baseUrl}/api/v1/automations`).then((response) => response.json()) as {
       automations: Array<{ id: string; name: string; enabled: boolean }>
     }
     const automation = created.automations.find((item) => item.name === name)
@@ -41,7 +41,7 @@ describe('GitHub automations', () => {
     automationId = automation!.id
     browser.waitForFunction(`document.body.textContent.includes('${name}') && document.body.textContent.includes('Paused')`)
 
-    const preview = await fetch(`${baseUrl}/api/automations/${automationId}/check`, {
+    const preview = await fetch(`${baseUrl}/api/v1/automations/${automationId}/check`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mode: 'preview' }),
@@ -49,11 +49,11 @@ describe('GitHub automations', () => {
     let check: { status: string; matches?: number; error?: string } = { status: 'queued' }
     for (let attempt = 0; attempt < 60 && !['complete', 'error'].includes(check.status); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500))
-      check = await fetch(`${baseUrl}/api/automation-checks/${preview.checkId}`).then((response) => response.json())
+      check = await fetch(`${baseUrl}/api/v1/automation-checks/${preview.checkId}`).then((response) => response.json())
     }
     expect(check.status, check.error).toBe('complete')
 
-    await fetch(`${baseUrl}/api/automations/${automationId}/enable`, { method: 'POST' })
+    await fetch(`${baseUrl}/api/v1/automations/${automationId}/enable`, { method: 'POST' })
     browser.goto(`${baseUrl}/p/${bootProject}/automations`)
     browser.waitForFunction(`document.body.textContent.includes('${name}') && document.body.textContent.includes('Enabled')`)
     browser.screenshot(`${artifactsDir}/automations-enabled.png`)

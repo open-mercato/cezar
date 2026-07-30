@@ -3,27 +3,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ProviderAuthService } from '../core/provider-auth.js';
-import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.js';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { WorkspaceEventBus, createApp } from './server.js';
+import { ProviderAuthService } from '../core/provider-auth.ts';
+import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.ts';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { WorkspaceEventBus, createApp } from './server.ts';
 
 /**
  * Workspace SSE stream (spec 2026-07-20-multi-project-workspace, step 2.8):
- * `GET /api/workspace/events` carries EVERY instantiated project's events,
+ * `GET /api/v1/workspace/events` carries EVERY instantiated project's events,
  * each payload stamped with its `project` id; `usage` is split per project
  * (one stamped event per project with live rows); workspace-level bus events
  * (`project-added`, `project-removed`, `checkout-progress`) and the host-wide
  * unstamped `provider-status` event ride the same stream. Subscribing never
  * force-instantiates a project — late-built contexts join dynamically. The
- * legacy `/api/events` alias stays boot-filtered with its UN-stamped,
+ * legacy `/api/v1/events` alias stays boot-filtered with its UN-stamped,
  * byte-identical shape (protected).
  */
-describe('GET /api/workspace/events', () => {
+describe('GET /api/v1/workspace/events', () => {
   const savedHome = process.env.CEZ_HOME;
   const savedRemote = process.env.CEZ_REMOTE;
   const savedDryRun = process.env.CEZ_DRY_RUN;
@@ -85,7 +85,7 @@ describe('GET /api/workspace/events', () => {
     store: RunStore;
   }> => {
     const other = await registerProject(otherRoot);
-    expect((await apiRequest(app, `/api/p/${other.id}/runs`)).status).toBe(200);
+    expect((await apiRequest(app, `/api/v1/p/${other.id}/runs`)).status).toBe(200);
     const otherStore = contexts.peek(other.id)?.store;
     expect(otherStore).toBeDefined();
     return { id: other.id, store: otherStore as RunStore };
@@ -124,7 +124,7 @@ describe('GET /api/workspace/events', () => {
   it("carries BOTH projects' store events, each stamped with its project id", async () => {
     const other = await buildOtherContext();
 
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
 
     const bootRun = store.createRun({
@@ -153,10 +153,10 @@ describe('GET /api/workspace/events', () => {
     expect(payloadsOf(withDeleted, 'run-deleted')).toEqual([{ id: otherRun.id, project: other.id }]);
   });
 
-  it('legacy /api/events stays boot-filtered with the byte-identical, UN-stamped shape', async () => {
+  it('legacy /api/v1/events stays boot-filtered with the byte-identical, UN-stamped shape', async () => {
     const other = await buildOtherContext();
 
-    const legacy = await openStream('/api/events');
+    const legacy = await openStream('/api/v1/events');
     await legacy.readUntil('event: ping');
 
     // Other project first: were it going to leak, it would arrive BEFORE the
@@ -198,7 +198,7 @@ describe('GET /api/workspace/events', () => {
       steps: [],
     }).id;
 
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
 
     const bootSample: ProcessUsage = {
@@ -242,14 +242,14 @@ describe('GET /api/workspace/events', () => {
   it("a late-built context's events appear after its first touch — and subscribing never force-instantiates", async () => {
     const other = await registerProject(otherRoot);
 
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
     // Opening the stream did NOT build the registered-but-untouched project.
     expect(contexts.peek(other.id)).toBeUndefined();
 
     // First API touch builds the context; the stream picks it up dynamically
     // via onContextBuilt.
-    expect((await apiRequest(app, `/api/p/${other.id}/runs`)).status).toBe(200);
+    expect((await apiRequest(app, `/api/v1/p/${other.id}/runs`)).status).toBe(200);
     const otherStore = contexts.peek(other.id)?.store;
     expect(otherStore).toBeDefined();
     const run = (otherStore as RunStore).createRun({
@@ -267,7 +267,7 @@ describe('GET /api/workspace/events', () => {
 
   it("broadcasts a late-built context's runtime provider invalidation without a project stamp", async () => {
     const other = await buildOtherContext();
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
 
     try {
@@ -305,10 +305,10 @@ describe('GET /api/workspace/events', () => {
   });
 
   it('broadcasts a global provider preference change with its enablement state', async () => {
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
 
-    const response = await apiRequest(app, '/api/providers/codex/enabled', {
+    const response = await apiRequest(app, '/api/v1/providers/codex/enabled', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
@@ -324,7 +324,7 @@ describe('GET /api/workspace/events', () => {
   });
 
   it('broadcasts an enabled provider row after an incident-safe retry', async () => {
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
     const run = store.createRun({
       title: 'auth retry',
@@ -343,7 +343,7 @@ describe('GET /api/workspace/events', () => {
       await ws.readUntil('event: provider-status');
       process.env.CEZ_DRY_RUN = '1';
 
-      const response = await apiRequest(app, '/api/providers/claude/retry', {
+      const response = await apiRequest(app, '/api/v1/providers/claude/retry', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ authFailureId: 'auth-incident-1' }),
@@ -364,12 +364,12 @@ describe('GET /api/workspace/events', () => {
   it('a removed project re-added on the same slug resumes flowing on an already-open stream', async () => {
     const other = await buildOtherContext();
 
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
 
     // Remove the project through the API — the stream must drop its attach
     // entry with the disposed context…
-    const del = await apiRequest(app, `/api/projects/${other.id}`, {
+    const del = await apiRequest(app, `/api/v1/projects/${other.id}`, {
       method: 'DELETE',
     });
     expect(del.status).toBe(200);
@@ -380,7 +380,7 @@ describe('GET /api/workspace/events', () => {
     // rebuilt context's events were silently lost until reconnect).
     const readded = await registerProject(otherRoot);
     expect(readded.id).toBe(other.id);
-    expect((await apiRequest(app, `/api/p/${readded.id}/runs`)).status).toBe(200);
+    expect((await apiRequest(app, `/api/v1/p/${readded.id}/runs`)).status).toBe(200);
     const rebuilt = contexts.peek(readded.id)?.store;
     expect(rebuilt).toBeDefined();
     expect(rebuilt).not.toBe(other.store);
@@ -398,7 +398,7 @@ describe('GET /api/workspace/events', () => {
   });
 
   it('relays workspace-level bus events under their own names (projects, checkout, provider status)', async () => {
-    const ws = await openStream('/api/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events');
     await ws.readUntil('event: ping');
 
     bus.emit('project-added', { project: { id: 'newbie', name: 'newbie' } });

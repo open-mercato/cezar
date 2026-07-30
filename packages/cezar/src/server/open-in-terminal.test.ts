@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { wslTerminalLaunchers } from './open-in-terminal.js';
+import { wslTerminalLaunchers } from './open-in-terminal.ts';
 
 describe('wslTerminalLaunchers (#361 WSL support)', () => {
   it('tries Windows Terminal first, re-entering the distro through wsl.exe', () => {

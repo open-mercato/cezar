@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { AgentEvent } from './agent-runner.js';
-import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.js';
-import { buildClaudeArgs, ClaudeCliRunner } from './claude-cli-runner.js';
-import type { UiEvent } from './ui-events.js';
+import type { AgentEvent } from './agent-runner.ts';
+import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
+import { buildClaudeArgs, ClaudeCliRunner } from './claude-cli-runner.ts';
+import type { UiEvent } from './ui-events.ts';
 
 /**
  * The per-backend system-prompt delivery mechanism (spec §protocol v2

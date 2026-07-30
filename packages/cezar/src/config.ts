@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { loadWorkspaceConfig } from './workspace/config.js';
+import { loadWorkspaceConfig } from './workspace/config.ts';
 
 /**
  * Optional advanced config at `.ai/cezar/config.json`. Zero-config rule:
@@ -97,6 +97,12 @@ const configSchema = z.object({
     })
     .optional()
     .catch(undefined),
+  /**
+   * Make each coding agent's native model setting authoritative. This is an
+   * optional repo-level counterpart to `CEZ_AGENT_MODELS_LOCKED=1`; absent or
+   * false preserves the ordinary per-runner model selector.
+   */
+  modelsLocked: z.boolean().optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;

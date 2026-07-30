@@ -67,8 +67,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     !modelsLocked && !runnerChanged && run.model
       ? { ...config.data?.defaultModels, [runner]: run.model }
       : config.data?.defaultModels
-  const models = modelsForRunner(runner, catalog.data, [pickedModel, modelDefaults?.[runner]])
-  const model = resolveModel(pickedModel, runner, modelDefaults, catalog.data)
+  const effectivePickedModel = modelsLocked ? null : pickedModel
+  const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
+  const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
 
   const mutation = useMutation({
     mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) => {
@@ -112,7 +113,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
           ariaLabel="Model"
           label={models.find((m) => m.id === model)?.label ?? 'auto'}
           value={model}
-          disabled={modelsLocked}
+          readOnly={modelsLocked}
           disabledHint="Model selection is locked to native coding-agent settings."
           onPick={(next) => setPickedModel(next)}
           options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}

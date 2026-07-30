@@ -48,6 +48,8 @@ afterEach(() => {
 
 const HEALTH_MULTI: HealthResponse = {
   version: '0.1.5',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   defaultRunner: 'claude',
@@ -59,7 +61,7 @@ const HEALTH_MULTI: HealthResponse = {
   forge: null,
   // `followups` became a required capability in #471 (merged from main): irrelevant to the
   // Continue pills these tests drive, but the shape must be whole.
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
 }
 
 type Recorded = { method: string; url: string; body?: unknown }
@@ -80,6 +82,7 @@ function serve(
   defaultModels: Record<string, string> = {},
   providerStatus: ProviderStatusResponse | { error: string } = providersForHealth(health),
   providerStatusCode = 200,
+  modelsLocked = false,
 ) {
   requests = []
   const json = (payload: unknown, status = 200) =>
@@ -91,19 +94,20 @@ function serve(
       const method = init.method ?? 'GET'
       const body = init.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/health') return json(health)
-      if (url === '/api/providers/status') return json(providerStatus, providerStatusCode)
-      if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (url === '/api/config' && method === 'GET')
+      if (url === '/api/v1/health') return json(health)
+      if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
+      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/config' && method === 'GET')
         return json({
           baseBranch: null,
           defaultRunner: 'claude',
           systemPrompt: null,
           defaultModels,
+          modelsLocked,
           maxParallel: 1,
           memoryLimitMb: null,
         })
-      if (url === '/api/runs' && method === 'GET') return json([])
+      if (url === '/api/v1/runs' && method === 'GET') return json([])
       if (url.endsWith('/continue') && method === 'POST') return json({ continued: true })
       return json({}, 200)
     }),
@@ -207,6 +211,30 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future' })
+  })
+
+  it('shows a read-only native model while locked and still permits switching runners', async () => {
+    serve(
+      HEALTH_MULTI,
+      { claude: 'native-sonnet', codex: 'gpt-5.6-codex' },
+      providersForHealth(HEALTH_MULTI),
+      200,
+      true,
+    )
+    renderAction(makeRun({ runner: 'claude', model: 'old-run-model' }))
+
+    const model = await screen.findByLabelText('Model')
+    expect(model.tagName).toBe('SPAN')
+    expect(model.textContent).toContain('native-sonnet')
+    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Runner' }))
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('Codex')) as HTMLElement)
+    await waitFor(() => expect(model.textContent).toContain('gpt-5.6-codex'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(continueBody()).toEqual({ runner: 'codex' }))
   })
 
   it('a legacy run (no persisted runner) shows claude — the server continues it on claude, not defaultRunner', async () => {

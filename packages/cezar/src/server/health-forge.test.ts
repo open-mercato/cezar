@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp, type ServerDeps } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp, type ServerDeps } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * Deployment modes + forge seam (cockpit-ui redesign spec): `/api/health`
+ * Deployment modes + forge seam (cockpit-ui redesign spec): `/api/v1/health`
  * gains `forge` and `capabilities.localHandoff` ADDITIVELY (the pre-forge
  * fields are the protected bookmarklet contract, BACKWARD_COMPATIBILITY.md
  * §2), and the open-in-cli local handoff 409s in hosted mode.
@@ -25,7 +25,7 @@ interface HealthBody {
   capabilities: { localHandoff: boolean; followups: boolean; singleProject: boolean; tokenMetrics: boolean };
 }
 
-describe('GET /api/health — forge + capabilities', () => {
+describe('GET /api/v1/health — forge + capabilities', () => {
   let repoRoot: string;
   let store: RunStore;
   const savedRemote = process.env.CEZ_REMOTE;
@@ -67,7 +67,7 @@ describe('GET /api/health — forge + capabilities', () => {
     createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over });
 
   const health = async (over: Partial<ServerDeps> = {}): Promise<HealthBody> => {
-    const res = await apiRequest(makeApp(over), '/api/health');
+    const res = await apiRequest(makeApp(over), '/api/v1/health');
     expect(res.status).toBe(200);
     return (await res.json()) as HealthBody;
   };
@@ -197,7 +197,7 @@ describe('GET /api/health — forge + capabilities', () => {
   });
 });
 
-describe('POST /api/runs/:id/open-in-cli — hosted-mode defense in depth', () => {
+describe('POST /api/v1/runs/:id/open-in-cli — hosted-mode defense in depth', () => {
   let repoRoot: string;
   let store: RunStore;
   let runId: string;
@@ -220,7 +220,7 @@ describe('POST /api/runs/:id/open-in-cli — hosted-mode defense in depth', () =
   const post = (over: Partial<ServerDeps> = {}) =>
     apiRequest(
       createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over }),
-      `/api/runs/${runId}/open-in-cli`,
+      `/api/v1/runs/${runId}/open-in-cli`,
       { method: 'POST' },
     );
 
@@ -248,7 +248,7 @@ describe('POST /api/runs/:id/open-in-cli — hosted-mode defense in depth', () =
   it('unknown runs still 404 first', async () => {
     process.env.CEZ_REMOTE = '1';
     const app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
-    const res = await apiRequest(app, '/api/runs/nope/open-in-cli', { method: 'POST' });
+    const res = await apiRequest(app, '/api/v1/runs/nope/open-in-cli', { method: 'POST' });
     expect(res.status).toBe(404);
   });
 });

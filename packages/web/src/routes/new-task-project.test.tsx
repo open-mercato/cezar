@@ -25,8 +25,8 @@ import { resetDraft } from './new-task-draft'
  * scope gate, the API prefix, the query keys, the per-project remount — hangs off that
  * navigation. Mounting `NewTaskRoute` directly would test a scope swap that never happens.
  *
- * The mocked server answers BOTH surfaces: the boot project's unscoped `/api/*` (the step-3.1
- * invariant) and the second project's `/api/p/other/*`. Each serves different skills, workflows
+ * The mocked server answers BOTH surfaces: the boot project's unscoped `/api/v1/*` (the step-3.1
+ * invariant) and the second project's `/api/v1/p/other/*`. Each serves different skills, workflows
  * and config, so "re-resolves against the selected project" is provable from the UI, not just
  * from the request log.
  */
@@ -70,7 +70,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
   projects: [
     { id: BOOT, name: 'cezar' },
     { id: OTHER, name: 'shop-frontend' },
@@ -150,7 +150,7 @@ const OTHER_REPO: RepoResponse = {
 type Recorded = { method: string; url: string; body?: unknown }
 let requests: Recorded[]
 
-/** The two-project workspace, served on both the unscoped and the `/api/p/other` surface.
+/** The two-project workspace, served on both the unscoped and the `/api/v1/p/other` surface.
  *  `registry` narrows to a one-project workspace for the hidden-pill case. */
 function serve({
   registry = REGISTRY,
@@ -171,22 +171,22 @@ function serve({
       requests.push({ method, url, body })
 
       // Workspace-level: never scoped (project-scope.ts `WORKSPACE_LEVEL`).
-      if (url === '/api/projects') return json(registry)
-      if (url === '/api/health') return json(health)
-      if (url === '/api/providers/status') return json(PROVIDERS)
+      if (url === '/api/v1/projects') return json(registry)
+      if (url === '/api/v1/health') return json(health)
+      if (url === '/api/v1/providers/status') return json(PROVIDERS)
 
       // Split the scope off the path so each route is written once.
-      const scoped = url.startsWith(`/api/p/${OTHER}/`)
-      const path = scoped ? `/api${url.slice(`/api/p/${OTHER}`.length)}` : url
+      const scoped = url.startsWith(`/api/v1/p/${OTHER}/`)
+      const path = scoped ? `/api/v1${url.slice(`/api/v1/p/${OTHER}`.length)}` : url
       const pick = <T,>(boot: T, other: T): T => (scoped ? other : boot)
 
-      if (path === '/api/health') return json(health)
-      if (path === '/api/skills') return json(pick(BOOT_SKILLS, OTHER_SKILLS))
-      if (path === '/api/workflows' && method === 'GET') return json(pick(BOOT_WORKFLOWS, OTHER_WORKFLOWS))
-      if (path === '/api/repo') return json(pick(REPO, OTHER_REPO))
-      if (path === '/api/ui-state' && method === 'GET') return json({})
-      if (path === '/api/ui-state' && method === 'PUT') return json(body ?? {})
-      if (path === '/api/config' && method === 'GET')
+      if (path === '/api/v1/health') return json(health)
+      if (path === '/api/v1/skills') return json(pick(BOOT_SKILLS, OTHER_SKILLS))
+      if (path === '/api/v1/workflows' && method === 'GET') return json(pick(BOOT_WORKFLOWS, OTHER_WORKFLOWS))
+      if (path === '/api/v1/repo') return json(pick(REPO, OTHER_REPO))
+      if (path === '/api/v1/ui-state' && method === 'GET') return json({})
+      if (path === '/api/v1/ui-state' && method === 'PUT') return json(body ?? {})
+      if (path === '/api/v1/config' && method === 'GET')
         return json({
           baseBranch: null,
           defaultRunner: 'claude',
@@ -194,7 +194,7 @@ function serve({
           // The Model pill's label is config-driven, so it proves the CONFIG re-resolved too.
           defaultModels: pick({ claude: 'sonnet' }, { claude: 'opus' }),
         })
-      if (path === '/api/runs' && method === 'POST') return json({ id: 'run-1' }, 201)
+      if (path === '/api/v1/runs' && method === 'POST') return json({ id: 'run-1' }, 201)
       return json({ error: `unmocked ${method} ${url}` }, 404)
     }),
   )
@@ -293,9 +293,9 @@ describe('switching project', () => {
     await waitFor(() => expect(pathname()).toBe(`/p/${OTHER}/new`))
     await composerReady('ship-storefront')
 
-    // … and the second project reads its own, through the `/api/p/<id>` prefix.
+    // … and the second project reads its own, through the `/api/v1/p/<id>` prefix.
     for (const path of ['/skills', '/workflows', '/config', '/repo']) {
-      expect(requests.some((r) => r.url === `/api/p/${OTHER}${path}`)).toBe(true)
+      expect(requests.some((r) => r.url === `/api/v1/p/${OTHER}${path}`)).toBe(true)
     }
     fireEvent.click(sourcePill())
     await screen.findByPlaceholderText('search skills & workflows…')
@@ -347,11 +347,11 @@ describe('switching project', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
 
     await waitFor(() =>
-      expect(requests.some((r) => r.method === 'POST' && r.url === `/api/p/${OTHER}/runs`)).toBe(true),
+      expect(requests.some((r) => r.method === 'POST' && r.url === `/api/v1/p/${OTHER}/runs`)).toBe(true),
     )
     // The unscoped legacy endpoint must never see it — that would run the task in the wrong repo.
-    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/runs')).toBe(false)
-    const posted = requests.find((r) => r.method === 'POST' && r.url === `/api/p/${OTHER}/runs`)
+    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(false)
+    const posted = requests.find((r) => r.method === 'POST' && r.url === `/api/v1/p/${OTHER}/runs`)
     expect((posted?.body as { task?: string }).task).toBe('Ship the storefront')
 
     // Started runs land on the selected project's thread URL, and the other draft is intact.

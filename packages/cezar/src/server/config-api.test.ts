@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * `GET/PUT /api/config` (R6 Step 1.5 — Settings → Agents). The contract under
+ * `GET/PUT /api/v1/config` (R6 Step 1.5 — Settings → Agents). The contract under
  * test: GET answers every Settings-editable knob in one shape; PUT merges into
  * the RAW config.json (user keys survive, defaults never materialize); the R6
  * keys (`systemPrompt`, `defaultModels`) are additive — `null`/`''` clears,
@@ -21,6 +21,7 @@ describe('the config API', () => {
   let repoRoot: string;
   let homeRoot: string;
   const savedHome = process.env.HOME;
+  const savedCezHome = process.env.CEZ_HOME;
   const savedCodexHome = process.env.CODEX_HOME;
   const savedXdgConfigHome = process.env.XDG_CONFIG_HOME;
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
@@ -31,10 +32,12 @@ describe('the config API', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-'));
     homeRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-home-'));
     process.env.HOME = homeRoot;
+    process.env.CEZ_HOME = join(homeRoot, '.cezar');
     process.env.CODEX_HOME = join(homeRoot, '.codex');
     process.env.XDG_CONFIG_HOME = join(homeRoot, '.config');
     delete process.env.CEZ_AGENT_MODELS_LOCKED;
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    mkdirSync(join(homeRoot, '.cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     // The config routes never touch the manager — an empty stub is honest.
     app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
@@ -46,6 +49,8 @@ describe('the config API', () => {
     rmSync(homeRoot, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.HOME;
     else process.env.HOME = savedHome;
+    if (savedCezHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedCezHome;
     if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = savedCodexHome;
     if (savedXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -57,10 +62,10 @@ describe('the config API', () => {
   const configPath = () => join(repoRoot, '.ai/cezar', 'config.json');
   const rawFile = () => JSON.parse(readFileSync(configPath(), 'utf8')) as Record<string, unknown>;
 
-  const get = () => apiRequest(app, '/api/config');
+  const get = () => apiRequest(app, '/api/v1/config');
   const getBody = async () => (await (await get()).json()) as Record<string, unknown>;
   const put = (body: unknown) =>
-    apiRequest(app, '/api/config', {
+    apiRequest(app, '/api/v1/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -113,6 +118,32 @@ describe('the config API', () => {
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toContain('models are locked');
     expect(rawFile().defaultModels).toEqual({ codex: 'cezar-codex' });
+  });
+
+  it('supports the same lock through the optional repository config key', async () => {
+    mkdirSync(join(homeRoot, '.codex'), { recursive: true });
+    writeFileSync(join(homeRoot, '.codex', 'config.toml'), 'model = "native-codex"\n');
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ modelsLocked: true, defaultModels: { codex: 'cezar-codex' } }),
+      'utf8',
+    );
+
+    const body = await getBody();
+    expect(body.modelsLocked).toBe(true);
+    expect(body.defaultModels).toEqual({ codex: 'native-codex' });
+    expect((await put({ defaultModels: { codex: 'other-model' } })).status).toBe(409);
+  });
+
+  it('supports a global workspace config lock across repositories', async () => {
+    writeFileSync(
+      join(homeRoot, '.cezar', 'config.json'),
+      JSON.stringify({ modelsLocked: true }),
+      'utf8',
+    );
+
+    expect((await getBody()).modelsLocked).toBe(true);
+    expect((await put({ defaultModels: { claude: 'opus' } })).status).toBe(409);
   });
 
   it('PUT systemPrompt trims, persists, and round-trips through GET', async () => {
@@ -228,7 +259,7 @@ describe('liveTitleUpdates round-trip (task auto-naming spec)', () => {
   });
 
   const put = (body: unknown) =>
-    apiRequest(app, '/api/config', {
+    apiRequest(app, '/api/v1/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -265,7 +296,7 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
   });
 
   const put = (body: unknown) =>
-    apiRequest(app, '/api/config', {
+    apiRequest(app, '/api/v1/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -275,7 +306,7 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
 
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {
     // Default (no config key) is null — the CEZ_REVIEW_GATE env (OFF) decides.
-    expect(((await (await apiRequest(app, '/api/config')).json()) as Record<string, unknown>).reviewGate).toBeNull();
+    expect(((await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>).reviewGate).toBeNull();
 
     const on = (await (await put({ reviewGate: true })).json()) as Record<string, unknown>;
     expect(on.reviewGate).toBe(true);

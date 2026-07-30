@@ -356,11 +356,12 @@ Settings split along the same line: **Agents**, **Worktrees**, **Bookmarklets**,
 **Projects** and **Keyboard** are yours or the machine's and live at
 `/settings/global`.
 
-**Old URLs keep working.** Every unprefixed path — `/`, `/tasks/<id>`,
-`/settings`, and the whole `/api/…` surface — still answers exactly as before,
-bound to the project cezar was started in; the cockpit redirects flat paths to
-their `/p/<boot>/…` twin. Existing bookmarks, bookmarklets and scripts need no
-change.
+**Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
+`/settings` — still answers, bound to the project cezar was started in; the
+cockpit redirects flat paths to their `/p/<boot>/…` twin, so existing bookmarks
+and bookmarklets need no change. The HTTP API is the exception: it moved to
+`/api/v1/…` (see the CHANGELOG), so a script that calls it needs the extra
+segment.
 
 > **Hosted cockpit?** The folder picker is confined to the independent browse
 > root. Set `CEZ_BROWSE_ROOT` narrowly before first boot (or save it in
@@ -426,7 +427,7 @@ Useful environment variables:
 | Var | Effect |
 |---|---|
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
-| `CEZ_AGENT_MODELS_LOCKED=1` | Lock model selection to the models configured in native Claude/Codex/OpenCode settings. Existing Cezar presets are preserved but ignored; only `1` enables it, and a restart is required. |
+| `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock model selection to the models configured in native Claude/Codex/OpenCode settings. Existing Cezar presets are preserved but ignored; only `1` enables it, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`. |
 | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
 | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
@@ -448,6 +449,7 @@ Useful environment variables:
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Agents toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Skip the `open-mercato/skills` banner on `cezar serve` startup. (The cockpit no longer shows a banner — its skills now live on the Skills page's Manage panel — so this env var is the terminal banner's only switch.) |
+| `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
 
 ---
 
@@ -568,10 +570,18 @@ never blocks startup):
   // exactly that commit, and reports it as `team.commit`.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode"
+  "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)
 }
 ```
+
+Put the same `"modelsLocked": true` key in `~/.cezar/config.json` to apply it
+to every registered project. When the key is absent or `false` in both config
+files (and `CEZ_AGENT_MODELS_LOCKED` is not `1`), each runner's normal model
+selector uses that runner's discovered model list. While locked, the model is
+shown read-only and follows the selected runner's native settings; the runner
+itself remains selectable.
 
 Run data (`runs.json`, NDJSON event logs, worktrees, `todos.json`) is
 git-ignored automatically; your workflows and skills stay committable.

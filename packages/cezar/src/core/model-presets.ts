@@ -1,8 +1,8 @@
-import type { RunnerId } from './agent-runner.js';
+import type { RunnerId } from './agent-runner.ts';
 
 /**
  * The model-preset ids each runner's picker offers — the ids of the web composer's
- * `MODELS_BY_RUNNER` (web/app/src/routes/new-task-form.ts), hand-mirrored the same way the
+ * `MODELS_BY_RUNNER` (packages/web/src/routes/new-task-form.ts), hand-mirrored the same way the
  * API types are. `''` (auto) is implicit and never listed.
  *
  * This is a cross-runner GUARD, not a whitelist: models stay free-form everywhere (custom ids

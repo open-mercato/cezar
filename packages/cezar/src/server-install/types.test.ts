@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { freshServerState, serverStateSchema } from './types.js';
+import { freshServerState, serverStateSchema } from './types.ts';
 
 describe('serverStateSchema', () => {
   it('round-trips a full server.json', () => {

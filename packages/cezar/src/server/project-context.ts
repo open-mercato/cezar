@@ -1,14 +1,14 @@
 import { join } from 'node:path';
-import { AutomationStore } from '../automations/store.js';
-import { reconcileAutomationReceipts } from '../automations/task-template.js';
-import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.js';
-import { pruneOrphans } from '../git-worktree.js';
-import { reclaimWorktrees } from '../runs/retention.js';
-import { RunStore } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { RunManager } from '../workflows/run.js';
-import { ensureLaunchKey } from './launch-key.js';
-import { getRepoInfo } from './git.js';
+import { AutomationStore } from '../automations/store.ts';
+import { reconcileAutomationReceipts } from '../automations/task-template.ts';
+import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
+import { pruneOrphans } from '../git-worktree.ts';
+import { reclaimWorktrees } from '../runs/retention.ts';
+import { RunStore } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { RunManager } from '../workflows/run.ts';
+import { ensureLaunchKey } from './launch-key.ts';
+import { getRepoInfo } from './git.ts';
 
 /**
  * Per-project server context (spec 2026-07-20-multi-project-workspace,

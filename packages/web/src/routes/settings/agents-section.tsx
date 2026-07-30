@@ -188,34 +188,52 @@ function AgentsForm({
                 : providerConnected
                   ? undefined
                   : 'Connect this provider before selecting it.'
+            const modelOptions = modelsForRunner(runner.id, catalog, [config.defaultModels[runner.id]])
+            const configuredModel = config.defaultModels[runner.id] ?? ''
+            const configuredModelLabel =
+              modelOptions.find((model) => model.id === configuredModel)?.label ??
+              configuredModel ??
+              'auto (default)'
             return (
               <label key={runner.id} className="flex items-center gap-3">
                 <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{runner.label}</span>
-                <select
-                  aria-label={`Default model for ${runner.label}`}
-                  data-slot="agents-model"
-                  data-runner={runner.id}
-                  value={config.defaultModels[runner.id] ?? ''}
-                  title={providerReason ?? runner.desc}
-                  disabled={save.isPending || !providerConnected || config.modelsLocked === true}
-                  onChange={(event) =>
-                    save.mutate({
-                      defaultModels: { [runner.id]: event.target.value || null } as Partial<
-                        Record<Runner, string | null>
-                      >,
-                    })
-                  }
-                  className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-                >
-                  {modelsForRunner(runner.id, catalog, [config.defaultModels[runner.id]]).map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.id === '' ? 'auto (default)' : model.label}
-                    </option>
-                  ))}
-                  {modelCatalogStatus(runner.id, catalog) ? (
-                    <option disabled>{modelCatalogStatus(runner.id, catalog)}</option>
-                  ) : null}
-                </select>
+                {config.modelsLocked ? (
+                  <output
+                    aria-label={`Default model for ${runner.label}`}
+                    data-slot="agents-model"
+                    data-runner={runner.id}
+                    title="Model selection is locked to native coding-agent settings."
+                    className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs"
+                  >
+                    {configuredModelLabel}
+                  </output>
+                ) : (
+                  <select
+                    aria-label={`Default model for ${runner.label}`}
+                    data-slot="agents-model"
+                    data-runner={runner.id}
+                    value={configuredModel}
+                    title={providerReason ?? runner.desc}
+                    disabled={save.isPending || !providerConnected}
+                    onChange={(event) =>
+                      save.mutate({
+                        defaultModels: { [runner.id]: event.target.value || null } as Partial<
+                          Record<Runner, string | null>
+                        >,
+                      })
+                    }
+                    className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+                  >
+                    {modelOptions.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.id === '' ? 'auto (default)' : model.label}
+                      </option>
+                    ))}
+                    {modelCatalogStatus(runner.id, catalog) ? (
+                      <option disabled>{modelCatalogStatus(runner.id, catalog)}</option>
+                    ) : null}
+                  </select>
+                )}
               </label>
             )
           })}

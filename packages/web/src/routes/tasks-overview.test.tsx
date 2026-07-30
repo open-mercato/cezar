@@ -682,8 +682,8 @@ describe('TasksOverviewRoute — wired to the app', () => {
   function renderApp(runs: RunRecord[]) {
     fetchMock.mockImplementation(async (input) => {
       const url = String(input)
-      if (url === '/api/runs') return new Response(JSON.stringify(runs), { status: 200 })
-      if (url === '/api/runs/archive-finished')
+      if (url === '/api/v1/runs') return new Response(JSON.stringify(runs), { status: 200 })
+      if (url === '/api/v1/runs/archive-finished')
         return new Response(JSON.stringify({ archived: 1 }), { status: 200 })
       return new Response('[]', { status: 200 })
     })
@@ -726,22 +726,22 @@ describe('TasksOverviewRoute — wired to the app', () => {
     expect(tableRow('arc')).toBeNull()
   })
 
-  it('posts to /api/runs/archive-finished and refetches the authoritative list', async () => {
+  it('posts to /api/v1/runs/archive-finished and refetches the authoritative list', async () => {
     renderApp([run({ id: 'd1', status: 'done' })])
     fireEvent.click(await screen.findByRole('button', { name: /Archive finished/ }))
 
     await waitFor(() => {
-      const posted = fetchMock.mock.calls.find(([path]) => String(path) === '/api/runs/archive-finished')
+      const posted = fetchMock.mock.calls.find(([path]) => String(path) === '/api/v1/runs/archive-finished')
       expect(posted?.[1]?.method).toBe('POST')
     })
     // The doctrine: after the mutation, ask the endpoint again rather than trusting the cache.
     await waitFor(() => {
-      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/runs')
+      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/runs')
       expect(listFetches.length).toBeGreaterThan(1)
     })
   })
 
-  it('PATCHes a table rename to /api/runs/:id and refetches the authoritative list', async () => {
+  it('PATCHes a table rename to /api/v1/runs/:id and refetches the authoritative list', async () => {
     renderApp([run({ id: 'rn1', title: 'Old name', status: 'done' })])
     await waitFor(() => expect(tableRow('rn1')).not.toBeNull())
 
@@ -751,13 +751,13 @@ describe('TasksOverviewRoute — wired to the app', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
 
     await waitFor(() => {
-      const patched = fetchMock.mock.calls.find(([path]) => String(path) === '/api/runs/rn1')
+      const patched = fetchMock.mock.calls.find(([path]) => String(path) === '/api/v1/runs/rn1')
       expect(patched?.[1]?.method).toBe('PATCH')
       expect(JSON.parse(String(patched?.[1]?.body))).toEqual({ title: 'New name' })
     })
     // Same doctrine as archive: the endpoint's answer is the truth — refetch, don't trust.
     await waitFor(() => {
-      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/runs')
+      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/runs')
       expect(listFetches.length).toBeGreaterThan(1)
     })
   })

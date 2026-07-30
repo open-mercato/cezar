@@ -122,7 +122,7 @@ describe('isProjectCollapsed', () => {
 describe('ProjectGroups', () => {
   it('caps an expanded group at 10 rows and links More… at that project’s tasks pane', async () => {
     const runs = Array.from({ length: 15 }, () => run())
-    serve({ '/api/workspace/ui-state': {}, '/api/p/cezar/runs': runs })
+    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': runs })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
     await waitFor(() => expect(taskLinks('cezar').length).toBeGreaterThan(0))
@@ -134,7 +134,7 @@ describe('ProjectGroups', () => {
   })
 
   it('orders groups by lastOpenedAt and only fetches the expanded one', async () => {
-    serve({ '/api/workspace/ui-state': {}, '/api/p/cezar/runs': [] })
+    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
     renderGroups([
       project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-18T00:00:00.000Z' }),
       project(),
@@ -149,11 +149,11 @@ describe('ProjectGroups', () => {
     // The collapsed group costs one registry row, never a runs request.
     expect(header('shop').getAttribute('aria-expanded')).toBe('false')
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
-    expect(asked).not.toContain('/api/p/shop/runs')
+    expect(asked).not.toContain('/api/v1/p/shop/runs')
   })
 
   it('renders each group’s nav scoped to that project', async () => {
-    serve({ '/api/workspace/ui-state': { sidebar: { collapsed: { shop: false } } }, '/api/p/cezar/runs': [], '/api/p/shop/runs': [] })
+    serve({ '/api/v1/workspace/ui-state': { sidebar: { collapsed: { shop: false } } }, '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
     await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
@@ -179,9 +179,9 @@ describe('ProjectGroups', () => {
     // follow each entry's own `forge` field, not one workspace-wide answer — the exact failure
     // was every group hiding (or showing) GitHub based on the folder cezar was LAUNCHED in.
     serve({
-      '/api/workspace/ui-state': { sidebar: { collapsed: { plain: false } } },
-      '/api/p/cezar/runs': [],
-      '/api/p/plain/runs': [],
+      '/api/v1/workspace/ui-state': { sidebar: { collapsed: { plain: false } } },
+      '/api/v1/p/cezar/runs': [],
+      '/api/v1/p/plain/runs': [],
     })
     renderGroups([
       project(),
@@ -196,7 +196,7 @@ describe('ProjectGroups', () => {
   })
 
   it('round-trips a collapse through the workspace ui-state', async () => {
-    serve({ '/api/workspace/ui-state': {}, '/api/p/cezar/runs': [] })
+    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
     await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('true'))
@@ -211,7 +211,7 @@ describe('ProjectGroups', () => {
       if (!call) throw new Error('no PUT yet')
       return call
     })
-    expect(String(put[0])).toBe('/api/workspace/ui-state')
+    expect(String(put[0])).toBe('/api/v1/workspace/ui-state')
     // The WHOLE `sidebar` object: the route merges shallowly at the top level, so a leaf-only
     // patch would replace `sidebar` and drop its siblings.
     expect(JSON.parse(String(put[1]?.body))).toEqual({ sidebar: { collapsed: { cezar: true } } })
@@ -228,8 +228,8 @@ describe('ProjectGroups', () => {
 
   it('starts from the stored collapse rather than the active-project default', async () => {
     serve({
-      '/api/workspace/ui-state': { sidebar: { collapsed: { cezar: true } } },
-      '/api/p/cezar/runs': [],
+      '/api/v1/workspace/ui-state': { sidebar: { collapsed: { cezar: true } } },
+      '/api/v1/p/cezar/runs': [],
     })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
@@ -239,8 +239,8 @@ describe('ProjectGroups', () => {
 
   it('badges a group with its needs-you count', async () => {
     serve({
-      '/api/workspace/ui-state': {},
-      '/api/p/cezar/runs': [run({ status: 'waiting' }), run({ status: 'review' }), run()],
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/p/cezar/runs': [run({ status: 'waiting' }), run({ status: 'review' }), run()],
     })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
@@ -256,7 +256,7 @@ describe('ProjectGroups', () => {
     // live under the 'default' scope key. The boot group must share that entry, or its list and
     // needs-you badge freeze at whatever the expand-time fetch answered.
     const client = createQueryClient()
-    serve({ '/api/workspace/ui-state': {}, '/api/p/cezar/runs': [] })
+    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
     render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/p/cezar/']}>
@@ -280,7 +280,7 @@ describe('ProjectGroups', () => {
   })
 
   it('renders a missing project greyed and inert, with no nav behind it', async () => {
-    serve({ '/api/workspace/ui-state': {}, '/api/p/cezar/runs': [] })
+    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' })])
 
     await waitFor(() => expect(group('gone')).not.toBeNull())
@@ -291,6 +291,6 @@ describe('ProjectGroups', () => {
     // link at — the row states the fact and stops.
     expect(within(group('gone')).queryByRole('button')).toBeNull()
     expect(within(group('gone')).queryAllByRole('link')).toHaveLength(0)
-    expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/p/gone/runs')
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/v1/p/gone/runs')
   })
 })

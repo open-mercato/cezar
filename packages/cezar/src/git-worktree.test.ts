@@ -11,7 +11,7 @@ import {
   resolveBaseRef,
   worktreeShortstat,
   worktreeSizeBytes,
-} from './git-worktree.js';
+} from './git-worktree.ts';
 
 const run = promisify(execFile);
 

@@ -26,7 +26,7 @@
  * persistence, events, or API run records.
  */
 
-import { followupsEnabled } from '../handoff.js';
+import { followupsEnabled } from '../handoff.ts';
 
 export interface Capabilities {
   localHandoff: boolean;

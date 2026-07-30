@@ -3,7 +3,7 @@ import {
   automationDefinitionSchema,
   automationDefinitionsFileSchema,
   automationRuntimeStateSchema,
-} from './types.js';
+} from './types.ts';
 
 const definition = {
   id: 'review-new-prs',

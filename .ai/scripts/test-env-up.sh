@@ -26,7 +26,7 @@ APP_LOG="$QA_DIR/test-env-app.log"
 BROWSER_DESCRIPTOR=".ai/browsers/agent-browser.md"
 
 PREFERRED_PORT=4321
-HEALTH_PATH="/api/health"
+HEALTH_PATH="/api/v1/health"
 HEALTH_TIMEOUT=60
 TEST_ENV_CACHE_TTL_SECONDS=${TEST_ENV_CACHE_TTL_SECONDS:-600}
 

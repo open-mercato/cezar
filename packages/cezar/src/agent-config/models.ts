@@ -1,132 +1,29 @@
-import { parse as parseToml } from 'smol-toml';
-import type { RunnerId } from '../core/agent-runner.js';
-import { CONFIG_FILES, type ConfigFormat } from './catalog.js';
-import { readConfigFile } from './files.js';
-import { stripJsonComments } from './validate.js';
+import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
+import { claudeModelSettingsStrategy } from './model-settings/claude.ts';
+import { codexModelSettingsStrategy } from './model-settings/codex.ts';
+import { opencodeModelSettingsStrategy } from './model-settings/opencode.ts';
+import type { AgentModelSettings, AgentModelSettingsStrategy } from './model-settings/types.ts';
 
 /** The model defaults exposed by the coding agents' own settings files. */
 export type AgentModelDefaults = Partial<Record<RunnerId, string>>;
 
 /**
- * Native settings are read in the same order in which each agent applies them:
- * the first valid model wins. Cezar deliberately only reads the settings files
- * it already exposes in Settings → Agent config; managed/CLI/environment
- * overrides stay with the agent process itself.
+ * Each runner owns its native-settings policy. Adding another backend means
+ * registering its strategy here; vendor precedence, environment variables,
+ * and provider composition stay inside that runner's module.
  */
-/** Remove JSONC trailing commas without touching commas inside string values. */
-function stripJsonTrailingCommas(input: string): string {
-  let out = '';
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i]!;
-    if (inString) {
-      out += ch;
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-      continue;
-    }
-    if (ch === ',') {
-      let next = i + 1;
-      while (/\s/.test(input[next] ?? '')) next++;
-      if (input[next] === '}' || input[next] === ']') continue;
-    }
-    out += ch;
-  }
-  return out;
-}
+const MODEL_SETTINGS_STRATEGIES: Record<RunnerId, AgentModelSettingsStrategy> = {
+  claude: claudeModelSettingsStrategy,
+  codex: codexModelSettingsStrategy,
+  opencode: opencodeModelSettingsStrategy,
+};
 
-function valueAtPath(value: unknown, path: string): unknown {
-  return path.split('.').reduce<unknown>((current, segment) => {
-    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
-    return (current as Record<string, unknown>)[segment];
-  }, value);
-}
-
-function parseConfigContent(content: string, format: ConfigFormat): unknown {
-  return format === 'toml'
-    ? parseToml(content)
-    : JSON.parse(format === 'jsonc' ? stripJsonTrailingCommas(stripJsonComments(content)) : content);
-}
-
-function modelFromContent(content: string, format: ConfigFormat, keys: readonly string[]): string | undefined {
-  try {
-    const parsed = parseConfigContent(content, format);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    for (const key of keys) {
-      const model = valueAtPath(parsed, key);
-      if (typeof model === 'string' && model.trim()) return model.trim();
-    }
-    return undefined;
-  } catch {
-    // A malformed higher-precedence file must not prevent a usable lower-level
-    // default from appearing in the cockpit.
-    return undefined;
-  }
-}
-
-function providerFromContent(content: string, format: ConfigFormat, key: string): string | undefined {
-  try {
-    const provider = valueAtPath(parseConfigContent(content, format), key);
-    return typeof provider === 'string' && provider.trim() ? provider.trim() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-interface AgentModelSettings {
-  model?: string;
-  provider?: string;
-}
-
-async function readRunnerModelSettings(
+export function readAgentModelSettings(
   runner: RunnerId,
   repoRoot: string,
-  env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<AgentModelSettings> {
-  // Claude Code gives ANTHROPIC_MODEL higher priority than settings-file values.
-  // The terminal and cezar must therefore agree when the model is configured in
-  // the shell that launched the server.
-  if (runner === 'claude' && env.ANTHROPIC_MODEL?.trim()) {
-    return { model: env.ANTHROPIC_MODEL.trim() };
-  }
-  const modelFiles = CONFIG_FILES.filter(
-    (def) =>
-      def.kind === 'settings' &&
-      def.runners.includes(runner) &&
-      def.modelKey !== undefined &&
-      def.modelPriority !== undefined,
-  ).sort((a, b) => (b.modelPriority ?? 0) - (a.modelPriority ?? 0));
-  const files: Array<{ def: (typeof modelFiles)[number]; content: string }> = [];
-  for (const def of modelFiles) {
-    const file = await readConfigFile(def.id, repoRoot, env);
-    if (!file || 'error' in file || !file.exists) continue;
-    files.push({ def, content: file.content });
-  }
-  const provider =
-    runner === 'codex'
-      ? files
-          .map(({ def, content }) =>
-            def.modelProviderKey ? providerFromContent(content, def.format, def.modelProviderKey) : undefined,
-          )
-          .find((value): value is string => value !== undefined)
-      : undefined;
-  for (const { def, content } of files) {
-    const model = modelFromContent(content, def.format, def.modelKeys ?? [def.modelKey!]);
-    if (model) {
-      if (runner === 'codex' && provider && provider !== 'openai' && !model.includes('/')) {
-        return { model: `${provider}/${model}`, provider };
-      }
-      return { model, provider };
-    }
-  }
-  return { provider };
+  return MODEL_SETTINGS_STRATEGIES[runner].read(repoRoot, env);
 }
 
 /** Read the current default model for each installed/configured coding agent. */
@@ -135,9 +32,9 @@ export async function readAgentModelDefaults(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<AgentModelDefaults> {
   const entries = await Promise.all(
-    (['claude', 'codex', 'opencode'] as const).map(async (runner) => [
+    RUNNER_IDS.map(async (runner) => [
       runner,
-      (await readRunnerModelSettings(runner, repoRoot, env)).model,
+      (await readAgentModelSettings(runner, repoRoot, env)).model,
     ] as const),
   );
   return Object.fromEntries(entries.filter((entry): entry is readonly [RunnerId, string] => entry[1] !== undefined));
@@ -149,5 +46,5 @@ export async function readAgentModelProvider(
   repoRoot: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | undefined> {
-  return (await readRunnerModelSettings(runner, repoRoot, env)).provider;
+  return (await readAgentModelSettings(runner, repoRoot, env)).provider;
 }

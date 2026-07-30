@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AutomationCoordinator } from './coordinator.js';
+import { AutomationCoordinator } from './coordinator.ts';
 
 const dirs: string[] = [];
 async function project(): Promise<string> {

@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.js';
+import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Type-only module (zod + nothing else), so this cannot cycle back into the store.
+import { workflowDefSchema } from '../workflows/types.ts';
 
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
@@ -49,7 +51,7 @@ const stepStateSchema = z.object({
 const queuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
-  /** `/api/runs/:id/images/…` URLs — the base64 never enters `runs.json`. */
+  /** `/api/v1/runs/:id/images/…` URLs — the base64 never enters `runs.json`. */
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
 });
@@ -163,11 +165,14 @@ const runRecordSchema = z.object({
   /** Distinct issue URLs spotted so far — the referenced-issue working set,
    *  persisted like `referencedPrCandidates`. Capped. */
   referencedIssueCandidates: z.array(z.string()).optional(),
-  /** Task worktree (spec 006) — absent when the run executed in the repo root. */
+  /** Explicit execution policy. `false` means the run intentionally uses the repo root;
+   *  absent on older runs and for the default isolated-worktree mode. */
+  worktree: z.literal(false).optional(),
+  /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
   /** The task's own branch (`cez/<id8>`), created off `baseBranch`. */
   branch: z.string().optional(),
-  /** Branch (or commit, when HEAD was detached) the worktree was forked from. */
+  /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
   /** Set when count-based retention (#483) reclaimed this run's worktree
    *  *directory* (the `cez/<id8>` branch is kept). Presence means "materialized
@@ -190,9 +195,25 @@ const runRecordSchema = z.object({
   steps: z.array(stepStateSchema),
   /** Full workflow definition, persisted so a `queued` run can be re-enqueued
    *  after a restart (#367) — including ad-hoc "(planned)" chains that exist
-   *  nowhere else. Kept loose here to avoid an upward import; the run manager
-   *  validates the shape before reviving it. */
-  workflowDef: z.record(z.string(), z.unknown()).optional(),
+   *  nowhere else.
+   *
+   *  Typed, not `z.record(z.string(), z.unknown())`: this key goes out over the
+   *  wire on every run route, and `unknown` is wider than anything the server
+   *  can serialize — which made the route's own type (hono's `JSONValue`, whose
+   *  index signature admits `object | symbol | undefined`) impossible for the
+   *  contract to describe. `.catch(undefined)` keeps an older or hand-edited
+   *  entry from failing the whole index parse: a def that no longer fits simply
+   *  drops, and `reviveWorkflow` falls back to the catalog by name.
+   *
+   *  That drop is PERMANENT, not per-boot — the index is re-serialized from the
+   *  parsed records (`saveNow`), so the next save writes runs.json back without
+   *  it. Harmless for a catalog workflow, which re-resolves by name; fatal for
+   *  the ad-hoc "(planned)" chain this field exists to preserve, which has no
+   *  catalog entry to fall back to. Nothing written since #367 fails the schema
+   *  (`name`, `source` and `steps` have been on every persisted def), so tighten
+   *  `workflowStepSchema` only with that in mind: a narrowing here silently eats
+   *  queued runs rather than degrading them. */
+  workflowDef: workflowDefSchema.optional().catch(undefined),
 });
 
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -397,6 +418,7 @@ export class RunStore extends EventEmitter {
     runner?: 'claude' | 'codex' | 'opencode';
     generateFollowups?: boolean;
     autonomous?: boolean;
+    worktree?: false;
     groupId?: string;
     variant?: string;
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
@@ -416,6 +438,7 @@ export class RunStore extends EventEmitter {
       runner: input.runner,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
+      worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,
       status: 'queued',

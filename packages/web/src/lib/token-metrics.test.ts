@@ -4,7 +4,9 @@ import type { HealthResponse } from '@open-mercato/cezar-api-client'
 
 import { tokenMetricsVisible } from './token-metrics'
 
-const health = (tokenMetrics?: boolean): Pick<HealthResponse, 'capabilities'> => ({
+// Matches what the helper accepts, not the full contract type: the point of these cases is the
+// absent field, which `Capabilities` no longer permits now that the server always sends it.
+const health = (tokenMetrics?: boolean): { capabilities?: Partial<HealthResponse['capabilities']> } => ({
   capabilities: {
     localHandoff: true,
     followups: false,

@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, readFile
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readConfigFile, writeConfigFile } from './files.js';
+import { readConfigFile, writeConfigFile } from './files.ts';
 
 let repo: string;
 let home: string;

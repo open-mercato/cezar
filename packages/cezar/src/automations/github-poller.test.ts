@@ -4,8 +4,8 @@ import {
   GithubPoller,
   matchesFilters,
   reconstructLabelEvents,
-} from './github-poller.js';
-import type { AutomationDefinition } from './types.js';
+} from './github-poller.ts';
+import type { AutomationDefinition } from './types.ts';
 
 const definition: AutomationDefinition = {
   id: 'one', revision: 1, name: 'Issues', enabled: true,

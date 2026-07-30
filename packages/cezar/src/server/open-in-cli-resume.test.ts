@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderAuthService, type ProviderId } from '../core/provider-auth.js';
-import { RunStore } from '../runs/store.js';
-import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
-import type { RunManager } from '../workflows/run.js';
-import { openInTerminal } from './open-in-terminal.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
+import { RunStore } from '../runs/store.ts';
+import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { openInTerminal } from './open-in-terminal.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 // The terminal launcher actually spawns a process (osascript/cmd/x-terminal-emulator) — mocked
 // so this suite exercises only the command construction, never a real terminal window.
@@ -15,7 +15,7 @@ vi.mock('./open-in-terminal.js', () => ({ openInTerminal: vi.fn(async () => true
 
 const mockOpenInTerminal = vi.mocked(openInTerminal);
 
-const { createApp } = await import('./server.js');
+const { createApp } = await import('./server.ts');
 
 const providerAuth = (disconnected: ProviderId[] = []) => new ProviderAuthService({
   platform: 'linux',
@@ -40,14 +40,14 @@ const workspaceConfig = (disabledProviders: ProviderId[] = []) => {
 };
 
 /**
- * `POST /api/runs/:id/open-in` with a `cli:<runner>` target (#402 follow-up): picking the
+ * `POST /api/v1/runs/:id/open-in` with a `cli:<runner>` target (#402 follow-up): picking the
  * agent CLI that matches the run's own runner resumes THIS run's session — the same
  * `resumeCommand` mapping the client mirrors in run-actions.ts. Every other case (a foreign
  * runner, or no session yet) launches the CLI fresh rather than guessing at a cross-backend
  * resume: a Claude session id means nothing to `codex resume`, so cross-runner picks and
  * sessionless runs both degrade to a plain launch instead of erroring.
  */
-describe('POST /api/runs/:id/open-in — agent CLI resume vs fresh launch', () => {
+describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', () => {
   let repoRoot: string;
   let store: RunStore;
   const savedRemote = process.env.CEZ_REMOTE;
@@ -92,14 +92,14 @@ describe('POST /api/runs/:id/open-in — agent CLI resume vs fresh launch', () =
   };
 
   const openIn = (runId: string, target: string, options: { disabled?: ProviderId[]; disconnected?: ProviderId[] } = {}) =>
-    apiRequest(app(options), `/api/runs/${runId}/open-in`, {
+    apiRequest(app(options), `/api/v1/runs/${runId}/open-in`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target }),
     });
 
   const openInCli = (runId: string, options: { disabled?: ProviderId[]; disconnected?: ProviderId[] } = {}) =>
-    apiRequest(app(options), `/api/runs/${runId}/open-in-cli`, { method: 'POST' });
+    apiRequest(app(options), `/api/v1/runs/${runId}/open-in-cli`, { method: 'POST' });
 
   it.each([
     ['claude', 'cli:claude', 'claude --resume sess-1'],

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import type { AutomationDefinition, AutomationEvent } from './types.js';
+import type { AutomationDefinition, AutomationEvent } from './types.ts';
 
 const execFileAsync = promisify(execFile);
 const HARD_CANDIDATE_CAP = 100;

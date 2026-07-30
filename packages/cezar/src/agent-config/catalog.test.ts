@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONFIG_FILES, findConfigFile, listConfigFiles, type AgentHomePaths } from './catalog.js';
+import { CONFIG_FILES, findConfigFile, listConfigFiles, type AgentHomePaths } from './catalog.ts';
 
 const HOME: AgentHomePaths = {
   claude: '/home/u/.claude',

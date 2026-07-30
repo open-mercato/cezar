@@ -31,12 +31,14 @@ const REPO: RepoResponse = {
 
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main', remote: 'git@github.com:acme/demo.git' },
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, followups: false, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, followups: false, singleProject: false },
 }
 
 const CHANGES: ChangesPayload = {
@@ -112,11 +114,11 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       sent.push({ path, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
       const override = overrides[`${method} ${path}`]
       if (override) return override()
-      if (method === 'GET' && path === '/api/repo') return jsonResponse(REPO)
-      if (method === 'GET' && path === '/api/repo/changes') return jsonResponse(CHANGES)
-      if (method === 'GET' && path === '/api/repo/commit/abc1234?structured=1') return jsonResponse(COMMIT)
-      if (method === 'GET' && path === '/api/health') return jsonResponse(HEALTH)
-      if (method === 'GET' && path === '/api/github?limit=20') return jsonResponse(GITHUB)
+      if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
+      if (method === 'GET' && path === '/api/v1/repo/changes') return jsonResponse(CHANGES)
+      if (method === 'GET' && path === '/api/v1/repo/commit/abc1234?structured=1') return jsonResponse(COMMIT)
+      if (method === 'GET' && path === '/api/v1/health') return jsonResponse(HEALTH)
+      if (method === 'GET' && path === '/api/v1/github?limit=20') return jsonResponse(GITHUB)
       return jsonResponse({})
     }),
   )
@@ -145,7 +147,7 @@ function renderAt(entry: string) {
 // ---- changes ----------------------------------------------------------------------------------
 
 describe('the repo view Changes segment', () => {
-  it('renders the header, the segment tabs and the working-tree diff from /api/repo/changes', async () => {
+  it('renders the header, the segment tabs and the working-tree diff from /api/v1/repo/changes', async () => {
     stubFetch()
     renderAt('/git')
 
@@ -178,7 +180,7 @@ describe('the repo view Changes segment', () => {
 
   it('a clean tree renders the honest empty state', async () => {
     stubFetch({
-      'GET /api/repo/changes': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
+      'GET /api/v1/repo/changes': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
     })
     renderAt('/git')
     await waitFor(() =>
@@ -188,7 +190,7 @@ describe('the repo view Changes segment', () => {
 
   it('a 409 from /changes renders the server reason, not an error explosion', async () => {
     stubFetch({
-      'GET /api/repo/changes': () => jsonResponse({ error: 'not a git repository' }, 409),
+      'GET /api/v1/repo/changes': () => jsonResponse({ error: 'not a git repository' }, 409),
     })
     renderAt('/git')
     await waitFor(() =>
@@ -214,7 +216,7 @@ describe('the repo view Changes segment', () => {
 
   it('outside a git repository the whole view degrades honestly', async () => {
     stubFetch({
-      'GET /api/repo': () =>
+      'GET /api/v1/repo': () =>
         jsonResponse({ info: null, status: [], log: [], branches: [], baseBranch: null }),
     })
     renderAt('/git')
@@ -228,7 +230,7 @@ describe('the repo view Changes segment', () => {
 // ---- commits ----------------------------------------------------------------------------------
 
 describe('the repo view Commits segment', () => {
-  it('lists the recent commits from /api/repo, each row deep-linking to its diff', async () => {
+  it('lists the recent commits from /api/v1/repo, each row deep-linking to its diff', async () => {
     stubFetch()
     renderAt('/git/commits')
     await waitFor(() => expect(document.querySelector('[data-slot="repo-commits"]')).not.toBeNull())
@@ -268,7 +270,7 @@ describe('the repo view Commits segment', () => {
 
   it('an unknown sha is a neutral "Commit not found" with the server reason', async () => {
     stubFetch({
-      'GET /api/repo/commit/nope999?structured=1': () =>
+      'GET /api/v1/repo/commit/nope999?structured=1': () =>
         jsonResponse({ error: 'unknown commit: nope999' }, 409),
     })
     renderAt('/git/commits/nope999')
@@ -280,7 +282,7 @@ describe('the repo view Commits segment', () => {
 
   it('a merge commit (zero files) says so instead of faking a diff', async () => {
     stubFetch({
-      'GET /api/repo/commit/abc1234?structured=1': () =>
+      'GET /api/v1/repo/commit/abc1234?structured=1': () =>
         jsonResponse({ ...COMMIT, files: [], stat: { adds: 0, dels: 0, files: 0 } }),
     })
     renderAt('/git/commits/abc1234')
@@ -307,16 +309,16 @@ describe('the repo view Branches segment', () => {
     expect(other?.querySelector('[data-action="switch-branch"]')).not.toBeNull()
   })
 
-  it('Switch POSTs /api/repo/branch and toasts the outcome', async () => {
+  it('Switch POSTs /api/v1/repo/branch and toasts the outcome', async () => {
     const sent = stubFetch({
-      'POST /api/repo/branch': () => jsonResponse({ branch: 'feature', created: false }),
+      'POST /api/v1/repo/branch': () => jsonResponse({ branch: 'feature', created: false }),
     })
     const client = renderAt('/git/branches')
     await waitFor(() => expect(document.querySelector('[data-action="switch-branch"]')).not.toBeNull())
 
     fireEvent.click(document.querySelector('[data-action="switch-branch"]')!)
     await waitFor(() => {
-      const post = sent.find((r) => r.method === 'POST' && r.path === '/api/repo/branch')
+      const post = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/repo/branch')
       expect(post?.body).toEqual({ name: 'feature' })
     })
     await waitFor(() => expect(document.body.textContent).toContain('Switched to feature'))
@@ -343,7 +345,7 @@ describe('the repo view Branches segment', () => {
 
   it('a switch 409 surfaces git’s own reason as a danger toast', async () => {
     stubFetch({
-      'POST /api/repo/branch': () =>
+      'POST /api/v1/repo/branch': () =>
         jsonResponse({ error: 'Your local changes to the following files would be overwritten by checkout' }, 409),
     })
     renderAt('/git/branches')
@@ -357,7 +359,7 @@ describe('the repo view Branches segment', () => {
 
   it('the create form POSTs the new name and clears on success', async () => {
     const sent = stubFetch({
-      'POST /api/repo/branch': () => jsonResponse({ branch: 'fresh-idea', created: true }),
+      'POST /api/v1/repo/branch': () => jsonResponse({ branch: 'fresh-idea', created: true }),
     })
     renderAt('/git/branches')
     const input = (await screen.findByLabelText('New branch name')) as HTMLInputElement
@@ -368,16 +370,16 @@ describe('the repo view Branches segment', () => {
     fireEvent.change(input, { target: { value: 'fresh-idea' } })
     fireEvent.click(document.querySelector('[data-action="create-branch"]')!)
     await waitFor(() => {
-      const post = sent.find((r) => r.method === 'POST' && r.path === '/api/repo/branch')
+      const post = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/repo/branch')
       expect(post?.body).toEqual({ name: 'fresh-idea' })
     })
     await waitFor(() => expect(document.body.textContent).toContain('Created and switched to fresh-idea'))
     await waitFor(() => expect(input.value).toBe(''))
   })
 
-  it('the base-branch picker PUTs /api/config with the chosen branch (and null to clear)', async () => {
+  it('the base-branch picker PUTs /api/v1/config with the chosen branch (and null to clear)', async () => {
     const sent = stubFetch({
-      'PUT /api/config': () => jsonResponse({ baseBranch: 'feature', defaultRunner: 'claude' }),
+      'PUT /api/v1/config': () => jsonResponse({ baseBranch: 'feature', defaultRunner: 'claude' }),
     })
     renderAt('/git/branches')
     const picker = (await screen.findByLabelText('Agents’ base branch')) as HTMLSelectElement
@@ -385,7 +387,7 @@ describe('the repo view Branches segment', () => {
 
     fireEvent.change(picker, { target: { value: 'feature' } })
     await waitFor(() => {
-      const put = sent.find((r) => r.method === 'PUT' && r.path === '/api/config')
+      const put = sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/config')
       expect(put?.body).toEqual({ baseBranch: 'feature' })
     })
     await waitFor(() => expect(document.body.textContent).toContain('Agents now branch from feature'))
@@ -405,21 +407,21 @@ describe('the repo view Branches segment', () => {
     expect(badge?.getAttribute('data-checks')).toBe('passing')
   })
 
-  it('no forge driver: the PR section does not render and /api/github is never fetched', async () => {
+  it('no forge driver: the PR section does not render and /api/v1/github is never fetched', async () => {
     const sent = stubFetch({
-      'GET /api/health': () => jsonResponse({ ...HEALTH, forge: null }),
+      'GET /api/v1/health': () => jsonResponse({ ...HEALTH, forge: null }),
     })
     renderAt('/git/branches')
     await waitFor(() => expect(document.querySelector('[data-slot="repo-branch-list"]')).not.toBeNull())
     // Give the health query time to settle, then assert the honest absence.
-    await waitFor(() => expect(sent.some((r) => r.path === '/api/health')).toBe(true))
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
     expect(document.querySelector('[data-slot="repo-prs"]')).toBeNull()
-    expect(sent.some((r) => r.path.startsWith('/api/github'))).toBe(false)
+    expect(sent.some((r) => r.path.startsWith('/api/v1/github'))).toBe(false)
   })
 
   it('forge detected but unreachable: the section renders the reason instead of rows', async () => {
     stubFetch({
-      'GET /api/health': () =>
+      'GET /api/v1/health': () =>
         jsonResponse({ ...HEALTH, forge: { kind: 'github', available: false, reason: 'gh not logged in' } }),
     })
     renderAt('/git/branches')

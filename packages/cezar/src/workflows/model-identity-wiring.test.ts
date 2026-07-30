@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { WorkflowDef } from './types.js';
-import { RunManager } from './run.js';
+import { RunStore } from '../runs/store.ts';
+import type { WorkflowDef } from './types.ts';
+import { RunManager } from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyProviderEnablement, isProviderUsable } from './provider-availability.js';
+import { applyProviderEnablement, isProviderUsable } from './provider-availability.ts';
 
 describe('provider availability', () => {
   const response = {

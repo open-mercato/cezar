@@ -53,13 +53,22 @@ export const workflowFileSchema = z
 export type WorkflowStepDef = z.infer<typeof workflowStepSchema>;
 export type WorkflowDoc = z.infer<typeof workflowFileSchema>;
 
-export interface WorkflowDef {
-  name: string;
-  description?: string;
-  steps: WorkflowStepDef[];
-  source: 'built-in' | 'file';
-  path?: string;
-}
+/**
+ * A resolved workflow: a catalog entry, or the ad-hoc "(planned)" chain a task
+ * was started with. A SCHEMA and not an interface because `RunStore` persists
+ * one of these on the run record (`workflowDef`) and has to parse it back —
+ * `src/server/contract-parity.workflows.test.ts` is what keeps this shape and
+ * the contract's `workflowDefSchema` from drifting.
+ */
+export const workflowDefSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  steps: z.array(workflowStepSchema),
+  source: z.enum(['built-in', 'file']),
+  path: z.string().optional(),
+});
+
+export type WorkflowDef = z.infer<typeof workflowDefSchema>;
 
 /** `skills: [a, b]` → agent steps, one per skill, each running `{{task}}`. */
 export function skillsToSteps(skills: string[]): WorkflowStepDef[] {

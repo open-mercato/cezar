@@ -2,11 +2,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { launchAutomationRun, reconcileAutomationReceipts, renderAutomationTask, validateAutomationPrompt } from './task-template.js';
-import { AutomationStore } from './store.js';
-import type { AutomationDefinition } from './types.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { launchAutomationRun, reconcileAutomationReceipts, renderAutomationTask, validateAutomationPrompt } from './task-template.ts';
+import { AutomationStore } from './store.ts';
+import type { AutomationDefinition } from './types.ts';
 
 const definition: AutomationDefinition = {
   id: 'one', revision: 1, name: 'Review', enabled: true, events: ['issue.opened'], intervalSeconds: 300,

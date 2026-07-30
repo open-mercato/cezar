@@ -14,10 +14,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent } from './agent-runner.js';
-import type { UiEvent, UiItem } from './ui-events.js';
-import { codexSessionStarted, createCodexUiState, mapCodexNotification } from './codex-ui-mapper.js';
-import { CodexAppServerRunner } from './codex-app-server-runner.js';
+import type { AgentEvent } from './agent-runner.ts';
+import type { UiEvent, UiItem } from './ui-events.ts';
+import { codexSessionStarted, createCodexUiState, mapCodexNotification } from './codex-ui-mapper.ts';
+import { CodexAppServerRunner } from './codex-app-server-runner.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, '__fixtures__', 'codex');

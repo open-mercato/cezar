@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { workspaceConfigPath } from '../paths.js';
+import { workspaceConfigPath } from '../paths.ts';
 import {
   atomicTmpPath,
   defaultWorkspaceConfig,
@@ -10,7 +10,7 @@ import {
   effectiveComposerDefault,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
-} from './config.js';
+} from './config.ts';
 
 /**
  * `~/.cezar/config.json` house rules under test (spec
@@ -87,6 +87,17 @@ describe('workspace config', () => {
     expect(written.disabledProviders).toEqual(['claude']);
     const raw = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as Record<string, unknown>;
     expect(raw.futureTopLevelKey).toEqual({ keep: true });
+  });
+
+  it('keeps the global model lock optional and degrades a non-boolean value per key', async () => {
+    expect(defaultWorkspaceConfig().modelsLocked).toBeUndefined();
+    write({ modelsLocked: true, projectsDir: '/tmp/projects' });
+    expect((await loadWorkspaceConfig()).modelsLocked).toBe(true);
+
+    write({ modelsLocked: 'yes', projectsDir: '/tmp/projects' });
+    const config = await loadWorkspaceConfig();
+    expect(config.modelsLocked).toBeUndefined();
+    expect(config.projectsDir).toBe('/tmp/projects');
   });
 
   it('takes zero-config roots from the environment while explicit stored values win', async () => {

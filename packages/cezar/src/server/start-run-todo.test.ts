@@ -4,20 +4,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { TodoItem } from '../todos.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
-import type { RunRecord } from '../runs/store.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { connectedProviderAuth } from './provider-auth.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { TodoItem } from '../todos.ts';
+import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import type { RunRecord } from '../runs/store.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { connectedProviderAuth } from './provider-auth.testkit.ts';
 
 /**
- * `POST /api/runs` `todoId` (#374) — the audit trail across the composer detour.
+ * `POST /api/v1/runs` `todoId` (#374) — the audit trail across the composer detour.
  *
  * Since the cockpit's Inbox "▶ Run" prefills `/new` instead of POSTing
- * `/api/todos/:id/start` (never launch blind — #355), the entry's id travels
+ * `/api/v1/todos/:id/start` (never launch blind — #355), the entry's id travels
  * `/new?…&todo=t1` → `todoId` → here, and a started run must land on the entry's
  * `startedTaskId` exactly as that route would have written it. Otherwise the
  * entry never leaves the inbox and a second Run duplicates the task.
@@ -26,7 +26,7 @@ import { connectedProviderAuth } from './provider-auth.testkit.js';
  * is already created by the time we touch todos.json, so nothing about an
  * unknown, stale or already-started id may turn into a failed start.
  */
-describe('POST /api/runs todoId', () => {
+describe('POST /api/v1/runs todoId', () => {
   let repoRoot: string;
   let dataDir: string;
   let store: RunStore;
@@ -75,7 +75,7 @@ describe('POST /api/runs todoId', () => {
   });
 
   const post = (body: unknown) =>
-    apiRequest(app, '/api/runs', {
+    apiRequest(app, '/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -90,7 +90,7 @@ describe('POST /api/runs todoId', () => {
     expect(res.status).toBe(201);
     const run = (await res.json()) as RunRecord;
 
-    // Exactly what POST /api/todos/:id/start writes — `visibleTodos()` hides it from here on.
+    // Exactly what POST /api/v1/todos/:id/start writes — `visibleTodos()` hides it from here on.
     expect(readTodosFile()[0]?.startedTaskId).toBe(run.id);
     // …and the entry survives as the audit trail rather than being deleted.
     expect(readTodosFile()).toHaveLength(1);
@@ -117,7 +117,7 @@ describe('POST /api/runs todoId', () => {
 
     const res = await post({ ...base, todoId: 't1' });
 
-    // The run the user asked for still starts — the 409 belongs to /api/todos/:id/start, which
+    // The run the user asked for still starts — the 409 belongs to /api/v1/todos/:id/start, which
     // is the route that has an inbox entry (not a task) as its subject.
     expect(res.status).toBe(201);
     expect(readTodosFile()[0]?.startedTaskId).toBe('run-first');

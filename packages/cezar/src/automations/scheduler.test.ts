@@ -2,8 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AutomationStore } from './store.js';
-import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from './scheduler.js';
+import { AutomationStore } from './store.ts';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from './scheduler.ts';
 
 const dirs: string[] = [];
 afterEach(async () => Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))));

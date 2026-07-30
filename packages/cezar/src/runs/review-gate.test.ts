@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { reviewGateEnabled } from './review-gate.js';
+import { reviewGateEnabled } from './review-gate.ts';
 
 describe('reviewGateEnabled', () => {
   const saved = process.env.CEZ_REVIEW_GATE;

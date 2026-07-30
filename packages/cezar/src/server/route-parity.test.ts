@@ -3,19 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.js';
-import { ProjectContexts } from './project-context.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp, projectRouteManifest, type ProjectRouteInfo } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import { ProjectContexts } from './project-context.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp, projectRouteManifest, type ProjectRouteInfo } from './server.ts';
 
 /**
  * Alias parity for the mirrored project-route table (spec
  * 2026-07-20-multi-project-workspace, step 2.2): every project-scoped route is
- * registered once and mounted under BOTH the legacy unprefixed `/api/<path>`
+ * registered once and mounted under BOTH the legacy unprefixed `/api/v1/<path>`
  * (bound to the boot project — the protected surface) and
- * `/api/p/:projectId/<path>`, where `default` and the boot project's own id
+ * `/api/v1/p/:projectId/<path>`, where `default` and the boot project's own id
  * resolve to the same boot context. The suite iterates the route manifest
  * exported by server.ts (derived from the app's actual registrations, so it
  * can never drift) and asserts the three spellings answer byte-identically —
@@ -25,12 +25,12 @@ import { createApp, projectRouteManifest, type ProjectRouteInfo } from './server
 
 /** The three spellings of one project route that must answer identically. */
 const spellings = (bootId: string, path: string): [string, string, string] => [
-  `/api${path}`,
-  `/api/p/${bootId}${path}`,
-  `/api/p/default${path}`,
+  `/api/v1${path}`,
+  `/api/v1/p/${bootId}${path}`,
+  `/api/v1/p/default${path}`,
 ];
 
-describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/default)', () => {
+describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/p/default)', () => {
   const savedHome = process.env.CEZ_HOME;
   const savedRemote = process.env.CEZ_REMOTE;
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
@@ -171,7 +171,7 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
     ]) {
       expect(keys, expected).toContain(expected);
     }
-    // Workspace-level routes must NOT be mirrored under /api/p/.
+    // Workspace-level routes must NOT be mirrored under /api/v1/p/.
     for (const workspaceOnly of ['GET /health', 'GET /projects', 'POST /projects', 'GET /fs/browse']) {
       expect(keys, workspaceOnly).not.toContain(workspaceOnly);
     }
@@ -267,7 +267,7 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
   });
 
   it('unknown and malformed project ids answer 404 {error}', async () => {
-    for (const url of ['/api/p/no-such-project/runs', '/api/p/no-such-project/events']) {
+    for (const url of ['/api/v1/p/no-such-project/runs', '/api/v1/p/no-such-project/events']) {
       const res = await apiRequest(app, url);
       expect(res.status, url).toBe(404);
       expect(await res.json()).toEqual({
@@ -276,7 +276,7 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
     }
     // Shape violations (uppercase, underscore) fail the zod gate before any
     // registry lookup — still a 404, never a 500 or a path touch.
-    const malformed = await apiRequest(app, '/api/p/Bad_Id/runs');
+    const malformed = await apiRequest(app, '/api/v1/p/Bad_Id/runs');
     expect(malformed.status).toBe(404);
     expect(await malformed.json()).toEqual({
       error: 'unknown project: Bad_Id',
@@ -287,7 +287,7 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
     const other = await registerProject(otherRoot);
     rmSync(otherRoot, { recursive: true, force: true });
     clearProjectProbeCache(); // drop the status-probe TTL so the loss is seen
-    const res = await apiRequest(app, `/api/p/${other.id}/runs`);
+    const res = await apiRequest(app, `/api/v1/p/${other.id}/runs`);
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
       error: `project folder not found: ${other.id}`,
@@ -297,18 +297,18 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
   it('a non-boot project builds lazily and answers with its own state', async () => {
     const other = await registerProject(otherRoot);
     expect(contexts.peek(other.id)).toBeUndefined(); // nothing until first touch
-    const runs = await apiRequest(app, `/api/p/${other.id}/runs`);
+    const runs = await apiRequest(app, `/api/v1/p/${other.id}/runs`);
     expect(runs.status).toBe(200);
     expect(await runs.json()).toEqual([]); // its own (empty) store, not boot's
     expect(contexts.peek(other.id)).toBeDefined();
     // Its launch key is its own — never the boot project's secret.
     const bootKey = (
-      (await (await apiRequest(app, '/api/launch-key')).json()) as {
+      (await (await apiRequest(app, '/api/v1/launch-key')).json()) as {
         key: string;
       }
     ).key;
     const otherKey = (
-      (await (await apiRequest(app, `/api/p/${other.id}/launch-key`)).json()) as {
+      (await (await apiRequest(app, `/api/v1/p/${other.id}/launch-key`)).json()) as {
         key: string;
       }
     ).key;
@@ -322,8 +322,8 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
     writeFileSync(join(repoRoot, '.claude', 'settings.json'), '{"project":"boot"}', 'utf8');
     writeFileSync(join(otherRoot, '.claude', 'settings.json'), '{"project":"other"}', 'utf8');
 
-    const boot = await apiRequest(app, '/api/agent-config/claude.project.settings');
-    const scoped = await apiRequest(app, `/api/p/${other.id}/agent-config/claude.project.settings`);
+    const boot = await apiRequest(app, '/api/v1/agent-config/claude.project.settings');
+    const scoped = await apiRequest(app, `/api/v1/p/${other.id}/agent-config/claude.project.settings`);
     expect((await boot.json()) as { content: string }).toMatchObject({
       content: '{"project":"boot"}',
     });
@@ -332,9 +332,9 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
     });
 
     const current = (await (
-      await apiRequest(app, `/api/p/${other.id}/agent-config/claude.project.settings`)
+      await apiRequest(app, `/api/v1/p/${other.id}/agent-config/claude.project.settings`)
     ).json()) as { version: string };
-    const updated = await apiRequest(app, `/api/p/${other.id}/agent-config/claude.project.settings`, {
+    const updated = await apiRequest(app, `/api/v1/p/${other.id}/agent-config/claude.project.settings`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -344,7 +344,7 @@ describe('project-route alias parity (unprefixed vs /api/p/<boot> vs /api/p/defa
     });
     expect(updated.status).toBe(200);
     expect(
-      (await (await apiRequest(app, '/api/agent-config/claude.project.settings')).json()) as { content: string },
+      (await (await apiRequest(app, '/api/v1/agent-config/claude.project.settings')).json()) as { content: string },
     ).toMatchObject({ content: '{"project":"boot"}' });
   });
 });

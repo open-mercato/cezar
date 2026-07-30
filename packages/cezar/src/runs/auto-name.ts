@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { loadConfig } from '../config.js';
-import { createRunner } from '../core/runner-factory.js';
-import { parseStructured } from '../planner.js';
-import { extractTaskRefs, refineTaskRefs, titleRefNumber, type TaskRefs } from './task-refs.js';
+import { loadConfig } from '../config.ts';
+import { createRunner } from '../core/runner-factory.ts';
+import { parseStructured } from '../planner.ts';
+import { extractTaskRefs, refineTaskRefs, titleRefNumber, type TaskRefs } from './task-refs.ts';
 
 /**
  * The one-shot LLM namer (spec 2026-07-17-task-auto-naming): turns a task's

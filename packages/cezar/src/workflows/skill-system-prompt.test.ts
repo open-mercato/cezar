@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ContentBlock } from '../core/agent-runner.js';
-import { expandRegistrySlashSkill, skillSystemPrompt } from './run.js';
+import type { ContentBlock } from '../core/agent-runner.ts';
+import { expandRegistrySlashSkill, skillSystemPrompt } from './run.ts';
 
 describe('skillSystemPrompt — installed-path hint for worktree agents', () => {
   const base = { name: 'om-code-review', description: 'Review a diff.', body: 'Do the review.' };

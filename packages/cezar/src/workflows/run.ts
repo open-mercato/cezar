@@ -2,18 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.js';
-import { type AgentSession } from '../core/claude-cli-runner.js';
-import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.js';
-import { createRunner } from '../core/runner-factory.js';
-import type { RunnerId } from '../core/agent-runner.js';
-import { modelConflictsWithRunner } from '../core/model-presets.js';
-import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.js';
+import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.ts';
+import { type AgentSession } from '../core/claude-cli-runner.ts';
+import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { createRunner } from '../core/runner-factory.ts';
+import type { RunnerId } from '../core/agent-runner.ts';
+import { modelConflictsWithRunner } from '../core/model-presets.ts';
+import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
   ModelIdentityError,
   formatModelIdentity,
   normalizeModelForBackend,
-} from '../core/model-identity.js';
+} from '../core/model-identity.ts';
 import {
   HANDOFF_ONLY_INSTRUCTIONS,
   HANDOFF_INSTRUCTIONS,
@@ -21,27 +21,27 @@ import {
   followupsEnabled,
   handoffPath,
   seedHandoffFile,
-} from '../handoff.js';
-import { todosPath } from '../todos.js';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.js';
-import { discoverSkills, type Skill } from '../skills.js';
-import { materializeSkillDir } from '../skills-remote.js';
-import { seedAgentConfigLocalLayer } from '../agent-config/seed.js';
-import { readAgentModelProvider } from '../agent-config/models.js';
-import { loadConfig, resolveWorktreeRetention } from '../config.js';
-import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.js';
-import { getRepoInfo } from '../server/git.js';
-import { loadWorkflows } from './load.js';
-import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.js';
-import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.js';
-import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.js';
-import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.js';
-import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.js';
-import { reviewGateEnabled } from '../runs/review-gate.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { UiEventSink } from '../runs/ui-event-sink.js';
-import type { UiEvent } from '../core/ui-events.js';
-import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.js';
+} from '../handoff.ts';
+import { todosPath } from '../todos.ts';
+import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+import { discoverSkills, type Skill } from '../skills.ts';
+import { materializeSkillDir } from '../skills-remote.ts';
+import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+import { readAgentModelProvider } from '../agent-config/models.ts';
+import { loadConfig, resolveWorktreeRetention } from '../config.ts';
+import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
+import { getHeadCommit, getRepoInfo } from '../server/git.ts';
+import { loadWorkflows } from './load.ts';
+import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.ts';
+import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
+import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
+import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
+import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { UiEventSink } from '../runs/ui-event-sink.ts';
+import type { UiEvent } from '../core/ui-events.ts';
+import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -49,7 +49,6 @@ async function configuredModelProvider(
   backend: RunnerId,
   repoRoot: string,
 ): Promise<string | undefined> {
-  if (backend !== 'codex') return undefined;
   return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
 }
 /** An interactive session that hears nothing from the user closes itself. */
@@ -484,10 +483,11 @@ export class RunManager {
     input: StartRunInput,
     group?: { groupId: string; variant: string },
   ): RunRecord {
-    // Native coding-agent settings are authoritative when the operator opts
-    // into the lock. Sanitize at the manager boundary so CLI, workflows,
-    // variants and direct callers cannot bypass the HTTP policy.
-    const effectiveInput = agentModelsLocked() ? { ...input, model: undefined } : input;
+    // Sanitize at the manager boundary so CLI runs, workflows, variants, and
+    // direct callers cannot bypass the HTTP policy.
+    const effectiveInput = agentModelsLocked(this.repoRoot)
+      ? { ...input, model: undefined }
+      : input;
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
@@ -503,13 +503,16 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      // Persist the explicit opt-out so queued-run restart recovery and the
+      // session Git routes can distinguish it from a removed isolated worktree.
+      worktree: !group && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
-    this.store.updateRun(run.id, { workflowDef: workflow as unknown as Record<string, unknown> });
+    this.store.updateRun(run.id, { workflowDef: workflow });
     // Initial pasted images must be visible while the run is still queued (#612),
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
@@ -556,7 +559,7 @@ export class RunManager {
       (variant) => {
         const hint = VARIANT_HINTS[variant];
         const task = hint ? `${input.task}\n\n${hint}` : input.task;
-        return this.startRun(workflow, { ...input, task }, { groupId, variant });
+        return this.startRun(workflow, { ...input, task, worktree: undefined }, { groupId, variant });
       },
     );
   }
@@ -771,6 +774,9 @@ export class RunManager {
               // recovered queued autonomous run would run non-autonomously (no
               // auto-nudge) and later wrongly park at `review`.
               autonomous: run.autonomous,
+              // Preserve an explicit worktree opt-out across a queued restart.
+              // Missing on older records means the default isolated mode.
+              worktree: run.worktree,
             }),
           });
           this.queue.push(run.id);
@@ -834,10 +840,11 @@ export class RunManager {
 
   /** The persisted definition when it looks sane, else the catalog by name. */
   private async reviveWorkflow(run: RunRecord): Promise<WorkflowDef | null> {
+    // "Looks sane" is the STORE's job now: it parses `workflowDef` against the definition schema
+    // and `.catch`es a def that no longer fits to `undefined`, so anything present here already
+    // has the `steps` array the old inline `Array.isArray` check was asking for.
     const def = run.workflowDef;
-    if (def && Array.isArray((def as { steps?: unknown }).steps)) {
-      return def as unknown as WorkflowDef;
-    }
+    if (def) return def;
     const { workflows } = await loadWorkflows(this.repoRoot);
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
@@ -1347,7 +1354,7 @@ export class RunManager {
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
-    if (agentModelsLocked() && opts.model?.trim()) {
+    if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
@@ -1549,8 +1556,6 @@ export class RunManager {
       }
       this.store.appendEvent(runId, { ...event, stepId });
       if (event.type === 'error') {
-        // A failed continuation must not be converted into a waiting session
-        // by the turn-end event some backends emit after the error.
         sessionError ??= event.message;
         state.session?.interrupt();
         return;
@@ -1649,7 +1654,7 @@ export class RunManager {
     try {
       const normalized = normalizeModelForBackend(
         continueBackend,
-        agentModelsLocked() ? undefined : record?.model,
+        agentModelsLocked(this.repoRoot) ? undefined : record?.model,
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
       continueModel = normalized?.backendModel;
@@ -1776,7 +1781,7 @@ export class RunManager {
     try {
       const normalized = normalizeModelForBackend(
         taskBackend,
-        agentModelsLocked() ? undefined : input.model,
+        agentModelsLocked(this.repoRoot) ? undefined : input.model,
         { configuredProvider: await configuredModelProvider(taskBackend, this.repoRoot) },
       );
       modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
@@ -1801,6 +1806,10 @@ export class RunManager {
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
       // repository-root lease serializes these runs so workflows cannot overlap.
+      // Pin the starting commit: the session's Changes and Commits views use it
+      // as their stable lower bound while reading the current working copy.
+      const startingCommit = await getHeadCommit(repo.root);
+      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
       emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
     } else if (repo) {
       emit({
@@ -2106,8 +2115,6 @@ export class RunManager {
       }
       emit({ ...event, stepId: step.id });
       if (event.type === 'error') {
-        // Runner errors are fatal for the current step. Do not let the
-        // following turn-end event park a broken session as waiting/running.
         sessionError ??= event.message;
         state.session?.interrupt();
         return;
@@ -2192,10 +2199,11 @@ export class RunManager {
     // instead of letting the backend silently substitute its default.
     let backendModel: string | undefined;
     try {
-      const requestedModel = agentModelsLocked() ? undefined : step.model ?? input.model;
-      const normalized = normalizeModelForBackend(stepBackend, requestedModel, {
-        configuredProvider: await configuredModelProvider(stepBackend, state.cwd),
-      });
+      const normalized = normalizeModelForBackend(
+        stepBackend,
+        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? input.model,
+        { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
+      );
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
       // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`
@@ -2531,7 +2539,10 @@ export class RunManager {
           throw err;
         }
         this.queuedImageSeq.set(runId, seq);
-        return { name, url: `/api/runs/${runId}/images/${name}`, path };
+        // Versioned, because that is the only surface served now. The cockpit still upgrades
+        // the unversioned URLs sitting in OLD transcripts when it renders them
+        // (`resolveApiUrl`), but a URL minted today must be fetchable as written.
+        return { name, url: `/api/v1/runs/${runId}/images/${name}`, path };
       }
       return null;
     } catch {

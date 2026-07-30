@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { RunRecord, RunStatus } from './store.js';
-import { isReclaimable, selectReclaimableWorktrees } from './retention.js';
+import type { RunRecord, RunStatus } from './store.ts';
+import { isReclaimable, selectReclaimableWorktrees } from './retention.ts';
 
 /**
  * The pure retention selector (#483). It only reads a handful of fields, so the

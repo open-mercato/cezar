@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { agentHomePaths } from '../paths.js';
-import { findConfigFile, type ConfigFileDef } from './catalog.js';
-import { validateConfig } from './validate.js';
+import { agentHomePaths } from '../paths.ts';
+import { findConfigFile, type ConfigFileDef } from './catalog.ts';
+import { validateConfig } from './validate.ts';
 
 /**
  * Read and write the coding agents' own config files, addressed by catalog id

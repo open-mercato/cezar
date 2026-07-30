@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { collectSecretValues, redactDeep } from '../core/secret-redaction.js';
+import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
 import { join } from 'node:path';
 import {
   automationDefinitionSchema,
@@ -22,8 +22,8 @@ import {
   type AutomationLogRecord,
   type AutomationReceipt,
   type AutomationRuntimeState,
-} from './types.js';
-import type { GithubCandidate } from './github-poller.js';
+} from './types.ts';
+import type { GithubCandidate } from './github-poller.ts';
 
 const DEFINITIONS = 'automations.json';
 const STATE = 'automation-state.json';

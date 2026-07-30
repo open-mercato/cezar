@@ -213,12 +213,13 @@ export function NewTaskRoute() {
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels()
+  const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
     : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
   const model = runner === null
     ? ''
-    : resolveModel(draft.model, runner, config.data?.defaultModels, catalog.data)
+    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -415,7 +416,7 @@ export function NewTaskRoute() {
         task: text,
         source,
         model,
-        modelsLocked: config.data?.modelsLocked === true,
+        modelsLocked,
         runner,
         runnerExplicit: draft.runner !== null,
         defaultRunner,
@@ -466,7 +467,7 @@ export function NewTaskRoute() {
           task: plan.task,
           steps: plan.steps,
           model,
-          modelsLocked: config.data?.modelsLocked === true,
+          modelsLocked,
           runner,
           runnerExplicit: draft.runner !== null,
           defaultRunner,
@@ -595,9 +596,10 @@ export function NewTaskRoute() {
                 ariaLabel="Model"
                 label={models.find((m) => m.id === model)?.label ?? 'auto'}
                 value={model}
-                disabled={!providersReady || config.data?.modelsLocked === true}
+                disabled={!providersReady}
+                readOnly={modelsLocked}
                 disabledHint={
-                  config.data?.modelsLocked
+                  modelsLocked
                     ? 'Model selection is locked to native coding-agent settings.'
                     : undefined
                 }

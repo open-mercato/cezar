@@ -1,6 +1,6 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { expandTilde } from '../paths.js';
+import { expandTilde } from '../paths.ts';
 
 /**
  * `GET /api/fs/browse` — the directory picker behind "Add project → open local

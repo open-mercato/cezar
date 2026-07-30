@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { buildChildEnv } from './agent-env.js';
-import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.js';
+import { buildChildEnv } from './agent-env.ts';
+import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 
 export interface CodexAppServerMessage {
   id?: number | string;

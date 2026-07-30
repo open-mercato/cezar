@@ -35,7 +35,7 @@ const scoped = (path: string) => `/p/${bootProject}${path}`
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   browser = AgentBrowser.open(runId)
-  const health = (await fetch(`${baseUrl}/api/health`).then((r) => r.json())) as {
+  const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
     forge: { available: boolean } | null
     capabilities: { followups: boolean }
   }
@@ -167,12 +167,12 @@ describe('cockpit app shell', () => {
     expect(footerRows.rowCount).toBe(2)
   })
 
-  it('fills the repo and version chips from the live /api/health', async () => {
+  it('fills the repo and version chips from the live /api/v1/health', async () => {
     // The server runs against this checkout (a real git repo), so health is real data — the one
     // thing a jsdom test with a mocked fetch cannot prove. Ask it from here rather than inside
     // the page: `eval` hands back whatever the expression evaluates to, and a promise is not a
     // value — an `await` in there would assert against `{}` and pass on nothing.
-    const health = (await fetch(`${baseUrl}/api/health`).then((r) => r.json())) as {
+    const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
       version: string
       repoRoot: string
       repo: { branch: string } | null
@@ -442,7 +442,7 @@ describe('mobile shell', () => {
 })
 
 /**
- * The global SSE stream, end to end: a real `/api/events`, a real EventSource, a real reducer.
+ * The global SSE stream, end to end: a real `/api/v1/events`, a real EventSource, a real reducer.
  *
  * The interesting half is not that a socket opens — it is that a server-side change reaches the
  * rendered UI with nobody reloading anything. The inbox is the one path this suite can drive for
@@ -482,11 +482,11 @@ describe('global SSE stream', () => {
     browser.goto(baseUrl + scoped('/'))
 
     // A second stream, opened from the page, against the same endpoint the app uses: it proves
-    // `/api/events` really speaks SSE to this origin (readyState 1 = OPEN) and keeps the socket up
+    // `/api/v1/events` really speaks SSE to this origin (readyState 1 = OPEN) and keeps the socket up
     // rather than answering and closing. That the *app's* own stream is open is what the badge test
     // below proves — an EventSource is not reachable from outside the bundle, and a test-only
     // handle hung off `window` to reach it would be scaffolding, not evidence.
-    browser.evaluate(`window.__cezProbe = new EventSource('/api/events'), true`)
+    browser.evaluate(`window.__cezProbe = new EventSource('/api/v1/events'), true`)
     browser.waitForFunction(`window.__cezProbe.readyState === 1`)
     expect(browser.evaluate('window.__cezProbe.readyState')).toBe(1)
     browser.evaluate(`window.__cezProbe.close(), delete window.__cezProbe, true`)

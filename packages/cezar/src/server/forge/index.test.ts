@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { RepoInfo } from '../git.js';
-import { forgeKindOfRemote, parseRemote, resolveForge } from './index.js';
+import type { RepoInfo } from '../git.ts';
+import { forgeKindOfRemote, parseRemote, resolveForge } from './index.ts';
 
 /** Forge resolution (spec §"Forge-driver seam"): remote host → driver | null. */
 

@@ -9,10 +9,10 @@ import {
   serviceExecStart,
   systemdUnit,
   ubuntuVps,
-} from './ubuntu-vps.js';
-import { StepAborted } from '../steps.js';
-import { createAutoUi } from '../ui.js';
-import type { InstallContext, InstallStep, Runner, Ui } from '../types.js';
+} from './ubuntu-vps.ts';
+import { StepAborted } from '../steps.ts';
+import { createAutoUi } from '../ui.ts';
+import type { InstallContext, InstallStep, Runner, Ui } from '../types.ts';
 
 const okRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
 
