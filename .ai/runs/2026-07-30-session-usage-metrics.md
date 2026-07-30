@@ -72,8 +72,8 @@ PR: #742
 
 ### Phase 3: Capabilities and compatibility documentation
 
-- [ ] 3.1 Split token and cost presentation capabilities
-- [ ] 3.2 Document environment and compatibility contracts
+- [x] 3.1 Split token and cost presentation capabilities — abeb82e3
+- [x] 3.2 Document environment and compatibility contracts — 2ae6abac
 
 ### Phase 4: Browser presentation
 
