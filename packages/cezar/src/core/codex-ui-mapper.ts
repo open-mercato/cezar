@@ -217,12 +217,13 @@ function mapTurnEnd(
 ): CodexUiMapping {
   let turnSeq = state.turnSeq;
   const turnId = turnIdOf(params) ?? state.currentTurnId ?? `turn_${++turnSeq}`;
+  const closesActiveTurn = state.currentTurnId === null || turnId === state.currentTurnId;
   // A review span still open when the turn ends never gets its `exitedReviewMode` — an
   // interrupted, cancelled or failed turn simply stops. Close it here, or the item stays
   // `running` forever and the Agents dock reads a finished run as a live fan-out (#474).
   // The status follows the turn: a turn that failed did not complete its review.
   const events: UiEvent[] = [];
-  if (state.reviewItemId !== null) {
+  if (closesActiveTurn && state.reviewItemId !== null) {
     events.push({
       type: 'item.completed',
       item: {
@@ -240,13 +241,15 @@ function mapTurnEnd(
     turnId,
     stopReason: turnStopReason(params, failed),
   };
-  if (state.currentTurnId !== null && state.pendingTurnUsage !== null) {
+  if (turnId === state.currentTurnId && state.pendingTurnUsage !== null) {
     completed.usage = state.pendingTurnUsage;
   }
   events.push(completed);
   return {
     events,
-    state: { ...state, turnSeq, currentTurnId: null, pendingTurnUsage: null, reviewItemId: null },
+    state: closesActiveTurn
+      ? { ...state, turnSeq, currentTurnId: null, pendingTurnUsage: null, reviewItemId: null }
+      : { ...state, turnSeq },
   };
 }
 

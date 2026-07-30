@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { createWorktree } from '../git-worktree.ts';
-import { RunStore, type RunRecord } from '../runs/store.ts';
+import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
 import { appendTurnText, RunManager } from './run.ts';
@@ -148,6 +148,41 @@ describe('RunManager directional usage accounting', () => {
     });
     expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
     expect(store.getRun(run.id)?.outputTokens).toBeUndefined();
+  });
+
+  it('writes each completeness checkpoint before launching or forwarding its boundary event', () => {
+    const { run, state } = fixture();
+    store.flush();
+
+    internal.beginUsageInvocation(run.id, state, 'work');
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 1,
+    });
+
+    const persistedAtSink: StepState[] = [];
+    const sink = {
+      handle: (_event: UiEvent) => {
+        const persisted = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.steps[0];
+        if (persisted) persistedAtSink.push(persisted);
+      },
+    };
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 8, output: 2, total: 10 },
+    });
+
+    expect(persistedAtSink[0]).toMatchObject({
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+    });
+    expect(persistedAtSink[1]).toMatchObject({
+      usageTurnsRecorded: 1,
+      inputTokens: 8,
+      outputTokens: 2,
+    });
   });
 
   it('tracks an unmetered turn without recording it and ignores a completion that never started', () => {

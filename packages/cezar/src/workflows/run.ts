@@ -30,7 +30,7 @@ import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
-import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.ts';
+import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
@@ -2288,7 +2288,7 @@ export class RunManager {
     const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === stepId);
     if (!step) return;
     const epoch = (step.usageInvocationEpoch ?? 0) + 1;
-    this.store.updateStep(runId, stepId, {
+    this.persistUsageCheckpoint(runId, stepId, {
       usageInvocationEpoch: epoch,
       usageInvocationsStarted: (step.usageInvocationsStarted ?? 0) + 1,
     });
@@ -2315,7 +2315,7 @@ export class RunManager {
       invocation.startedTurns.add(event.turnId);
       const firstObservedTurn = !invocation.observed;
       invocation.observed = true;
-      this.store.updateStep(runId, invocation.stepId, {
+      this.persistUsageCheckpoint(runId, invocation.stepId, {
         usageTurnsStarted: (step.usageTurnsStarted ?? 0) + 1,
         ...(firstObservedTurn
           ? { usageInvocationsObserved: (step.usageInvocationsObserved ?? 0) + 1 }
@@ -2339,11 +2339,23 @@ export class RunManager {
       return;
     }
     invocation.recordedTurns.add(event.turnId);
-    this.store.updateStep(runId, invocation.stepId, {
+    this.persistUsageCheckpoint(runId, invocation.stepId, {
       inputTokens: (step.inputTokens ?? 0) + input,
       outputTokens: (step.outputTokens ?? 0) + output,
       usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
     });
+  }
+
+  /** Usage completeness is a crash boundary, unlike high-frequency token
+   * snapshots: the checkpoint must reach `runs.json` before the runner starts
+   * or the matching UI event is persisted and forwarded. */
+  private persistUsageCheckpoint(
+    runId: string,
+    stepId: string,
+    patch: Partial<Omit<StepState, 'id'>>,
+  ): void {
+    this.store.updateStep(runId, stepId, patch);
+    this.store.flush();
   }
 
   /**

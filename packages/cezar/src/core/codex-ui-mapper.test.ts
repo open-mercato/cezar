@@ -328,6 +328,46 @@ describe('mapCodexNotification edge cases', () => {
     ]);
   });
 
+  it('does not consume the active turn usage on a stale completion for an earlier turn', () => {
+    let s = createCodexUiState();
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, s).state;
+    s = mapCodexNotification(
+      {
+        method: 'thread/tokenUsage/updated',
+        params: {
+          tokenUsage: {
+            total: { inputTokens: 100, outputTokens: 20 },
+            last: { inputTokens: 8, outputTokens: 2 },
+          },
+        },
+      },
+      s,
+    ).state;
+
+    const stale = mapCodexNotification(
+      { method: 'turn/completed', params: { turn: { id: 't1' } } },
+      s,
+    );
+    expect(stale.events).toEqual([{ type: 'turn.completed', turnId: 't1', stopReason: 'end_turn' }]);
+    expect(stale.state.currentTurnId).toBe('t2');
+
+    expect(
+      mapCodexNotification(
+        { method: 'turn/completed', params: { turn: { id: 't2' } } },
+        stale.state,
+      ).events,
+    ).toEqual([
+      {
+        type: 'turn.completed',
+        turnId: 't2',
+        stopReason: 'end_turn',
+        usage: { input: 8, output: 2, total: 10 },
+      },
+    ]);
+  });
+
   it('session.started is emitted once whichever path lands first', () => {
     let s = createCodexUiState();
     const viaNotification = mapCodexNotification(
