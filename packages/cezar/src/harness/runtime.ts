@@ -772,7 +772,9 @@ export async function runValidationCommands(
         timedOut: boolean;
       }>((resolve) => {
         const processToken = randomProcessToken();
-        const child = spawn('bash', ['-lc', command], {
+        // A login shell may replace PATH via /etc/profile, bypassing both the
+        // repository's Corepack shim and an explicitly supplied validation PATH.
+        const child = spawn('bash', ['-c', command], {
           cwd,
           env: {
             ...validationEnvironment,

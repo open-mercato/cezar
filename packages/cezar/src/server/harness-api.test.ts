@@ -10,6 +10,7 @@ import { HARNESS_FIX_ISSUE } from '../harness/workflows.js';
 import { RunStore } from '../runs/store.js';
 import type { RunManager, StartRunInput } from '../workflows/run.js';
 import type { WorkflowDef } from '../workflows/types.js';
+import { connectedProviderAuth } from './provider-auth.testkit.js';
 import { createApp } from './server.js';
 import { apiRequest } from './loopback-request.testkit.js';
 
@@ -46,6 +47,7 @@ describe('harness API', () => {
       store,
       manager,
       version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
       harnessProber: {
         probe: async () => ({ status: 'ready', detail: 'test binding' }),
         probeAll: async (refs) =>

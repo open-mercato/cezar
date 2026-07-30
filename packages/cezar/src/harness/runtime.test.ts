@@ -230,6 +230,19 @@ describe('harness runtime bridge', () => {
     async () => {
       const fakeBin = join(dir, 'fake-bin');
       mkdirSync(fakeBin);
+      const bash = join(fakeBin, 'bash');
+      writeFileSync(
+        bash,
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "-lc" ]; then',
+          '  PATH=/usr/bin:/bin',
+          'fi',
+          'exec /bin/bash "$@"',
+        ].join('\n'),
+        'utf8',
+      );
+      chmodSync(bash, 0o755);
       const corepack = join(fakeBin, 'corepack');
       writeFileSync(
         corepack,
