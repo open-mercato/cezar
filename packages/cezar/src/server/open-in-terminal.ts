@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { shellQuote, withEnvPrefix } from '../core/shell-env.ts';
 import { isWsl, wslDistroName } from './wsl.ts';
 
 /**
@@ -18,9 +19,22 @@ import { isWsl, wslDistroName } from './wsl.ts';
  * Returns true when a launcher was started without an immediate error; the
  * caller shows a copy-the-command fallback otherwise.
  */
-export async function openInTerminal(cwd: string, command: string): Promise<boolean> {
+export async function openInTerminal(
+  cwd: string,
+  command: string,
+  /** Environment the opened shell must carry — today, the agent account's config dir (spec
+   *  2026-07-29-agent-profiles). Rendered per platform and made to PERSIST, because the window
+   *  stays open and the user types the next `claude` in it themselves. An empty/absent env
+   *  changes nothing about the command. Returns false without launching anything when the
+   *  values cannot be embedded safely: a terminal silently aimed at the wrong account is worse
+   *  than no terminal, since nothing in the window would say so. */
+  env: Record<string, string> = {},
+): Promise<boolean> {
+  const prefixed = withEnvPrefix(command, env, process.platform);
+  if (prefixed === null) return false;
+
   if (process.platform === 'darwin') {
-    const script = `cd ${shellQuote(cwd)} && ${command}`;
+    const script = `cd ${shellQuote(cwd)} && ${prefixed}`;
     return runDetached('osascript', [
       '-e',
       'tell application "Terminal" to activate',
@@ -30,16 +44,16 @@ export async function openInTerminal(cwd: string, command: string): Promise<bool
   }
 
   if (process.platform === 'win32') {
-    const inner = `cd /d "${cwd}" && ${command}`;
+    const inner = `cd /d "${cwd}" && ${prefixed}`;
     // Windows Terminal first, classic cmd window as fallback.
-    if (await runDetached('cmd', ['/c', 'start', '', 'wt', '-d', cwd, 'cmd', '/K', command])) {
+    if (await runDetached('cmd', ['/c', 'start', '', 'wt', '-d', cwd, 'cmd', '/K', prefixed])) {
       return true;
     }
     return runDetached('cmd', ['/c', 'start', '', 'cmd', '/K', inner]);
   }
 
   // Linux/other: a temp script avoids each emulator's own quoting rules.
-  const scriptPath = writeLaunchScript(cwd, command);
+  const scriptPath = writeLaunchScript(cwd, prefixed);
 
   if (isWsl()) {
     // No Linux GUI here — go through interop to a Windows terminal, which re-enters this same
@@ -115,10 +129,6 @@ function runDetached(bin: string, args: string[]): Promise<boolean> {
       settle(true);
     }, 250);
   });
-}
-
-function shellQuote(s: string): string {
-  return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
 function appleScriptQuote(s: string): string {

@@ -7,9 +7,14 @@ import {
   ApiError,
   browseFs,
   checkoutProject,
+  connectProvider,
   continueRun,
+  createAgentProfile,
   getAgentConfig,
   getAgentConfigFile,
+  getAgentAccountDetails,
+  getAgentAccountStatus,
+  getAgentProfiles,
   getConfig,
   getGithub,
   getGithubChecks,
@@ -49,25 +54,37 @@ import {
   applySkillsUpdate,
   getWorktrees,
   editQueuedMessage,
+  markRunSeen,
   patchRun,
   removeQueuedMessage,
   registerProject,
+  openAgentAccountFile,
+  removeAgentProfile,
   removeProject,
+  selectAgentProfile,
+  updateAgentProfile,
   updateProject,
   sendMessage,
   putAgentConfigFile,
   retryProviderAuth,
 } from './client'
 import { queryScope } from '@open-mercato/cezar-api-client'
+import { useProjectScope } from './project-scope-context'
+import { githubRepoBase } from '@/lib/tasks-table'
 import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
+  CreateAgentProfileInput,
   HealthResponse,
   MessageInput,
   PatchRunInput,
   ProviderId,
+  OpenAgentAccountFileInput,
   ProviderStatusResponse,
+  RunRecord,
+  SelectAgentProfileInput,
   SetAgentConfigInput,
+  UpdateAgentProfileInput,
   UpdateProjectInput,
 } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
@@ -189,12 +206,23 @@ export const workspaceQueryKeys = {
   /** `~/.cezar/config.json`'s settings slice via `GET/PUT /api/workspace/config` (step 2.7):
    *  the global Resources knobs and the checkout root. */
   config: ['workspace', 'config'] as const,
+  /** Agent accounts via `GET /api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles).
+   *  Workspace-led like the registry: an account describes the machine, not a repo. */
+  agentProfiles: ['workspace', 'agent-profiles'] as const,
+  /** One account's identity, keyed by its route id. A child of `agentProfiles` so removing an
+   *  account drops any details cached for it in the same invalidation. */
+  agentAccountDetails: (routeId: string) =>
+    ['workspace', 'agent-profiles', 'details', routeId] as const,
+  /** One account's auth state — a child of `agentProfiles`, so removing an account drops it too. */
+  agentAccountStatus: (routeId: string) =>
+    ['workspace', 'agent-profiles', 'status', routeId] as const,
   skillsUpdate: (projectId: string) => ['workspace', 'skills-update', projectId] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
    *  browsed path — `null` is the browse root, whose absolute location only the server knows.
    *  Not scope-led: there is one filesystem behind the workspace, not one per project. */
   fsBrowseRoot: ['workspace', 'fs-browse'] as const,
-  fsBrowse: (path: string | null) => [...workspaceQueryKeys.fsBrowseRoot, path] as const,
+  fsBrowse: (path: string | null, showHidden = false) =>
+    [...workspaceQueryKeys.fsBrowseRoot, path, showHidden] as const,
 }
 
 /** `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue —
@@ -278,10 +306,12 @@ export function useProjects() {
  *  the browse root. Retries are off: the interesting failures here are the deliberate 400/404s
  *  (outside the root, no such directory) — re-asking cannot change those answers, and the
  *  dialog shows the server's own words instead. */
-export function useFsBrowse(path: string | null) {
+export function useFsBrowse(path: string | null, showHidden = false) {
   return useQuery({
-    queryKey: workspaceQueryKeys.fsBrowse(path),
-    queryFn: ({ signal }) => browseFs(path ?? undefined, { signal }),
+    // `showHidden` is part of the key: the two listings of one directory are different answers,
+    // and sharing a cache entry would show whichever caller asked first.
+    queryKey: workspaceQueryKeys.fsBrowse(path, showHidden),
+    queryFn: ({ signal }) => browseFs(path ?? undefined, { signal, showHidden }),
     retry: false,
   })
 }
@@ -346,10 +376,150 @@ export function useRemoveProject() {
 export function useUpdateProject() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (variables: { id: string } & UpdateProjectInput) =>
-      updateProject(variables.id, { maxParallel: variables.maxParallel }),
+    // Forwarded whole rather than key by key: the body is partial, so an unlisted key would be
+    // silently dropped instead of sent — which is how `agentProfile` would have gone missing.
+    mutationFn: (variables: { id: string } & UpdateProjectInput) => {
+      const { id, ...patch } = variables
+      return updateProject(id, patch)
+    },
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/**
+ * The three agent-account mutations (spec 2026-07-29-agent-profiles).
+ *
+ * All three invalidate the PROJECTS list as well as the account list: deleting an account scrubs
+ * every project's reference to it server-side, so a projects cache left alone would keep showing
+ * a selection that no longer exists.
+ */
+function useAgentProfileMutation<TVariables>(
+  mutationFn: (variables: TVariables) => Promise<unknown>,
+) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn,
+    retry: false,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles }),
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+      ])
+    },
+  })
+}
+
+export function useCreateAgentProfile() {
+  return useAgentProfileMutation((input: CreateAgentProfileInput) => createAgentProfile(input))
+}
+
+export function useUpdateAgentProfile() {
+  return useAgentProfileMutation((variables: { id: string } & UpdateAgentProfileInput) => {
+    const { id, ...patch } = variables
+    return updateAgentProfile(id, patch)
+  })
+}
+
+export function useRemoveAgentProfile() {
+  return useAgentProfileMutation((id: string) => removeAgentProfile(id))
+}
+
+/** Point one project's provider at an account (spec 2026-07-29-agent-profiles). */
+export function useSelectAgentProfile() {
+  return useAgentProfileMutation((input: SelectAgentProfileInput) => selectAgentProfile(input))
+}
+
+/**
+ * Who an account is signed in as — fetched ONLY once `enabled` (the row's "Show details").
+ *
+ * `enabled: false` is the whole point: identity is not in the accounts listing, so until the user
+ * asks, no request carries it and nothing caches it. `staleTime: 0` so re-opening the row after a
+ * re-login shows the new answer rather than a remembered one.
+ */
+export function useAgentAccountDetails(routeId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentAccountDetails(routeId),
+    queryFn: ({ signal }) => getAgentAccountDetails(routeId, { signal }),
+    enabled,
+    staleTime: 0,
+    retry: false,
+  })
+}
+
+/**
+ * One account's auth state — the GAP-FILLER, not the normal path.
+ *
+ * The listing carries a status whenever the server has one cached, which after the boot warm is
+ * almost always. This covers the rest: an account added mid-session, or a cache that has aged out.
+ * Each row asks for its own in parallel, so the pane still paints from the spawn-free listing and
+ * fills dots in as answers arrive rather than blocking on a spawn per provider AND per account.
+ */
+export function useAgentAccountStatus(routeId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentAccountStatus(routeId),
+    queryFn: ({ signal }) => getAgentAccountStatus(routeId, { signal }),
+    // Only when the listing had nothing cached to give us. The server warms this at boot and keeps
+    // a connected answer for minutes, so in the normal case the listing already carries it and this
+    // never fires — no request, no CLI spawn, no "Checking…" flicker.
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * Sign IN to one agent account — the last mile of "add account → Connect → the CLI creates the
+ * folder", which is the documented first-run sequence and the only way a second login can be
+ * created from cezar.
+ *
+ * Invalidates both the account listing and the provider card: the login the user just opened is
+ * for a named account, but the terminal they finish it in can equally be the discovered one, and a
+ * stale card is what makes people press Connect twice.
+ */
+export function useConnectAgentAccount() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ provider, profileId }: { provider: ProviderId; profileId?: string }) =>
+      connectProvider(provider, profileId),
+    retry: false,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles }),
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus }),
+      ])
+    },
+  })
+}
+
+/**
+ * Re-probe ONE account for real (`?refresh=1`), for the "Check again" the pane offers beside
+ * Connect — the affordance the cached-by-default listing is designed around.
+ *
+ * Writes the answer straight into the per-account status cache so the row updates without a second
+ * round-trip, and never retries: the interesting failures here are the server's own refusals.
+ */
+export function useRecheckAgentAccount() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { refresh: true }),
+    retry: false,
+    onSuccess: (answer, routeId) => {
+      queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles })
+    },
+  })
+}
+
+/** Hand one of an account's config files to a local app. Nothing to invalidate — opening a file
+ *  changes no cezar state, so this deliberately does NOT go through the shared mutation helper. */
+export function useOpenAgentAccountFile() {
+  return useMutation({
+    mutationFn: (variables: { routeId: string } & OpenAgentAccountFileInput) => {
+      const { routeId, ...input } = variables
+      return openAgentAccountFile(routeId, input)
+    },
+    retry: false,
   })
 }
 
@@ -425,6 +595,25 @@ export function useHealth() {
   })
 }
 
+/**
+ * The GitHub web root (`https://github.com/owner/repo`) of the project currently on screen, or
+ * undefined when it cannot be proven — the only authority `taskIssueUrl` may synthesize a link
+ * against (#526).
+ *
+ * The boot-project guard is the load-bearing part. `/health` is WORKSPACE-level (project-scope.ts
+ * `WORKSPACE_LEVEL`): the server always builds it from `bootRoot`, so its `repo.remote` names the
+ * project cezar launched in, whichever project the URL is scoped to. Handing a non-boot project's
+ * task a link built from the boot project's repo would point at a completely different repository
+ * — the same wrong-link defect #526 exists to kill. Until a per-project remote is served, a
+ * scoped view synthesizes nothing.
+ */
+export function useProjectRepoBase(): string | undefined {
+  const health = useHealth().data
+  const { projectId } = useProjectScope()
+  const isBootProject = projectId === null || projectId === health?.bootProject
+  return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
+}
+
 /** The local "Open in…" targets (#open-in). Machine-level and stable, so it caches broadly;
  *  empty in hosted mode. */
 export function useOpenTargets() {
@@ -485,9 +674,9 @@ export function useRunDiff(id: string | undefined) {
   })
 }
 
-/** The structured worktree diff behind the Changes tab (R5). A 409 ("no worktree — …") is a
- *  real answer here, not a network hiccup — retrying cannot change it, so retries are off and
- *  the view renders the server's own reason. */
+/** The structured session diff behind the Changes tab (R5). A 409 (for example, a reclaimed
+ *  worktree whose directory is unavailable) is a real answer, not a network hiccup — retrying
+ *  cannot change it, so retries are off and the view renders the server's own reason. */
 export function useRunChanges(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.changes(id ?? ''),
@@ -533,7 +722,7 @@ export function useGroup(groupId: string | undefined) {
 }
 
 /** A run's commit list (Commits tab). Polls while active so new commits appear as the agent
- *  autosaves. A 409 ("no worktree") is a real answer retries can't change. */
+ *  works. A 409 from an unavailable backing directory is a real answer retries can't change. */
 export function useRunCommits(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.commits(id ?? ''),
@@ -757,6 +946,20 @@ export function useWorkspaceConfig() {
   })
 }
 
+/**
+ * Every agent account on this machine (spec 2026-07-29-agent-profiles).
+ *
+ * Read by three surfaces — the Accounts settings section, the per-project picker in Settings →
+ * Agents, and the composer's override — so it is one cached query rather than three fetches.
+ * Not scope-led: one machine, one set of accounts.
+ */
+export function useAgentProfiles() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentProfiles,
+    queryFn: ({ signal }) => getAgentProfiles({ signal }),
+  })
+}
+
 export function useSkillsUpdate(projectId: string, enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.skillsUpdate(projectId),
@@ -798,6 +1001,48 @@ export function usePatchRun(id: string) {
   return useMutation({
     mutationFn: (patch: PatchRunInput) => patchRun(id, patch),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+  })
+}
+
+/**
+ * Mark one run read (#unread-done-items): `POST /api/runs/:id/read`. Opening a finished task's
+ * thread fires this so the unread dot clears without waiting for the round-trip — the list and
+ * detail caches are stamped with `seenAt` optimistically, then reconciled to the server's exact
+ * value (which also arrives independently over the `run` SSE). On error the optimistic stamp is
+ * rolled back, so a run that could not be marked read honestly stays unread.
+ */
+export function useMarkRunSeen() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => markRunSeen(id),
+    onMutate: async (id: string) => {
+      // Cancel BOTH caches this stamps: an in-flight refetch of either that settles after the
+      // optimistic write would otherwise put the unread dot straight back.
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.list() })
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.detail(id) })
+      const prevList = queryClient.getQueryData<RunRecord[]>(queryKeys.runs.list())
+      const prevDetail = queryClient.getQueryData<RunRecord>(queryKeys.runs.detail(id))
+      const now = new Date().toISOString()
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === id ? { ...run, seenAt: now } : run)),
+      )
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(id), (run) =>
+        run ? { ...run, seenAt: now } : run,
+      )
+      return { prevList, prevDetail, id }
+    },
+    onError: (_error, id, context) => {
+      // Both restores are guarded: with no snapshot there is nothing to roll back TO, and
+      // writing `undefined` would evict a cache entry the mutation never touched.
+      if (context?.prevList) queryClient.setQueryData(queryKeys.runs.list(), context.prevList)
+      if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === updated.id ? updated : run)),
+      )
+      queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
+    },
   })
 }
 

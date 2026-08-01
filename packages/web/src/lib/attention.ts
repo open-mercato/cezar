@@ -60,9 +60,13 @@ function hasPendingPermission(_run: AttentionInput): boolean {
 /**
  * Whether a run finished while the user was not looking.
  *
- * Also always false today, and for the same reason: `unseen` needs a per-run "last seen" marker,
- * and cezar persists none — not in `RunRecord`, not in `UiState`. A terminal run therefore lands
- * in `none`, which is honest: the list shows its outcome, nothing is demanding attention.
+ * Still always false here, but now by DESIGN rather than for want of data. The "finished while
+ * you weren't looking" question is answered by the read/unread channel (#unread-done-items):
+ * `RunRecord.seenAt` + `isUnread()` in `lib/read-state.ts`. That signal is deliberately kept OFF
+ * the status dot — the dot keeps saying done/failed, and unread rides its own trailing violet
+ * marker (the approved "Option B") so status and "have I seen it" never collapse into one dot.
+ * Routing unread through this `unseen` bucket would recolor the status dot violet, which is
+ * exactly the conflation that design avoids, so the bucket stays reserved and unused.
  */
 function isUnseen(_run: AttentionInput): boolean {
   return false

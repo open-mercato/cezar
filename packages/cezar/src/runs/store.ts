@@ -26,6 +26,8 @@ export type StepStatus =
   | 'cancelled'
   | 'skipped';
 
+const usageCounterSchema = z.number().finite().nonnegative();
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -33,6 +35,13 @@ const stepStateSchema = z.object({
   status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
   iterations: z.number(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
+  usageInvocationsStarted: usageCounterSchema.optional(),
+  usageInvocationsObserved: usageCounterSchema.optional(),
+  usageTurnsStarted: usageCounterSchema.optional(),
+  usageTurnsRecorded: usageCounterSchema.optional(),
+  usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   error: z.string().optional(),
@@ -40,6 +49,12 @@ const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse. */
   backend: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
+   *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
+   *  only means something inside the config dir that created it: `sessionId` and `profileId` are
+   *  a PAIR. Without it, changing the project's account would silently make Continue resume
+   *  against the wrong account's session store. Absent = the discovered default. */
+  profileId: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -64,9 +79,19 @@ const runRecordSchema = z.object({
    *  `title` so edits always win). The UI shows `titleSummary ?? title`. */
   titleSummary: z.string().optional(),
   /** `git diff --shortstat` of the worktree vs its base, refreshed on every
-   *  turn-end (#389) — what the quick list / table shows without a git call. */
+   *  turn-end (#389) — what the quick list / table shows without a git call.
+   *  `repointed` (#751) is optional and only ever written as `true`: it marks the
+   *  runs whose numbers were narrowed to uncommitted work because the agent had
+   *  checked another branch out into the worktree. Optional is load-bearing here —
+   *  `runs.json` is `safeParse`d as one array, so a required addition would
+   *  silently drop every pre-existing run. */
   diffStat: z
-    .object({ adds: z.number(), dels: z.number(), files: z.number() })
+    .object({
+      adds: z.number(),
+      dels: z.number(),
+      files: z.number(),
+      repointed: z.boolean().optional(),
+    })
     .optional(),
   workflow: z.string(),
   task: z.string(),
@@ -88,6 +113,11 @@ const runRecordSchema = z.object({
   modelIdentity: z.string().optional(),
   /** Agent backend this run used — drives "open in CLI" resume command. */
   runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Per-task agent-account override from the composer (spec 2026-07-29-agent-profiles), applying
+   *  to steps that run on `runner`. Steps on a DIFFERENT backend still resolve from the project's
+   *  own selection — an override for Claude says nothing about which Codex account a mixed
+   *  workflow's codex step should use. Absent = follow the project. */
+  agentProfile: z.string().optional(),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
    *  Deliberately NOT the full composed prompt — skill bodies and the handoff
@@ -126,6 +156,8 @@ const runRecordSchema = z.object({
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
   /** First GitHub PR URL spotted in the transcript (the janitor trick). */
   pullRequestUrl: z.string().optional(),
@@ -165,11 +197,14 @@ const runRecordSchema = z.object({
   /** Distinct issue URLs spotted so far — the referenced-issue working set,
    *  persisted like `referencedPrCandidates`. Capped. */
   referencedIssueCandidates: z.array(z.string()).optional(),
-  /** Task worktree (spec 006) — absent when the run executed in the repo root. */
+  /** Explicit execution policy. `false` means the run intentionally uses the repo root;
+   *  absent on older runs and for the default isolated-worktree mode. */
+  worktree: z.literal(false).optional(),
+  /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
   /** The task's own branch (`cez/<id8>`), created off `baseBranch`. */
   branch: z.string().optional(),
-  /** Branch (or commit, when HEAD was detached) the worktree was forked from. */
+  /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
   /** Set when count-based retention (#483) reclaimed this run's worktree
    *  *directory* (the `cez/<id8>` branch is kept). Presence means "materialized
@@ -187,6 +222,11 @@ const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean().default(false),
   archivedAt: z.string().optional(),
+  /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
+   *  run's thread. A finished run reads as "unread" until it has been seen since it
+   *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
+   *  runs and on every run not yet opened, which the unread rule treats as unread. */
+  seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -413,8 +453,11 @@ export class RunStore extends EventEmitter {
     task: string;
     model?: string;
     runner?: 'claude' | 'codex' | 'opencode';
+    /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
+    agentProfile?: string;
     generateFollowups?: boolean;
     autonomous?: boolean;
+    worktree?: false;
     groupId?: string;
     variant?: string;
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
@@ -432,8 +475,10 @@ export class RunStore extends EventEmitter {
       task: input.task,
       model: input.model,
       runner: input.runner,
+      agentProfile: input.agentProfile,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
+      worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,
       status: 'queued',
@@ -528,6 +573,28 @@ export class RunStore extends EventEmitter {
     if (!run || !step) return;
     Object.assign(step, this.redactStepPatch(patch));
     run.tokensUsed = run.steps.reduce((sum, s) => sum + s.tokensUsed, 0);
+    const startedAgentSteps = run.steps.filter((candidate) => candidate.kind === 'agent' && candidate.iterations > 0);
+    const directionalComplete =
+      startedAgentSteps.length > 0 &&
+      startedAgentSteps.every(
+        (candidate) =>
+          candidate.usageInvocationsStarted !== undefined &&
+          candidate.usageInvocationsObserved !== undefined &&
+          candidate.usageInvocationsObserved > 0 &&
+          candidate.usageInvocationsStarted === candidate.usageInvocationsObserved &&
+          candidate.usageTurnsStarted !== undefined &&
+          candidate.usageTurnsRecorded !== undefined &&
+          candidate.usageTurnsStarted > 0 &&
+          candidate.usageTurnsStarted === candidate.usageTurnsRecorded &&
+          candidate.inputTokens !== undefined &&
+          candidate.outputTokens !== undefined,
+      );
+    run.inputTokens = directionalComplete
+      ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.inputTokens ?? 0), 0)
+      : undefined;
+    run.outputTokens = directionalComplete
+      ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.outputTokens ?? 0), 0)
+      : undefined;
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
     run.costUsd = cost > 0 ? cost : undefined;
     this.touch(run);
@@ -552,6 +619,42 @@ export class RunStore extends EventEmitter {
         this.touch(run);
         count++;
       }
+    }
+    return count;
+  }
+
+  /** Mark one run as read (#unread-done-items): stamp the read receipt now. Mirrors
+   *  `setArchived` — sets the field then persists + broadcasts via `touch`, so the
+   *  updated record rides the existing `run` SSE with no new event. Idempotent by
+   *  design: opening an already-read thread just re-stamps a later `seenAt`. */
+  setRead(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    run.seenAt = new Date().toISOString();
+    this.touch(run);
+    return run;
+  }
+
+  /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
+   *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
+   *  clause for clause: a `done` or `failed` run that finished and has not been seen
+   *  since. Cancelled runs are never unread — you stopped them yourself — and archived
+   *  ones never are either, since archiving is a stronger "done with this" than reading;
+   *  both are skipped, as are runs already read. Keeping the two rules identical is what
+   *  makes the returned count the number the cockpit's unread badge was showing. */
+  markAllRead(): number {
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const run of this.runs.values()) {
+      const unread =
+        !run.archived &&
+        (run.status === 'done' || run.status === 'failed') &&
+        run.finishedAt !== undefined &&
+        (run.seenAt === undefined || run.seenAt < run.finishedAt);
+      if (!unread) continue;
+      run.seenAt = now;
+      this.touch(run);
+      count++;
     }
     return count;
   }

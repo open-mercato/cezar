@@ -257,6 +257,28 @@ describe('assigning a template to a skill', () => {
     expect(options.map((o) => o.dataset.skill)).toEqual(['g-review', 'om-fix'])
   })
 
+  it('a query filters the Most used tier too — not just the rest of the catalog (#668)', async () => {
+    // g-review is promoted into Most used by usage; a query for "fix" must still hide it.
+    serve({ skillUsage: { 'g-review': 3 } })
+    renderSection()
+    await waitFor(() => expect(rows()).toHaveLength(DEFAULT_PROMPT_TEMPLATES.length))
+
+    await openPicker(rows()[0]!)
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="prompt-template-skill-option"]')).toHaveLength(2),
+    )
+
+    const searchInput = document.querySelector<HTMLInputElement>('[placeholder="search skills…"]')!
+    fireEvent.change(searchInput, { target: { value: 'fix' } })
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="prompt-template-skill-option"]')).toHaveLength(1),
+    )
+    expect(option('om-fix')).not.toBeNull()
+    // The frequently-used g-review must be gone even though it sits in the Most used tier.
+    expect(option('g-review')).toBeNull()
+  })
+
   it('assigning shows a chip and Save PUTs the skills alongside the template', async () => {
     serve()
     renderSection()

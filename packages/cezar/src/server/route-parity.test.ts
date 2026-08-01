@@ -171,8 +171,23 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     ]) {
       expect(keys, expected).toContain(expected);
     }
-    // Workspace-level routes must NOT be mirrored under /api/v1/p/.
-    for (const workspaceOnly of ['GET /health', 'GET /projects', 'POST /projects', 'GET /fs/browse']) {
+    // Workspace-level routes must NOT be mirrored under /api/v1/p/. Agent accounts belong here
+    // for the same reason the registry does: an account describes the person and the machine,
+    // and a project-scoped spelling would be a second surface to protect with no consumer.
+    for (const workspaceOnly of [
+      'GET /health',
+      'GET /projects',
+      'POST /projects',
+      'GET /fs/browse',
+      'GET /workspace/agent-profiles',
+      'POST /workspace/agent-profiles',
+      'PATCH /workspace/agent-profiles/:id',
+      'DELETE /workspace/agent-profiles/:id',
+      'PUT /workspace/agent-profiles/selection',
+      'GET /workspace/agent-profiles/:id/details',
+      'GET /workspace/agent-profiles/:id/status',
+      'POST /workspace/agent-profiles/:id/open',
+    ]) {
       expect(keys, workspaceOnly).not.toContain(workspaceOnly);
     }
   });

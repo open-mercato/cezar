@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from './api/query-client'
 import { queryKeys, workspaceQueryKeys } from './api/queries'
-import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
+import type { ProjectsResponse, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
@@ -90,16 +90,31 @@ function ProjectNavigationProbe() {
 }
 
 /** Cold-load the router at a URL, exactly as a pasted deep link would — under the same providers
- *  the app shell supplies. With `seed` (the default) the health + registry answers the redirect
- *  gates need are already cached, the way a warm app has them; `seed: false` is the cold state
- *  where the boot id is still unknown. */
-function renderAt(entry: string, { seed = true, health = HEALTH }: { seed?: boolean; health?: typeof HEALTH } = {}) {
+ *  the app shell supplies. With `seed` (the default) the health, registry, and workspace UI-state
+ *  answers the redirect gates need are already cached, the way a warm app has them; `seed: false`
+ *  is the cold state where the boot id is still unknown. Passing `null` skips an individual seed
+ *  so error and pending behavior can be exercised without replacing the shared harness. */
+function renderAt(
+  entry: string,
+  {
+    seed = true,
+    health = HEALTH,
+    registry = REGISTRY,
+    uiState = {},
+  }: {
+    seed?: boolean
+    health?: typeof HEALTH | null
+    registry?: ProjectsResponse | null
+    uiState?: WorkspaceUiState | Record<string, unknown> | null
+  } = {},
+) {
   const client = createQueryClient()
   if (seed) {
     // Scope is unset while seeding, so `queryKeys.health` is the unscoped `['default','health']`
     // key the legacy-redirect gate reads.
-    client.setQueryData(queryKeys.health, health)
-    client.setQueryData(workspaceQueryKeys.projects, REGISTRY)
+    if (health !== null) client.setQueryData(queryKeys.health, health)
+    if (registry !== null) client.setQueryData(workspaceQueryKeys.projects, registry)
+    if (uiState !== null) client.setQueryData(workspaceQueryKeys.uiState, uiState)
   }
   render(
     <QueryClientProvider client={client}>
@@ -366,6 +381,178 @@ describe('the global settings area (/settings/global)', () => {
 /** Legacy flat URLs (BACKWARD_COMPATIBILITY.md): every pre-multi-project path redirects to the
  *  boot project's scoped twin with params intact — old bookmarks keep landing. */
 describe('legacy flat URLs redirect to the boot project', () => {
+  it('restores the last settled project page from the exact bare root', () => {
+    renderAt('/', {
+      uiState: {
+        lastLocation: {
+          projectId: 'other',
+          pathname: '/p/other/tasks/run-1/changes',
+          search: '?file=x',
+          hash: '#L2',
+        },
+      },
+    })
+
+    expect(currentPathname()).toBe('/p/other/tasks/run-1/changes')
+    expect(currentSearch()).toBe('?file=x')
+    expect(currentHash()).toBe('#L2')
+    expect(routeName()).toBe('task-changes')
+  })
+
+  it('keeps an explicit legacy deep link even when another location was saved', () => {
+    renderAt('/tasks/run-2?file=y#L3', {
+      uiState: {
+        lastLocation: { projectId: 'other', pathname: '/p/other/tasks/run-1' },
+      },
+    })
+
+    expect(currentPathname()).toBe('/p/boot/tasks/run-2')
+    expect(currentSearch()).toBe('?file=y')
+    expect(currentHash()).toBe('#L3')
+  })
+
+  it('treats query or hash on / as an explicit boot-project URL', () => {
+    renderAt('/?shared=1#section', {
+      uiState: {
+        lastLocation: { projectId: 'other', pathname: '/p/other/tasks/run-1' },
+      },
+    })
+
+    expect(currentPathname()).toBe('/p/boot/')
+    expect(currentSearch()).toBe('?shared=1')
+    expect(currentHash()).toBe('#section')
+  })
+
+  it.each([
+    [
+      'malformed',
+      REGISTRY,
+      { projectId: 'boot', pathname: '/p/other/tasks/run-1' },
+    ],
+    [
+      'unknown',
+      REGISTRY,
+      { projectId: 'unknown', pathname: '/p/unknown/tasks/run-1' },
+    ],
+    [
+      'missing',
+      {
+        ...REGISTRY,
+        projects: [
+          ...REGISTRY.projects,
+          { ...REGISTRY.projects[1]!, id: 'gone', name: 'gone', status: 'missing' as const },
+        ],
+      },
+      { projectId: 'gone', pathname: '/p/gone/tasks/run-1' },
+    ],
+  ])('falls back to the boot project for a %s saved location', (_case, registry, lastLocation) => {
+    renderAt('/', { registry, uiState: { lastLocation } })
+
+    expect(currentPathname()).toBe('/p/boot/')
+    expect(routeName()).toBe('tasks')
+  })
+
+  it('restores a registered not-git project', () => {
+    renderAt('/', {
+      registry: {
+        ...REGISTRY,
+        projects: REGISTRY.projects.map((project) =>
+          project.id === 'other' ? { ...project, status: 'not-git' as const } : project,
+        ),
+      },
+      uiState: {
+        lastLocation: { projectId: 'other', pathname: '/p/other/' },
+      },
+    })
+
+    expect(currentPathname()).toBe('/p/other/')
+    expect(routeName()).toBe('tasks')
+  })
+
+  it.each([
+    ['the boot project', { projectId: 'boot', pathname: '/p/boot/tasks/run-1' }, '/p/boot/tasks/run-1'],
+    ['another project', { projectId: 'other', pathname: '/p/other/tasks/run-1' }, '/p/boot/'],
+  ])('with the registry unavailable, handles a saved location for %s', async (_case, lastLocation, expected) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).startsWith('/api/v1/projects')) {
+          return new Response(JSON.stringify({ error: 'down' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Promise<never>(() => {})
+      }),
+    )
+
+    renderAt('/', { registry: null, uiState: { lastLocation } })
+
+    await waitFor(() => expect(currentPathname()).toBe(expected), { timeout: 4_000 })
+  })
+
+  it('keeps the quiet resolving surface while bare-root inputs are pending', () => {
+    renderAt('/', { seed: false })
+
+    expect(routeName()).toBe('scope-resolving')
+    expect(currentPathname()).toBe('/')
+  })
+
+  it('uses the registry boot project when health fails instead of resolving forever', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).startsWith('/api/v1/health')) {
+          return new Response(JSON.stringify({ error: 'down' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Promise<never>(() => {})
+      }),
+    )
+
+    renderAt('/', {
+      health: null,
+      uiState: {
+        lastLocation: { projectId: 'other', pathname: '/p/other/tasks/run-1' },
+      },
+    })
+
+    await waitFor(() => expect(currentPathname()).toBe('/p/other/tasks/run-1'), {
+      timeout: 4_000,
+    })
+    expect(routeName()).toBe('task-thread')
+  })
+
+  it('falls through the default alias when health and registry both fail', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (
+          String(input).startsWith('/api/v1/health') ||
+          String(input).startsWith('/api/v1/projects')
+        ) {
+          return new Response(JSON.stringify({ error: 'down' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Promise<never>(() => {})
+      }),
+    )
+
+    renderAt('/', { health: null, registry: null })
+
+    await waitFor(
+      () => {
+        expect(currentPathname()).toBe('/p/default/')
+        expect(routeName()).toBe('tasks')
+      },
+      { timeout: 4_000 },
+    )
+  })
+
   for (const [url, route] of ROUTE_CASES) {
     it(`${url} → /p/${BOOT}${url}`, () => {
       renderAt(url)

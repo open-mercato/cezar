@@ -86,9 +86,10 @@ describe('model option resolution', () => {
     ])
   })
 
-  it('resolveModel keeps known picks and arbitrary Codex pins', () => {
+  it('resolveModel keeps known picks and arbitrary native model pins', () => {
     expect(resolveModel('opus', 'claude')).toBe('opus')
     expect(resolveModel('custom-codex-id', 'codex')).toBe('custom-codex-id')
+    expect(resolveModel(null, 'opencode', { opencode: 'provider/custom-model' })).toBe('provider/custom-model')
     expect(resolveModel(null, 'claude')).toBe('')
   })
 
@@ -99,7 +100,7 @@ describe('model option resolution', () => {
     // An explicit pick — including explicitly picking auto ('') — beats the preset.
     expect(resolveModel('sonnet', 'claude', defaults)).toBe('sonnet')
     expect(resolveModel('', 'claude', defaults)).toBe('')
-    // Configured Codex ids remain representable even when discovery is unavailable.
+    // Configured custom ids remain representable even when discovery is unavailable.
     expect(resolveModel(null, 'codex', defaults)).toBe('not-a-preset')
     // No preset for the runner → auto, exactly as before.
     expect(resolveModel(null, 'opencode', defaults)).toBe('')
@@ -173,6 +174,24 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
       model: 'sonnet',
       runner: 'claude',
     })
+  })
+
+  it('keeps a locked native default visible while omitting it from direct and automation requests', () => {
+    const model = resolveModel(null, 'claude', { claude: 'native-sonnet' })
+    expect(model).toBe('native-sonnet')
+
+    const opts = {
+      task: 'use the native model',
+      source: { source: 'workflow' as const, ref: 'quick-task' },
+      model,
+      modelsLocked: true,
+      runner: 'claude' as const,
+      defaultRunner: 'claude' as const,
+      variants: 1,
+      images: [],
+    }
+    expect(buildCreateRunBody(opts).model).toBeUndefined()
+    expect(buildAutomationTask(opts).model).toBeUndefined()
   })
 
   it('omits runner when the chosen connected runner equals the server default', () => {

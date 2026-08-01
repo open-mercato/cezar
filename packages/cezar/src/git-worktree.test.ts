@@ -209,6 +209,90 @@ describe('worktreeShortstat (real git)', () => {
     // Only task.txt (1 add) — NOT the merged-in upstream lines.
     expect(await worktreeShortstat(r, 'main')).toEqual({ adds: 1, dels: 0, files: 1 });
   });
+
+  /**
+   * #751: a review/QA task checks the branch under review out into its own
+   * worktree, which repoints HEAD off the task's branch. Anchoring at the
+   * merge-base then attributes that whole branch's diff to a task that
+   * committed nothing — the measured symptom was `+22505 −2628 / 774 files`
+   * on a task whose own branch sat exactly on `main`.
+   */
+  describe('repointed HEAD (#751)', () => {
+    /** `main` + a task branch at main's tip + an `other` branch far ahead. */
+    async function repoWithForeignBranch(): Promise<string> {
+      const r = mkdtempSync(join(tmpdir(), 'cez-repointed-'));
+      worktreeRoots.push(r);
+      await run('git', ['init', '-q', '-b', 'main'], { cwd: r });
+      writeFileSync(join(r, 'f.txt'), 'base\n');
+      await run('git', ['add', '-A'], { cwd: r });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c0'], { cwd: r });
+      // The task's own branch: created off main and never committed to.
+      await run('git', ['branch', 'cez/x'], { cwd: r });
+      // Somebody else's branch, with real commits on it.
+      await run('git', ['checkout', '-q', '-b', 'other'], { cwd: r });
+      writeFileSync(join(r, 'theirs.txt'), 'a\nb\nc\nd\ne\n'); // 5 adds that are NOT this task's
+      await run('git', ['add', '-A'], { cwd: r });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'their work'], { cwd: r });
+      return r;
+    }
+
+    it('counts only uncommitted work when HEAD sits on someone else\'s branch', async () => {
+      const r = await repoWithForeignBranch();
+      writeFileSync(join(r, 'mine.txt'), 'z\n'); // the 1 line this task actually produced
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+        repointed: true,
+      });
+    });
+
+    it('reports the foreign branch\'s whole diff without the guard — the bug being fixed', async () => {
+      const r = await repoWithForeignBranch();
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+
+      // No `taskBranch` → nothing to compare HEAD against → the pre-#751 answer,
+      // which swallows `other`'s 5 committed lines. Pinned so a future refactor
+      // cannot quietly re-narrow the no-taskBranch path (the main working tree
+      // has no task branch and must keep the whole-branch anchor).
+      expect(await worktreeShortstat(r, 'main')).toEqual({ adds: 6, dels: 0, files: 2 });
+    });
+
+    it('leaves the normal on-task-branch case exactly as it was — no `repointed` key', async () => {
+      const r = await repoWithForeignBranch();
+      await run('git', ['checkout', '-q', 'cez/x'], { cwd: r });
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+
+      const stat = await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' });
+      expect(stat).toEqual({ adds: 1, dels: 0, files: 1 });
+      expect(stat).not.toHaveProperty('repointed');
+    });
+
+    it('narrows a detached HEAD too — it is not the task branch either', async () => {
+      const r = await repoWithForeignBranch();
+      await run('git', ['checkout', '-q', '--detach'], { cwd: r });
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+        repointed: true,
+      });
+    });
+
+    it('answers an honest all-zeros (still flagged) when a repointed task changed nothing', async () => {
+      const r = await repoWithForeignBranch();
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 0,
+        dels: 0,
+        files: 0,
+        repointed: true,
+      });
+    });
+  });
 });
 
 describe('resolveBaseRef (real git)', () => {

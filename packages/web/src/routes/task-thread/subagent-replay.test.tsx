@@ -54,7 +54,9 @@ describe('replayed run — the sheet', () => {
       // Exactly the fixture's parented items, deduplicated by the reducer's id-keyed upsert.
       expect(children.map((child) => child.id)).toEqual(['item_1', 'toolu_sub_01'])
 
-      const { unmount } = render(<SubagentSheet agent={agent} entries={children} onClose={() => {}} />)
+      const { unmount } = render(
+        <SubagentSheet runId="r1" agent={agent} entries={children} onClose={() => {}} />,
+      )
       const stream = document.querySelector('[data-slot="subagent-stream"]')!
       expect(stream.textContent).toContain('Scanning the auth middleware.')
       expect(stream.textContent).toContain('session') // "Search session", split verb/detail

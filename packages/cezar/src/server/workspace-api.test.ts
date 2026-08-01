@@ -106,6 +106,10 @@ describe('the workspace settings API (step 2.7)', () => {
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
       },
+      // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
+      // keys mean "this machine has no opinion", which is what makes them defaults a repo can be
+      // silent about rather than settings every checkout inherits a value from.
+      agentDefaults: {},
     });
     // Absolute project roots belong on /api/v1/projects; schemaVersion is a
     // migration cursor, not a setting.
@@ -144,6 +148,9 @@ describe('the workspace settings API (step 2.7)', () => {
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
       },
+      // Untouched by a resources write, and still empty — the two live in the same file but answer
+      // unrelated questions, so one must never materialize the other.
+      agentDefaults: {},
     });
     // Round-trip through GET and the raw file.
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.maxParallel).toBe(5);
@@ -340,6 +347,47 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
     expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
+  });
+
+  it('round-trips a bounded last project location including query and hash', async () => {
+    const lastLocation = {
+      projectId: 'storefront',
+      pathname: '/p/storefront/runs/run-123',
+      search: '?tab=events',
+      hash: '#tool-call-9',
+    };
+
+    const res = await putUiState({ lastLocation });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ lastLocation });
+    expect(await (await getUiState()).json()).toMatchObject({ lastLocation });
+    expect(rawUiState()).toMatchObject({ lastLocation });
+  });
+
+  it.each([
+    ['an empty project id', { projectId: '', pathname: '/p/storefront/' }],
+    ['an overlong project id', { projectId: 'p'.repeat(65), pathname: '/p/storefront/' }],
+    ['a non-project pathname', { projectId: 'storefront', pathname: '/settings/global' }],
+    ['an overlong pathname', { projectId: 'storefront', pathname: `/p/storefront/${'x'.repeat(2035)}` }],
+    ['a search without its prefix', { projectId: 'storefront', pathname: '/p/storefront/', search: 'tab=runs' }],
+    [
+      'an overlong search',
+      { projectId: 'storefront', pathname: '/p/storefront/', search: `?${'x'.repeat(4096)}` },
+    ],
+    ['a hash without its prefix', { projectId: 'storefront', pathname: '/p/storefront/', hash: 'run-1' }],
+    [
+      'an overlong hash',
+      { projectId: 'storefront', pathname: '/p/storefront/', hash: `#${'x'.repeat(2048)}` },
+    ],
+    ['a non-string field', { projectId: 'storefront', pathname: 42 }],
+    ['an unknown field', { projectId: 'storefront', pathname: '/p/storefront/', extra: true }],
+  ])('rejects lastLocation with %s without writing state', async (_case, lastLocation) => {
+    const res = await putUiState({ lastLocation });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toHaveProperty('error');
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
   });
 
   // Every Settings → Appearance preference has to be listed in `appearanceSchema`: the top-level

@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 
 /**
@@ -75,7 +76,7 @@ export interface ChangesPayload {
   /** Present when a run worktree was repointed away from the task branch (#591). In that case the
    *  payload is intentionally limited to uncommitted changes instead of attributing the
    *  checked-out branch's history to this task. */
-  repointedHead?: { headBranch: string; taskBranch: string };
+  repointedHead?: RepointedHead;
 }
 
 export type ChangesResult = { ok: true; changes: ChangesPayload } | { ok: false; error: string };
@@ -242,10 +243,12 @@ function statusWord(letter: string): ChangedFile['status'] {
 
 /**
  * Structured "what changed here" for a directory vs its base branch:
- * committed + uncommitted + untracked (via `add -N`), anchored at the
- * merge-base so the diff stays *this task's* changes even after the base
- * moves on — the exact resolution `worktreeDiff` (src/git-worktree.ts) uses
- * for the text-blob `/diff` endpoint, which stays untouched.
+ * committed + uncommitted + untracked (via `add -N`), anchored by the shared
+ * `resolveTaskDiffBase` rule (`src/git-diff-base.ts`) — the merge-base, so the
+ * diff stays *this task's* changes even after the base moves on, or `HEAD`
+ * alone when the agent repointed the worktree onto another branch (#591).
+ * `worktreeShortstat` resolves through the same helper (#751); the text-blob
+ * `/diff` endpoint (`worktreeDiff`) deliberately does not — see its own note.
  */
 export async function collectChanges(
   dir: string,
@@ -270,19 +273,13 @@ export async function collectChanges(
     } else {
       await git(dir, ['add', '-N', '.']);
     }
-    const mergeBase = await git(dir, ['merge-base', baseBranch, 'HEAD']);
-    const headBranchResult = opts.taskBranch
-      ? await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])
-      : undefined;
-    const headBranch = headBranchResult?.ok ? headBranchResult.stdout.trim() : '';
-    const repointedHead = opts.taskBranch && headBranch && headBranch !== opts.taskBranch
-      ? { headBranch, taskBranch: opts.taskBranch }
-      : undefined;
-    const base = repointedHead
-      ? 'HEAD'
-      : mergeBase.ok && mergeBase.stdout.trim()
-        ? mergeBase.stdout.trim()
-        : baseBranch;
+    // Which ref anchors this task's diff — merge-base normally, HEAD when the agent
+    // repointed the worktree onto someone else's branch (#591). The rule is shared with
+    // `worktreeShortstat` (#751); ref resolution never reads the index, so it deliberately
+    // runs WITHOUT the scratch-index `env`.
+    const { base, repointedHead } = await resolveTaskDiffBase((args) => git(dir, args), baseBranch, {
+      taskBranch: opts.taskBranch,
+    });
 
     const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
     if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };

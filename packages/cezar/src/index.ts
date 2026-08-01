@@ -6,7 +6,10 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.ts';
-import { ProviderAuthService } from './core/provider-auth.ts';
+import {
+  ProviderAuthService,
+  providerAuthChecksDisabled,
+} from './core/provider-auth.ts';
 import { applyProviderEnablement } from './core/provider-availability.ts';
 import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
@@ -372,7 +375,7 @@ async function runCommand(
     workflow,
     (await loadConfig(repoRoot)).defaultRunner,
   );
-  if (requiredProviders.length > 0) {
+  if (requiredProviders.length > 0 && !providerAuthChecksDisabled()) {
     const [discovered, workspace] = await Promise.all([
       providerAuth.status(),
       loadWorkspaceConfig(),

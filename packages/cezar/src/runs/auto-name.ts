@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import { parseStructured } from '../planner.ts';
+import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber, type TaskRefs } from './task-refs.ts';
 
 /**
@@ -154,6 +155,10 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext): Prom
     const config = await loadConfig(repoRoot);
     const runner = createRunner(config.defaultRunner);
     const model = config.defaultRunner === 'claude' ? config.namerModel : undefined;
+    // Name under the project's own agent account (spec 2026-07-29-agent-profiles) — naming is
+    // a model call like any other, and billing it to the personal subscription for a work
+    // project is the exact confusion accounts exist to remove.
+    const { env: profileEnv } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await runner.run({
         systemPrompt: NAMER_SYSTEM_PROMPT,
@@ -165,7 +170,7 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext): Prom
         // Shadow the argv-capture hook: dry-run tests capture the AGENT's argv
         // through CEZ_MOCK_ARGS_FILE; the namer's bookkeeping call must not
         // interleave lines into that file.
-        env: { CEZ_MOCK_ARGS_FILE: '' },
+        env: { ...profileEnv, CEZ_MOCK_ARGS_FILE: '' },
       });
       const composed = composeNameResult(result.text, ctx);
       if (composed) return composed;

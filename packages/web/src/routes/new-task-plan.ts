@@ -89,6 +89,8 @@ export function buildPlannedRunBody(opts: {
   task: string
   steps: readonly WorkflowStepDef[]
   model: string
+  /** Native coding-agent settings stay visible, but a locked model is never a request override. */
+  modelsLocked?: boolean
   runner: Runner
   /** True when the draft contains a sticky/user runner choice rather than an untouched default. */
   runnerExplicit?: boolean
@@ -98,12 +100,12 @@ export function buildPlannedRunBody(opts: {
   generateFollowups?: boolean
   todoId?: string
 }): CreateRunInput {
-  const { task, steps, model, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
+  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
     opts
   return {
     task,
     steps: [...steps],
-    model: model || undefined,
+    model: modelsLocked ? undefined : model || undefined,
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,

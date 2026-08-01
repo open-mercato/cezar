@@ -243,6 +243,22 @@ describe('POST /api/v1/todos/:id/start', () => {
     expect(captured?.runner).toBeUndefined();
   });
 
+  it('rejects a model override while locked but still permits choosing the runner', async () => {
+    writeFileSync(
+      join(repoRoot, '.ai', 'cezar', 'config.json'),
+      JSON.stringify({ modelsLocked: true }),
+      'utf8',
+    );
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+
+    expect((await start('todo-1', { runner: 'codex', model: 'gpt-5.6-codex' })).status).toBe(409);
+    expect(captured).toBeUndefined();
+
+    expect((await start('todo-1', { runner: 'codex' })).status).toBe(201);
+    expect(captured?.runner).toBe('codex');
+    expect(captured?.model).toBeUndefined();
+  });
+
   it('rejects an unknown runner with a 400 and never starts a run', async () => {
     writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
     const res = await start('todo-1', { runner: 'gemini' });

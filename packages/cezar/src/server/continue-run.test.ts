@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -81,6 +81,21 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(res.status).toBe(200);
     expect(captured?.opts.text).toBe('keep going');
     expect(captured?.opts.runner).toBe('opencode');
+  });
+
+  it('rejects a model override while locked but still permits switching runners', async () => {
+    writeFileSync(
+      join(repoRoot, '.ai', 'cezar', 'config.json'),
+      JSON.stringify({ modelsLocked: true }),
+      'utf8',
+    );
+
+    expect((await post({ runner: 'codex', model: 'gpt-5.6-codex' })).status).toBe(409);
+    expect(captured).toBeUndefined();
+
+    expect((await post({ runner: 'codex' })).status).toBe(200);
+    expect(captured?.opts.runner).toBe('codex');
+    expect(captured?.opts.model).toBeUndefined();
   });
 
   /** The follow-up composer is a full composer, so a screenshot pasted into it has to reach the

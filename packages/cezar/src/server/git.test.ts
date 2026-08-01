@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getRepoInfo } from './git.ts';
+import { getHeadCommit, getRepoInfo } from './git.ts';
 
 /**
  * getRepoInfo remote discovery: the forge seam (and so the GitHub tab) hangs
@@ -60,10 +60,15 @@ describe('getRepoInfo — remote discovery', () => {
     expect(info?.remote).toBeUndefined();
   });
 
+  it('pins the current commit as a full SHA', async () => {
+    expect(await getHeadCommit(dir)).toBe(g(dir, 'rev-parse', 'HEAD').trim());
+  });
+
   it('returns null outside a git repository', async () => {
     const bare = mkdtempSync(join(tmpdir(), 'cez-nogit-'));
     try {
       expect(await getRepoInfo(bare)).toBeNull();
+      expect(await getHeadCommit(bare)).toBeNull();
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }

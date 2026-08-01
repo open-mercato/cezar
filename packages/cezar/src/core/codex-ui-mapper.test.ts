@@ -304,6 +304,70 @@ describe('mapCodexNotification edge cases', () => {
     expect(event).toEqual({ type: 'usage.updated', usage: { input: 7, output: 2, total: 9 } });
   });
 
+  it('attaches only a fresh in-turn tokenUsage.last snapshot to one completion', () => {
+    let s = createCodexUiState();
+    s = mapCodexNotification(
+      { method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 90, outputTokens: 10 }, last: { inputTokens: 90, outputTokens: 10 } } } },
+      s,
+    ).state;
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, s).state;
+    const noFreshUsage = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s);
+    expect(noFreshUsage.events).toEqual([{ type: 'turn.completed', turnId: 't1', stopReason: 'end_turn' }]);
+
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, noFreshUsage.state).state;
+    s = mapCodexNotification(
+      { method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 200, outputTokens: 30 }, last: { inputTokens: 7, outputTokens: 3 } } } },
+      s,
+    ).state;
+    const completed = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, s);
+    expect(completed.events).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', usage: { input: 7, output: 3, total: 10 } },
+    ]);
+    expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, completed.state).events).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn' },
+    ]);
+  });
+
+  it('does not consume the active turn usage on a stale completion for an earlier turn', () => {
+    let s = createCodexUiState();
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, s).state;
+    s = mapCodexNotification(
+      {
+        method: 'thread/tokenUsage/updated',
+        params: {
+          tokenUsage: {
+            total: { inputTokens: 100, outputTokens: 20 },
+            last: { inputTokens: 8, outputTokens: 2 },
+          },
+        },
+      },
+      s,
+    ).state;
+
+    const stale = mapCodexNotification(
+      { method: 'turn/completed', params: { turn: { id: 't1' } } },
+      s,
+    );
+    expect(stale.events).toEqual([{ type: 'turn.completed', turnId: 't1', stopReason: 'end_turn' }]);
+    expect(stale.state.currentTurnId).toBe('t2');
+
+    expect(
+      mapCodexNotification(
+        { method: 'turn/completed', params: { turn: { id: 't2' } } },
+        stale.state,
+      ).events,
+    ).toEqual([
+      {
+        type: 'turn.completed',
+        turnId: 't2',
+        stopReason: 'end_turn',
+        usage: { input: 8, output: 2, total: 10 },
+      },
+    ]);
+  });
+
   it('session.started is emitted once whichever path lands first', () => {
     let s = createCodexUiState();
     const viaNotification = mapCodexNotification(
@@ -743,7 +807,12 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
       exitCode: 0,
     });
     expect(v2).toContainEqual({ type: 'usage.updated', usage: { input: 1200, output: 300, total: 1500 } });
-    expect(v2).toContainEqual({ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' });
+    expect(v2).toContainEqual({
+      type: 'turn.completed',
+      turnId: 'turn_mock_1',
+      stopReason: 'end_turn',
+      usage: { input: 1200, output: 300, total: 1500 },
+    });
   }, 30_000);
 
   it('normalizes collaboration telemetry while preserving the legacy stream', async () => {
@@ -760,6 +829,34 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
     expect(tools).toContain('subAgentActivity');
     expect(tools).toContain('collabAgentToolCall');
     expect(v2.filter((event) => event.type === 'item.started' && event.item.kind === 'tool' && event.item.toolKind === 'task')).toHaveLength(1);
+  }, 30_000);
+
+  it('does not end the parent turn when a sub-agent child thread completes its turn (#600)', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const v1: AgentEvent[] = [];
+    const v2: UiEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:child-turn', cwd: process.cwd() },
+      (event) => v1.push(event),
+      { autoEndAfterFirstTurn: true, onUiEvent: (event) => v2.push(event) },
+    );
+    await session.result;
+
+    // v1: the child thread (th_child) emits its own turn/completed, but only the run's
+    // own main thread (th_mock_1) may produce a turn-end — otherwise the run parks
+    // under "Needs you" while it is visibly still working.
+    const turnEnds = v1.filter((event) => event.type === 'turn-end');
+    expect(turnEnds).toHaveLength(1);
+    // The parent's post-child activity still streamed through.
+    const text = v1.flatMap((event) => (event.type === 'text' ? [event.text] : [])).join('');
+    expect(text).toContain('Still working after the sub-agent.');
+
+    // v2: the child turn must not corrupt the parent's normalized stream either — exactly
+    // one turn.started and one turn.completed, both for the parent turn (turn_mock_1).
+    const v2Started = v2.filter((event) => event.type === 'turn.started');
+    const v2Completed = v2.filter((event) => event.type === 'turn.completed');
+    expect(v2Started).toEqual([{ type: 'turn.started', turnId: 'turn_mock_1' }]);
+    expect(v2Completed).toEqual([{ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' }]);
   }, 30_000);
 
   it('keeps autonomous full-access permissions when resuming a thread', async () => {

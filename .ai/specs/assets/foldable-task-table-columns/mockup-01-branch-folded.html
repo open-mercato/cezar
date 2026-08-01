@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proposed Cezar Tasks table — Branch folded</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b0b0c;
+      color: #f4f4f5;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 1180px; background: #0b0b0c; }
+    button { font: inherit; }
+    .shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 900px; }
+    .sidebar {
+      position: relative;
+      border-right: 1px solid #2a2a2d;
+      background: #171719;
+      padding: 14px 10px 86px;
+    }
+    .brand { display: flex; align-items: center; gap: 9px; padding: 0 5px 13px; font-size: 14px; font-weight: 750; }
+    .logo {
+      display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px;
+      background: linear-gradient(135deg, #eef8a4, #c8f54c 58%, #a273f0); color: #171719; font-weight: 900;
+    }
+    .repo { overflow: hidden; color: #7d7d83; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+    .new-task {
+      display: flex; align-items: center; justify-content: center; gap: 8px; height: 36px; width: calc(100% - 42px);
+      border: 0; border-radius: 11px; background: #f2f2f3; color: #171719; font-size: 13px; font-weight: 700;
+    }
+    nav { margin-top: 12px; }
+    nav div { display: flex; align-items: center; gap: 11px; height: 34px; padding: 0 10px; border-radius: 9px; color: #aaaab0; font-size: 14px; }
+    nav div::before { width: 14px; color: #8a8a90; content: "◇"; text-align: center; }
+    nav .active { background: #2a2a2d; color: white; font-weight: 650; }
+    nav .active::before { content: "☷"; }
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-top: 18px; padding: 3px; border-radius: 10px; background: #2a2a2d; }
+    .tabs span { padding: 7px; border-radius: 7px; color: #9999a0; text-align: center; font-size: 12px; }
+    .tabs .on { background: #19191b; color: #fff; font-weight: 650; }
+    .bucket { margin: 15px 10px 0; color: #7d7d83; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+    .quick { margin: 7px 8px 0; }
+    .quick div { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 7px; align-items: center; height: 34px; font-size: 12px; }
+    .dot { width: 7px; height: 7px; border-radius: 999px; background: #ffc11a; }
+    .quick b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 520; }
+    .quick i { color: #18c98a; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .sidebar-foot { position: absolute; right: 10px; bottom: 14px; left: 10px; border-top: 1px solid #2a2a2d; padding-top: 12px; color: #9b9ba1; font-size: 12px; }
+    .search-mini { height: 30px; padding: 7px 10px; border: 1px solid #303035; border-radius: 9px; background: #1a1a1c; }
+    .main { min-width: 0; }
+    .top {
+      display: flex; align-items: center; height: 56px; border-bottom: 1px solid #252528; padding: 0 20px;
+      background: #0b0b0c;
+    }
+    h1 { margin: 0; font-size: 16px; }
+    .top-tabs { display: flex; gap: 2px; margin-left: 12px; padding: 3px; border-radius: 9px; background: #29292c; font-size: 12px; }
+    .top-tabs span { padding: 6px 13px; border-radius: 7px; color: #9999a0; }
+    .top-tabs .on { background: #18181a; color: white; font-weight: 650; }
+    .proposed { margin-left: auto; border: 1px solid #5a446f; border-radius: 999px; padding: 4px 8px; color: #cda8f2; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+    .search { margin-left: 10px; width: 240px; height: 36px; border: 1px solid #2d2d31; border-radius: 10px; padding: 9px 12px; background: #171719; color: #76767d; font-size: 12px; }
+    .content { padding: 20px; }
+    .table-wrap { overflow: hidden; border: 1px solid #2d2d31; border-radius: 12px; background: #171719; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    col.status { width: 110px; } col.task { width: auto; } col.workflow { width: 168px; }
+    col.folded { width: 42px; } col.diff { width: 62px; } col.ref { width: 82px; }
+    col.tokens { width: 76px; } col.cost { width: 65px; } col.cpu { width: 52px; }
+    col.mem { width: 58px; } col.started { width: 74px; }
+    th {
+      height: 40px; border-bottom: 1px solid #2b2b2f; padding: 0 10px; color: #7d7d83;
+      text-align: left; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    }
+    th.right, td.right { text-align: right; }
+    .fold-button {
+      display: flex; align-items: center; gap: 5px; width: 100%; height: 30px; border: 0; padding: 0;
+      background: transparent; color: inherit; text-transform: uppercase; letter-spacing: .08em; cursor: pointer;
+    }
+    .fold-button.right { justify-content: flex-end; }
+    .fold-button .chev { color: #55555c; font-size: 13px; }
+    th.collapsed { padding: 0 4px; background: #1d1a21; border-right: 1px solid #352b3e; border-left: 1px solid #352b3e; }
+    .restore {
+      display: grid; place-items: center; width: 32px; height: 30px; margin: auto; border: 1px solid #614a77;
+      border-radius: 7px; background: #241e2a; color: #c69ce9; cursor: pointer;
+    }
+    .restore svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+    .restore .chev { position: absolute; margin-left: 20px; margin-top: -19px; font-size: 12px; }
+    td { height: 44px; border-bottom: 1px solid #29292c; padding: 0 10px; color: #b7b7bc; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    tr:last-child td { border-bottom: 0; }
+    tr:hover td { background: #1b1b1e; }
+    td.folded { padding: 0; border-right: 1px solid #28232e; border-left: 1px solid #28232e; background: #18161b; }
+    .fold-track { display: block; width: 1px; height: 16px; margin: auto; background: #3b3144; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: #28282b; color: #b8b8bd; font-size: 11px; }
+    .title { color: #f2f2f3; font-size: 12.5px; font-weight: 620; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #a8a8ae; }
+    .branch-chip { border-radius: 6px; background: #2b2b2e; padding: 4px 7px; }
+    .plus { color: #13c88a; } .minus { color: #ff4056; }
+    .ref-chip { border: 1px solid #634d8b; border-radius: 999px; padding: 4px 8px; color: #ad87f5; }
+    .muted { color: #696970; }
+    .hint {
+      display: flex; align-items: center; gap: 8px; margin-top: 11px; color: #797981; font-size: 11px;
+    }
+    .hint strong { color: #b38add; font-weight: 650; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">♟</span><span>cezar</span><span class="repo">foldable-task-columns</span></div>
+      <button class="new-task">＋ New task</button>
+      <nav>
+        <div class="active">Tasks</div><div>Git</div><div>GitHub</div><div>Automations</div>
+        <div>Skills</div><div>Workflows</div><div>Settings</div>
+      </nav>
+      <div class="tabs"><span class="on">Active 6</span><span>Archived</span></div>
+      <div class="bucket">NEEDS YOU</div>
+      <div class="quick">
+        <div><span class="dot"></span><b>Validate the branch…</b><i>+0 −0</i></div>
+        <div><span class="dot"></span><b>Fix issue 721…</b><i>+0 −0</i></div>
+        <div><span class="dot"></span><b>Verify responsive task…</b><i>+0 −0</i></div>
+        <div><span class="dot"></span><b>Implement workspace nav…</b><i>+0 −0</i></div>
+        <div><span class="dot"></span><b>Review PR 734…</b><i>+0 −0</i></div>
+      </div>
+      <div class="sidebar-foot"><div class="search-mini">⌕ &nbsp; Search…</div></div>
+    </aside>
+    <main class="main">
+      <header class="top">
+        <h1>Tasks</h1>
+        <div class="top-tabs"><span class="on">Active 6</span><span>Archived</span></div>
+        <span class="proposed">PROPOSED</span>
+        <div class="search">⌕ &nbsp; Search tasks…</div>
+      </header>
+      <section class="content">
+        <div class="table-wrap">
+          <table aria-label="Tasks">
+            <colgroup>
+              <col class="status"><col class="task"><col class="workflow"><col class="folded">
+              <col class="diff"><col class="ref"><col class="tokens"><col class="cost">
+              <col class="cpu"><col class="mem"><col class="started">
+            </colgroup>
+            <thead><tr>
+              <th>Status</th><th>Task</th>
+              <th id="workflow-header"><button id="workflow-toggle" class="fold-button" aria-label="Fold Workflow column" aria-pressed="true">Workflow <span class="chev">‹</span></button></th>
+              <th class="collapsed">
+                <button class="restore" aria-label="Expand Branch column" aria-pressed="false" title="Expand Branch column">
+                  <svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10M8 17c5 0 1-9 8-9"></path></svg><span class="chev">›</span>
+                </button>
+              </th>
+              <th><button class="fold-button right">± <span class="chev">‹</span></button></th>
+              <th><button class="fold-button right">Ref <span class="chev">‹</span></button></th>
+              <th><button class="fold-button right">Tokens <span class="chev">‹</span></button></th>
+              <th><button class="fold-button right">Cost <span class="chev">‹</span></button></th>
+              <th><button class="fold-button right">CPU <span class="chev">‹</span></button></th>
+              <th><button class="fold-button right">Mem <span class="chev">‹</span></button></th>
+              <th><button class="fold-button right">Started <span class="chev">‹</span></button></th>
+            </tr></thead>
+            <tbody>
+              <tr><td><span class="pill"><span class="dot"></span>needs you</span></td><td class="title">Validate the branch and prepare it for review</td><td>om-check-and-commit</td><td class="folded"><span class="fold-track"></span></td><td class="right"><span class="plus">+0</span> <span class="minus">−0</span></td><td class="right"><span class="ref-chip">#738 ↗</span></td><td class="right mono">1.4k</td><td class="right mono">$0.03</td><td class="right muted">—</td><td class="right muted">—</td><td class="right muted">31s</td></tr>
+              <tr><td><span class="pill"><span class="dot"></span>needs you</span></td><td class="title">Fix issue 721 without changing public contracts</td><td>om-auto-fix-issue</td><td class="folded"><span class="fold-track"></span></td><td class="right"><span class="plus">+99</span> <span class="minus">−3</span></td><td class="right"><span class="ref-chip">#721 ↗</span></td><td class="right mono">18.2k</td><td class="right mono">$0.31</td><td class="right muted">—</td><td class="right muted">—</td><td class="right muted">33s</td></tr>
+              <tr><td><span class="pill"><span class="dot"></span>needs you</span></td><td class="title">Verify the responsive task thread in a real browser</td><td>om-auto-qa-pr</td><td class="folded"><span class="fold-track"></span></td><td class="right"><span class="plus">+0</span> <span class="minus">−0</span></td><td class="right"><span class="ref-chip">#734 ↗</span></td><td class="right mono">6.8k</td><td class="right mono">$0.12</td><td class="right muted">—</td><td class="right muted">—</td><td class="right muted">34s</td></tr>
+              <tr><td><span class="pill"><span class="dot"></span>needs you</span></td><td class="title">Implement the workspace navigation specification</td><td>om-auto-implement-spec</td><td class="folded"><span class="fold-track"></span></td><td class="right"><span class="plus">+48</span> <span class="minus">−9</span></td><td class="right"><span class="ref-chip">#729 ↗</span></td><td class="right mono">24.1k</td><td class="right mono">$0.44</td><td class="right muted">—</td><td class="right muted">—</td><td class="right muted">35s</td></tr>
+              <tr><td><span class="pill"><span class="dot"></span>needs you</span></td><td class="title">Review PR 734 and summarize merge blockers</td><td>om-auto-review-pr</td><td class="folded"><span class="fold-track"></span></td><td class="right"><span class="plus">+0</span> <span class="minus">−0</span></td><td class="right"><span class="ref-chip">#734 ↗</span></td><td class="right mono">11.3k</td><td class="right mono">$0.20</td><td class="right muted">—</td><td class="right muted">—</td><td class="right muted">36s</td></tr>
+              <tr><td><span class="pill"><span class="dot"></span>needs you</span></td><td class="title">Review task-table space usage</td><td>quick-task</td><td class="folded"><span class="fold-track"></span></td><td class="right"><span class="plus">+0</span> <span class="minus">−0</span></td><td class="right"><span class="ref-chip">#738 ↗</span></td><td class="right mono">1.4k</td><td class="right mono">$0.03</td><td class="right muted">—</td><td class="right muted">—</td><td class="right muted">1m</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="hint"><strong>Branch is folded by default.</strong> Its header stays in place as a narrow restore control; click any optional expanded header to fold it too.</div>
+      </section>
+    </main>
+  </div>
+  <script>
+    const workflowHeader = document.querySelector('#workflow-header')
+    const workflowToggle = document.querySelector('#workflow-toggle')
+    const workflowCells = [...document.querySelectorAll('tbody td:nth-child(3)')]
+    workflowToggle.addEventListener('click', () => {
+      const expanded = workflowToggle.getAttribute('aria-pressed') === 'true'
+      if (!expanded) return
+      document.querySelector('col.workflow').classList.add('folded')
+      workflowHeader.classList.add('collapsed')
+      workflowHeader.innerHTML = `
+        <button id="workflow-restore" class="restore" aria-label="Expand Workflow column" aria-pressed="false" title="Expand Workflow column">
+          <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="18" cy="6" r="2"></circle><circle cx="12" cy="18" r="2"></circle><path d="M8 7.2l3 8M16 7.2l-3 8"></path></svg><span class="chev">›</span>
+        </button>`
+      workflowCells.forEach((cell) => {
+        cell.dataset.expandedText = cell.textContent
+        cell.classList.add('folded')
+        cell.innerHTML = '<span class="fold-track"></span>'
+      })
+      document.querySelector('.hint').innerHTML =
+        '<strong>Workflow and Branch are folded.</strong> Status and Task stay fixed while the task title receives the reclaimed width.'
+    })
+  </script>
+</body>
+</html>

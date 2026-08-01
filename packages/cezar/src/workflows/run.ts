@@ -2,12 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.ts';
+import {
+  parseAskMarkerResult,
+  stripAskMarker,
+  type AskMarkerParseResult,
+  type AskRequest,
+} from '../core/ask.ts';
 import { type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
+import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
   ModelIdentityError,
   formatModelIdentity,
@@ -26,22 +32,31 @@ import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
-import { getRepoInfo } from '../server/git.ts';
+import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
-import type { QueuedMessage, RunRecord, RunStore } from '../runs/store.ts';
+import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
+
+async function configuredModelProvider(
+  backend: RunnerId,
+  repoRoot: string,
+): Promise<string | undefined> {
+  return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
+}
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 /**
@@ -92,6 +107,17 @@ function emitAskRequested(sink: UiEventSink, ask: AskRequest): string {
   sink.handle({ type: 'ask.requested', requestId, questions: ask.questions });
   return requestId;
 }
+/** A persisted, non-fatal explanation for protocol-shaped text that could not
+ * become an ask card. Never include the raw payload in this diagnostic. */
+function askMarkerRejection(result: AskMarkerParseResult): string | undefined {
+  if (result.kind === 'invalid-json') {
+    return 'structured question ignored — CEZ:ASK payload is not valid JSON';
+  }
+  if (result.kind !== 'invalid-structure') return undefined;
+  const issue = result.issues[0];
+  const location = issue?.path.length ? ` at ${issue.path.join('.')}` : '';
+  return `structured question ignored — CEZ:ASK payload failed validation${location}${issue ? `: ${issue.message}` : ''}`;
+}
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
 
@@ -133,6 +159,15 @@ interface ActiveRun {
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; every degradation/opt-out path does. */
   releaseRepoRoot?: () => void;
+  /** Durable directional-usage accounting state for the current runner
+   * invocation. Provider-local turn ids are unique only within this epoch. */
+  usageInvocation?: {
+    stepId: string;
+    epoch: number;
+    observed: boolean;
+    startedTurns: Set<string>;
+    recordedTurns: Set<string>;
+  };
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever. */
@@ -147,6 +182,10 @@ export interface StartRunInput {
   model?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
+  /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
+   *  on `runner`. Unset = the project's own selection. Persisted on the record so the choice
+   *  survives into resume and Continue, and so the thread can say which account did the work. */
+  agentProfile?: string;
   /** Screenshots pasted into the new-task form — persisted when the run is
    *  created and delivered once, with the first agent step's opening message. */
   images?: ContentBlock[];
@@ -469,17 +508,58 @@ export class RunManager {
     };
   }
 
+  /**
+   * `agentEnv` plus the agent-account variable for the profile this STEP runs under (spec
+   * 2026-07-29-agent-profiles), and the id it resolved to so the caller can record it.
+   *
+   * Resolved per step, not per run, because a workflow can mix backends: an override naming a
+   * Claude account says nothing about which Codex account a codex step should use. Resolution
+   * order, most specific first:
+   *
+   *   1. the step's ALREADY-RECORDED `profileId` — a resume or Continue must reattach to the
+   *      account that created the session, whatever the project has since been switched to;
+   *   2. the run's composer override, but only for steps on the run's own runner;
+   *   3. the project's stored selection, and failing that the discovered default.
+   *
+   * Read fresh every time. `~/.cezar/config.json` is shared by every cezar process on this
+   * machine, so a cached snapshot is a staleness bug, and one small JSON read is free next to
+   * spawning a CLI. Never throws: an unreadable home degrades to the default profile, which is
+   * exactly the behaviour that predates profiles.
+   */
+  private async agentEnvForStep(
+    runId: string,
+    backend: RunnerId,
+    options: { generateFollowups?: boolean; recordedProfileId?: string } = {},
+  ): Promise<{ env: Record<string, string>; profileId: string }> {
+    const run = this.store.getRun(runId);
+    const profileId = options.recordedProfileId
+      ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
+    const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
+    return {
+      env: { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env },
+      profileId: resolved.profile.id,
+    };
+  }
+
   startRun(
     workflow: WorkflowDef,
     input: StartRunInput,
     group?: { groupId: string; variant: string },
   ): RunRecord {
+    // Sanitize at the manager boundary so CLI runs, workflows, variants, and
+    // direct callers cannot bypass the HTTP policy.
+    const effectiveInput = agentModelsLocked(this.repoRoot)
+      ? { ...input, model: undefined }
+      : input;
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
-      model: input.model,
+      model: effectiveInput.model,
       runner: input.runner,
+      // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
+      // so a queued run picks it up at dequeue and every later resume reads the same answer.
+      agentProfile: input.agentProfile,
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
       // startRun directly — a route-level gate would leave those writing todos.json.
@@ -489,6 +569,9 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      // Persist the explicit opt-out so queued-run restart recovery and the
+      // session Git routes can distinguish it from a removed isolated worktree.
+      worktree: !group && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
@@ -523,7 +606,7 @@ export class RunManager {
     // above shows instantly; the namer's short title replaces it when (and if)
     // the model answers. Never awaited, never fails the run.
     void this.autoNameRun(run.id, skillHint, input.task);
-    this.pendingJobs.set(run.id, { workflow, input });
+    this.pendingJobs.set(run.id, { workflow, input: effectiveInput });
     this.queue.push(run.id);
     void this.pump();
     return run;
@@ -542,7 +625,7 @@ export class RunManager {
       (variant) => {
         const hint = VARIANT_HINTS[variant];
         const task = hint ? `${input.task}\n\n${hint}` : input.task;
-        return this.startRun(workflow, { ...input, task }, { groupId, variant });
+        return this.startRun(workflow, { ...input, task, worktree: undefined }, { groupId, variant });
       },
     );
   }
@@ -757,6 +840,9 @@ export class RunManager {
               // recovered queued autonomous run would run non-autonomously (no
               // auto-nudge) and later wrongly park at `review`.
               autonomous: run.autonomous,
+              // Preserve an explicit worktree opt-out across a queued restart.
+              // Missing on older records means the default isolated mode.
+              worktree: run.worktree,
             }),
           });
           this.queue.push(run.id);
@@ -1334,6 +1420,9 @@ export class RunManager {
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
+    if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
+      return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
+    }
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
@@ -1517,6 +1606,7 @@ export class RunManager {
 
     let stepCost = 0;
     let turnText = '';
+    let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, stepId);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
@@ -1531,6 +1621,12 @@ export class RunManager {
         return;
       }
       this.store.appendEvent(runId, { ...event, stepId });
+      if (event.type === 'error') {
+        sessionError ??= event.message;
+        state.session?.interrupt();
+        return;
+      }
+      if (sessionError) return;
       if (event.type === 'session') {
         this.store.updateStep(runId, stepId, { sessionId: event.sessionId, backend });
       }
@@ -1551,10 +1647,13 @@ export class RunManager {
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is genuinely blocked; wins over `CEZ:MONITORING`
         // (a pending question is always attention), loses to `CEZ:DONE` (#473).
-        const ask = sessionOpen && !done ? parseAskMarker(turnText) : null;
+        const askResult = sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
+        const ask = askResult?.kind === 'valid' ? askResult.request : null;
+        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
         const monitoring =
           sessionOpen && !done && !ask && MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
+        if (askRejection) this.store.appendEvent(runId, { type: 'note', message: askRejection, stepId });
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
@@ -1622,7 +1721,11 @@ export class RunManager {
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
     try {
-      const normalized = normalizeModelForBackend(continueBackend, record?.model);
+      const normalized = normalizeModelForBackend(
+        continueBackend,
+        agentModelsLocked(this.repoRoot) ? undefined : record?.model,
+        { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
+      );
       continueModel = normalized?.backendModel;
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
@@ -1649,7 +1752,21 @@ export class RunManager {
       this.dropActive(runId);
       return;
     }
+    // Resuming reattaches to a session that lives inside ONE account's config dir, so the
+    // continuation must run under the account that created it — not whatever the project has
+    // been switched to since. The owning step is the one carrying this session id.
+    const resumedProfileId = sessionId === undefined
+      ? undefined
+      : record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
+    const continueProfile = await this.agentEnvForStep(runId, continueBackend, {
+      generateFollowups,
+      recordedProfileId: resumedProfileId,
+    });
+    this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
+
     const runner = createRunner(continueBackend);
+    state.currentStepId = stepId;
+    this.beginUsageInvocation(runId, state, stepId);
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -1664,7 +1781,7 @@ export class RunManager {
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
         additionalDirectories: [join(this.dataDir, 'runs')],
-        env: this.agentEnv(runId, generateFollowups),
+        env: continueProfile.env,
         model: continueModel,
         sessionId,
         resume: sessionId !== undefined,
@@ -1676,13 +1793,13 @@ export class RunManager {
     state.session = session;
     state.sessionEverOpened = true;
     this.flushDeferred(runId);
-    state.currentStepId = stepId;
     state.interrupt = () => session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
     const finishedAt = () => new Date().toISOString();
     try {
       await session.result;
+      if (sessionError) throw new Error(sessionError);
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       if (state.cancelled) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
@@ -1744,7 +1861,11 @@ export class RunManager {
     // can still override below); the authoritative fail-loud gate is at spawn.
     let modelIdentity: string | undefined;
     try {
-      const normalized = normalizeModelForBackend(taskBackend, input.model);
+      const normalized = normalizeModelForBackend(
+        taskBackend,
+        agentModelsLocked(this.repoRoot) ? undefined : input.model,
+        { configuredProvider: await configuredModelProvider(taskBackend, this.repoRoot) },
+      );
       modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
     } catch {
       // An unresolvable task-level model surfaces loudly at the step below; the
@@ -1767,6 +1888,10 @@ export class RunManager {
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
       // repository-root lease serializes these runs so workflows cannot overlap.
+      // Pin the starting commit: the session's Changes and Commits views use it
+      // as their stable lower bound while reading the current working copy.
+      const startingCommit = await getHeadCommit(repo.root);
+      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
       emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
     } else if (repo) {
       emit({
@@ -2056,6 +2181,7 @@ export class RunManager {
     const startTokens = stepRecord?.tokensUsed ?? 0;
     let stepCost = stepRecord?.costUsd ?? 0;
     let turnText = '';
+    let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
@@ -2070,6 +2196,12 @@ export class RunManager {
         return;
       }
       emit({ ...event, stepId: step.id });
+      if (event.type === 'error') {
+        sessionError ??= event.message;
+        state.session?.interrupt();
+        return;
+      }
+      if (sessionError) return;
       if (event.type === 'session') {
         // Codex/OpenCode mint their own session id — persist it so resume works.
         this.store.updateStep(runId, step.id, { sessionId: event.sessionId, backend });
@@ -2090,7 +2222,9 @@ export class RunManager {
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473).
-        const ask = interactive && sessionOpen && !done ? parseAskMarker(turnText) : null;
+        const askResult = interactive && sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
+        const ask = askResult?.kind === 'valid' ? askResult.request : null;
+        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
         const monitoring =
           interactive &&
           sessionOpen &&
@@ -2098,6 +2232,7 @@ export class RunManager {
           !ask &&
           MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
+        if (askRejection) emit({ type: 'note', stepId: step.id, message: askRejection });
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
           // of parking at `waiting` — the run completes and frees its slot.
@@ -2149,7 +2284,11 @@ export class RunManager {
     // instead of letting the backend silently substitute its default.
     let backendModel: string | undefined;
     try {
-      const normalized = normalizeModelForBackend(stepBackend, step.model ?? input.model);
+      const normalized = normalizeModelForBackend(
+        stepBackend,
+        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? input.model,
+        { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
+      );
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
       // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`
@@ -2162,8 +2301,18 @@ export class RunManager {
       if (err instanceof ModelIdentityError) return err.message;
       throw err;
     }
+    // Which agent account this step spawns under, and — recorded on the step before the spawn —
+    // which one its session belongs to. `sessionId` and `profileId` are a pair: a resume that
+    // reads the wrong account's config dir finds no session and silently starts a fresh one.
+    const stepProfile = await this.agentEnvForStep(runId, stepBackend, {
+      generateFollowups: followupsEnabled() && input.generateFollowups !== false,
+    });
+    this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
+
     const runner = createRunner(stepBackend);
     let session: AgentSession;
+    state.currentStepId = step.id;
+    this.beginUsageInvocation(runId, state, step.id);
     try {
       session = runner.startSession(
         {
@@ -2183,7 +2332,7 @@ export class RunManager {
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: [join(this.dataDir, 'runs')],
-          env: this.agentEnv(runId, followupsEnabled() && input.generateFollowups !== false),
+          env: stepProfile.env,
           model: backendModel,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.
@@ -2196,6 +2345,7 @@ export class RunManager {
         },
       );
     } catch (err) {
+      state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
     }
     state.session = session;
@@ -2207,6 +2357,10 @@ export class RunManager {
 
     try {
       const result = await session.result;
+      if (sessionError) {
+        sink.sessionEnded('error', sessionError);
+        return sessionError;
+      }
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
       // events to the RunManager — only it knows how the session settled).
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
@@ -2247,6 +2401,7 @@ export class RunManager {
   /** Native backend asks arrive before turn-end. Persist and park immediately
    * so the cockpit shows attention and the run releases its workspace slot. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
+    this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
@@ -2256,6 +2411,82 @@ export class RunManager {
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
+  }
+
+  /** Persist the invocation checkpoint before launching a runner. A throw or
+   * process exit before `turn.started` therefore leaves a durable mismatch. */
+  private beginUsageInvocation(runId: string, state: ActiveRun, stepId: string): void {
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === stepId);
+    if (!step) return;
+    const epoch = (step.usageInvocationEpoch ?? 0) + 1;
+    this.persistUsageCheckpoint(runId, stepId, {
+      usageInvocationEpoch: epoch,
+      usageInvocationsStarted: (step.usageInvocationsStarted ?? 0) + 1,
+    });
+    state.usageInvocation = {
+      stepId,
+      epoch,
+      observed: false,
+      startedTurns: new Set(),
+      recordedTurns: new Set(),
+    };
+  }
+
+  /** Fold backend-neutral completed-turn usage into the current step exactly
+   * once. Invocation/turn counters are written before the event reaches the
+   * NDJSON sink so crashes cannot preserve a falsely complete subtotal. */
+  private recordUsageUiEvent(runId: string, state: ActiveRun, event: UiEvent): void {
+    const invocation = state.usageInvocation;
+    if (!invocation) return;
+    const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
+    if (!step) return;
+
+    if (event.type === 'turn.started') {
+      if (invocation.startedTurns.has(event.turnId)) return;
+      invocation.startedTurns.add(event.turnId);
+      const firstObservedTurn = !invocation.observed;
+      invocation.observed = true;
+      this.persistUsageCheckpoint(runId, invocation.stepId, {
+        usageTurnsStarted: (step.usageTurnsStarted ?? 0) + 1,
+        ...(firstObservedTurn
+          ? { usageInvocationsObserved: (step.usageInvocationsObserved ?? 0) + 1 }
+          : {}),
+      });
+      return;
+    }
+
+    if (event.type !== 'turn.completed') return;
+    if (!invocation.startedTurns.has(event.turnId) || invocation.recordedTurns.has(event.turnId)) return;
+    const input = event.usage?.input;
+    const output = event.usage?.output;
+    if (
+      typeof input !== 'number' ||
+      !Number.isFinite(input) ||
+      input < 0 ||
+      typeof output !== 'number' ||
+      !Number.isFinite(output) ||
+      output < 0
+    ) {
+      return;
+    }
+    invocation.recordedTurns.add(event.turnId);
+    this.persistUsageCheckpoint(runId, invocation.stepId, {
+      inputTokens: (step.inputTokens ?? 0) + input,
+      outputTokens: (step.outputTokens ?? 0) + output,
+      usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
+    });
+  }
+
+  /** Usage completeness is a crash boundary, unlike high-frequency token
+   * snapshots: the checkpoint must reach `runs.json` before the runner starts
+   * or the matching UI event is persisted and forwarded. */
+  private persistUsageCheckpoint(
+    runId: string,
+    stepId: string,
+    patch: Partial<Omit<StepState, 'id'>>,
+  ): void {
+    this.store.updateStep(runId, stepId, patch);
+    this.store.flush();
   }
 
   /**
@@ -2325,7 +2556,12 @@ export class RunManager {
       // deliberately NEVER a title source; see maybeRefreshTitle below. The
       // one exception is an explicit CEZ:TITLE declaration (applied above).
       if (run.worktreePath && existsSync(run.worktreePath)) {
-        const stat = await worktreeShortstat(run.worktreePath, run.baseBranch ?? 'HEAD');
+        // `taskBranch` is what keeps this number *this task's* (#751): a review/QA run
+        // repoints the worktree onto the branch under review, and without the branch to
+        // compare HEAD against, the stat would claim that whole branch's diff.
+        const stat = await worktreeShortstat(run.worktreePath, run.baseBranch ?? 'HEAD', {
+          taskBranch: run.branch,
+        });
         if (stat) this.store.updateRun(runId, { diffStat: stat });
         else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
       }

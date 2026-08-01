@@ -90,10 +90,28 @@ async function respond(userText, imageCount) {
   // `mock:ask-invalid` → syntactically valid JSON that FAILS the ask schema
   // (empty questions) — the shape behind the blank-question bug: no card will
   // ever render it, so the marker must survive in the v1 text.
+  // `mock:ask-near` → bounded presentation drift: harmless extra keys plus
+  // an overlong header/description. It should normalize into exactly one card.
   const askMarker = userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
     : userText.includes('mock:ask-invalid')
       ? '\n\nCEZ:ASK {"questions":[]}'
+      : userText.includes('mock:ask-near')
+        ? '\n\nCEZ:ASK ' +
+          JSON.stringify({
+            transportHint: 'render as chips',
+            questions: [
+              {
+                header: 'Implementation path',
+                question: 'Which implementation should I use?',
+                presentation: 'compact',
+                options: [
+                  { label: 'Minimal', description: 'd'.repeat(300), recommended: true },
+                  { label: 'Expanded', description: 'Touch the wider surface' },
+                ],
+              },
+            ],
+          })
       : userText.includes('mock:ask')
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({

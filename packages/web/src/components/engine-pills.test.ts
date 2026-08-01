@@ -64,7 +64,9 @@ function stubResolverFetch({
           checks: [{ name: 'claude', available: true }],
         })
       }
-      if (path === '/api/v1/config') return jsonResponse({ defaultRunner: projectDefault, defaultModels: {} })
+      if (path === '/api/v1/config') {
+        return jsonResponse({ defaultRunner: projectDefault, defaultModels: {}, modelsLocked: false })
+      }
       if (path === '/api/v1/models?runner=codex') {
         return jsonResponse({ runner: 'codex', models: [], source: 'live', stale: false })
       }
@@ -188,6 +190,10 @@ describe('engineBody', () => {
 
   it('a pinned model is sent', () => {
     expect(engineBody(resolved({ model: 'opus' })).model).toBe('opus')
+  })
+
+  it('omits a resolved native model when model selection is locked', () => {
+    expect(engineBody(resolved({ model: 'opus', modelsLocked: true })).model).toBeUndefined()
   })
 
   it('omits the runner when it is already what the server would choose', () => {

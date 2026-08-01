@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -109,6 +109,24 @@ describe('POST /api/v1/runs systemPrompt', () => {
     const res = await post({ ...base, systemPrompt: 42 });
     expect(res.status).toBe(400);
     expect(captured).toBeUndefined();
+  });
+
+  it('rejects a model override from repository lock config but still accepts a runner choice', async () => {
+    writeFileSync(
+      join(repoRoot, '.ai', 'cezar', 'config.json'),
+      JSON.stringify({ modelsLocked: true }),
+      'utf8',
+    );
+
+    const rejected = await post({ ...base, runner: 'codex', model: 'gpt-5.6-codex' });
+    expect(rejected.status).toBe(409);
+    expect(((await rejected.json()) as { error: string }).error).toContain('models are locked');
+    expect(captured).toBeUndefined();
+
+    const accepted = await post({ ...base, runner: 'codex' });
+    expect(accepted.status).toBe(201);
+    expect(captured?.runner).toBe('codex');
+    expect(captured?.model).toBeUndefined();
   });
 });
 

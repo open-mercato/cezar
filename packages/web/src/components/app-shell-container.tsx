@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, useProjectRuns, useProjects, useSkillsUpdate, useTodos } from '@/api/queries'
+import { useHealth, useProjectRuns, useProjects, useRuns, useSkillsUpdate, useTodos } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
@@ -12,6 +12,7 @@ import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
+import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 import { pageTitleContext } from '@/routes'
 
@@ -64,6 +65,9 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
   const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
   const skillsUpdateAvailable = skillsUpdateMarkerOf(skillsUpdate.data)
+  // Unread done items (#unread-done-items) for the Tasks badge. Reads the same active-scope run
+  // list the sidebar quick-list and Tasks table already hold — one cache entry, no extra fetch.
+  const runs = useRuns()
   const registry = useProjects().data
   const titleContext = pageTitleContext(pathname)
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
@@ -112,6 +116,9 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // `?? null` rather than `?? 0`: no badge while the inbox is unknown, and no badge when it
         // is known to be empty — AppShell renders neither for a falsy count.
         inboxCount={todos.data?.length ?? null}
+        // Same `?? null` honesty: no badge while the list is unknown; a loaded list with none
+        // unread is 0, which AppShell also renders as no badge.
+        unreadCount={runs.data ? unreadDoneCount(runs.data) : null}
         skillsUpdateAvailable={skillsUpdateAvailable}
         // Hidden until health confirms the forge driver (R6 Step 1.1) — same honesty rule as
         // the chips: the nav must not claim a GitHub tab it cannot back. The Tools menu's

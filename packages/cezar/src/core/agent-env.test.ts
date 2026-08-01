@@ -237,6 +237,52 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
   });
 });
 
+/**
+ * Agent accounts (spec 2026-07-29-agent-profiles) reach the child through `extraEnv`, which is
+ * applied AFTER the allowlist and so bypasses it. That makes `profileEnv` the only gatekeeper —
+ * these pin the two properties the rest of the design leans on.
+ */
+describe('agent-profile config dirs reach the child', () => {
+  it('CLAUDE_CONFIG_DIR survives for claude, and via the host allowlist too', () => {
+    expect(
+      buildChildEnv({
+        backend: 'claude',
+        extraEnv: { CLAUDE_CONFIG_DIR: '/home/u/.claude-klaudiusz' },
+        source: { PATH: '/usr/bin' },
+      }).CLAUDE_CONFIG_DIR,
+    ).toBe('/home/u/.claude-klaudiusz');
+    // The `CLAUDE_` prefix means a host-level override also rides in, which is what makes it the
+    // DEFAULT profile's dir rather than something cezar has to re-export.
+    expect(
+      buildChildEnv({
+        backend: 'claude',
+        source: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/home/u/.claude-host' },
+      }).CLAUDE_CONFIG_DIR,
+    ).toBe('/home/u/.claude-host');
+  });
+
+  it('CODEX_HOME survives for codex', () => {
+    expect(
+      buildChildEnv({
+        backend: 'codex',
+        extraEnv: { CODEX_HOME: '/home/u/.codex-klaudiusz' },
+        source: { PATH: '/usr/bin' },
+      }).CODEX_HOME,
+    ).toBe('/home/u/.codex-klaudiusz');
+  });
+
+  it('the per-run account still wins under the CEZ_AGENT_ENV_FULL escape hatch', () => {
+    // The hatch restores full inheritance, but `extraEnv` is applied last there too — otherwise
+    // a host-level CLAUDE_CONFIG_DIR would silently outrank the account the user picked.
+    const env = buildChildEnv({
+      backend: 'claude',
+      extraEnv: { CLAUDE_CONFIG_DIR: '/home/u/.claude-klaudiusz' },
+      source: { PATH: '/usr/bin', CEZ_AGENT_ENV_FULL: '1', CLAUDE_CONFIG_DIR: '/home/u/.claude' },
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/home/u/.claude-klaudiusz');
+  });
+});
+
 describe('looksSecret', () => {
   it('flags credential-shaped names', () => {
     for (const n of ['GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'FOO_API_KEY', 'DB_PASSWORD', 'NODE_AUTH_TOKEN']) {

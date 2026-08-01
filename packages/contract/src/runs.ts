@@ -56,6 +56,8 @@ export const stepStatusSchema = z.enum([
 ]);
 export type StepStatus = z.infer<typeof stepStatusSchema>;
 
+const usageCounterSchema = z.number().finite().nonnegative();
+
 /** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
@@ -64,6 +66,13 @@ export const stepStateSchema = z.object({
   status: stepStatusSchema,
   iterations: z.number(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
+  usageInvocationsStarted: usageCounterSchema.optional(),
+  usageInvocationsObserved: usageCounterSchema.optional(),
+  usageTurnsStarted: usageCounterSchema.optional(),
+  usageTurnsRecorded: usageCounterSchema.optional(),
+  usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   error: z.string().optional(),
@@ -71,6 +80,11 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
+   *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
+   *  that created it, so resume and Continue read this rather than the project's current
+   *  selection. Absent on records written before accounts existed. */
+  profileId: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -80,6 +94,12 @@ export const diffStatSchema = z.object({
   adds: z.number(),
   dels: z.number(),
   files: z.number(),
+  /** Additive since #751, and present ONLY when true: the numbers cover uncommitted work
+   *  alone, because the worktree's HEAD had been repointed off the task's own branch (every
+   *  review/QA run does this) and the merge-base anchor would otherwise have reported the
+   *  checked-out branch's entire diff as this task's. Absent on every normal run and on every
+   *  record written before #751 — a consumer that ignores it sees exactly the old shape. */
+  repointed: z.boolean().optional(),
 });
 export type DiffStat = z.infer<typeof diffStatSchema>;
 
@@ -128,6 +148,9 @@ export const runRecordSchema = z.object({
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
+  /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
+   *  on `runner`. Absent = the run follows the project's own selection. */
+  agentProfile: z.string().optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
@@ -165,6 +188,8 @@ export const runRecordSchema = z.object({
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407) — auto-discovered from conversation references. Display
@@ -187,9 +212,13 @@ export const runRecordSchema = z.object({
   referencedIssueUrl: z.string().optional(),
   /** The referenced-issue working set, persisted like `referencedPrCandidates`. Capped. */
   referencedIssueCandidates: z.array(z.string()).optional(),
-  /** Absent when the run executed in the repo working tree rather than its own worktree. */
+  /** Explicit execution policy. `false` means the run intentionally uses the repo root;
+   *  absent on older runs and for the default isolated-worktree mode. */
+  worktree: z.literal(false).optional(),
+  /** Absent for in-place runs and after an isolated worktree is removed. */
   worktreePath: z.string().optional(),
   branch: z.string().optional(),
+  /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
   /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is
    *  kept): the dir is gone but recoverable. */
@@ -202,6 +231,11 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean(),
   archivedAt: z.string().optional(),
+  /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
+   *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
+   *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
+   *  runs and on any run not yet opened, both of which count as unread. */
+  seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -252,6 +286,10 @@ export type CancelResponse = z.infer<typeof cancelResponseSchema>;
 /** `POST /runs/archive-finished` — how many runs the sweep archived. */
 export const archiveFinishedResponseSchema = z.object({ archived: z.number() });
 export type ArchiveFinishedResponse = z.infer<typeof archiveFinishedResponseSchema>;
+
+/** `POST /runs/read-all` — how many unread finished runs the sweep marked read. */
+export const markAllReadResponseSchema = z.object({ read: z.number() });
+export type MarkAllReadResponse = z.infer<typeof markAllReadResponseSchema>;
 
 /** `DELETE /runs/:id` — an active run is a 409 and an unknown one a 404, so this only ever
  *  reports success. */
@@ -369,6 +407,8 @@ export const groupVariantSchema = z.object({
   status: runStatusSchema,
   archived: z.boolean(),
   tokensUsed: z.number(),
+  inputTokens: usageCounterSchema.optional(),
+  outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
   diffStat: z.string(),
   /** First lines of the handoff journal's "## Progress log" section, as markdown. */
@@ -427,6 +467,9 @@ export const createRunInputBaseSchema = z
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     runner: runnerSchema.optional(),
+    /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
+     *  project's own selection; an id that no longer exists is a 400, not a silent default. */
+    agentProfile: z.string().max(64).optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).
