@@ -10,9 +10,9 @@ import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * `GET /api/github/search?kind=…&q=…` (#730).
+ * `GET /api/v1/github/search?kind=…&q=…` (#730).
  *
- * Why this route exists: `GET /api/github` lists the OPEN set only, and the tab's search is an
+ * Why this route exists: `GET /api/v1/github` lists the OPEN set only, and the tab's search is an
  * in-memory filter over that payload — so a closed or merged issue/PR is not merely "outside the
  * fetched window", it was never fetched and nothing the user types can reach it. This is the
  * endpoint that asks the forge instead.
@@ -48,7 +48,7 @@ describe('the github search API', () => {
   });
 
   it('finds a PR by number', async () => {
-    const res = await apiRequest(app, '/api/github/search?kind=pr&q=128');
+    const res = await apiRequest(app, '/api/v1/github/search?kind=pr&q=128');
     expect(res.status).toBe(200);
     const body = (await res.json()) as ForgeSearchData;
     expect(body.available).toBe(true);
@@ -56,14 +56,14 @@ describe('the github search API', () => {
   });
 
   it('finds an issue by text', async () => {
-    const res = await apiRequest(app, '/api/github/search?kind=issue&q=Login');
+    const res = await apiRequest(app, '/api/v1/github/search?kind=issue&q=Login');
     expect(res.status).toBe(200);
     const body = (await res.json()) as ForgeSearchData;
     expect(body.items.map((i) => i.number)).toEqual([142]);
   });
 
   it('returns an empty hit list rather than an error when nothing matches', async () => {
-    const res = await apiRequest(app, '/api/github/search?kind=pr&q=nothing-matches-this');
+    const res = await apiRequest(app, '/api/v1/github/search?kind=pr&q=nothing-matches-this');
     expect(res.status).toBe(200);
     const body = (await res.json()) as ForgeSearchData;
     expect(body.available).toBe(true);
@@ -71,30 +71,30 @@ describe('the github search API', () => {
   });
 
   it('400s on a missing or unknown kind', async () => {
-    expect((await apiRequest(app, '/api/github/search?q=128')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/search?kind=commit&q=128')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?q=128')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?kind=commit&q=128')).status).toBe(400);
   });
 
   it('400s on a missing or blank query', async () => {
-    expect((await apiRequest(app, '/api/github/search?kind=pr')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/search?kind=pr&q=')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/search?kind=pr&q=%20%20')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?kind=pr')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?kind=pr&q=')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?kind=pr&q=%20%20')).status).toBe(400);
   });
 
   it('400s on an absurdly long query rather than shelling out with it', async () => {
     const long = 'a'.repeat(257);
-    expect((await apiRequest(app, `/api/github/search?kind=pr&q=${long}`)).status).toBe(400);
+    expect((await apiRequest(app, `/api/v1/github/search?kind=pr&q=${long}`)).status).toBe(400);
   });
 
   it('400s on a malformed limit', async () => {
-    expect((await apiRequest(app, '/api/github/search?kind=pr&q=128&limit=0')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/search?kind=pr&q=128&limit=abc')).status).toBe(400);
-    expect((await apiRequest(app, '/api/github/search?kind=pr&q=128&limit=9999')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?kind=pr&q=128&limit=0')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?kind=pr&q=128&limit=abc')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/search?kind=pr&q=128&limit=9999')).status).toBe(400);
   });
 
   it('answers identically on the project-scoped mirror', async () => {
-    const plain = await apiRequest(app, '/api/github/search?kind=pr&q=128');
-    const scoped = await apiRequest(app, '/api/p/default/github/search?kind=pr&q=128');
+    const plain = await apiRequest(app, '/api/v1/github/search?kind=pr&q=128');
+    const scoped = await apiRequest(app, '/api/v1/p/default/github/search?kind=pr&q=128');
     expect(scoped.status).toBe(plain.status);
     // Compared by identity, not deep-equality: the dry-run catalog stamps `createdAt` off the
     // clock at call time, so two calls a millisecond apart legitimately differ there.
