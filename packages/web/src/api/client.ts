@@ -3,6 +3,7 @@ import type {
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
+  MarkAllReadResponse,
   CancelResponse,
   ChangesPayload,
   CheckoutProjectInput,
@@ -578,6 +579,17 @@ export function archiveRun(id: string, archived = true): Promise<RunRecord> {
  *  the Tasks header's "Archive finished" button. */
 export function archiveFinished(): Promise<ArchiveFinishedResponse> {
   return mutate<ArchiveFinishedResponse>('POST', '/api/runs/archive-finished')
+}
+
+/** Read receipt (#unread-done-items): opening a task's thread marks it read. Bodyless —
+ *  the server stamps `seenAt = now` and answers with the updated record. */
+export function markRunSeen(id: string): Promise<RunRecord> {
+  return mutate<RunRecord>('POST', runPath(id, '/read'))
+}
+
+/** "Mark all read": stamp every currently-unread finished run in one call. */
+export function markAllRunsSeen(): Promise<MarkAllReadResponse> {
+  return mutate<MarkAllReadResponse>('POST', '/api/runs/read-all')
 }
 
 /** Close a waiting session gracefully — the run completes as done. 409 when nothing is open. */

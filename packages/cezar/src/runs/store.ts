@@ -175,6 +175,11 @@ const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean().default(false),
   archivedAt: z.string().optional(),
+  /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
+   *  run's thread. A finished run reads as "unread" until it has been seen since it
+   *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
+   *  runs and on every run not yet opened, which the unread rule treats as unread. */
+  seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -524,6 +529,38 @@ export class RunStore extends EventEmitter {
         this.touch(run);
         count++;
       }
+    }
+    return count;
+  }
+
+  /** Mark one run as read (#unread-done-items): stamp the read receipt now. Mirrors
+   *  `setArchived` — sets the field then persists + broadcasts via `touch`, so the
+   *  updated record rides the existing `run` SSE with no new event. Idempotent by
+   *  design: opening an already-read thread just re-stamps a later `seenAt`. */
+  setRead(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    run.seenAt = new Date().toISOString();
+    this.touch(run);
+    return run;
+  }
+
+  /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
+   *  "Unread" here is the same rule the cockpit paints (read-state.ts): a `done` or
+   *  `failed` run not seen since it finished. Cancelled runs are never unread — you
+   *  stopped them yourself — so they are skipped, as are runs already read. */
+  markAllRead(): number {
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const run of this.runs.values()) {
+      const unread =
+        (run.status === 'done' || run.status === 'failed') &&
+        run.finishedAt !== undefined &&
+        (run.seenAt === undefined || run.seenAt < run.finishedAt);
+      if (!unread) continue;
+      run.seenAt = now;
+      this.touch(run);
+      count++;
     }
     return count;
   }

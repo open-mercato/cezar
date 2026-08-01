@@ -9,6 +9,7 @@ import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import { compactTokens, shortAge } from '@/lib/format'
+import { isReadDoneItem, isUnread } from '@/lib/read-state'
 import {
   groupRuns,
   listCounts,
@@ -265,6 +266,11 @@ function RunRow({
   const attention = deriveAttention(run)
   const isActive = run.id === currentRunId
   const prUrl = taskPrUrl(run)
+  // Read/unread (#unread-done-items, "Option B"): an unread done item is promoted (bright +
+  // semibold) and wears a trailing violet dot; a read one dims so the history steps back. Both
+  // are orthogonal to the leading status dot, which keeps saying done/failed.
+  const unread = isUnread(run)
+  const readDone = isReadDoneItem(run)
   // A variant row spends its width on what distinguishes the variants (runner and spend) rather
   // than on an age they all share — they started together. Per the mockup.
   const age = variant
@@ -300,7 +306,12 @@ function RunRow({
           </span>
         ) : null}
         <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-[13px]',
+            unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+          )}
+        >
           {variant ? variantLabel(run) : runTitle(run)}
         </span>
         {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
@@ -310,6 +321,17 @@ function RunRow({
         {prUrl || !age ? null : (
           <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
         )}
+        {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
+            different hue from the leading status dot, so the two read as two signals. */}
+        {unread ? (
+          <StatusDot
+            tone="violet"
+            role="img"
+            aria-label="unread"
+            title="Unread — not opened since it finished"
+            className="ml-0.5 shrink-0"
+          />
+        ) : null}
       </Link>
       {/* href protocol guard (#431): link only for http(s) URLs. */}
       {prUrl && isHttpUrl(prUrl) ? (

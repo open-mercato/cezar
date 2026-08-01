@@ -2237,6 +2237,17 @@ export function createApp(deps: ServerDeps) {
     return run ? c.json(run) : c.json({ error: 'not found' }, 404);
   });
 
+  // Read receipts (#unread-done-items). Registered before `/:id/...` so "read-all"
+  // never matches as a run id — the same guard the archive pair above relies on.
+  api.post('/runs/read-all', (c) => c.json({ read: c.get('project').store.markAllRead() }));
+
+  api.post('/runs/:id/read', (c) => {
+    // No body: opening a thread marks it read, full stop. Stamps `seenAt = now` and
+    // returns the updated record (which also rides the `run` SSE via `touch`).
+    const run = c.get('project').store.setRead(c.req.param('id'));
+    return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+  });
+
   api.post('/runs', async (c) => {
     const { root: repoRoot, dataDir, manager } = c.get('project');
     const parsed = startRunSchema.safeParse(await c.req.json().catch(() => null));

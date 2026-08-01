@@ -42,6 +42,7 @@ function LocationProbe() {
 function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {}) {
   const onViewChange = props.onViewChange ?? vi.fn()
   const onArchiveFinished = props.onArchiveFinished ?? vi.fn()
+  const onMarkAllRead = props.onMarkAllRead ?? vi.fn()
   const onRename = props.onRename ?? vi.fn()
   const utils = render(
     <MemoryRouter initialEntries={['/']}>
@@ -57,6 +58,7 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
               {...props}
               onViewChange={onViewChange}
               onArchiveFinished={onArchiveFinished}
+              onMarkAllRead={onMarkAllRead}
               onRename={onRename}
             />
           }
@@ -369,6 +371,7 @@ describe('TasksOverview — usage cells', () => {
               view="active"
               onViewChange={vi.fn()}
               onArchiveFinished={vi.fn()}
+              onMarkAllRead={vi.fn()}
               onRename={vi.fn()}
               now={NOW}
             />

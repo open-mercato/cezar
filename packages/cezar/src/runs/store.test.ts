@@ -1029,3 +1029,68 @@ describe('RunStore — queuedMessages (#472)', () => {
     );
   });
 });
+
+describe('RunStore — read receipts (#unread-done-items)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  /** Create a run and drive it to a terminal status with a finishedAt, the way the run manager
+   *  does — so the read/unread rule has a real "finished" instant to compare against. The instant
+   *  is safely in the past: `setRead`/`markAllRead` stamp `seenAt` from the real wall clock, so a
+   *  future `finishedAt` would make a just-read run compare as still-unread. */
+  const FINISHED_AT = '2020-01-01T00:00:00.000Z';
+  function finishedRun(store: RunStore, status: 'done' | 'failed' | 'cancelled'): string {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status, finishedAt: FINISHED_AT });
+    return run.id;
+  }
+
+  it('setRead stamps seenAt, round-trips, and returns the record', () => {
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+    expect(store.getRun(id)?.seenAt).toBeUndefined();
+
+    const updated = store.setRead(id);
+    expect(updated?.seenAt).toBeDefined();
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(id)?.seenAt).toBe(updated?.seenAt);
+  });
+
+  it('setRead returns undefined for an unknown id', () => {
+    const store = RunStore.open(dataDir);
+    expect(store.setRead('nope')).toBeUndefined();
+  });
+
+  it('still loads an old runs.json with no seenAt (additive)', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun('legacy-1')?.seenAt).toBeUndefined();
+  });
+
+  it('markAllRead stamps only unread done/failed runs and returns the count', () => {
+    const store = RunStore.open(dataDir);
+    const doneUnread = finishedRun(store, 'done');
+    const failedUnread = finishedRun(store, 'failed');
+    const cancelled = finishedRun(store, 'cancelled');
+    const alreadyRead = finishedRun(store, 'done');
+    store.setRead(alreadyRead);
+    const running = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+
+    expect(store.markAllRead()).toBe(2);
+    expect(store.getRun(doneUnread)?.seenAt).toBeDefined();
+    expect(store.getRun(failedUnread)?.seenAt).toBeDefined();
+    // Cancelled and still-running runs are never unread, so they stay untouched.
+    expect(store.getRun(cancelled)?.seenAt).toBeUndefined();
+    expect(store.getRun(running)?.seenAt).toBeUndefined();
+
+    // Idempotent: a second sweep finds nothing left unread.
+    expect(store.markAllRead()).toBe(0);
+  });
+});

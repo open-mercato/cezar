@@ -47,6 +47,8 @@ import {
   applySkillsUpdate,
   getWorktrees,
   editQueuedMessage,
+  markRunSeen,
+  markAllRunsSeen,
   patchRun,
   removeQueuedMessage,
   registerProject,
@@ -64,6 +66,7 @@ import type {
   PatchRunInput,
   ProviderId,
   ProviderStatusResponse,
+  RunRecord,
   SetAgentConfigInput,
   UpdateProjectInput,
 } from '@open-mercato/cezar-api-client'
@@ -789,6 +792,53 @@ export function usePatchRun(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (patch: PatchRunInput) => patchRun(id, patch),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+  })
+}
+
+/**
+ * Mark one run read (#unread-done-items): `POST /api/runs/:id/read`. Opening a finished task's
+ * thread fires this so the unread dot clears without waiting for the round-trip — the list and
+ * detail caches are stamped with `seenAt` optimistically, then reconciled to the server's exact
+ * value (which also arrives independently over the `run` SSE). On error the optimistic stamp is
+ * rolled back, so a run that could not be marked read honestly stays unread.
+ */
+export function useMarkRunSeen() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => markRunSeen(id),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.list() })
+      const prevList = queryClient.getQueryData<RunRecord[]>(queryKeys.runs.list())
+      const prevDetail = queryClient.getQueryData<RunRecord>(queryKeys.runs.detail(id))
+      const now = new Date().toISOString()
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === id ? { ...run, seenAt: now } : run)),
+      )
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(id), (run) =>
+        run ? { ...run, seenAt: now } : run,
+      )
+      return { prevList, prevDetail, id }
+    },
+    onError: (_error, id, context) => {
+      if (context?.prevList) queryClient.setQueryData(queryKeys.runs.list(), context.prevList)
+      queryClient.setQueryData(queryKeys.runs.detail(id), context?.prevDetail)
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === updated.id ? updated : run)),
+      )
+      queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
+    },
+  })
+}
+
+/** "Mark all read" (#unread-done-items): `POST /api/runs/read-all` stamps every unread finished
+ *  run. Invalidate `runs.*` for the truth; each stamped run also rides the `run` SSE. */
+export function useMarkAllRunsSeen() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => markAllRunsSeen(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }

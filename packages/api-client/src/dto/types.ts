@@ -184,6 +184,11 @@ export interface RunRecord {
   peakProcCount?: number
   archived: boolean
   archivedAt?: string
+  /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
+   *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
+   *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
+   *  runs and on any run not yet opened, both of which count as unread. */
+  seenAt?: string
   currentStepId?: string
   error?: string
   steps: StepState[]
@@ -1176,6 +1181,11 @@ export interface CancelResponse {
 /** `POST /api/runs/archive-finished` — how many runs the sweep archived. */
 export interface ArchiveFinishedResponse {
   archived: number
+}
+
+/** `POST /api/runs/read-all` — how many unread finished runs the sweep marked read. */
+export interface MarkAllReadResponse {
+  read: number
 }
 
 export interface DeleteRunResponse {
