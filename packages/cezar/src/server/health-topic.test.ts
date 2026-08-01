@@ -78,11 +78,19 @@ describe('health topic + cache (live-server path)', () => {
     return { app: createApp(deps), topics };
   };
 
-  /** The boot pre-warm is fire-and-forget; wait for it to land before asserting on the cache. */
+  /**
+   * The boot pre-warm is fire-and-forget; wait for it to land before asserting on the cache.
+   *
+   * The budget is explicit because `vi.waitFor` defaults to 1000ms and the snapshot this waits on is
+   * the one the pre-warm exists for — a cold compute that probes git and the agent CLIs, which the
+   * comment at its call site in `server.ts` measures at ~1s. Leaning on the default made this whole
+   * suite flaky under load: eight failures, all "Timed out in waitFor", on a machine doing anything
+   * else. Ten seconds is far past a real answer while still failing a hung one.
+   */
   const settle = async (): Promise<void> => {
     await vi.waitFor(async () => {
       expect(await runner()).toBeDefined();
-    });
+    }, { timeout: 10_000 });
   };
   let currentApp: ReturnType<typeof createApp> | undefined;
   const runner = async (): Promise<string | undefined> => {
@@ -145,7 +153,9 @@ describe('health topic + cache (live-server path)', () => {
 
     expect(await runner()).toBe('claude'); // stale served immediately…
     clock.mockReturnValue(realNow + 10_001);
-    await vi.waitFor(async () => expect(await runner()).toBe('codex')); // …and the refresh lands behind it
+    // …and the refresh lands behind it. Same explicit budget as `settle`, for the same reason: this
+    // waits on a full cold snapshot compute, which outlives `waitFor`'s 1s default under load.
+    await vi.waitFor(async () => expect(await runner()).toBe('codex'), { timeout: 10_000 });
   });
 
   it('publishes to subscribers only when the payload actually changed', async () => {

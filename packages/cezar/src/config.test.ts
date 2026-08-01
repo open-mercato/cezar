@@ -292,3 +292,84 @@ describe('gatedSkillsRepos', () => {
     expect([...(await gatedSkillsRepos(repoRoot))]).toEqual(defaults);
   });
 });
+
+/**
+ * Machine-wide agent defaults (spec 2026-07-29-agent-profiles): what a repo that has set none of
+ * its own runs, so a second login and a model preference are configured once instead of per
+ * checkout.
+ *
+ * The load-bearing property is that these are DEFAULTS. A repo key always wins, and the fallback is
+ * applied to the RAW object before parsing — `defaultRunner`'s `.default('claude')` materializes the
+ * key, so after a parse there is no telling "the user chose claude" from "the user said nothing".
+ */
+describe('loadConfig machine-wide agent defaults', () => {
+  let repoRoot: string;
+  let cezHome: string;
+  const savedHome = process.env.CEZ_HOME;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-machine-defaults-'));
+    cezHome = mkdtempSync(join(tmpdir(), 'cez-machine-home-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    process.env.CEZ_HOME = cezHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedHome;
+    for (const dir of [repoRoot, cezHome]) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const writeRepo = (value: unknown) =>
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+  const writeMachine = (agentDefaults: unknown) =>
+    writeFileSync(join(cezHome, 'config.json'), JSON.stringify({ agentDefaults }), 'utf8');
+
+  it('fills a repo that has no config file at all', async () => {
+    writeMachine({ runner: 'codex', models: { codex: 'gpt-5' } });
+    const config = await loadConfig(repoRoot);
+    expect(config.defaultRunner).toBe('codex');
+    expect(config.defaultModels?.codex).toBe('gpt-5');
+  });
+
+  it('fills a repo whose config says nothing about the runner', async () => {
+    writeMachine({ runner: 'codex' });
+    writeRepo({ systemPrompt: 'be brief' });
+    expect((await loadConfig(repoRoot)).defaultRunner).toBe('codex');
+  });
+
+  it('NEVER overrules a repo that chose — that is what makes it a default', async () => {
+    writeMachine({ runner: 'codex' });
+    writeRepo({ defaultRunner: 'claude' });
+    expect((await loadConfig(repoRoot)).defaultRunner).toBe('claude');
+  });
+
+  it('merges models per RUNNER, so pinning one does not discard the others', async () => {
+    // Whole-object precedence would silently drop the machine's codex preset the moment a repo
+    // pinned claude's — a loss nobody asked for and nothing would report.
+    writeMachine({ models: { claude: 'machine-claude', codex: 'machine-codex' } });
+    writeRepo({ defaultModels: { claude: 'repo-claude' } });
+    const config = await loadConfig(repoRoot);
+    expect(config.defaultModels).toEqual({ claude: 'repo-claude', codex: 'machine-codex' });
+  });
+
+  it('changes nothing when the machine has no opinion — the zero-config path', async () => {
+    writeRepo({ systemPrompt: 'be brief' });
+    const config = await loadConfig(repoRoot);
+    expect(config.defaultRunner).toBe('claude');
+    expect(config.defaultModels).toBeUndefined();
+  });
+
+  it('degrades to the built-in default when the machine file is corrupt', async () => {
+    writeFileSync(join(cezHome, 'config.json'), '{not json', 'utf8');
+    expect((await loadConfig(repoRoot)).defaultRunner).toBe('claude');
+  });
+
+  it('ignores a machine runner the schema refuses, rather than failing the load', async () => {
+    writeMachine({ runner: 'not-an-agent' });
+    writeRepo({ systemPrompt: 'be brief' });
+    const config = await loadConfig(repoRoot);
+    expect(config.defaultRunner).toBe('claude');
+    expect(config.systemPrompt).toBe('be brief');
+  });
+});

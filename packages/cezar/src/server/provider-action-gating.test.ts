@@ -253,6 +253,134 @@ describe('provider action gating', () => {
   });
 });
 
+/**
+ * The gate re-probes before it refuses (`providerActionError` in `server.ts`).
+ *
+ * Auth state is served stale-while-revalidate, so a cached "disconnected" can predate a login cezar
+ * never saw — someone typing `claude auth login` in a terminal. Refusing on that would lock a user
+ * out of their own cockpit with no way back but waiting, which is exactly what a short cache window
+ * used to paper over, at the cost of making every reader of `GET /api/v1/providers/status`
+ * periodically pay for a CLI spawn.
+ */
+describe('the gate verifies before it refuses', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let startRun: ReturnType<typeof vi.fn>;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+
+  beforeEach(() => {
+    // The whole point is the real probe path, so dry-run (which reports everything connected) must
+    // be off or these would pass without exercising anything.
+    delete process.env.CEZ_DRY_RUN;
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-gate-verify-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    startRun = vi.fn((_workflow: WorkflowDef, input: StartRunInput) => store.createRun({
+      title: 'Task',
+      workflow: 'quick-task',
+      task: input.task,
+      runner: input.runner,
+      steps: [],
+    }));
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+  });
+
+  /** A claude whose login state the test controls, with a clock it can advance. */
+  const setup = (options: { disabled?: ProviderId[] } = {}) => {
+    let now = 1_000;
+    const state = { claudeLoggedIn: false, probes: 0 };
+    const providerAuth = new ProviderAuthService({
+      platform: 'linux',
+      now: () => now,
+      runCommand: async (executable) => {
+        state.probes += 1;
+        if (executable === 'claude') {
+          return state.claudeLoggedIn
+            ? { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 }
+            : { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 };
+        }
+        if (executable === 'codex') return { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0 };
+        return { stdout: '└  1 credential', stderr: '', exitCode: 0 };
+      },
+    });
+    const app = createApp({
+      repoRoot,
+      store,
+      manager: { startRun, sendMessage: vi.fn(() => true), continueRun: vi.fn(() => ({ ok: true })) } as unknown as RunManager,
+      version: 'test',
+      providerAuth,
+      workspaceConfig: memoryWorkspaceConfig(options.disabled ?? []),
+    });
+    return { app, providerAuth, state, advance: (ms: number) => { now += ms; } };
+  };
+
+  const start = (app: Hono, runner: ProviderId) => apiRequest(app, '/api/v1/runs', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ task: 'Task', runner, steps: [{ id: 'task', prompt: '{{task}}' }] }),
+  });
+
+  it('starts the run when the cached refusal is out of date — a terminal login is honoured', async () => {
+    const { app, providerAuth, state, advance } = setup();
+    await providerAuth.status(); // learns: claude disconnected
+    advance(61_000); // …and that answer goes stale
+    state.claudeLoggedIn = true; // meanwhile, the user logs in from a terminal
+
+    const response = await start(app, 'claude');
+    expect(response.status).toBe(201);
+    expect(startRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses when the fresh answer agrees — verifying is not a way in', async () => {
+    const { app, providerAuth, advance } = setup();
+    await providerAuth.status();
+    advance(61_000);
+
+    const response = await start(app, 'claude');
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+    });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it('cannot be talked out of a rejection it actually observed during a run', async () => {
+    const { app, providerAuth, state } = setup();
+    state.claudeLoggedIn = true; // credentials look fine to a probe…
+    await providerAuth.status();
+    providerAuth.reportRuntimeAuthFailure('claude'); // …but a run was rejected
+
+    expect((await start(app, 'claude')).status).toBe(409);
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it('spawns nothing to re-read a DISABLED provider — that is settings, not credentials', async () => {
+    const { app, providerAuth, state } = setup({ disabled: ['codex'] });
+    await providerAuth.status();
+    const warmed = state.probes;
+
+    const response = await start(app, 'codex');
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: DISABLED_MESSAGE });
+    expect(state.probes).toBe(warmed);
+  });
+
+  it('costs nothing on the happy path — a warm connected answer is not re-probed', async () => {
+    const { app, providerAuth, state } = setup();
+    state.claudeLoggedIn = true;
+    await providerAuth.status();
+    const warmed = state.probes;
+
+    expect((await start(app, 'claude')).status).toBe(201);
+    expect(state.probes).toBe(warmed);
+  });
+});
+
 describe('provider availability preserves existing execution', () => {
   let repoRoot: string;
   let store: RunStore;

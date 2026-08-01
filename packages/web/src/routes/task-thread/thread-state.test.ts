@@ -798,6 +798,19 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(msg?.text).toBe('Pick one.')
   })
 
+  it('suppresses a complete provisional marker during the active turn', () => {
+    const markerJson = JSON.stringify({ questions: ASK.questions })
+    const events = [
+      line(1, 'item.completed', {
+        item: { kind: 'message', id: 'm1', role: 'assistant', text: `Pick one.\n\nCEZ:ASK ${markerJson}` },
+      }),
+    ]
+    const msg = reduceThread(events, { activeTurn: true }).turns[0]!.items.find(
+      (item) => item.kind === 'message',
+    ) as { text: string } | undefined
+    expect(msg?.text).toBe('Pick one.')
+  })
+
   // Regression (blank-question bug): a marker whose card never materialized —
   // invalid payload, or the session died before turn-end emitted ask.requested —
   // must stay visible. The card is the only other place the questions exist;
@@ -810,6 +823,23 @@ describe('reduceThread — AskUser cards (#473)', () => {
       }),
     ]).find((i) => i.kind === 'message') as { text: string } | undefined
     expect(msg?.text).toBe(raw)
+  })
+
+  it('restores a hard-invalid marker when the active turn settles without a card', () => {
+    const raw = 'Pick one.\n\nCEZ:ASK {"questions":[]}'
+    const events = [
+      line(1, 'item.completed', {
+        item: { kind: 'message', id: 'm1', role: 'assistant', text: raw },
+      }),
+    ]
+    const active = reduceThread(events, { activeTurn: true }).turns[0]!.items.find(
+      (item) => item.kind === 'message',
+    ) as { text: string } | undefined
+    const settled = reduceThread(events).turns[0]!.items.find(
+      (item) => item.kind === 'message',
+    ) as { text: string } | undefined
+    expect(active?.text).toBe('Pick one.')
+    expect(settled?.text).toBe(raw)
   })
 
   it("an ask card in ANOTHER turn does not license stripping this turn's marker", () => {

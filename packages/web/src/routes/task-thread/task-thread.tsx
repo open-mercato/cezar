@@ -1,5 +1,5 @@
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -26,18 +26,7 @@ import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
-import {
-  AssistantMessage,
-  ContextGroup,
-  ImageItem,
-  NoteLine,
-  ProviderAuthRequiredCard,
-  ReasoningItem,
-  ToolCard,
-  ToolStreak,
-  UserBubble,
-  WorkingIndicator,
-} from './thread-items'
+import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
@@ -49,17 +38,21 @@ import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
 import { useActiveProviderAvailability } from './active-provider'
-import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import { ThreadLoading } from './thread-loading'
-import { ThreadCardCache } from './thread-open-cards'
 import { threadRenderMode } from './thread-scroll'
-import { JumpToLatestPill, ThreadRows, useThreadScroll, type ThreadRow } from './thread-scroller'
+import { JumpToLatestPill, useThreadScroll } from './thread-scroller'
+import {
+  SessionTranscript,
+  buildTranscriptRows,
+  mainTranscriptSections,
+  type TranscriptMessageActions,
+} from './session-transcript'
 import {
   latestPlanEntries,
   reduceThread,
   threadFilePaths,
   threadFooter,
-  type ThreadEntry,
+  type ThreadAsk,
   type ThreadState,
 } from './thread-state'
 
@@ -78,7 +71,11 @@ export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
   const events = useRunEvents(id)
-  const thread = useMemo(() => reduceThread(events), [events])
+  const runStatus = run.data?.status
+  const thread = useMemo(
+    () => reduceThread(events, { activeTurn: runStatus === 'running' }),
+    [events, runStatus],
+  )
 
   // Read receipt (#unread-done-items): opening a finished task's thread marks it read — the same
   // "opening the mail clears the unread dot" move. Gated on `isUnread` so it fires only for a
@@ -120,79 +117,6 @@ export function TaskThreadRoute() {
   }
 
   return <ThreadView run={run.data} thread={thread} />
-}
-
-/**
- * The run's task + every turn, flattened to keyed rows for the threshold-switched scroller
- * (thread-scroll.ts owns the rule). Row keys are turn-scoped — the same keys the open-card
- * cache uses, because v2 item ids repeat across sessions.
- */
-export function buildThreadRows(
-  run: ApiRun,
-  thread: ThreadState,
-  /** Queued-run affordances (#472). Omitted (the default) renders every bubble read-only,
-   *  which is what every caller outside the live thread view wants. */
-  edit?: {
-    onEditTask: (text: string) => Promise<void>
-    onEditMessage: (msgId: string, text: string) => Promise<void>
-    onRemoveMessage: (msgId: string) => Promise<void>
-  },
-): ThreadRow[] {
-  const rows: ThreadRow[] = []
-  // The initial prompt: the engine writes no v1 `user-message` line for it — the task on
-  // the run record IS that message, so it renders from there, not from an invented event.
-  if (run.task)
-    rows.push({
-      key: 'task',
-      node: (
-        <UserBubble
-          text={run.task}
-          images={run.taskImages ?? []}
-          // Editable but never removable: a run with no prompt is not a run.
-          onEdit={edit ? edit.onEditTask : undefined}
-          editLabel="Edit the prompt"
-        />
-      ),
-    })
-  // Messages stacked onto the run while it waits for a slot (#472). Same provenance as the
-  // task bubble — they live on the record, not in the event stream, and the engine writes no
-  // `user-message` line for them (they are folded into the prompt, not sent as turns). So
-  // rendering them here is what keeps the thread showing exactly one bubble per authored
-  // message, before the run starts and after.
-  for (const message of run.queuedMessages ?? []) {
-    rows.push({
-      key: `queued:${message.id}`,
-      node: (
-        <UserBubble
-          text={message.text}
-          images={message.images ?? []}
-          onEdit={edit ? (text) => edit.onEditMessage(message.id, text) : undefined}
-          onRemove={edit ? () => edit.onRemoveMessage(message.id) : undefined}
-        />
-      ),
-    })
-  }
-  for (const turn of thread.turns) {
-    if (turn.userMessage) {
-      rows.push({
-        key: `${turn.id}:user`,
-        node: (
-          <UserBubble
-            text={turn.userMessage.text}
-            imageCount={turn.userMessage.imageCount}
-            images={turn.userMessage.images}
-          />
-        ),
-      })
-    }
-    for (const block of groupThreadItems(turn.items)) {
-      rows.push({
-        key: `${turn.id}:${block.id}`,
-        node: <ThreadBlockView block={block} scope={turn.id} run={run} />,
-      })
-    }
-  }
-  return rows
 }
 
 /** The loaded thread. The header owns its own data hooks (mutations, the runs list); the
@@ -285,13 +209,28 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
     [queued, patchRunAsync, editQueuedAsync, removeQueuedAsync],
   )
 
-  const rows = useMemo(() => buildThreadRows(run, thread, edit), [run, thread, edit])
+  const sections = useMemo(() => mainTranscriptSections(run, thread), [run, thread])
+  const rows = useMemo(() => buildTranscriptRows(sections, run.id), [sections, run.id])
+  const renderAsk = useCallback((ask: ThreadAsk) => <AskCard ask={ask} run={run} />, [run])
+  const messageActions = useMemo<Readonly<Record<string, TranscriptMessageActions>> | undefined>(() => {
+    if (edit === undefined) return undefined
+    const actions: Record<string, TranscriptMessageActions> = {
+      task: { onEdit: edit.onEditTask, editLabel: 'Edit the prompt' },
+    }
+    for (const message of run.queuedMessages ?? []) {
+      actions[`queued:${message.id}`] = {
+        onEdit: (text) => edit.onEditMessage(message.id, text),
+        onRemove: () => edit.onRemoveMessage(message.id),
+      }
+    }
+    return actions
+  }, [edit, run.queuedMessages])
   // #526: the footer's issue link may be synthesized from the CEZ:ISSUE marker, and the only
   // repository it may ever name is the one on screen — never the transcript's.
   const issueUrl = taskIssueUrl(run, useProjectRepoBase())
   const { search } = useLocation()
   const mode = threadRenderMode(search, rows.length)
-  const scroll = useThreadScroll(run.id)
+  const scroll = useThreadScroll(`${run.id}:main`)
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
@@ -303,9 +242,16 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
       <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
-        <ThreadCardCache runId={run.id}>
-          <ThreadRows runId={run.id} rows={rows} mode={mode} controls={scroll} />
-        </ThreadCardCache>
+        <SessionTranscript
+          runId={run.id}
+          viewId="main"
+          sections={sections}
+          mode="document"
+          renderAsk={renderAsk}
+          messageActions={messageActions}
+          scrollControls={scroll}
+          renderMode={mode}
+        />
 
         {thread.turns.length === 0 ? (
           run.status === 'queued' ? (
@@ -372,16 +318,15 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
       <AcceptCelebration status={run.status} />
 
       {/* The drill-down for whichever Agents-dock row was clicked. Rendered outside the dock
-          so the sheet's portal is not affected by the dock's collapse state — but inside its
-          own card cache (module-level and run-keyed, so this is the SAME store the thread
-          uses), or tool cards expanded in the sheet would forget that on reopen. */}
-      <ThreadCardCache runId={run.id}>
-        <SubagentSheet
-          agent={openAgent}
-          entries={openAgentChildren}
-          onClose={() => setOpenAgentId(undefined)}
-        />
-      </ThreadCardCache>
+          so the sheet's portal is not affected by the dock's collapse state. SessionTranscript
+          owns the shared run-keyed card cache, so expanded sheet cards survive a reopen. */}
+      <SubagentSheet
+        runId={run.id}
+        renderAsk={renderAsk}
+        agent={openAgent}
+        entries={openAgentChildren}
+        onClose={() => setOpenAgentId(undefined)}
+      />
 
       {/* The dock region (mockup `.dock`): plan dock, paused hint, then the composer.
           `bottom: var(--kb)` is the iOS keyboard lift — 0 until the visualViewport watcher
@@ -485,51 +430,4 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
       </p>
     </div>
   )
-}
-
-/** One grouped block → its surface. Grouping (context groups, streaks, sub-agent nesting) is
- *  `groupThreadItems`'s — this only maps block kinds to components. `scope` (the turn's render
- *  key) namespaces the open-card cache keys, because item ids repeat across sessions. */
-function ThreadBlockView({ block, scope, run }: { block: ThreadBlock; scope: string; run: ApiRun }) {
-  switch (block.kind) {
-    case 'entry':
-      return <ThreadEntryView entry={block.entry} scope={scope} run={run} />
-    case 'tool-card':
-      return <ToolCard item={block.item} nested={block.children} cacheKey={`${scope}:${block.id}`} />
-    case 'context-group':
-      return <ContextGroup group={block} scope={scope} />
-    case 'streak':
-      return (
-        <ToolStreak count={block.count}>
-          {block.blocks.map((inner) => (
-            <ThreadBlockView key={inner.id} block={inner} scope={scope} run={run} />
-          ))}
-        </ToolStreak>
-      )
-  }
-}
-
-/** One reducer entry → its block (non-tool entries; tools always arrive as tool-card blocks). */
-function ThreadEntryView({ entry, scope, run }: { entry: ThreadEntry; scope: string; run: ApiRun }) {
-  switch (entry.kind) {
-    case 'message':
-      // Agent-side user echoes (some backends emit them) read as user bubbles too.
-      return entry.role === 'assistant' ? (
-        <AssistantMessage text={entry.text} />
-      ) : (
-        <UserBubble text={entry.text} />
-      )
-    case 'reasoning':
-      return <ReasoningItem text={entry.text} />
-    case 'tool':
-      return <ToolCard item={entry} cacheKey={`${scope}:${entry.id}`} />
-    case 'note':
-      return <NoteLine note={entry} />
-    case 'image':
-      return <ImageItem image={entry} />
-    case 'ask':
-      return <AskCard ask={entry} run={run} />
-    case 'provider-auth-required':
-      return <ProviderAuthRequiredCard incident={entry} />
-  }
 }

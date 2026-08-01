@@ -33,6 +33,7 @@ function serve(
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
     },
+    agentDefaults: {},
     ...overrides,
   }
   const update: SkillsUpdateState = {

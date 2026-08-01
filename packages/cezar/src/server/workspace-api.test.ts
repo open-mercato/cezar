@@ -106,6 +106,10 @@ describe('the workspace settings API (step 2.7)', () => {
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
       },
+      // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
+      // keys mean "this machine has no opinion", which is what makes them defaults a repo can be
+      // silent about rather than settings every checkout inherits a value from.
+      agentDefaults: {},
     });
     // Absolute project roots belong on /api/v1/projects; schemaVersion is a
     // migration cursor, not a setting.
@@ -144,6 +148,9 @@ describe('the workspace settings API (step 2.7)', () => {
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
       },
+      // Untouched by a resources write, and still empty — the two live in the same file but answer
+      // unrelated questions, so one must never materialize the other.
+      agentDefaults: {},
     });
     // Round-trip through GET and the raw file.
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.maxParallel).toBe(5);

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -64,16 +64,61 @@ beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-agents-'))
   mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
   writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN], null, 2), 'utf8')
-  copyFileSync(
+  // Derive a long attributed child stream from the real `mock:subagents` recording. The
+  // source fixture stays verbatim; this test adds scale without pretending the runner emitted
+  // data it cannot currently attribute (notably images, whose persisted v1 line has no parent).
+  const recorded = readFileSync(
     resolve(import.meta.dirname, 'fixtures/subagents-run.ndjson'),
-    join(dataRoot, '.ai/cezar/runs', `${RUN_ID}.ndjson`),
+    'utf8',
   )
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+  const taskCompletion = recorded.findIndex(
+    (event) =>
+      event.type === 'item.completed' &&
+      (event.item as { id?: string } | undefined)?.id === 'toolu_task_a_1',
+  )
+  const longChildren = Array.from({ length: 34 }, (_, index) => ({
+    type: 'item.completed',
+    item: {
+      kind: 'tool',
+      id: `toolu_sub_long_${index}`,
+      name: 'Bash',
+      toolKind: 'execute',
+      title: `Ran long check ${index + 1}`,
+      status: 'completed',
+      output: `long check ${index + 1} passed`,
+      exitCode: 0,
+      parentItemId: 'toolu_task_a_1',
+    },
+    stepId: 'task',
+  }))
+  recorded.splice(taskCompletion, 0, ...longChildren)
+  const scaled = recorded
+    .map((event, index) =>
+      JSON.stringify({
+        ...event,
+        seq: index + 1,
+        ts: new Date(Date.UTC(2026, 6, 21, 10, 0, index)).toISOString(),
+      }),
+    )
+    .join('\n')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs', `${RUN_ID}.ndjson`), `${scaled}\n`, 'utf8')
 
   const port = await freePort()
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [
+      join(repoRoot, 'packages/cezar/dist/index.js'),
+      'serve',
+      '--repo',
+      dataRoot,
+      '--port',
+      String(port),
+      '--no-open',
+    ],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
@@ -110,7 +155,7 @@ describe('the Agents dock against a replayed fan-out', () => {
 
     expect(rows[0]!.text).toContain('Audit the auth flow')
     expect(rows[0]!.type).toBe('general-purpose')
-    expect(rows[0]!.tools).toBe('2 tools')
+    expect(rows[0]!.tools).toBe('36 tools')
     expect(rows[1]!.text).toContain('Review the store layer')
     expect(rows[1]!.type).toBe('code-reviewer')
     expect(rows[1]!.tools).toBe('1 tool')
@@ -150,6 +195,39 @@ describe('the Agents dock against a replayed fan-out', () => {
     browser.press('Escape')
     browser.waitForFunction(`document.querySelector('[data-slot="subagent-sheet"]') === null`)
     expect(browser.evaluate(`document.querySelector('${DOCK}') !== null`)).toBe(true)
+  }, 120_000)
+
+  it('the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill', () => {
+    browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
+    browser.click(`${ROW}:nth-of-type(1) button`)
+    browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"]') !== null`)
+
+    const metrics = JSON.parse(
+      browser.evaluate(`JSON.stringify((() => {
+        const el = document.querySelector('[data-slot="transcript-viewport"]')
+        const style = getComputedStyle(el)
+        return {
+          overflowY: style.overflowY,
+          scrollbarGutter: style.scrollbarGutter,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+        }
+      })())`) as string,
+    ) as { overflowY: string; scrollbarGutter: string; scrollHeight: number; clientHeight: number }
+    expect(metrics.overflowY).toBe('auto')
+    expect(metrics.scrollbarGutter).toContain('stable')
+    expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+
+    browser.evaluate(`(() => {
+      const el = document.querySelector('[data-slot="transcript-viewport"]')
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
+      el.scrollTop = 0
+      el.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })()`)
+    browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
+    browser.screenshot(join(artifactsDir, 'agents-dock-long-transcript.png'))
+    browser.click('[data-slot="jump-to-latest"]')
   }, 120_000)
 
   it('collapses to a one-line odometer', () => {

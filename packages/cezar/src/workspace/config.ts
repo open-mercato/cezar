@@ -76,6 +76,32 @@ const composerDefaultsSchema = z
   })
   .passthrough();
 
+/**
+ * What a repo that has said nothing runs (spec 2026-07-29-agent-profiles).
+ *
+ * The point is not to configure every checkout: a repo's own `.ai/cezar/config.json` still wins
+ * key by key, and this is only consulted where that file is SILENT. Which is why every key here is
+ * optional with no default — an absent `runner` has to stay distinguishable from one someone chose,
+ * or "fall back to the machine default" collapses into "always claude".
+ *
+ * Personal and per-machine, like everything else in this file. The repo config is the team's; this
+ * is yours.
+ */
+const agentDefaultsSchema = z
+  .object({
+    runner: z.enum(PROVIDER_IDS).optional().catch(undefined),
+    models: z
+      .object({
+        claude: z.string().trim().min(1).max(200).optional().catch(undefined),
+        codex: z.string().trim().min(1).max(200).optional().catch(undefined),
+        opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
+      })
+      .passthrough()
+      .optional()
+      .catch(undefined),
+  })
+  .passthrough();
+
 const workspacePathSchema = (envName: 'CEZ_BROWSE_ROOT' | 'CEZ_PROJECTS_DIR', fallback: string) => {
   const defaultValue = () => process.env[envName]?.trim() || fallback;
   return z.string().min(1).max(4096).default(defaultValue).catch(defaultValue);
@@ -121,6 +147,8 @@ const workspaceConfigSchema = z
     composerDefaults: composerDefaultsSchema.default(() => ({})).catch(() => ({})),
     /** Host-wide provider preferences; absent means every provider is enabled. */
     disabledProviders: disabledProvidersSchema,
+    /** Machine-wide agent/model defaults for repos that set none of their own. */
+    agentDefaults: agentDefaultsSchema.default(() => ({})).catch(() => ({})),
     /** Per-entry salvage: a corrupt entry is dropped, the rest of the registry
      *  survives (a whole-array `.catch([])` would evict every project over one
      *  bad row). */

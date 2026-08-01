@@ -226,6 +226,9 @@ export function buildCreateRunBody(opts: {
   /** True when the draft contains a sticky/user runner choice rather than an untouched default. */
   runnerExplicit?: boolean
   defaultRunner?: Runner
+  /** Per-task agent account (spec 2026-07-29-agent-profiles) — the composer's override of the
+   *  project's own selection, applying to `runner`. Absent/empty follows the project. */
+  agentProfile?: string | null
   variants: number
   images: readonly ImageInput[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
@@ -249,6 +252,7 @@ export function buildCreateRunBody(opts: {
     runner,
     runnerExplicit,
     defaultRunner,
+    agentProfile,
     variants,
     images,
     worktree,
@@ -263,6 +267,9 @@ export function buildCreateRunBody(opts: {
       : { workflow: source.ref }),
     model: modelsLocked ? undefined : model || undefined,
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
+    // Sent only when the user picked one — an absent key is "follow the project", which is what
+    // every launch that never touched the control means.
+    agentProfile: agentProfile || undefined,
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
     // Off only matters for a single run — variants always isolate.

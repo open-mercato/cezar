@@ -1,7 +1,7 @@
 import { ChevronDownIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
-import type { Runner } from '@open-mercato/cezar-api-client'
+import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -116,29 +116,102 @@ export function PickerPill({
   )
 }
 
-/** Runner choice — rendered only when the host offers more than one backend, so a claude-only
- *  machine keeps the simple form (legacy rule). */
+/**
+ * One agent account, as this pill needs to show it (spec 2026-07-29-agent-profiles).
+ *
+ * `id` is the reserved `default` for the DISCOVERED account — the one `agentHomePaths()` finds —
+ * and a stored slug otherwise.
+ */
+export interface RunnerAccountChoice {
+  provider: Runner
+  id: string
+  label: string
+  /** The folder, as written. The labels are cezar's invention; the folder IS the account. */
+  configDir: string
+}
+
+/** How one row of the pill's menu is addressed: the agent, and which of its logins. */
+const choiceValue = (runner: Runner, account: string | null): string =>
+  account === null ? runner : `${runner}:${account}`
+
+/**
+ * Which agent — and, when there is more than one login for it, which account — in ONE flat list:
+ *
+ *     claude · Default
+ *     claude · Klaudiusz
+ *     codex
+ *
+ * Not a runner group with an account group nested under it. Every row is a concrete thing that can
+ * run this task, so what will happen is readable at a glance instead of assembled from two
+ * selections. An agent with a single login stays a single row, which is why a machine with no extra
+ * accounts sees exactly the list it always saw.
+ *
+ * The pill renders for a CHOICE: more than one runner, or more than one account for one runner. A
+ * host with one agent and one login has neither, and the caller leaves it out.
+ *
+ * Three wire states, and the difference between the first two matters:
+ *   - `account === null` — follow the repo's setting. What an untouched pill means, and it stays
+ *     true if that setting changes before the task starts.
+ *   - `'default'` — the discovered account, EXPLICITLY. Beats the repo setting server-side
+ *     (`selectProfile`), which is what makes "claude · Default" mean it in a repo set to another
+ *     account.
+ *   - a stored id — that account.
+ */
 export function RunnerPill({
   runners,
   value,
   onPick,
   disabled = false,
+  accounts = [],
+  account = null,
+  repoAccount,
 }: {
   runners: readonly Runner[]
   value: Runner
-  onPick: (runner: Runner) => void
+  /** `account` is `null` only while the repo's own choice is still the one in force. */
+  onPick: (runner: Runner, account: string | null) => void
   disabled?: boolean
+  /** Every login for every runner, discovered accounts included. Empty = the zero-config host. */
+  accounts?: readonly RunnerAccountChoice[]
+  /** The per-task override. */
+  account?: string | null
+  /** What the repo's setting resolves to per runner — the row that is selected until overridden. */
+  repoAccount?: Partial<Record<Runner, string>>
 }) {
-  const options = RUNNERS.filter((r) => runners.includes(r.id))
+  const available = RUNNERS.filter((r) => runners.includes(r.id))
+  const options = available.flatMap((runner) => {
+    const logins = accounts.filter((entry) => entry.provider === runner.id)
+    // One login is not a choice, so it does not become a row of its own — the agent is the row.
+    if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id, desc: runner.desc }]
+    return logins.map((login) => ({
+      value: choiceValue(runner.id, login.id),
+      label: `${runner.id} · ${login.label}`,
+      // The folder, because the label is cezar's invention and the folder is the account.
+      desc: login.configDir,
+    }))
+  })
+
+  // What is selected right now: the override if the user made one, else whatever the repo resolves
+  // to, else the discovered account. Falls back to the plain runner row for an agent with one login
+  // — and for an override naming an account that has since been deleted, which must not leave the
+  // pill pointing at nothing.
+  const selected = account ?? repoAccount?.[value] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const value_ = options.some((option) => option.value === choiceValue(value, selected))
+    ? choiceValue(value, selected)
+    : choiceValue(value, null)
+
   return (
     <PickerPill
       slot="runner-pill"
       ariaLabel="Runner"
-      label={value}
-      value={value}
+      label={options.find((option) => option.value === value_)?.label ?? value}
+      value={value_}
       disabled={disabled}
-      onPick={(next) => onPick(next as Runner)}
-      options={options.map((r) => ({ value: r.id, label: r.label, desc: r.desc }))}
+      onPick={(next) => {
+        const [runner, picked] = next.split(':')
+        onPick(runner as Runner, picked ?? null)
+      }}
+      options={options}
     />
   )
 }

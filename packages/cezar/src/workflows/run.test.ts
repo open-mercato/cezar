@@ -1020,6 +1020,22 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(v1Text.some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
 
+  it('normalizes a near-valid presentation-only marker into exactly one ask card', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-near choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((event) => event.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{
+      header: string;
+      options: Array<{ label: string; description?: string }>;
+    }>;
+    expect(questions[0]!.header).toBe('Implementati');
+    expect(questions[0]!.options[0]).toEqual({ label: 'Minimal', description: 'd'.repeat(280) });
+    expect(events.filter((event) => event.type === 'text').some((event) => String(event.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
+
   it('a markerless turn-end raises no ask.requested', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
     currentId = record.id;
@@ -1034,7 +1050,9 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const parked = store.getRun(record.id);
     expect(parked?.status).toBe('waiting'); // still parks — never worse than the prose fallback
     expect(parked?.activity).toBeUndefined();
-    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(false);
+    const events = readEvents(record.id);
+    expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON'))).toHaveLength(1);
   }, 30_000);
 
   // Regression (blank-question bug): valid JSON that fails the ask schema used
@@ -1048,6 +1066,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'waiting');
     const events = readEvents(record.id);
     expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('failed validation'))).toHaveLength(1);
     const assistantText = events.filter((e) => e.type === 'text');
     expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
   }, 30_000);

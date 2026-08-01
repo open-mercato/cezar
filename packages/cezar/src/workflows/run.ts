@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { parseAskMarker, stripAskMarker, type AskRequest } from '../core/ask.ts';
+import {
+  parseAskMarkerResult,
+  stripAskMarker,
+  type AskMarkerParseResult,
+  type AskRequest,
+} from '../core/ask.ts';
 import { type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -38,6 +43,7 @@ import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-re
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
@@ -100,6 +106,17 @@ function emitAskRequested(sink: UiEventSink, ask: AskRequest): string {
   const requestId = randomUUID();
   sink.handle({ type: 'ask.requested', requestId, questions: ask.questions });
   return requestId;
+}
+/** A persisted, non-fatal explanation for protocol-shaped text that could not
+ * become an ask card. Never include the raw payload in this diagnostic. */
+function askMarkerRejection(result: AskMarkerParseResult): string | undefined {
+  if (result.kind === 'invalid-json') {
+    return 'structured question ignored — CEZ:ASK payload is not valid JSON';
+  }
+  if (result.kind !== 'invalid-structure') return undefined;
+  const issue = result.issues[0];
+  const location = issue?.path.length ? ` at ${issue.path.join('.')}` : '';
+  return `structured question ignored — CEZ:ASK payload failed validation${location}${issue ? `: ${issue.message}` : ''}`;
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
@@ -165,6 +182,10 @@ export interface StartRunInput {
   model?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
+  /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
+   *  on `runner`. Unset = the project's own selection. Persisted on the record so the choice
+   *  survives into resume and Continue, and so the thread can say which account did the work. */
+  agentProfile?: string;
   /** Screenshots pasted into the new-task form — persisted when the run is
    *  created and delivered once, with the first agent step's opening message. */
   images?: ContentBlock[];
@@ -487,6 +508,39 @@ export class RunManager {
     };
   }
 
+  /**
+   * `agentEnv` plus the agent-account variable for the profile this STEP runs under (spec
+   * 2026-07-29-agent-profiles), and the id it resolved to so the caller can record it.
+   *
+   * Resolved per step, not per run, because a workflow can mix backends: an override naming a
+   * Claude account says nothing about which Codex account a codex step should use. Resolution
+   * order, most specific first:
+   *
+   *   1. the step's ALREADY-RECORDED `profileId` — a resume or Continue must reattach to the
+   *      account that created the session, whatever the project has since been switched to;
+   *   2. the run's composer override, but only for steps on the run's own runner;
+   *   3. the project's stored selection, and failing that the discovered default.
+   *
+   * Read fresh every time. `~/.cezar/config.json` is shared by every cezar process on this
+   * machine, so a cached snapshot is a staleness bug, and one small JSON read is free next to
+   * spawning a CLI. Never throws: an unreadable home degrades to the default profile, which is
+   * exactly the behaviour that predates profiles.
+   */
+  private async agentEnvForStep(
+    runId: string,
+    backend: RunnerId,
+    options: { generateFollowups?: boolean; recordedProfileId?: string } = {},
+  ): Promise<{ env: Record<string, string>; profileId: string }> {
+    const run = this.store.getRun(runId);
+    const profileId = options.recordedProfileId
+      ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
+    const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
+    return {
+      env: { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env },
+      profileId: resolved.profile.id,
+    };
+  }
+
   startRun(
     workflow: WorkflowDef,
     input: StartRunInput,
@@ -503,6 +557,9 @@ export class RunManager {
       task: input.task,
       model: effectiveInput.model,
       runner: input.runner,
+      // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
+      // so a queued run picks it up at dequeue and every later resume reads the same answer.
+      agentProfile: input.agentProfile,
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
       // startRun directly — a route-level gate would leave those writing todos.json.
@@ -1590,10 +1647,13 @@ export class RunManager {
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is genuinely blocked; wins over `CEZ:MONITORING`
         // (a pending question is always attention), loses to `CEZ:DONE` (#473).
-        const ask = sessionOpen && !done ? parseAskMarker(turnText) : null;
+        const askResult = sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
+        const ask = askResult?.kind === 'valid' ? askResult.request : null;
+        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
         const monitoring =
           sessionOpen && !done && !ask && MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
+        if (askRejection) this.store.appendEvent(runId, { type: 'note', message: askRejection, stepId });
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
@@ -1692,6 +1752,18 @@ export class RunManager {
       this.dropActive(runId);
       return;
     }
+    // Resuming reattaches to a session that lives inside ONE account's config dir, so the
+    // continuation must run under the account that created it — not whatever the project has
+    // been switched to since. The owning step is the one carrying this session id.
+    const resumedProfileId = sessionId === undefined
+      ? undefined
+      : record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
+    const continueProfile = await this.agentEnvForStep(runId, continueBackend, {
+      generateFollowups,
+      recordedProfileId: resumedProfileId,
+    });
+    this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
+
     const runner = createRunner(continueBackend);
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
@@ -1709,7 +1781,7 @@ export class RunManager {
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
         additionalDirectories: [join(this.dataDir, 'runs')],
-        env: this.agentEnv(runId, generateFollowups),
+        env: continueProfile.env,
         model: continueModel,
         sessionId,
         resume: sessionId !== undefined,
@@ -2150,7 +2222,9 @@ export class RunManager {
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473).
-        const ask = interactive && sessionOpen && !done ? parseAskMarker(turnText) : null;
+        const askResult = interactive && sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
+        const ask = askResult?.kind === 'valid' ? askResult.request : null;
+        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
         const monitoring =
           interactive &&
           sessionOpen &&
@@ -2158,6 +2232,7 @@ export class RunManager {
           !ask &&
           MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
+        if (askRejection) emit({ type: 'note', stepId: step.id, message: askRejection });
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
           // of parking at `waiting` — the run completes and frees its slot.
@@ -2226,6 +2301,14 @@ export class RunManager {
       if (err instanceof ModelIdentityError) return err.message;
       throw err;
     }
+    // Which agent account this step spawns under, and — recorded on the step before the spawn —
+    // which one its session belongs to. `sessionId` and `profileId` are a pair: a resume that
+    // reads the wrong account's config dir finds no session and silently starts a fresh one.
+    const stepProfile = await this.agentEnvForStep(runId, stepBackend, {
+      generateFollowups: followupsEnabled() && input.generateFollowups !== false,
+    });
+    this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
+
     const runner = createRunner(stepBackend);
     let session: AgentSession;
     state.currentStepId = step.id;
@@ -2249,7 +2332,7 @@ export class RunManager {
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: [join(this.dataDir, 'runs')],
-          env: this.agentEnv(runId, followupsEnabled() && input.generateFollowups !== false),
+          env: stepProfile.env,
           model: backendModel,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.

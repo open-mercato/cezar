@@ -122,6 +122,20 @@ describe('AskCard', () => {
     expect(screen.getByText('Tree-shakeable')).toBeTruthy()
   })
 
+  it('wraps schema-valid unbroken question and option text inside the card', () => {
+    const question = 'q'.repeat(400)
+    const label = 'l'.repeat(60)
+    const description = 'd'.repeat(280)
+    renderAsk({
+      ...singleAsk,
+      questions: [{ header: 'Limits', question, options: [{ label, description }, { label: 'Other' }] }],
+    })
+
+    expect(screen.getByText(question).className).toContain('break-words')
+    expect(screen.getByText(label).className).toContain('break-words')
+    expect(screen.getByText(description).className).toContain('break-words')
+  })
+
   it('a single single-select question sends "header: label" on one tap (no Send button)', () => {
     renderAsk(singleAsk)
     expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
@@ -158,7 +172,7 @@ describe('AskCard', () => {
   it('a resolved ask collapses to a compact answered summary with no option buttons', () => {
     renderAsk({ ...singleAsk, resolved: true, answer: 'Library: date-fns' })
     expect(screen.getByText('Answered')).toBeTruthy()
-    expect(screen.getByText('Library: date-fns')).toBeTruthy()
+    expect(screen.getByText('Library: date-fns').className).toContain('break-words')
     expect(screen.queryByRole('button', { name: /date-fns/ })).toBeNull()
   })
 

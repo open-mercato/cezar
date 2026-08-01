@@ -11,6 +11,30 @@
   additive mount rather than an edit to every route.
 
 ## ✨ Features
+- ✨ **Agent accounts: run one project on your work login and another on your personal one.**
+  The same CLI logged in twice — `CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
+  Codex — is now something cezar can address. Add the extra config folder under **Settings → Agent
+  accounts**, pick which account each project uses in **Settings → Agents**, and override it for a
+  single task from the composer. Each account reports its own connection state and gets its own
+  **Connect**, and "Open in → Claude CLI" hands the terminal the account that actually ran the
+  work, so `--resume` lands on the right conversation instead of silently starting a fresh one.
+  Each agent gets its own tab, showing whether it is installed, its version, and its logins.
+  **Show details** on a login reveals the email, organization and plan it is signed in as, and
+  opens any of that account's own config files — `settings.json`, `CLAUDE.md`, `config.toml`,
+  `AGENTS.md` — resolved inside *that* folder rather than the default account's, through the same
+  **Open in…** menu the task thread uses, so you can pick the system default or any editor the
+  machine has. Identity is opt-in
+  by construction: it has its own request, made only when you expand a row, so nothing carries an
+  email until you ask.
+  Zero-config is untouched: with one login there is no new control anywhere, and no new variable in
+  any spawned process. Accounts live in their own `~/.cezar/agent-accounts.json` rather than a key
+  in `config.json`, so switching to an older cezar and back cannot lose them — a version that has
+  never heard of accounts does not open that file. cezar does not go looking for accounts (a folder
+  is one because you said so, and you can type a path that does not exist yet), and it never
+  silently falls back to another account when the one you chose is unavailable,
+  because that would bill the wrong subscription while the UI said otherwise. OpenCode is not
+  supported yet: it keeps credentials outside its config folder, so a second folder would change
+  settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 - ✨ **The two mixed-format routes do real HTTP content negotiation.** `GET /api/v1/repo/commit/:sha`
   (legacy text blob or structured commit payload) and `GET /api/v1/runs/:id/files` (JSON listing or
   an image's raw bytes) now honour the request's `Accept` header, answer `Vary: Accept`, and set a
@@ -65,6 +89,52 @@ A stabilization release that hardens single-project mode and sharpens the cockpi
 - ✨ Project-aware browser page titles (fixes #543). (#592) *(@pkarw)*
 
 ## 🐛 Fixes
+- ⚡ **Settings → Agent accounts opens instantly.** The account listing used to probe every agent's
+  login while you waited — one CLI shell-out per agent plus one per account, 2.5s on a machine with
+  four accounts. Which login an agent uses is operating knowledge that changes only when you run
+  `claude auth login`, so cezar now warms every account — extra logins included — once at boot and
+  keeps it in memory instead of re-probing every few seconds; the listing serves what it holds and never spawns anything (the rule
+  `/api/v1/health` already follows). A *disconnected* answer is still re-checked within seconds,
+  because that one blocks starting a run — so logging in from a terminal is not punished with a
+  ten-minute wait. Same machine, same accounts: 2.5s → 12ms.
+- **An added agent account can now be signed in from cezar.** The account row grows Connect and
+  Check again; Connect opens a terminal aimed at that account's config dir rather than the default
+  one. Previously the pane pointed at a Connect button that did not exist.
+- **A task now says which agent, account and model produced it**, as text in the header
+  (`claude · Klaudiusz · opus`) rather than hidden behind an icon; the account is the one the step actually spawned under, so a resumed
+  task reports the login that owns its session rather than whatever the project is set to now.
+- ✨ **Settings → Agent accounts now sets the default agent, account and models once, not per repo.**
+  A project that has chosen nothing now follows the machine-wide default — and a project that HAS
+  chosen is never moved by changing it, so a global tweak cannot quietly re-point work you already
+  configured. Models merge per agent, so pinning one repo's Claude model keeps the machine's Codex
+  preset.
+- **Settings → Agents picks the default agent and its account in one click.** "Default runner" and
+  the separate account picker were two fields answering one question; they are now a single flat
+  list — `claude · Default`, `claude · Klaudiusz`, `codex` — matching the composer. The runner still
+  goes to the repo's committable config and the account to your machine only, so a teammate keeps
+  their own. With no extra logins it is the control it always was.
+- **The composer's runner pill now lists agents and logins as one flat list** — `claude · Default`,
+  `claude · Klaudiusz`, `codex` — instead of a separate account pill beside it. Every row is a
+  concrete thing that can run the task, so which subscription it will bill is readable without
+  opening anything. It starts on whatever the repo is set to and any row overrides it for that task
+  alone. An agent with one login stays one row, so a machine with no extra accounts sees the list it
+  always saw.
+- **fix(server): `GET /api/v1/providers/status` no longer stalls for ~1–3s whenever its cache
+  lapses.** It shares the same knowledge as the accounts listing and had the same problem from the
+  other side: any provider you are not signed into pulled the whole response onto a five-second
+  window, so one reader in every five seconds paid for three CLI spawns. Reads are now
+  stale-while-revalidate (what `/api/v1/health` already does) and the run gate re-checks a provider
+  before refusing to start a run, instead of the cache being kept young to protect it. Measured on
+  the built server: reads that alternated between 3ms and 817ms are now 1–7ms across every cache
+  window, while "Check again" (`?refresh=1`) still blocks for the real answer.
+- 🐛 **`CLAUDE_CONFIG_DIR` is honoured.** A host that relocates Claude Code's config folder was
+  invisible to the Agent config pane, which kept showing `~/.claude`. Related: the MCP listing read
+  `~/.claude.json` from the wrong place under an override — that file is a *sibling* of the default
+  folder but lives *inside* a relocated one.
+- 🐛 **`CEZ_CLAUDE_BIN` counts as "installed".** The environment probe hardcoded a bare `claude`,
+  unlike every other call site, so a host whose only install is at a custom path reported Claude as
+  missing — dropping it from the composer and the installer's dependency step even though runs
+  would have worked.
 - ⚡ Virtualize the diff and the task commit list. (#599) *(@patzick)*
 - 🐛 Repair concatenated task titles (fixes #623). (#627) *(@pkarw)*
 - 🐛 Prevent single-project registry leak (fixes #626). (#629) *(@pkarw)*

@@ -80,6 +80,11 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
+   *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
+   *  that created it, so resume and Continue read this rather than the project's current
+   *  selection. Absent on records written before accounts existed. */
+  profileId: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -143,6 +148,9 @@ export const runRecordSchema = z.object({
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
+  /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
+   *  on `runner`. Absent = the run follows the project's own selection. */
+  agentProfile: z.string().optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
@@ -459,6 +467,9 @@ export const createRunInputBaseSchema = z
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     runner: runnerSchema.optional(),
+    /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
+     *  project's own selection; an id that no longer exists is a 400, not a silent default. */
+    agentProfile: z.string().max(64).optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).

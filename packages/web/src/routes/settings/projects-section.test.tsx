@@ -72,6 +72,7 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
   }
   const config: WorkspaceConfigResponse = {
+    agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,

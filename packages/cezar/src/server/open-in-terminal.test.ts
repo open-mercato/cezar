@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { wslTerminalLaunchers } from './open-in-terminal.ts';
+import { openInTerminal, wslTerminalLaunchers } from './open-in-terminal.ts';
 
 describe('wslTerminalLaunchers (#361 WSL support)', () => {
   it('tries Windows Terminal first, re-entering the distro through wsl.exe', () => {
@@ -27,5 +27,18 @@ describe('wslTerminalLaunchers (#361 WSL support)', () => {
   it('addresses the distro the launch actually runs in, not a hardcoded default', () => {
     const [first] = wslTerminalLaunchers('/tmp/script.sh', 'Debian');
     expect(first?.[1]).toContain('Debian');
+  });
+});
+
+describe('openInTerminal env (spec 2026-07-29-agent-profiles)', () => {
+  it('refuses to launch anything when the account env cannot be embedded safely', async () => {
+    // Fail CLOSED. Launching the bare command would open a terminal on a DIFFERENT account than
+    // the user asked for, and nothing in the window would say so — worse than not opening one.
+    // The refusal happens before any spawn, which is what makes this assertable without mocks.
+    await expect(
+      openInTerminal('/tmp', 'claude --resume abc', {
+        CLAUDE_CONFIG_DIR: `/home/u${String.fromCharCode(10)}evil`,
+      }),
+    ).resolves.toBe(false);
   });
 });

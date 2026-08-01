@@ -17,6 +17,7 @@ import { createRun, getLaunchKey, postPlan, putConfig, putUiState } from '@/api/
 import { useProjectScope } from '@/api/project-scope-context'
 import {
   queryKeys,
+  useAgentProfiles,
   useConfig,
   useHealth,
   useProviderStatus,
@@ -221,6 +222,32 @@ export function NewTaskRoute() {
   const model = runner === null
     ? ''
     : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+  // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
+  // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
+  // readable at a glance instead of assembled from two controls. An agent with a single login stays
+  // a single row, which is why a host with no extra accounts sees the list it always saw.
+  const profiles = useAgentProfiles()
+  const accountChoices = (profiles.data?.profiles ?? []).map((profile) => ({
+    provider: profile.provider as Runner,
+    id: profile.id,
+    label: profile.label,
+    configDir: profile.configDir,
+  }))
+  // A draft account belonging to ANOTHER runner is ignored rather than sent: switching runner must
+  // not silently carry a foreign account along.
+  const agentProfile = accountChoices.some(
+    (choice) => choice.provider === displayRunner && choice.id === draft.agentProfile,
+  )
+    ? draft.agentProfile
+    : null
+  // Which account each runner falls back to until the task overrides it. Selections are keyed by
+  // repo ROOT — the same key the store uses — and the root comes from `useRepo`, which is
+  // project-scoped and so already answers for the ACTIVE project; going through the projects list
+  // would mean re-deriving a mapping the API has already done.
+  const repoRoot = repo.data?.info?.root
+  const repoAccount = (repoRoot ? profiles.data?.selections[repoRoot] : undefined) as
+    | Partial<Record<Runner, string>>
+    | undefined
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -420,6 +447,7 @@ export function NewTaskRoute() {
         modelsLocked,
         runner,
         runnerExplicit: draft.runner !== null,
+        agentProfile,
         defaultRunner,
         variants,
         images,
@@ -585,12 +613,27 @@ export function NewTaskRoute() {
                 iconOnly
                 onInsert={(text) => composerRef.current?.insertAtCaret(text)}
               />
-              {runners.length > 1 ? (
+              {/* Shown when there is a choice to make: more than one runner, or more than one
+                  login for one of them. A host with neither sees no pill, exactly as before. */}
+              {runners.length > 1
+              || runners.some((id) => accountChoices.filter((c) => c.provider === id).length > 1) ? (
                 <RunnerPill
                   runners={runners}
                   value={displayRunner}
+                  accounts={accountChoices}
+                  account={agentProfile}
+                  repoAccount={repoAccount}
+                  // Changing the AGENT clears the model pin: presets are per-runner, so a kept
+                  // model would be one the new runner does not have. Changing only the account
+                  // keeps it — the model catalog is the same either way.
+                  onPick={(next, picked) =>
+                    update({
+                      runner: next,
+                      agentProfile: picked,
+                      ...(next === displayRunner ? {} : { model: null }),
+                    })
+                  }
                   disabled={!providersReady}
-                  onPick={(next) => update({ runner: next, model: null })}
                 />
               ) : null}
               <PickerPill

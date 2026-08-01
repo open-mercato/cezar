@@ -597,7 +597,7 @@ describe('notes panel', () => {
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
-  it('meta shows workflow · branch chip · ± · input/output · cost, with runner/model tucked into the agent badge', () => {
+  it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -610,9 +610,16 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     expect(meta.textContent).toContain('quick-task')
-    // Runner/model are no longer loose text next to the workflow — they live in the badge.
-    expect(meta.textContent).not.toContain('codex')
-    expect(meta.textContent).not.toContain('gpt-5.2-codex')
+    // #416 pulled runner/model out of the loose dot-list to cut noise, and that still holds — they
+    // are not separate chips beside the workflow. But an icon ALONE made "which agent, account and
+    // model produced this?" unanswerable without knowing to click it, which is the one question the
+    // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
+    // labelled breakdown.
+    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
+    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent)
+      .toBe('codex · gpt-5.2-codex')
+    // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
+    expect(meta.textContent?.replace(badge.textContent ?? '', '')).not.toContain('codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
     expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
@@ -620,7 +627,6 @@ describe('meta line, tabs, pill and resume hint', () => {
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
 
-    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
@@ -716,12 +722,85 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
+  /**
+   * Which ACCOUNT a task ran under (spec 2026-07-29-agent-profiles). Read from the step that
+   * actually spawned, never from the run's composer override or the project's current selection:
+   * the override is absent whenever the run simply followed the project, and the selection can have
+   * changed since — either would name an account this run may never have touched.
+   */
+  describe('the account a task ran under', () => {
+    const withAccounts = (extra: Record<string, () => Response> = {}) => stubFetch({
+      '/api/v1/workspace/agent-profiles': () => jsonResponse({
+        editable: true,
+        profileCapableProviders: ['claude', 'codex'],
+        selections: {},
+        defaults: {},
+        profiles: [
+          { id: 'default', provider: 'claude', label: 'Default', configDir: '~/.claude', path: '/home/u/.claude', exists: true, looksValid: true, isDefault: true, files: [] },
+          { id: 'klaudiusz', provider: 'claude', label: 'Klaudiusz', configDir: '~/.claude-klaudiusz', path: '/home/u/.claude-klaudiusz', exists: true, looksValid: true, isDefault: false, files: [] },
+        ],
+      }),
+      ...extra,
+    })
+
+    it('names the account the step recorded, by its label — visibly, not only on click', async () => {
+      withAccounts()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'opus',
+        steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
+      }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
+      // The regression this guards: it read as a bare bot icon, so the answer was there but nobody
+      // could find it without knowing to open a menu.
+      await waitFor(() => expect(
+        badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent,
+      ).toBe('claude · Klaudiusz · opus'))
+    })
+
+    it('prefers what RAN over what the composer asked for', async () => {
+      // A resumed run reattaches to the account that owns the session, whatever the run record's
+      // override says — so the badge must report the step, or it would name the wrong subscription.
+      withAccounts()
+      renderHeader(run('done', {
+        runner: 'claude',
+        agentProfile: 'default',
+        steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
+      }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      await within(meta).findByRole('button', { name: /account Klaudiusz/ })
+    })
+
+    it('says nothing at all for a run from before accounts existed', async () => {
+      // Nothing wrote it down, so claiming the discovered account would be an invention.
+      withAccounts()
+      renderHeader(run('done', { runner: 'claude', steps: [step({ sessionId: 'sess-1' })] }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      await within(meta).findByRole('button', { name: /Agent: claude, model auto/ })
+      expect(meta.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
+    })
+
+    it('still names an account that has since been removed', async () => {
+      // The id is the only remaining pointer to the folder this run's sessions live in.
+      withAccounts()
+      renderHeader(run('done', {
+        runner: 'claude',
+        steps: [step({ sessionId: 'sess-1', profileId: 'deleted-one' })],
+      }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      await within(meta).findByRole('button', { name: /account deleted-one \(removed\)/ })
+    })
+  })
+
   it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'claude' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    expect(meta.textContent).not.toContain('claude')
-    expect(within(meta).getByRole('button', { name: /Agent: claude, model auto/ })).not.toBeNull()
+    const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
+    // Named on the badge like any other agent — claude being the default is not a reason to leave
+    // "what produced this?" unanswered.
+    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude · auto')
   })
 
   it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {

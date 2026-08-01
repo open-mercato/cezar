@@ -5,7 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
-import type { ConfigResponse, ProviderStatusResponse, RepoResponse, Runner } from '@open-mercato/cezar-api-client'
+import type {
+  AgentProfilesResponse,
+  ConfigResponse,
+  ProjectListEntry,
+  RepoResponse,
+  Runner,
+} from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 
@@ -25,6 +31,51 @@ const REPO: RepoResponse = {
   baseBranch: null,
 }
 
+/** The boot project, as the registry answers it — the Account picker writes to this entry. */
+const PROJECT: ProjectListEntry = {
+  id: 'boot',
+  name: 'repo',
+  root: '/repo',
+  addedAt: '',
+  lastOpenedAt: '',
+  source: 'local',
+  status: 'ok',
+}
+
+/** One discovered profile per provider plus one extra Claude login. */
+const WITH_WORK_ACCOUNT: AgentProfilesResponse = {
+  defaults: {},
+  editable: true,
+  profileCapableProviders: ['claude', 'codex'],
+  selections: {},
+  profiles: [
+    {
+      id: 'default',
+      provider: 'claude',
+      label: 'Default',
+      configDir: '/home/u/.claude',
+      path: '/home/u/.claude',
+      exists: true,
+      looksValid: true,
+      isDefault: true,
+      status: { provider: 'claude', status: 'connected' },
+      files: [],
+    },
+    {
+      id: 'klaudiusz',
+      provider: 'claude',
+      label: 'Klaudiusz',
+      configDir: '~/.claude-klaudiusz',
+      path: '/home/u/.claude-klaudiusz',
+      exists: true,
+      looksValid: true,
+      isDefault: false,
+      status: { provider: 'claude', status: 'connected', profileId: 'klaudiusz' },
+      files: [],
+    },
+  ],
+}
+
 let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
 function serve({
@@ -41,6 +92,7 @@ function serve({
   providerStatusCode = 200,
   providerStatusPending = false,
   providerStatusAfterFirstError,
+  agentProfiles,
 }: {
   config?: Partial<ConfigResponse>
   putStatus?: number
@@ -49,9 +101,16 @@ function serve({
   providerStatusCode?: number
   providerStatusPending?: boolean
   providerStatusAfterFirstError?: string
+  /** Extra agent accounts (spec 2026-07-29-agent-profiles). Omitted = the route never answers,
+   *  which is how every pre-existing test in this file keeps its byte-identical surface. */
+  agentProfiles?: AgentProfilesResponse
 } = {}) {
   requests = []
   let providerStatusReads = 0
+  // The selection store, keyed by repo root exactly as `~/.cezar/agent-accounts.json` is.
+  const selections: Record<string, Record<string, string>> = {
+    ...(agentProfiles?.selections as Record<string, Record<string, string>>),
+  }
   const state: ConfigResponse = {
     baseBranch: null,
     defaultRunner: 'claude',
@@ -108,6 +167,25 @@ function serve({
         return json(state)
       }
       if (url === '/api/v1/repo' && method === 'GET') return json(REPO)
+      if (url === '/api/v1/workspace/agent-profiles' && method === 'GET' && agentProfiles) {
+        // Served from the mutable copy, so a PUT is visible to the refetch the mutation triggers —
+        // which is how the real store behaves, and the only way to assert what the pane shows AFTER
+        // a pick rather than just what it sent.
+        return json({ ...agentProfiles, selections })
+      }
+      if (url === '/api/v1/workspace/agent-profiles/selection' && method === 'PUT') {
+        const { provider, profileId } = body as { provider: string; profileId: string | null }
+        const current = { ...selections[PROJECT.root] }
+        if (profileId === null) delete current[provider]
+        else current[provider] = profileId
+        // Absence, not an empty object — the server drops a root whose last key was cleared.
+        if (Object.keys(current).length === 0) delete selections[PROJECT.root]
+        else selections[PROJECT.root] = current
+        return json({ selections })
+      }
+      if (url === '/api/v1/projects' && method === 'GET') {
+        return json({ projects: [PROJECT], bootProject: 'boot', projectsDir: '~/cezar/projects' })
+      }
       return new Promise<never>(() => {})
     }),
   )
@@ -122,8 +200,12 @@ function gateSeededClient() {
     queries: { ...client.getDefaultOptions().queries, retry: false },
   })
   client.setQueryData(queryKeys.health, { bootProject: 'boot' })
+  // Seeded WITH the boot project, not an empty list: the client's staleTime is 5 minutes, so an
+  // empty seed is never refetched and `project` stays undefined for the whole test — which renders
+  // the Account picker disabled and let its assertions pass only because `fireEvent` ignores
+  // `disabled`. This is the state the cockpit is really in by the time Settings paints.
   client.setQueryData(workspaceQueryKeys.projects, {
-    projects: [],
+    projects: [PROJECT],
     bootProject: 'boot',
     projectsDir: '~/cezar/projects',
   })
@@ -425,5 +507,149 @@ describe('the agents form', () => {
     )
     // The control did not lie: the runner stayed where the server left it.
     expect(screen.getByRole('radio', { name: 'claude' }).getAttribute('aria-checked')).toBe('true')
+  })
+
+  /**
+   * Agent + account in ONE control (spec 2026-07-29-agent-profiles): the repo's default agent and,
+   * when that agent has more than one login, which of them — the same flat list the composer's
+   * runner pill uses. The invisibility case is the load-bearing one: a user with one login must see
+   * exactly the control they saw before.
+   */
+  describe('the default agent carries the account', () => {
+    const rows = () => [...document.querySelectorAll('[data-slot="agents-runner"] [role="radio"]')]
+    const rowFor = (runner: string, account = '') =>
+      document.querySelector<HTMLButtonElement>(
+        `[data-slot="agents-runner"] [data-value="${runner}"][data-account="${account}"]`,
+      )
+    const selections = () =>
+      requests.filter((r) => r.url === '/api/v1/workspace/agent-profiles/selection')
+
+    it('stays exactly three rows when only the discovered profiles exist', async () => {
+      serve({
+        agentProfiles: {
+          defaults: {},
+          editable: true,
+          profileCapableProviders: ['claude', 'codex'],
+          selections: {},
+          profiles: WITH_WORK_ACCOUNT.profiles.filter((profile) => profile.isDefault),
+        },
+      })
+      renderAt('/settings/agents')
+      await waitFor(() => expect(form()).not.toBeNull())
+      // Settled: the default-models field below it has rendered, so the pane is not mid-load.
+      await screen.findByLabelText('Default model for claude')
+      expect(rows().map((r) => r.getAttribute('data-value'))).toEqual(['claude', 'codex', 'opencode'])
+      // …and it is still called what it always was, because there is no account in play.
+      expect(document.body.textContent).toContain('Default runner')
+    })
+
+    it('splits ONLY the agent that has a second login, and names each folder', async () => {
+      serve({ agentProfiles: WITH_WORK_ACCOUNT })
+      renderAt('/settings/agents')
+
+      await waitFor(() => expect(rows()).toHaveLength(4))
+      expect(rows().map((r) => r.textContent)).toEqual([
+        'claude · Default/home/u/.claude',
+        'claude · Klaudiusz~/.claude-klaudiusz',
+        'codexOpenAI Codex (app-server)',
+        'opencodeOpenCode (serve)',
+      ])
+      // The discovered account is the checked row until the repo says otherwise.
+      expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
+      expect(document.body.textContent).toContain('Default agent')
+    })
+
+    it('starts on the account the repo is already set to', async () => {
+      serve({
+        agentProfiles: { ...WITH_WORK_ACCOUNT, selections: { '/repo': { claude: 'klaudiusz' } } },
+      })
+      renderAt('/settings/agents')
+
+      await waitFor(() => expect(rowFor('claude', 'klaudiusz')?.getAttribute('aria-checked')).toBe('true'))
+      expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('false')
+    })
+
+    it('writes the account to the accounts store and the runner to the repo config', async () => {
+      // One click, two stores, and that split is the point: the runner is a team decision that
+      // belongs in the committable repo config, the account is personal and must never reach it.
+      serve({ agentProfiles: WITH_WORK_ACCOUNT })
+      renderAt('/settings/agents')
+
+      await waitFor(() => expect(rows()).toHaveLength(4))
+      fireEvent.click(rowFor('claude', 'klaudiusz')!)
+
+      await waitFor(() => expect(selections()).toHaveLength(1))
+      expect(selections()[0]?.body).toEqual({
+        projectId: 'default',
+        provider: 'claude',
+        profileId: 'klaudiusz',
+      })
+      // claude was ALREADY the default runner, so nothing needed saying to the repo config…
+      expect(puts()).toHaveLength(0)
+      // …nor to the project registry, whose schema a downgraded cezar would rewrite.
+      expect(requests.some((r) => r.url.startsWith('/api/v1/projects/'))).toBe(false)
+    })
+
+    it('clears back to the discovered account with null, never the reserved id', async () => {
+      serve({
+        agentProfiles: { ...WITH_WORK_ACCOUNT, selections: { '/repo': { claude: 'klaudiusz' } } },
+      })
+      renderAt('/settings/agents')
+
+      // Wait for the SPLIT state: until the accounts land, claude is one plain row, and clicking
+      // that one writes no selection — which is correct, and would make this pass for no reason.
+      await waitFor(() => expect(rows()).toHaveLength(4))
+      fireEvent.click(rowFor('claude', '')!)
+
+      await waitFor(() => expect(selections()).toHaveLength(1))
+      expect(selections()[0]?.body).toEqual({
+        projectId: 'default',
+        provider: 'claude',
+        profileId: null,
+      })
+    })
+
+    it('switches agent and account together when the picked row is another agent', async () => {
+      serve({ agentProfiles: WITH_WORK_ACCOUNT })
+      renderAt('/settings/agents')
+
+      await waitFor(() => expect(rows()).toHaveLength(4))
+      fireEvent.click(rowFor('codex')!)
+
+      await waitFor(() => expect(puts()).toHaveLength(1))
+      expect(puts()[0]?.body).toEqual({ defaultRunner: 'codex' })
+      // Codex has one login, so nothing is written to the accounts store — a selection there would
+      // record a choice the user was never offered.
+      expect(selections()).toHaveLength(0)
+    })
+
+    it('warns when the chosen account has no folder yet, rather than looking fine', async () => {
+      // A run under it fails on auth by design — it must NOT quietly use another login.
+      serve({
+        agentProfiles: {
+          ...WITH_WORK_ACCOUNT,
+          selections: { '/repo': { claude: 'klaudiusz' } },
+          profiles: WITH_WORK_ACCOUNT.profiles.map((profile) =>
+            profile.id === 'klaudiusz' ? { ...profile, exists: false, looksValid: false } : profile),
+        },
+      })
+      renderAt('/settings/agents')
+
+      await waitFor(() =>
+        expect(
+          document.querySelector('[data-slot="agents-account-missing"]')?.textContent,
+        ).toContain('folder not created yet'))
+    })
+
+    it('says the account is personal, because everything else in this pane is shared', async () => {
+      serve({ agentProfiles: WITH_WORK_ACCOUNT })
+      renderAt('/settings/agents')
+
+      await waitFor(() => expect(rows()).toHaveLength(4))
+      const pane = document.querySelector('[data-slot="agents-runner"]')?.closest('section')
+      expect(pane?.textContent).toContain('never committed')
+      // The consequence a reader cannot guess: sessions live in the account's own folder.
+      expect(pane?.textContent).toContain('can’t be resumed here')
+    })
   })
 })
