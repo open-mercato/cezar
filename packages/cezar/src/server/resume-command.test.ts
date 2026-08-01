@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSafeSessionId, resumeCommand } from './server.js';
+import { isSafeSessionId, resumeCommand } from './server.ts';
 
 /**
  * Terminal take-over (#431): `resumeCommand`'s session id is the only variable

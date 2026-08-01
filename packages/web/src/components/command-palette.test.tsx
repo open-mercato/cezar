@@ -65,12 +65,14 @@ function skill(overrides: Partial<Skill> & { name: string; source: Skill['source
 function health(forgeAvailable: boolean): HealthResponse {
   return {
     version: '0.0.0-test',
+    projects: [],
+    bootProject: 'default',
     repoRoot: '/repo',
     repo: { root: '/repo', branch: 'main' },
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, followups: true, singleProject: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false },
   }
 }
 
@@ -105,7 +107,7 @@ function renderPalette({
   uiState?: Record<string, unknown>
 } = {}) {
   if (theme) localStorage.setItem(THEME_STORAGE_KEY, theme)
-  serve({ '/api/runs': runs, '/api/skills': skills, '/api/health': health(forge), '/api/ui-state': uiState })
+  serve({ '/api/v1/runs': runs, '/api/v1/skills': skills, '/api/v1/health': health(forge), '/api/v1/ui-state': uiState })
   render(
     <QueryClientProvider client={createQueryClient()}>
       <ThemeProvider>
@@ -176,27 +178,27 @@ describe('opening and closing', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
     const paths = fetchMock.mock.calls.map((call) => String(call[0]))
-    expect(paths).toContain('/api/skills')
+    expect(paths).toContain('/api/v1/skills')
   })
 })
 
 describe('Views group', () => {
-  it('lists the 7 nav destinations plus New task with its C hint', async () => {
+  it('lists the 8 nav destinations plus New task with its C hint', async () => {
     renderPalette()
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
     // The GitHub row waits on the health answer (forge gate) — settle before asserting.
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(8),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings', '/new',
+      '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings', '/new',
     ])
-    expect(views[7]?.textContent).toContain('New task')
+    expect(views[8]?.textContent).toContain('New task')
     // The chip advertises `c` — ⌘N is browser-reserved and only fires in the desktop shell.
-    expect(views[7]?.textContent).toContain('C')
+    expect(views[8]?.textContent).toContain('C')
   })
 
   // R6 Step 1.1: the palette must not offer a GitHub view the sidebar honestly hides.
@@ -212,6 +214,7 @@ describe('Views group', () => {
       view.getAttribute('data-nav-to'),
     )
     expect(targets).not.toContain('/github')
+    expect(targets).not.toContain('/automations')
   })
 
   it('navigates to the selected view and closes', async () => {

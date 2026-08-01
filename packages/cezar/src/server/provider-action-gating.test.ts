@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderAuthService, type ProviderId } from '../core/provider-auth.js';
-import { RunStore, type RunRecord } from '../runs/store.js';
-import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.js';
-import { RunManager, type StartRunInput } from '../workflows/run.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
+import { RunManager, type StartRunInput } from '../workflows/run.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
 
@@ -45,6 +45,7 @@ describe('provider action gating', () => {
   let startRun: ReturnType<typeof vi.fn>;
   let sendMessage: ReturnType<typeof vi.fn>;
   let continueRun: ReturnType<typeof vi.fn>;
+  const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
 
@@ -65,13 +66,17 @@ describe('provider action gating', () => {
       steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
     });
     if (backend) {
-      store.updateRun(run.id, { currentStepId: 'task' });
+      // A persisted active backend belongs to a live run. Keeping the record queued would
+      // model the prompt-authoring window, where provider availability deliberately does not
+      // gate mutations of the existing task.
+      store.updateRun(run.id, { status: 'running', currentStepId: 'task' });
       store.updateStep(run.id, 'task', { backend, status: 'running' });
     }
     return run;
   };
 
   beforeEach(() => {
+    delete process.env.CEZ_AGENT_MODELS_LOCKED;
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_FOLLOWUPS = '1';
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-provider-action-gating-'));
@@ -94,6 +99,8 @@ describe('provider action gating', () => {
   afterEach(() => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    if (savedModelsLocked === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+    else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedFollowups === undefined) delete process.env.CEZ_FOLLOWUPS;
@@ -106,7 +113,7 @@ describe('provider action gating', () => {
   };
 
   it('blocks a new run selected with a disabled provider before starting it', async () => {
-    const response = await apiRequest(app, '/api/runs', {
+    const response = await apiRequest(app, '/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -120,8 +127,27 @@ describe('provider action gating', () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
+  it('keeps every runner selectable under the explicit model lock despite provider preferences', async () => {
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    const response = await apiRequest(app, '/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        task: 'Task',
+        runner: 'codex',
+        steps: [{ id: 'task', prompt: '{{task}}' }],
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(startRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ runner: 'codex', model: undefined }),
+    );
+  });
+
   it('blocks a mixed inline workflow when one agent step uses a disabled provider', async () => {
-    const response = await apiRequest(app, '/api/runs', {
+    const response = await apiRequest(app, '/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -143,7 +169,7 @@ describe('provider action gating', () => {
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ defaultRunner: 'codex' }), 'utf8');
 
-    const response = await apiRequest(app, '/api/plan', {
+    const response = await apiRequest(app, '/api/v1/plan', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task: 'Plan it' }),
@@ -154,7 +180,7 @@ describe('provider action gating', () => {
 
   it('blocks a message using the persisted current backend before delivery', async () => {
     const run = createExistingRun('codex');
-    const response = await apiRequest(app, `/api/runs/${run.id}/messages`, {
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'Continue' }),
@@ -166,7 +192,7 @@ describe('provider action gating', () => {
 
   it('blocks a continue override before resuming the run', async () => {
     const run = createExistingRun('claude');
-    const response = await apiRequest(app, `/api/runs/${run.id}/continue`, {
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/continue`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ runner: 'codex' }),
@@ -178,7 +204,7 @@ describe('provider action gating', () => {
 
   it('uses the run runner, not a historical step backend, for a no-override continue', async () => {
     const run = createExistingRun('codex');
-    const response = await apiRequest(app, `/api/runs/${run.id}/continue`, {
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/continue`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -203,7 +229,7 @@ describe('provider action gating', () => {
     store.updateStep(run.id, 'retry', { backend: 'claude', status: 'running' });
     store.updateStep(run.id, 'later', { backend: 'codex', status: 'done' });
 
-    const response = await apiRequest(app, `/api/runs/${run.id}/messages`, {
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'Continue retrying' }),
@@ -216,7 +242,7 @@ describe('provider action gating', () => {
   it('blocks starting an inbox todo with a disabled provider', async () => {
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, 'todos.json'), JSON.stringify([{ id: 'todo-1', summary: 'Follow up' }]), 'utf8');
-    const response = await apiRequest(app, '/api/todos/todo-1/start', {
+    const response = await apiRequest(app, '/api/v1/todos/todo-1/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ runner: 'codex' }),
@@ -295,7 +321,7 @@ describe('provider availability preserves existing execution', () => {
     runId = run.id;
     expect(store.getRun(run.id)?.status).toBe('queued');
 
-    const disabled = await apiRequest(app, '/api/providers/codex/enabled', {
+    const disabled = await apiRequest(app, '/api/v1/providers/codex/enabled', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: false }),

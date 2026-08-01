@@ -1,3 +1,61 @@
+# Unreleased
+
+## ⚠️ Breaking
+- **The HTTP API moved to `/api/v1`.** Every route answers under `/api/v1/…` (project-scoped:
+  `/api/v1/p/<projectId>/…`) and the WebSocket bus is `/api/v1/ws`; the unversioned `/api/*`
+  spelling is gone. The bundled cockpit ships in lockstep, so a normal upgrade needs nothing from
+  you — this only matters if you script the API directly, where the fix is adding `/v1`.
+  `GET /api/v1/health` is still the CORS-open discovery endpoint, historical run transcripts keep
+  rendering (old image URLs are upgraded when read), and saved bookmarklets are unaffected.
+  Versioning is what lets the typed client describe the whole surface and makes a future `v2` an
+  additive mount rather than an edit to every route.
+
+## ✨ Features
+- ✨ **The two mixed-format routes do real HTTP content negotiation.** `GET /api/v1/repo/commit/:sha`
+  (legacy text blob or structured commit payload) and `GET /api/v1/runs/:id/files` (JSON listing or
+  an image's raw bytes) now honour the request's `Accept` header, answer `Vary: Accept`, and set a
+  `Content-Type` confirming what they actually sent. Purely additive: the `?structured=`/`?raw=`
+  flags still decide whenever the request carries one, `*/*` (what `fetch` and `curl` send) is read
+  as "no preference" and keeps each route's existing default, so every current caller's answer is
+  byte-identical. What is new is that a client that really does ask — an `<img>`, a browser
+  navigation — gets the other representation without the flag, under the same allowlist, size cap
+  and sandbox CSP as before.
+
+## 🔧 Changed
+- Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
+  Its body used to be parsed inside the handler to keep "unknown id 404s before the body is
+  validated"; a small existence guard registered *before* the body validator keeps that status
+  order while the body becomes part of the route type. A bodyless POST still 201s and a malformed
+  one still 400s.
+- **Validation errors (`400 {error}`) are worded differently and now name the field.** Two causes:
+  zod 4 rewrote its default messages (`Required` → `Invalid input: expected string, received
+  undefined`), and each issue is now prefixed with its path — `task: must be at most 100000
+  characters` where it used to be `task must be at most 100000 characters` for a handful of fields
+  and an unattributed sentence for the rest. **The `{ error: string }` shape and the 400 status are
+  unchanged**, and the message was never a pinned contract (BACKWARD_COMPATIBILITY.md §2 pins the
+  shape, not the text) — but a script matching on the exact wording will need updating, and the
+  cockpit shows the new text verbatim in its toasts.
+- Every mutating route now validates its body as route middleware rather than inside the handler,
+  and the query string / path params of 17 more routes are validated too. Behaviour is unchanged
+  by design, including the tolerant cases (a body sent without a JSON content-type, a malformed
+  body, and a repeated query key such as `?refresh=1&refresh=1`, which still takes the first
+  value). The point is that the typed client can now check request bodies, params and queries at
+  compile time.
+
+## 🐛 Fixes
+- 🐛 **Running the test suite no longer wipes your project registry.** A merge-write resolved
+  `~/.cezar/config.json` twice — once to read, once to write, after the `await` — and
+  `cezarHomeDir()` re-reads `CEZ_HOME` on every call, so a test that lost its sandbox pin
+  mid-flight (a timeout was enough) read the temp home and wrote the real one, replacing every
+  project with the fixture's. The path is now resolved once per merge-write, the whole server
+  suite runs with `CEZ_HOME` pinned to a per-worker sandbox, and a write into the real `~/.cezar`
+  from a vitest process is refused outright. The same one-path fix lands in the `ui-state.json` twin.
+- 🐛 **The registry survives a lost config file.** Every merge-write that leaves projects behind
+  also writes `~/.cezar/config.json.bak`, and cezar restores from that snapshot when the config
+  file is missing, empty, or corrupt. Removing `~/.cezar` still resets cezar completely; removing
+  only `config.json` no longer loses the project list. A config that parses and is simply empty is
+  left alone — that is a user who removed their last project, not a lost registry.
+
 # 0.9.1 (2026-07-24)
 
 ## Highlights

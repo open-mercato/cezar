@@ -1,14 +1,14 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { z } from 'zod';
-import { readNdjson } from './ndjson.js';
+import { readNdjson } from './ndjson.ts';
 import {
   CodexAppServerRpc,
   endCodexAppServer,
   resolveCodexExecutable,
   spawnCodexAppServer,
   type CodexAppServerMessage,
-} from './codex-app-server-transport.js';
-import type { ModelOption } from './runner-model-catalog.js';
+} from './codex-app-server-transport.ts';
+import type { ModelOption } from './runner-model-catalog.ts';
 
 export interface CodexModelDiscoveryOptions {
   cwd: string;

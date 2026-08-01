@@ -35,6 +35,7 @@ export function PickerPill({
   options,
   onPick,
   disabled = false,
+  readOnly = false,
   hint,
   disabledHint,
   status,
@@ -46,12 +47,26 @@ export function PickerPill({
   options: ReadonlyArray<{ value: string; label: string; desc?: string }>
   onPick: (value: string) => void
   disabled?: boolean
+  /** Display the resolved value without presenting a selector. */
+  readOnly?: boolean
   /** Hover explanation for the enabled pill — what the setting does (e.g. the ×1 variants pill). */
   hint?: string
   disabledHint?: string
   /** Quiet non-selectable catalog state, kept inside the menu's accessible reading order. */
   status?: string
 }) {
+  if (readOnly) {
+    return (
+      <span
+        data-slot={slot}
+        aria-label={ariaLabel}
+        title={disabledHint ?? hint}
+        className={`${chipClass} cursor-default hover:bg-card hover:text-muted-foreground`}
+      >
+        {label}
+      </span>
+    )
+  }
   const trigger = (
     <button
       type="button"

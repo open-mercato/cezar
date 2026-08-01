@@ -70,6 +70,7 @@ describe('AppShell', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Automations',
       'Skills',
       'Workflows',
       'Settings',
@@ -80,6 +81,7 @@ describe('AppShell', () => {
       '/inbox',
       '/git',
       '/github',
+      '/automations',
       '/skills',
       '/workflows',
       '/settings',
@@ -92,7 +94,7 @@ describe('AppShell', () => {
     renderShell('/', { forgeAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    expect(links).toHaveLength(NAV_ITEMS.length - 1)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
   })
 
   describe('active nav state follows the current route', () => {
@@ -224,7 +226,7 @@ describe('AppShell', () => {
     it('renders the repo chip and version chip from props', () => {
       renderShell('/', { repo: { name: 'cezar', branch: 'main' }, version: '1.2.3' })
       expect(screen.getByText('cezar / main')).toBeTruthy()
-      // The chip prefixes the raw semver from /api/health — `v1.2.3`, mono, muted.
+      // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
     })
 

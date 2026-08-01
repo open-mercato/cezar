@@ -14,8 +14,8 @@ import {
   serverInstancesDir,
   serverLockPath,
   serverStatePath,
-} from '../paths.js';
-import { freshServerState, serverStateSchema, type ServerState, type StepOutcome } from './types.js';
+} from '../paths.ts';
+import { freshServerState, serverStateSchema, type ServerState, type StepOutcome } from './types.ts';
 
 /**
  * `~/.cezar/server.json` I/O and the single-writer lock. Reads degrade to a

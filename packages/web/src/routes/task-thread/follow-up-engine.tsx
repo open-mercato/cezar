@@ -59,15 +59,17 @@ export function useContinueAction(run: ApiRun): ContinueAction {
 
   const continuation = useContinuationProvider(run, pickedRunner)
   const { runners, canContinue, currentRunner, runner } = continuation
+  const modelsLocked = config.data?.modelsLocked === true
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the
   // runner invalidates that pin and falls back to the new backend's configured default / auto.
   const runnerChanged = runner !== currentRunner
   const modelDefaults =
-    !runnerChanged && run.model
+    !modelsLocked && !runnerChanged && run.model
       ? { ...config.data?.defaultModels, [runner]: run.model }
       : config.data?.defaultModels
-  const models = modelsForRunner(runner, catalog.data, [pickedModel, modelDefaults?.[runner]])
-  const model = resolveModel(pickedModel, runner, modelDefaults, catalog.data)
+  const effectivePickedModel = modelsLocked ? null : pickedModel
+  const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
+  const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
 
   const mutation = useMutation({
     mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) => {
@@ -83,7 +85,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // server keeps the run's current backend/model. If that backend disconnected, the
         // connected fallback must be explicit even when the pills were untouched.
         runner: continuation.runnerOverride,
-        model: pickedModel !== null ? model : undefined,
+        model: !modelsLocked && pickedModel !== null ? model : undefined,
       })
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
@@ -111,6 +113,8 @@ export function useContinueAction(run: ApiRun): ContinueAction {
           ariaLabel="Model"
           label={models.find((m) => m.id === model)?.label ?? 'auto'}
           value={model}
+          readOnly={modelsLocked}
+          disabledHint="Model selection is locked to native coding-agent settings."
           onPick={(next) => setPickedModel(next)}
           options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
           status={modelCatalogStatus(runner, catalog.data, catalog.isError)}

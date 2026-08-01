@@ -1,12 +1,14 @@
 import { join } from 'node:path';
-import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.js';
-import { pruneOrphans } from '../git-worktree.js';
-import { reclaimWorktrees } from '../runs/retention.js';
-import { RunStore } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { RunManager } from '../workflows/run.js';
-import { ensureLaunchKey } from './launch-key.js';
-import { getRepoInfo } from './git.js';
+import { AutomationStore } from '../automations/store.ts';
+import { reconcileAutomationReceipts } from '../automations/task-template.ts';
+import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
+import { pruneOrphans } from '../git-worktree.ts';
+import { reclaimWorktrees } from '../runs/retention.ts';
+import { RunStore } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { RunManager } from '../workflows/run.ts';
+import { ensureLaunchKey } from './launch-key.ts';
+import { getRepoInfo } from './git.ts';
 
 /**
  * Per-project server context (spec 2026-07-20-multi-project-workspace,
@@ -33,6 +35,7 @@ export interface ProjectContext {
   dataDir: string;
   store: RunStore;
   manager: RunManager;
+  automationStore: AutomationStore;
   /** Bookmarklet auto-start secret (spec 011), ensured at context build. */
   launchKey: string;
 }
@@ -50,6 +53,10 @@ export interface ProjectContextSource {
 export interface ProjectContextDeps {
   /** Registry lookup — the workspace `listProjects()` in production. */
   listProjects: () => Promise<readonly ProjectContextSource[]>;
+  /** Resolve the one automation store owned by this project. Production
+   *  injects the workspace automation coordinator's cached store so API
+   *  mutations and scheduler reads share the same in-memory state. */
+  automationStore?: (projectId: string, root: string) => AutomationStore;
   /** Workspace-wide parallel-cap semaphore (spec 2026-07-20, step 2.5). Boot
    *  passes the ONE instance it already gave the boot manager, so every
    *  project's RunManager counts against the same `resources.maxParallel`.
@@ -202,6 +209,9 @@ export class ProjectContexts {
     // keepLive + recover() (#367), same as serveCommand: runs that were live
     // when this project's context last existed are re-queued or resumed.
     const store = RunStore.open(dataDir, { keepLive: true });
+    const automationStore = this.deps.automationStore?.(project.id, project.root)
+      ?? AutomationStore.open(dataDir);
+    reconcileAutomationReceipts(automationStore, store);
     this.notifyStoreCreated(store);
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore });
     try {
@@ -219,7 +229,7 @@ export class ProjectContexts {
         await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
       }
       await manager.recover();
-      return { id: project.id, root: project.root, dataDir, store, manager, launchKey };
+      return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.
       teardown({ store, manager });

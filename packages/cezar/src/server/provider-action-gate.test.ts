@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { RunRecord } from '../runs/store.js';
-import type { WorkflowDef } from '../workflows/types.js';
+import type { RunRecord } from '../runs/store.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
 import {
   providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
   unavailableProviderMessage,
-} from './provider-action-gate.js';
+} from './provider-action-gate.ts';
 
 const run = (overrides: Partial<RunRecord> = {}): RunRecord => ({
   id: 'run-1',

@@ -3,23 +3,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * `PUT /api/ui-state` — the cockpit's small prefs file. Covered here for `promptTemplates`
+ * `PUT /api/v1/ui-state` — the cockpit's small prefs file. Covered here for `promptTemplates`
  * (#413) and its `skills` assignment field (#413 follow-up): the schema is the ONLY thing
  * standing between a cockpit bug and an unreadable `ui-state.json`, and the additive-key rule
  * ("an old client's payload must keep validating") is easy to break by tightening it later.
  */
-describe('PUT /api/ui-state — promptTemplates', () => {
+describe('PUT /api/v1/ui-state — promptTemplates', () => {
   let repoRoot: string;
   let app: Hono;
 
   const put = (body: unknown) =>
-    apiRequest(app, '/api/ui-state', {
+    apiRequest(app, '/api/v1/ui-state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -49,13 +49,13 @@ describe('PUT /api/ui-state — promptTemplates', () => {
     const templates = [template({ skills: ['om-fix', 'om-review'] })];
     expect((await put({ promptTemplates: templates })).status).toBe(200);
 
-    const read = await apiRequest(app, '/api/ui-state');
+    const read = await apiRequest(app, '/api/v1/ui-state');
     expect(await read.json()).toMatchObject({ promptTemplates: templates });
   });
 
   it('accepts a template with NO skills key — the pre-assignment client must keep working', async () => {
     expect((await put({ promptTemplates: [template()] })).status).toBe(200);
-    const read = await apiRequest(app, '/api/ui-state');
+    const read = await apiRequest(app, '/api/v1/ui-state');
     expect(((await read.json()) as { promptTemplates: unknown[] }).promptTemplates[0]).toEqual(
       template(),
     );
@@ -63,7 +63,7 @@ describe('PUT /api/ui-state — promptTemplates', () => {
 
   it('accepts a deliberately empty list — "I cleared every template" is a real state', async () => {
     expect((await put({ promptTemplates: [] })).status).toBe(200);
-    const read = await apiRequest(app, '/api/ui-state');
+    const read = await apiRequest(app, '/api/v1/ui-state');
     expect(await read.json()).toMatchObject({ promptTemplates: [] });
   });
 
@@ -83,7 +83,7 @@ describe('PUT /api/ui-state — promptTemplates', () => {
     expect((await put({ notifications: { enabled: true } })).status).toBe(200);
     expect((await put({ promptTemplates: [template({ skills: ['om-fix'] })] })).status).toBe(200);
 
-    const read = await apiRequest(app, '/api/ui-state');
+    const read = await apiRequest(app, '/api/v1/ui-state');
     expect(await read.json()).toMatchObject({
       notifications: { enabled: true },
       promptTemplates: [template({ skills: ['om-fix'] })],

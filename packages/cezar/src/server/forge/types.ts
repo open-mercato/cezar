@@ -1,4 +1,4 @@
-import type { RunRecord } from '../../runs/store.js';
+import type { RunRecord } from '../../runs/store.ts';
 
 /**
  * Forge-driver seam (cockpit-ui redesign spec §"Forge-driver seam"): every

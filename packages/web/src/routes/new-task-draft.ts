@@ -35,7 +35,6 @@ export interface NewTaskDraft {
 export interface ComposerRunModeInput {
   hasGit: boolean
   variants: number
-  forceWorktree?: boolean
   planFirst: boolean
   explicitAutonomous: boolean | null
   explicitWorktree: boolean | null
@@ -47,8 +46,10 @@ export interface ComposerRunModeInput {
 
 /** Resolve run-mode values once, in precedence order: hard constraints, explicit draft
  * choices, an interactive-skill recommendation, then the configured (or source-dependent)
- * default. `configuredAutonomous`/`configuredWorktree` carry the workspace run defaults;
- * `'source-dependent'` autonomy means skills default on and everything else off. */
+ * default. Parallel variants are the only hard Worktree constraint; ordinary workflows can
+ * run in place when the user or workspace policy opts out. `configuredAutonomous`/
+ * `configuredWorktree` carry the workspace run defaults; `'source-dependent'` autonomy means
+ * skills default on and everything else off. */
 export function resolveComposerRunMode(input: ComposerRunModeInput): {
   autonomous: boolean
   worktree: boolean
@@ -62,7 +63,7 @@ export function resolveComposerRunMode(input: ComposerRunModeInput): {
     : (input.explicitAutonomous ?? recommended ?? autonomousFallback)
   const worktree = !input.hasGit
     ? false
-    : input.variants > 1 || input.forceWorktree === true
+    : input.variants > 1
       ? true
       : (input.explicitWorktree ?? recommended ?? input.configuredWorktree)
   return { autonomous, worktree }
@@ -89,7 +90,7 @@ const STORAGE_KEY = 'cez-new-task-draft'
  * cezar composer when the project pill swaps scope — so each project gets its own key.
  *
  * `null` (the argument's default) keeps the BARE legacy key. That is the same "unscoped means
- * byte-identical" invariant the rest of step 3.1 keeps (`scopeApiPath`, `queryScope`): the boot
+ * byte-identical" invariant the rest of step 3.1 keeps (`apiPath`, `queryScope`): the boot
  * project mounts unscoped, so its draft stays exactly where it has always been and a task typed
  * before this upgrade is still there after it. Only non-boot projects pay the suffix.
  */

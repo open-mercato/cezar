@@ -2,9 +2,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { workspaceConfigPath, workspaceUiStatePath } from '../paths.js';
-import { defaultWorkspaceConfig, loadWorkspaceConfig } from './config.js';
-import { runMigrations, type WorkspaceMigration } from './migrations.js';
+import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
+import { defaultWorkspaceConfig, loadWorkspaceConfig } from './config.ts';
+import { runMigrations, type WorkspaceMigration } from './migrations.ts';
 
 /**
  * Workspace migration framework + migration 001 under test (spec

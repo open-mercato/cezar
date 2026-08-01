@@ -8,7 +8,7 @@ import {
   resolveIndexHtml,
   type GetTarget,
   type IndexTarget,
-} from './static-ui.js';
+} from './static-ui.ts';
 
 describe('resolveIndexHtml', () => {
   const cases: Array<{ name: string; distExists: boolean; target: IndexTarget }> = [
@@ -46,9 +46,9 @@ describe('resolveGetRequest', () => {
     { name: '/new?legacy=1 has no special meaning — the query is not the path', path: '/new', target: 'dist' },
 
     // Never shadow the API: an unknown /api path must 404 as JSON, not as HTML.
-    { name: '/api/runs → passthrough', path: '/api/runs', target: 'passthrough' },
-    { name: '/api/runs/x/events (SSE) → passthrough', path: '/api/runs/x/events', target: 'passthrough' },
-    { name: '/api/nope → passthrough, so it keeps its own 404', path: '/api/nope', target: 'passthrough' },
+    { name: '/api/v1/runs → passthrough', path: '/api/v1/runs', target: 'passthrough' },
+    { name: '/api/v1/runs/x/events (SSE) → passthrough', path: '/api/v1/runs/x/events', target: 'passthrough' },
+    { name: '/api/v1/nope → passthrough, so it keeps its own 404', path: '/api/v1/nope', target: 'passthrough' },
     { name: '/api → passthrough', path: '/api', target: 'passthrough' },
     // …but /api-ish paths that are not the API are just routes.
     { name: '/apidocs → the shell (not an /api path)', path: '/apidocs', target: 'dist' },
@@ -67,7 +67,7 @@ describe('resolveGetRequest', () => {
     { name: '/ with no build → the build-hint page', path: '/', distExists: false, target: 'build-hint' },
     { name: '/new with no build → the build-hint page', path: '/new', distExists: false, target: 'build-hint' },
     // An /api or asset caller is not a person who could run `npm run build:web`.
-    { name: '/api/runs with no build → passthrough, not the hint', path: '/api/runs', distExists: false, target: 'passthrough' },
+    { name: '/api/v1/runs with no build → passthrough, not the hint', path: '/api/v1/runs', distExists: false, target: 'passthrough' },
   ];
 
   for (const c of cases) {

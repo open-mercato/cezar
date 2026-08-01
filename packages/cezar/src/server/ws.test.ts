@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { verifyWsUpgrade } from './server.js';
+import { verifyWsUpgrade } from './server.ts';
 import {
   createSocketHub,
   WS_PATH,
@@ -11,7 +11,7 @@ import {
   type TopicOptions,
   type TopicPublisher,
   type WsUpgradeVerdict,
-} from './ws.js';
+} from './ws.ts';
 
 /**
  * The hub is exercised over REAL sockets — a Node http server plus the `ws`
@@ -199,7 +199,7 @@ describe('createSocketHub', () => {
     const { publisher } = makeTopic();
     const { base } = await boot(publisher);
 
-    const ws = new WebSocket(`${base}/api/other`);
+    const ws = new WebSocket(`${base}/api/v1/other`);
     await new Promise<void>((resolve, reject) => {
       ws.on('error', () => resolve());
       ws.on('open', () => reject(new Error('handshake must not succeed')));

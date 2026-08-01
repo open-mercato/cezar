@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from './store.js';
+import { RunStore } from './store.ts';
 
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
@@ -17,6 +17,77 @@ const LEGACY_RUN = {
   archived: false,
   steps: [],
 };
+
+describe('RunStore — directional usage persistence', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('round-trips step checkpoints and complete run aggregates through runs.json', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 'metered task',
+      workflow: 'quick-task',
+      task: 'metered task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', {
+      iterations: 1,
+      inputTokens: 120,
+      outputTokens: 30,
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      usageInvocationEpoch: 1,
+    });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir).getRun(run.id);
+    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(reopened?.steps[0]).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 30,
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      usageInvocationEpoch: 1,
+    });
+  });
+
+  it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun(LEGACY_RUN.id)?.inputTokens).toBeUndefined();
+
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 'partial task',
+      workflow: 'quick-task',
+      task: 'partial task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', {
+      iterations: 1,
+      inputTokens: 10,
+      outputTokens: 2,
+      usageInvocationsStarted: 2,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+    });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+    store.updateStep(run.id, 'task', { usageInvocationsObserved: 2, usageTurnsStarted: 2 });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+  });
+});
 
 describe('RunStore — titleSummary + diffStat (#389)', () => {
   let dataDir: string;
@@ -47,6 +118,33 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     const loaded = reopened.getRun(run.id);
     expect(loaded?.titleSummary).toBe('Catch AuthError in the login handler');
     expect(loaded?.diffStat).toEqual({ adds: 10, dels: 2, files: 3 });
+  });
+
+  it('round-trips the repointed flag, and keeps it absent when it was never set (#751)', () => {
+    const store = RunStore.open(dataDir);
+    const narrowed = store.createRun({ title: 'review pr 694', workflow: 'quick-task', task: 'review', steps: [] });
+    const normal = store.createRun({ title: 'fix the login bug', workflow: 'quick-task', task: 'fix', steps: [] });
+    store.updateRun(narrowed.id, { diffStat: { adds: 1, dels: 0, files: 1, repointed: true } });
+    store.updateRun(normal.id, { diffStat: { adds: 10, dels: 2, files: 3 } });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(narrowed.id)?.diffStat).toEqual({ adds: 1, dels: 0, files: 1, repointed: true });
+    // The un-narrowed shape must survive byte-identically — no `repointed: false`
+    // materialized into the record of every task that behaved.
+    expect(reopened.getRun(normal.id)?.diffStat).toEqual({ adds: 10, dels: 2, files: 3 });
+    expect(reopened.getRun(normal.id)?.diffStat).not.toHaveProperty('repointed');
+  });
+
+  it('still loads a pre-#751 diffStat that has no repointed key', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, diffStat: { adds: 4, dels: 1, files: 2 } }]),
+      'utf8',
+    );
+    const run = RunStore.open(dataDir).getRun('legacy-1');
+    expect(run?.diffStat).toEqual({ adds: 4, dels: 1, files: 2 });
+    expect(run?.diffStat?.repointed).toBeUndefined();
   });
 
   it('still loads an old runs.json that predates the fields', () => {
@@ -994,7 +1092,7 @@ describe('RunStore — queuedMessages (#472)', () => {
         {
           id: 'm2',
           text: 'see this mock',
-          images: [`/api/runs/${run.id}/images/pasted-1.png`],
+          images: [`/api/v1/runs/${run.id}/images/pasted-1.png`],
           createdAt: '2026-07-21T10:01:00.000Z',
         },
       ],
@@ -1009,7 +1107,7 @@ describe('RunStore — queuedMessages (#472)', () => {
       text: 'and update the changelog',
       createdAt: '2026-07-21T10:00:00.000Z',
     });
-    expect(stack?.[1]?.images).toEqual([`/api/runs/${run.id}/images/pasted-1.png`]);
+    expect(stack?.[1]?.images).toEqual([`/api/v1/runs/${run.id}/images/pasted-1.png`]);
   });
 
   /** The `task` rule (above) extended to the stack: these strings are replayed

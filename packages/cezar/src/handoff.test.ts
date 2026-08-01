@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { HANDOFF_INSTRUCTIONS } from './handoff.js';
-import { todoSchema } from './todos.js';
+import { HANDOFF_INSTRUCTIONS } from './handoff.ts';
+import { todoSchema } from './todos.ts';
 
 /**
  * HANDOFF_INSTRUCTIONS is the only thing that tells an agent what to append to todos.json,

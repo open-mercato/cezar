@@ -48,6 +48,7 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The workspace root publishes nothing; every publishable manifest is named here explicitly.
 const dirs = {
+  contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
   alias: path.join(repoRoot, 'alias-cezar'),
@@ -72,6 +73,7 @@ if (!isReleaseBump(bump)) {
 }
 
 const manifests = {
+  contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
   alias: readManifest(dirs.alias),
@@ -95,8 +97,8 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampStableManifests(manifests, version);
-for (const key of ['apiClient', 'cezar', 'alias']) writeManifest(dirs[key], stamped[key]);
-const stampedNames = ['apiClient', 'cezar', 'alias'].map((key) => stamped[key].name);
+for (const key of ['contract', 'apiClient', 'cezar', 'alias']) writeManifest(dirs[key], stamped[key]);
+const stampedNames = ['contract', 'apiClient', 'cezar', 'alias'].map((key) => stamped[key].name);
 console.log(
   `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag latest${dryRun ? ', dry run' : ''})`,
 );
@@ -131,7 +133,7 @@ const publish = (dir, label) => {
 // exactly this reason. A `private` manifest is stamped above but never published: it is part of
 // the release (its version moves, its pins are rewritten) without being on the registry.
 const published = [];
-for (const key of ['apiClient', 'cezar', 'alias']) {
+for (const key of ['contract', 'apiClient', 'cezar', 'alias']) {
   if (!isPublishable(stamped[key])) {
     console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
     continue;

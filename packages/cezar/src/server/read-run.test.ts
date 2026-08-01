@@ -9,7 +9,7 @@ import { createApp } from './server.js';
 import { apiRequest } from './loopback-request.testkit.js';
 
 /**
- * Read receipts (#unread-done-items): `POST /api/runs/:id/read` and `POST /api/runs/read-all`
+ * Read receipts (#unread-done-items): `POST /api/v1/runs/:id/read` and `POST /api/v1/runs/read-all`
  * through the real Hono app. Like the archive routes they mirror, these touch only the store, so
  * the manager can be an empty stub.
  */
@@ -43,12 +43,12 @@ describe('read receipts (#unread-done-items)', () => {
 
   const post = (path: string) => apiRequest(app, path, { method: 'POST' });
 
-  describe('POST /api/runs/:id/read', () => {
+  describe('POST /api/v1/runs/:id/read', () => {
     it('stamps seenAt, answers the record, and persists', async () => {
       const id = finished('done');
       expect(store.getRun(id)?.seenAt).toBeUndefined();
 
-      const res = await post(`/api/runs/${id}/read`);
+      const res = await post(`/api/v1/runs/${id}/read`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as RunRecord;
       expect(body.seenAt).toBeDefined();
@@ -56,17 +56,17 @@ describe('read receipts (#unread-done-items)', () => {
     });
 
     it('404s an unknown id', async () => {
-      expect((await post('/api/runs/nope/read')).status).toBe(404);
+      expect((await post('/api/v1/runs/nope/read')).status).toBe(404);
     });
   });
 
-  describe('POST /api/runs/read-all', () => {
+  describe('POST /api/v1/runs/read-all', () => {
     it('marks every unread done/failed run read and answers the count', async () => {
       const doneUnread = finished('done');
       const failedUnread = finished('failed');
       const cancelled = finished('cancelled');
 
-      const res = await post('/api/runs/read-all');
+      const res = await post('/api/v1/runs/read-all');
       expect(res.status).toBe(200);
       expect((await res.json()) as { read: number }).toEqual({ read: 2 });
       expect(store.getRun(doneUnread)?.seenAt).toBeDefined();
@@ -76,7 +76,7 @@ describe('read receipts (#unread-done-items)', () => {
     });
 
     it('is a no-op zero when nothing is unread', async () => {
-      const res = await post('/api/runs/read-all');
+      const res = await post('/api/v1/runs/read-all');
       expect((await res.json()) as { read: number }).toEqual({ read: 0 });
     });
   });

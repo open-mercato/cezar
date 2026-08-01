@@ -91,7 +91,7 @@ describe('useRunEvents — subscription', () => {
   it('opens one stream at the run endpoint, and none without a run id', () => {
     renderHook(() => useRunEvents('run-1'))
     expect(FakeEventSource.instances).toHaveLength(1)
-    expect(FakeEventSource.last.url).toBe('/api/runs/run-1/events')
+    expect(FakeEventSource.last.url).toBe('/api/v1/runs/run-1/events')
     expect(FakeEventSource.last.init).toEqual({ withCredentials: true })
 
     cleanup()
@@ -103,7 +103,7 @@ describe('useRunEvents — subscription', () => {
     setApiScope('proj-a')
     try {
       renderHook(() => useRunEvents('run-1'))
-      expect(FakeEventSource.last.url).toBe('/api/p/proj-a/runs/run-1/events')
+      expect(FakeEventSource.last.url).toBe('/api/v1/p/proj-a/runs/run-1/events')
     } finally {
       setApiScope(null)
     }
@@ -287,7 +287,7 @@ describe('useRunEvents — lifecycle', () => {
 
     // Old socket closed, new one at the new endpoint, and run-1's events are gone.
     expect(first.closeCount).toBe(1)
-    expect(FakeEventSource.last.url).toBe('/api/runs/run-2/events')
+    expect(FakeEventSource.last.url).toBe('/api/v1/runs/run-2/events')
     expect(result.current).toEqual([])
 
     // The high-water mark reset with the list: run-2's own seq 1 must not be "stale".
@@ -323,7 +323,7 @@ describe('useRunEvents — lifecycle', () => {
 
     const second = FakeEventSource.last
     expect(second).not.toBe(first)
-    expect(second.url).toBe('/api/runs/run-1/events')
+    expect(second.url).toBe('/api/v1/runs/run-1/events')
     second.emit('run-event', line(1, 'stdout', { text: 'before' })) // replayed prefix
     second.emit('run-event', line(2, 'stdout', { text: 'after' }))
     expect(result.current.map((event) => event.seq)).toEqual([1, 2])

@@ -3,8 +3,8 @@ import {
   type ProviderAuthService,
   type ProviderId,
   type ProviderStatus,
-} from '../core/provider-auth.js';
-import type { RunEvent, RunStore } from '../runs/store.js';
+} from '../core/provider-auth.ts';
+import type { RunEvent, RunStore } from '../runs/store.ts';
 
 const AUTH_ERROR_EVENT_TYPES = new Set(['error', 'session.error', 'note']);
 

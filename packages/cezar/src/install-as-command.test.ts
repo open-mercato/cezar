@@ -5,7 +5,7 @@ import {
   globalBinDir,
   globalShimPaths,
   planInstall,
-} from './install-as-command.js';
+} from './install-as-command.ts';
 
 // The decisions behind `npm run install-as-command` (scripts/install-as-command.mjs):
 // which npm command runs per mode, and where the global bin shims land. Spec 013.

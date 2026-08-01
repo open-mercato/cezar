@@ -7,6 +7,7 @@ import {
   ApiError,
   browseFs,
   checkoutProject,
+  continueRun,
   getAgentConfig,
   getAgentConfigFile,
   getConfig,
@@ -59,6 +60,9 @@ import {
   retryProviderAuth,
 } from './client'
 import { queryScope } from '@open-mercato/cezar-api-client'
+import { useProjectScope } from './project-scope-context'
+import { githubRepoBase } from '@/lib/tasks-table'
+import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
   HealthResponse,
@@ -411,7 +415,7 @@ export function useHealthSubscription(): void {
  *
  * A pure read: the HTTP query is the authoritative bootstrap and the reconcile target
  * (global-events.tsx invalidates it on reconnect/visibility), and live updates arrive by the
- * one local-only `useHealthSubscription` at the root folding pushed `/api/ws` frames into this same cache
+ * one local-only `useHealthSubscription` at the root folding pushed `/api/v1/ws` frames into this same cache
  * (#369 — this replaced the old 5 s `refetchInterval` per tab). Safe to call from as many
  * components as need health; they all read one cache and none of them touches the socket. */
 export function useHealth() {
@@ -419,6 +423,25 @@ export function useHealth() {
     queryKey: queryKeys.health,
     queryFn: ({ signal }) => getHealth({ signal }),
   })
+}
+
+/**
+ * The GitHub web root (`https://github.com/owner/repo`) of the project currently on screen, or
+ * undefined when it cannot be proven — the only authority `taskIssueUrl` may synthesize a link
+ * against (#526).
+ *
+ * The boot-project guard is the load-bearing part. `/health` is WORKSPACE-level (project-scope.ts
+ * `WORKSPACE_LEVEL`): the server always builds it from `bootRoot`, so its `repo.remote` names the
+ * project cezar launched in, whichever project the URL is scoped to. Handing a non-boot project's
+ * task a link built from the boot project's repo would point at a completely different repository
+ * — the same wrong-link defect #526 exists to kill. Until a per-project remote is served, a
+ * scoped view synthesizes nothing.
+ */
+export function useProjectRepoBase(): string | undefined {
+  const health = useHealth().data
+  const { projectId } = useProjectScope()
+  const isBootProject = projectId === null || projectId === health?.bootProject
+  return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
 }
 
 /** The local "Open in…" targets (#open-in). Machine-level and stable, so it caches broadly;
@@ -481,9 +504,9 @@ export function useRunDiff(id: string | undefined) {
   })
 }
 
-/** The structured worktree diff behind the Changes tab (R5). A 409 ("no worktree — …") is a
- *  real answer here, not a network hiccup — retrying cannot change it, so retries are off and
- *  the view renders the server's own reason. */
+/** The structured session diff behind the Changes tab (R5). A 409 (for example, a reclaimed
+ *  worktree whose directory is unavailable) is a real answer, not a network hiccup — retrying
+ *  cannot change it, so retries are off and the view renders the server's own reason. */
 export function useRunChanges(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.changes(id ?? ''),
@@ -529,7 +552,7 @@ export function useGroup(groupId: string | undefined) {
 }
 
 /** A run's commit list (Commits tab). Polls while active so new commits appear as the agent
- *  autosaves. A 409 ("no worktree") is a real answer retries can't change. */
+ *  works. A 409 from an unavailable backing directory is a real answer retries can't change. */
 export function useRunCommits(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.commits(id ?? ''),
@@ -678,7 +701,8 @@ export function useRepoCommit(sha: string | undefined) {
 }
 
 /** The Settings → Agents knobs (R6 1.5): base branch, default runner, system prompt, per-runner
- *  model presets. The composer reads it too — `defaultModels` preselects its Model pill. */
+ *  model presets. Task-start surfaces read this project-scoped query for both runner and model
+ *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo. */
 export function useConfig() {
   return useQuery({
     queryKey: queryKeys.config,
@@ -860,6 +884,20 @@ export function useSendMessage(id: string) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       }
     },
+  })
+}
+
+/** Reopen a closed run's last agent session (`POST /api/runs/:id/continue`), starting it on an
+ *  opening prompt. The sibling of `useSendMessage` for a run whose session has already ended:
+ *  same invalidation (the record flips to `running`, the transcript grows over SSE) and the
+ *  same contract that errors belong to the CALLER, so a refusal can be shown where the user
+ *  acted. The thread composer keeps its own mutation (`useContinueAction`) because it also owns
+ *  the runner/model pills; this hook is the plain "resume on the run's own engine" path. */
+export function useContinueRun(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (opts: ContinueOptions = {}) => continueRun(id, opts),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }
 

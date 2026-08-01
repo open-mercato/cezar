@@ -5,8 +5,8 @@
 // recoverable) and the thin I/O enforcer that performs the reclaim. The selector
 // is pure and unit-testable; the enforcer never throws (helper discipline).
 import { existsSync } from 'node:fs';
-import { createWorktree, removeWorktree } from '../git-worktree.js';
-import type { RunRecord, RunStatus } from './store.js';
+import { createWorktree, removeWorktree } from '../git-worktree.ts';
+import type { RunRecord, RunStatus } from './store.ts';
 
 /** The "finished" status set — mirrors `RunStore.archiveFinished`. A run at the
  *  `review` gate is deliberately excluded: it still needs its worktree to render

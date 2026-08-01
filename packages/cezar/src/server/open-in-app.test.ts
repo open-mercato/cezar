@@ -26,7 +26,7 @@ import {
   openFileInDefaultApp,
   openInApp,
   resolveOnPath,
-} from './open-in-app.js';
+} from './open-in-app.ts';
 
 /** Polls `assertion` until it stops throwing or `timeoutMs` elapses (then rethrows) — there is
  *  no @testing-library here, and the detached child processes this suite launches settle on

@@ -9,8 +9,9 @@ import {
   useParams,
 } from 'react-router'
 
-import { useHealth, useProjects } from './api/queries'
+import { useHealth, useProjects, useWorkspaceUiState } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
+import { locationToRestore } from './lib/last-location'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
@@ -30,6 +31,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
+import { AutomationsRoute } from './routes/automations/automations'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
  *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
@@ -217,16 +219,42 @@ function NewTaskProjectRoute() {
  * Legacy flat URLs — every pre-multi-project path, `/tasks/:id` bookmarks and the `/new?...`
  * bookmarklet grammar included — redirect to the boot project's scoped twin, preserving path,
  * query and hash byte-for-byte (BACKWARD_COMPATIBILITY.md protects the bookmarklet contract).
- * The boot id comes from `/api/health` (`bootProject`); until it answers, the quiet resolving
- * state — never a flashed wrong screen. `replace` keeps Back from bouncing off the redirect.
+ * The exact bare root is the sole exception: once health, registry, and workspace UI state
+ * settle, it may restore the last valid project-scoped page. Any query/hash makes `/` explicit,
+ * so pasted links always win. `replace` keeps Back from bouncing off either startup redirect.
  */
 function LegacyPathRedirect() {
   const location = useLocation()
   const health = useHealth()
-  if (health.data === undefined) return <ScopeResolving />
-  // Health always names the boot project; the alias is a just-in-case fallback that still
-  // lands (the gate above normalizes `default` from the registry, which always answers one).
-  const boot = health.data.bootProject ?? 'default'
+  const projects = useProjects()
+  const uiState = useWorkspaceUiState()
+  const resolvedBoot = health.data?.bootProject ?? projects.data?.bootProject
+  const bootSourcesSettled =
+    (health.data !== undefined || health.isError) &&
+    (projects.data !== undefined || projects.isError)
+  if (resolvedBoot === undefined && !bootSourcesSettled) return <ScopeResolving />
+  // Health and the registry normally name the same boot project. If neither can answer after
+  // both queries settle, the server-side `default` alias remains the no-config fallback.
+  const boot = resolvedBoot ?? 'default'
+
+  const isBareRoot =
+    location.pathname === '/' && location.search === '' && location.hash === ''
+  if (isBareRoot) {
+    if (
+      (projects.data === undefined && !projects.isError) ||
+      (uiState.data === undefined && !uiState.isError)
+    ) {
+      return <ScopeResolving />
+    }
+
+    const restored = locationToRestore(
+      uiState.data?.lastLocation,
+      projects.data,
+      resolvedBoot,
+    )
+    if (restored !== null) return <Navigate to={restored} replace />
+  }
+
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
   // minting a nonsense `/p/<boot>/p` path.
   const path = location.pathname === '/p' || location.pathname === '/p/' ? '/' : location.pathname
@@ -249,6 +277,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
+  { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
   { pattern: '/workflows/*', pageLabel: 'Workflows' },
@@ -413,6 +442,10 @@ export function AppRoutes() {
             </Suspense>
           }
         />
+        <Route path="automations" element={<AutomationsRoute />} />
+        <Route path="automations/new" element={<AutomationsRoute mode="new" />} />
+        <Route path="automations/:automationId" element={<AutomationsRoute mode="edit" />} />
+        <Route path="automations/:automationId/log" element={<AutomationsRoute mode="log" />} />
 
         {/* The skills catalog (R6 Step 1.4) — its own top-level surface, no settings sub-nav.
             `/settings/skills` redirects here (below) so pasted links keep working. */}

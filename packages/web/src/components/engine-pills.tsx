@@ -1,4 +1,4 @@
-import { useConfig, useHealth, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import { usableRunners } from '@/lib/provider-status'
@@ -7,6 +7,7 @@ import {
   modelCatalogStatus,
   resolveModel,
   resolveRunner,
+  runnerOverride,
 } from '@/routes/new-task-form'
 
 /**
@@ -16,7 +17,7 @@ import {
  * It exists so those two cannot drift from the composer: the resolution quartet
  * (`usableRunners` → `resolveRunner` → `modelsForRunner` → `resolveModel`) and the
  * "hide the runner pill on a single-backend host" rule live here once, read from the same
- * provider/health/config queries new-task.tsx reads. The composer itself keeps its own inline copy —
+ * provider/config queries new-task.tsx reads. The composer itself keeps its own inline copy —
  * it threads the pills through a persisted draft and a variants pill this pair has no notion of.
  *
  * The caller owns the pick (`null` = never touched, so the configured default shows through);
@@ -33,31 +34,39 @@ export interface EnginePick {
 /** The effective backend, plus what the body rules need to decide what to send. */
 export interface ResolvedEngine {
   runner: Runner
+  /** A sticky/user pick must ride the request even when it currently equals the default. */
+  runnerExplicit: boolean
   model: string
   /** The backends this host offers — the runner pill renders only when there is a choice. */
   runners: readonly Runner[]
-  /** What the server would pick on its own, once health has authoritatively reported it. */
+  /** What the active project's server context would pick from its authoritative config. */
   defaultRunner?: Runner
   /** True only after provider status confirms at least one connected backend. */
   canRun: boolean
+  /** Native agent settings are authoritative; model overrides must be omitted. */
+  modelsLocked?: boolean
   providerPending: boolean
   providerError: boolean
 }
 
 export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
-  const health = useHealth()
   const providers = useProviderStatus()
   const config = useConfig()
   const catalog = useRunnerModels()
   const runners = usableRunners(providers.data)
-  const defaultRunner = health.data?.defaultRunner
+  // `/api/health` is deliberately boot-project-only. Runner policy is per project, so every
+  // scoped start surface must read the active project's `/api/config` instead (#699).
+  const defaultRunner = config.data?.defaultRunner
   const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
+  const modelsLocked = config.data?.modelsLocked === true
   return {
     runner,
-    model: resolveModel(pick.model, runner, config.data?.defaultModels, catalog.data),
+    runnerExplicit: pick.runner !== null,
+    model: resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data),
     runners,
     defaultRunner,
     canRun: providers.isSuccess && runners.length > 0,
+    modelsLocked,
     providerPending: providers.isPending,
     providerError: providers.isError,
   }
@@ -76,18 +85,14 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
  * when the configured `defaultRunner` is disconnected. Then `resolveRunner` falls back to a
  * connected backend and the model pill lists ITS presets — but the count is 1, so no runner is
  * sent, and the server resolves the omitted field back to the disconnected default. Comparing
- * against the authoritative health default preserves omission when it is safe and explicitly
- * sends the provider-status fallback when it is not.
- *
- * `buildCreateRunBody` still has the original hole; this only fixes the surfaces it feeds.
+ * against the active project's authoritative config default preserves omission when it is safe
+ * and explicitly sends the provider-status fallback when it is not. A sticky/user pick always
+ * rides the request, so a boot-project snapshot can never erase that intent.
  */
 export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model'> {
   return {
-    runner:
-      resolved.defaultRunner !== undefined && resolved.runner === resolved.defaultRunner
-        ? undefined
-        : resolved.runner,
-    model: resolved.model || undefined,
+    runner: runnerOverride(resolved.runner, resolved.defaultRunner, resolved.runnerExplicit),
+    model: resolved.modelsLocked ? undefined : resolved.model || undefined,
   }
 }
 
@@ -100,7 +105,7 @@ export function EnginePills({
   onChange: (pick: EnginePick) => void
   disabled?: boolean
 }) {
-  const { runner, model, runners, canRun } = useResolvedEngine(pick)
+  const { runner, model, runners, canRun, modelsLocked } = useResolvedEngine(pick)
   const config = useConfig()
   const catalog = useRunnerModels()
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
@@ -126,6 +131,8 @@ export function EnginePills({
         label={models.find((m) => m.id === model)!.label}
         value={model}
         disabled={unavailable}
+        readOnly={modelsLocked === true}
+        disabledHint={modelsLocked ? 'Model selection is locked to native coding-agent settings.' : undefined}
         onPick={(next) => onChange({ ...pick, model: next })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         status={modelCatalogStatus(runner, catalog.data, catalog.isError)}

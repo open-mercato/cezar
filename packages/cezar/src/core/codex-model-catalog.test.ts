@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { discoverCodexModels } from './codex-model-catalog.js';
+import { discoverCodexModels } from './codex-model-catalog.ts';
 
 const fixtures = fileURLToPath(new URL('__fixtures__/codex/', import.meta.url));
 

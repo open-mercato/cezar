@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTaskMarkers, stripTaskMarkers } from './task-markers.js';
+import { parseTaskMarkers, stripTaskMarkers } from './task-markers.ts';
 
 /** Spec 2026-07-18-task-ref-markers — the in-band declaration layer above the fuzzy tiers. */
 describe('parseTaskMarkers', () => {

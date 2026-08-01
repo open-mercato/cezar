@@ -301,7 +301,7 @@ describe('runTitle — the one name every surface shows', () => {
       expected: 'fix the login bug plz',
     },
     {
-      label: 'a user edit set BOTH fields (PATCH /api/runs/:id), so the edit is what shows',
+      label: 'a user edit set BOTH fields (PATCH /api/v1/runs/:id), so the edit is what shows',
       over: { title: 'Login 500 fix', titleSummary: 'Login 500 fix' },
       expected: 'Login 500 fix',
     },

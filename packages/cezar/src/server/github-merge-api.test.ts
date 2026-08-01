@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 describe('the GitHub merge API', () => {
   let repoRoot: string;
@@ -42,7 +42,7 @@ describe('the GitHub merge API', () => {
   });
 
   it('returns fresh normalized state and performs an expected-head guarded merge', async () => {
-    const stateResponse = await apiRequest(app, '/api/github/prs/128/merge-state?refresh=1');
+    const stateResponse = await apiRequest(app, '/api/v1/github/prs/128/merge-state?refresh=1');
     expect(stateResponse.status).toBe(200);
     const state = (await stateResponse.json()) as {
       available: true;
@@ -50,7 +50,7 @@ describe('the GitHub merge API', () => {
     };
     expect(state.mergeState).toMatchObject({ canMerge: true, canOverride: false, methods: ['squash', 'merge', 'rebase'] });
 
-    const mergeResponse = await apiRequest(app, '/api/github/prs/128/merge', {
+    const mergeResponse = await apiRequest(app, '/api/v1/github/prs/128/merge', {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4321' },
       body: JSON.stringify({ method: 'squash', expectedHeadSha: state.mergeState.headSha }),
@@ -60,15 +60,15 @@ describe('the GitHub merge API', () => {
   });
 
   it('rejects invalid input and stale heads without mutating', async () => {
-    expect((await apiRequest(app, '/api/github/prs/nope/merge-state')).status).toBe(400);
-    const invalid = await apiRequest(app, '/api/github/prs/128/merge', {
+    expect((await apiRequest(app, '/api/v1/github/prs/nope/merge-state')).status).toBe(400);
+    const invalid = await apiRequest(app, '/api/v1/github/prs/128/merge', {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4321' },
       body: JSON.stringify({ method: 'octopus', expectedHeadSha: 'bad' }),
     });
     expect(invalid.status).toBe(400);
 
-    const stale = await apiRequest(app, '/api/github/prs/128/merge', {
+    const stale = await apiRequest(app, '/api/v1/github/prs/128/merge', {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4321' },
       body: JSON.stringify({ method: 'squash', expectedHeadSha: 'f'.repeat(40) }),
@@ -78,7 +78,7 @@ describe('the GitHub merge API', () => {
   });
 
   it('keeps the existing origin guard in front of the merge mutation', async () => {
-    const response = await app.request('/api/github/prs/128/merge', {
+    const response = await app.request('/api/v1/github/prs/128/merge', {
       method: 'POST',
       headers: {
         host: '127.0.0.1:4321',

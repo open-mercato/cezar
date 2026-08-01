@@ -4,7 +4,7 @@ import type { ComponentType, ReactNode, SVGProps } from 'react'
 import { useAppearance } from '@/components/appearance-provider'
 import { useTheme } from '@/components/theme-provider'
 import { cn } from '@/lib/utils'
-import type { Accent, Density } from '@/lib/appearance'
+import type { Accent, Density, Width } from '@/lib/appearance'
 import type { Theme } from '@/lib/theme'
 
 /**
@@ -37,6 +37,11 @@ const DENSITY_OPTIONS: Array<{ value: Density; label: string }> = [
   { value: 'comfortable', label: 'Comfortable' },
   { value: 'compact', label: 'Compact' },
   { value: 'ultra', label: 'Compact for real' },
+]
+
+const WIDTH_OPTIONS: Array<{ value: Width; label: string }> = [
+  { value: 'narrow', label: 'Narrow' },
+  { value: 'wide', label: 'Wide' },
 ]
 
 /** One segmented radio group — the shared chassis of all three controls. */
@@ -107,7 +112,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
 
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
-  const { accent, density, setAccent, setDensity } = useAppearance()
+  const { accent, density, width, setAccent, setDensity, setWidth } = useAppearance()
 
   return (
     <div
@@ -127,6 +132,13 @@ export function AppearanceSection() {
         hint="Compact tightens spacing across the cockpit — text stays the same size."
       >
         <Segmented slot="appearance-density" label="Density" value={density} options={DENSITY_OPTIONS} onChange={setDensity} />
+      </Field>
+
+      <Field
+        title="Reading width"
+        hint="Wide lets a task's session and commits use more of the screen. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
+      >
+        <Segmented slot="appearance-width" label="Reading width" value={width} options={WIDTH_OPTIONS} onChange={setWidth} />
       </Field>
     </div>
   )

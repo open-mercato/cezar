@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 /**
- * `GET/PUT /api/agent-config` (spec #404). The contract under test: files are
+ * `GET/PUT /api/v1/agent-config` (spec #404). The contract under test: files are
  * addressed by catalog id (unknown → 404); reads work in every mode; and the
  * load-bearing security property — EVERY write 409s in hosted mode
  * (`CEZ_REMOTE`), including a repo-LOCAL file whose hooks would otherwise be a
@@ -41,14 +41,14 @@ describe('the agent-config API', () => {
   });
 
   const put = (id: string, body: unknown) =>
-    apiRequest(app, `/api/agent-config/${id}`, {
+    apiRequest(app, `/api/v1/agent-config/${id}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
 
   it('GET lists the catalog with editable:true locally', async () => {
-    const res = await apiRequest(app, '/api/agent-config');
+    const res = await apiRequest(app, '/api/v1/agent-config');
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       editable: boolean;
@@ -61,11 +61,11 @@ describe('the agent-config API', () => {
   });
 
   it('GET :id → 404 for an unknown id', async () => {
-    expect((await apiRequest(app, '/api/agent-config/nope')).status).toBe(404);
+    expect((await apiRequest(app, '/api/v1/agent-config/nope')).status).toBe(404);
   });
 
   it('GET :id reads an absent file as exists:false', async () => {
-    const res = await apiRequest(app, '/api/agent-config/claude.project.settings');
+    const res = await apiRequest(app, '/api/v1/agent-config/claude.project.settings');
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ exists: false, version: null });
   });
@@ -123,7 +123,7 @@ describe('the agent-config API', () => {
 
   it('hosted mode: repo-file reads work, home-dir file reads are withheld, userMcp is null', async () => {
     process.env.CEZ_REMOTE = '1';
-    const res = await apiRequest(app, '/api/agent-config');
+    const res = await apiRequest(app, '/api/v1/agent-config');
     const body = (await res.json()) as {
       editable: boolean;
       userMcp: unknown;
@@ -133,9 +133,9 @@ describe('the agent-config API', () => {
     expect(body.userMcp).toBeNull();
     expect(body.files.every((f) => f.writable === false)).toBe(true);
     // a repo-local file read still works (the cockpit already serves repo contents)
-    expect((await apiRequest(app, '/api/agent-config/claude.project.settings')).status).toBe(200);
+    expect((await apiRequest(app, '/api/v1/agent-config/claude.project.settings')).status).toBe(200);
     // but an OUTSIDE-REPO ($HOME) file's contents are NOT served — they can hold secrets
-    expect((await apiRequest(app, '/api/agent-config/claude.user.settings')).status).toBe(409);
-    expect((await apiRequest(app, '/api/agent-config/codex.user.config')).status).toBe(409);
+    expect((await apiRequest(app, '/api/v1/agent-config/claude.user.settings')).status).toBe(409);
+    expect((await apiRequest(app, '/api/v1/agent-config/codex.user.config')).status).toBe(409);
   });
 });

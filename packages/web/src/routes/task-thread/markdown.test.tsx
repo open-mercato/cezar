@@ -1,5 +1,5 @@
-import { cleanup, render, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Markdown } from './markdown'
 
@@ -151,6 +151,110 @@ describe('Markdown', () => {
       expect(body?.querySelector('br')).toBeNull()
       expect(body?.textContent).toContain('a')
       expect(body?.textContent).toContain('b')
+    })
+  })
+
+  /**
+   * Link safety. Streamdown enables it by default and renders its own modal INLINE, next to the
+   * link — a `fixed inset-0` box with no portal. Thread rows carry `content-visibility: auto`
+   * (⇒ `contain: paint`), which makes the row the containing block and clip rect for exactly
+   * such a box, so that modal rendered *inside the message* as an unreachable blurred rectangle.
+   * These tests pin the fix: the confirm is ours, and it leaves the contained subtree.
+   */
+  describe('link safety', () => {
+    const openMock = vi.fn()
+
+    beforeEach(() => {
+      vi.stubGlobal('open', openMock)
+    })
+
+    afterEach(() => {
+      openMock.mockReset()
+      vi.unstubAllGlobals()
+    })
+
+    /** Renders one link inside a paint-CONTAINED wrapper — the thread row, in miniature. */
+    function renderLink(markdown = '[docs](https://example.com/a/very/long/path?q=1)') {
+      return render(
+        <div style={{ contentVisibility: 'auto' }} data-testid="contained-row">
+          <Markdown>{markdown}</Markdown>
+        </div>,
+      )
+    }
+
+    it('confirms before following a link, in OUR dialog and not Streamdown’s inline one', () => {
+      const { container } = renderLink()
+
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      expect(document.querySelector('[data-slot="link-safety-dialog"]')).not.toBeNull()
+      expect(document.querySelector('[data-streamdown="link-safety-modal"]')).toBeNull()
+      // Not followed yet — the whole point of the confirm.
+      expect(openMock).not.toHaveBeenCalled()
+    })
+
+    it('portals the dialog OUT of the contained row — the regression this fix exists for', () => {
+      const { container } = renderLink()
+      const row = container.querySelector('[data-testid="contained-row"]') as HTMLElement
+
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      const dialog = document.querySelector('[data-slot="link-safety-dialog"]') as HTMLElement
+      expect(dialog).not.toBeNull()
+      // Inside the row it would resolve `position: fixed` against the row's paint-contained
+      // box instead of the viewport, and be clipped to it.
+      expect(row.contains(dialog)).toBe(false)
+      expect(document.body.contains(dialog)).toBe(true)
+    })
+
+    it('shows the full destination address, untruncated', () => {
+      const { container } = renderLink()
+
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      expect(document.querySelector('[data-slot="link-safety-url"]')?.textContent).toBe(
+        'https://example.com/a/very/long/path?q=1',
+      )
+    })
+
+    it('announces the address as part of the dialog’s description, not just visually', () => {
+      // The address is the whole reason the prompt exists; announcing only the sentence would
+      // leave a screen-reader user with exactly the question the dialog was opened to answer.
+      const { container } = renderLink()
+
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      const dialog = document.querySelector('[data-slot="link-safety-dialog"]') as HTMLElement
+      const describedBy = dialog.getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(document.getElementById(describedBy as string)?.textContent).toContain(
+        'https://example.com/a/very/long/path?q=1',
+      )
+    })
+
+    it('opens the link in a new tab only once confirmed', () => {
+      const { container } = renderLink()
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open link' }))
+
+      expect(openMock).toHaveBeenCalledWith(
+        'https://example.com/a/very/long/path?q=1',
+        '_blank',
+        'noreferrer',
+      )
+    })
+
+    it('cancelling closes the dialog and follows nothing', async () => {
+      const { container } = renderLink()
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => {
+        expect(document.querySelector('[data-slot="link-safety-dialog"]')).toBeNull()
+      })
+      expect(openMock).not.toHaveBeenCalled()
     })
   })
 })

@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { ProjectScopeProvider, useProjectScope } from './project-scope-context'
-import { getApiScope, queryScope, scopeApiPath, setApiScope } from '@open-mercato/cezar-api-client'
+import { getApiScope, queryScope, apiPath, setApiScope } from '@open-mercato/cezar-api-client'
 
 afterEach(() => {
   cleanup()
@@ -16,15 +16,15 @@ function Probe() {
   const { projectId, apiBase } = useProjectScope()
   return (
     <output data-testid="probe">
-      {`${projectId ?? '-'}|${apiBase}|${queryScope()}|${scopeApiPath('/api/runs')}`}
+      {`${projectId ?? '-'}|${apiBase}|${queryScope()}|${apiPath('/runs')}`}
     </output>
   )
 }
 
 describe('ProjectScopeProvider', () => {
-  it('defaults to unscoped outside any provider — the pre-3.2 app, byte-identical', () => {
+  it('defaults to unscoped outside any provider — no project prefix, just the version', () => {
     const view = render(<Probe />)
-    expect(view.getByTestId('probe').textContent).toBe('-|/api|default|/api/runs')
+    expect(view.getByTestId('probe').textContent).toBe('-|/api/v1|default|/api/v1/runs')
   })
 
   it('scopes both the context and the module seam before the children render', () => {
@@ -33,9 +33,9 @@ describe('ProjectScopeProvider', () => {
         <Probe />
       </ProjectScopeProvider>,
     )
-    // The probe read scopeApiPath/queryScope during ITS render — if the provider had waited
+    // The probe read apiPath/queryScope during ITS render — if the provider had waited
     // for an effect, the first paint would have fetched and cached under the wrong scope.
-    expect(view.getByTestId('probe').textContent).toBe('cezar|/api/p/cezar|cezar|/api/p/cezar/runs')
+    expect(view.getByTestId('probe').textContent).toBe('cezar|/api/v1/p/cezar|cezar|/api/v1/p/cezar/runs')
     expect(getApiScope()).toBe('cezar')
   })
 
@@ -52,7 +52,7 @@ describe('ProjectScopeProvider', () => {
         <Probe />
       </ProjectScopeProvider>,
     )
-    expect(view.getByTestId('probe').textContent).toBe('b|/api/p/b|b|/api/p/b/runs')
+    expect(view.getByTestId('probe').textContent).toBe('b|/api/v1/p/b|b|/api/v1/p/b/runs')
 
     view.unmount()
     expect(getApiScope()).toBeNull()
@@ -92,6 +92,6 @@ describe('ProjectScopeProvider', () => {
         <Probe />
       </ProjectScopeProvider>,
     )
-    expect(view.getByTestId('probe').textContent).toBe('-|/api|default|/api/runs')
+    expect(view.getByTestId('probe').textContent).toBe('-|/api/v1|default|/api/v1/runs')
   })
 })

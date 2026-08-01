@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { autosaveCommit, createWorktree } from '../git-worktree.js';
-import { RunStore } from '../runs/store.js';
-import { AUTOSAVE_INTERVAL_MS, periodicAutosaveEnabled, RunManager } from './run.js';
+import { autosaveCommit, createWorktree } from '../git-worktree.ts';
+import { RunStore } from '../runs/store.ts';
+import { AUTOSAVE_INTERVAL_MS, periodicAutosaveEnabled, RunManager } from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

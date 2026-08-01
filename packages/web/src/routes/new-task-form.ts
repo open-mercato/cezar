@@ -95,13 +95,17 @@ export function modelsForRunner(
   customIds: readonly (string | null | undefined)[] = [],
 ): readonly ModelPreset[] {
   const base = [...(MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude)]
-  if (runner !== 'codex') return base
   const seen = new Set(base.map((model) => model.id))
-  for (const model of catalog?.models ?? []) {
-    if (!model.id || seen.has(model.id)) continue
-    seen.add(model.id)
-    base.push({ id: model.id, label: model.label || model.id, desc: model.description })
+  if (runner === 'codex') {
+    for (const model of catalog?.models ?? []) {
+      if (!model.id || seen.has(model.id)) continue
+      seen.add(model.id)
+      base.push({ id: model.id, label: model.label || model.id, desc: model.description })
+    }
   }
+  // Native settings may contain a provider-specific/custom id that is not in
+  // cezar's static catalog. Keep it representable so the initial selection
+  // matches the agent's own configured default on every backend.
   for (const id of customIds) {
     if (!id || seen.has(id) || modelConflictsWithRunner(id, runner)) continue
     seen.add(id)
@@ -141,6 +145,16 @@ export function resolveRunner(
   if (picked !== null && available.includes(picked)) return picked
   if (available.includes(preferred)) return preferred
   return available[0] ?? 'claude'
+}
+
+/** The runner field shared by every NEW-run surface. Explicit/sticky intent always rides the
+ * request; only an untouched pick matching the active project's known default may be omitted. */
+export function runnerOverride(
+  runner: Runner,
+  defaultRunner: Runner | undefined,
+  explicit = false,
+): Runner | undefined {
+  return !explicit && runner === defaultRunner ? undefined : runner
 }
 
 /** The effective model: the user's pick when it exists in the selected runner's presets, else
@@ -197,15 +211,20 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
- *  - `runner` omitted only when it equals a known server default (unknown defaults and connected
- *    fallbacks stay explicit);
+ *  - an explicit/sticky `runner` always rides the request; an untouched runner is omitted only
+ *    when it equals the active project's known default (unknown defaults and connected fallbacks
+ *    stay explicit);
  *  - `model`/`variants`/`images` only when they say something (`''`/1/empty mean "default").
  */
 export function buildCreateRunBody(opts: {
   task: string
   source: TaskSource
   model: string
+  /** Native coding-agent settings stay visible, but a locked model is never a request override. */
+  modelsLocked?: boolean
   runner: Runner
+  /** True when the draft contains a sticky/user runner choice rather than an untouched default. */
+  runnerExplicit?: boolean
   defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
@@ -226,7 +245,9 @@ export function buildCreateRunBody(opts: {
     task,
     source,
     model,
+    modelsLocked,
     runner,
+    runnerExplicit,
     defaultRunner,
     variants,
     images,
@@ -240,8 +261,8 @@ export function buildCreateRunBody(opts: {
     ...(source.source === 'skill'
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source.ref }),
-    model: model || undefined,
-    runner: runner === defaultRunner ? undefined : runner,
+    model: modelsLocked ? undefined : model || undefined,
+    runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
     // Off only matters for a single run — variants always isolate.
@@ -250,6 +271,16 @@ export function buildCreateRunBody(opts: {
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
   }
+}
+
+/** The automation editor persists the exact New task serialization, with only the transport-
+ * specific `task` key renamed to `prompt`. Images and inbox provenance are deliberately absent:
+ * an automation is a reusable template, not one browser submission. */
+export function buildAutomationTask(
+  opts: Parameters<typeof buildCreateRunBody>[0],
+): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
+  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+  return { prompt: task, ...body }
 }
 
 /** Where a successful POST navigates: the run's thread — for ×2/×3 the FIRST variant's thread,

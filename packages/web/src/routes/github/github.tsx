@@ -336,13 +336,19 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
                 {gh.repo}
               </span>
             ) : null}
+            <Link
+              to="/automations/new"
+              className="ml-auto shrink-0 text-[10px] font-medium text-primary hover:underline"
+            >
+              Set up automations
+            </Link>
             <button
               type="button"
               data-slot="gh-refresh"
               title="Refresh from GitHub"
               disabled={refresh.isPending}
               onClick={() => refresh.mutate()}
-              className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
+              className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
             >
               <RefreshCwIcon
                 aria-hidden="true"

@@ -10,7 +10,7 @@ import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 
 /**
- * Settings → Agents (R6 Step 1.5): the form round-trip against a stateful `/api/config` stub
+ * Settings → Agents (R6 Step 1.5): the form round-trip against a stateful `/api/v1/config` stub
  * that mimics the server's merge semantics (null clears, `defaultModels` merges per runner),
  * client-side validation of the system-prompt cap, and error surfacing — a PUT refusal (409)
  * shows the server's own words. The API contract itself is pinned server-side in
@@ -57,6 +57,7 @@ function serve({
     defaultRunner: 'claude',
     systemPrompt: null,
     defaultModels: {},
+    modelsLocked: false,
     maxParallel: 2,
     memoryLimitMb: null,
     worktreeRetention: 10,
@@ -73,18 +74,18 @@ function serve({
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/config' && method === 'GET') return json(state)
-      if (url === '/api/providers/status' && method === 'GET') {
+      if (url === '/api/v1/config' && method === 'GET') return json(state)
+      if (url === '/api/v1/providers/status' && method === 'GET') {
         if (providerStatusPending) return new Promise<never>(() => {})
         if (providerStatusReads++ > 0 && providerStatusAfterFirstError) {
           return json({ error: providerStatusAfterFirstError }, 500)
         }
         return json(providerStatus, providerStatusCode)
       }
-      if (url === '/api/providers/status?refresh=1' && method === 'GET') {
+      if (url === '/api/v1/providers/status?refresh=1' && method === 'GET') {
         return json(providerStatus, providerStatusCode)
       }
-      if (url === '/api/config' && method === 'PUT') {
+      if (url === '/api/v1/config' && method === 'PUT') {
         if (putStatus !== 200) return json({ error: putError }, putStatus)
         // The server's merge semantics, mimicked: null clears, defaultModels merges per runner.
         if (body?.defaultRunner !== undefined) state.defaultRunner = body.defaultRunner as Runner
@@ -106,7 +107,7 @@ function serve({
         }
         return json(state)
       }
-      if (url === '/api/repo' && method === 'GET') return json(REPO)
+      if (url === '/api/v1/repo' && method === 'GET') return json(REPO)
       return new Promise<never>(() => {})
     }),
   )
@@ -114,7 +115,7 @@ function serve({
 
 /** Seeds the step-3.2 route gates — boot id (legacy redirect) + registry (known-check) — so a
  *  flat entry URL lands scoped immediately. The boot project mounts UNSCOPED, so the exact
- *  `/api/*` paths this file's fetch stub matches stay byte-identical. */
+ *  `/api/v1/*` paths this file's fetch stub matches stay byte-identical. */
 function gateSeededClient() {
   const client = createQueryClient()
   client.setDefaultOptions({
@@ -142,7 +143,7 @@ function renderAt(entry: string) {
   return client
 }
 
-const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/config')
+const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/config')
 const form = () => document.querySelector('[data-slot="agents-section"]')
 
 afterEach(() => {
@@ -259,7 +260,7 @@ describe('the agents form', () => {
     expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
   })
 
-  it('renders every knob from GET /api/config', async () => {
+  it('renders every knob from GET /api/v1/config', async () => {
     serve({
       config: {
         baseBranch: 'develop',
@@ -338,6 +339,28 @@ describe('the agents form', () => {
     await waitFor(() => expect(puts()).toHaveLength(2))
     expect(puts()[1]?.body).toEqual({ defaultModels: { claude: null } })
     await waitFor(() => expect(claude.value).toBe(''))
+  })
+
+  it('shows native models as read-only values while keeping the runner selectable', async () => {
+    serve({
+      config: {
+        defaultRunner: 'claude',
+        defaultModels: { claude: 'native-sonnet', codex: 'gpt-5.6-codex' },
+        modelsLocked: true,
+      },
+    })
+    renderAt('/settings/agents')
+    await waitFor(() => expect(form()).not.toBeNull())
+
+    const claudeModel = screen.getByLabelText<HTMLOutputElement>('Default model for claude')
+    expect(claudeModel.tagName).toBe('OUTPUT')
+    expect(claudeModel.textContent).toContain('native-sonnet')
+    expect(screen.queryByRole('combobox', { name: 'Default model for claude' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'codex' }))
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ defaultRunner: 'codex' })
+    expect(screen.getByLabelText('Default model for codex').textContent).toContain('gpt-5.6-codex')
   })
 
   it('system prompt saves trimmed on the explicit button, and an emptied box clears with null', async () => {

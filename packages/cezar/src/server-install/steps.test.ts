@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createAutoUi } from './ui.js';
-import { generatePassword, sudoStep, StepAborted, StepSkipped, verifyCommand } from './steps.js';
-import type { CommandResult, InstallContext, Runner, Ui } from './types.js';
+import { createAutoUi } from './ui.ts';
+import { generatePassword, sudoStep, StepAborted, StepSkipped, verifyCommand } from './steps.ts';
+import type { CommandResult, InstallContext, Runner, Ui } from './types.ts';
 
 function makeCtx(over: {
   ui?: Ui;

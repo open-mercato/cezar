@@ -7,6 +7,7 @@ import {
   finishedRunCount,
   formatCost,
   formatMem,
+  githubRepoBase,
   prNumber,
   taskReference,
   taskPrUrl,
@@ -182,6 +183,34 @@ describe('taskPrUrl', () => {
   it('is undefined when the task has no PR association at all', () => {
     expect(taskPrUrl(run())).toBeUndefined()
   })
+
+  it('does not adopt an incidental PR for an issue-subject run that declared no PR (#526)', () => {
+    // om-prepare-issue for #524: CEZ:ISSUE declared, no CEZ:PR — #454 was only incidental
+    // transcript text and must never surface as "the run's PR".
+    const r = run({
+      markerRefs: { issue: 524 },
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+      referencedPrCandidates: ['https://github.com/o/r/pull/454'],
+    })
+    expect(taskPrUrl(r)).toBeUndefined()
+  })
+
+  it('still shows the referenced PR when the run also declared a PR marker (#526)', () => {
+    const r = run({
+      markerRefs: { issue: 524, pr: 454 },
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    expect(taskPrUrl(r)).toBe('https://github.com/o/r/pull/454')
+  })
+
+  it('a created PR always wins, even for an issue-subject run (#526)', () => {
+    const r = run({
+      markerRefs: { issue: 524 },
+      pullRequestUrl: 'https://github.com/o/r/pull/900',
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    expect(taskPrUrl(r)).toBe('https://github.com/o/r/pull/900')
+  })
 })
 
 describe('taskIssueUrl', () => {
@@ -191,8 +220,68 @@ describe('taskIssueUrl', () => {
     )
   })
 
-  it('is undefined when the task has no issue URL association', () => {
+  it('is undefined when the task has no issue URL and no repo to synthesize from', () => {
     expect(taskIssueUrl(run({ issueNumber: 544 }))).toBeUndefined()
+  })
+
+  it('synthesizes the issue link from the CEZ:ISSUE marker + the project repo (#526)', () => {
+    // The om-prepare-issue #524 record: issue known via the marker, but no `…/issues/524`
+    // link was ever scanned. The cockpit's own repo makes the created issue reachable.
+    const r = run({
+      markerRefs: { issue: 524 },
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/524')
+  })
+
+  it('synthesizes from the project repo, never from a foreign transcript URL (#526)', () => {
+    // The regression the candidates-based synthesis had: an incidental PR from ANOTHER repo
+    // would have produced `https://github.com/other/repo/issues/524` — #526's wrong link with
+    // an issue URL instead of a PR one. The project repo is the only authority.
+    const r = run({
+      markerRefs: { issue: 524 },
+      referencedPullRequestUrl: 'https://github.com/other/repo/pull/1',
+      referencedPrCandidates: ['https://github.com/other/repo/pull/1'],
+      referencedIssueCandidates: ['https://github.com/third/repo/issues/9'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/524')
+    // …and with no project repo known (health in flight, no remote, non-GitHub forge), no link
+    // at all: no chip beats a wrong chip.
+    expect(taskIssueUrl(r)).toBeUndefined()
+  })
+
+  it('prefers a real discovered issue URL over the synthesized one (#526)', () => {
+    const r = run({
+      markerRefs: { issue: 524 },
+      referencedIssueUrl: 'https://github.com/o/r/issues/524',
+      referencedPullRequestUrl: 'https://github.com/other/repo/pull/1',
+      referencedPrCandidates: ['https://github.com/other/repo/pull/1'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/elsewhere/x')).toBe('https://github.com/o/r/issues/524')
+  })
+})
+
+describe('githubRepoBase', () => {
+  it.each([
+    ['https://github.com/open-mercato/cezar.git', 'https://github.com/open-mercato/cezar'],
+    ['https://github.com/open-mercato/cezar', 'https://github.com/open-mercato/cezar'],
+    ['https://user:token@github.com/open-mercato/cezar.git', 'https://github.com/open-mercato/cezar'],
+    ['git@github.com:open-mercato/cezar.git', 'https://github.com/open-mercato/cezar'],
+    ['ssh://git@github.com:22/open-mercato/cezar.git', 'https://github.com/open-mercato/cezar'],
+    ['https://github.com/open-mercato/cezar/', 'https://github.com/open-mercato/cezar'],
+  ])('normalizes %s', (remote, expected) => {
+    expect(githubRepoBase(remote)).toBe(expected)
+  })
+
+  it.each([
+    ['undefined remote', undefined],
+    ['no remote configured', ''],
+    ['a GitLab remote', 'git@gitlab.com:o/r.git'],
+    ['a self-hosted forge', 'https://git.example.com/o/r.git'],
+    ['a local path', '/srv/git/repo.git'],
+    ['a bare host with no owner', 'https://github.com/cezar'],
+  ])('has no GitHub base for %s', (_name, remote) => {
+    expect(githubRepoBase(remote)).toBeUndefined()
   })
 })
 

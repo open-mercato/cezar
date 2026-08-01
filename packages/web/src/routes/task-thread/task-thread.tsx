@@ -11,6 +11,7 @@ import {
   usePatchRun,
   useRemoveQueuedMessage,
   useRun,
+  useProjectRepoBase,
   useRuns,
   useSendMessage,
 } from '@/api/queries'
@@ -22,7 +23,7 @@ import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { isUnread } from '@/lib/read-state'
-import { taskPrUrl } from '@/lib/tasks-table'
+import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
@@ -253,7 +254,10 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   )
   const sendMessage = useSendMessage(run.id)
   const activeProvider = useActiveProviderAvailability(run)
-  const activeProviderBlocked = (sessionOpen || queued) && !activeProvider.usable
+  // A queued send only amends the persisted prompt; it invokes no provider and therefore
+  // remains available even when provider discovery cannot authorize a live session. Once the
+  // session is open, mirror the server's active-backend gate as before.
+  const activeProviderBlocked = sessionOpen && !activeProvider.usable
   const continuationProviderBlocked = hasContinuation && !continueAction.canContinue
   const providerBlocked = activeProviderBlocked || continuationProviderBlocked
   const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason
@@ -282,6 +286,9 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
   )
 
   const rows = useMemo(() => buildThreadRows(run, thread, edit), [run, thread, edit])
+  // #526: the footer's issue link may be synthesized from the CEZ:ISSUE marker, and the only
+  // repository it may ever name is the one on screen — never the transcript's.
+  const issueUrl = taskIssueUrl(run, useProjectRepoBase())
   const { search } = useLocation()
   const mode = threadRenderMode(search, rows.length)
   const scroll = useThreadScroll(run.id)
@@ -295,7 +302,7 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
-      <div className="mx-auto flex w-full max-w-[820px] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
+      <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
         <ThreadCardCache runId={run.id}>
           <ThreadRows runId={run.id} rows={rows} mode={mode} controls={scroll} />
         </ThreadCardCache>
@@ -341,6 +348,19 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
                 PR ↗
               </a>
             ) : null}
+            {/* #526: an issue-subject run (om-prepare-issue) links the issue it created — it
+                declares no PR, so without this the created issue was unreachable from the UI. */}
+            {isHttpUrl(issueUrl) ? (
+              <a
+                data-slot="issue-link"
+                href={issueUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-foreground underline-offset-2 hover:underline"
+              >
+                Issue ↗
+              </a>
+            ) : null}
           </div>
         ) : null}
 
@@ -376,7 +396,7 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
             <JumpToLatestPill onJump={scroll.jumpToLatest} />
           </div>
         ) : null}
-        <div className="mx-auto flex w-full max-w-[820px] flex-col gap-2.5">
+        <div className="mx-auto flex w-full max-w-[var(--measure)] flex-col gap-2.5">
           {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />

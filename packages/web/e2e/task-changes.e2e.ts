@@ -11,7 +11,7 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 /**
  * The Changes tab (R5 Step 1.5) end-to-end against a LIVE dry run, same doctrine as
  * review-gate.e2e.ts: the mock claude's first turn appends `notes.md` in the run's REAL
- * worktree, so `/api/runs/:id/changes` answers a genuine one-file diff (the diff is anchored
+ * worktree, so `/api/v1/runs/:id/changes` answers a genuine one-file diff (the diff is anchored
  * at the merge-base, so it survives the engine's settle-time autosave commit). The fixture
  * repo carries a github.com `origin`, so the forge resolves (dry-run `detect()` answers
  * available without the network) and the git surface is fully lit.
@@ -46,7 +46,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -57,7 +57,7 @@ async function waitForHealth(url: string): Promise<void> {
 
 async function waitForStatus(url: string, id: string, wanted: string[]): Promise<string> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const record = (await (await fetch(`${url}/api/runs/${id}`)).json()) as { status: string }
+    const record = (await (await fetch(`${url}/api/v1/runs/${id}`)).json()) as { status: string }
     if (wanted.includes(record.status)) return record.status
     await new Promise((r) => setTimeout(r, 500))
   }
@@ -104,7 +104,7 @@ beforeAll(async () => {
   bootProject = await bootProjectId(baseUrl)
 
   const created = (await (
-    await fetch(`${baseUrl}/api/runs`, {
+    await fetch(`${baseUrl}/api/v1/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task: 'Improve the project notes.', workflow: 'quick-task' }),
@@ -115,11 +115,11 @@ beforeAll(async () => {
   // Park the run at review (the same settle rule review-gate.e2e.ts rides): the worktree
   // diff is non-empty because the mock touched notes.md.
   await waitForStatus(baseUrl, runId, ['waiting'])
-  await fetch(`${baseUrl}/api/runs/${runId}/finish`, { method: 'POST' })
+  await fetch(`${baseUrl}/api/v1/runs/${runId}/finish`, { method: 'POST' })
   const parked = await waitForStatus(baseUrl, runId, ['review', 'done'])
   if (parked !== 'review') throw new Error('cezar e2e: the dry run settled as done — no diff to review?')
 
-  const record = (await (await fetch(`${baseUrl}/api/runs/${runId}`)).json()) as { worktreePath: string }
+  const record = (await (await fetch(`${baseUrl}/api/v1/runs/${runId}`)).json()) as { worktreePath: string }
   worktreePath = record.worktreePath
 
   browser = AgentBrowser.open(sessionId)
@@ -167,7 +167,7 @@ describe('the Changes tab against a live dry run', () => {
   })
 
   it('the toolbar comes from the policy: Push, Create PR, Commit, and kebab', () => {
-    // Push's enablement rides the /api/health answer (repo.remote), and health probes the
+    // Push's enablement rides the /api/v1/health answer (repo.remote), and health probes the
     // real codex/opencode/gh CLIs — slow. Wait for the policy to settle rather than sample.
     browser.waitForFunction(
       `document.querySelector('[data-slot="git-toolbar"] [data-action="push"]')?.disabled === false`,
