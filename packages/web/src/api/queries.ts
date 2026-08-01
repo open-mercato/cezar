@@ -54,7 +54,6 @@ import {
   getWorktrees,
   editQueuedMessage,
   markRunSeen,
-  markAllRunsSeen,
   patchRun,
   removeQueuedMessage,
   registerProject,
@@ -1012,7 +1011,10 @@ export function useMarkRunSeen() {
   return useMutation({
     mutationFn: (id: string) => markRunSeen(id),
     onMutate: async (id: string) => {
+      // Cancel BOTH caches this stamps: an in-flight refetch of either that settles after the
+      // optimistic write would otherwise put the unread dot straight back.
       await queryClient.cancelQueries({ queryKey: queryKeys.runs.list() })
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.detail(id) })
       const prevList = queryClient.getQueryData<RunRecord[]>(queryKeys.runs.list())
       const prevDetail = queryClient.getQueryData<RunRecord>(queryKeys.runs.detail(id))
       const now = new Date().toISOString()
@@ -1025,8 +1027,10 @@ export function useMarkRunSeen() {
       return { prevList, prevDetail, id }
     },
     onError: (_error, id, context) => {
+      // Both restores are guarded: with no snapshot there is nothing to roll back TO, and
+      // writing `undefined` would evict a cache entry the mutation never touched.
       if (context?.prevList) queryClient.setQueryData(queryKeys.runs.list(), context.prevList)
-      queryClient.setQueryData(queryKeys.runs.detail(id), context?.prevDetail)
+      if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
     },
     onSuccess: (updated) => {
       queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
@@ -1034,16 +1038,6 @@ export function useMarkRunSeen() {
       )
       queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
     },
-  })
-}
-
-/** "Mark all read" (#unread-done-items): `POST /api/runs/read-all` stamps every unread finished
- *  run. Invalidate `runs.*` for the truth; each stamped run also rides the `run` SSE. */
-export function useMarkAllRunsSeen() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => markAllRunsSeen(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }
 

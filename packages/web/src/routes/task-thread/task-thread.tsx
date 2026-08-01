@@ -85,7 +85,16 @@ export function TaskThreadRoute() {
   const { mutate: markRunSeen } = useMarkRunSeen()
   useEffect(() => {
     if (run.data && isUnread(run.data)) markRunSeen(run.data.id)
-  }, [markRunSeen, run.data?.id, run.data?.status, run.data?.finishedAt, run.data?.seenAt])
+  }, [
+    markRunSeen,
+    run.data?.id,
+    run.data?.status,
+    run.data?.finishedAt,
+    run.data?.seenAt,
+    // `isUnread` reads `archived` too, so it belongs here: un-archiving an open thread makes the
+    // run unread again, and without this dep the effect would never fire to clear it.
+    run.data?.archived,
+  ])
   // The two feeds can drift: a record update lost on the workspace stream leaves the thread
   // showing Working… over a "run finished" transcript. The transcript is live here, so it
   // arbitrates — a session end with no session after it refetches a record still claiming one.

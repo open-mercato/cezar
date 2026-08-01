@@ -636,14 +636,18 @@ export class RunStore extends EventEmitter {
   }
 
   /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
-   *  "Unread" here is the same rule the cockpit paints (read-state.ts): a `done` or
-   *  `failed` run not seen since it finished. Cancelled runs are never unread — you
-   *  stopped them yourself — so they are skipped, as are runs already read. */
+   *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
+   *  clause for clause: a `done` or `failed` run that finished and has not been seen
+   *  since. Cancelled runs are never unread — you stopped them yourself — and archived
+   *  ones never are either, since archiving is a stronger "done with this" than reading;
+   *  both are skipped, as are runs already read. Keeping the two rules identical is what
+   *  makes the returned count the number the cockpit's unread badge was showing. */
   markAllRead(): number {
     const now = new Date().toISOString();
     let count = 0;
     for (const run of this.runs.values()) {
       const unread =
+        !run.archived &&
         (run.status === 'done' || run.status === 'failed') &&
         run.finishedAt !== undefined &&
         (run.seenAt === undefined || run.seenAt < run.finishedAt);

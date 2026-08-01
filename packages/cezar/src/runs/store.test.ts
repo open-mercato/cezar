@@ -1191,4 +1191,19 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
     // Idempotent: a second sweep finds nothing left unread.
     expect(store.markAllRead()).toBe(0);
   });
+
+  it('markAllRead skips archived runs, exactly as the cockpit rule does', () => {
+    // `isUnread()` (web/src/lib/read-state.ts) treats an archived run as never unread —
+    // archiving is a stronger "done with this" than reading. The sweep has to agree, or the
+    // count it answers would exceed the unread badge the user clicked, and archived history
+    // would take a pointless write and `run` broadcast on every sweep.
+    const store = RunStore.open(dataDir);
+    const archived = finishedRun(store, 'done');
+    store.setArchived(archived, true);
+    const active = finishedRun(store, 'done');
+
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(active)?.seenAt).toBeDefined();
+    expect(store.getRun(archived)?.seenAt).toBeUndefined();
+  });
 });
