@@ -549,10 +549,13 @@ describe('TasksOverview — header', () => {
         run({ id: 'cancelled', status: 'cancelled', finishedAt: FINISHED }),
       ],
     })
+    // Keyed on the aria-label, not on the violet tone alone: the attention pill's OWN dot is
+    // violet for the live states (running/waiting/review), so a tone-only selector would be
+    // matching two different signals and would quietly stop meaning what it says.
     const unreadDot = (id: string) =>
-      tableRow(id)?.querySelector('[data-slot="status-dot"][data-tone="violet"]')
+      tableRow(id)?.querySelector('[data-slot="status-dot"][aria-label="unread"]')
     expect(unreadDot('unread')).not.toBeNull()
-    expect(unreadDot('unread')?.getAttribute('aria-label')).toBe('unread')
+    expect(unreadDot('unread')?.getAttribute('data-tone')).toBe('violet')
     expect(unreadDot('read')).toBeNull()
     expect(unreadDot('cancelled')).toBeNull()
   })
