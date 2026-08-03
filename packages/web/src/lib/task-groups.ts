@@ -81,8 +81,15 @@ export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
  *
  * `??`, not `||`: the server never stores an empty summary (trimmed, 1–300 chars), so only
  * absence falls back — a falsy-but-present value would be a server bug worth seeing.
+ *
+ * Takes the three fields it reads rather than a whole `RunRecord`, for the same reason
+ * `AttentionInput` does: the ⌘K palette's cross-project index (`RunIndexEntry`) is a slim row,
+ * not a record, and it must name a task exactly as every other surface does. Widening the
+ * parameter is what makes that a shared function instead of a second title rule.
  */
-export function runTitle(run: RunRecord): string {
+export type RunTitleInput = Pick<RunRecord, 'title' | 'titleSummary' | 'titleOrigin'>
+
+export function runTitle(run: RunTitleInput): string {
   const summary = run.titleSummary
   if (summary === undefined) return run.title
   const protectedTitle = run.titleOrigin === 'user' || run.titleOrigin === 'marker'

@@ -45,6 +45,23 @@
   navigation — gets the other representation without the flag, under the same allowlist, size cap
   and sandbox CSP as before.
 
+- ✨ **⌘K searches the whole workspace, not just the project you are standing in.** The palette
+  now lists your **projects** — recency-ordered like the sidebar, the active one last — so
+  switching is a keystroke, and it finds **tasks in any project**, each row labelled with the
+  project it belongs to. That is backed by one new workspace-level route,
+  `GET /api/v1/workspace/runs-index`, which answers a deliberately slim row per run instead of the
+  full record: it never builds a project context, so reading it cannot prune worktrees or resume
+  interrupted runs — typing in a search box must not restart agents. Projects this process has
+  never opened are read straight off `runs.json`, sharing `RunStore`'s own reconciliation so a
+  crashed process's `running` row reads as interrupted here exactly as it would once opened.
+  The palette also opens on **New task** (one row now, not three scattered copies) followed by
+  **Recently finished** — the tasks you have not opened since they finished, the same signal
+  behind the Tasks badge. Ranking is substring-based rather than cmdk's fuzzy subsequence, because
+  a run id is a uuid and typing a task number used to match stray digits inside unrelated ids
+  ahead of the task actually named that; searching also folds the sections into one ranked list so
+  a near-miss can never sit above an exact hit. The dialog is wider on wider screens, taller on
+  taller ones, and anchored near the top so it no longer jumps as results come and go.
+
 ## 🔧 Changed
 - Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
   Its body used to be parsed inside the handler to keep "unknown id 404s before the body is

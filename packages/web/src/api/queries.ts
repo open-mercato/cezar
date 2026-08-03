@@ -39,6 +39,7 @@ import {
   getRunFile,
   getRunHandoff,
   getRuns,
+  getRunsIndex,
   getImportableSkills,
   getImportableSkillsWhenReady,
   getSkills,
@@ -194,6 +195,9 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
+  /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
+   *  it answers for every project at once, so no scope owns it. */
+  runsIndex: ['workspace', 'runs-index'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */
@@ -624,6 +628,28 @@ export function useRuns() {
   return useQuery({
     queryKey: queryKeys.runs.list(),
     queryFn: ({ signal }) => getRuns({ signal }),
+  })
+}
+
+/**
+ * Every registered project's recent tasks, slim — the ⌘K palette's cross-project finder.
+ *
+ * `enabled` rather than always-on, and the palette passes `false` in a single-project workspace:
+ * there is nothing to aggregate there, and the active project's own `useRuns()` entry (already
+ * warm, and stream-patched) answers better than this snapshot could.
+ *
+ * ONE request for the whole registry, deliberately — the alternative, N `useProjectRuns` calls,
+ * ships a full `RunRecord` per run (`steps[]` and all) times the registry, to render a title and
+ * a dot. `staleTime` because a task search is a glance, not a live view: the palette mounts on
+ * open, and re-opening it seconds later should not re-ask the whole workspace. The active
+ * project's rows come from `useRuns()` anyway, so the live half of the list is never this stale.
+ */
+export function useRunsIndex(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.runsIndex,
+    queryFn: ({ signal }) => getRunsIndex({ signal }),
+    enabled,
+    staleTime: 30_000,
   })
 }
 

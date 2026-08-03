@@ -265,6 +265,64 @@ export const apiRunSchema = runRecordSchema.extend({
 });
 export type ApiRun = z.infer<typeof apiRunSchema>;
 
+// ---- the cross-project index --------------------------------------------------------------
+
+/**
+ * One run in the WORKSPACE-level index (`GET /api/v1/workspace/runs-index`) — the ⌘K palette's
+ * "find a task in any project" list.
+ *
+ * Deliberately a separate, slim shape rather than `ApiRun`. The index answers for every
+ * registered project at once, and `runRecordSchema` carries `steps[]` and `workflowDef` — a fat
+ * record whose cost is fine per project and absurd multiplied by the registry. These are exactly
+ * the fields a palette row renders: `runTitle`'s three (`title`, `titleSummary`, `titleOrigin`),
+ * `deriveAttention`'s two (`status`, `activity`), `isUnread`'s four (`status`, `finishedAt`,
+ * `seenAt`, `archived`), and the timestamps `shortAge` reads. Adding a field here is cheap;
+ * adding the whole record is what this exists to avoid.
+ *
+ * `projectId` is the join key, NOT the project name: the registry is already on the client and is
+ * authoritative for display names, and duplicating one here would let a renamed project show two
+ * different labels in one palette.
+ */
+export const runIndexEntrySchema = z.object({
+  /** The registered project this run belongs to. Joins against `GET /projects`. */
+  projectId: z.string(),
+  id: z.string(),
+  title: z.string(),
+  titleSummary: z.string().optional(),
+  titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  status: runStatusSchema,
+  activity: runActivitySchema.optional(),
+  createdAt: z.string(),
+  finishedAt: z.string().optional(),
+  /** With `status`/`finishedAt`/`archived`, the four inputs `isUnread` reads — what lets the
+   *  palette lead with "finished while you weren't looking" across every project, not just the
+   *  one you happen to be standing in. */
+  seenAt: z.string().optional(),
+  /** Always present, like `RunRecord.archived`: absent would read as "not archived", and the
+   *  unread rule treats archiving as a stronger "done with this" than reading. */
+  archived: z.boolean(),
+});
+export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
+
+/**
+ * `GET /workspace/runs-index`.
+ *
+ * `truncated` is not decoration: the index caps each project's contribution, and a capped list
+ * that says nothing reads as "your task is not here" when the honest answer is "not in the
+ * newest N". Naming the projects that hit the cap is what lets a consumer say so.
+ */
+export const runsIndexResponseSchema = z.object({
+  /** Newest first, across every registered project. Archived runs are included — `GET /runs`
+   *  carries them for the project you are standing in, and a finder that dropped them elsewhere
+   *  would make a task vanish the moment you left its project. */
+  runs: z.array(runIndexEntrySchema),
+  /** The per-project cap that produced this list. */
+  perProjectLimit: z.number(),
+  /** Ids of the projects that had more runs than the cap allowed. */
+  truncated: z.array(z.string()),
+});
+export type RunsIndexResponse = z.infer<typeof runsIndexResponseSchema>;
+
 // ---- mutation responses ------------------------------------------------------------------
 
 /**
