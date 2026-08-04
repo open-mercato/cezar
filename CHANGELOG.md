@@ -1,15 +1,5 @@
 # Unreleased
 
-## ⚠️ Breaking
-- **The HTTP API moved to `/api/v1`.** Every route answers under `/api/v1/…` (project-scoped:
-  `/api/v1/p/<projectId>/…`) and the WebSocket bus is `/api/v1/ws`; the unversioned `/api/*`
-  spelling is gone. The bundled cockpit ships in lockstep, so a normal upgrade needs nothing from
-  you — this only matters if you script the API directly, where the fix is adding `/v1`.
-  `GET /api/v1/health` is still the CORS-open discovery endpoint, historical run transcripts keep
-  rendering (old image URLs are upgraded when read), and saved bookmarklets are unaffected.
-  Versioning is what lets the typed client describe the whole surface and makes a future `v2` an
-  additive mount rather than an edit to every route.
-
 ## ✨ Features
 - ✨ **Agent accounts: run one project on your work login and another on your personal one.**
   The same CLI logged in twice — `CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
@@ -35,6 +25,20 @@
   because that would bill the wrong subscription while the UI said otherwise. OpenCode is not
   supported yet: it keeps credentials outside its config folder, so a second folder would change
   settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+
+# 0.9.2 (2026-08-04)
+
+## ⚠️ Breaking
+- **The HTTP API moved to `/api/v1`.** Every route answers under `/api/v1/…` (project-scoped:
+  `/api/v1/p/<projectId>/…`) and the WebSocket bus is `/api/v1/ws`; the unversioned `/api/*`
+  spelling is gone. The bundled cockpit ships in lockstep, so a normal upgrade needs nothing from
+  you — this only matters if you script the API directly, where the fix is adding `/v1`.
+  `GET /api/v1/health` is still the CORS-open discovery endpoint, historical run transcripts keep
+  rendering (old image URLs are upgraded when read), and saved bookmarklets are unaffected.
+  Versioning is what lets the typed client describe the whole surface and makes a future `v2` an
+  additive mount rather than an edit to every route.
+
+## ✨ Features
 - ✨ **The two mixed-format routes do real HTTP content negotiation.** `GET /api/v1/repo/commit/:sha`
   (legacy text blob or structured commit payload) and `GET /api/v1/runs/:id/files` (JSON listing or
   an image's raw bytes) now honour the request's `Accept` header, answer `Vary: Accept`, and set a
@@ -44,6 +48,12 @@
   byte-identical. What is new is that a client that really does ask — an `<img>`, a browser
   navigation — gets the other representation without the flag, under the same allowlist, size cap
   and sandbox CSP as before.
+- ✨ **Finished tasks now carry a read/unread marker (#767).** A done or failed run you have not
+  opened since it finished reads as *unread* — its row is promoted (brighter, semibold) and wears a
+  small trailing violet dot — while everything you have already seen dims back. The Tasks nav item
+  shows how many are unread, opening a task's thread clears it, and a "Mark all read" sweep clears
+  the lot. Unread is a deliberately separate channel from the status dot, which keeps saying
+  done/failed, so "what happened" and "have I seen it" never collapse into one signal.
 
 ## 🔧 Changed
 - Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
@@ -79,6 +89,16 @@
   file is missing, empty, or corrupt. Removing `~/.cezar` still resets cezar completely; removing
   only `config.json` no longer loses the project list. A config that parses and is simply empty is
   left alone — that is a user who removed their last project, not a lost registry.
+- 🐛 **Structured questions render as a form, not raw JSON (#757).** When an agent asked a
+  structured question, the Ask card could fall back to printing the raw JSON payload; it now renders
+  the real question with its options, and long question text wraps instead of overflowing.
+- 🐛 **Subagent sessions render like the main thread (#756).** A subagent's transcript now goes
+  through the same session renderer as the top-level thread, so its messages, tools and reasoning
+  look identical instead of a stripped-down variant.
+- 🐛 **The task diff stat stops counting a repointed HEAD's branch (#751).** When a task's worktree
+  HEAD was repointed onto another branch, the ± diff stat folded in that branch's whole history; it
+  is now anchored at HEAD so it counts only the task's own changes, and the Changes tab says so when
+  a repointed HEAD has narrowed what it shows.
 
 # 0.9.1 (2026-07-24)
 
