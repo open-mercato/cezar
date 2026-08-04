@@ -123,6 +123,8 @@ thread is not re-stamped by the auto-read effect, and a later fresh mount does m
 
 ## Progress
 
+PR: #776
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server — clear the receipt
@@ -148,5 +150,6 @@ thread is not re-stamped by the auto-read effect, and a later fresh mount does m
 
 ### Phase 4: Validation and PR
 
-- [ ] 4.1 Full validation gate green
-- [ ] 4.2 Labels, review pass, summary comment
+- [x] 4.1 Full validation gate green — typecheck, npm test (5320), test:unit (36), build, test:package (12)
+- [x] 4.2 Labels, review pass, summary comment
+- [x] Post-review fix: pin the read/unread routes in contract-parity + correct the `seenAt` docs — 50828a46
