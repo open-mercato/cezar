@@ -8,6 +8,7 @@ import {
   CopyIcon,
   EllipsisVerticalIcon,
   FileTextIcon,
+  MailIcon,
   PencilIcon,
   PlayIcon,
   SquareTerminalIcon,
@@ -22,6 +23,7 @@ import {
   useAgentProfiles,
   useConfig,
   useHealth,
+  useMarkRunUnseen,
   useOpenTargets,
   usePatchRun,
   useProjectRepoBase,
@@ -91,16 +93,21 @@ export function RunHeader({
   run,
   planTally,
   tab = 'session',
+  onMarkedUnread,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
+  /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
+   *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
+   *  the three `task-git` tabs render this same header and run no such effect. */
+  onMarkedUnread?: () => void
 }) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
-  const actions = useRunActions(run)
+  const actions = useRunActions(run, onMarkedUnread)
 
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
@@ -187,6 +194,18 @@ export function RunHeader({
               <FileTextIcon aria-hidden="true" />
               Notes
             </Button>
+            {flags.markUnread ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Put this task back in the unread list"
+                disabled={actions.markUnread.isPending}
+                onClick={() => actions.markUnread.mutate()}
+              >
+                <MailIcon aria-hidden="true" />
+                Mark unread
+              </Button>
+            ) : null}
             {flags.archive ? (
               <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
                 {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
@@ -313,7 +332,7 @@ function OpenInMenuForRun({
 
 /** The mutations + confirm state, bundled so the desktop bar and the mobile kebab drive the
  *  exact same behavior. Every failure surfaces the server's own words as a danger toast. */
-function useRunActions(run: ApiRun) {
+function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [confirming, setConfirming] = useState<'cancel' | 'delete' | null>(null)
@@ -340,6 +359,20 @@ function useRunActions(run: ApiRun) {
     onSuccess: invalidate,
     onError,
   })
+  // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
+  // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
+  // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
+  // and reinstate the receipt before the server's own answer lands.
+  const markUnreadMutation = useMarkRunUnseen()
+  const markUnread = {
+    isPending: markUnreadMutation.isPending,
+    mutate: () => {
+      // Before the mutation, so the Session tab's suppression is in place by the time the
+      // optimistic write re-renders the thread and re-evaluates its auto-mark-read effect.
+      onMarkedUnread?.()
+      markUnreadMutation.mutate(run.id, { onError })
+    },
+  }
   const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
   const deleteMutation = useMutation({
     mutationFn: () => deleteRun(run.id),
@@ -368,6 +401,7 @@ function useRunActions(run: ApiRun) {
     continuation,
     continueRun: continueMutation,
     archive,
+    markUnread,
     cancel,
     delete: deleteMutation,
     terminal,
@@ -688,6 +722,14 @@ function ActionsKebab({
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>
+        {flags.markUnread ? (
+          <DropdownMenuItem
+            disabled={actions.markUnread.isPending}
+            onSelect={() => actions.markUnread.mutate()}
+          >
+            <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
         {flags.archive ? (
           <DropdownMenuItem onSelect={() => actions.archive.mutate()}>
             {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
