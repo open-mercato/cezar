@@ -142,9 +142,9 @@ thread is not re-stamped by the auto-read effect, and a later fresh mount does m
 
 ### Phase 3: Cockpit UI
 
-- [ ] 3.1 "Mark unread" control in the run header (desktop row + mobile kebab)
-- [ ] 3.2 Per-visit auto-mark-read suppression in `task-thread.tsx`
-- [ ] 3.3 `run-header.test.tsx` and `task-thread.test.tsx` coverage
+- [x] 3.1 "Mark unread" control in the run header (desktop row + mobile kebab) — 0a5812cd
+- [x] 3.2 Per-visit auto-mark-read suppression in `task-thread.tsx` — 0a5812cd
+- [x] 3.3 `run-header.test.tsx` and `task-thread.test.tsx` coverage — 0a5812cd
 
 ### Phase 4: Validation and PR
 
