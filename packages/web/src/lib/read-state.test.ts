@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import type { RunRecord } from '@open-mercato/cezar-api-client'
-import { isDoneItem, isReadDoneItem, isUnread, unreadDoneCount, type ReadStateInput } from '@/lib/read-state'
+import {
+  canBeUnread,
+  isDoneItem,
+  isReadDoneItem,
+  isUnread,
+  unreadDoneCount,
+  type ReadStateInput,
+} from '@/lib/read-state'
 
 /** A finished-run shape for the read/unread rule. Defaults describe a done run that finished at a
  *  fixed instant and has never been opened — i.e. unread — so each case overrides only what it
@@ -63,6 +70,40 @@ describe('isUnread', () => {
 
   it('is never unread once archived — archiving is a stronger "handled" than reading', () => {
     expect(isUnread(done({ archived: true, seenAt: undefined }))).toBe(false)
+  })
+})
+
+describe('canBeUnread — the receipt-independent half (#775)', () => {
+  it('is true for a finished done/failed run regardless of its receipt', () => {
+    // The whole point of the split: eligibility does NOT look at seenAt, so a run that is
+    // currently read still answers true — which is exactly when "Mark unread" is offered.
+    expect(canBeUnread(done({ seenAt: undefined }))).toBe(true)
+    expect(canBeUnread(done({ seenAt: '2026-08-01T10:05:00.000Z' }))).toBe(true)
+    expect(canBeUnread(done({ status: 'failed', seenAt: '2026-08-01T10:05:00.000Z' }))).toBe(true)
+  })
+
+  it('is false for the rows that can never wear the marker', () => {
+    expect(canBeUnread(done({ status: 'cancelled' }))).toBe(false)
+    expect(canBeUnread(done({ archived: true }))).toBe(false)
+    expect(canBeUnread(done({ finishedAt: undefined }))).toBe(false)
+    for (const status of ['queued', 'running', 'waiting', 'review'] as RunRecord['status'][]) {
+      expect(canBeUnread(done({ status, finishedAt: undefined }))).toBe(false)
+    }
+  })
+
+  it('is implied by isUnread — every unread row is by definition eligible', () => {
+    const cases: ReadStateInput[] = [
+      done({ seenAt: undefined }),
+      done({ status: 'failed', seenAt: undefined }),
+      done({ seenAt: '2026-08-01T09:00:00.000Z' }), // stale receipt
+      done({ status: 'cancelled' }),
+      done({ archived: true }),
+      done({ finishedAt: undefined }),
+      done({ status: 'running', finishedAt: undefined }),
+    ]
+    for (const run of cases) {
+      if (isUnread(run)) expect(canBeUnread(run)).toBe(true)
+    }
   })
 })
 

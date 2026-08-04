@@ -54,6 +54,7 @@ import {
   getWorktrees,
   editQueuedMessage,
   markRunSeen,
+  markRunUnseen,
   patchRun,
   removeQueuedMessage,
   registerProject,
@@ -1039,6 +1040,54 @@ export function useMarkRunSeen() {
       queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
     },
   })
+}
+
+/**
+ * Put one finished run back to unread (#775): `POST /api/runs/:id/unread`. The exact inverse of
+ * `useMarkRunSeen`, down to the cache choreography — both caches cancelled so an in-flight
+ * refetch cannot re-stamp the receipt after the optimistic write, `seenAt` *cleared* instead of
+ * stamped, and a guarded rollback so a run that could not be marked unread honestly stays read
+ * (which is also the mixed-version failure mode: an older server 404s this route, and the user
+ * sees the marker not come back rather than a cockpit lying about the server's state).
+ *
+ * Clearing is spelled as a rest-destructure rather than `seenAt: undefined`: the reader is
+ * `isUnread`, which keys on the field being absent, and an explicit `undefined` would survive
+ * into a record shape the server never writes.
+ */
+export function useMarkRunUnseen() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => markRunUnseen(id),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.list() })
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.detail(id) })
+      const prevList = queryClient.getQueryData<RunRecord[]>(queryKeys.runs.list())
+      const prevDetail = queryClient.getQueryData<RunRecord>(queryKeys.runs.detail(id))
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === id ? withoutReceipt(run) : run)),
+      )
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(id), (run) =>
+        run ? withoutReceipt(run) : run,
+      )
+      return { prevList, prevDetail, id }
+    },
+    onError: (_error, id, context) => {
+      if (context?.prevList) queryClient.setQueryData(queryKeys.runs.list(), context.prevList)
+      if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === updated.id ? updated : run)),
+      )
+      queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
+    },
+  })
+}
+
+/** A copy of the record with the read receipt gone — the optimistic half of `useMarkRunUnseen`. */
+function withoutReceipt(run: RunRecord): RunRecord {
+  const { seenAt: _dropped, ...rest } = run
+  return rest
 }
 
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself
