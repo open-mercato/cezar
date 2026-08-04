@@ -13,7 +13,9 @@
  *     Exact, no locale, no parsing of prose. This is the one that matters in practice.
  *  2. An explicit reset instant in the prose (`try again at 2026-08-03T18:00:00Z`) — how Codex and
  *     OpenCode phrase the same thing when they carry a timestamp at all.
- *  3. A relative delay (`try again in 42 minutes`, `retry-after: 3600`).
+ *  3. A clock-only reset in prose (`resets 8:10pm (Europe/Warsaw)`) — how Claude Code phrases
+ *     session windows in some interactive output.
+ *  4. A relative delay (`try again in 42 minutes`, `retry-after: 3600`).
  *
  * Nothing else counts. A limit message with no recoverable reset instant returns `null` on
  * purpose: guessing a window would turn one interruption into a retry loop against a provider
@@ -24,7 +26,7 @@ export interface UsageLimitHit {
   /** When the provider says the limit lifts. Never in the past — a stale instant clamps to now. */
   resetAt: Date;
   /** Which shape carried it — the lifecycle note quotes this so the schedule is auditable. */
-  evidence: 'claude-marker' | 'timestamp' | 'delay';
+  evidence: 'claude-marker' | 'timestamp' | 'clock' | 'delay';
 }
 
 /**
@@ -42,11 +44,15 @@ const CLAUDE_MARKER_RE = /claude(?:\s+ai)?\s+usage\s+limit\s+reached\s*\|\s*(\d{
  * false positive there would schedule a resume on a timestamp that means something else entirely.
  */
 const LIMIT_PHRASE_RE =
-  /\b(?:usage|rate|weekly|hourly)[\s-]?limit\b|\brate[_-]?limit(?:_error|ed)?\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
+  /\b(?:usage|rate|session|weekly|hourly)[\s-]?limit\b|\brate[_-]?limit(?:_error|ed)?\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
 
 /** `…try again at 2026-08-03T18:00:00Z`, `…resets at 2026-08-03 18:00`. */
 const RESET_AT_RE =
   /(?:resets?|reset[s]?\s+at|try\s+again|retry|available\s+again|unlocks?)\b[^\n]{0,24}?\b(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?)/i;
+
+/** `...resets 8:10pm (Europe/Warsaw)`, `...try again at 20:10`. */
+const RESET_CLOCK_RE =
+  /(?:resets?|reset[s]?\s+at|try\s+again|retry|available\s+again|unlocks?)\b[^\n]{0,24}?\b(?:at\s*)?(\d{1,2})(?:(?::(\d{2}))\s*([ap]\.?m\.?)?|\s*([ap]\.?m\.?))(?:\s*\(([^)]+)\))?/i;
 
 /** `…try again in 42 minutes`, `…retry after 3600 seconds`, `retry-after: 3600`. */
 const RESET_IN_RE =
@@ -86,6 +92,12 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
     if (Number.isFinite(parsed)) return settle(parsed, now, 'timestamp');
   }
 
+  const clock = RESET_CLOCK_RE.exec(message);
+  if (clock) {
+    const parsed = parseClockReset(clock, now);
+    if (parsed !== null) return settle(parsed, now, 'clock');
+  }
+
   const relative = RESET_IN_RE.exec(message);
   if (relative) {
     const unit = UNIT_MS[relative[2]!.toLowerCase()];
@@ -95,6 +107,120 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
   if (header) return settle(now + Number(header[1]) * 1_000, now, 'delay');
 
   return null;
+}
+
+function parseClockReset(match: RegExpExecArray, now: number): number | null {
+  const hourRaw = Number(match[1]);
+  const minute = match[2] === undefined ? 0 : Number(match[2]);
+  const meridiem = (match[3] ?? match[4])?.toLowerCase().replaceAll('.', '');
+  if (!Number.isInteger(hourRaw) || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+    return null;
+  }
+  let hour = hourRaw;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    if (meridiem === 'am') hour = hour === 12 ? 0 : hour;
+    else if (meridiem === 'pm') hour = hour === 12 ? 12 : hour + 12;
+    else return null;
+  } else if (hour < 0 || hour > 23) {
+    return null;
+  }
+
+  const timeZone = validTimeZone(match[5]?.trim());
+  if (timeZone) return nextClockInTimeZone(hour, minute, timeZone, now);
+  return nextLocalClock(hour, minute, now);
+}
+
+function nextLocalClock(hour: number, minute: number, now: number): number {
+  const candidate = new Date(now);
+  candidate.setHours(hour, minute, 0, 0);
+  if (candidate.getTime() < now) candidate.setDate(candidate.getDate() + 1);
+  return candidate.getTime();
+}
+
+function nextClockInTimeZone(hour: number, minute: number, timeZone: string, now: number): number | null {
+  const today = zonedParts(now, timeZone);
+  if (!today) return null;
+  let candidate = zonedWallTimeToUtc(today.year, today.month, today.day, hour, minute, timeZone);
+  if (candidate === null) return null;
+  if (candidate < now) {
+    const tomorrow = new Date(Date.UTC(today.year, today.month - 1, today.day + 1));
+    candidate = zonedWallTimeToUtc(
+      tomorrow.getUTCFullYear(),
+      tomorrow.getUTCMonth() + 1,
+      tomorrow.getUTCDate(),
+      hour,
+      minute,
+      timeZone,
+    );
+  }
+  return candidate;
+}
+
+function validTimeZone(candidate: string | undefined): string | null {
+  if (!candidate) return null;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(new Date(0));
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+function zonedWallTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): number | null {
+  const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  let candidate = wallAsUtc;
+  for (let i = 0; i < 3; i += 1) {
+    const offset = timeZoneOffsetMs(timeZone, candidate);
+    if (offset === null) return null;
+    const next = wallAsUtc - offset;
+    if (Math.abs(next - candidate) < 1_000) return next;
+    candidate = next;
+  }
+  return candidate;
+}
+
+function timeZoneOffsetMs(timeZone: string, utcMs: number): number | null {
+  const parts = zonedParts(utcMs, timeZone);
+  if (!parts) return null;
+  const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  return asUtc - utcMs;
+}
+
+function zonedParts(
+  utcMs: number,
+  timeZone: string,
+): { year: number; month: number; day: number; hour: number; minute: number; second: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(utcMs));
+    const value = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+    return {
+      year: value('year'),
+      month: value('month'),
+      day: value('day'),
+      hour: value('hour'),
+      minute: value('minute'),
+      second: value('second'),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Bound a candidate instant: past → now (the limit already lifted), absurd → not believed. */

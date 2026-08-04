@@ -29,6 +29,24 @@ describe('parseUsageLimit', () => {
     expect(hit?.evidence).toBe('timestamp');
   });
 
+  it('reads Claude Code session-limit prose with a clock and IANA timezone', () => {
+    const hit = parseUsageLimit(
+      "You've hit your session limit · resets 8:10pm (Europe/Warsaw)",
+      NOW,
+    );
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T18:10:00.000Z');
+    expect(hit?.evidence).toBe('clock');
+  });
+
+  it('uses tomorrow when a clock-only reset already passed today in its named timezone', () => {
+    const lateWarsawNight = Date.parse('2026-08-03T20:30:00.000Z');
+    const hit = parseUsageLimit(
+      "You've hit your session limit · resets 8:10pm (Europe/Warsaw)",
+      lateWarsawNight,
+    );
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-04T18:10:00.000Z');
+  });
+
   it('reads a relative delay, and a bare retry-after', () => {
     expect(parseUsageLimit('rate limit exceeded — try again in 42 minutes', NOW)?.resetAt.toISOString())
       .toBe('2026-08-03T12:42:00.000Z');
