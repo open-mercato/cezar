@@ -152,6 +152,17 @@ const runRecordSchema = z.object({
   monitoringWakeAt: z.string().datetime().optional().catch(undefined),
   /** True only for the live epoch that exhausted all automatic monitoring checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /**
+   * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
+   * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a
+   * short grace. Present only while such a resume is pending: the run is `failed`, the timer is
+   * armed, and the cockpit says so. Deliberately survives a restart (`RunStore.open` keeps it) —
+   * it is what lets `recover()` re-arm a wait that may be hours long.
+   */
+  autoResumeAt: z.string().datetime().optional().catch(undefined),
+  /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
+   *  Persisted so a restart cannot reset a loop back to zero. */
+  autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -287,6 +298,20 @@ const MAX_PR_CANDIDATES = 8;
  * invisible to the janitor, #407). Reasoning items are skipped: thinking text
  * speculates about PRs the task never touches.
  */
+/**
+ * Archiving IS resigning from a task, so an archived run can never carry a pending usage-limit
+ * resume (spec 2026-08-03-auto-resume-after-usage-limit). The rule lives HERE rather than in the
+ * archive route because the bulk "Archive finished" sweep never goes through that route, and a
+ * user who archives fifty finished tasks has resigned from all fifty.
+ *
+ * The engine needs no telling: its timer re-reads the record before it fires and no sweep re-arms
+ * an archived run, so a cleared field is the whole cancellation.
+ */
+function clearPendingAutoResume(run: RunRecord): void {
+  run.autoResumeAt = undefined;
+  run.autoResumeAttempts = undefined;
+}
+
 function eventTextFragments(event: Record<string, unknown>): string[] {
   const fragments: string[] = [];
   for (const key of ['text', 'result', 'message'] as const) {
@@ -426,6 +451,10 @@ export class RunStore extends EventEmitter {
               run.activity = undefined;
               run.monitoringWakeAt = undefined;
             }
+            // A pending usage-limit resume survives the restart on purpose (the wait can be
+            // hours) — `RunManager.recover()` re-arms it from this field. It can only mean
+            // anything on a `failed` run, so anywhere else it is stale bookkeeping.
+            if (run.status !== 'failed') run.autoResumeAt = undefined;
             // The wake counter is intentionally process-local, so a restarted
             // process starts a fresh epoch instead of displaying a stale cap.
             run.monitoringWakeCapReached = undefined;
@@ -514,6 +543,13 @@ export class RunStore extends EventEmitter {
       normalized.activity = undefined;
       normalized.monitoringWakeAt = undefined;
       normalized.monitoringWakeCapReached = undefined;
+    }
+    // …and the mirror image for the usage-limit resume (spec
+    // 2026-08-03-auto-resume-after-usage-limit): it is a promise made ABOUT a failed run, so a
+    // run coming back to life — the resume itself, a user Continue, a re-queue — retires it.
+    // The manager's timer re-checks the record before it fires, so a cleared field is enough.
+    if (normalized.status && ['running', 'waiting', 'queued'].includes(normalized.status)) {
+      normalized.autoResumeAt = undefined;
     }
     Object.assign(run, this.redactPatch(normalized));
     this.touch(run);
@@ -605,6 +641,7 @@ export class RunStore extends EventEmitter {
     if (!run) return undefined;
     run.archived = archived;
     run.archivedAt = archived ? new Date().toISOString() : undefined;
+    if (archived) clearPendingAutoResume(run);
     this.touch(run);
     return run;
   }
@@ -616,6 +653,7 @@ export class RunStore extends EventEmitter {
       if (!run.archived && ['done', 'failed', 'cancelled'].includes(run.status)) {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
+        clearPendingAutoResume(run);
         this.touch(run);
         count++;
       }

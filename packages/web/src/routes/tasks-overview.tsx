@@ -35,6 +35,7 @@ import {
   filterRuns,
   finishedRunCount,
   formatCost,
+  scheduledResume,
   taskReference,
   usageCells,
   workflowLabel,
@@ -368,6 +369,7 @@ function TableRow({
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
+  const scheduled = scheduledResume(run)
   const to = `/tasks/${run.id}`
   const cost = formatCost(run.costUsd)
   const reference = taskReference(run)
@@ -383,8 +385,11 @@ function TableRow({
       className="group/row cursor-pointer hover:bg-muted"
     >
       <td className={TD_BASE}>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
+        {/* A scheduled run wears its appointment in the pill, the way a queued one wears its
+            queue position — the row's whole answer to "what is this waiting for?". */}
+        <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
           {attention.label}
+          {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
         </Pill>
       </td>
       <td className={cn(TD_BASE, 'w-[34%] max-w-0')}>
@@ -540,6 +545,7 @@ function TaskCard({
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
+  const scheduled = scheduledResume(run)
   const to = `/tasks/${run.id}`
   const reference = taskReference(run)
   // Read/unread (#unread-done-items) — the same promote-unread / dim-read treatment as the row.
@@ -559,8 +565,9 @@ function TaskCard({
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
       <div className="flex items-start gap-2.5">
-        <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0">
+        <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
           {attention.label}
+          {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
         </Pill>
         <Link
           to={to}

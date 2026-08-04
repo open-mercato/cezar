@@ -457,6 +457,7 @@ export interface WorkspaceConfigResponse {
     maxParallel: number;
     maxMonitoringSessions: number;
     monitoringWakeIntervalMinutes: number | null;
+    autoResumeOnUsageLimit: boolean;
     memoryLimitMb: number | null;
     worktreeRetentionDefault: number;
   };
@@ -2809,6 +2810,7 @@ export function createApp(deps: ServerDeps) {
       maxParallel: config.resources.maxParallel,
       maxMonitoringSessions: config.resources.maxMonitoringSessions,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
+      autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
@@ -2876,6 +2878,9 @@ export function createApp(deps: ServerDeps) {
           }
           if (resources?.monitoringWakeIntervalMinutes !== undefined) {
             config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
+          }
+          if (resources?.autoResumeOnUsageLimit !== undefined) {
+            config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
@@ -2951,6 +2956,7 @@ export function createApp(deps: ServerDeps) {
         maxParallel: z.number().int().min(1).max(16).optional(),
         maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
         monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
+        autoResumeOnUsageLimit: z.boolean().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       })
@@ -3455,9 +3461,23 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       // An empty/absent body archives (the common case); a malformed body degrades
       // to `{}` just as before, but a wrong-typed `archived` is now a 400 (#429).
+      // Archiving also retires any pending usage-limit resume, but that rule belongs to
+      // `setArchived` itself — the bulk sweep must obey it too (spec
+      // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
+    // The per-task off switch for that resume (the workspace setting is Settings → Resources).
+    // Idempotent: a run with nothing pending answers 200 too, because "this task will not
+    // resume itself" is equally true either way.
+    .delete('/runs/:id/auto-resume', (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      manager.cancelAutoResume(id);
+      return c.json({ cancelled: true as const });
     })
 
     .post('/runs/:id/read', (c) => {

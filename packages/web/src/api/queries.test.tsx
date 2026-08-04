@@ -14,6 +14,7 @@ import {
   useHealth,
   useHealthSubscription,
   useRunnerModels,
+  useMarkRunSeen,
   usePatchRun,
   usePutAgentConfigFile,
   useRun,
@@ -689,6 +690,74 @@ describe('useRun', () => {
     rerender({ id: 'run-1' })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/runs/run-1')
+  })
+})
+
+describe('useMarkRunSeen', () => {
+  const RUN = {
+    id: 'run-1',
+    title: 'mock:limit ship it',
+    workflow: 'quick-task',
+    task: 'mock:limit ship it',
+    status: 'failed',
+    createdAt: '2026-08-03T19:23:00.000Z',
+    finishedAt: '2026-08-03T19:23:13.000Z',
+    tokensUsed: 0,
+    archived: false,
+    steps: [],
+  }
+
+  it('takes only the receipt from the answer, keeping fields the stream advanced meanwhile', async () => {
+    // The read receipt fires the instant a run finishes — the busiest moment on the run stream.
+    // Its answer is a snapshot from BEFORE anything that happened while it was in flight, so
+    // writing it wholesale reverts those fields for good (nothing refetches afterwards).
+    //
+    // Measured case (spec 2026-08-03-auto-resume-after-usage-limit): a run fails on a usage
+    // limit and, a beat later, publishes when it will resume itself. The receipt raced that beat
+    // and the thread's resume hint vanished on every live schedule while a reload always showed
+    // it — the exact "works on refresh, never live" shape.
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.runs.detail('run-1'), RUN)
+    client.setQueryData(queryKeys.runs.list(), [RUN])
+    const { result } = renderHook(() => useMarkRunSeen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    // …the run stream lands the newer record while the POST is still in flight.
+    const armed = { ...RUN, autoResumeAt: '2026-08-03T19:33:53.000Z', seenAt: undefined as string | undefined }
+    client.setQueryData(queryKeys.runs.detail('run-1'), armed)
+    client.setQueryData(queryKeys.runs.list(), [armed])
+
+    // The answer is the pre-arm snapshot the server had when it stamped the receipt.
+    await act(async () => deferred.resolve(json({ ...RUN, seenAt: '2026-08-03T19:23:14.000Z' })))
+
+    const detail = client.getQueryData<typeof armed>(queryKeys.runs.detail('run-1'))
+    expect(detail?.autoResumeAt).toBe('2026-08-03T19:33:53.000Z')
+    expect(detail?.seenAt).toBe('2026-08-03T19:23:14.000Z')
+    const list = client.getQueryData<Array<typeof armed>>(queryKeys.runs.list())
+    expect(list?.[0]?.autoResumeAt).toBe('2026-08-03T19:33:53.000Z')
+    expect(list?.[0]?.seenAt).toBe('2026-08-03T19:23:14.000Z')
+  })
+
+  it('still stamps a detail cache that arrived only with the answer', async () => {
+    fetchMock.mockResolvedValue(json({ ...RUN, seenAt: '2026-08-03T19:23:14.000Z' }))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useMarkRunSeen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(client.getQueryData<typeof RUN & { seenAt: string }>(queryKeys.runs.detail('run-1'))?.seenAt)
+      .toBe('2026-08-03T19:23:14.000Z')
   })
 })
 

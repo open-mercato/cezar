@@ -184,6 +184,12 @@ export const runRecordSchema = z.object({
   monitoringWakeAt: z.string().optional(),
   /** The current live monitoring epoch exhausted its 40 automatic checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /** Exact ISO-8601 instant this run resumes itself after a provider usage limit stopped it
+   *  (spec 2026-08-03-auto-resume-after-usage-limit). Present only on a `failed` run with a
+   *  pending automatic resume — its absence is what "no resume is scheduled" looks like. */
+  autoResumeAt: z.string().optional(),
+  /** Consecutive automatic resumes since the last human turn, against the safety cap. */
+  autoResumeAttempts: z.number().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -282,6 +288,17 @@ export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
 /** `POST /runs/:id/cancel` — genuinely a boolean: an already-settled run answers 200 + `false`. */
 export const cancelResponseSchema = z.object({ cancelled: z.boolean() });
 export type CancelResponse = z.infer<typeof cancelResponseSchema>;
+
+/**
+ * `DELETE /runs/:id/auto-resume` (spec 2026-08-03-auto-resume-after-usage-limit) — the per-task
+ * off switch for a pending usage-limit resume, next to the workspace-wide setting.
+ *
+ * `z.literal(true)`, not a boolean, and that IS the shape: the route is idempotent, so a run with
+ * nothing pending answers 200 as well — "this task will not resume itself" is equally true either
+ * way. Only an unknown run refuses, with 404.
+ */
+export const cancelAutoResumeResponseSchema = z.object({ cancelled: z.literal(true) });
+export type CancelAutoResumeResponse = z.infer<typeof cancelAutoResumeResponseSchema>;
 
 /** `POST /runs/archive-finished` — how many runs the sweep archived. */
 export const archiveFinishedResponseSchema = z.object({ archived: z.number() });

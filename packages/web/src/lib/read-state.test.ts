@@ -81,6 +81,23 @@ describe('isReadDoneItem', () => {
   })
 })
 
+describe('a run waiting out a usage limit', () => {
+  const scheduled = done({ status: 'failed', autoResumeAt: '2026-08-03T19:33:53.000Z' })
+
+  it('is neither unread nor read history — it is not finished at all', () => {
+    // No outcome to have missed, and nothing to dim as history (spec
+    // 2026-08-03-auto-resume-after-usage-limit): the row carries its `scheduled` status instead.
+    expect(isUnread(scheduled)).toBe(false)
+    expect(isReadDoneItem(scheduled)).toBe(false)
+    expect(unreadDoneCount([scheduled])).toBe(0)
+  })
+
+  it('goes back to the ordinary rule once the schedule is gone', () => {
+    expect(isUnread(done({ status: 'failed' }))).toBe(true)
+    expect(isUnread({ ...scheduled, autoResumeAt: undefined })).toBe(true)
+  })
+})
+
 describe('unreadDoneCount', () => {
   it('counts only the unread done items', () => {
     const runs: ReadStateInput[] = [
