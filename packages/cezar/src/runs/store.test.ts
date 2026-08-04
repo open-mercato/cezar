@@ -1167,6 +1167,48 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
     expect(store.setRead('nope')).toBeUndefined();
   });
 
+  it('setUnread clears the receipt, round-trips, and returns the record (#775)', () => {
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+    store.setRead(id);
+    expect(store.getRun(id)?.seenAt).toBeDefined();
+
+    const updated = store.setUnread(id);
+    // Cleared, not blanked: `isUnread` and the store's own `markAllRead` both key on the
+    // field being ABSENT, so an empty-string receipt would read as "seen at the epoch".
+    expect(updated?.seenAt).toBeUndefined();
+    expect(Object.hasOwn(updated!, 'seenAt')).toBe(false);
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(id)?.seenAt).toBeUndefined();
+  });
+
+  it('setUnread is idempotent on an already-unread run', () => {
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+
+    expect(store.setUnread(id)?.seenAt).toBeUndefined();
+    expect(store.setUnread(id)?.seenAt).toBeUndefined();
+  });
+
+  it('setUnread returns undefined for an unknown id', () => {
+    const store = RunStore.open(dataDir);
+    expect(store.setUnread('nope')).toBeUndefined();
+  });
+
+  it('a run put back to unread is counted again by the next markAllRead sweep', () => {
+    // The point of clearing rather than flagging: the run rejoins the unread population every
+    // other reader already computes, so the badge, the sweep and the marker all agree again.
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+    store.setRead(id);
+    expect(store.markAllRead()).toBe(0);
+
+    store.setUnread(id);
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(id)?.seenAt).toBeDefined();
+  });
+
   it('still loads an old runs.json with no seenAt (additive)', () => {
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     expect(RunStore.open(dataDir).getRun('legacy-1')?.seenAt).toBeUndefined();

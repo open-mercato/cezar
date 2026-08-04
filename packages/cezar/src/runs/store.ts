@@ -635,6 +635,27 @@ export class RunStore extends EventEmitter {
     return run;
   }
 
+  /** Mark one run as UNread (#775): drop the read receipt so the run rejoins the unread
+   *  list. The inverse of `setRead` and, like it, `touch`es so the updated record rides the
+   *  existing `run` SSE.
+   *
+   *  Deleting the field rather than adding a "manually unread" flag is the whole point:
+   *  absent `seenAt` is ALREADY what every reader treats as unread (`isUnread` in the
+   *  cockpit's read-state.ts, and `markAllRead`'s clause-for-clause copy of it below), so
+   *  clearing needs no new state and writes a shape any older cezar already parses.
+   *
+   *  Deliberately unconditional: clearing a receipt is always a legal write, so this
+   *  succeeds for an already-unread run (idempotent) and for statuses that can never wear
+   *  the marker. WHETHER the action means anything for a given run is UI policy, and lives
+   *  in the cockpit's `runActionFlags` — the same split the rest of the store keeps. */
+  setUnread(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    delete run.seenAt;
+    this.touch(run);
+    return run;
+  }
+
   /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
    *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
    *  clause for clause: a `done` or `failed` run that finished and has not been seen

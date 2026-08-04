@@ -39,7 +39,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - Skills: `GET /api/v1/skills`, `GET /api/v1/skills/importable`, `POST /api/v1/skills/refresh`
 - Workflows: `GET/POST /api/v1/workflows`, `DELETE /api/v1/workflows/:name`, `POST /api/v1/workflows/parse`, `POST /api/v1/plan`
 - Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check}`, `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry`
-- Runs: `GET/POST /api/v1/runs`, `GET /api/v1/runs/:id`, `PATCH /api/v1/runs/:id`, `PATCH/DELETE /api/v1/runs/:id/queued-messages/:msgId`, `POST /api/v1/runs/:id/{cancel,messages,finish,continue,open-in-cli,open-in,pr,archive,read,remove-worktree,git/commit,git/push}`, `POST /api/v1/runs/{archive-finished,read-all}`, `DELETE /api/v1/runs/:id`, `GET /api/v1/runs/:id/{handoff,diff,changes,files,commits,events}`, `GET /api/v1/runs/:id/commit/:sha`, `GET /api/v1/runs/:id/images/:file`
+- Runs: `GET/POST /api/v1/runs`, `GET /api/v1/runs/:id`, `PATCH /api/v1/runs/:id`, `PATCH/DELETE /api/v1/runs/:id/queued-messages/:msgId`, `POST /api/v1/runs/:id/{cancel,messages,finish,continue,open-in-cli,open-in,pr,archive,read,unread,remove-worktree,git/commit,git/push}`, `POST /api/v1/runs/{archive-finished,read-all}`, `DELETE /api/v1/runs/:id`, `GET /api/v1/runs/:id/{handoff,diff,changes,files,commits,events}`, `GET /api/v1/runs/:id/commit/:sha`, `GET /api/v1/runs/:id/images/:file`
 - Worktrees: `GET /api/v1/worktrees`, `POST /api/v1/worktrees/reclaim`
 - Open-in: `GET /api/v1/open-targets`
 - Variants: `GET /api/v1/groups/:groupId`, `POST /api/v1/groups/:groupId/pick`
