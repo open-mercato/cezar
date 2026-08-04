@@ -127,10 +127,10 @@ thread is not re-stamped by the auto-read effect, and a later fresh mount does m
 
 ### Phase 1: Server — clear the receipt
 
-- [ ] 1.1 `RunStore.setUnread(id)` clears the read receipt
-- [ ] 1.2 `POST /api/v1/runs/:id/unread` route
-- [ ] 1.3 `BACKWARD_COMPATIBILITY.md` §2 route inventory gains `unread`
-- [ ] 1.4 Store and route tests
+- [x] 1.1 `RunStore.setUnread(id)` clears the read receipt — 6e1df428
+- [x] 1.2 `POST /api/v1/runs/:id/unread` route — 6e1df428
+- [x] 1.3 `BACKWARD_COMPATIBILITY.md` §2 route inventory gains `unread` — 6e1df428
+- [x] 1.4 Store and route tests — 6e1df428
 
 ### Phase 2: Cockpit data layer
 
