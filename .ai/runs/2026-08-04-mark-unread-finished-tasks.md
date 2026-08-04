@@ -134,11 +134,11 @@ thread is not re-stamped by the auto-read effect, and a later fresh mount does m
 
 ### Phase 2: Cockpit data layer
 
-- [ ] 2.1 Extract `canBeUnread` in `lib/read-state.ts`
-- [ ] 2.2 `markRunUnseen` API client call
-- [ ] 2.3 `useMarkRunUnseen` optimistic mutation hook
-- [ ] 2.4 `markUnread` flag in `runActionFlags`
-- [ ] 2.5 `read-state.test.ts` and `run-actions.test.ts` coverage
+- [x] 2.1 Extract `canBeUnread` in `lib/read-state.ts` — d3ddd7fb
+- [x] 2.2 `markRunUnseen` API client call — d3ddd7fb
+- [x] 2.3 `useMarkRunUnseen` optimistic mutation hook — d3ddd7fb
+- [x] 2.4 `markUnread` flag in `runActionFlags` — d3ddd7fb
+- [x] 2.5 `read-state.test.ts` and `run-actions.test.ts` coverage — d3ddd7fb
 
 ### Phase 3: Cockpit UI
 
