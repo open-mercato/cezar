@@ -100,10 +100,10 @@ clamp, persist across a reload and stay absent below `md`.
 
 ### Phase 1: De-duplicate the reference number in the row
 
-- [ ] 1.1 Add `stripRefPrefix` to `lib/task-groups.ts` with table tests
-- [ ] 1.2 Render the leading PR/issue ref chip in `RunRow`, drop the trailing PR chip and the now-dead `ReferenceChip compact` mode
-- [ ] 1.3 Establish the width-priority rule (title floor, droppable metadata) in `RunRow` and the group tile
-- [ ] 1.4 Unit tests for a row under full width contention (title + diff + PR + unread)
+- [x] 1.1 Add `stripRefPrefix` to `lib/task-groups.ts` with table tests — d1a366a66bb028b9ea1527e9b3dffedbc2ccb7bc
+- [x] 1.2 Render the leading PR/issue ref chip in `RunRow`, drop the trailing PR chip and the now-dead `ReferenceChip compact` mode — 5e8010ae6f0576b10bf0bf03d5bb5f8e82153cc4
+- [x] 1.3 Establish the width-priority rule (title floor, droppable metadata) in `RunRow` and the group tile — 5e8010ae6f0576b10bf0bf03d5bb5f8e82153cc4
+- [x] 1.4 Unit tests for a row under full width contention (title + diff + PR + unread) — 5e8010ae6f0576b10bf0bf03d5bb5f8e82153cc4
 
 ### Phase 2: Let the column breathe
 
