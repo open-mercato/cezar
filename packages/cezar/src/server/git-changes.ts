@@ -281,12 +281,19 @@ export async function collectChanges(
     }
     // Which ref anchors this task's diff — merge-base normally, the checked-out branch's
     // pre-run state when the agent repointed the worktree onto it (#591, #751). The rule is
-    // shared with `worktreeShortstat`; ref resolution never reads the index, so it
-    // deliberately runs WITHOUT the scratch-index `env`.
-    const { base, repointedHead } = await resolveTaskDiffBase((args) => git(dir, args), baseBranch, {
-      taskBranch: opts.taskBranch,
-      runStartedAt: opts.runStartedAt,
-    });
+    // shared with `worktreeShortstat`, and it runs WITH the scratch-index `env`: picking
+    // between two repointed anchors compares them with `git diff --shortstat`, and `git diff`
+    // refreshes and rewrites the index it reads. On the user's real main tree that would be a
+    // read-only GET writing their index, and it would measure against a different index than
+    // the listing below. The ref lookups themselves ignore `GIT_INDEX_FILE`.
+    const { base, repointedHead } = await resolveTaskDiffBase(
+      (args) => git(dir, args, env),
+      baseBranch,
+      {
+        taskBranch: opts.taskBranch,
+        runStartedAt: opts.runStartedAt,
+      },
+    );
 
     const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
     if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };

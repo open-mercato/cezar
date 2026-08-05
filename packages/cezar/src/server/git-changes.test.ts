@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -239,6 +239,40 @@ describe('collectChanges — structured diff vs base', () => {
     const withAdd = await collectChanges(dir, 'main');
     expect(withAdd.ok).toBe(true);
     if (withAdd.ok) expect(withAdd.changes.files.some((f) => f.path === 'untracked.txt')).toBe(true);
+  });
+
+  it('intentToAdd:false leaves the real index untouched on a repointed HEAD too', async () => {
+    // Choosing between the two repointed anchors compares them with `git diff --shortstat`,
+    // and `git diff` REWRITES the index it reads (a stat refresh). Those probes must run on
+    // the scratch index like every other diff here, or a read-only GET against the user's own
+    // checkout writes their `.git/index` — the same invariant as the test above, one call
+    // deeper.
+    const before = '2026-01-01T00:00:00Z';
+    gAt(dir, before, 'commit', '--allow-empty', '-m', 'root');
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'base');
+    gAt(dir, before, 'checkout', '-b', 'review/pr-42');
+    writeFileSync(join(dir, 'theirs.txt'), 'belongs to the reviewed PR\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'reviewed change');
+    // Backdating a tracked file is what makes the index stale: the recorded stat data no
+    // longer matches, git's refresh finds the content clean anyway, and it persists the new
+    // stat. (Rewriting the file in-place would not do it — a mtime inside the index's own
+    // second is "racily clean" and git declines to record it.)
+    const staleTime = new Date(Date.now() - 600_000);
+    utimesSync(join(dir, 'tracked.txt'), staleTime, staleTime);
+    const indexBefore = readFileSync(join(dir, '.git', 'index'));
+
+    const result = await collectChanges(dir, 'main', {
+      intentToAdd: false,
+      taskBranch: 'cez/task1234',
+      runStartedAt: '2026-06-01T00:00:00Z',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changes.repointedHead?.headBranch).toBe('review/pr-42');
+    expect(readFileSync(join(dir, '.git', 'index'))).toEqual(indexBefore);
   });
 });
 

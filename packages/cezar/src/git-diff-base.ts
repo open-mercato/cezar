@@ -139,6 +139,13 @@ async function checkoutBaseline(
  * picks between two candidates, never a number anyone sees (the callers do their
  * own parsing for that, `parseShortstat`). Both candidates cover the same
  * uncommitted work, so the comparison is fair whatever the index holds.
+ *
+ * This is the one part of the decision that reads the index rather than just
+ * refs, and `git diff` rewrites the index it reads (a stat refresh). Callers
+ * that keep their diffs off an index they do not own — `collectChanges` and its
+ * scratch `GIT_INDEX_FILE` — must therefore hand this module a runner carrying
+ * that same environment, and the two probes below run one after the other so
+ * they never refresh one index file concurrently.
  */
 async function changedLines(runGit: GitRunner, ref: string): Promise<number | null> {
   const res = await runGit(['diff', '--shortstat', ref]);
@@ -194,11 +201,9 @@ export async function resolveTaskDiffBase(
   // afterwards, which drags the whole upstream delta past a pre-merge baseline
   // and leaves the merge-base as the only anchor that still measures the task.
   const anchor = await mergeBase();
-  const [viaBaseline, viaMergeBase] = await Promise.all([
-    changedLines(runGit, baseline),
-    changedLines(runGit, anchor),
-  ]);
+  const viaBaseline = await changedLines(runGit, baseline);
   if (viaBaseline === null) return { base: anchor, repointedHead };
+  const viaMergeBase = await changedLines(runGit, anchor);
   if (viaMergeBase === null || viaBaseline <= viaMergeBase) return { base: baseline, repointedHead };
   return { base: anchor, repointedHead };
 }
