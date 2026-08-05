@@ -2556,11 +2556,13 @@ export class RunManager {
       // deliberately NEVER a title source; see maybeRefreshTitle below. The
       // one exception is an explicit CEZ:TITLE declaration (applied above).
       if (run.worktreePath && existsSync(run.worktreePath)) {
-        // `taskBranch` is what keeps this number *this task's* (#751): a review/QA run
-        // repoints the worktree onto the branch under review, and without the branch to
-        // compare HEAD against, the stat would claim that whole branch's diff.
+        // `taskBranch` + `runStartedAt` are what keep this number *this task's* (#751): a
+        // review/QA run repoints the worktree onto the branch under review, and without the
+        // branch to compare HEAD against and the moment it was checked out, the stat would
+        // claim that whole branch's diff.
         const stat = await worktreeShortstat(run.worktreePath, run.baseBranch ?? 'HEAD', {
           taskBranch: run.branch,
+          runStartedAt: run.startedAt,
         });
         if (stat) this.store.updateRun(runId, { diffStat: stat });
         else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });

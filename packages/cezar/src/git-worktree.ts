@@ -59,6 +59,11 @@ export function branchFor(runId: string): string {
  * 142k-line diff. `origin/<base>` is the source of truth for a review base, so
  * only keep the local ref when it is equal to or ahead of origin (unpushed base
  * commits); otherwise use origin.
+ *
+ * This answers the question once, when the worktree is forked. The local ref
+ * goes stale AFTERWARDS too — agents fetch, they never pull — so every diff
+ * re-applies the same rule at read time through `freshestBaseRef`
+ * (`git-diff-base.ts`). Keep the two in agreement.
  */
 export async function resolveBaseRef(repoRoot: string, base: string): Promise<string | null> {
   if (!isSafeGitRef(base)) return null;
@@ -498,9 +503,10 @@ export interface DiffStat {
   adds: number;
   dels: number;
   files: number;
-  /** Set only when the numbers were narrowed to uncommitted work because the worktree's
-   *  HEAD had been repointed off the task's branch (#751). Absent — never `false` — on a
-   *  normal run, so the persisted shape is unchanged for every task that behaved. */
+  /** Set only when the numbers were narrowed to what this run did on a branch it checked
+   *  out into its worktree, because HEAD had been repointed off the task's branch (#751).
+   *  Absent — never `false` — on a normal run, so the persisted shape is unchanged for
+   *  every task that behaved. */
   repointed?: boolean;
 }
 
@@ -527,9 +533,11 @@ export function parseShortstat(s: string): DiffStat {
  * behind `RunRecord.diffStat`, which is what the sidebar quick list and the
  * Tasks table show. Same intent-to-add as `worktreeDiff`, but the anchor comes
  * from the shared `resolveTaskDiffBase` rule (`git-diff-base.ts`): pass the
- * run's own `taskBranch` and a worktree whose HEAD was repointed onto another
- * branch reports its uncommitted work only, instead of claiming that whole
- * branch's diff as this task's (#751 — the #591 guard, on this surface).
+ * run's own `taskBranch` and `runStartedAt`, and a worktree whose HEAD was
+ * repointed onto another branch reports what this run did to that branch
+ * instead of claiming the branch's whole diff as this task's (#751 — the #591
+ * guard, on this surface). The same rule re-resolves a stale local base ref,
+ * so the number never counts upstream history the task merely forked from.
  *
  * `repointed: true` rides along on the returned stat exactly when that
  * narrowing happened, so the UI can say why the number is what it is. Null on
@@ -539,7 +547,7 @@ export function parseShortstat(s: string): DiffStat {
 export async function worktreeShortstat(
   worktreePath: string,
   baseBranch: string,
-  opts: { taskBranch?: string } = {},
+  opts: { taskBranch?: string; runStartedAt?: string } = {},
 ): Promise<DiffStat | null> {
   if (!isSafeGitRef(baseBranch)) return null;
   await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up

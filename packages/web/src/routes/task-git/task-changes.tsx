@@ -161,7 +161,7 @@ function ChangesView({ run }: { run: ApiRun }) {
       {changes.data?.repointedHead ? (
         <p data-slot="repointed-head-note" className="border-b px-4 py-2 text-xs text-soft-foreground md:px-6">
           HEAD is on <code>{changes.data.repointedHead.headBranch}</code>, not this task&apos;s branch{' '}
-          <code>{changes.data.repointedHead.taskBranch}</code> — showing uncommitted changes only.
+          <code>{changes.data.repointedHead.taskBranch}</code> — showing only what this task changed there.
         </p>
       ) : null}
 

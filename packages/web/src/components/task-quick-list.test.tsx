@@ -135,7 +135,7 @@ describe('TaskQuickList', () => {
     const narrowed = row('review')?.querySelector('[data-slot="diff-stat"]')
     expect(narrowed?.textContent).toBe('+1 −0')
     expect(narrowed?.getAttribute('data-repointed')).toBe('true')
-    expect(narrowed?.getAttribute('title')).toContain('uncommitted changes only')
+    expect(narrowed?.getAttribute('title')).toContain('as this task found it')
     // A task working on its own branch is untouched by the annotation.
     expect(row('own')?.querySelector('[data-slot="diff-stat"]')?.getAttribute('data-repointed')).toBeNull()
   })

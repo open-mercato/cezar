@@ -37,6 +37,16 @@ function g(dir: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
 }
 
+/** `g`, with the clock moved: reflog entries take their timestamp from the committer
+ *  ident, so this is how a fixture puts branch history *before* a run started. */
+function gAt(dir: string, iso: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+  });
+}
+
 /** Fresh repo with identity configured and one initial commit on `main`. */
 function initRepo(dir: string): void {
   g(dir, 'init', '-b', 'main');
@@ -143,6 +153,38 @@ describe('collectChanges — structured diff vs base', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.changes.files.map((file) => file.path)).toEqual(['reviewed.txt']);
+    expect(result.changes.repointedHead).toEqual({
+      headBranch: 'review/pr-42',
+      taskBranch: 'cez/task1234',
+    });
+  });
+
+  it('keeps what the run committed on a repointed branch, and drops what predates it', async () => {
+    // `runStartedAt` turns the repointed answer from "uncommitted work only" into "the
+    // branch as this run found it" — the difference between a review run's honest zero
+    // and a `feat/…` run's committed work being reported as nothing at all (#751).
+    const before = '2026-01-01T00:00:00Z';
+    gAt(dir, before, 'commit', '--allow-empty', '-m', 'root');
+    writeFileSync(join(dir, 'base.txt'), 'base\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'base');
+    gAt(dir, before, 'checkout', '-b', 'review/pr-42');
+    writeFileSync(join(dir, 'theirs.txt'), 'belongs to the reviewed PR\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'reviewed change');
+    // Everything below happens during the run.
+    writeFileSync(join(dir, 'mine.txt'), 'the run committed this\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'the run\'s own commit');
+    writeFileSync(join(dir, 'wip.txt'), 'uncommitted, also the run\'s\n');
+
+    const result = await collectChanges(dir, 'main', {
+      taskBranch: 'cez/task1234',
+      runStartedAt: '2026-06-01T00:00:00Z',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changes.files.map((file) => file.path).sort()).toEqual(['mine.txt', 'wip.txt']);
     expect(result.changes.repointedHead).toEqual({
       headBranch: 'review/pr-42',
       taskBranch: 'cez/task1234',

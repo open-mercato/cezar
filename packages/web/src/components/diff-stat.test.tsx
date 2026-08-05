@@ -37,7 +37,7 @@ describe('DiffStatLabel', () => {
   })
 
   /**
-   * #751: a review/QA task's numbers cover uncommitted work only, because the agent
+   * #751: a review/QA task's numbers are measured against the branch it checked out, because the agent
    * checked another branch out into the worktree. The number is honest; the surface
    * has to explain WHY it is smaller than the one that used to be there.
    */
@@ -45,7 +45,7 @@ describe('DiffStatLabel', () => {
     const el = renderStat({ adds: 1, dels: 0, files: 1, repointed: true })
     expect(el.getAttribute('data-repointed')).toBe('true')
     expect(el.title).toBe(
-      "+1 −0 across 1 file — uncommitted changes only, measured with another branch checked out in this task's worktree"
+      "+1 −0 across 1 file — measured against another branch checked out in this task's worktree, as this task found it"
     )
     // Discoverable without a hover-only affordance being the only signal.
     expect(el.className).toContain('cursor-help')
@@ -63,7 +63,7 @@ describe('DiffStatLabel', () => {
    */
   it('scopes the caveat to when the numbers were measured, not to the worktree now', () => {
     const title = renderStat({ adds: 1, dels: 0, files: 1, repointed: true }).title
-    expect(title).toContain('measured with another branch checked out')
+    expect(title).toContain('measured against another branch checked out')
     // No present-tense claim about a worktree that may already have been reclaimed.
     expect(title).not.toContain('has another branch checked out')
   })

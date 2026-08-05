@@ -3962,6 +3962,8 @@ export function createApp(deps: ServerDeps) {
       if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
       const result = await collectChanges(workingDirectory, run.baseBranch ?? 'HEAD', {
         taskBranch: run.branch,
+        // Anchors a repointed worktree at the branch as this run found it (#751).
+        runStartedAt: run.startedAt,
         // A read-only GET against the user's real checkout must never modify its index.
         intentToAdd: run.worktreePath ? undefined : false,
       });
