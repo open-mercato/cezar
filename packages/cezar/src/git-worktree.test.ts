@@ -31,7 +31,13 @@ async function fixtureRepo(prefix: string): Promise<string> {
 }
 
 afterEach(() => {
-  for (const root of worktreeRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  // `maxRetries` is the point: git detaches background maintenance after a clone or a
+  // commit, so a fixture's `.git` can still gain files while the removal walks it, and the
+  // rmdir fails with ENOTEMPTY. It is load-dependent — this teardown reddened CI while
+  // passing locally every time. Retrying lets the stray writer finish instead.
+  for (const root of worktreeRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 describe('parseShortstat', () => {
@@ -405,7 +411,10 @@ describe('worktreeShortstat (real git)', () => {
 
       const work = mkdtempSync(join(tmpdir(), 'cez-stale-work-'));
       worktreeRoots.push(work);
-      await run('git', ['clone', '-q', origin, work], { cwd: tmpdir() });
+      // `-c gc.auto=0` is `clone --config`: it lands in the new repo, so neither the clone
+      // nor any later commit in it detaches a background gc that would still be writing
+      // into `.git` when the afterEach above removes the fixture.
+      await run('git', ['clone', '-q', '-c', 'gc.auto=0', origin, work], { cwd: tmpdir() });
 
       // Origin moves on by a lot; the work repo only ever fetches, so `origin/main`
       // advances while the local `main` ref stays where the clone left it.
@@ -472,7 +481,10 @@ describe('resolveBaseRef (real git)', () => {
     }
     const work = mkdtempSync(join(tmpdir(), 'cez-work-'));
     worktreeRoots.push(work);
-    await run('git', ['clone', '-q', origin, work], { cwd: tmpdir() });
+    // `-c gc.auto=0` is `clone --config`: it lands in the new repo, so neither the clone
+    // nor any later commit in it detaches a background gc that would still be writing
+    // into `.git` when the afterEach above removes the fixture.
+    await run('git', ['clone', '-q', '-c', 'gc.auto=0', origin, work], { cwd: tmpdir() });
     // Materialize a local `develop` tracking origin/develop.
     await run('git', ['checkout', '-q', 'develop'], { cwd: work });
     await run('git', ['checkout', '-q', 'main'], { cwd: work });
