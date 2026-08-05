@@ -4,7 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
 
@@ -510,6 +510,211 @@ describe('tasks table overview', () => {
 
     browser.screenshot(`${artifactsDir}/tasks-cards-mobile.png`)
     browser.setViewport(1440, 900)
+  })
+})
+
+/**
+ * A row under width contention, and the column the user can widen (#788, option C).
+ *
+ * Its own fixture server, like the empty case below: this is one deliberately worst-case record —
+ * a long `NNN: `-prefixed title competing with a five-digit diff pair, a PR chip and the unread
+ * marker, all at once — and dropping it into the shared fixture above would rewrite every
+ * ordering, count and screenshot assertion in this file for one row's sake.
+ *
+ * jsdom cannot answer any of this: the whole question is what the REAL CSS does with 264px, so
+ * every assertion below reads a resolved computed style or a measured rectangle.
+ */
+describe('a row under width contention, in a column the user can widen', () => {
+  let wideServer: ChildProcess
+  let wideRoot: string
+  let wideUrl: string
+  let wideProject: string
+
+  const ROW_ID = '[data-slot="task-row"][data-run-id="wide-load"]'
+  const HANDLE = '[data-slot="sidebar-resize-handle"]'
+  const FULL_TITLE = '775: implementing comment threads across the whole thread view'
+
+  /** The `<aside>`'s resolved width in px — the number the drag is actually moving. */
+  const sidebarWidth = () =>
+    Number(
+      browser.evaluate(
+        `document.querySelector('[data-slot="sidebar"]').getBoundingClientRect().width`
+      )
+    )
+
+  /** Grab the handle at its middle and pull it `dx` px horizontally. */
+  const dragHandle = (dx: number) => {
+    const box = browser.evaluate(`(() => {
+      const r = document.querySelector('${HANDLE}').getBoundingClientRect()
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+    })()`) as { x: number; y: number }
+    browser.dragTo(box, { x: box.x + dx, y: box.y })
+  }
+
+  beforeAll(async () => {
+    wideRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-wide-'))
+    mkdirSync(join(wideRoot, '.ai/cezar'), { recursive: true })
+    writeFileSync(
+      join(wideRoot, '.ai/cezar/runs.json'),
+      JSON.stringify(
+        [
+          {
+            id: 'wide-load',
+            title: FULL_TITLE,
+            workflow: 'default',
+            task: 'implement comment threads',
+            status: 'done',
+            createdAt: ago(4 * 3_600_000),
+            // Finished and never opened, so the row also wears the unread marker — the fourth
+            // element that used to compete with the name.
+            finishedAt: ago(3_600_000),
+            tokensUsed: 512_000,
+            diffStat: { adds: 59_514, dels: 12_160, files: 208 },
+            pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/775',
+            archived: false,
+            steps: [],
+          },
+        ],
+        null,
+        2
+      ),
+      'utf8'
+    )
+
+    const port = await freePort()
+    wideUrl = `http://localhost:${port}`
+    wideServer = spawn(
+      process.execPath,
+      [join(repoRoot, 'dist/index.js'), 'serve', '--repo', wideRoot, '--port', String(port), '--no-open'],
+      { env: fixtureServeEnv(wideRoot), stdio: 'ignore' }
+    )
+    await waitForHealth(wideUrl)
+    wideProject = await bootProjectId(wideUrl)
+  }, 90_000)
+
+  afterAll(() => {
+    wideServer?.kill()
+    if (wideRoot) rmSync(wideRoot, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    browser.setViewport(1440, 900)
+    browser.goto(`${wideUrl}/p/${wideProject}/`)
+    // A width the last test dragged must not leak into the next one — the preference is real.
+    browser.evaluate(`localStorage.removeItem('cez-sidebar-width')`)
+    browser.goto(`${wideUrl}/p/${wideProject}/`)
+    browser.waitForFunction(`document.querySelector('${ROW_ID}') !== null`)
+  })
+
+  it('names the task instead of its number: the prefix is gone and the chip carries it', () => {
+    const painted = browser.evaluate(`(() => {
+      const row = document.querySelector('${ROW_ID}')
+      const chip = row.querySelector('[data-slot="pr-chip"]')
+      return {
+        title: row.querySelector('[data-slot="task-row-title"]').textContent,
+        chip: chip.textContent,
+        chipHref: chip.href,
+        tooltip: row.querySelector('a[href$="/tasks/wide-load"]').getAttribute('title'),
+      }
+    })()`) as { title: string; chip: string; chipHref: string; tooltip: string }
+
+    expect(painted.title).toBe('implementing comment threads across the whole thread view')
+    expect(painted.chip).toBe('#775')
+    expect(painted.chipHref).toBe('https://github.com/open-mercato/cezar/pull/775')
+    // The number was moved, not deleted — the stored title is still one hover away.
+    expect(painted.tooltip).toBe(FULL_TITLE)
+  })
+
+  it('gives the name real width at the default 264px, and drops the diff pair to do it', () => {
+    expect(sidebarWidth()).toBe(264)
+
+    const measured = browser.evaluate(`(() => {
+      const row = document.querySelector('${ROW_ID}')
+      const title = row.querySelector('[data-slot="task-row-title"]')
+      const diff = row.querySelector('[data-slot="diff-stat"]')
+      const scroller = document.querySelector('[data-slot="task-quick-list"]')
+      return {
+        titleWidth: title.getBoundingClientRect().width,
+        // The real CSS, not the class: this is the container query resolving at 264px.
+        diffDisplay: getComputedStyle(diff).display,
+        diffTooltip: diff.getAttribute('title'),
+        overflows: scroller.scrollWidth > scroller.clientWidth,
+      }
+    })()`) as { titleWidth: number; diffDisplay: string; diffTooltip: string; overflows: boolean }
+
+    // The floor from the width-priority rule, honored by the real layout — before this change the
+    // same row gave its title ~68px.
+    expect(measured.titleWidth).toBeGreaterThanOrEqual(112)
+    expect(measured.diffDisplay).toBe('none')
+    // Dropped from view, not from reach.
+    expect(measured.diffTooltip).toBe('+59514 −12160 across 208 files')
+    // A floor must not buy readability with a horizontal scrollbar.
+    expect(measured.overflows).toBe(false)
+
+    browser.screenshot(`${artifactsDir}/quick-list-width-contention-264.png`, { viewport: true })
+  })
+
+  it('drags wider, brings the diff pair back, and remembers the width across a reload', () => {
+    dragHandle(100)
+    expect(sidebarWidth()).toBe(364)
+    expect(browser.evaluate(`document.querySelector('${HANDLE}').getAttribute('aria-valuenow')`)).toBe('364')
+    // Past 21rem of column, the row can afford its diff numbers again — the whole point of making
+    // the metadata droppable rather than deleting it.
+    expect(
+      browser.evaluate(`getComputedStyle(document.querySelector('${ROW_ID} [data-slot="diff-stat"]')).display`)
+    ).toBe('inline')
+
+    browser.screenshot(`${artifactsDir}/quick-list-width-contention-364.png`, { viewport: true })
+
+    expect(browser.evaluate(`localStorage.getItem('cez-sidebar-width')`)).toBe('364')
+    browser.goto(`${wideUrl}/p/${wideProject}/`)
+    browser.waitForFunction(`document.querySelector('${ROW_ID}') !== null`)
+    expect(sidebarWidth()).toBe(364)
+  })
+
+  it('clamps at both ends — the column can never collapse or swallow the view', () => {
+    dragHandle(4000)
+    expect(sidebarWidth()).toBe(420)
+    dragHandle(-4000)
+    expect(sidebarWidth()).toBe(264)
+  })
+
+  it('resizes from the keyboard and resets on double-click', () => {
+    browser.evaluate(`document.querySelector('${HANDLE}').focus()`)
+    browser.press('End')
+    expect(sidebarWidth()).toBe(420)
+    browser.press('ArrowLeft')
+    expect(sidebarWidth()).toBe(404)
+    browser.press('Home')
+    expect(sidebarWidth()).toBe(264)
+
+    browser.press('ArrowRight')
+    expect(sidebarWidth()).toBe(280)
+    browser.evaluate(`(() => {
+      const el = document.querySelector('${HANDLE}')
+      el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    })()`)
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"]').getBoundingClientRect().width === 264`)
+  })
+
+  it('is a desktop affordance only: below md there is no handle to reach', () => {
+    browser.setViewport(390, 844)
+    browser.goto(`${wideUrl}/p/${wideProject}/`)
+    browser.waitForFunction(`document.querySelector('[data-slot="mobile-top-bar"]') !== null`)
+
+    // The aside is still in the DOM (display:none), so the handle inside it is unreachable
+    // rather than absent — and the drawer that replaces it brings no handle of its own.
+    expect(browser.isVisible(HANDLE)).toBe(false)
+    browser.click('[data-slot="mobile-top-bar"] button[aria-label="Open menu"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="mobile-nav-drawer"]') !== null`)
+    expect(
+      browser.evaluate(`document.querySelectorAll('[data-slot="mobile-nav-drawer"] ${HANDLE}').length`)
+    ).toBe(0)
+    expect(
+      browser.evaluate(
+        `Math.round(document.querySelector('[data-slot="mobile-nav-drawer"]').getBoundingClientRect().width)`
+      )
+    ).toBe(264)
   })
 })
 

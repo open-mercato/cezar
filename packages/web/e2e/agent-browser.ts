@@ -173,6 +173,22 @@ export class AgentBrowser {
     this.run(['mouse', 'up'])
   }
 
+  /** operation: interact (`mouse move`/`down`/`up`) — press at one viewport coordinate, move to
+   *  another, release. A real, trusted pointer stream, which is the only kind that can exercise
+   *  a drag built on pointer capture (`setPointerCapture` rejects a pointer id the browser is
+   *  not actually tracking, so a synthetically dispatched PointerEvent cannot test one).
+   *
+   *  The intermediate move exists because a single jump from press to release is indistinguishable
+   *  from a click for anything that samples movement — the sidebar's resize handle reads each
+   *  move, so it needs more than one. */
+  dragTo(from: { x: number; y: number }, to: { x: number; y: number }): void {
+    this.run(['mouse', 'move', String(from.x), String(from.y)])
+    this.run(['mouse', 'down'])
+    this.run(['mouse', 'move', String(Math.round((from.x + to.x) / 2)), String(Math.round((from.y + to.y) / 2))])
+    this.run(['mouse', 'move', String(to.x), String(to.y)])
+    this.run(['mouse', 'up'])
+  }
+
   /** operation: assert (`eval`) — for DOM facts no selector query can express, such as a
    *  computed style resolved from a CSS custom property. */
   evaluate(js: string): unknown {
