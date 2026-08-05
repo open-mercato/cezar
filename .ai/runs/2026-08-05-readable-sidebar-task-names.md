@@ -96,6 +96,8 @@ clamp, persist across a reload and stay absent below `md`.
 
 ## Progress
 
+PR: #789
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: De-duplicate the reference number in the row
@@ -113,5 +115,5 @@ clamp, persist across a reload and stay absent below `md`.
 
 ### Phase 3: Prove it
 
-- [ ] 3.1 e2e: readable title at 264px, and drag/clamp/persist/`<md`-no-op for the resize
-- [ ] 3.2 Full validation gate green
+- [x] 3.1 e2e: readable title at 264px, and drag/clamp/persist/`<md`-no-op for the resize — e9d75c0b6f57791229c5b1443adc3d390a533f66, e29cb7608abbb541f80ed9a2c686f8e7b1c53d4d
+- [x] 3.2 Full validation gate green — 62a813d1 (typecheck, npm test 5395 passed, test:unit 36, build + check:pack, test:package 12)
