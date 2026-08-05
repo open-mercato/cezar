@@ -338,8 +338,10 @@ function ProjectRow({
           size="sm"
           data-action="project-remove"
           // Names the gesture precisely for a screen reader, where the row context that makes a
-          // bare "Remove" safe-sounding isn't read out with it.
-          aria-label={`Unregister ${project.name} (no files are deleted)`}
+          // bare "Remove" safe-sounding isn't read out with it — but LEADS with the button's own
+          // word, so the accessible name contains the visible one (WCAG 2.5.3 Label in Name) and
+          // speech input still reaches the control. Same shape as the General page's button.
+          aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
           // The boot project is refused server-side too (it re-registers itself at every start);
           // disabling here means the user gets the explanation before the click, not after.
           title={isBoot ? 'cezar is serving this project — it re-registers itself at every start' : undefined}

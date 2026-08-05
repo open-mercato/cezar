@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { useProjects, useWorkspaceConfig } from '@/api/queries'
-import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
+import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { useActiveProjectId } from '@/lib/project-router'
 import { ProjectFolderField } from './project-location'
@@ -27,6 +27,15 @@ import { SettingsField } from './settings-field'
  * Reuse over restatement: the folder row, the concurrency select, and the removal wording+dialog
  * are the same components the registry table uses. Two pages disagreeing about what "Remove"
  * does is exactly the failure this page could otherwise introduce.
+ *
+ * Split in two halves, because `CEZ_SINGLE_PROJECT=1` treats them differently. DESCRIBING the
+ * project (folder, registry facts) stays true in every mode. MANAGING the registry — the
+ * concurrency ceiling, Remove — is what single-project mode takes away: `PATCH`/`DELETE
+ * /api/v1/projects/:id` both answer 409 there (server.ts), and `visibleSettingsSections` already
+ * drops the whole global Projects section for the same reason. Rendering those two fields anyway
+ * would offer a knob that can only fail, which is the opposite of what capabilities.ts asks for
+ * ("the UI hides what the server says isn't there, and the matching endpoints refuse as defense
+ * in depth").
  */
 
 /** `2026-07-20T…` → a full local date. Unlike the registry table's compact `Jul 20`, this page has
@@ -38,7 +47,7 @@ function fullDate(iso: string): string {
   return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ProjectGeneral() {
+export function ProjectGeneral({ capabilities }: { capabilities?: Pick<Capabilities, 'singleProject'> }) {
   const projectId = useActiveProjectId()
   const projects = useProjects()
   const config = useWorkspaceConfig()
@@ -50,39 +59,59 @@ export function ProjectGeneral() {
       </p>
     )
   }
+  // An unreadable registry is SAID, not skipped. Defense in depth rather than a path a user
+  // reaches today: `ProjectScopeRoute` keeps a scoped URL on "Loading…" while the registry query
+  // is unresolved, so this branch only renders where the gate is not in front of it. It belongs
+  // here anyway — on desktop the section cards are `md:hidden` (the left nav already lists them),
+  // so a silent `null` would leave the whole pane blank with no hint that anything went wrong.
+  if (projects.isError) {
+    return (
+      <p data-slot="project-general-error" className="text-[13px] text-danger">
+        Could not read the project registry — {projects.error.message}
+      </p>
+    )
+  }
   const registry = projects.data
   const project = registry?.projects.find((entry) => entry.id === projectId)
-  // The registry is what names a project; without it (query errored, or an unscoped mount) there
-  // is nothing true to say, and the section cards below still work.
+  // No registry entry for this URL (an unscoped mount, or an id the registry does not have):
+  // there is nothing true to say about a project that isn't one.
   if (!registry || !project) return null
+  // See the header comment: single-project mode keeps the description, drops the management.
+  const managesRegistry = capabilities?.singleProject !== true
 
   return (
     <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
       <ProjectFolderField />
-      <ProjectFacts project={project} />
-      <SettingsField
-        title="Max parallel tasks"
-        hint={
-          config.data
-            ? `How many of this project's tasks may run at once. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
-            : "How many of this project's tasks may run at once. The workspace limit still applies as an overall ceiling."
-        }
-      >
-        {config.data ? (
-          <MaxParallelSelect project={project} workspaceMax={config.data.resources.maxParallel} />
-        ) : (
-          // The select's "Inherit workspace (N)" option has to name N, and guessing it would be
-          // the one thing this control must not do.
-          <p className="text-[13px] text-soft-foreground">Loading the workspace limit…</p>
-        )}
-      </SettingsField>
-      <RemoveProject project={project} bootProject={registry.bootProject} />
+      <ProjectFacts project={project} canRemove={managesRegistry} />
+      {managesRegistry ? (
+        <>
+          <SettingsField
+            title="Max parallel tasks"
+            hint={
+              config.data
+                ? `How many of this project's tasks may run at once. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
+                : "How many of this project's tasks may run at once. The workspace limit still applies as an overall ceiling."
+            }
+          >
+            {config.data ? (
+              <MaxParallelSelect project={project} workspaceMax={config.data.resources.maxParallel} />
+            ) : (
+              // The select's "Inherit workspace (N)" option has to name N, and guessing it would be
+              // the one thing this control must not do.
+              <p className="text-[13px] text-soft-foreground">Loading the workspace limit…</p>
+            )}
+          </SettingsField>
+          <RemoveProject project={project} bootProject={registry.bootProject} />
+        </>
+      ) : null}
     </div>
   )
 }
 
-/** The registry entry, read out: what cezar probed about this folder the last time it looked. */
-function ProjectFacts({ project }: { project: ProjectListEntry }) {
+/** The registry entry, read out: what cezar probed about this folder the last time it looked.
+ *  `canRemove` is whether the Remove field is rendered below — the missing-folder hint points at
+ *  it, and must not point at a field single-project mode took away. */
+function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRemove: boolean }) {
   return (
     <SettingsField
       title="Project"
@@ -100,7 +129,11 @@ function ProjectFacts({ project }: { project: ProjectListEntry }) {
           {STATUS_LABEL[project.status]}
           {/* A registered folder that has been deleted or moved is the one status worth acting
               on, and "folder not found" alone does not say what to do about it. */}
-          {project.status === 'missing' ? ' — remove it below, or restore the folder' : null}
+          {project.status === 'missing'
+            ? canRemove
+              ? ' — remove it below, or restore the folder'
+              : ' — restore the folder at the path above'
+            : null}
         </dd>
 
         {/* Omitted rather than dashed when git could not name one (unborn HEAD): an empty row
@@ -158,7 +191,10 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           variant="outline"
           size="sm"
           data-action="project-general-remove"
-          aria-label={`Unregister ${project.name} (no files are deleted)`}
+          // Leads with the words on the button (WCAG 2.5.3 Label in Name) so speech input can
+          // reach it, then says what "Remove" actually does — the row context that makes a bare
+          // "Remove" safe-sounding isn't read out with it.
+          aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
           title={isBoot ? 'cezar is serving this project — it re-registers itself at every start' : undefined}
           disabled={isBoot || remove.isPending}
           onClick={() => setConfirming(project)}

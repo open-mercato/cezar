@@ -222,8 +222,10 @@ export function SettingsIndexRoute({ scope, capabilities }: {
         <div className="flex min-w-0 flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
           {/* The project area's index is a PAGE, not a menu: the folder, the registry facts, the
               concurrency ceiling and Remove. The global area has no such dashboard — nothing about
-              the machine is per-project — so there the cards are the whole page. */}
-          {global ? null : <ProjectGeneral />}
+              the machine is per-project — so there the cards are the whole page.
+              `capabilities` travels because the registry half of that page is exactly what
+              single-project mode disables, the same gate `visibleSettingsSections` applies. */}
+          {global ? null : <ProjectGeneral capabilities={capabilities} />}
           <ul
             data-slot="settings-index"
             className={cn(
