@@ -336,7 +336,11 @@ function SidebarContent({
   return (
     <div
       data-slot="sidebar-content"
-      className="flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      // `@container/sidebar` (#788): the sidebar is no longer one fixed width, so what its rows
+      // can afford to paint is a question about THIS column, not about the viewport. Everything
+      // inside that is droppable metadata — the quick-list's diff pair today — hides itself with
+      // an `@min-[…]/sidebar:` query and returns when the user drags the column wider.
+      className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
         <BrandTile />
