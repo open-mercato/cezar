@@ -536,6 +536,35 @@ describe('Recently finished group', () => {
     expect(groups).not.toContain('Recently finished')
   })
 
+  it('leaves a usage-limit resume out, cross-project too — it has an appointment, not an outcome', async () => {
+    renderPalette({
+      projects: [project({ id: 'cezar' }), project({ id: 'shop' })],
+      entry: '/p/cezar/',
+      runs: [],
+      indexed: [
+        // `failed` with a resume booked (#auto-resume). `isUnread` and `deriveAttention` both
+        // read `autoResumeAt`, so the index has to carry it or this row would claim a red dot
+        // and a place in Recently finished for work that is simply waiting.
+        indexed({
+          id: 'r-parked',
+          projectId: 'shop',
+          title: 'Waiting out the limit',
+          status: 'failed',
+          finishedAt: '2026-07-15T10:00:00Z',
+          autoResumeAt: '2026-07-15T14:00:00Z',
+        }),
+      ],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Waiting out the limit')
+
+    const groups = [...document.querySelectorAll('[cmdk-group-heading]')].map((h) => h.textContent)
+    expect(groups).not.toContain('Recently finished')
+    // And it wears the parked dot the rest of the cockpit gives it, not the failure red.
+    const row = document.querySelector('[data-run-id="r-parked"]')
+    expect(row?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+  })
+
   it('leaves archived runs out — archiving is a stronger "done with this" than reading', async () => {
     renderPalette({
       runs: [

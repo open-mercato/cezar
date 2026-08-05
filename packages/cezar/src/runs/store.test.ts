@@ -1192,6 +1192,36 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
     expect(store.markAllRead()).toBe(0);
   });
 
+  it('archiving retires a pending usage-limit resume — one run and in bulk', () => {
+    // Archiving is how a user resigns from a task, so an archived run can never carry a promise
+    // to resume itself (spec 2026-08-03-auto-resume-after-usage-limit). The rule lives in the
+    // store because the "Archive finished" SWEEP never goes through the archive route, and a
+    // user who archives fifty finished tasks has resigned from all fifty.
+    const store = RunStore.open(dataDir);
+    const limited = () => {
+      const id = finishedRun(store, 'failed');
+      store.updateRun(id, {
+        autoResumeAt: '2026-08-03T18:41:48.000Z',
+        autoResumeAttempts: 2,
+      });
+      return id;
+    };
+    const one = limited();
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.autoResumeAt).toBeUndefined();
+    expect(store.getRun(one)?.autoResumeAttempts).toBeUndefined();
+
+    const swept = limited();
+    expect(store.archiveFinished()).toBeGreaterThanOrEqual(1);
+    expect(store.getRun(swept)?.archived).toBe(true);
+    expect(store.getRun(swept)?.autoResumeAt).toBeUndefined();
+
+    // Un-archiving restores the task, never the promise — that would resume a task the user
+    // has already walked away from once.
+    store.setArchived(one, false);
+    expect(store.getRun(one)?.autoResumeAt).toBeUndefined();
+  });
+
   it('markAllRead skips archived runs, exactly as the cockpit rule does', () => {
     // `isUnread()` (web/src/lib/read-state.ts) treats an archived run as never unread —
     // archiving is a stronger "done with this" than reading. The sweep has to agree, or the

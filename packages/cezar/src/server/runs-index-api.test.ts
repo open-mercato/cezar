@@ -140,7 +140,7 @@ describe('workspace runs index API', () => {
       createdAt: '2026-07-14T10:00:00Z',
       finishedAt: '2026-07-14T11:00:00Z',
       // The read receipt and the archive flag ride along so the palette can compute `isUnread`
-      // for a project it is not standing in — the same four inputs the Tasks badge reads.
+      // for a project it is not standing in — the same inputs the Tasks badge reads.
       seenAt: '2026-07-14T12:00:00Z',
       archived: false,
     });
@@ -189,6 +189,30 @@ describe('workspace runs index API', () => {
     // The NEWEST 200 survived, not the first 200 in file order.
     expect(body.runs[0]?.id).toBe('r-209');
     expect(body.runs.at(-1)?.id).toBe('r-010');
+  });
+
+  it('carries `autoResumeAt`, so a usage-limit park does not read as a failure', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'parked',
+        title: 'Waiting out the limit',
+        status: 'failed',
+        finishedAt: '2026-07-14T11:00:00Z',
+        autoResumeAt: '2026-07-14T15:00:00Z',
+      }),
+    ]);
+
+    const body = await getIndex();
+
+    // `deriveAttention` and `isUnread` both read this field. Dropping it from the slim row would
+    // make the palette paint a red "failed" dot on work that is merely waiting for its slot.
+    expect(body.runs[0]).toMatchObject({
+      id: 'parked',
+      status: 'failed',
+      autoResumeAt: '2026-07-14T15:00:00Z',
+    });
   });
 
   it('reads a crashed process’s `running` row as interrupted, exactly as opening it would', async () => {

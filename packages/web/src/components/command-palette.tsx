@@ -133,6 +133,7 @@ export function mergeTasks(
     finishedAt: run.finishedAt,
     seenAt: run.seenAt,
     archived: run.archived,
+    autoResumeAt: run.autoResumeAt,
   }))
   const live = new Set(mine.map(taskKey))
   const theirs = (indexed ?? [])
