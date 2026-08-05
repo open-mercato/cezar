@@ -104,6 +104,18 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
     await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toBeInstanceOf(AgentTempDirError);
   });
 
+  // A crash never reaches the terminal-transition reap, so without the startup
+  // sweep the directories would accumulate exactly the way `/tmp` did.
+  it('sweeps orphaned directories at startup', async () => {
+    const dead = newRun();
+    const { env } = await seam().agentEnvForStep(dead.id, 'claude');
+    store.updateRun(dead.id, { status: 'done', finishedAt: new Date().toISOString() });
+    expect(existsSync(env.TMPDIR as string)).toBe(true);
+
+    await manager.recover();
+    expect(existsSync(env.TMPDIR as string)).toBe(false);
+  });
+
   it('the error names the path and the way out, so the thread footer is actionable', async () => {
     const run = newRun();
     mkdirSync(dataDir, { recursive: true });
@@ -130,6 +142,17 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
       expect(existsSync(agentTmpDir(dataDir, run.id))).toBe(false);
       // The handoff contract is untouched by the opt-out.
       expect(env.CEZ_TASK_ID).toBe(run.id);
+    });
+
+    // A run that started before #785 must still start with the hatch set — the
+    // preflight is part of what the hatch turns off, or it is not an escape.
+    it('still spawns when the temp directory could not have been created', async () => {
+      const run = newRun();
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(join(dataDir, 'tmp'), 'not a directory', 'utf8');
+      await expect(seam().agentEnvForStep(run.id, 'claude')).resolves.toMatchObject({
+        env: { CEZ_TASK_ID: run.id },
+      });
     });
   });
 });

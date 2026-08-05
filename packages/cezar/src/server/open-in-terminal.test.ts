@@ -42,15 +42,22 @@ describe('wslTerminalLaunchers (#361 WSL support)', () => {
 describe('launch-script cleanup (#785)', () => {
   const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  /** Poll rather than sleep a fixed span: the cleanup is a real timer, and a
+   *  loaded event loop (the full suite runs these files in parallel) makes any
+   *  single "long enough" wait a coin toss. */
+  const waitGone = async (path: string) => {
+    for (let i = 0; i < 200 && existsSync(path); i += 1) await settle(10);
+    return !existsSync(path);
+  };
+
   it('writes a runnable script, then removes its directory', async () => {
     const scriptPath = createLaunchScript('/some/worktree', 'claude --resume abc', 5);
     expect(existsSync(scriptPath)).toBe(true);
     expect(readFileSync(scriptPath, 'utf8')).toContain('claude --resume abc');
     expect(dirname(scriptPath)).toMatch(/cez-term-/);
 
-    await settle(40);
+    expect(await waitGone(dirname(scriptPath))).toBe(true);
     expect(existsSync(scriptPath)).toBe(false);
-    expect(existsSync(dirname(scriptPath))).toBe(false);
   });
 
   it('survives long enough for a slow emulator to start', async () => {

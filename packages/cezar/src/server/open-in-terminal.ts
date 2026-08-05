@@ -29,10 +29,6 @@ export async function openInTerminal(
    *  values cannot be embedded safely: a terminal silently aimed at the wrong account is worse
    *  than no terminal, since nothing in the window would say so. */
   env: Record<string, string> = {},
-  /** Test seam only: how long the Linux/WSL launch script survives before it is
-   *  reaped (#785). Defaults to `LAUNCH_SCRIPT_TTL_MS`; nothing in production
-   *  passes it. */
-  opts: { launchScriptTtlMs?: number } = {},
 ): Promise<boolean> {
   const prefixed = withEnvPrefix(command, env, process.platform);
   if (prefixed === null) return false;
@@ -58,7 +54,7 @@ export async function openInTerminal(
 
   // Linux/other: a temp script avoids each emulator's own quoting rules. It reaps
   // itself afterwards (#785) — see `createLaunchScript`.
-  const scriptPath = createLaunchScript(cwd, prefixed, opts.launchScriptTtlMs);
+  const scriptPath = createLaunchScript(cwd, prefixed);
 
   if (isWsl()) {
     // No Linux GUI here — go through interop to a Windows terminal, which re-enters this same

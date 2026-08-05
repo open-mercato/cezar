@@ -110,13 +110,21 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
       }
     });
 
-    it('still preflights the host directory — an unusable one is worth reporting', () => {
+    // The hatch turns the whole feature off, preflight included. An escape hatch
+    // that still imposed the new check would be one you cannot escape through,
+    // and a run that used to start must still start with it set.
+    it('does not preflight anything either, however broken the host TMPDIR is', () => {
       expect(() =>
         agentTmpEnv(dataDir, 'run-g', {
           CEZ_AGENT_TMPDIR: '0',
           TMPDIR: join(dataDir, 'does-not-exist'),
         }),
-      ).toThrow(AgentTempDirError);
+      ).not.toThrow();
+    });
+
+    it('is not fooled by an unusable directory it would otherwise have minted', () => {
+      writeFileSync(join(dataDir, 'tmp'), 'not a directory', 'utf8');
+      expect(agentTmpEnv(dataDir, 'run-h', { CEZ_AGENT_TMPDIR: '0' })).toEqual({});
     });
 
     it('only an exact "0" disables it', () => {
@@ -157,6 +165,17 @@ describe('reaping the per-run temp directories (#785)', () => {
     mkdirSync(sibling, { recursive: true });
     removeAgentTmpDir(dataDir, '../runs');
     expect(existsSync(sibling)).toBe(true);
+  });
+
+  // The one input that turns this helper into data loss: `join(dataDir, 'tmp', '..')`
+  // is `<dataDir>` itself, so a guard that admits it would recursively remove every
+  // run's state — runs.json included.
+  it.each(['.', '..'])('refuses the relative id %j, which would resolve onto dataDir', (id) => {
+    writeFileSync(join(dataDir, 'runs.json'), '[]', 'utf8');
+    agentTmpEnv(dataDir, 'live', {});
+    removeAgentTmpDir(dataDir, id);
+    expect(existsSync(join(dataDir, 'runs.json'))).toBe(true);
+    expect(existsSync(agentTmpDir(dataDir, 'live'))).toBe(true);
   });
 
   it('sweeps orphans left by a crash while keeping the live runs', () => {
