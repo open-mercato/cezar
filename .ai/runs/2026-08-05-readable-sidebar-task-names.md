@@ -107,9 +107,9 @@ clamp, persist across a reload and stay absent below `md`.
 
 ### Phase 2: Let the column breathe
 
-- [ ] 2.1 Add `lib/sidebar-width.ts` (clamp 264–420, localStorage, defensive) with unit tests
-- [ ] 2.2 Drive the desktop `<aside>` width from state in `app-shell.tsx` and add the pointer + keyboard resize handle
-- [ ] 2.3 Unit tests for the resize handle in `app-shell.test.tsx`
+- [x] 2.1 Add `lib/sidebar-width.ts` (clamp 264–420, localStorage, defensive) with unit tests — eb8a7abe75bb126132b5ae2d243f24cb5299af3a
+- [x] 2.2 Drive the desktop `<aside>` width from state in `app-shell.tsx` and add the pointer + keyboard resize handle — 34d936be48c5efb350271594ff1d71a962706077
+- [x] 2.3 Unit tests for the resize handle in `app-shell.test.tsx` — 34d936be48c5efb350271594ff1d71a962706077
 
 ### Phase 3: Prove it
 
