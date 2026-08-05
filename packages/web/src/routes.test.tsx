@@ -9,6 +9,7 @@ import type { ProjectsResponse, WorkspaceUiState } from '@open-mercato/cezar-api
 import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
+import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
 import { AppRoutes, pageTitleContext } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
@@ -18,13 +19,21 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
   // The /new draft store is a module singleton by design — isolate it per test.
   resetDraft()
+  // The remembered location is per-browser (localStorage), so it outlives a render otherwise.
+  localStorage.clear()
 })
 
 // Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
 afterEach(() => {
   cleanup()
+  localStorage.clear()
   vi.unstubAllGlobals()
 })
+
+/** Seed the location this browser was last on — where the cockpit now remembers it. */
+function rememberLocation(lastLocation: unknown): void {
+  localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify(lastLocation))
+}
 
 /** The boot project (multi-project spec, step 3.2) — what `/api/v1/health.bootProject` and
  *  `/api/v1/projects.bootProject` name, and where every legacy flat URL redirects. */
@@ -90,10 +99,12 @@ function ProjectNavigationProbe() {
 }
 
 /** Cold-load the router at a URL, exactly as a pasted deep link would — under the same providers
- *  the app shell supplies. With `seed` (the default) the health, registry, and workspace UI-state
- *  answers the redirect gates need are already cached, the way a warm app has them; `seed: false`
- *  is the cold state where the boot id is still unknown. Passing `null` skips an individual seed
- *  so error and pending behavior can be exercised without replacing the shared harness. */
+ *  the app shell supplies. With `seed` (the default) the health and registry answers the redirect
+ *  gates need are already cached, the way a warm app has them (plus the workspace UI-state the
+ *  appearance provider reads); `seed: false` is the cold state where the boot id is still unknown.
+ *  Passing `null` skips an individual seed so error and pending behavior can be exercised without
+ *  replacing the shared harness. The remembered location is NOT seeded here — it is per-browser
+ *  now, so `rememberLocation` writes it to localStorage instead. */
 function renderAt(
   entry: string,
   {
@@ -382,16 +393,13 @@ describe('the global settings area (/settings/global)', () => {
  *  boot project's scoped twin with params intact — old bookmarks keep landing. */
 describe('legacy flat URLs redirect to the boot project', () => {
   it('restores the last settled project page from the exact bare root', () => {
-    renderAt('/', {
-      uiState: {
-        lastLocation: {
-          projectId: 'other',
-          pathname: '/p/other/tasks/run-1/changes',
-          search: '?file=x',
-          hash: '#L2',
-        },
-      },
+    rememberLocation({
+      projectId: 'other',
+      pathname: '/p/other/tasks/run-1/changes',
+      search: '?file=x',
+      hash: '#L2',
     })
+    renderAt('/')
 
     expect(currentPathname()).toBe('/p/other/tasks/run-1/changes')
     expect(currentSearch()).toBe('?file=x')
@@ -400,11 +408,8 @@ describe('legacy flat URLs redirect to the boot project', () => {
   })
 
   it('keeps an explicit legacy deep link even when another location was saved', () => {
-    renderAt('/tasks/run-2?file=y#L3', {
-      uiState: {
-        lastLocation: { projectId: 'other', pathname: '/p/other/tasks/run-1' },
-      },
-    })
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/run-1' })
+    renderAt('/tasks/run-2?file=y#L3')
 
     expect(currentPathname()).toBe('/p/boot/tasks/run-2')
     expect(currentSearch()).toBe('?file=y')
@@ -412,11 +417,8 @@ describe('legacy flat URLs redirect to the boot project', () => {
   })
 
   it('treats query or hash on / as an explicit boot-project URL', () => {
-    renderAt('/?shared=1#section', {
-      uiState: {
-        lastLocation: { projectId: 'other', pathname: '/p/other/tasks/run-1' },
-      },
-    })
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/run-1' })
+    renderAt('/?shared=1#section')
 
     expect(currentPathname()).toBe('/p/boot/')
     expect(currentSearch()).toBe('?shared=1')
@@ -446,22 +448,21 @@ describe('legacy flat URLs redirect to the boot project', () => {
       { projectId: 'gone', pathname: '/p/gone/tasks/run-1' },
     ],
   ])('falls back to the boot project for a %s saved location', (_case, registry, lastLocation) => {
-    renderAt('/', { registry, uiState: { lastLocation } })
+    rememberLocation(lastLocation)
+    renderAt('/', { registry })
 
     expect(currentPathname()).toBe('/p/boot/')
     expect(routeName()).toBe('tasks')
   })
 
   it('restores a registered not-git project', () => {
+    rememberLocation({ projectId: 'other', pathname: '/p/other/' })
     renderAt('/', {
       registry: {
         ...REGISTRY,
         projects: REGISTRY.projects.map((project) =>
           project.id === 'other' ? { ...project, status: 'not-git' as const } : project,
         ),
-      },
-      uiState: {
-        lastLocation: { projectId: 'other', pathname: '/p/other/' },
       },
     })
 
@@ -486,7 +487,8 @@ describe('legacy flat URLs redirect to the boot project', () => {
       }),
     )
 
-    renderAt('/', { registry: null, uiState: { lastLocation } })
+    rememberLocation(lastLocation)
+    renderAt('/', { registry: null })
 
     await waitFor(() => expect(currentPathname()).toBe(expected), { timeout: 4_000 })
   })
@@ -512,12 +514,8 @@ describe('legacy flat URLs redirect to the boot project', () => {
       }),
     )
 
-    renderAt('/', {
-      health: null,
-      uiState: {
-        lastLocation: { projectId: 'other', pathname: '/p/other/tasks/run-1' },
-      },
-    })
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/run-1' })
+    renderAt('/', { health: null })
 
     await waitFor(() => expect(currentPathname()).toBe('/p/other/tasks/run-1'), {
       timeout: 4_000,
