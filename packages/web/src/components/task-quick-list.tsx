@@ -281,8 +281,9 @@ function Row({
  * WIDTH-PRIORITY RULE (#788, option C) — read this before adding anything to this row.
  * The column is 264px by default and the title is the ONLY thing here a person scans for, so:
  *
- *  1. The title is the only element allowed to GROW (`min-w-0 flex-1`) and it has a floor
- *     (`min-w-[7rem]`) that nothing may push it below.
+ *  1. The title is the only element allowed to GROW (`flex-1`) and it has a floor
+ *     (`min-w-[7rem]`, replacing the `min-w-0` that let it be squeezed to nothing) that no other
+ *     element may push it below.
  *  2. Every other element is metadata and must be DROPPABLE beneath that floor. The mechanism is
  *     the `@container/sidebar` the app shell declares: metadata that does not fit a narrow column
  *     is hidden by a container query and comes back when the user drags the column wider.
@@ -409,12 +410,18 @@ function RunRow({
             className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
           />
         ) : null}
-        {/* The reference chip takes the age's slot when there is one — same as the mockup, and
+        {/* The reference chip takes the AGE's slot when there is one — same as the mockup, and
             the same trade as before: a row that knows its PR or issue number is identified by
-            that, not by how long ago it finished. */}
-        {reference || !age ? null : (
+            that, not by how long ago it finished.
+
+            It never takes the QUEUE POSITION's slot. `#2` is not an age, it is where the engine
+            will pick this run up, it is carried nowhere else in the row, and a queued run is
+            exactly the kind that has an issue reference and no PR yet — so keying this on "has a
+            reference" alone would have silently deleted the queue position from every
+            issue-driven queued row. */}
+        {age && (queuePosition !== null || !reference) ? (
           <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
-        )}
+        ) : null}
         {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
             different hue from the leading status dot, so the two read as two signals. */}
         {unread ? (

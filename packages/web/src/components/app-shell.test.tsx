@@ -425,6 +425,21 @@ describe('AppShell', () => {
       expect(sidebar().style.width).toBe('264px')
     })
 
+    it('takes focus on grab, so the arrow keys work right after a mouse drag', () => {
+      // `preventDefault()` on pointerdown (which stops the drag selecting the sidebar's text)
+      // also suppresses the focus a press would otherwise give a tabIndex=0 element.
+      renderShell()
+      drag(264, 320)
+      expect(document.activeElement).toBe(handle())
+      fireEvent.keyDown(handle(), { key: 'ArrowRight' })
+      expect(sidebar().style.width).toBe('336px')
+    })
+
+    it('opts out of browser touch panning, so a touch drag resizes instead of scrolling', () => {
+      renderShell()
+      expect(handle().className).toContain('touch-none')
+    })
+
     it('ignores a non-primary button, so a right-click on the border resizes nothing', () => {
       renderShell()
       const el = handle()

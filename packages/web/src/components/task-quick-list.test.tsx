@@ -388,6 +388,39 @@ describe('TaskQuickList', () => {
       expect(row('q1')?.textContent).toBe('First#1')
       expect(row('q2')?.textContent).toBe('Second#2')
     })
+
+    it('keeps the queue position even when the row has a reference chip', () => {
+      // The chip takes the AGE's slot, never the queue position's: `#1` is where the engine will
+      // pick this run up, it is carried nowhere else in the row, and an issue-driven queued run —
+      // an issue reference, no PR yet — is exactly the shape that would have silently lost it.
+      renderList({
+        runs: [
+          run({
+            id: 'qref',
+            title: '788: queued on an issue',
+            status: 'queued',
+            createdAt: ago(120_000),
+            referencedIssueUrl: 'https://github.com/o/r/issues/788',
+          }),
+        ],
+      })
+      expect(row('qref')?.textContent).toBe('#788queued on an issue#1')
+    })
+
+    it('still drops the age for a referenced row that is not queued', () => {
+      renderList({
+        runs: [
+          run({
+            id: 'aged',
+            title: 'Finished with a PR',
+            status: 'done',
+            finishedAt: ago(2 * 3_600_000),
+            pullRequestUrl: 'https://github.com/o/r/pull/9',
+          }),
+        ],
+      })
+      expect(row('aged')?.textContent).toBe('#9Finished with a PR')
+    })
   })
 
   describe('variant groups', () => {

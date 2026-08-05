@@ -332,6 +332,10 @@ function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
     event.currentTarget.setPointerCapture(event.pointerId)
     // Without this the drag selects the sidebar's text as it passes over it.
     event.preventDefault()
+    // …but preventing the default also suppresses the focus the press would have given a
+    // `tabIndex=0` element, which would leave someone who grabbed the handle with a mouse unable
+    // to fine-tune with the arrow keys immediately afterwards. Focus it explicitly instead.
+    event.currentTarget.focus()
   }
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -382,9 +386,10 @@ function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
       onKeyDown={onKeyDown}
       onDoubleClick={() => onWidthChange(DEFAULT_SIDEBAR_WIDTH)}
       title="Drag to resize the sidebar — double-click to reset"
-      // A 5px grab strip straddling the border, invisible until you reach for it: the border is
-      // already the visual edge, so a second permanent line would just be a heavier border.
-      className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+      // A 5px grab strip straddling the border, invisible until you reach for it. `touch-none`
+      // is load-bearing rather than decorative: without it a touch drag is claimed by the
+      // browser's own panning and scrolls the page instead of resizing the column.
+      className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
     />
   )
 }

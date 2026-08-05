@@ -125,8 +125,12 @@ export function runTitle(run: RunRecord): string {
  */
 export function splitRefPrefix(title: string): { ref: number | null; rest: string } {
   const match = /^(\d{1,9}): (.+)$/.exec(title)
-  if (!match) return { ref: null, rest: title }
-  const [, digits, rest] = match as unknown as [string, string, string]
+  const digits = match?.[1]
+  const rest = match?.[2]
+  // Both groups are non-optional in the pattern, so this narrowing is only for the type system —
+  // but it is the narrowing rather than a cast, so a future edit to the pattern is caught here
+  // instead of producing an `undefined` that has been asserted to be a string.
+  if (digits === undefined || rest === undefined) return { ref: null, rest: title }
   return { ref: Number(digits), rest }
 }
 
