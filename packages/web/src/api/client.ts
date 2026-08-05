@@ -22,6 +22,7 @@ import type {
   ApiRun,
   ArchiveFinishedResponse,
   MarkAllReadResponse,
+  CancelAutoResumeResponse,
   CancelResponse,
   ChangesPayload,
   CheckoutProjectInput,
@@ -962,6 +963,18 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
       json: { archived },
     }),
     runPath(id, '/archive'),
+  )
+}
+
+/** Stop THIS task from resuming itself after a usage limit (spec
+ *  2026-08-03-auto-resume-after-usage-limit) — the per-task twin of the workspace setting.
+ *  Idempotent: a task with nothing scheduled answers the same way. */
+export async function cancelAutoResume(id: string): Promise<CancelAutoResumeResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['auto-resume'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/auto-resume'),
   )
 }
 

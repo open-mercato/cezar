@@ -37,6 +37,36 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.memoryLimitMb()).toBe(512);
   });
 
+  it('accountHolds() unions every participant by kind, and is empty for stubs that hold none', () => {
+    // A usage limit closes an ACCOUNT, and one account can drive tasks in several projects, so
+    // the hold spans managers the way the parallel cap does (spec
+    // 2026-08-03-auto-resume-after-usage-limit). The two kinds bind different work, so they are
+    // aggregated separately. `accountHolds` is optional on the participant, so a stub that
+    // predates it — like the ones above — simply holds nothing.
+    const sem = new WorkspaceSemaphore();
+    expect(sem.accountHolds().deadline.size + sem.accountHolds().inFlight.size).toBe(0);
+
+    sem.register(participant(0));
+    const offA = sem.register({
+      ...participant(0),
+      accountHolds: () => ({ deadline: new Set(['claude:default']), inFlight: new Set<string>() }),
+    });
+    sem.register({
+      ...participant(0),
+      accountHolds: () => ({
+        deadline: new Set(['codex:work']),
+        inFlight: new Set(['claude:second']),
+      }),
+    });
+    expect([...sem.accountHolds().deadline].sort()).toEqual(['claude:default', 'codex:work'])
+    expect([...sem.accountHolds().inFlight]).toEqual(['claude:second'])
+
+    // A torn-down project stops holding the workspace's queue with it.
+    offA()
+    expect([...sem.accountHolds().deadline]).toEqual(['codex:work'])
+  })
+
+
   it('busy() sums every registered participant; unregister stops counting', () => {
     const sem = new WorkspaceSemaphore();
     const a = participant(2);

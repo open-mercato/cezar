@@ -1033,10 +1033,27 @@ export function useMarkRunSeen() {
       if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
     },
     onSuccess: (updated) => {
-      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
-        list?.map((run) => (run.id === updated.id ? updated : run)),
+      // Take ONLY the receipt out of the answer — never the whole record.
+      //
+      // `POST /runs/:id/read` answers with a SNAPSHOT taken while the request was in flight, and
+      // this mutation fires at the exact moment a run finishes, which is also the busiest moment
+      // on the run stream. Writing the snapshot wholesale therefore reverts every field the
+      // stream advanced in that window, permanently — nothing refetches afterwards, so the
+      // thread stays wrong until the next reload.
+      //
+      // The case that exposed it (spec 2026-08-03-auto-resume-after-usage-limit): a run fails on
+      // a usage limit and, a beat later, publishes the instant it will resume itself. The read
+      // receipt raced that beat and put back a record with no `autoResumeAt`, so the thread's
+      // resume hint vanished on every LIVE schedule while a page refresh always showed it.
+      //
+      // `seenAt` is the only field this mutation changes, so it is the only one worth taking
+      // from its answer; everything else belongs to the stream and the authoritative fetch.
+      const stampReceipt = (run: RunRecord): RunRecord =>
+        run.id === updated.id ? { ...run, seenAt: updated.seenAt } : run
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) => list?.map(stampReceipt))
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
+        current ? stampReceipt(current) : updated,
       )
-      queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
     },
   })
 }

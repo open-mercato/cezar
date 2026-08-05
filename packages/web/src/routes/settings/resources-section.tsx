@@ -85,6 +85,19 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
     { resources: { monitoringWakeIntervalMinutes: wakeMode === 'park' ? null : wakeNum } },
     { onSuccess: () => toast(wakeMode === 'park' ? 'Monitoring will stay parked' : `Monitoring will re-check every ${wakeNum} minutes`) },
   )
+  // Shipped ON: a server that predates the key answers without it, and reading that as "off"
+  // would silently disable the feature on the one client that cannot tell the difference.
+  const autoResume = config.resources.autoResumeOnUsageLimit ?? true
+  const saveAutoResume = (on: boolean) => save.mutate(
+    { resources: { autoResumeOnUsageLimit: on } },
+    {
+      onSuccess: () => toast(
+        on
+          ? 'Tasks stopped by a usage limit will resume themselves'
+          : 'Tasks stopped by a usage limit will stay failed',
+      ),
+    },
+  )
   const memoryNum = memory.trim() === '' ? 0 : Number(memory)
   const memoryInvalid =
     memory.trim() !== '' && (!Number.isInteger(memoryNum) || memoryNum < MEMORY_MIN_MB)
@@ -211,6 +224,26 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         ) : (
           <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
         )}
+      </SettingsField>
+
+      <SettingsField
+        title="Auto-resume after a usage limit"
+        hint="When an agent stops because its provider usage limit is reached, cezar waits for the reset the provider named and continues the task 30 seconds later — up to 12 times in a row without you. Off leaves the task failed with its Continue button."
+      >
+        <select
+          aria-label="Auto-resume after a usage limit"
+          data-slot="resources-auto-resume"
+          value={autoResume ? 'on' : 'off'}
+          disabled={save.isPending}
+          onChange={(event) => saveAutoResume(event.target.value === 'on')}
+          className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+        >
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+        <p className="text-[11px] text-soft-foreground">
+          Applies to Claude, Codex and OpenCode — whenever the provider says when the limit lifts.
+        </p>
       </SettingsField>
 
       <SettingsField

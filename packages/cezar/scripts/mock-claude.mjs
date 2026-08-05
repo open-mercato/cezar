@@ -151,6 +151,26 @@ async function respond(userText, imageCount) {
     return;
   }
 
+  // `mock:limit` → the envelope Claude Code emits when the subscription window is
+  // exhausted: an `is_error` result whose text is the machine-readable
+  // `Claude AI usage limit reached|<epoch seconds>` marker. Makes the auto-resume path
+  // (spec 2026-08-03-auto-resume-after-usage-limit) reachable under CEZ_DRY_RUN=1 for QA and
+  // the e2e smoke. `CEZ_MOCK_LIMIT_RESET_SECONDS` moves the reset instant (default 60 s out),
+  // so a dry run can actually watch the resume fire instead of reading about it.
+  if (userText.includes('mock:limit')) {
+    const configured = Number(process.env.CEZ_MOCK_LIMIT_RESET_SECONDS ?? '60');
+    const seconds = Number.isFinite(configured) ? configured : 60;
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + seconds}`,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+
   // `mock:md` → answer with a markdown-rich reply (#346 QA: tables, nested
   // lists, emphasis, fences, quotes) instead of the scripted turn.
   if (userText.includes('mock:md')) {
