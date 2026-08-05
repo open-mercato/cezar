@@ -15,6 +15,16 @@ import { dirname, resolve } from 'node:path'
 const repoRoot = resolve(import.meta.dirname, '../../..')
 const descriptorPath = resolve(repoRoot, '.ai/qa/test-env.json')
 
+/**
+ * The built CLI a spec spawns when it needs its OWN cezar rather than the shared test env
+ * (a pinned `runs.json` fixture, an empty repo, a second project).
+ *
+ * Exported from here rather than re-derived per spec because it is one fact about the build
+ * layout, and it has already moved once: `npm run build` emits the server into the workspace
+ * package (`packages/cezar/dist`), not into a root-level `dist/`.
+ */
+export const cezarCli = resolve(repoRoot, 'packages/cezar/dist/index.js')
+
 type EnvDescriptor = {
   baseUrl: string
   browser: { installed: boolean; command: string; version: string; notes: string }

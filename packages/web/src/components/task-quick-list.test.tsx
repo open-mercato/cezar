@@ -336,9 +336,10 @@ describe('TaskQuickList', () => {
       expect(title.textContent).toBe('implementing comment threads across the whole thread view')
 
       const diff = rowEl.querySelector('[data-slot="diff-stat"]') as HTMLElement
-      // Hidden by default at the 264px column, back once the column is dragged past 21rem.
+      // Hidden by default at the 264px column, back once the column is dragged past 23rem —
+      // the width at which the pair fits without costing the name any of its default budget.
       expect(diff.className).toContain('hidden')
-      expect(diff.className).toContain('@min-[21rem]/sidebar:inline')
+      expect(diff.className).toContain('@min-[23rem]/sidebar:inline')
       // Dropped from view, never from reach — the exact numbers stay in its tooltip.
       expect(diff.getAttribute('title')).toBe('+59514 −12160 across 208 files')
 

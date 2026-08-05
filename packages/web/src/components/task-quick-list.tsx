@@ -395,13 +395,18 @@ function RunRow({
             sidebar row has no column to hold an em dash open for.
 
             Droppable metadata, per the width-priority rule: `+59514 −12160` is ~82px, which a
-            264px column cannot spend and still name the task. It appears once the user has
-            dragged the sidebar wide enough to afford it AND the title's floor (#788), and its
-            exact numbers stay one hover away in the Tasks table's ± column either way. */}
+            264px column cannot spend and still name the task, and its exact numbers stay in the
+            `title` tooltip and in the Tasks table's ± column either way.
+
+            23rem is not the width at which the pair merely *fits* — it is the width at which it
+            fits AND the name is still at least as long as it was in the default 264px column
+            (measured: 146px of title at 23rem vs 132px at 264px). Anything narrower buys the
+            numbers back by making the task names shorter than they were before the drag, which
+            is precisely the bargain this issue exists to stop making. */}
         {run.diffStat ? (
           <DiffStatLabel
             stat={run.diffStat}
-            className="hidden shrink-0 text-[10.5px] @min-[21rem]/sidebar:inline"
+            className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
           />
         ) : null}
         {/* The reference chip takes the age's slot when there is one — same as the mockup, and

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
 
 /**
  * The task quick-list, in a real browser, against a real cezar serving real runs.
@@ -30,7 +30,6 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
-const repoRoot = resolve(import.meta.dirname, '../../..')
 const runId = `e2e-quick-list-${process.pid}`
 
 const now = Date.now()
@@ -184,7 +183,7 @@ beforeAll(async () => {
 
   const port = await freePort()
   baseUrl = `http://localhost:${port}`
-  server = spawn(process.execPath, [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'], {
+  server = spawn(process.execPath, [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'], {
     // Dry-run + a pinned CEZ_HOME, exactly as the shared test env does — see `fixtureServeEnv`.
     // Nothing in this spec starts a run, but the boot probes the backends.
     env: fixtureServeEnv(dataRoot),
@@ -542,6 +541,26 @@ describe('a row under width contention, in a column the user can widen', () => {
       )
     )
 
+  /** The row title's measured width — how much of the column the NAME actually got. */
+  const titleWidth = () =>
+    Number(
+      browser.evaluate(
+        `document.querySelector('${ROW_ID} [data-slot="task-row-title"]').getBoundingClientRect().width`
+      )
+    )
+
+  /** The diff pair's RESOLVED display — the container query's answer, not a class. */
+  const diffDisplay = () =>
+    String(browser.evaluate(`getComputedStyle(document.querySelector('${ROW_ID} [data-slot="diff-stat"]')).display`))
+
+  /** Set the width through the stored preference and reload — the non-pointer path to a width,
+   *  used where the assertion is about the LAYOUT at that width rather than about dragging. */
+  const setStoredWidth = (width: number) => {
+    browser.evaluate(`localStorage.setItem('cez-sidebar-width', '${width}')`)
+    browser.goto(`${wideUrl}/p/${wideProject}/`)
+    browser.waitForFunction(`document.querySelector('${ROW_ID}') !== null`)
+  }
+
   /** Grab the handle at its middle and pull it `dx` px horizontally. */
   const dragHandle = (dx: number) => {
     const box = browser.evaluate(`(() => {
@@ -585,7 +604,7 @@ describe('a row under width contention, in a column the user can widen', () => {
     wideUrl = `http://localhost:${port}`
     wideServer = spawn(
       process.execPath,
-      [join(repoRoot, 'dist/index.js'), 'serve', '--repo', wideRoot, '--port', String(port), '--no-open'],
+      [cezarCli, 'serve', '--repo', wideRoot, '--port', String(port), '--no-open'],
       { env: fixtureServeEnv(wideRoot), stdio: 'ignore' }
     )
     await waitForHealth(wideUrl)
@@ -654,22 +673,44 @@ describe('a row under width contention, in a column the user can widen', () => {
     browser.screenshot(`${artifactsDir}/quick-list-width-contention-264.png`, { viewport: true })
   })
 
+  it('grows the name as the column grows, without ever shrinking it', () => {
+    // The cliff this guards against: a threshold placed where the diff pair merely *fits* makes
+    // dragging the column WIDER produce a SHORTER name, which is the exact bargain #788 exists
+    // to stop making. At every width the name is at least as long as it was at the default.
+    const baseline = titleWidth()
+    let previousBelowThreshold = baseline
+    for (const width of [280, 320, 360, 368, 400, 420]) {
+      setStoredWidth(width)
+      expect(sidebarWidth()).toBe(width)
+      expect(titleWidth()).toBeGreaterThanOrEqual(baseline)
+      if (diffDisplay() === 'none') {
+        // Below the threshold the name grows monotonically — every px goes to it.
+        expect(titleWidth()).toBeGreaterThanOrEqual(previousBelowThreshold)
+        previousBelowThreshold = titleWidth()
+      }
+    }
+  })
+
   it('drags wider, brings the diff pair back, and remembers the width across a reload', () => {
     dragHandle(100)
     expect(sidebarWidth()).toBe(364)
     expect(browser.evaluate(`document.querySelector('${HANDLE}').getAttribute('aria-valuenow')`)).toBe('364')
-    // Past 21rem of column, the row can afford its diff numbers again — the whole point of making
-    // the metadata droppable rather than deleting it.
-    expect(
-      browser.evaluate(`getComputedStyle(document.querySelector('${ROW_ID} [data-slot="diff-stat"]')).display`)
-    ).toBe('inline')
+    // Still below 23rem: the column is wider, and all of it went to the name.
+    expect(diffDisplay()).toBe('none')
 
-    browser.screenshot(`${artifactsDir}/quick-list-width-contention-364.png`, { viewport: true })
+    dragHandle(56)
+    expect(sidebarWidth()).toBe(420)
+    // Past 23rem the row can afford its diff numbers again — the whole point of making the
+    // metadata droppable rather than deleting it. `block`, not `inline`: the utility says
+    // `inline`, and CSS blockifies the display of a flex item, which this span is.
+    expect(diffDisplay()).not.toBe('none')
 
-    expect(browser.evaluate(`localStorage.getItem('cez-sidebar-width')`)).toBe('364')
+    browser.screenshot(`${artifactsDir}/quick-list-width-contention-420.png`, { viewport: true })
+
+    expect(browser.evaluate(`localStorage.getItem('cez-sidebar-width')`)).toBe('420')
     browser.goto(`${wideUrl}/p/${wideProject}/`)
     browser.waitForFunction(`document.querySelector('${ROW_ID}') !== null`)
-    expect(sidebarWidth()).toBe(364)
+    expect(sidebarWidth()).toBe(420)
   })
 
   it('clamps at both ends — the column can never collapse or swallow the view', () => {
@@ -731,7 +772,7 @@ describe('empty quick-list', () => {
     emptyUrl = `http://localhost:${port}`
     emptyServer = spawn(
       process.execPath,
-      [join(repoRoot, 'dist/index.js'), 'serve', '--repo', emptyRoot, '--port', String(port), '--no-open'],
+      [cezarCli, 'serve', '--repo', emptyRoot, '--port', String(port), '--no-open'],
       { env: fixtureServeEnv(emptyRoot), stdio: 'ignore' }
     )
     await waitForHealth(emptyUrl)
