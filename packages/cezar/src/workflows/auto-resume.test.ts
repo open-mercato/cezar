@@ -334,6 +334,71 @@ describe('a run stopped by a usage limit resumes itself', () => {
       .toBeDefined();
   }, 60_000);
 
+  it('watchdog: an in-place run it forces through is not handed back at the repo-root gate', async () => {
+    // The same wedge as above, but the rescued run is `worktree: false` — and that is the case
+    // the spawn path asks the hold question TWICE for: once at the top of `execute`, and again
+    // after the exclusive repo-root lease is granted. A force override consumed by the first gate
+    // leaves the second one to hand the run straight back, `dropActive` releases the slot, an
+    // ordinary pump starts nothing, and sixty seconds later the watchdog repeats the whole cycle
+    // — the queue never unwedges and the transcript fills with identical held-in-the-queue notes.
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1 } }),
+    });
+    const limited = manager.startRun(workflow, { task: 'mock:limit holder', worktree: false });
+    await settle(limited.id);
+    const waiting = manager.startRun(workflow, { task: 'mock:done work', worktree: false });
+    await expect.poll(() => store.getRun(waiting.id)?.status, { timeout: 10_000 }).toBe('queued');
+
+    // Wedge it: the holder holds with no deadline anyone is waiting for, and nothing is running.
+    store.updateRun(limited.id, {
+      status: 'queued',
+      autoResumeAt: undefined,
+      autoResumeAttempts: 1,
+    });
+    expect(manager.accountHolds().inFlight.size).toBe(1);
+
+    await manager.rescueStalledQueue();
+    await expect.poll(() => store.getRun(waiting.id)?.startedAt, { timeout: 20_000 }).toBeDefined();
+    // …and it STAYS started. A bounce at the second gate shows up as a return to `queued` with
+    // `startedAt` cleared, which is exactly what the first assertion alone would miss.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(store.getRun(waiting.id)?.status).not.toBe('queued');
+    expect(
+      store
+        .readEvents(waiting.id)
+        .some((event) => String(event.message ?? '').includes('held in the queue')),
+    ).toBe(false);
+  }, 60_000);
+
+  it('retires a deadline no timer is holding when the setting is off', async () => {
+    // The population `reconcileAutoResumes` exists for — a record promising a resume that no
+    // timer is holding — met by the setting being off: cezar restarted while it was off, the
+    // config was hand-edited, or the project context was disposed mid-wait. Sweeping only the
+    // armed timers leaves the deadline on the record, and a live `autoResumeAt` is not cosmetic:
+    // `accountHolds()` reads it as a hold, so nothing new starts on that account, and the cockpit
+    // shows a `scheduled` row for a resume that will never come.
+    const first = new RunManager(store, repoRoot);
+    const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
+    await settle(record.id);
+    expect(store.getRun(record.id)?.autoResumeAt).toBeDefined();
+    first.dispose(); // the timer is gone; the deadline is not
+
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { autoResumeOnUsageLimit: false } }),
+    });
+    await manager.recover();
+
+    await expect
+      .poll(() => store.getRun(record.id)?.autoResumeAt, { timeout: 5_000 })
+      .toBeUndefined();
+    expect(manager.accountHolds().deadline.size).toBe(0);
+    expect(
+      store
+        .readEvents(record.id)
+        .some((event) => String(event.message ?? '').includes('automatic resume cancelled')),
+    ).toBe(true);
+  }, 40_000);
+
   it('watchdog: re-adopts a queued record the engine has no work item for', async () => {
     // The worst shape a queue can be in — and the one a live workspace ended up in: every record
     // says `queued`, several with a pending `continue-N` step, and the engine holds nothing for

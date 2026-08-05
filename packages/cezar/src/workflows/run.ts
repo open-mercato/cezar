@@ -253,30 +253,6 @@ export function runAccountKey(
 }
 
 /**
- * Is this run a reason its account is closed right now?
- *
- * Two states say yes, and the second is the subtle one:
- *
- *  - parked on a usage-limit resume that has not come due (`failed` + a future `autoResumeAt`);
- *  - an automatic resume IN FLIGHT — `autoResumeAttempts` set while the run is queued or
- *    running. Without this the hold would end the instant a resume fires, which is the moment
- *    the account is least proven, and every cycle would let a queued task dequeue and walk all
- *    the way to the repo-root lease before being handed back. The counter is retired by the
- *    first completed turn (the only evidence the window really reopened), which is what
- *    releases the queue behind it.
- *
- * A deadline already in the past is NOT a hold: that run is about to resume, and holding the
- * queue for it would stall the very work the window reopened for.
- */
-function usageLimitHolder(run: RunRecord, now: number): boolean {
-  if (run.status === 'failed' && run.autoResumeAt) {
-    const deadline = Date.parse(run.autoResumeAt);
-    return Number.isFinite(deadline) && deadline > now;
-  }
-  return resumeInFlight(run);
-}
-
-/**
  * Is this run an automatic resume that has not completed a turn yet?
  *
  * Such a run is the work the reopened window is FOR, so the hold must never apply to it — not
@@ -1252,7 +1228,20 @@ export class RunManager {
    */
   private reconcileAutoResumes(): void {
     if (!this.semaphore.autoResumeOnUsageLimit()) {
-      for (const runId of [...this.autoResumeTimers.keys()]) {
+      // Sweep the RECORDS, not the timer map. A record promising a resume that no timer is
+      // holding is the exact population this method exists for, and it is also the one the
+      // setting can be switched off in front of: cezar restarted while it was off, the config
+      // was hand-edited, or the project context was disposed mid-wait. Retiring only the armed
+      // timers leaves such a record with a live `autoResumeAt`, which `accountHolds()` reads as
+      // a deadline hold — so nothing new starts on that account, `rescueStalledQueue` treats the
+      // phantom appointment as a legitimate reason to sit still, and the cockpit shows a
+      // `scheduled` row for a resume that will never come. `clearAutoResume` covers the armed
+      // ones too, so this one loop is the whole cancellation.
+      const pending = new Set([
+        ...this.autoResumeTimers.keys(),
+        ...this.store.listRuns().filter((run) => run.autoResumeAt !== undefined).map((run) => run.id),
+      ]);
+      for (const runId of pending) {
         this.clearAutoResume(runId);
         this.store.appendEvent(runId, {
           type: 'note',
@@ -1313,7 +1302,12 @@ export class RunManager {
   ): boolean {
     const run = this.store.getRun(runId);
     if (!run || run.status === 'cancelled' || state?.cancelled) return false;
-    if (this.forceStarted.delete(runId)) return false; // the watchdog sent this one through
+    // The watchdog sent this one through. Checked, never consumed: the spawn path asks this
+    // question TWICE — here at the top of `execute`, and again after the exclusive repo-root
+    // lease is granted — so a one-shot flag would clear at the first gate and let the second one
+    // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
+    // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
+    if (this.forceStarted.has(runId)) return false;
     if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner)) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
