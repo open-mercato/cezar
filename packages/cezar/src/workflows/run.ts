@@ -40,6 +40,12 @@ import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import {
+  AgentTempDirError,
+  agentTmpEnv,
+  removeAgentTmpDir,
+  sweepAgentTmpDirs,
+} from '../runs/agent-tmpdir.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
@@ -348,6 +354,18 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
 }
 
 /**
+ * The directories a spawned agent may reach outside its worktree: the run-state
+ * folder that holds its handoff file, plus its own temp directory when this run
+ * got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed to
+ * write would trade one silent failure for another, so the two travel together;
+ * under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the list is
+ * exactly what it always was.
+ */
+export function agentDirectories(runsDir: string, env: Record<string, string>): string[] {
+  return env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+}
+
+/**
  * Materialized pasted attachment: the on-disk name/serving-URL pair the
  * transcript already used, plus the absolute path that lets the agent
  * operate on the file itself — save it, `cp` it, attach it to a GitHub
@@ -626,12 +644,19 @@ export class RunManager {
    *  key would let a value inherited from *this* process through — a nested
    *  cezar (an agent running `cez serve`/`cez run`/the test suite) would then
    *  write follow-ups into the parent's inbox despite the opt-out. Empty is the
-   *  established "absent" spelling — consumers guard with `if (todosFile)`. */
+   *  established "absent" spelling — consumers guard with `if (todosFile)`.
+   *
+   *  `TMPDIR`/`TEMP`/`TMP` (#785) point at this run's own scratch directory
+   *  instead of the machine-wide one every agent used to share. Created and
+   *  write-probed here, on the last common path before a spawn, so an unusable
+   *  temp directory throws `AgentTempDirError` at the caller rather than
+   *  turning into empty command output inside a running agent. */
   private agentEnv(runId: string, generateFollowups = true): Record<string, string> {
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
+      ...agentTmpEnv(this.dataDir, runId),
     };
   }
 
@@ -1026,6 +1051,10 @@ export class RunManager {
       .listRuns()
       .filter((r) => ['queued', 'waiting', 'running'].includes(r.status))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // A crash never reaches `dropActive`, so its temp directory (#785) outlived the run.
+    // Startup is the one moment we know which runs are still live, so sweep every other
+    // per-run directory here — bounded to `<dataDir>/tmp`, never a sibling.
+    sweepAgentTmpDirs(this.dataDir, live.map((r) => r.id));
     for (const run of live) {
       if (run.status === 'queued') {
         await this.reviveQueuedRun(run, 'cezar restarted');
@@ -1123,6 +1152,11 @@ export class RunManager {
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
     void this.enforceRetention();
+    // The run's temp directory (#785) goes on the same terminal transition, and
+    // unconditionally — it is scratch, not an artifact, so unlike a worktree
+    // there is no keep-count to respect and nothing left to recover from it. A
+    // Continue (or an auto-resume) re-creates it through `agentEnv`.
+    removeAgentTmpDir(this.dataDir, runId);
   }
 
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
@@ -2235,10 +2269,32 @@ export class RunManager {
     // Backend + model come off the record: the run's current backend by default, or the
     // follow-up override that `continueRun` persisted before scheduling (#401).
     const continueBackend = backend;
+    /** Settle this turn as a failure before anything is spawned — the shape both
+     *  pre-spawn gates below need (model identity, #405; temp directory, #785). */
+    const failBeforeSpawn = (message: string): void => {
+      const failedAt = new Date().toISOString();
+      sink.sessionEnded('error', message);
+      this.store.updateStep(runId, stepId, {
+        status: 'failed',
+        error: message,
+        finishedAt: failedAt,
+      });
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error: `continue failed: ${message}`,
+        finishedAt: failedAt,
+        currentStepId: undefined,
+      });
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `continue failed — ${message}`,
+      });
+      this.dropActive(runId);
+    };
     // Apply the SAME canonical-identity gate the first spawn applies (#405, review M1).
     // A follow-up may switch both runner and model (#401), so without this the record keeps
     // asserting the identity the run STARTED with while a different model serves the turn —
-    // the exact defect this PR exists to remove — and the raw record string reaches the CLI
+    // the exact defect that PR existed to remove — and the raw record string reaches the CLI
     // in the un-normalised wire form the first step already converted away (`anthropic/opus`
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
@@ -2254,24 +2310,7 @@ export class RunManager {
       });
     } catch (err) {
       if (!(err instanceof ModelIdentityError)) throw err;
-      const failedAt = new Date().toISOString();
-      sink.sessionEnded('error', err.message);
-      this.store.updateStep(runId, stepId, {
-        status: 'failed',
-        error: err.message,
-        finishedAt: failedAt,
-      });
-      this.store.updateRun(runId, {
-        status: 'failed',
-        error: `continue failed: ${err.message}`,
-        finishedAt: failedAt,
-        currentStepId: undefined,
-      });
-      this.store.appendEvent(runId, {
-        type: 'lifecycle',
-        message: `continue failed — ${err.message}`,
-      });
-      this.dropActive(runId);
+      failBeforeSpawn(err.message);
       return;
     }
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
@@ -2280,10 +2319,20 @@ export class RunManager {
     const resumedProfileId = sessionId === undefined
       ? undefined
       : record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
-    const continueProfile = await this.agentEnvForStep(runId, continueBackend, {
-      generateFollowups,
-      recordedProfileId: resumedProfileId,
-    });
+    // The temp-directory preflight (#785) rides along with the account resolution: a resumed
+    // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
+    // returns nothing is worse than a turn that refuses to start and says why.
+    let continueProfile: { env: Record<string, string>; profileId: string };
+    try {
+      continueProfile = await this.agentEnvForStep(runId, continueBackend, {
+        generateFollowups,
+        recordedProfileId: resumedProfileId,
+      });
+    } catch (err) {
+      if (!(err instanceof AgentTempDirError)) throw err;
+      failBeforeSpawn(err.message);
+      return;
+    }
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
     const runner = createRunner(continueBackend);
@@ -2302,7 +2351,7 @@ export class RunManager {
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
-        additionalDirectories: [join(this.dataDir, 'runs')],
+        additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
         env: continueProfile.env,
         model: continueModel,
         sessionId,
@@ -2841,9 +2890,17 @@ export class RunManager {
     // Which agent account this step spawns under, and — recorded on the step before the spawn —
     // which one its session belongs to. `sessionId` and `profileId` are a pair: a resume that
     // reads the wrong account's config dir finds no session and silently starts a fresh one.
-    const stepProfile = await this.agentEnvForStep(runId, stepBackend, {
-      generateFollowups: followupsEnabled() && input.generateFollowups !== false,
-    });
+    // Resolved together with the temp-directory preflight (#785): the step fails with a named,
+    // actionable error instead of spawning a backend whose shell would return empty output.
+    let stepProfile: { env: Record<string, string>; profileId: string };
+    try {
+      stepProfile = await this.agentEnvForStep(runId, stepBackend, {
+        generateFollowups: followupsEnabled() && input.generateFollowups !== false,
+      });
+    } catch (err) {
+      if (err instanceof AgentTempDirError) return err.message;
+      throw err;
+    }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     const runner = createRunner(stepBackend);
@@ -2868,7 +2925,7 @@ export class RunManager {
           allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: [join(this.dataDir, 'runs')],
+          additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), stepProfile.env),
           env: stepProfile.env,
           model: backendModel,
           sessionId,

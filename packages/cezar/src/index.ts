@@ -668,6 +668,7 @@ function ensureDataGitignore(repoRoot: string): void {
     'runs.json.tmp',
     'runs/',
     'worktrees/',
+    'tmp/', // per-run agent temp directories (#785)
     'todos.json',
     'todos.json.tmp',
     'launch-key',

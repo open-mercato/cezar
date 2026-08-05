@@ -447,12 +447,40 @@ Useful environment variables:
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
+| `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, reaped when the run ends, so concurrent tasks stop sharing one directory. Only an exact `0` disables it. The pre-spawn writability check runs either way — a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Agents toggle overrides this default. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Agents toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Skip the `open-mercato/skills` banner on `cezar serve` startup. (The cockpit no longer shows a banner — its skills now live on the Skills page's Manage panel — so this env var is the terminal banner's only switch.) |
 | `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
+
+### Troubleshooting: the agent's shell returns nothing
+
+**Symptom.** A task on the Claude backend keeps working, but every shell command
+comes back with no output and a spurious non-zero exit status — `echo hello`
+included. Redirecting into a file inside the worktree still produces the right
+content, so the commands genuinely run; only the *capture* is lost. Codex tasks
+on the same machine are unaffected, because that backend streams over stdio
+pipes instead of round-tripping a command's output through a temp file.
+
+**Diagnosis.** The temp directory the agent was given is out of space or out of
+quota. One line tells you:
+
+```bash
+echo probe > "${TMPDIR:-/tmp}/probe"   # "Disk quota exceeded" / "No space left on device"
+df -i "${TMPDIR:-/tmp}"                # a tmpfs can exhaust inodes long before bytes
+```
+
+Under quota the file is *created* and the write then fails, so the backend reads
+back a zero-byte capture file and hands the agent an empty result.
+
+**Fix.** Since #785 cezar gives each task its own `TMPDIR` under
+`.ai/cezar/tmp/<task-id>` and write-probes it before spawning, so a broken temp
+directory fails the task with `agent temp directory is not writable: …` on the
+task thread instead of corrupting its work. If you see that error, free space on
+the disk holding the repo, or set `CEZ_AGENT_TMPDIR=0` to go back to the host
+`TMPDIR` and point that somewhere writable.
 
 ---
 

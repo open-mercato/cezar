@@ -297,12 +297,25 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   const source = opts.source ?? process.env;
   const extra = opts.extraEnv ?? {};
 
+  // Names `extra` is about to define, normalized. The host copy of a var the
+  // per-run env overrides must be DROPPED, not merely shadowed: env names are
+  // matched case-insensitively here (and by Windows itself), so a host `Temp`
+  // and a per-run `TEMP` are the same variable spelled two ways — leaving both
+  // in the child env hands the backend the host value under one of them. That
+  // is exactly the temp-directory bug #785 fixes, so the override has to be
+  // total. `extra` is cezar's own, never a host secret, and always wins.
+  const overridden = upperSet(Object.keys(extra));
+
   // Escape hatch: restore legacy full-inheritance (opt-in, off by default).
   // Parsed with the same `isTruthy` the Bedrock/Vertex toggles use (#456
   // review) — an exact `=== '1'` made `CEZ_AGENT_ENV_FULL=true` silently do
   // nothing, which is a confusing way to fail open-vs-closed.
   if (isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'))) {
-    return { ...source, ...extra };
+    const full: NodeJS.ProcessEnv = {};
+    for (const [name, value] of Object.entries(source)) {
+      if (!overridden.has(name.toUpperCase())) full[name] = value;
+    }
+    return { ...full, ...extra };
   }
 
   const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude;
@@ -329,6 +342,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
     if (value === undefined) continue;
+    if (overridden.has(name.toUpperCase())) continue; // the per-run value replaces it, whatever the spelling
     if (allow(name)) out[name] = value;
   }
   // Per-run env last — it is cezar's own, never a host secret, and must win.
