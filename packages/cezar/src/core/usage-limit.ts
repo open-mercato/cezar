@@ -87,8 +87,11 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
   if (at) {
     // A bare date, or `YYYY-MM-DD HH:MM` without a zone, is read in the host's local time — the
     // provider is talking to the person at this machine, and `Date.parse` would otherwise read the
-    // space-separated form as UTC on some runtimes and local on others.
-    const parsed = Date.parse(at[1]!.includes('T') ? at[1]! : at[1]!.replace(' ', 'T'));
+    // space-separated form as UTC on some runtimes and local on others. A date with no time at all
+    // needs the midnight spelled out for the same reason: the ECMAScript date-ONLY form is defined
+    // as UTC, so `2026-08-03` alone would land up to a day away from the day the provider named.
+    const stamp = at[1]!.includes('T') ? at[1]! : at[1]!.replace(' ', 'T');
+    const parsed = Date.parse(stamp.includes('T') ? stamp : `${stamp}T00:00`);
     if (Number.isFinite(parsed)) return settle(parsed, now, 'timestamp');
   }
 

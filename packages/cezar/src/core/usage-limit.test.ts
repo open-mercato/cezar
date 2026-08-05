@@ -29,6 +29,18 @@ describe('parseUsageLimit', () => {
     expect(hit?.evidence).toBe('timestamp');
   });
 
+  it('reads a date-only reset as local midnight, the way the zoneless prose forms are read', () => {
+    // The ECMAScript date-ONLY form is defined as UTC, so a bare `YYYY-MM-DD` reaching
+    // `Date.parse` unchanged would land up to a day away from the day the provider named. The
+    // zoneless prose forms are deliberately read on the host's clock — the provider is talking
+    // to the person at this machine — and a bare date has to answer the same way.
+    // Two days out, so the expectation is unambiguous (and un-clamped) in every host timezone.
+    const hit = parseUsageLimit('Usage limit reached. Try again at 2026-08-05.', NOW);
+    const midnight = new Date(2026, 7, 5, 0, 0, 0, 0);
+    expect(hit?.resetAt.getTime()).toBe(midnight.getTime());
+    expect(hit?.evidence).toBe('timestamp');
+  });
+
   it('reads Claude Code session-limit prose with a clock and IANA timezone', () => {
     const hit = parseUsageLimit(
       "You've hit your session limit · resets 8:10pm (Europe/Warsaw)",

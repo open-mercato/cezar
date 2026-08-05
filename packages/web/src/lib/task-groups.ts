@@ -155,10 +155,10 @@ export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[
     .sort((a, b) => {
       const weight = statusWeight(a) - statusWeight(b)
       if (weight !== 0) return weight
-      if (weight === 0 && statusWeight(a) === SCHEDULED_WEIGHT) {
-        // Both are scheduled: the appointment is the answer, and a missing one sorts last
-        // rather than throwing the comparator off.
-        const order = (a.autoResumeAt ?? '￿').localeCompare(b.autoResumeAt ?? '￿')
+      // Equal weights, and that weight is the scheduled one — so both sides carry an
+      // `autoResumeAt` (nothing else earns the rank), and the appointment is the answer.
+      if (statusWeight(a) === SCHEDULED_WEIGHT && a.autoResumeAt && b.autoResumeAt) {
+        const order = a.autoResumeAt.localeCompare(b.autoResumeAt)
         if (order !== 0) return order
       }
       if (a.status === 'queued' && b.status === 'queued') {
