@@ -86,6 +86,8 @@ actual terms.
 
 ## Progress
 
+PR: #796
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Write the licence
