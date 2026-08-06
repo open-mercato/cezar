@@ -477,6 +477,21 @@ describe('picker data flows', () => {
     expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
   })
 
+  // #791: health is bound to the boot folder, so a cezar booted outside a git repo answered
+  // `repo: null` for EVERY project. Reading git state from the project-scoped `/repo` instead is
+  // what keeps the worktree controls alive for a git project under a non-git boot root.
+  it('gates variants on the project repo, not the boot folder: boot without git still offers worktrees', async () => {
+    serve({ health: HEALTH_NO_GIT, repo: REPO })
+    renderNewTask()
+    await pillReady()
+    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
+    expect(pill.disabled).toBe(false)
+    expect(document.querySelector('[data-slot="worktree-toggle"]')).not.toBeNull()
+    fireEvent.change(textarea(), { target: { value: 'Fix the composer git detection' } })
+    await startTask()
+    expect(postedBody()).not.toMatchObject({ worktree: false })
+  })
+
   it('base branch pill shows config default (falling back to the checkout) and PUTs /api/v1/config', async () => {
     serve({ repo: { ...REPO, baseBranch: 'develop' } })
     renderNewTask()

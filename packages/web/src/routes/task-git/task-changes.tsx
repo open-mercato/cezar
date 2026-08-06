@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { ApiError, createRunPr, getRunFile, openRunFileInApp, openRunInCli, pushRun, runFileRawUrl } from '@/api/client'
-import { queryKeys, useHealth, useRun, useRunChanges } from '@/api/queries'
+import { queryKeys, useHealth, useRepo, useRun, useRunChanges } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffHandle, type DiffMode } from '@/components/diff'
@@ -41,6 +41,10 @@ export function TaskChangesRoute() {
 
 function ChangesView({ run }: { run: ApiRun }) {
   const health = useHealth()
+  // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
+  // from `/api/health.repo`: health is bound to the boot folder, so a cezar booted outside a git
+  // repo reported no remote for every project (#791).
+  const repo = useRepo()
   // Poll while the run is active so writes appear as the agent makes them.
   const changes = useRunChanges(run.id, isRunActive(run.status))
   const desktop = useIsDesktop()
@@ -103,7 +107,7 @@ function ChangesView({ run }: { run: ApiRun }) {
     hasWorktree: Boolean(run.worktreePath) && !changesRefused,
     branch: run.branch,
     changedFiles: changes.data?.stat.files,
-    remote: health.data?.repo?.remote,
+    remote: repo.data?.info?.remote,
     forge: health.data?.forge ?? null,
     localHandoff: health.data?.capabilities.localHandoff ?? false,
     hasSession: lastSessionId(run) !== undefined,
