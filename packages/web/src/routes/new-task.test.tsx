@@ -489,7 +489,9 @@ describe('picker data flows', () => {
     expect(document.querySelector('[data-slot="worktree-toggle"]')).not.toBeNull()
     fireEvent.change(textarea(), { target: { value: 'Fix the composer git detection' } })
     await startTask()
-    expect(postedBody()).not.toMatchObject({ worktree: false })
+    // `worktree` is sent only when explicitly OFF (new-task-form.ts): an absent key IS the
+    // isolated-worktree default, so absence — not `worktree: false` — is what the fix restores.
+    expect(postedBody()).not.toHaveProperty('worktree')
   })
 
   it('base branch pill shows config default (falling back to the checkout) and PUTs /api/v1/config', async () => {
