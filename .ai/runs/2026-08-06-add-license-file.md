@@ -96,4 +96,4 @@ actual terms.
 
 ### Phase 2: Verify
 
-- [ ] 2.1 Verify tarball + validation gate
+- [x] 2.1 Verify tarball + validation gate — verified on b34efafa (`npm pack --dry-run -w @open-mercato/cezar`: 456 files, `LICENSE` present; gate green — typecheck ✅, `npm test` 5344 passed / 299 files ✅, `test:unit` 36 passed ✅, `build` + `check:pack` ok ✅, `test:package` 12 passed ✅)
