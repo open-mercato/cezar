@@ -2,6 +2,7 @@ import type {
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
+  HarnessCertification,
   HarnessModelRef,
   HarnessPreset,
   HarnessProbeResponse,
@@ -306,6 +307,9 @@ export function withoutHarnessWorkflows(workflows: readonly WorkflowDef[]): Work
 export interface HarnessModelOption extends HarnessModelRef {
   label: string
   family: string
+  /** Recorded eval-gate evidence (spec 2026-08-06-eval-gated-model-routing), carried from
+   *  `/harness/status`. Absent on runner options — only configured bindings are certified. */
+  certification?: HarnessCertification
 }
 
 const GATEWAY_PREFIXES: ReadonlySet<string> = new Set(['opencode', 'openrouter', 'zen'])
@@ -368,6 +372,7 @@ export function advisorHarnessOptions(status?: HarnessStatusResponse): HarnessMo
       model: m.id,
       label: m.model ? `${m.id} · ${m.model}` : m.id,
       family: m.family ?? 'harness',
+      ...(m.certification ? { certification: m.certification } : {}),
     }))
 }
 
@@ -592,6 +597,128 @@ export function defaultHarnessRoles(allOptions: readonly HarnessModelOption[]): 
     implementer: { runner: implementer.runner, model: implementer.model },
     reviewers: reviewers.map((r) => ({ runner: r.runner, model: r.model })),
   }
+}
+
+/* ---- eval-gate certification (spec 2026-08-06-eval-gated-model-routing) ---------------- */
+
+/** The role slice of an option's recorded certification, or null when there is none. */
+export function certifiedRoleRate(
+  option: HarnessModelOption,
+  role: 'orchestrator' | 'implementer' | 'reviewer',
+): { cases: number; passed: number; status: 'certified' | 'stale' } | null {
+  const cert = option.certification
+  const rate = cert?.roles?.[role]
+  if (!cert || !rate || cert.status === 'uncertified') return null
+  return { ...rate, status: cert.status }
+}
+
+const asReviewerRef = (option: HarnessModelOption): HarnessModelRef =>
+  option.runner === 'harness'
+    ? { runner: 'harness', model: option.model, family: option.family }
+    : { runner: option.runner, model: option.model }
+
+/**
+ * The best CERTIFIED lineup the workspace can field, or null when there are no
+ * receipts to pick by — then the button that applies this does not exist, and
+ * the passive `defaultHarnessRoles` heuristic stays the only pre-fill.
+ *
+ * Deliberately an EXPLICIT action, not the passive default: advisors never
+ * auto-seed ("advisors are an explicit choice"), and applying a recorded-score
+ * lineup is exactly such a choice. Rules preserved from the manual path: 2–5
+ * unique reviewers spanning ≥2 families; orchestrator/implementer stay runner
+ * sessions (advisor bindings are reviewer-only by construction). A certified
+ * option beats a stale one beats an unscored one; ties break on pass rate.
+ */
+export function bestCertifiedRoles(allOptions: readonly HarnessModelOption[]): HarnessRoles | null {
+  const base = defaultHarnessRoles(allOptions)
+  if (!base) return null
+  const reviewerScore = (option: HarnessModelOption): number => {
+    const rate = certifiedRoleRate(option, 'reviewer')
+    if (!rate || rate.cases === 0) return -1
+    return (rate.status === 'certified' ? 2 : 1) + rate.passed / rate.cases
+  }
+  const ranked = [...allOptions]
+    .filter((option) => reviewerScore(option) >= 0)
+    .sort((a, b) => reviewerScore(b) - reviewerScore(a))
+  const certified = ranked.filter((o) => certifiedRoleRate(o, 'reviewer')?.status === 'certified')
+  if (certified.length === 0) return null
+
+  const seats: HarnessModelOption[] = certified.slice(0, 5)
+  const used = () => new Set(seats.map(refKeyOf))
+  const fill = (candidates: readonly HarnessModelOption[], wantOtherFamily: boolean) =>
+    candidates.find(
+      (o) =>
+        !used().has(refKeyOf(o)) &&
+        (!wantOtherFamily || o.family !== seats[0]!.family),
+    )
+  // Family diversity + the 2-seat floor, from the best remaining evidence: first
+  // stale-certified options, then the heuristic default's own reviewers.
+  const fallbackPool = [...ranked, ...allOptions.filter((o) => reviewerScore(o) < 0)]
+  if (new Set(seats.map((o) => o.family)).size < 2) {
+    const other = fill(fallbackPool, true)
+    if (!other) return null
+    if (seats.length === 5) seats.pop()
+    seats.push(other)
+  }
+  if (seats.length < 2) {
+    const extra = fill(fallbackPool, new Set(seats.map((o) => o.family)).size < 2)
+    if (!extra) return null
+    seats.push(extra)
+  }
+
+  const roleScore = (
+    option: HarnessModelOption,
+    role: 'orchestrator' | 'implementer',
+  ): number => {
+    const rate = certifiedRoleRate(option, role)
+    if (!rate || rate.status !== 'certified' || rate.cases === 0) return -1
+    return rate.passed / rate.cases
+  }
+  const runners = allOptions.filter((o) => o.runner !== 'harness')
+  const bestFor = (role: 'orchestrator' | 'implementer') =>
+    runners.filter((o) => roleScore(o, role) >= 0).sort((a, b) => roleScore(b, role) - roleScore(a, role))[0]
+  const orchestrator = bestFor('orchestrator')
+  const implementer = bestFor('implementer')
+  return {
+    orchestrator: orchestrator
+      ? { runner: orchestrator.runner as HarnessRunnerRef['runner'], model: orchestrator.model }
+      : base.orchestrator,
+    implementer: implementer
+      ? { runner: implementer.runner as HarnessRunnerRef['runner'], model: implementer.model }
+      : base.implementer,
+    reviewers: seats.map(asReviewerRef),
+  }
+}
+
+const refKeyOf = (ref: HarnessModelRef | HarnessModelOption) => `${ref.runner}/${ref.model}`
+
+/**
+ * The certification advisory for a picked lineup, or null when nothing needs
+ * saying. Silent while the workspace has NO recorded certifications at all —
+ * before the first certify run, "uncertified" is every model's state and the
+ * line would be noise. Once receipts exist, an unscored or stale reviewer is
+ * worth a sentence: runs are unaffected, the results are simply unverified.
+ */
+export function certificationAdvisory(
+  roles: HarnessRoles | null,
+  options: readonly HarnessModelOption[],
+): string | null {
+  if (!roles) return null
+  if (!options.some((o) => certifiedRoleRate(o, 'reviewer'))) return null
+  const byKey = new Map(options.map((o) => [refKeyOf(o), o]))
+  const flagged = roles.reviewers
+    .map((ref) => {
+      const option = byKey.get(refKeyOf(ref))
+      const rate = option ? certifiedRoleRate(option, 'reviewer') : null
+      const label = option?.label ?? ref.model
+      if (!rate) return { label, why: 'not certified for review' }
+      if (rate.status === 'stale') return { label, why: 'certification is stale' }
+      return null
+    })
+    .filter((entry): entry is { label: string; why: string } => entry !== null)
+  if (flagged.length === 0) return null
+  const parts = flagged.map((f) => `${f.label} — ${f.why}`).join('; ')
+  return `${parts}. Runs are unaffected; their review results are simply unverified by the eval suite.`
 }
 
 /**

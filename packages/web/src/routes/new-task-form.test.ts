@@ -9,6 +9,8 @@ import {
   canSaveHarnessPreset,
   visibleHarnessPresets,
   advisorHarnessOptions,
+  bestCertifiedRoles,
+  certificationAdvisory,
   defaultHarnessRoles,
   freeTierReviewerWarning,
   groupHarnessOptions,
@@ -844,5 +846,133 @@ describe('buildAutomationTask', () => {
       variants: 2,
       autonomous: true,
     })
+  })
+})
+
+describe('eval-gate certification helpers (spec 2026-08-06-eval-gated-model-routing)', () => {
+  const cert = (
+    status: 'certified' | 'stale',
+    role: 'orchestrator' | 'implementer' | 'reviewer',
+    passed: number,
+    cases = 28,
+  ) => ({ status, roles: { [role]: { cases, passed } }, pack: 'omh', catalogVersion: '203' })
+
+  const claudeSonnet: Parameters<typeof bestCertifiedRoles>[0][number] = {
+    runner: 'claude', model: 'sonnet', label: 'sonnet', family: 'anthropic',
+  }
+  const codexAuto: Parameters<typeof bestCertifiedRoles>[0][number] = {
+    runner: 'codex', model: '', label: 'auto', family: 'openai',
+  }
+  const claudeOpus: Parameters<typeof bestCertifiedRoles>[0][number] = {
+    runner: 'claude', model: 'opus', label: 'opus', family: 'anthropic',
+  }
+
+  it('advisorHarnessOptions carries certification through from /harness/status', () => {
+    const status = {
+      enabled: true,
+      configured: true,
+      profiles: ['standard'],
+      driven: ['standard'],
+      runtime: { installed: true, source: 'bundled' as const, commit: 'a'.repeat(40) },
+      models: [
+        {
+          id: 'deepseek', family: 'deepseek', model: 'deepseek-v4-pro', adapter: 'preset',
+          roles: ['reviewer'], certification: cert('certified', 'reviewer', 27),
+        },
+      ],
+    }
+    expect(advisorHarnessOptions(status)[0]?.certification?.status).toBe('certified')
+  })
+
+  it('bestCertifiedRoles is null without any receipts — the button must not exist', () => {
+    expect(bestCertifiedRoles([claudeSonnet, codexAuto, claudeOpus])).toBeNull()
+  })
+
+  it('seats certified reviewers by pass rate and keeps family diversity', () => {
+    const deepseek = {
+      runner: 'harness' as const, model: 'deepseek', label: 'deepseek · v4-pro',
+      family: 'deepseek', certification: cert('certified', 'reviewer', 27),
+    }
+    const kimi = {
+      runner: 'harness' as const, model: 'kimi', label: 'kimi · k3',
+      family: 'moonshot', certification: cert('certified', 'reviewer', 24),
+    }
+    const roles = bestCertifiedRoles([claudeSonnet, claudeOpus, codexAuto, kimi, deepseek])
+    expect(roles?.reviewers).toEqual([
+      { runner: 'harness', model: 'deepseek', family: 'deepseek' },
+      { runner: 'harness', model: 'kimi', family: 'moonshot' },
+    ])
+    // No certified orchestrator/implementer evidence -> the heuristic default stands.
+    expect(roles?.orchestrator).toEqual({ runner: 'claude', model: 'sonnet' })
+    expect(roles?.implementer).toEqual({ runner: 'codex', model: '' })
+  })
+
+  it('a lone certified reviewer gets a second seat from another family — quorum needs two', () => {
+    const deepseek = {
+      runner: 'harness' as const, model: 'deepseek', label: 'deepseek · v4-pro',
+      family: 'deepseek', certification: cert('certified', 'reviewer', 27),
+    }
+    const roles = bestCertifiedRoles([claudeSonnet, claudeOpus, codexAuto, deepseek])
+    expect(roles?.reviewers).toHaveLength(2)
+    expect(roles?.reviewers[0]).toEqual({ runner: 'harness', model: 'deepseek', family: 'deepseek' })
+    expect(new Set(roles!.reviewers.map((r) => modelFamilyOf(r))).size).toBe(2)
+    expect(harnessRolesIssue(roles!)).toBeNull()
+  })
+
+  it('certified orchestrator/implementer evidence overrides the heuristic default', () => {
+    const certifiedOpus = { ...claudeOpus, certification: cert('certified', 'orchestrator', 20, 23) }
+    const deepseek = {
+      runner: 'harness' as const, model: 'deepseek', label: 'deepseek · v4-pro',
+      family: 'deepseek', certification: cert('certified', 'reviewer', 27),
+    }
+    const roles = bestCertifiedRoles([claudeSonnet, certifiedOpus, codexAuto, deepseek])
+    expect(roles?.orchestrator).toEqual({ runner: 'claude', model: 'opus' })
+  })
+
+  it('certificationAdvisory stays silent before the first receipt, then names unscored reviewers', () => {
+    const picked = {
+      orchestrator: { runner: 'claude' as const, model: 'sonnet' },
+      implementer: { runner: 'codex' as const, model: '' },
+      reviewers: [
+        { runner: 'claude' as const, model: 'opus' },
+        { runner: 'harness' as const, model: 'deepseek', family: 'deepseek' },
+      ],
+    }
+    // No receipts anywhere -> silence, not a nag on every lineup.
+    expect(certificationAdvisory(picked, [claudeSonnet, claudeOpus, codexAuto])).toBeNull()
+    const deepseek = {
+      runner: 'harness' as const, model: 'deepseek', label: 'deepseek · v4-pro',
+      family: 'deepseek', certification: cert('certified', 'reviewer', 27),
+    }
+    const advisory = certificationAdvisory(picked, [claudeSonnet, claudeOpus, codexAuto, deepseek])
+    expect(advisory).toContain('opus — not certified for review')
+    expect(advisory).not.toContain('deepseek —')
+    expect(advisory).toContain('unverified')
+  })
+
+  it('a stale certification is flagged as stale, not treated as evidence or as absence', () => {
+    const deepseek = {
+      runner: 'harness' as const, model: 'deepseek', label: 'deepseek · v4-pro',
+      family: 'deepseek', certification: cert('stale', 'reviewer', 27),
+    }
+    const fresh = {
+      runner: 'harness' as const, model: 'kimi', label: 'kimi · k3',
+      family: 'moonshot', certification: cert('certified', 'reviewer', 24),
+    }
+    const picked = {
+      orchestrator: { runner: 'claude' as const, model: 'sonnet' },
+      implementer: { runner: 'codex' as const, model: '' },
+      reviewers: [
+        { runner: 'harness' as const, model: 'deepseek', family: 'deepseek' },
+        { runner: 'harness' as const, model: 'kimi', family: 'moonshot' },
+      ],
+    }
+    expect(certificationAdvisory(picked, [claudeSonnet, codexAuto, deepseek, fresh])).toContain(
+      'certification is stale',
+    )
+    // Stale never leads the certified lineup, but it can fill a diversity seat.
+    const roles = bestCertifiedRoles([claudeSonnet, claudeOpus, codexAuto, deepseek, fresh])
+    expect(roles?.reviewers[0]).toEqual({ runner: 'harness', model: 'kimi', family: 'moonshot' })
+    expect(roles?.reviewers[1]).toEqual({ runner: 'harness', model: 'deepseek', family: 'deepseek' })
   })
 })
