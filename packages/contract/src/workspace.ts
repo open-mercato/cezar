@@ -260,6 +260,9 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
+  /** Multi-model harness feature flag (off by default): gates the harness workflows, the
+   *  composer's Multi-model tab and the Settings → Harness section. */
+  multiModel: z.boolean(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 

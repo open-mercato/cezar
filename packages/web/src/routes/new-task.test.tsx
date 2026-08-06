@@ -145,6 +145,9 @@ const CONFIG: ConfigResponse = {
   systemPrompt: null,
   defaultModels: {},
   modelsLocked: false,
+  // The multi-model feature flag is ON for this suite so the Multi-model surface stays
+  // exercised; the default-off gate has its own test.
+  multiModel: true,
   maxParallel: 2,
   memoryLimitMb: null,
   worktreeRetention: 10,
@@ -372,6 +375,17 @@ describe('the hero surface', () => {
     expect(textarea().value).toContain('failing or flaky test')
     expect(requests.some((r) => r.method === 'POST')).toBe(false)
     expect(location()).toBe('/new')
+  })
+
+  it('the Multi-model tab exists only behind the multiModel flag (off by default)', async () => {
+    serve({ config: { multiModel: false } })
+    renderNewTask()
+    await pillReady()
+    // Task-only composer: no mode tablist at all, and a persisted multi draft
+    // falls back to the Task surface instead of stranding.
+    expect(document.querySelector('[data-slot="multi-model-tab"]')).toBeNull()
+    expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
+    expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
   })
 })
 

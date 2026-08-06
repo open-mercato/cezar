@@ -962,11 +962,14 @@ export function useRepoCommit(sha: string | undefined) {
 
 /** The Settings → Agents knobs (R6 1.5): base branch, default runner, system prompt, per-runner
  *  model presets. Task-start surfaces read this project-scoped query for both runner and model
- *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo. */
-export function useConfig() {
+ *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo.
+ *  `enabled: false` skips the fetch for callers outside a project scope (the global settings
+ *  shell), where the answer would be the boot repo's and the traffic is contractually absent. */
+export function useConfig(enabled = true) {
   return useQuery({
     queryKey: queryKeys.config,
     queryFn: ({ signal }) => getConfig({ signal }),
+    enabled,
   })
 }
 

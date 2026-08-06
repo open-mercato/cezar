@@ -95,6 +95,9 @@ export const harnessModelSchema = z.object({
 export type HarnessModel = z.infer<typeof harnessModelSchema>;
 
 export const harnessStatusResponseSchema = z.object({
+  /** The `multiModel` feature flag (off by default). The status route stays readable when
+   *  disabled so Settings can explain the gate; probe and run starts answer 409. */
+  enabled: z.boolean(),
   configured: z.boolean(),
   profiles: z.array(z.string()),
   driven: z.array(z.string()),

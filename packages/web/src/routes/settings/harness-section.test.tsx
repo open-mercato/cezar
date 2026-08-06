@@ -53,6 +53,7 @@ const BUNDLED_RUNTIME = { installed: true, source: 'bundled' as const, commit: '
 describe('Settings → Harness', () => {
   it('renders the model roster with bindings and roles', async () => {
     serve({
+      enabled: true,
       configured: true,
       profiles: ['standard', 'multi'],
       driven: ['standard'],
@@ -71,6 +72,7 @@ describe('Settings → Harness', () => {
 
   it('says plainly when no external models are configured', async () => {
     serve({
+      enabled: true,
       configured: false,
       profiles: ['standard'],
       driven: ['standard'],
@@ -84,6 +86,7 @@ describe('Settings → Harness', () => {
 
   it('offers configure and check actions that prefill a cez-setup-harness task', async () => {
     serve({
+      enabled: true,
       configured: false,
       profiles: ['standard'],
       driven: ['standard'],
@@ -97,5 +100,24 @@ describe('Settings → Harness', () => {
     const check = screen.getByRole('link', { name: /check setup/i })
     expect(check.getAttribute('href')).toContain('cez-setup-harness')
     expect(decodeURIComponent(check.getAttribute('href') ?? '')).toContain('--check')
+  })
+
+  it('explains the gate instead of the roster while the multiModel flag is off', async () => {
+    // The nav hides the section when the flag is off, but the route stays registered —
+    // a direct URL deserves the reason, not a 404 or a working-looking roster.
+    serve({
+      enabled: false,
+      configured: true,
+      profiles: ['standard', 'multi'],
+      driven: ['standard'],
+      runtime: BUNDLED_RUNTIME,
+      models: [
+        { id: 'claude', family: 'anthropic', model: 'host app', roles: ['host', 'reviewer'], profiles: ['standard'] },
+      ],
+    })
+    mount()
+    await waitFor(() => expect(screen.getByText(/multi-model runs are disabled/i)).toBeTruthy())
+    expect(screen.getByText(/"multiModel": true/)).toBeTruthy()
+    expect(screen.queryByText('Profiles')).toBeNull()
   })
 })

@@ -45,6 +45,20 @@ export function HarnessSection() {
     )
   }
 
+  // Feature flag (off by default): the nav hides this section, but the route stays
+  // registered, so a direct URL gets the honest explanation instead of a 404.
+  if (status.data.enabled === false) {
+    return (
+      <CenteredState
+        icon={<NetworkIcon />}
+        tone="neutral"
+        title="Multi-model runs are disabled"
+        subtitle={'Enable them for this repository by setting "multiModel": true in .ai/cezar/config.json.'}
+        heading="h2"
+      />
+    )
+  }
+
   const { configured } = status.data
   const profiles = status.data.profiles ?? []
   const driven = status.data.driven ?? []

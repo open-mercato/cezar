@@ -1,6 +1,7 @@
 import { ChevronRightIcon } from 'lucide-react'
 import { Link as RouterLink, NavLink as RouterNavLink } from 'react-router'
 import type { Capabilities } from '@open-mercato/cezar-api-client'
+import { useConfig } from '@/api/queries'
 import { Link as ScopedLink, NavLink as ScopedNavLink } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import { visibleSettingsSections, type SettingsScope, type SettingsSection } from './registry'
@@ -44,6 +45,22 @@ function navComponents(scope: SettingsScope) {
     : { Link: ScopedLink, NavLink: ScopedNavLink }
 }
 
+/**
+ * The health capabilities plus the per-project `multiModel` config flag, which the registry
+ * uses to hide the Harness section while the feature is off (default). Routes stay registered
+ * (routes.tsx cannot know a project's config), so a direct URL still reaches the section,
+ * which explains the gate itself. Project scope only — global sections never carry the flag,
+ * and the config query under the global area would answer for the boot project.
+ */
+function useNavCapabilities(
+  scope: SettingsScope,
+  capabilities?: Pick<Capabilities, 'singleProject'>,
+): Parameters<typeof visibleSettingsSections>[1] {
+  const config = useConfig(scope !== 'global')
+  if (scope === 'global') return capabilities
+  return { ...capabilities, ...(config.data ? { multiModel: config.data.multiModel } : {}) }
+}
+
 function SectionNav({
   scope,
   activeId,
@@ -54,6 +71,7 @@ function SectionNav({
   capabilities?: Pick<Capabilities, 'singleProject'>
 }) {
   const { NavLink } = navComponents(scope)
+  const navCapabilities = useNavCapabilities(scope, capabilities)
   return (
     <nav
       aria-label="Settings sections"
@@ -61,7 +79,7 @@ function SectionNav({
       data-scope={scope}
       className="hidden w-52 shrink-0 flex-col gap-1 border-r border-border p-3 md:flex"
     >
-      {visibleSettingsSections(scope, capabilities).map((section) => (
+      {visibleSettingsSections(scope, navCapabilities).map((section) => (
         <NavLink
           key={section.id}
           to={settingsSectionPath(scope, section.id)}
@@ -98,13 +116,14 @@ function SectionPills({
   capabilities?: Pick<Capabilities, 'singleProject'>
 }) {
   const { NavLink } = navComponents(scope)
+  const navCapabilities = useNavCapabilities(scope, capabilities)
   return (
     <nav
       aria-label="Settings sections"
       data-slot="settings-nav-mobile"
       className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-border px-3 py-2.5 md:hidden"
     >
-      {visibleSettingsSections(scope, capabilities).map((section) => (
+      {visibleSettingsSections(scope, navCapabilities).map((section) => (
         <NavLink
           key={section.id}
           to={settingsSectionPath(scope, section.id)}
@@ -169,6 +188,7 @@ export function SettingsIndexRoute({ scope, capabilities }: {
   capabilities?: Pick<Capabilities, 'singleProject'>
 }) {
   const { Link } = navComponents(scope)
+  const navCapabilities = useNavCapabilities(scope, capabilities)
   const global = scope === 'global'
   return (
     <div data-route={global ? 'settings-global' : 'settings'} className="flex min-h-full flex-col">
@@ -186,7 +206,7 @@ export function SettingsIndexRoute({ scope, capabilities }: {
             page "Settings" from the nav registry. */}
         <div className="flex min-w-0 flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
           <ul data-slot="settings-index" className="mx-auto flex w-full max-w-2xl flex-col gap-2.5">
-            {visibleSettingsSections(scope, capabilities).map((section) => (
+            {visibleSettingsSections(scope, navCapabilities).map((section) => (
               <li key={section.id}>
                 <Link
                   to={settingsSectionPath(scope, section.id)}

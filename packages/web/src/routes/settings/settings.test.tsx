@@ -158,6 +158,17 @@ describe('the section registry', () => {
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
   })
+
+  it('hides Harness when the multiModel flag is known-off; absent keeps it routed', () => {
+    // `false` = the project's config said the feature is off (the default) — the nav drops the
+    // section. Absent = the caller cannot know (route registration), so the section stays and
+    // the component itself explains the gate.
+    expect(visibleSettingsSections('project', { multiModel: false }).map((s) => s.id)).toEqual(
+      PROJECT_SECTIONS.filter((id) => id !== 'harness'),
+    )
+    expect(visibleSettingsSections('project', { multiModel: true }).map((s) => s.id)).toEqual(PROJECT_SECTIONS)
+    expect(visibleSettingsSections('project').map((s) => s.id)).toEqual(PROJECT_SECTIONS)
+  })
 })
 
 describe('the settings shell', () => {

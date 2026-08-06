@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -48,12 +48,26 @@ describe('harness built-in workflows', () => {
       rmSync(repoRoot, { recursive: true, force: true });
     });
 
-    it('loadWorkflows lists the harness workflows beside quick-task', async () => {
+    it('loadWorkflows lists the harness workflows beside quick-task once the flag is on', async () => {
+      mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai/cezar/config.json'),
+        JSON.stringify({ multiModel: true }),
+        'utf8',
+      );
       const { workflows } = await loadWorkflows(repoRoot);
       const names = workflows.map((w) => w.name);
       expect(names).toContain('quick-task');
       expect(names).toContain(HARNESS_FIX_ISSUE);
       expect(names).toContain(HARNESS_IMPLEMENT_FEATURE);
+    });
+
+    it('keeps the harness workflows out of the catalog by default (multiModel off)', async () => {
+      const { workflows } = await loadWorkflows(repoRoot);
+      const names = workflows.map((w) => w.name);
+      expect(names).toContain('quick-task');
+      expect(names).not.toContain(HARNESS_FIX_ISSUE);
+      expect(names).not.toContain(HARNESS_IMPLEMENT_FEATURE);
     });
   });
 });

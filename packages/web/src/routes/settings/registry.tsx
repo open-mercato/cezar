@@ -209,12 +209,19 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Pick<Capabilities, 'singleProject'>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject'>> & {
+    /** The per-project `multiModel` config flag. `false` hides the Harness section
+     *  (feature off); absent keeps it — route registration happens above the
+     *  project scope, where the config is unknowable, and the section component
+     *  itself explains the gate on a direct URL. */
+    multiModel?: boolean
+  },
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      !(capabilities?.multiModel === false && section.id === 'harness'),
   )
 }

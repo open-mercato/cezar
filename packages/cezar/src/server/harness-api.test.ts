@@ -29,6 +29,10 @@ describe('harness API', () => {
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-harness-api-'));
     dataDir = join(repoRoot, '.ai/cezar');
+    // The multi-model feature flag is ON for this suite — it exercises the gated
+    // surface; the default-off behavior has its own tests below.
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: true }), 'utf8');
     store = RunStore.open(dataDir);
     captured = undefined;
     const manager = {
@@ -74,11 +78,43 @@ describe('harness API', () => {
       body: JSON.stringify(body),
     });
 
+  describe('the multiModel feature flag (off by default)', () => {
+    const disable = () =>
+      writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: false }), 'utf8');
+
+    it('status stays readable and reports enabled:false', async () => {
+      disable();
+      const res = await apiRequest(app, '/api/v1/harness/status');
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { enabled: boolean }).enabled).toBe(false);
+    });
+
+    it('probe answers 409 — it spawns live provider transports', async () => {
+      disable();
+      const res = await post('/api/v1/harness/probe', { profile: 'standard' });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toMatch(/disabled/i);
+    });
+
+    it('a harness run start answers 409 with the real reason, not "unknown workflow"', async () => {
+      disable();
+      const res = await post('/api/v1/runs', {
+        task: 'Fix issue #642',
+        workflow: HARNESS_FIX_ISSUE,
+        harness: { profile: 'standard' },
+      });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toMatch(/multiModel/);
+      expect(captured).toBeUndefined();
+    });
+  });
+
   describe('GET /api/v1/harness/status', () => {
     it('reports config absence honestly', async () => {
       const res = await apiRequest(app, '/api/v1/harness/status');
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { configured: boolean; profiles: string[] };
+      const body = (await res.json()) as { enabled: boolean; configured: boolean; profiles: string[] };
+      expect(body.enabled).toBe(true);
       expect(body.configured).toBe(false);
       expect(body.profiles).toContain('standard');
     });
@@ -315,7 +351,7 @@ describe('harness API', () => {
       mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
       writeFileSync(
         join(repoRoot, '.ai/cezar/config.json'),
-        JSON.stringify({ baseBranch: 'develop' }),
+        JSON.stringify({ baseBranch: 'develop', multiModel: true }),
         'utf8',
       );
 

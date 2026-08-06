@@ -199,8 +199,12 @@ export function NewTaskRoute() {
   const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, taskWorkflows)
 
   // ---- cez-harness / Multi-model tab (role-based, user feedback 2026-07-24) -----------------
-  const composerMode: 'task' | 'multi' =
-    draft.composerMode ?? (harnessWorkflowName(rawSource) !== null ? 'multi' : 'task')
+  // Feature flag (off by default): with `multiModel` unset or false the Multi-model tab is not
+  // offered and a persisted 'multi' draft falls back to the Task surface instead of stranding.
+  const multiModelEnabled = config.data?.multiModel === true
+  const composerMode: 'task' | 'multi' = !multiModelEnabled
+    ? 'task'
+    : draft.composerMode ?? (harnessWorkflowName(rawSource) !== null ? 'multi' : 'task')
   const harnessMode =
     draft.harnessMode ?? HARNESS_MODES.find((m) => m.workflow === rawSource.ref)?.id ?? 'fix-issue'
   const harnessSkillProfile = draft.harnessSkillProfile ?? 'generic'
@@ -304,7 +308,7 @@ export function NewTaskRoute() {
   const opencodeCatalogData = opencodeCatalog.data
   // Configured agentHarness advisor bindings (kimi-subscription, deepseek-api…)
   // join the reviewer options (spec 2026-07-24-advisor-reviewers).
-  const harnessStatus = useHarnessStatus()
+  const harnessStatus = useHarnessStatus(multiModelEnabled)
   const harnessStatusData = harnessStatus.data
   const [harnessBaseReason, setHarnessBaseReason] = useState('')
   const harnessOptions = useMemo<HarnessModelOption[]>(
@@ -742,7 +746,10 @@ export function NewTaskRoute() {
         </header>
 
         {/* The composer's two surfaces (user feedback 2026-07-23): the ordinary Task tab and
-            the Multi-model tab, a first-class entry instead of a workflow hidden in the picker. */}
+            the Multi-model tab, a first-class entry instead of a workflow hidden in the picker.
+            Behind the `multiModel` config flag (off by default) there is only one surface, so
+            the whole strip disappears rather than rendering a single-tab tablist. */}
+        {multiModelEnabled ? (
         <div className="mb-3 flex justify-center">
           <div
             role="tablist"
@@ -781,6 +788,7 @@ export function NewTaskRoute() {
             </button>
           </div>
         </div>
+        ) : null}
 
         <Composer
           ref={composerRef}

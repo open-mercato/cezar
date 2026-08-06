@@ -3612,6 +3612,9 @@ export function createApp(deps: ServerDeps) {
 
   const HARNESS_ARTIFACT_CHAR_CAP = 400_000;
 
+  const MULTI_MODEL_DISABLED_ERROR =
+    'Multi-model runs are disabled for this repository. Set "multiModel": true in .ai/cezar/config.json to enable them.';
+
   // ---- chained family: staged multi-model harness (project-scoped) ---------
   const harnessRoutes = new Hono<ProjectApiEnv>()
     .get('/harness/status', async (c) => {
@@ -3669,6 +3672,9 @@ export function createApp(deps: ServerDeps) {
         ? staleBaseNote(cezarConfig.baseBranch, remoteDefault)
         : null;
       return c.json({
+        // Feature flag (off by default). The status stays readable either way —
+        // it only reads config files — so Settings can explain the gate.
+        enabled: cezarConfig.multiModel,
         configured: agentic.agentHarness !== undefined,
         profiles,
         driven: [...HARNESS_PROFILES],
@@ -3686,6 +3692,11 @@ export function createApp(deps: ServerDeps) {
     .post('/harness/probe', jsonZodValidator(harnessProbeSchema), async (c) => {
       const body = c.req.valid('json');
       const { root: repoRoot } = c.get('project');
+      // Probing spawns live provider transports — gated with run starts, unlike
+      // the read-only status above.
+      if (!(await loadConfig(repoRoot)).multiModel) {
+        return c.json({ error: MULTI_MODEL_DISABLED_ERROR }, 409);
+      }
       const agentic = await loadAgenticConfig(repoRoot);
       const profile = body.profile ?? 'multi-optimized';
       const resolved = body.roles
@@ -4054,6 +4065,16 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
+      // Feature flag (off by default): the catalog below already omits the
+      // harness workflows when disabled, but a direct start deserves the real
+      // reason rather than "unknown workflow".
+      if (
+        parsed.data.workflow !== undefined &&
+        isHarnessWorkflow(parsed.data.workflow) &&
+        !(await loadConfig(repoRoot)).multiModel
+      ) {
+        return c.json({ error: MULTI_MODEL_DISABLED_ERROR }, 409);
       }
       let workflow: WorkflowDef | undefined;
       if (parsed.data.steps) {
@@ -5730,6 +5751,9 @@ export function createApp(deps: ServerDeps) {
       // Optional review gate (#489): tri-state — null means "no config key, the
       // CEZ_REVIEW_GATE env default (OFF) decides".
       reviewGate: config.reviewGate ?? null,
+      // Multi-model harness feature flag: off by default; gates the harness
+      // workflows, the composer's Multi-model tab and the Settings section.
+      multiModel: config.multiModel,
     };
   };
   // ---- chained family: per-repo config (project-scoped) ----
@@ -5780,6 +5804,10 @@ export function createApp(deps: ServerDeps) {
       if (parsed.data.reviewGate !== undefined) {
         if (parsed.data.reviewGate === null) delete raw.reviewGate;
         else raw.reviewGate = parsed.data.reviewGate;
+      }
+      if (parsed.data.multiModel !== undefined) {
+        if (parsed.data.multiModel === null) delete raw.multiModel;
+        else raw.multiModel = parsed.data.multiModel;
       }
       if (parsed.data.memoryLimitMb !== undefined) {
         // null or 0 both mean "no ceiling" — drop the key back to the default.
@@ -5844,6 +5872,9 @@ export function createApp(deps: ServerDeps) {
     // Optional review gate toggle (Settings → Agents, #489): null clears the key
     // back to the env-default behavior (OFF).
     reviewGate: z.boolean().nullable().optional(),
+    // Multi-model harness feature flag: null clears the key back to the schema
+    // default (OFF).
+    multiModel: z.boolean().nullable().optional(),
   });
   const setAgentConfigSchema = z.object({
     content: z.string().max(2_000_000),

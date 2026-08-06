@@ -357,6 +357,7 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
 
   it('advisorHarnessOptions turns configured reviewer bindings into council options (2026-07-24)', () => {
     const status = {
+      enabled: true,
       configured: true,
       profiles: ['standard', 'multi'],
       driven: ['standard'],
