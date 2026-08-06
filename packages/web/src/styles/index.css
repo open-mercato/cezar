@@ -161,15 +161,17 @@
   --sidebar: #fafafa;
   --muted: #f7f7f7;
   --muted-foreground: #5c5c5c;
-  --soft-foreground: #a3a3a3;
+  --soft-foreground: #737373;
   --border: #ebebeb;
   --input: #ebebeb;
   --contrast: #262626;
   --contrast-foreground: #ffffff;
 
-  /* Darker lime so text-primary links pass WCAG AA on white (≥ 4.5 : 1). */
+  /* Darken accent / status colours so text passes WCAG AA on white (≥ 4.5 : 1). */
   --accent-lime: #3d7a0c;
   --primary: var(--accent-lime);
+  --violet: #6d5fd4;
+  --success: #047857;
 
   --ring: #171717;
 
@@ -182,7 +184,7 @@
   --syn-key: #7c3aed;
   --syn-str: #15803d;
   --syn-fn: #1d4ed8;
-  --syn-com: #9ca3af;
+  --syn-com: #6b7280;
   --syn-num: #b91c1c;
   --syn-punc: #6b7280;
   --syn-var: #111827;
