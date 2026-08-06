@@ -74,6 +74,7 @@ import {
   type ModelProber,
 } from '../harness/probe.ts';
 import { createLiveTransport } from '../harness/probe-transports.ts';
+import { certificationFor } from '../harness/certification.ts';
 import { resolveHarnessPlan } from '../harness/profile-plan.ts';
 import { harnessArtifactDir } from '../harness/driver.ts';
 import { providerFamilyOf } from '../harness/model-family.ts';
@@ -3640,6 +3641,11 @@ export function createApp(deps: ServerDeps) {
         });
       const rawModels =
         (agentic.agentHarness?.models as Record<string, unknown> | undefined) ?? {};
+      // Recorded eval-gate evidence per binding (spec 2026-08-06-eval-gated-model-routing):
+      // resolved per row so the roster can answer "why is this model seated here". The
+      // synthetic claude host row is annotated too — it is implicitly seated everywhere,
+      // and an honest 'uncertified' beats a blank.
+      const certified = (id: string) => certificationFor(id, agentic.agentHarness, new Date());
       const models = [
         {
           id: 'claude',
@@ -3648,6 +3654,7 @@ export function createApp(deps: ServerDeps) {
           adapter: 'host',
           roles: ['host', 'reviewer'],
           profiles,
+          certification: certified('claude'),
         },
         ...Object.entries(rawModels).map(([id, raw]) => {
           const model = (raw ?? {}) as {
@@ -3665,6 +3672,7 @@ export function createApp(deps: ServerDeps) {
               ? model.roles.filter((role): role is string => typeof role === 'string')
               : [],
             profiles: profilesUsing(id),
+            certification: certified(id),
           };
         }),
       ];

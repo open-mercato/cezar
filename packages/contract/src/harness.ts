@@ -81,6 +81,34 @@ export const harnessRunStubSchema = z.object({
 });
 export type HarnessRunStub = z.infer<typeof harnessRunStubSchema>;
 
+/** One role's recorded eval-pack score. */
+export const harnessCertificationRoleSchema = z.object({
+  cases: z.number(),
+  passed: z.number(),
+});
+
+/**
+ * Recorded eval-gate evidence for a binding (spec 2026-08-06-eval-gated-model-routing) —
+ * resolved server-side from `agentHarness.certifications`. `status` is always present:
+ * 'uncertified' means "no valid evidence recorded", 'stale' means the evidence aged out of
+ * the freshness window (provenance fields survive so the UI can say what aged). Additive:
+ * readiness stays the LIVE measurement; certification is the RECORDED one.
+ */
+export const harnessCertificationSchema = z.object({
+  status: z.enum(['certified', 'stale', 'uncertified']),
+  roles: z
+    .object({
+      orchestrator: harnessCertificationRoleSchema.optional(),
+      implementer: harnessCertificationRoleSchema.optional(),
+      reviewer: harnessCertificationRoleSchema.optional(),
+    })
+    .optional(),
+  pack: z.string().optional(),
+  catalogVersion: z.string().optional(),
+  recordedAt: z.string().optional(),
+});
+export type HarnessCertification = z.infer<typeof harnessCertificationSchema>;
+
 export const harnessModelSchema = z.object({
   id: z.string(),
   family: z.string().optional(),
@@ -91,6 +119,7 @@ export const harnessModelSchema = z.object({
   readiness: z.enum(['ready', 'missing', 'failed', 'unknown']).optional(),
   readinessDetail: z.string().optional(),
   binding: z.string().optional(),
+  certification: harnessCertificationSchema.optional(),
 });
 export type HarnessModel = z.infer<typeof harnessModelSchema>;
 

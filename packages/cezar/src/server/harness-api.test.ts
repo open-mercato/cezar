@@ -159,6 +159,50 @@ describe('harness API', () => {
       expect(body.models[0]).toMatchObject({ id: 'claude', roles: ['host', 'reviewer'] });
     });
 
+    it('annotates every roster row with its certification — recorded evidence or an honest uncertified', async () => {
+      // Spec 2026-08-06-eval-gated-model-routing, Phase 1 Task 2: the roster is
+      // where "why is this model seated here" gets answered, so each row carries
+      // the resolved certification. Absent evidence is 'uncertified' — including
+      // the synthetic claude host row, which is implicitly seated everywhere.
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai', 'agentic.config.json'),
+        JSON.stringify({
+          agentHarness: {
+            version: 1,
+            models: {
+              deepseek: { adapter: 'preset', family: 'deepseek', model: 'deepseek-v4-pro', roles: ['reviewer'] },
+              kimi: { adapter: 'preset', family: 'moonshot', model: 'kimi-code/k3', roles: ['reviewer'] },
+            },
+            profiles: { standard: { workers: [], reviewers: [] } },
+            certifications: {
+              deepseek: {
+                pack: 'omh',
+                catalogVersion: '203@4529-head',
+                binding: { family: 'deepseek', model: 'deepseek-v4-pro', adapter: 'preset' },
+                roles: { reviewer: { cases: 28, passed: 27 } },
+                recordedAt: new Date().toISOString(),
+                resultDigest: 'a'.repeat(64),
+              },
+            },
+          },
+        }),
+        'utf8',
+      );
+      const res = await apiRequest(app, '/api/v1/harness/status');
+      const body = (await res.json()) as {
+        models: Array<{
+          id: string;
+          certification?: { status: string; roles?: { reviewer?: { cases: number; passed: number } } };
+        }>;
+      };
+      const deepseek = body.models.find((m) => m.id === 'deepseek');
+      expect(deepseek?.certification?.status).toBe('certified');
+      expect(deepseek?.certification?.roles?.reviewer).toEqual({ cases: 28, passed: 27 });
+      expect(body.models.find((m) => m.id === 'kimi')?.certification).toEqual({ status: 'uncertified' });
+      expect(body.models.find((m) => m.id === 'claude')?.certification).toEqual({ status: 'uncertified' });
+    });
+
     it('reports the bundled cez-harness runtime with its pinned vendor commit', async () => {
       const res = await apiRequest(app, '/api/v1/harness/status');
       const body = (await res.json()) as {
