@@ -167,6 +167,10 @@
   --contrast: #262626;
   --contrast-foreground: #ffffff;
 
+  /* Darker lime so text-primary links pass WCAG AA on white (≥ 4.5 : 1). */
+  --accent-lime: #3d7a0c;
+  --primary: var(--accent-lime);
+
   --ring: #171717;
 
   --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.12);
