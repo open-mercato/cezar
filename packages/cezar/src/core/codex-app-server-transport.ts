@@ -27,14 +27,17 @@ export function buildCodexAppServerEnv(extraEnv?: Record<string, string>): NodeJ
   return buildChildEnv({ backend: 'codex', extraEnv });
 }
 
-/** Spawn the authenticated host's app-server with the same least-privilege env used by runs. */
+/** Spawn the authenticated host's app-server with the same least-privilege env used by runs.
+ *  `configArgs` are `-c key=value` CLI config overrides applied to the whole server process —
+ *  the only spawn-time knob codex offers for sandbox policy details like writable roots. */
 export function spawnCodexAppServer(
   bin: string,
   cwd: string,
   extraEnv?: Record<string, string>,
+  configArgs: readonly string[] = [],
 ): ChildProcessWithoutNullStreams {
   try {
-    return nodeSpawn(bin, ['app-server'], {
+    return nodeSpawn(bin, ['app-server', ...configArgs], {
       cwd,
       env: buildCodexAppServerEnv(extraEnv),
       detached: AGENT_PROCESS_DETACHED,

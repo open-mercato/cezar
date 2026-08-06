@@ -58,6 +58,28 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
   }, 15_000);
 
+  it('grants additional directories as writable roots under the stage-only sandbox', async () => {
+    // The phase-result contract writes OUTSIDE the worktree (the run's
+    // agent-output dir). Claude gets it via --add-dir; codex must get it as
+    // sandbox_workspace_write.writable_roots or the implementer finishes the
+    // work and then EPERMs on the one file the driver requires (run d6ebd27c).
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'implement the phase',
+        cwd: process.cwd(),
+        env: {
+          CEZ_HARNESS_STAGE_ONLY: '1',
+          MOCK_CODEX_REQUIRE_WRITABLE_ROOTS: '/data/runs/x-harness/agent-output',
+        },
+        additionalDirectories: ['/data/runs/x-harness/agent-output'],
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
+  }, 15_000);
+
   it('surfaces a failed turn as an AgentEvent error', async () => {
     const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
     const events: AgentEvent[] = [];
