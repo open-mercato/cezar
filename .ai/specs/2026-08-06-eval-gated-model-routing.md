@@ -65,6 +65,20 @@ Highly compatible — the feedback's mapping (roles ↔ case modes, bindings ↔
 
 ### Phase 1 — Certification layer in cezar (implementable now, this repo)
 
+> **Status 2026-08-06: implemented on `feat/eval-gated-routing`** (Tasks 1–3, each with tests).
+> Design refinements settled during review, now binding:
+> - **Pack-agnostic by construction.** The mechanism (schema, status, badges, staleness) is
+>   generic cezar; the OMH suite is content and stays in the open-mercato repo. `pack` names
+>   the source; a future generic/cezar pack or a per-repo "bring your own eval" command slots
+>   in without schema changes.
+> - **Scoped to the multi-model flow.** Certification rides the `multiModel` flag and touches
+>   nothing in single-model cezar — roles and bindings only exist in the harness.
+> - **Auto-assign is an explicit action.** The passive `defaultHarnessRoles` pre-fill never
+>   seats advisors ("advisors are an explicit choice", pinned test); the recorded-score lineup
+>   is applied via the "Use best certified" button (`bestCertifiedRoles`), which exists only
+>   when receipts exist. Manual picks stay free everywhere; the advisory line
+>   (`certificationAdvisory`) stays silent until the workspace's first receipt.
+
 ### Task 1: Certification schema + resolution (`certification.ts`)
 
 **Files:**
@@ -75,7 +89,7 @@ Highly compatible — the feedback's mapping (roles ↔ case modes, bindings ↔
 - Consumes: the loose `agentHarness` record from `loadAgenticConfig` (`runtime.ts:479-485`); binding family resolution via `familyByModelName` (`model-family.ts:49`).
 - Produces: `certificationSchema` (zod), `type ModelCertification`, `type CertificationStatus = 'certified' | 'stale' | 'uncertified'`, and `certificationFor(modelId: string, agentHarness: Record<string, unknown> | undefined, now: Date): ResolvedCertification` where `ResolvedCertification = { status: CertificationStatus; roles?: Partial<Record<'orchestrator' | 'implementer' | 'reviewer', { cases: number; passed: number }>>; pack?: string; catalogVersion?: string; recordedAt?: string }`.
 
-- [ ] **Step 1.1: Write the failing tests**
+- [x] **Step 1.1: Write the failing tests**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -127,8 +141,8 @@ describe('certificationFor', () => {
 });
 ```
 
-- [ ] **Step 1.2:** Run `npx vitest run packages/cezar/src/harness/certification.test.ts` — expect FAIL (module not found).
-- [ ] **Step 1.3: Implement**
+- [x] **Step 1.2:** Run `npx vitest run packages/cezar/src/harness/certification.test.ts` — expect FAIL (module not found).
+- [x] **Step 1.3: Implement**
 
 ```ts
 import { z } from 'zod';
@@ -201,8 +215,8 @@ export function certificationFor(
 }
 ```
 
-- [ ] **Step 1.4:** Run the test file — expect PASS.
-- [ ] **Step 1.5:** Commit: `feat(harness): certification schema + resolution (eval-gated routing, phase 1)`.
+- [x] **Step 1.4:** Run the test file — expect PASS.
+- [x] **Step 1.5:** Commit: `feat(harness): certification schema + resolution (eval-gated routing, phase 1)`.
 
 ### Task 2: Surface certification on `GET /api/v1/harness/status`
 
@@ -215,10 +229,10 @@ export function certificationFor(
 - Consumes: `certificationFor` from Task 1.
 - Produces: each roster row optionally carries `certification: { status, roles?, catalogVersion?, recordedAt? }` — additive; absent when the config has no table, so old consumers see no change.
 
-- [ ] **Step 2.1:** Failing test in `harness-api.test.ts`: write an `agentic.config.json` whose `agentHarness` has one model plus a `certifications` entry for it; `GET /api/v1/harness/status`; expect the row to carry `certification.status === 'certified'` and an uncertified sibling to carry `certification.status === 'uncertified'`.
-- [ ] **Step 2.2:** Extend the roster mapping in the status handler: `certification: certificationFor(id, agentic.agentHarness, new Date())` (include for the synthetic `claude` host row too — the host is implicitly seated and deserves an honest `uncertified` until a claude lane manifest exists).
-- [ ] **Step 2.3:** Add the optional `certification` object to `harnessModelSchema` in the contract; run `npm run typecheck`.
-- [ ] **Step 2.4:** Run `npx vitest run packages/cezar/src/server/harness-api.test.ts` — expect PASS. Commit.
+- [x] **Step 2.1:** Failing test in `harness-api.test.ts`: write an `agentic.config.json` whose `agentHarness` has one model plus a `certifications` entry for it; `GET /api/v1/harness/status`; expect the row to carry `certification.status === 'certified'` and an uncertified sibling to carry `certification.status === 'uncertified'`.
+- [x] **Step 2.2:** Extend the roster mapping in the status handler: `certification: certificationFor(id, agentic.agentHarness, new Date())` (include for the synthetic `claude` host row too — the host is implicitly seated and deserves an honest `uncertified` until a claude lane manifest exists).
+- [x] **Step 2.3:** Add the optional `certification` object to `harnessModelSchema` in the contract; run `npm run typecheck`.
+- [x] **Step 2.4:** Run `npx vitest run packages/cezar/src/server/harness-api.test.ts` — expect PASS. Commit.
 
 ### Task 3: Cockpit surfaces — roster chips and role-picker badges (advisory)
 
@@ -228,9 +242,9 @@ export function certificationFor(
 - Modify: `packages/web/src/routes/new-task-harness.tsx` (the role picker badges options and, when a picked reviewer is uncertified for the reviewer role, shows the advisory line "not yet certified for review — runs are unaffected, results unverified")
 - Test: `packages/web/src/routes/settings/harness-section.test.tsx`, `packages/web/src/routes/new-task-form.test.ts`
 
-- [ ] **Step 3.1:** Failing tests: harness-section renders the chip text for a certified row; `advisorHarnessOptions` carries `certification` through; the panel shows the advisory for an uncertified pick.
-- [ ] **Step 3.2:** Implement the pass-throughs and chips (no gating of Start here — Phase 3 owns enforcement).
-- [ ] **Step 3.3:** Run both web test files; commit.
+- [x] **Step 3.1:** Failing tests: harness-section renders the chip text for a certified row; `advisorHarnessOptions` carries `certification` through; the panel shows the advisory for an uncertified pick.
+- [x] **Step 3.2:** Implement the pass-throughs and chips (no gating of Start here — Phase 3 owns enforcement).
+- [x] **Step 3.3:** Run both web test files; commit.
 
 ### Phase 2 — The certify lane (open-mercato repo, coordinated with #4670)
 
