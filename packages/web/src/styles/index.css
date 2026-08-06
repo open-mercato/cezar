@@ -170,6 +170,7 @@
   /* Darken accent / status colours so text passes WCAG AA on white (≥ 4.5 : 1). */
   --accent-lime: #3d7a0c;
   --primary: var(--accent-lime);
+  --primary-foreground: #ffffff;
   --violet: #6d5fd4;
   --success: #047857;
 
