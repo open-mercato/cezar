@@ -4,6 +4,15 @@ import type { JSONParsed, JSONValue } from 'hono/utils/types';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import type {
+  agentAccountDetailsResponseSchema,
+  agentAccountStatusResponseSchema,
+  agentProfileResponseSchema,
+  agentProfileSelectionsResponseSchema,
+  agentProfilesResponseSchema,
+  openAgentAccountFileResponseSchema,
+  removeAgentProfileResponseSchema,
+} from '@open-mercato/cezar-contract';
+import type {
   fsBrowseResponseSchema,
   launchKeyResponseSchema,
   projectsResponseSchema,
@@ -111,6 +120,40 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type Models200 = InferResponseType<typeof client.api.v1.models.$get, 200>;
   type OpenTargets200 = InferResponseType<(typeof client.api.v1)['open-targets']['$get'], 200>;
 
+  // ---- agent profiles / accounts (spec 2026-07-29-agent-profiles) --------------------------
+  type AgentProfiles200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles']['$get'],
+    200
+  >;
+  type CreateAgentProfile201 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles']['$post'],
+    201
+  >;
+  type UpdateAgentProfile200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles'][':id']['$patch'],
+    200
+  >;
+  type RemoveAgentProfile200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles'][':id']['$delete'],
+    200
+  >;
+  type SelectAgentProfile200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles']['selection']['$put'],
+    200
+  >;
+  type AgentAccountDetails200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles'][':id']['details']['$get'],
+    200
+  >;
+  type AgentAccountStatus200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles'][':id']['status']['$get'],
+    200
+  >;
+  type OpenAgentAccountFile200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles'][':id']['open']['$post'],
+    200
+  >;
+
   type _Checks = [
     // the registry
     Assert<Exact<z.infer<typeof projectsResponseSchema>, Projects200>>,
@@ -141,6 +184,15 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof providerConnectResponseSchema>, ProviderConnect200>>,
     Assert<Exact<z.infer<typeof runnerModelCatalogResponseSchema>, Models200>>,
     Assert<Exact<z.infer<typeof openTargetsResponseSchema>, OpenTargets200>>,
+    // agent profiles
+    Assert<Exact<z.infer<typeof agentProfilesResponseSchema>, AgentProfiles200>>,
+    Assert<Exact<z.infer<typeof agentProfileResponseSchema>, CreateAgentProfile201>>,
+    Assert<Exact<z.infer<typeof agentProfileResponseSchema>, UpdateAgentProfile200>>,
+    Assert<Exact<z.infer<typeof removeAgentProfileResponseSchema>, RemoveAgentProfile200>>,
+    Assert<Exact<z.infer<typeof agentProfileSelectionsResponseSchema>, SelectAgentProfile200>>,
+    Assert<Exact<z.infer<typeof agentAccountDetailsResponseSchema>, AgentAccountDetails200>>,
+    Assert<Exact<z.infer<typeof agentAccountStatusResponseSchema>, AgentAccountStatus200>>,
+    Assert<Exact<z.infer<typeof openAgentAccountFileResponseSchema>, OpenAgentAccountFile200>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

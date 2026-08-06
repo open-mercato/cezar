@@ -124,6 +124,22 @@ describe('TaskQuickList', () => {
     expect(row('plain')?.textContent).not.toContain('—')
   })
 
+  it('flags a repointed-worktree diff so the sidebar number explains itself (#751)', () => {
+    renderList({
+      runs: [
+        run({ id: 'review', title: 'Review PR 694', status: 'review', diffStat: { adds: 1, dels: 0, files: 1, repointed: true } }),
+        run({ id: 'own', title: 'Own work', status: 'review', diffStat: { adds: 42, dels: 7, files: 3 } }),
+      ],
+    })
+
+    const narrowed = row('review')?.querySelector('[data-slot="diff-stat"]')
+    expect(narrowed?.textContent).toBe('+1 −0')
+    expect(narrowed?.getAttribute('data-repointed')).toBe('true')
+    expect(narrowed?.getAttribute('title')).toContain('uncommitted changes only')
+    // A task working on its own branch is untouched by the annotation.
+    expect(row('own')?.querySelector('[data-slot="diff-stat"]')?.getAttribute('data-repointed')).toBeNull()
+  })
+
   it('marks the row for the open task active, from the route', () => {
     const runs = [run({ id: 'open', title: 'Open one' }), run({ id: 'other', title: 'Other one' })]
     renderList({ runs, currentRunId: 'open' }, '/tasks/open')

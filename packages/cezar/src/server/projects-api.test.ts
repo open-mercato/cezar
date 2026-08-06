@@ -644,6 +644,7 @@ describe('workspace projects API', () => {
       }
       expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
     });
+
   });
 
   describe('GET /api/v1/health — additive projects + bootProject', () => {

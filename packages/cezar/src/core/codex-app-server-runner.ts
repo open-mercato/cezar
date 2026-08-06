@@ -500,6 +500,11 @@ class CodexSession implements AgentSession {
         // An interrupted/failed item never sees item/completed — surface its
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
+        if (method === 'turn/failed' && !this.terminatedByCezar) {
+          const error = params.error as Record<string, unknown> | undefined;
+          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
+          this.emit({ type: 'error', message });
+        }
         this.emit({ type: 'turn-end' });
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);

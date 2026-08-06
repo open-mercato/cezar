@@ -19,12 +19,25 @@ import { apiRequest } from './loopback-request.testkit.ts';
  */
 describe('the config API', () => {
   let repoRoot: string;
+  let homeRoot: string;
+  const savedHome = process.env.HOME;
+  const savedCezHome = process.env.CEZ_HOME;
+  const savedCodexHome = process.env.CODEX_HOME;
+  const savedXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   let store: RunStore;
   let app: Hono;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-'));
+    homeRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-home-'));
+    process.env.HOME = homeRoot;
+    process.env.CEZ_HOME = join(homeRoot, '.cezar');
+    process.env.CODEX_HOME = join(homeRoot, '.codex');
+    process.env.XDG_CONFIG_HOME = join(homeRoot, '.config');
+    delete process.env.CEZ_AGENT_MODELS_LOCKED;
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    mkdirSync(join(homeRoot, '.cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     // The config routes never touch the manager — an empty stub is honest.
     app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
@@ -33,6 +46,17 @@ describe('the config API', () => {
   afterEach(() => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(homeRoot, { recursive: true, force: true });
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedCezHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedCezHome;
+    if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = savedCodexHome;
+    if (savedXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdgConfigHome;
+    if (savedModelsLocked === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+    else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
   });
 
   const configPath = () => join(repoRoot, '.ai/cezar', 'config.json');
@@ -55,12 +79,71 @@ describe('the config API', () => {
       defaultRunner: 'claude',
       systemPrompt: null,
       defaultModels: {},
+      modelsLocked: false,
       maxParallel: 2,
       memoryLimitMb: null,
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
     });
+  });
+
+  it("uses the coding agents' native model settings as the initial defaults", async () => {
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    mkdirSync(join(homeRoot, '.codex'), { recursive: true });
+    mkdirSync(join(homeRoot, '.config', 'opencode'), { recursive: true });
+    writeFileSync(join(homeRoot, '.claude', 'settings.json'), '{"model":"sonnet"}');
+    writeFileSync(join(homeRoot, '.codex', 'config.toml'), 'model = "gpt-5-codex"\n');
+    writeFileSync(join(homeRoot, '.config', 'opencode', 'opencode.json'), '{"model":"openai/gpt-5.1"}');
+
+    expect((await getBody()).defaultModels).toEqual({
+      claude: 'sonnet',
+      codex: 'gpt-5-codex',
+      opencode: 'openai/gpt-5.1',
+    });
+    expect((await getBody()).modelsLocked).toBe(false);
+  });
+
+  it('locks native defaults and rejects Cezar model overrides', async () => {
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    mkdirSync(join(homeRoot, '.codex'), { recursive: true });
+    writeFileSync(join(homeRoot, '.codex', 'config.toml'), 'model = "gpt-5-codex"\n');
+    writeFileSync(configPath(), JSON.stringify({ defaultModels: { codex: 'cezar-codex' } }), 'utf8');
+
+    const body = await getBody();
+    expect(body.modelsLocked).toBe(true);
+    expect(body.defaultModels).toEqual({ codex: 'gpt-5-codex' });
+
+    const res = await put({ defaultModels: { codex: 'other-model' } });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain('models are locked');
+    expect(rawFile().defaultModels).toEqual({ codex: 'cezar-codex' });
+  });
+
+  it('supports the same lock through the optional repository config key', async () => {
+    mkdirSync(join(homeRoot, '.codex'), { recursive: true });
+    writeFileSync(join(homeRoot, '.codex', 'config.toml'), 'model = "native-codex"\n');
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ modelsLocked: true, defaultModels: { codex: 'cezar-codex' } }),
+      'utf8',
+    );
+
+    const body = await getBody();
+    expect(body.modelsLocked).toBe(true);
+    expect(body.defaultModels).toEqual({ codex: 'native-codex' });
+    expect((await put({ defaultModels: { codex: 'other-model' } })).status).toBe(409);
+  });
+
+  it('supports a global workspace config lock across repositories', async () => {
+    writeFileSync(
+      join(homeRoot, '.cezar', 'config.json'),
+      JSON.stringify({ modelsLocked: true }),
+      'utf8',
+    );
+
+    expect((await getBody()).modelsLocked).toBe(true);
+    expect((await put({ defaultModels: { claude: 'opus' } })).status).toBe(409);
   });
 
   it('PUT systemPrompt trims, persists, and round-trips through GET', async () => {
@@ -113,6 +196,7 @@ describe('the config API', () => {
       defaultRunner: 'claude',
       systemPrompt: 'Be brief.',
       defaultModels: { claude: 'opus' },
+      modelsLocked: false,
       maxParallel: 5,
       memoryLimitMb: null,
       worktreeRetention: 10,

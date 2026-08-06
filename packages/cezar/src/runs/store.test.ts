@@ -120,6 +120,33 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(loaded?.diffStat).toEqual({ adds: 10, dels: 2, files: 3 });
   });
 
+  it('round-trips the repointed flag, and keeps it absent when it was never set (#751)', () => {
+    const store = RunStore.open(dataDir);
+    const narrowed = store.createRun({ title: 'review pr 694', workflow: 'quick-task', task: 'review', steps: [] });
+    const normal = store.createRun({ title: 'fix the login bug', workflow: 'quick-task', task: 'fix', steps: [] });
+    store.updateRun(narrowed.id, { diffStat: { adds: 1, dels: 0, files: 1, repointed: true } });
+    store.updateRun(normal.id, { diffStat: { adds: 10, dels: 2, files: 3 } });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(narrowed.id)?.diffStat).toEqual({ adds: 1, dels: 0, files: 1, repointed: true });
+    // The un-narrowed shape must survive byte-identically — no `repointed: false`
+    // materialized into the record of every task that behaved.
+    expect(reopened.getRun(normal.id)?.diffStat).toEqual({ adds: 10, dels: 2, files: 3 });
+    expect(reopened.getRun(normal.id)?.diffStat).not.toHaveProperty('repointed');
+  });
+
+  it('still loads a pre-#751 diffStat that has no repointed key', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, diffStat: { adds: 4, dels: 1, files: 2 } }]),
+      'utf8',
+    );
+    const run = RunStore.open(dataDir).getRun('legacy-1');
+    expect(run?.diffStat).toEqual({ adds: 4, dels: 1, files: 2 });
+    expect(run?.diffStat?.repointed).toBeUndefined();
+  });
+
   it('still loads an old runs.json that predates the fields', () => {
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     const store = RunStore.open(dataDir);
@@ -1169,3 +1196,113 @@ describe('RunStore — addStep lands at the execution point', () => {
     expect(store.getRun(run.id)!.steps.map((step) => step.id)).toEqual(['task', 'continue-1'])
   })
 })
+
+describe('RunStore — read receipts (#unread-done-items)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  /** Create a run and drive it to a terminal status with a finishedAt, the way the run manager
+   *  does — so the read/unread rule has a real "finished" instant to compare against. The instant
+   *  is safely in the past: `setRead`/`markAllRead` stamp `seenAt` from the real wall clock, so a
+   *  future `finishedAt` would make a just-read run compare as still-unread. */
+  const FINISHED_AT = '2020-01-01T00:00:00.000Z';
+  function finishedRun(store: RunStore, status: 'done' | 'failed' | 'cancelled'): string {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status, finishedAt: FINISHED_AT });
+    return run.id;
+  }
+
+  it('setRead stamps seenAt, round-trips, and returns the record', () => {
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+    expect(store.getRun(id)?.seenAt).toBeUndefined();
+
+    const updated = store.setRead(id);
+    expect(updated?.seenAt).toBeDefined();
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(id)?.seenAt).toBe(updated?.seenAt);
+  });
+
+  it('setRead returns undefined for an unknown id', () => {
+    const store = RunStore.open(dataDir);
+    expect(store.setRead('nope')).toBeUndefined();
+  });
+
+  it('still loads an old runs.json with no seenAt (additive)', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun('legacy-1')?.seenAt).toBeUndefined();
+  });
+
+  it('markAllRead stamps only unread done/failed runs and returns the count', () => {
+    const store = RunStore.open(dataDir);
+    const doneUnread = finishedRun(store, 'done');
+    const failedUnread = finishedRun(store, 'failed');
+    const cancelled = finishedRun(store, 'cancelled');
+    const alreadyRead = finishedRun(store, 'done');
+    store.setRead(alreadyRead);
+    const running = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+
+    expect(store.markAllRead()).toBe(2);
+    expect(store.getRun(doneUnread)?.seenAt).toBeDefined();
+    expect(store.getRun(failedUnread)?.seenAt).toBeDefined();
+    // Cancelled and still-running runs are never unread, so they stay untouched.
+    expect(store.getRun(cancelled)?.seenAt).toBeUndefined();
+    expect(store.getRun(running)?.seenAt).toBeUndefined();
+
+    // Idempotent: a second sweep finds nothing left unread.
+    expect(store.markAllRead()).toBe(0);
+  });
+
+  it('archiving retires a pending usage-limit resume — one run and in bulk', () => {
+    // Archiving is how a user resigns from a task, so an archived run can never carry a promise
+    // to resume itself (spec 2026-08-03-auto-resume-after-usage-limit). The rule lives in the
+    // store because the "Archive finished" SWEEP never goes through the archive route, and a
+    // user who archives fifty finished tasks has resigned from all fifty.
+    const store = RunStore.open(dataDir);
+    const limited = () => {
+      const id = finishedRun(store, 'failed');
+      store.updateRun(id, {
+        autoResumeAt: '2026-08-03T18:41:48.000Z',
+        autoResumeAttempts: 2,
+      });
+      return id;
+    };
+    const one = limited();
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.autoResumeAt).toBeUndefined();
+    expect(store.getRun(one)?.autoResumeAttempts).toBeUndefined();
+
+    const swept = limited();
+    expect(store.archiveFinished()).toBeGreaterThanOrEqual(1);
+    expect(store.getRun(swept)?.archived).toBe(true);
+    expect(store.getRun(swept)?.autoResumeAt).toBeUndefined();
+
+    // Un-archiving restores the task, never the promise — that would resume a task the user
+    // has already walked away from once.
+    store.setArchived(one, false);
+    expect(store.getRun(one)?.autoResumeAt).toBeUndefined();
+  });
+
+  it('markAllRead skips archived runs, exactly as the cockpit rule does', () => {
+    // `isUnread()` (web/src/lib/read-state.ts) treats an archived run as never unread —
+    // archiving is a stronger "done with this" than reading. The sweep has to agree, or the
+    // count it answers would exceed the unread badge the user clicked, and archived history
+    // would take a pointless write and `run` broadcast on every sweep.
+    const store = RunStore.open(dataDir);
+    const archived = finishedRun(store, 'done');
+    store.setArchived(archived, true);
+    const active = finishedRun(store, 'done');
+
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(active)?.seenAt).toBeDefined();
+    expect(store.getRun(archived)?.seenAt).toBeUndefined();
+  });
+});

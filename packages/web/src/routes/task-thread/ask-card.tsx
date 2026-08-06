@@ -42,7 +42,7 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       >
         <span className="text-soft-foreground">Answered</span>
         {ask.answer ? (
-          <span className="ml-1.5 whitespace-pre-line text-foreground">{ask.answer}</span>
+          <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{ask.answer}</span>
         ) : null}
       </div>
     )
@@ -178,7 +178,7 @@ function AskQuestionBlock({
           <span className="ml-auto text-[10.5px] text-soft-foreground">select all that apply</span>
         ) : null}
       </div>
-      <p className="mb-2.5 text-sm font-semibold text-foreground">{question.question}</p>
+      <p className="mb-2.5 break-words text-sm font-semibold text-foreground">{question.question}</p>
       <div className="flex flex-col gap-2">
         {question.options.map((option) => {
           const isSelected = selected.includes(option.label)
@@ -195,12 +195,12 @@ function AskQuestionBlock({
                 isSelected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
               )}
             >
-              <span className="flex items-center gap-2 text-[13.5px] font-semibold text-foreground">
+              <span className="flex min-w-0 items-start gap-2 text-[13.5px] font-semibold text-foreground">
                 {multiSelect ? (
                   <span
                     aria-hidden
                     className={cn(
-                      'flex size-4 items-center justify-center rounded border text-[10px]',
+                      'flex size-4 shrink-0 items-center justify-center rounded border text-[10px]',
                       isSelected
                         ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-soft-foreground',
@@ -209,10 +209,12 @@ function AskQuestionBlock({
                     {isSelected ? '✓' : ''}
                   </span>
                 ) : null}
-                {option.label}
+                <span className="min-w-0 break-words">{option.label}</span>
               </span>
               {option.description ? (
-                <span className="text-xs text-muted-foreground">{option.description}</span>
+                <span className="min-w-0 break-words text-xs text-muted-foreground">
+                  {option.description}
+                </span>
               ) : null}
             </button>
           )

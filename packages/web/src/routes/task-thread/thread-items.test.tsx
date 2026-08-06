@@ -21,6 +21,7 @@ import {
   ToolStreak,
 } from './thread-items'
 import { reduceThread } from './thread-state'
+import { SessionTranscript } from './session-transcript'
 
 afterEach(cleanup)
 
@@ -286,7 +287,14 @@ describe('sub-agent nesting (golden subagent-task fixture, end to end through th
     const blocks = groupThreadItems(turns[0]!.items)
     const task = blocks.find((b) => b.kind === 'tool-card')
     if (task?.kind !== 'tool-card') throw new Error('expected the Task card')
-    render(<ToolCard item={task.item} nested={task.children} />)
+    render(
+      <SessionTranscript
+        runId="r1"
+        viewId="main"
+        sections={[{ id: 'turn-1', entries: turns[0]!.items }]}
+        mode="document"
+      />,
+    )
 
     const button = screen.getByRole('button', { name: /Task/ })
     expect((button as HTMLButtonElement).disabled).toBe(false) // nested children ARE detail — the card is not locked

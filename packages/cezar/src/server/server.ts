@@ -32,11 +32,13 @@ import type {
 } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
+import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
+  providerAuthChecksDisabled,
   type ProviderId,
   type ProviderStatusResponse,
 } from '../core/provider-auth.ts';
@@ -108,8 +110,11 @@ import {
 } from './git-changes.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
-import { readConfigFile, writeConfigFile } from '../agent-config/files.ts';
+import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
+import { readAgentModelDefaults } from '../agent-config/models.ts';
 import { listAgentConfig } from '../agent-config/service.ts';
+import { listConfigFiles, type AgentHomePaths } from '../agent-config/catalog.ts';
+import { readAccountIdentity } from '../agent-config/account-identity.ts';
 import {
   PROJECT_ID_RE,
   defaultWorkspaceConfig,
@@ -120,6 +125,27 @@ import {
   type WorkspaceConfig,
   type WorkspaceProject,
 } from '../workspace/config.ts';
+import {
+  CONTROL_CHARS_RE,
+  DEFAULT_AGENT_ACCOUNT_ID,
+  defaultAgentAccountStore,
+  isAbsoluteConfigDir,
+  loadAgentAccounts,
+  mergeWriteAgentAccounts,
+  type AgentAccount,
+  type AgentAccountStore,
+} from '../workspace/agent-accounts.ts';
+import {
+  defaultAgentProfile,
+  listAgentProfiles,
+  profileDirState,
+  resolveProfileEnvForRoot,
+  resolveStoredProfile,
+  sameProfileDir,
+  type ResolvedAgentProfile,
+} from '../workspace/agent-profiles.ts';
+import { PROFILE_CAPABLE_PROVIDERS, profileEnv, supportsProfiles } from '../core/agent-profiles.ts';
+import { withEnvPrefix } from '../core/shell-env.ts';
 import {
   allocateProjectSlug,
   listProjects,
@@ -135,7 +161,7 @@ import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
-import { expandTilde } from '../paths.ts';
+import { agentHomePaths, expandTilde } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
@@ -223,6 +249,9 @@ export interface ServerDeps {
   providerRuntimeAuth?: ProviderRuntimeAuthObserver;
   /** Local terminal handoff for provider-owned login. */
   openTerminal?: typeof openInTerminal;
+  /** Hand a local FILE (or folder) to the OS default app. Injected so the account-file open route
+   *  is testable without actually launching an editor. */
+  openFile?: typeof openFileInDefaultApp;
   /** Process-wide Open Mercato skills update detector. Injected in tests and
    * shared by every workspace route/project; createApp owns the default. */
   skillsUpdate?: SkillsUpdateService;
@@ -249,7 +278,61 @@ const projectIdSchema = z.union([z.literal('default'), z.string().regex(PROJECT_
 
 const providerConnectSchema = z.object({
   provider: z.enum(PROVIDER_IDS),
+  /** Which agent account to sign in (spec 2026-07-29-agent-profiles). Absent = the discovered
+   *  default, which is what every pre-profiles client sends. Without this, "Connect" on a second
+   *  Claude account would open a login for the FIRST one and report success. */
+  profileId: z.string().max(64).optional(),
 }).strict();
+
+/** Agent-account bodies (spec 2026-07-29-agent-profiles). Bounds mirror `agentProfileSchema` in
+ *  src/workspace/config.ts exactly, so a value these accept can never be degraded away by the
+ *  next load's `.catch`. The id is allocated server-side and is never a request field. */
+const createAgentProfileSchema = z.object({
+  provider: z.enum(PROVIDER_IDS),
+  label: z.string().trim().max(200).optional(),
+  configDir: z.string().trim().min(1).max(4096),
+}).strict();
+
+/** `POST …/agent-profiles/:id/open` — a catalog id (or `folder`) plus an optional open target. */
+const openAgentAccountFileSchema = z.object({
+  file: z.string().min(1).max(200),
+  target: z.string().min(1).max(64).optional(),
+}).strict();
+
+const updateAgentProfileSchema = z.object({
+  label: z.string().trim().max(200).optional(),
+  configDir: z.string().trim().min(1).max(4096).optional(),
+}).strict().refine(
+  (value) => value.label !== undefined || value.configDir !== undefined,
+  'send label or configDir',
+);
+
+/** `PUT …/agent-profiles/selection` — which account a project uses for one provider. `null`
+ *  clears it back to the discovered account. */
+const selectAgentProfileSchema = z.object({
+  /** `null` targets the machine-wide default rather than one repo. */
+  projectId: z.string().min(1).max(64).nullable(),
+  provider: z.enum(PROVIDER_IDS),
+  profileId: z.string().max(64).nullable(),
+}).strict();
+
+/** The hosted-mode refusal, worded like the agent-config one it mirrors. */
+const hostedProfileRefusal = {
+  error: 'agent accounts are managed from the machine that owns the checkout (this cockpit runs in hosted mode)',
+};
+
+/**
+ * Allocate a profile id from the label (or, with no label, the folder name).
+ *
+ * Reuses the project allocator's shape, and deliberately its reserved set too: `default` is the
+ * discovered profile here exactly as it is the boot alias there, so a folder called `default/`
+ * becomes `default-2` and can never shadow it.
+ */
+function allocateAgentProfileId(source: string, taken: Iterable<string>): string {
+  // `allocateProjectSlug` already basenames its argument and enforces the shared
+  // `^[a-z0-9][a-z0-9-]{0,63}$` shape, so `~/.claude-klaudiusz` slugs to `claude-klaudiusz`.
+  return allocateProjectSlug(source, taken);
+}
 
 const providerParamSchema = z.enum(PROVIDER_IDS);
 const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
@@ -407,8 +490,15 @@ export interface WorkspaceConfigResponse {
     maxParallel: number;
     maxMonitoringSessions: number;
     monitoringWakeIntervalMinutes: number | null;
+    autoResumeOnUsageLimit: boolean;
     memoryLimitMb: number | null;
     worktreeRetentionDefault: number;
+  };
+  /** What a repo that has set none of its own runs (spec 2026-07-29-agent-profiles). Both keys
+   *  optional: absent means "no opinion", which must stay distinguishable from a chosen value. */
+  agentDefaults: {
+    runner?: ProviderId;
+    models?: { claude?: string; codex?: string; opencode?: string };
   };
 }
 
@@ -517,6 +607,10 @@ const startRunSchema = z
     model: z.string().optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
     runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
+    // own selection, then the discovered default. Bounded like a profile id in the workspace
+    // schema, so a value this route accepts can never be degraded away by the next load.
+    agentProfile: z.string().max(64).optional(),
     // Parallel variants (spec 010): ×2/×3 runs the task as 2–3 competing
     // agents in separate worktrees; the user compares diffs and picks one.
     variants: z.number().int().min(1).max(3).optional(),
@@ -1093,16 +1187,51 @@ export function createApp(deps: ServerDeps) {
     mergeWrite: mergeWriteWorkspaceConfig,
   };
   const providerStatus = async (options?: { refresh?: boolean }): Promise<ProviderStatusResponse> => {
+    if (providerAuthChecksDisabled()) {
+      return applyProviderEnablement(
+        await providerAuth.status(options?.refresh ? { refresh: true } : undefined),
+        [],
+      );
+    }
     const [discovered, workspace] = await Promise.all([
       providerAuth.status(options?.refresh ? { refresh: true } : undefined),
       workspaceConfig.load(),
     ]);
     return applyProviderEnablement(discovered, workspace.disabledProviders);
   };
+  /**
+   * The gate: why a run cannot start against `required`, or null when it can.
+   *
+   * VERIFY BEFORE YOU REFUSE. Auth state is served stale-while-revalidate (see
+   * `ProviderAuthService.status`), so a cached "disconnected" may predate a login cezar could not
+   * observe — someone running `claude auth login` in a terminal. Refusing on that would lock a user
+   * out of their own cockpit with no way back but waiting. So a believed-unavailable provider is
+   * re-probed, and only a refusal that survives the fresh answer is returned.
+   *
+   * The cost lands where it belongs: the common path (connected, warm) pays nothing at all, and the
+   * probe is only spawned when cezar is about to say no — a rare, interactive moment. This is also
+   * what lets the cache hold a negative for a minute instead of five seconds, which is what made
+   * every reader of `GET /providers/status` periodically pay for a CLI spawn.
+   *
+   * A runtime auth latch is deliberately NOT escaped by this: `withRuntimeFailures` keeps forcing
+   * the row disconnected until the user acknowledges that exact incident, so the re-probe cannot
+   * talk cezar out of a rejection it actually observed.
+   */
   const providerActionError = async (
     required: readonly ProviderId[],
-  ): Promise<string | null> => unavailableProviderMessage(required, await providerStatus());
+  ): Promise<string | null> => {
+    const known = await providerStatus();
+    const message = unavailableProviderMessage(required, known);
+    if (message === null) return null;
+    // A DISABLED provider is a settings fact, not a probe result — re-probing it learns nothing and
+    // would spawn a CLI to re-read something the user typed.
+    const disabled = required.some((provider) =>
+      known.providers.find((row) => row.provider === provider)?.enabled === false);
+    if (disabled) return message;
+    return unavailableProviderMessage(required, await providerStatus({ refresh: true }));
+  };
   const openTerminal = deps.openTerminal ?? openInTerminal;
+  const openFile = deps.openFile ?? openFileInDefaultApp;
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
@@ -1602,6 +1731,38 @@ export function createApp(deps: ServerDeps) {
   // fills while the browser is still downloading the bundle, so its first
   // `GET /api/health` reads a warm value instead of the cold ~1 s compute.
   if (deps.socketHub) void refreshHealth();
+  /**
+   * Warm the whole of cezar's agent knowledge — the three discovered defaults AND every extra
+   * account — so no reader ever pays the first shell-out.
+   *
+   * Which login each agent is signed into is operating knowledge, not a settings-page detail: the
+   * composer, the action gate, the accounts pane and every run resolution ask for it. So the server
+   * learns it once, at boot, and keeps it (see the asymmetric cache lifetime in
+   * `core/provider-auth.ts`); on-demand refresh rides on `?refresh=1` and on the explicit
+   * invalidations — connect, repoint, remove, runtime rejection.
+   *
+   * Extra accounts are warmed ONE AT A TIME, after the defaults. Each is a CLI spawn, and a machine
+   * with several accounts would otherwise fan out a spawn storm at exactly the moment the browser is
+   * fetching the bundle; nothing is waiting on this, so sequential costs nothing that matters.
+   *
+   * Hosted mode warms only the defaults: the agent-profiles family is refused there, so there are
+   * no accounts to learn about.
+   */
+  const warmAgentKnowledge = async (): Promise<void> => {
+    await providerAuth.status().catch(() => {});
+    if (!capabilities().localHandoff) return;
+    const store = await loadAgentAccounts().catch(() => defaultAgentAccountStore());
+    for (const account of listAgentProfiles(store, PROVIDER_IDS)) {
+      if (account.isDefault) continue; // covered by `status()` above
+      await providerAuth
+        .profileStatus(account.provider, { id: account.id, configDir: account.path })
+        .catch(() => {});
+    }
+  };
+  // Same gate as `refreshHealth`, same reason (startServer injects the hub; a bare app in tests does
+  // not, so tests never spawn probes here). Fire-and-forget: a probe that fails leaves that row
+  // cold, which is exactly the state every reader already handles.
+  if (deps.socketHub) void warmAgentKnowledge();
 
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
@@ -1609,6 +1770,69 @@ export function createApp(deps: ServerDeps) {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
+
+  /**
+   * Resolve `profileId` (absent = the discovered default) into a concrete account for `provider`.
+   *
+   * A dangling id is an ERROR here rather than the silent fall-back to the default that run
+   * resolution performs. The difference is who is asking: a run is replaying a stored reference
+   * and the default is the only safe answer it can act on, whereas a route is answering a user
+   * who just named an account — telling them "unknown account" is honest, and quietly connecting
+   * or reporting on a different one is not.
+   */
+  const resolveWorkspaceProfile = async (
+    provider: ProviderId,
+    profileId?: string,
+  ): Promise<{ profile: ResolvedAgentProfile } | { error: string }> => {
+    if (profileId === undefined || profileId === DEFAULT_AGENT_ACCOUNT_ID) {
+      return { profile: defaultAgentProfile(provider) };
+    }
+    let accounts: readonly AgentAccount[];
+    try {
+      accounts = (await loadAgentAccounts()).accounts;
+    } catch {
+      return { error: `unknown ${provider} account: ${profileId}` };
+    }
+    const stored = accounts.find((a) => a.id === profileId && a.provider === provider);
+    if (!stored) return { error: `unknown ${provider} account: ${profileId}` };
+    return { profile: resolveStoredProfile(stored) };
+  };
+
+  /**
+   * The environment a terminal handoff must carry so the CLI lands on the right account.
+   *
+   * `profileId` is the one RECORDED on the step that owns the session, never the project's
+   * current selection: `claude --resume <id>` reads `<configDir>/sessions`, so a handoff for a
+   * run started on the work account and resumed after the project was switched back would find
+   * nothing and silently open a fresh conversation.
+   */
+  const handoffEnv = async (
+    provider: ProviderId,
+    profileId: string | undefined,
+  ): Promise<{ env: Record<string, string> } | { error: string }> => {
+    const resolved = await resolveWorkspaceProfile(provider, profileId);
+    if ('error' in resolved) {
+      return { error: `this session belongs to an account that no longer exists (${profileId})` };
+    }
+    const { profile } = resolved;
+    return { env: profile.isDefault ? {} : profileEnv(provider, profile.path) };
+  };
+
+  /** The copy-paste fallback shown when no terminal could be opened — same account, spelled for
+   *  this platform's shell. `null` when the dir cannot be embedded safely, which is a refusal. */
+  const handoffFallbackCommand = (cwd: string, command: string, env: Record<string, string>): string | null => {
+    const prefixed = withEnvPrefix(command, env, process.platform);
+    return prefixed === null ? null : `cd '${cwd}' && ${prefixed}`;
+  };
+
+  /** A registered project's realpath'd root, or null when the id is unknown. */
+  const projectRootFor = async (projectId: string): Promise<string | null> => {
+    try {
+      return (await loadWorkspaceConfig()).projects.find((p) => p.id === projectId)?.root ?? null;
+    } catch {
+      return null;
+    }
+  };
 
   // ---- chained family: agent providers (workspace-level) ----
   const providersRoutes = new Hono<ProjectApiEnv>()
@@ -1670,10 +1894,43 @@ export function createApp(deps: ServerDeps) {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
-      const command = providerAuth.loginCommand(provider);
-      const row = (await providerAuth.status({ refresh: true })).providers.find(
-        (candidate) => candidate.provider === provider,
-      );
+      // A NAMED account is refused in hosted mode before anything is resolved, exactly like every
+      // sibling route in the agent-profiles family. Checking later would already have read
+      // `~/.cezar/agent-accounts.json`, built a command carrying the account's absolute path (which
+      // both the success body and the hosted 409 echo), and — for a stored account — spawned a
+      // probe. It would also answer `unknown account: <id>` for a wrong id, which is an enumeration
+      // oracle for the very ids the hosted listing withholds. The bare-provider spelling keeps its
+      // existing behaviour: it names no host path and is how the Providers card has always worked.
+      if (body.data.profileId !== undefined
+        && body.data.profileId !== DEFAULT_AGENT_ACCOUNT_ID
+        && !capabilities().localHandoff) {
+        return c.json(hostedProfileRefusal, 409);
+      }
+      // Resolve the account BEFORE anything else: both the command and the status probe below
+      // must describe the same one, or the pane reports on the personal login while the terminal
+      // signs into the work login.
+      const resolved = await resolveWorkspaceProfile(provider, body.data.profileId);
+      if ('error' in resolved) return c.json({ error: resolved.error }, 400);
+      const { profile } = resolved;
+      const command = providerAuth.loginCommand(provider, profile.isDefault ? null : profile.path);
+      // Fail closed: a config dir that cannot be embedded safely in this platform's shell has no
+      // safe degradation. Running the bare command would sign the user into a DIFFERENT account
+      // than the one they clicked, and nothing in the terminal would say so.
+      if (command === null) {
+        return c.json({ error: `This account's folder cannot be used in a terminal command: ${profile.configDir}` }, 409);
+      }
+      // BOTH branches must mean "is this account signed in NOW". The default branch refreshes; the
+      // account branch has to evict first, because `profileStatus` serves the per-account cache and
+      // a connected answer there stands for CONNECTED_TTL_MS. Without this, Connect after a
+      // `claude /logout` answers "already connected", opens nothing, and the user is stuck — and it
+      // would contradict this module's own invariant that opening a login is one of the things
+      // cezar CAN observe and therefore invalidates explicitly rather than waiting out a window.
+      if (!profile.isDefault) providerAuth.forgetProfileStatus(provider, profile.id);
+      const row = profile.isDefault
+        ? (await providerAuth.status({ refresh: true })).providers.find(
+          (candidate) => candidate.provider === provider,
+        )
+        : await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path });
       if (!row) {
         return c.json({ error: 'Authentication could not be verified. Try again.' }, 500);
       }
@@ -1692,6 +1949,9 @@ export function createApp(deps: ServerDeps) {
       }
       let opened = false;
       try {
+        // No `env` argument: `loginCommand` already rendered the account's config dir INTO the
+        // command, because this string is also the copy-paste fallback the pane shows. Passing
+        // it again here would set the variable twice.
         opened = await openTerminal(bootRoot, command);
       } catch {
         // Terminal handoff is best-effort; the exact command remains the safe fallback.
@@ -1701,6 +1961,477 @@ export function createApp(deps: ServerDeps) {
       }
       return c.json({ opened: true, command });
     });
+
+  // ---- chained family: agent profiles / accounts (workspace-level) ----------
+  // Extra config dirs for a SECOND login of the same agent CLI (spec
+  // 2026-07-29-agent-profiles). Workspace-level and therefore SINGLE-MOUNT: an account belongs to
+  // the person and the machine, never to a repo, and a project-scoped spelling would be a second
+  // surface to protect with no consumer. Which account a project uses is a field on
+  // `PATCH /api/v1/projects/:projectId` instead.
+  //
+  // Writing is a LOCAL-MACHINE capability, exactly like `PUT /api/v1/agent-config/:id`: a profile
+  // points an agent at a directory on the host, and the listing echoes absolute paths carrying
+  // the username — the same disclosure `/api/v1/health` trims in hosted mode (#431).
+
+  /**
+   * This agent's own USER-scope config files, resolved inside ONE account's folder.
+   *
+   * Straight from the catalog — the single home of config-file vendor knowledge — with an
+   * `AgentHomePaths` whose slot for this provider is the account's dir. That is what makes a second
+   * login's `settings.json` the file you open rather than the default account's, and it keeps the
+   * ids opaque and stable so the open route below never takes a path from the client.
+   */
+  const accountFiles = async (profile: ResolvedAgentProfile) => {
+    const home: AgentHomePaths = {
+      ...agentHomePaths(),
+      ...(profile.provider === 'claude' ? { claude: profile.path } : {}),
+      ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
+      ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
+    };
+    const defs = listConfigFiles().filter(
+      (def) => def.scope === 'user' && def.runners.includes(profile.provider),
+    );
+    return Promise.all(
+      defs.map(async (def) => {
+        const path = def.resolve(bootRoot, home);
+        return { id: def.id, label: basename(path), path, exists: (await statConfigPath(path)).exists };
+      }),
+    );
+  };
+
+  /** Build the wire row for one resolved profile: its dir state plus whatever auth is cached. */
+  const agentProfileBody = async (profile: ResolvedAgentProfile) => ({
+    id: profile.id,
+    provider: profile.provider,
+    label: profile.label,
+    configDir: profile.configDir,
+    path: profile.path,
+    ...(await profileDirState(profile.provider, profile.path)),
+    isDefault: profile.isDefault,
+    // CACHED auth only — this listing must never pay a CLI spawn.
+    //
+    // Probing here cost a shell-out per provider PLUS one per extra account: ~0.7s with no extra
+    // accounts and over 2s with a few, on every cold load, for a route whose real job (what
+    // accounts exist) is a JSON read and a handful of stats. `GET /api/v1/health` already
+    // established the rule — it serves whatever the cache holds and never pays a `gh` shell-out.
+    // An absent `status` means "not determined yet", which the cockpit renders as Checking… and
+    // then fills in from the per-account status route below.
+    //
+    // SPREAD, not `status: maybeUndefined`: hono would type the key as always-present while
+    // `JSON.stringify` drops it, which is exactly the drift `contract-parity` catches (AGENTS.md
+    // names this as one of the two recurring mismatches).
+    ...(() => {
+      const cached = profile.isDefault
+        ? providerAuth.peekStatus()?.providers.find((row) => row.provider === profile.provider)
+        : providerAuth.peekProfileStatus(profile.provider, profile.id);
+      return cached ? { status: cached } : {};
+    })(),
+    files: await accountFiles(profile),
+  });
+
+  /**
+   * Resolve `:id` to an account for the per-account reads below. Unlike `resolveWorkspaceProfile`
+   * this accepts the reserved `default` for a NAMED provider, which these routes cannot infer — so
+   * the id may be `default:<provider>` as well as a stored account id.
+   */
+  const accountById = async (id: string): Promise<ResolvedAgentProfile | null> => {
+    const [head, tail] = id.split(':');
+    if (head === DEFAULT_AGENT_ACCOUNT_ID) {
+      const provider = PROVIDER_IDS.find((p) => p === tail);
+      return provider ? defaultAgentProfile(provider) : null;
+    }
+    try {
+      const stored = (await loadAgentAccounts()).accounts.find((a) => a.id === id);
+      return stored ? resolveStoredProfile(stored) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Validate a client-supplied config dir. Returns the error text, or null when it is usable. */
+  const checkProfileDir = (configDir: string): string | null => {
+    if (CONTROL_CHARS_RE.test(configDir)) return 'folder must not contain control characters';
+    const expanded = expandTilde(configDir);
+    // Absolute after expansion: a relative dir would resolve against whatever cwd the agent
+    // happens to be spawned in, which for a task is a throwaway worktree. Through
+    // `isAbsoluteConfigDir`, never a leading-`/` test — see its note: a string test refuses every
+    // real Windows path, and this is the only gate the Add-account dialog has.
+    if (!isAbsoluteConfigDir(expanded)) return `folder must be an absolute path: ${configDir}`;
+    return null;
+  };
+
+  /** Refuse a dir that is already some other account's (or the default's), compared through
+   *  `realpath` — two spellings of one directory would be two accounts silently sharing one
+   *  session store, and "which one am I logged into?" would stop having an answer. */
+  const conflictingProfile = async (
+    profiles: readonly AgentAccount[],
+    provider: ProviderId,
+    path: string,
+    exceptId?: string,
+  ): Promise<string | null> => {
+    if (await sameProfileDir(path, defaultAgentProfile(provider).path)) {
+      return 'that is already this agent\'s default folder';
+    }
+    for (const candidate of profiles) {
+      if (candidate.provider !== provider || candidate.id === exceptId) continue;
+      if (await sameProfileDir(path, expandTilde(candidate.configDir))) {
+        return `that folder is already used by "${candidate.label || candidate.id}"`;
+      }
+    }
+    return null;
+  };
+
+  const agentProfilesRoutes = new Hono<ProjectApiEnv>()
+    .get('/workspace/agent-profiles', async (c) => {
+      const editable = capabilities().localHandoff;
+      // Hosted mode withholds the listing entirely rather than serving it read-only: the paths
+      // are the host disclosure, so an empty list is the only honest hosted answer.
+      //
+      // ONE body object, never a hosted `return` and a local `return`: two returns let hono
+      // narrow `editable` to the literal `false`/`true` of each branch, and the contract's
+      // honest `z.boolean()` then reads as wider than the route. Same shape as
+      // `listAgentConfig`, which carries the same flag for the same reason.
+      let store = defaultAgentAccountStore();
+      if (editable) {
+        try {
+          store = await loadAgentAccounts();
+        } catch {
+          // an unreadable home degrades to "no extra accounts", never a failed request
+        }
+      }
+      const profiles = editable
+        ? await Promise.all(listAgentProfiles(store, PROVIDER_IDS).map(agentProfileBody))
+        : [];
+      return c.json({
+        editable,
+        profiles,
+        profileCapableProviders: [...PROFILE_CAPABLE_PROVIDERS],
+        // Which account each project uses, keyed by repo root. Served here rather than on the
+        // project registry because it lives in the same file as the accounts it names.
+        selections: editable ? store.selections : {},
+        /** The machine-wide fallback, for repos that have chosen nothing. Withheld in hosted mode
+         *  on the same terms as the rest of this family. */
+        defaults: editable ? store.defaults : {},
+      });
+    })
+
+    .post('/workspace/agent-profiles', jsonZodValidator(() => createAgentProfileSchema), async (c) => {
+      if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+      const { provider, configDir, label } = c.req.valid('json');
+      if (!supportsProfiles(provider)) {
+        return c.json({ error: `${provider} cannot carry more than one account` }, 400);
+      }
+      const dirError = checkProfileDir(configDir);
+      if (dirError) return c.json({ error: dirError }, 400);
+
+      // Read-first, exactly like `POST /projects`: the duplicate check needs `realpath`, and the
+      // merge-write mutator is deliberately SYNCHRONOUS so the read→rename window stays as small
+      // as it is for every other writer of this file. Two processes adding the same folder in
+      // that window would both win — a cosmetic duplicate, not a correctness problem, since the
+      // schema's id dedupe is what keeps resolution deterministic.
+      let existing: readonly AgentAccount[] = [];
+      try {
+        existing = (await loadAgentAccounts()).accounts;
+      } catch {
+        // unreadable store — the merge-write below reports the real failure
+      }
+      const conflict = await conflictingProfile(existing, provider, expandTilde(configDir));
+      if (conflict !== null) return c.json({ error: conflict }, 409);
+
+      let created: AgentAccount | undefined;
+      try {
+        await mergeWriteAgentAccounts((store) => {
+          const id = allocateAgentProfileId(label ?? configDir, store.accounts.map((a) => a.id));
+          created = {
+            id,
+            provider,
+            configDir,
+            label: label?.trim() || id,
+            addedAt: new Date().toISOString(),
+          };
+          store.accounts.push(created);
+        });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+      if (!created) return c.json({ error: 'account could not be saved' }, 500);
+      // A brand-new account is the one thing the boot warm could not have known about, so learn it
+      // now rather than only when something asks. Still off the response: the row is returned with
+      // `status` absent (the listing's rule), the pane shows Checking…, and its follow-up request
+      // joins this same in-flight probe.
+      const account = resolveStoredProfile(created);
+      const created201 = await agentProfileBody(account);
+      void providerAuth
+        .profileStatus(account.provider, { id: account.id, configDir: account.path })
+        .catch(() => {});
+      return c.json({ profile: created201 }, 201);
+    })
+
+    .patch(
+      '/workspace/agent-profiles/:id',
+      paramZodValidator(z.object({ id: z.string() })),
+      jsonZodValidator(() => updateAgentProfileSchema),
+      async (c) => {
+        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        const id = c.req.param('id');
+        const { label, configDir } = c.req.valid('json');
+        if (configDir !== undefined) {
+          const dirError = checkProfileDir(configDir);
+          if (dirError) return c.json({ error: dirError }, 400);
+        }
+
+        // Read-first (see POST above, and `PATCH /projects`): a well-formed but unknown id must
+        // 404 WITHOUT rewriting the config, and the duplicate check needs async `realpath`.
+        let existing: readonly AgentAccount[] = [];
+        try {
+          existing = (await loadAgentAccounts()).accounts;
+        } catch {
+          // unreadable store — treated as unknown, like DELETE and PATCH /projects
+        }
+        const current = existing.find((a) => a.id === id);
+        if (!current) return c.json({ error: `unknown account: ${id}` }, 404);
+        if (configDir !== undefined) {
+          const conflict = await conflictingProfile(existing, current.provider, expandTilde(configDir), id);
+          if (conflict !== null) return c.json({ error: conflict }, 409);
+        }
+
+        let updated: AgentAccount | undefined;
+        try {
+          await mergeWriteAgentAccounts((store) => {
+            const entry = store.accounts.find((a) => a.id === id);
+            if (!entry) return; // lost a race with a concurrent delete — answered below
+            // Mutated in place so `.passthrough()` keys on the row survive.
+            if (label !== undefined) entry.label = label.trim() || entry.id;
+            if (configDir !== undefined) entry.configDir = configDir;
+            updated = entry;
+          });
+        } catch (err) {
+          return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+        if (!updated) return c.json({ error: `unknown account: ${id}` }, 404);
+        // The dir may have moved under a cached probe — drop THIS account's answer so the response
+        // reports the new folder's state rather than the old one's, and leave every other account's
+        // warm answer alone (it is still true). Then re-learn it in the background, so the server's
+        // knowledge is complete again whether or not a cockpit is open to ask; the pane's own
+        // request for this row joins the same in-flight probe rather than spawning a second.
+        const repointed = resolveStoredProfile(updated);
+        providerAuth.forgetProfileStatus(repointed.provider, repointed.id);
+        const body = await agentProfileBody(repointed);
+        void providerAuth
+          .profileStatus(repointed.provider, { id: repointed.id, configDir: repointed.path })
+          .catch(() => {});
+        return c.json({ profile: body });
+      },
+    )
+
+    /**
+     * One account's authentication state, probed for real.
+     *
+     * Separate from the listing because a probe shells out to an agent CLI: keeping it here lets
+     * the pane paint immediately and fill each row in as its answer lands, instead of every cold
+     * load blocking on N spawns. `refresh=1` drops this account's cached answer and re-probes, for
+     * the "Check again" affordance — the cache itself holds a connected answer for minutes and an
+     * unsettled one for a minute (`cacheTtlFor` in `core/provider-auth.ts`).
+     */
+    .get(
+      '/workspace/agent-profiles/:id/status',
+      paramZodValidator(z.object({ id: z.string() })),
+      queryZodValidator(z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') }), { message: 'refresh must be 1 when provided' }),
+      async (c) => {
+        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        const account = await accountById(c.req.param('id'));
+        if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
+        const refresh = c.req.valid('query').refresh === '1';
+        // The discovered account's row is the one `GET /api/v1/providers/status` owns, so it comes
+        // from there — enablement included, which a bare probe does not know about.
+        if (account.isDefault) {
+          const all = await providerStatus(refresh ? { refresh: true } : undefined);
+          const row = all.providers.find((candidate) => candidate.provider === account.provider);
+          return c.json({ status: row ?? { provider: account.provider, status: 'unknown' as const } });
+        }
+        // "Check again" re-probes THIS account only — the other accounts' warm answers are not
+        // invalidated by asking about this one.
+        if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
+        return c.json({
+          status: await providerAuth.profileStatus(account.provider, {
+            id: account.id,
+            configDir: account.path,
+          }),
+        });
+      },
+    )
+
+    /**
+     * Who this account is signed in AS — the pane's "Show details".
+     *
+     * A separate, on-demand route rather than a field on the listing, and that is what makes
+     * "hidden by default" real: an email carried by the listing would already be in the response,
+     * the query cache and devtools, whatever the UI chose to render. `provider-auth.ts` keeps
+     * identity out of ITS boundary on purpose; this is the deliberate, local-only, opt-in
+     * exception — not a widening of that rule. Never logged, never persisted.
+     */
+    .get(
+      '/workspace/agent-profiles/:id/details',
+      paramZodValidator(z.object({ id: z.string() })),
+      async (c) => {
+        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        const account = await accountById(c.req.param('id'));
+        if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
+        return c.json(await readAccountIdentity(account.provider, account.path));
+      },
+    )
+
+    /**
+     * Open one of this account's own config files — or its folder — in a local app.
+     *
+     * `file` is a catalog ID from the account's own `files`, never a path: the client cannot name a
+     * location, so there is no traversal surface here at all (the same rule
+     * `/api/v1/agent-config/:id` follows). `folder` is the one extra keyword, and it resolves to
+     * the account's dir rather than anything the caller spelled.
+     */
+    .post(
+      '/workspace/agent-profiles/:id/open',
+      paramZodValidator(z.object({ id: z.string() })),
+      jsonZodValidator(() => openAgentAccountFileSchema),
+      async (c) => {
+        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        const account = await accountById(c.req.param('id'));
+        if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
+        const { file, target } = c.req.valid('json');
+
+        let path: string;
+        if (file === 'folder') {
+          path = account.path;
+        } else {
+          const match = (await accountFiles(account)).find((f) => f.id === file);
+          if (!match) return c.json({ error: `unknown file: ${file}` }, 404);
+          path = match.path;
+        }
+        // A file the agent has not written yet has nothing to open; say so rather than hand the OS
+        // a missing path and report success.
+        if (!(await statConfigPath(path)).exists && file !== 'folder') {
+          return c.json({ error: `this account has no ${basename(path)} yet` }, 409);
+        }
+        // `target` names a detected app; absent means the OS default handler. Either way the PATH
+        // came from the catalog, so an editor is only ever pointed inside this account's folder.
+        //
+        // Which targets APPLY is checked here rather than left to the UI, because two of them are
+        // actively wrong rather than merely useless: `terminal` runs `cd <path>`, which fails on a
+        // file, and a `cli:<runner>` handoff would start an agent session inside the config folder.
+        // A route is a surface of its own; it refuses what it cannot do correctly.
+        if (target !== undefined) {
+          if (agentCliRunner(target) !== null) {
+            return c.json({ error: 'agent CLIs open a task worktree, not a config folder' }, 400);
+          }
+          if (target === 'terminal' && file !== 'folder') {
+            return c.json({ error: 'a terminal opens a folder, not a file' }, 400);
+          }
+          if (!detectOpenTargets().some((candidate) => candidate.id === target)) {
+            return c.json({ error: `no such app on this machine: ${target}` }, 400);
+          }
+        }
+        const opened = target === undefined
+          ? await openFile(path)
+          : await openInApp(target, path);
+        if (!opened) return c.json({ error: `could not open ${basename(path)}`, path }, 409);
+        return c.json({ opened: true as const, path });
+      },
+    )
+
+    // Which account a PROJECT uses. On the accounts family rather than `PATCH /api/v1/projects`
+    // because the selection is stored beside the accounts it names — one file, one atomic write,
+    // and nothing about it can be dropped by a cezar version that never heard of accounts.
+    .put(
+      '/workspace/agent-profiles/selection',
+      jsonZodValidator(() => selectAgentProfileSchema),
+      async (c) => {
+        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        const { projectId, provider, profileId } = c.req.valid('json');
+        // `null` writes the MACHINE-WIDE default instead of one repo's selection: the account any
+        // repo that has chosen nothing uses, so a second login is set up once rather than per
+        // checkout. No project to resolve, and therefore no 404 path.
+        let root: string | null = null;
+        if (projectId !== null) {
+          const resolvedId = projectId === 'default' ? await resolveBootProject() : projectId;
+          // Keyed by repo ROOT, so the selection survives the registry being rebuilt and needs no
+          // cross-reference into config.json. An unknown project is a 404 rather than an orphan
+          // entry nobody will ever read.
+          root = await projectRootFor(resolvedId);
+          if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
+        }
+        // A user naming an account that does not exist gets told so — the opposite of how RUN
+        // resolution treats a dangling stored id, and deliberately: a run has no better answer
+        // than the default, a person does.
+        if (profileId !== null && profileId !== DEFAULT_AGENT_ACCOUNT_ID) {
+          const account = await resolveWorkspaceProfile(provider, profileId);
+          if ('error' in account) return c.json({ error: account.error }, 400);
+        }
+        let store: AgentAccountStore;
+        try {
+          store = await mergeWriteAgentAccounts((current) => {
+            // One rule, two targets: the machine default is the same per-provider shape as a repo's
+            // selection, so it clears the same way rather than growing its own spelling.
+            const selection = root === null ? current.defaults : current.selections[root] ?? {};
+            // `null` and the reserved `default` both mean "back to the discovered account", which
+            // is stored as ABSENCE — the default id is never written to the file.
+            if (profileId === null || profileId === DEFAULT_AGENT_ACCOUNT_ID) delete selection[provider];
+            else selection[provider] = profileId;
+            // The machine default keeps an emptied object where a repo selection is deleted, and
+            // that asymmetry is the schema's, not an oversight: `defaults` is one FIXED field with
+            // `.default(() => ({}))`, so `mergeWriteAgentAccounts` re-materializes it on the next
+            // write no matter what this one omits (verified). `selections` is a growing MAP, where
+            // an emptied entry is a row per repo ever touched that says nothing. The rule stated
+            // for `agentDefaults.models` — "absence is the same answer" — applies there because
+            // that key is `.optional()`, so deleting it actually sticks.
+            if (root === null) current.defaults = selection;
+            else if (Object.keys(selection).length === 0) delete current.selections[root];
+            else current.selections[root] = selection;
+          });
+        } catch (err) {
+          return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+        return c.json({ selections: store.selections, defaults: store.defaults });
+      },
+    )
+
+    .delete(
+      '/workspace/agent-profiles/:id',
+      paramZodValidator(z.object({ id: z.string() })),
+      async (c) => {
+        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        const id = c.req.param('id');
+        let removed = false;
+        // Captured inside the mutator, because after the write there is nothing left to ask which
+        // provider this account belonged to — and the eviction below is keyed by it.
+        let removedProvider: ProviderId | undefined;
+        try {
+          await mergeWriteAgentAccounts((store) => {
+            const before = store.accounts.length;
+            removedProvider = store.accounts.find((a) => a.id === id)?.provider;
+            store.accounts = store.accounts.filter((a) => a.id !== id);
+            removed = store.accounts.length < before;
+            if (!removed) return;
+            // Scrub every reference IN THE SAME MUTATOR — the reason selections share this file.
+            // A two-call delete-then-scrub can be observed mid-way by another cezar process on
+            // this machine, which would then resolve a dangling id; harmless today (it degrades
+            // to the default) but only by luck.
+            for (const [root, selection] of Object.entries(store.selections)) {
+              for (const key of Object.keys(selection) as Array<keyof typeof selection>) {
+                if (selection[key] === id) delete selection[key];
+              }
+              if (Object.keys(selection).length === 0) delete store.selections[root];
+            }
+          });
+        } catch (err) {
+          return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+        if (!removed) return c.json({ error: `unknown account: ${id}` }, 404);
+        // Only this account's answer: it is about to stop existing, and holding it would let a
+        // re-added account with the same id read the deleted one's state.
+        providerAuth.forgetProfileStatus(removedProvider, id);
+        return c.json({ removed: true as const, id });
+      },
+    );
 
   // ---- workspace projects (multi-project spec) -----------------------------
   // The registered-project list for the cockpit sidebar. Same-origin (unlike
@@ -2142,6 +2873,10 @@ export function createApp(deps: ServerDeps) {
   // cap". Bounds mirror `workspaceProjectSchema` (config.ts) exactly, so a
   // value this route accepts can never be degraded away by the next load's
   // `.catch`.
+  //
+  // Deliberately NOT the home of the agent-account selection: that lives in
+  // `~/.cezar/agent-accounts.json` beside the accounts it names, so a cezar version that has
+  // never heard of accounts cannot drop it (see workspace/agent-accounts.ts).
   const updateProjectSchema = z.object({
     maxParallel: z.number().int().min(1).max(16).nullable(),
   });
@@ -2191,8 +2926,16 @@ export function createApp(deps: ServerDeps) {
       maxParallel: config.resources.maxParallel,
       maxMonitoringSessions: config.resources.maxMonitoringSessions,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
+      autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
+    },
+    // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
+    // `JSON.stringify` drops it, which is the exact drift `contract-parity` catches. And absent has
+    // to keep meaning "no opinion" here, or the fallback collapses into "always claude".
+    agentDefaults: {
+      ...(config.agentDefaults.runner !== undefined ? { runner: config.agentDefaults.runner } : {}),
+      ...(config.agentDefaults.models !== undefined ? { models: config.agentDefaults.models } : {}),
     },
   });
   // ---- chained family: workspace settings + GUI prefs (workspace-level) ----
@@ -2201,7 +2944,7 @@ export function createApp(deps: ServerDeps) {
 
     .put('/workspace/config', jsonZodValidator(() => workspaceConfigUpdateSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources } = parsed.data;
+      const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources, agentDefaults } = parsed.data;
       for (const [configuredRoot, create] of [
         [browseRoot, false],
         [projectsDir, true],
@@ -2252,9 +2995,26 @@ export function createApp(deps: ServerDeps) {
           if (resources?.monitoringWakeIntervalMinutes !== undefined) {
             config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
           }
+          if (resources?.autoResumeOnUsageLimit !== undefined) {
+            config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
+          }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
+          }
+          // `null` CLEARS back to "no opinion" — a partial patch cannot say that by omission,
+          // and leaving a stale runner behind would keep overriding repos that never chose.
+          if (agentDefaults?.runner === null) delete config.agentDefaults.runner;
+          else if (agentDefaults?.runner !== undefined) config.agentDefaults.runner = agentDefaults.runner;
+          for (const runner of PROVIDER_IDS) {
+            const model = agentDefaults?.models?.[runner];
+            if (model === undefined) continue;
+            const models = config.agentDefaults.models ?? {};
+            if (model === null) delete models[runner];
+            else models[runner] = model;
+            // An empty object would persist a key that says nothing; absence is the same answer.
+            if (Object.keys(models).length === 0) delete config.agentDefaults.models;
+            else config.agentDefaults.models = models;
           }
         });
       } catch (err) {
@@ -2312,8 +3072,23 @@ export function createApp(deps: ServerDeps) {
         maxParallel: z.number().int().min(1).max(16).optional(),
         maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
         monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
+        autoResumeOnUsageLimit: z.boolean().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
+      })
+      .optional(),
+    // Bounds mirror `src/workspace/config.ts`, so a value this accepts is never degraded away by
+    // the next load's `.catch`. `null` clears a key back to "no opinion".
+    agentDefaults: z
+      .object({
+        runner: z.enum(PROVIDER_IDS).nullable().optional(),
+        models: z
+          .object({
+            claude: z.string().trim().min(1).max(200).nullable().optional(),
+            codex: z.string().trim().min(1).max(200).nullable().optional(),
+            opencode: z.string().trim().min(1).max(200).nullable().optional(),
+          })
+          .optional(),
       })
       .optional(),
   });
@@ -3220,8 +3995,8 @@ export function createApp(deps: ServerDeps) {
   const runsRoutes = new Hono<ProjectApiEnv>()
     .get('/runs', (c) => c.json(c.get('project').store.listRuns().map(withUsage)))
 
-    // Registered before the `/:id/...` routes so "archive-finished" never
-    // matches as a run id.
+    // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
+    // never match as a run id.
     .post('/runs/archive-finished', (c) => {
       const { dataDir, store } = c.get('project');
       const releasable = store
@@ -3238,20 +4013,48 @@ export function createApp(deps: ServerDeps) {
       return c.json({ archived });
     })
 
+    // The read-receipt sweep (#unread-done-items) — the mark-read twin of the archive
+    // sweep above, and under the same registration-order guard.
+    .post('/runs/read-all', (c) => c.json({ read: c.get('project').store.markAllRead() }))
+
     .post('/runs/:id/archive', jsonZodValidator(archiveSchema, { absent: ({}) }), async (c) => {
       const { dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       // An empty/absent body archives (the common case); a malformed body degrades
       // to `{}` just as before, but a wrong-typed `archived` is now a 400 (#429).
+      // Archiving also retires any pending usage-limit resume, but that rule belongs to
+      // `setArchived` itself — the bulk sweep must obey it too (spec
+      // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
       if (run?.archived && !manager.isActive(id)) releaseHarnessIssueClaim(dataDir, id);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
+    // The per-task off switch for that resume (the workspace setting is Settings → Resources).
+    // Idempotent: a run with nothing pending answers 200 too, because "this task will not
+    // resume itself" is equally true either way.
+    .delete('/runs/:id/auto-resume', (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      manager.cancelAutoResume(id);
+      return c.json({ cancelled: true as const });
+    })
+
+    .post('/runs/:id/read', (c) => {
+      // No body: opening a thread marks it read, full stop. Stamps `seenAt = now` and
+      // returns the updated record (which also rides the `run` SSE via `touch`).
+      const run = c.get('project').store.setRead(c.req.param('id'));
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
     .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
       const { root: repoRoot, dataDir, manager } = c.get('project');
       const parsed = { data: c.req.valid('json') };
+      if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+        return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
       let workflow: WorkflowDef | undefined;
       if (parsed.data.steps) {
         // Inline chain (spec 008): an approved plan runs as an ad-hoc workflow.
@@ -3448,6 +4251,14 @@ export function createApp(deps: ServerDeps) {
       }
       const blocked = await providerActionError([...requiredProviders]);
       if (blocked) return c.json({ error: blocked }, 409);
+      // A composer override names an account the user just picked, so a stale id (deleted since
+      // the page loaded) is answered honestly instead of quietly running on the default — the
+      // opposite of how RESOLUTION treats a dangling reference, and deliberately so: a run
+      // replaying a stored id has no better answer than the default, a user does.
+      if (parsed.data.agentProfile !== undefined) {
+        const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
+        if ('error' in account) return c.json({ error: account.error }, 400);
+      }
       const images = parsed.data.images?.map((img): ContentBlock => ({
         type: 'image',
         source: { type: 'base64', media_type: img.mediaType, data: img.data },
@@ -3456,6 +4267,7 @@ export function createApp(deps: ServerDeps) {
         task: parsed.data.task,
         model: parsed.data.model,
         runner: parsed.data.runner,
+        agentProfile: parsed.data.agentProfile,
         images,
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
@@ -3774,13 +4586,16 @@ export function createApp(deps: ServerDeps) {
 
     // "Continue" (spec 003): reopen a finished run's session in-process.
     .post('/runs/:id/continue', jsonZodValidator(continueSchema, { absent: ({}) }), async (c) => {
-      const { store, manager } = c.get('project');
+      const { root: repoRoot, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       // Bounded resume text (#429); an empty/absent body still just re-runs on the
       // run's current backend, and a runner/model override reopens on that engine (#401).
       const parsed = { data: c.req.valid('json') };
+      if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+        return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
       const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
       if (blocked) return c.json({ error: blocked }, 409);
       const result = manager.continueRun(id, {
@@ -3814,7 +4629,8 @@ export function createApp(deps: ServerDeps) {
           409,
         );
       }
-      const sessionId = [...run.steps].reverse().find((s) => s.sessionId)?.sessionId;
+      const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
+      const sessionId = sessionStep?.sessionId;
       if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
       const blocked = await providerActionError([providerForExistingRun(run)]);
       if (blocked) return c.json({ error: blocked }, 409);
@@ -3822,15 +4638,18 @@ export function createApp(deps: ServerDeps) {
       const command = resumeCommand(run.runner, sessionId);
       // Fails closed on an id we do not recognise — see resumeCommand (#431).
       if (!command) return c.json({ error: 'the recorded session id has an unexpected shape' }, 409);
-      const opened = await openInTerminal(cwd, command);
+      // The account that OWNS this session, not the project's current one (spec 2026-07-29).
+      const account = await handoffEnv(run.runner ?? 'claude', sessionStep?.profileId);
+      if ('error' in account) return c.json({ error: account.error }, 409);
+      const fallback = handoffFallbackCommand(cwd, command, account.env);
+      // Fail closed for the same reason as the session id: a terminal opened without the
+      // account's config dir resumes nothing and says nothing about why.
+      if (fallback === null) {
+        return c.json({ error: 'this account\'s folder cannot be used in a terminal command' }, 409);
+      }
+      const opened = await openInTerminal(cwd, command, account.env);
       if (!opened) {
-        return c.json(
-          {
-            error: 'no terminal emulator found',
-            command: `cd '${cwd}' && ${command}`,
-          },
-          409,
-        );
+        return c.json({ error: 'no terminal emulator found', command: fallback }, 409);
       }
       return c.json({ opened: true, command });
     })
@@ -3918,20 +4737,27 @@ export function createApp(deps: ServerDeps) {
         const blocked = await providerActionError([cliRunner]);
         if (blocked) return c.json({ error: blocked }, 409);
         const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
-        const sessionId = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId)?.sessionId;
+        const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
+        const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
         const command = resume ?? cliRunner;
-        const opened = await openInTerminal(dir, command);
+        // BOTH branches carry the account (spec 2026-07-29-agent-profiles): a resume needs the
+        // config dir that holds its session, and a FRESH CLI in this worktree should still open
+        // on the account the project works under — otherwise "Open in → Claude CLI" quietly
+        // hands the user a different subscription than every task in the same project uses.
+        const account = resume
+          ? await handoffEnv(cliRunner, sessionStep?.profileId)
+          : { env: (await resolveProfileEnvForRoot(repoRoot, cliRunner)).env };
+        if ('error' in account) return c.json({ error: account.error }, 409);
+        const fallback = handoffFallbackCommand(dir, command, account.env);
+        if (fallback === null) {
+          return c.json({ error: 'this account\'s folder cannot be used in a terminal command' }, 409);
+        }
+        const opened = await openInTerminal(dir, command, account.env);
         if (!opened) {
-          return c.json(
-            {
-              error: 'no terminal emulator found',
-              command: `cd '${dir}' && ${command}`,
-            },
-            409,
-          );
+          return c.json({ error: 'no terminal emulator found', command: fallback }, 409);
         }
         return c.json({ opened: true, path: dir, command });
       }
@@ -4397,6 +5223,9 @@ export function createApp(deps: ServerDeps) {
         const id = c.req.param('id');
         const todo = c.get('todo');
         const parsed = { data: c.req.valid('json') };
+        if (agentModelsLocked(repoRoot) && parsed.data?.model?.trim()) {
+          return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+        }
         if (todo.startedTaskId) return c.json({ error: 'already started' }, 409);
 
         let task = todoTaskText(todo);
@@ -4877,30 +5706,45 @@ export function createApp(deps: ServerDeps) {
 
   // The Settings → Agents knobs in one read (R6 Step 1.5) — an ADDITIVE
   // sibling of PUT /api/config below; /api/health keeps its protected shape.
-  const configAnswer = (config: CezConfig) => ({
-    baseBranch: config.baseBranch ?? null,
-    defaultRunner: config.defaultRunner,
-    systemPrompt: config.systemPrompt ?? null,
-    defaultModels: config.defaultModels ?? {},
-    maxParallel: config.maxParallel,
-    memoryLimitMb: config.memoryLimitMb ?? null,
-    // Count-based worktree retention (#483): keep the last N finished worktrees
-    // on disk. 0 = unlimited. Always materialized (schema default 10).
-    worktreeRetention: config.worktreeRetention,
-    // Live title updates (task auto-naming spec): tri-state — null means "no
-    // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
-    liveTitleUpdates: config.liveTitleUpdates ?? null,
-    // Optional review gate (#489): tri-state — null means "no config key, the
-    // CEZ_REVIEW_GATE env default (OFF) decides".
-    reviewGate: config.reviewGate ?? null,
-  });
+  const configAnswer = async (repoRoot: string, config: CezConfig) => {
+    const nativeModels = await readAgentModelDefaults(repoRoot);
+    const modelsLocked = agentModelsLocked(repoRoot);
+    return {
+      baseBranch: config.baseBranch ?? null,
+      defaultRunner: config.defaultRunner,
+      systemPrompt: config.systemPrompt ?? null,
+      // Native defaults seed each runner independently. A Cezar preset remains
+      // selectable unless the operator opts into the fixed-model policy.
+      defaultModels: modelsLocked
+        ? nativeModels
+        : { ...nativeModels, ...(config.defaultModels ?? {}) },
+      modelsLocked,
+      maxParallel: config.maxParallel,
+      memoryLimitMb: config.memoryLimitMb ?? null,
+      // Count-based worktree retention (#483): keep the last N finished worktrees
+      // on disk. 0 = unlimited. Always materialized (schema default 10).
+      worktreeRetention: config.worktreeRetention,
+      // Live title updates (task auto-naming spec): tri-state — null means "no
+      // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
+      liveTitleUpdates: config.liveTitleUpdates ?? null,
+      // Optional review gate (#489): tri-state — null means "no config key, the
+      // CEZ_REVIEW_GATE env default (OFF) decides".
+      reviewGate: config.reviewGate ?? null,
+    };
+  };
   // ---- chained family: per-repo config (project-scoped) ----
   const configRoutes = new Hono<ProjectApiEnv>()
-    .get('/config', async (c) => c.json(configAnswer(await loadConfig(c.get('project').root))))
+    .get('/config', async (c) => {
+      const repoRoot = c.get('project').root;
+      return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
+    })
 
     .put('/config', jsonZodValidator(() => setConfigSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       const parsed = { data: c.req.valid('json') };
+      if (agentModelsLocked(repoRoot) && parsed.data.defaultModels !== undefined) {
+        return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
       const configPath = join(dataDir, 'config.json');
       let raw: Record<string, unknown> = {};
       try {
@@ -4966,7 +5810,7 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
       // Pre-R6 answer shape ({baseBranch, defaultRunner}) + additive R6 fields.
-      return c.json(configAnswer(await loadConfig(repoRoot)));
+      return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
     });
 
   // Set/clear the agents' config knobs (Settings → Agents; the Repo tab's
@@ -5104,6 +5948,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', modelsRoutes)
     .route('/', providersRoutes)
     .route('/', projectsRoutes)
+    .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', fsBrowseRoutes)

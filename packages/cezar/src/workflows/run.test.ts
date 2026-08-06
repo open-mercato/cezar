@@ -320,6 +320,52 @@ describe('RunManager.recordTurnEnd', () => {
     expect(later?.diffStat).toEqual({ adds: 4, dels: 1, files: 3 });
   });
 
+  /**
+   * #751: `recordTurnEnd` is the ONE place `RunRecord.diffStat` is written, so it
+   * is also the one place `run.branch` has to reach `worktreeShortstat` — without
+   * it, a review/QA run that checked another branch out into its worktree stores
+   * that branch's whole diff as this task's work.
+   */
+  it('stores only the uncommitted diff when the agent repointed the worktree HEAD', async () => {
+    const record = await makeWorktreeRun();
+    const wt = record.worktreePath as string;
+
+    // A branch with real commits on it, checked out into the task's worktree —
+    // exactly what a `review/pr-NNN` or QA run does.
+    await run('git', ['checkout', '-q', '-b', 'someone-elses-branch'], { cwd: wt });
+    writeFileSync(join(wt, 'theirs.txt'), 'a\nb\nc\nd\ne\nf\n'); // 6 lines that are NOT this task's
+    await run('git', ['add', '-A'], { cwd: wt });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'their work'], { cwd: wt });
+    writeFileSync(join(wt, 'mine.txt'), 'z\n'); // the 1 line this task produced
+
+    await manager.recordTurnEnd(record.id, TURN_TEXT);
+
+    // 1 uncommitted line, flagged — not the 6 committed ones the foreign branch carries
+    // (which, with `a.txt`'s edit and `new.txt`, would have read `+10 −1 / 4 files`).
+    expect(store.getRun(record.id)?.diffStat).toEqual({
+      adds: 1,
+      dels: 0,
+      files: 1,
+      repointed: true,
+    });
+  });
+
+  it('drops the repointed flag again once HEAD returns to the task branch', async () => {
+    const record = await makeWorktreeRun();
+    const wt = record.worktreePath as string;
+    await run('git', ['checkout', '-q', '-b', 'a-detour'], { cwd: wt });
+    await manager.recordTurnEnd(record.id, TURN_TEXT);
+    expect(store.getRun(record.id)?.diffStat?.repointed).toBe(true);
+
+    // `updateRun` replaces `diffStat` wholesale, so a stale `repointed: true` can
+    // never outlive the repoint that caused it.
+    await run('git', ['checkout', '-q', record.branch as string], { cwd: wt });
+    await manager.recordTurnEnd(record.id, TURN_TEXT);
+    const after = store.getRun(record.id);
+    expect(after?.diffStat).toEqual({ adds: 3, dels: 1, files: 2 });
+    expect(after?.diffStat).not.toHaveProperty('repointed');
+  });
+
   it('never overwrites a user-edited title (PATCH sets titleSummary too)', async () => {
     const record = await makeWorktreeRun();
     // What PATCH /api/v1/runs/:id does on a rename:
@@ -1055,6 +1101,22 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(v1Text.some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
 
+  it('normalizes a near-valid presentation-only marker into exactly one ask card', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-near choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((event) => event.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{
+      header: string;
+      options: Array<{ label: string; description?: string }>;
+    }>;
+    expect(questions[0]!.header).toBe('Implementat…');
+    expect(questions[0]!.options[0]).toEqual({ label: 'Minimal', description: `${'d'.repeat(279)}…` });
+    expect(events.filter((event) => event.type === 'text').some((event) => String(event.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
+
   it('a markerless turn-end raises no ask.requested', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
     currentId = record.id;
@@ -1069,7 +1131,9 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const parked = store.getRun(record.id);
     expect(parked?.status).toBe('waiting'); // still parks — never worse than the prose fallback
     expect(parked?.activity).toBeUndefined();
-    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(false);
+    const events = readEvents(record.id);
+    expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON'))).toHaveLength(1);
   }, 30_000);
 
   // Regression (blank-question bug): valid JSON that fails the ask schema used
@@ -1083,6 +1147,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'waiting');
     const events = readEvents(record.id);
     expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('failed validation'))).toHaveLength(1);
     const assistantText = events.filter((e) => e.type === 'text');
     expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
   }, 30_000);

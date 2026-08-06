@@ -82,6 +82,7 @@ function serve(
   defaultModels: Record<string, string> = {},
   providerStatus: ProviderStatusResponse | { error: string } = providersForHealth(health),
   providerStatusCode = 200,
+  modelsLocked = false,
 ) {
   requests = []
   const json = (payload: unknown, status = 200) =>
@@ -102,6 +103,7 @@ function serve(
           defaultRunner: 'claude',
           systemPrompt: null,
           defaultModels,
+          modelsLocked,
           maxParallel: 1,
           memoryLimitMb: null,
         })
@@ -209,6 +211,30 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future' })
+  })
+
+  it('shows a read-only native model while locked and still permits switching runners', async () => {
+    serve(
+      HEALTH_MULTI,
+      { claude: 'native-sonnet', codex: 'gpt-5.6-codex' },
+      providersForHealth(HEALTH_MULTI),
+      200,
+      true,
+    )
+    renderAction(makeRun({ runner: 'claude', model: 'old-run-model' }))
+
+    const model = await screen.findByLabelText('Model')
+    expect(model.tagName).toBe('SPAN')
+    expect(model.textContent).toContain('native-sonnet')
+    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Runner' }))
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('Codex')) as HTMLElement)
+    await waitFor(() => expect(model.textContent).toContain('gpt-5.6-codex'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(continueBody()).toEqual({ runner: 'codex' }))
   })
 
   it('a legacy run (no persisted runner) shows claude — the server continues it on claude, not defaultRunner', async () => {

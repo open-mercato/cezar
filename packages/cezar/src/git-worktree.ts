@@ -3,6 +3,7 @@ import { existsSync, realpathSync, type Dirent } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 
 /**
@@ -500,6 +501,18 @@ async function gitHasIdentity(dir: string): Promise<boolean> {
  * "What did this task change": diff of the worktree (committed + uncommitted
  * + untracked, via a scratch-index intent-to-add) against the merge-base with its base branch —
  * so the diff stays *this task's* changes even after the base moves on.
+ *
+ * Deliberately does NOT take the repointed-HEAD guard that `collectChanges`
+ * (#591) and `worktreeShortstat` (#751) resolve through
+ * `resolveTaskDiffBase` — this is the whole-branch anchor on purpose, for two
+ * reasons. Its text output is `GET /api/v1/runs/:id/diff`, a protected surface
+ * (BACKWARD_COMPATIBILITY.md §2), so narrowing it would silently change what
+ * every existing consumer reads. And its other caller, `settleSuccess`, asks
+ * only "is there anything here to review at all" — over-answering that parks a
+ * run at the review gate, which is recoverable, while under-answering would
+ * settle a run to `done` with work still in the tree. If a future change wants
+ * the narrow answer here, take it from `resolveTaskDiffBase` rather than
+ * re-deriving the rule a fourth time.
  */
 export async function worktreeDiff(
   worktreePath: string,
@@ -518,7 +531,12 @@ export async function worktreeDiff(
 
 /**
  * `git diff --stat` version of `worktreeDiff` (spec 010 — the variant
- * comparison columns). Same merge-base anchoring; returns '' on any failure.
+ * comparison columns). Same merge-base anchoring, and it stays whole-branch
+ * for a reason of its own: variants are sibling cezar worktrees, each on its
+ * own `cez/*` branch, and the column exists to compare their *committed* work
+ * against one another. Narrowing one variant to its uncommitted tree would
+ * make the comparison meaningless rather than more honest. Returns '' on any
+ * failure. (The task-diff rule the other surfaces follow: `git-diff-base.ts`.)
  */
 export async function worktreeDiffStat(
   worktreePath: string,
@@ -537,6 +555,10 @@ export interface DiffStat {
   adds: number;
   dels: number;
   files: number;
+  /** Set only when the numbers were narrowed to uncommitted work because the worktree's
+   *  HEAD had been repointed off the task's branch (#751). Absent — never `false` — on a
+   *  normal run, so the persisted shape is unchanged for every task that behaved. */
+  repointed?: boolean;
 }
 
 /**
@@ -558,21 +580,38 @@ export function parseShortstat(s: string): DiffStat {
 }
 
 /**
- * `git diff --shortstat` of the worktree vs its base (#389) — same
- * merge-base anchoring and scratch-index technique as `worktreeDiff`, parsed into
- * numbers. Null on git failure (the caller notes it, never fails the run);
- * an empty diff is a valid all-zero stat.
+ * `git diff --shortstat` of the worktree vs its base (#389) — the numbers
+ * behind `RunRecord.diffStat`, which is what the sidebar quick list and the
+ * Tasks table show. Same scratch-index technique as `worktreeDiff` (untracked
+ * files show up; real index untouched), but the anchor comes
+ * from the shared `resolveTaskDiffBase` rule (`git-diff-base.ts`): pass the
+ * run's own `taskBranch` and a worktree whose HEAD was repointed onto another
+ * branch reports its uncommitted work only, instead of claiming that whole
+ * branch's diff as this task's (#751 — the #591 guard, on this surface).
+ *
+ * `repointed: true` rides along on the returned stat exactly when that
+ * narrowing happened, so the UI can say why the number is what it is. Null on
+ * git failure (the caller notes it, never fails the run); an empty diff is a
+ * valid all-zero stat.
  */
 export async function worktreeShortstat(
   worktreePath: string,
   baseBranch: string,
+  opts: { taskBranch?: string } = {},
 ): Promise<DiffStat | null> {
   if (!isSafeGitRef(baseBranch)) return null;
   const env = (await scratchIndexEnv(worktreePath)) ?? undefined; // untracked files show up; real index untouched
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
-  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+  const { base, repointedHead } = await resolveTaskDiffBase(
+    (args) => git(worktreePath, args),
+    baseBranch,
+    opts,
+  );
   const res = await git(worktreePath, ['diff', '--shortstat', base], env);
-  return res.ok ? parseShortstat(res.stdout) : null;
+  if (!res.ok) return null;
+  // The key stays ABSENT (not `false`) on a normal run: `diffStat` is persisted in
+  // `runs.json` and served on the runs API, so the un-narrowed shape must keep
+  // round-tripping byte-identically.
+  return { ...parseShortstat(res.stdout), ...(repointedHead ? { repointed: true } : {}) };
 }
 
 /**

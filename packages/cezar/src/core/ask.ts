@@ -56,6 +56,20 @@ export type AskOption = z.infer<typeof askOptionSchema>;
 export type AskQuestion = z.infer<typeof askQuestionSchema>;
 export type AskRequest = z.infer<typeof askRequestSchema>;
 
+export interface AskParseIssue {
+  code: string;
+  path: PropertyKey[];
+  message: string;
+}
+
+/** The diagnostic parse result used at turn-end. The compatibility wrapper
+ * below deliberately keeps returning `AskRequest | null`. */
+export type AskMarkerParseResult =
+  | { kind: 'none' }
+  | { kind: 'invalid-json'; message: string }
+  | { kind: 'invalid-structure'; issues: AskParseIssue[] }
+  | { kind: 'valid'; request: AskRequest; normalized: boolean };
+
 /**
  * Parse a value into a validated `AskRequest`, or `null` when it does not match
  * (bad counts, over-length header, non-unique labels/questions, extra keys).
@@ -76,35 +90,31 @@ export function parseAskRequest(value: unknown): AskRequest | null {
  */
 export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
 
+/** Looser than `ASK_MARKER_RE` so diagnostics can distinguish a malformed
+ * trailing marker from ordinary assistant prose. */
+const ASK_MARKER_CANDIDATE_RE = /CEZ:ASK[ \t]+([\s\S]*)$/;
+
 function clamp(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
 }
 
 /**
- * Coerce a nearly-valid payload into a valid one.
- *
- * Models overrun the cosmetic limits routinely — a 15-character `header` where
- * the contract says 12 is by far the most common — and the schema is
- * all-or-nothing, so one long chip label cost the user the entire card and put
- * a wall of raw JSON in the transcript instead. Nothing repaired here changes
- * what is being asked: chip labels and descriptions are truncated, unknown keys
- * dropped, colliding option labels disambiguated.
- *
- * Structural problems are deliberately NOT repaired. Fewer than two options is
- * not a choice, and more questions or options than the card can show would have
- * to be dropped to fit — silently discarding a real alternative is worse than
- * the prose fallback that handles those (`formatAskAsProse`).
+ * Rebuild a payload with only presentation drift repaired — the candidate the
+ * schema then re-judges. Unknown keys are discarded; the display-only id,
+ * header, question, label and description are clipped to their documented
+ * bounds; labels that collide only after truncation are disambiguated. Counts,
+ * required text, types, and uniqueness remain schema-enforced. Returns the
+ * value untouched when it is not ask-shaped enough to rebuild, so the caller's
+ * diagnostics point at the real structural problem.
  */
-export function repairAskRequest(value: unknown): AskRequest | null {
-  const direct = parseAskRequest(value);
-  if (direct) return direct;
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+function repairAskCandidate(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
   const questions = (value as { questions?: unknown }).questions;
-  if (!Array.isArray(questions)) return null;
+  if (!Array.isArray(questions)) return value;
   const repaired = questions.map((entry) => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return entry;
     const question = entry as Record<string, unknown>;
-    const options = Array.isArray(question.options) ? question.options : question.options;
+    const options = question.options;
     const taken = new Set<string>();
     return {
       ...(typeof question.id === 'string' ? { id: clamp(question.id, 64) } : {}),
@@ -129,7 +139,26 @@ export function repairAskRequest(value: unknown): AskRequest | null {
         : options,
     };
   });
-  return parseAskRequest({ questions: repaired });
+  return { questions: repaired };
+}
+
+/**
+ * Coerce a nearly-valid payload into a valid one.
+ *
+ * Models overrun the cosmetic limits routinely — a 15-character `header` where
+ * the contract says 12 is by far the most common — and the schema is
+ * all-or-nothing, so one long chip label cost the user the entire card and put
+ * a wall of raw JSON in the transcript instead. Nothing repaired here changes
+ * what is being asked: chip labels and descriptions are truncated, unknown keys
+ * dropped, colliding option labels disambiguated.
+ *
+ * Structural problems are deliberately NOT repaired. Fewer than two options is
+ * not a choice, and more questions or options than the card can show would have
+ * to be dropped to fit — silently discarding a real alternative is worse than
+ * the prose fallback that handles those (`formatAskAsProse`).
+ */
+export function repairAskRequest(value: unknown): AskRequest | null {
+  return parseAskRequest(value) ?? parseAskRequest(repairAskCandidate(value));
 }
 
 /**
@@ -166,22 +195,52 @@ export function formatAskAsProse(value: unknown): string | null {
   return blocks.length > 0 ? blocks.join('\n\n') : null;
 }
 
+function issuesOf(error: z.ZodError): AskParseIssue[] {
+  return error.issues.map((issue) => ({
+    code: issue.code,
+    path: issue.path,
+    message: issue.message,
+  }));
+}
+
 /**
- * Extract and validate a trailing `CEZ:ASK <json>` marker from assembled turn
- * text. Returns the `AskRequest` — repaired where the payload only broke a
- * cosmetic limit — or `null` when there is no marker or the payload is not
- * valid JSON / cannot be repaired into the schema.
+ * Parse a trailing marker with an actionable result for diagnostics. A
+ * parseable near-valid request gets one bounded repair pass
+ * (`repairAskCandidate`); structural violations remain rejected so the raw
+ * fallback stays readable, and the reported issues come from the repaired
+ * candidate so they point at the structural problem rather than cosmetic
+ * drift.
  */
-export function parseAskMarker(turnText: string): AskRequest | null {
-  const match = ASK_MARKER_RE.exec(turnText.trimEnd());
-  if (!match || match[1] === undefined) return null;
+export function parseAskMarkerResult(turnText: string): AskMarkerParseResult {
+  const match = ASK_MARKER_CANDIDATE_RE.exec(turnText.trimEnd());
+  if (!match || match[1] === undefined) return { kind: 'none' };
   let raw: unknown;
   try {
     raw = JSON.parse(match[1]);
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      kind: 'invalid-json',
+      message: error instanceof Error ? error.message : 'invalid JSON',
+    };
   }
-  return repairAskRequest(raw);
+
+  const strict = askRequestSchema.safeParse(raw);
+  if (strict.success) return { kind: 'valid', request: strict.data, normalized: false };
+
+  const repaired = askRequestSchema.safeParse(repairAskCandidate(raw));
+  if (repaired.success) return { kind: 'valid', request: repaired.data, normalized: true };
+  return { kind: 'invalid-structure', issues: issuesOf(repaired.error) };
+}
+
+/**
+ * Extract and validate a trailing `CEZ:ASK <json>` marker from assembled turn
+ * text. Returns a strict or safely repaired `AskRequest`, or `null` when
+ * there is no marker or its payload remains invalid (caller degrades to plain
+ * text — the prose fallback is never made worse).
+ */
+export function parseAskMarker(turnText: string): AskRequest | null {
+  const parsed = parseAskMarkerResult(turnText);
+  return parsed.kind === 'valid' ? parsed.request : null;
 }
 
 /**

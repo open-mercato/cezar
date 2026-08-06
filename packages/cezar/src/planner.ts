@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { createRunner } from './core/runner-factory.ts';
 import { loadConfig } from './config.ts';
 import { discoverSkills, type Skill } from './skills.ts';
+import { resolveProfileEnvForRoot } from './workspace/agent-profiles.ts';
 import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.ts';
 
 /**
@@ -65,6 +66,10 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   // OpenCode pick their own default model instead.
   const runner = createRunner(config.defaultRunner);
   const plannerModel = config.defaultRunner === 'claude' ? config.plannerModel : undefined;
+  // Plan under the SAME agent account this project's tasks run on (spec
+  // 2026-07-29-agent-profiles). Without this the planner would quietly bill the personal
+  // subscription for a project the user pointed at their work account.
+  const { env: profileEnv } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
   // One retry on an unparseable answer; a runner error goes straight to fallback.
   for (let attempt = 0; attempt < 2; attempt++) {
     let text: string;
@@ -74,6 +79,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
         userPrompt,
         cwd: repoRoot,
         allowedTools: [],
+        ...(Object.keys(profileEnv).length > 0 ? { env: profileEnv } : {}),
         model: plannerModel,
         timeoutMs: PLANNER_TIMEOUT_MS,
       });

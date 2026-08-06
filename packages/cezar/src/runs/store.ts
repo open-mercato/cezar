@@ -49,6 +49,12 @@ const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse. */
   backend: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
+   *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
+   *  only means something inside the config dir that created it: `sessionId` and `profileId` are
+   *  a PAIR. Without it, changing the project's account would silently make Continue resume
+   *  against the wrong account's session store. Absent = the discovered default. */
+  profileId: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -91,9 +97,19 @@ const runRecordSchema = z.object({
    *  `title` so edits always win). The UI shows `titleSummary ?? title`. */
   titleSummary: z.string().optional(),
   /** `git diff --shortstat` of the worktree vs its base, refreshed on every
-   *  turn-end (#389) — what the quick list / table shows without a git call. */
+   *  turn-end (#389) — what the quick list / table shows without a git call.
+   *  `repointed` (#751) is optional and only ever written as `true`: it marks the
+   *  runs whose numbers were narrowed to uncommitted work because the agent had
+   *  checked another branch out into the worktree. Optional is load-bearing here —
+   *  `runs.json` is `safeParse`d as one array, so a required addition would
+   *  silently drop every pre-existing run. */
   diffStat: z
-    .object({ adds: z.number(), dels: z.number(), files: z.number() })
+    .object({
+      adds: z.number(),
+      dels: z.number(),
+      files: z.number(),
+      repointed: z.boolean().optional(),
+    })
     .optional(),
   workflow: z.string(),
   task: z.string(),
@@ -115,6 +131,11 @@ const runRecordSchema = z.object({
   modelIdentity: z.string().optional(),
   /** Agent backend this run used — drives "open in CLI" resume command. */
   runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Per-task agent-account override from the composer (spec 2026-07-29-agent-profiles), applying
+   *  to steps that run on `runner`. Steps on a DIFFERENT backend still resolve from the project's
+   *  own selection — an override for Claude says nothing about which Codex account a mixed
+   *  workflow's codex step should use. Absent = follow the project. */
+  agentProfile: z.string().optional(),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
    *  Deliberately NOT the full composed prompt — skill bodies and the handoff
@@ -149,6 +170,17 @@ const runRecordSchema = z.object({
   monitoringWakeAt: z.string().datetime().optional().catch(undefined),
   /** True only for the live epoch that exhausted all automatic monitoring checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /**
+   * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
+   * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a
+   * short grace. Present only while such a resume is pending: the run is `failed`, the timer is
+   * armed, and the cockpit says so. Deliberately survives a restart (`RunStore.open` keeps it) —
+   * it is what lets `recover()` re-arm a wait that may be hours long.
+   */
+  autoResumeAt: z.string().datetime().optional().catch(undefined),
+  /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
+   *  Persisted so a restart cannot reset a loop back to zero. */
+  autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -219,6 +251,11 @@ const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean().default(false),
   archivedAt: z.string().optional(),
+  /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
+   *  run's thread. A finished run reads as "unread" until it has been seen since it
+   *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
+   *  runs and on every run not yet opened, which the unread rule treats as unread. */
+  seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -302,6 +339,20 @@ const MAX_PR_CANDIDATES = 8;
  * invisible to the janitor, #407). Reasoning items are skipped: thinking text
  * speculates about PRs the task never touches.
  */
+/**
+ * Archiving IS resigning from a task, so an archived run can never carry a pending usage-limit
+ * resume (spec 2026-08-03-auto-resume-after-usage-limit). The rule lives HERE rather than in the
+ * archive route because the bulk "Archive finished" sweep never goes through that route, and a
+ * user who archives fifty finished tasks has resigned from all fifty.
+ *
+ * The engine needs no telling: its timer re-reads the record before it fires and no sweep re-arms
+ * an archived run, so a cleared field is the whole cancellation.
+ */
+function clearPendingAutoResume(run: RunRecord): void {
+  run.autoResumeAt = undefined;
+  run.autoResumeAttempts = undefined;
+}
+
 function eventTextFragments(event: Record<string, unknown>): string[] {
   const fragments: string[] = [];
   for (const key of ['text', 'result', 'message'] as const) {
@@ -441,6 +492,10 @@ export class RunStore extends EventEmitter {
               run.activity = undefined;
               run.monitoringWakeAt = undefined;
             }
+            // A pending usage-limit resume survives the restart on purpose (the wait can be
+            // hours) — `RunManager.recover()` re-arms it from this field. It can only mean
+            // anything on a `failed` run, so anywhere else it is stale bookkeeping.
+            if (run.status !== 'failed') run.autoResumeAt = undefined;
             // The wake counter is intentionally process-local, so a restarted
             // process starts a fresh epoch instead of displaying a stale cap.
             run.monitoringWakeCapReached = undefined;
@@ -468,6 +523,8 @@ export class RunStore extends EventEmitter {
     task: string;
     model?: string;
     runner?: 'claude' | 'codex' | 'opencode';
+    /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
+    agentProfile?: string;
     generateFollowups?: boolean;
     autonomous?: boolean;
     worktree?: false;
@@ -488,6 +545,7 @@ export class RunStore extends EventEmitter {
       task: input.task,
       model: input.model,
       runner: input.runner,
+      agentProfile: input.agentProfile,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
       worktree: input.worktree,
@@ -526,6 +584,13 @@ export class RunStore extends EventEmitter {
       normalized.activity = undefined;
       normalized.monitoringWakeAt = undefined;
       normalized.monitoringWakeCapReached = undefined;
+    }
+    // …and the mirror image for the usage-limit resume (spec
+    // 2026-08-03-auto-resume-after-usage-limit): it is a promise made ABOUT a failed run, so a
+    // run coming back to life — the resume itself, a user Continue, a re-queue — retires it.
+    // The manager's timer re-checks the record before it fires, so a cleared field is enough.
+    if (normalized.status && ['running', 'waiting', 'queued'].includes(normalized.status)) {
+      normalized.autoResumeAt = undefined;
     }
     Object.assign(run, this.redactPatch(normalized));
     this.touch(run);
@@ -628,6 +693,7 @@ export class RunStore extends EventEmitter {
     if (!run) return undefined;
     run.archived = archived;
     run.archivedAt = archived ? new Date().toISOString() : undefined;
+    if (archived) clearPendingAutoResume(run);
     this.touch(run);
     return run;
   }
@@ -639,9 +705,46 @@ export class RunStore extends EventEmitter {
       if (!run.archived && ['done', 'failed', 'cancelled'].includes(run.status)) {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
+        clearPendingAutoResume(run);
         this.touch(run);
         count++;
       }
+    }
+    return count;
+  }
+
+  /** Mark one run as read (#unread-done-items): stamp the read receipt now. Mirrors
+   *  `setArchived` — sets the field then persists + broadcasts via `touch`, so the
+   *  updated record rides the existing `run` SSE with no new event. Idempotent by
+   *  design: opening an already-read thread just re-stamps a later `seenAt`. */
+  setRead(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    run.seenAt = new Date().toISOString();
+    this.touch(run);
+    return run;
+  }
+
+  /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
+   *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
+   *  clause for clause: a `done` or `failed` run that finished and has not been seen
+   *  since. Cancelled runs are never unread — you stopped them yourself — and archived
+   *  ones never are either, since archiving is a stronger "done with this" than reading;
+   *  both are skipped, as are runs already read. Keeping the two rules identical is what
+   *  makes the returned count the number the cockpit's unread badge was showing. */
+  markAllRead(): number {
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const run of this.runs.values()) {
+      const unread =
+        !run.archived &&
+        (run.status === 'done' || run.status === 'failed') &&
+        run.finishedAt !== undefined &&
+        (run.seenAt === undefined || run.seenAt < run.finishedAt);
+      if (!unread) continue;
+      run.seenAt = now;
+      this.touch(run);
+      count++;
     }
     return count;
   }

@@ -55,6 +55,9 @@ export type AppShellProps = {
   repo?: RepoChip | null
   /** Inbox badge count. Null/0 renders no badge. Step 3.2 feeds it from the SSE stream. */
   inboxCount?: number | null
+  /** Unread done-items count for the Tasks badge (#unread-done-items). Null/0 renders no badge;
+   *  the container derives it from the run list via `unreadDoneCount`. */
+  unreadCount?: number | null
   /** A quiet, accessible marker on Skills when a checked update remains actionable. */
   skillsUpdateAvailable?: boolean
   /** cezar version for the footer chip. Null until Step 3.1 reads it from `/api/health`. */
@@ -126,6 +129,7 @@ export function AppShell({
   children,
   repo = null,
   inboxCount = null,
+  unreadCount = null,
   skillsUpdateAvailable = false,
   version = null,
   latestVersion = null,
@@ -182,6 +186,7 @@ export function AppShell({
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.
     inboxCount: inboxAvailable ? inboxCount : null,
+    unreadCount,
     skillsUpdateAvailable,
     version,
     latestVersion,
@@ -236,6 +241,7 @@ type NavProps = {
   items: NavItem[]
   repo: RepoChip | null
   inboxCount: number | null
+  unreadCount: number | null
   skillsUpdateAvailable: boolean
   version: string | null
   latestVersion: string | null
@@ -309,6 +315,7 @@ function SidebarContent({
   items,
   repo,
   inboxCount,
+  unreadCount,
   skillsUpdateAvailable,
   version,
   latestVersion,
@@ -414,6 +421,17 @@ function SidebarContent({
                       className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
                     >
                       {inboxCount}
+                    </span>
+                  ) : null}
+                  {/* Unread done items (#unread-done-items): same violet count grammar as the
+                      Inbox badge — the two share the "needs a human" hue. */}
+                  {item.badge === 'tasks-unread' && unreadCount ? (
+                    <span
+                      data-slot="nav-unread-badge"
+                      title={`${unreadCount} unread finished ${unreadCount === 1 ? 'task' : 'tasks'}`}
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                    >
+                      {unreadCount}
                     </span>
                   ) : null}
                   {item.badge === 'skills-update' && skillsUpdateAvailable ? (

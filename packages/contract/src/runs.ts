@@ -81,6 +81,11 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
+   *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
+   *  that created it, so resume and Continue read this rather than the project's current
+   *  selection. Absent on records written before accounts existed. */
+  profileId: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -90,6 +95,12 @@ export const diffStatSchema = z.object({
   adds: z.number(),
   dels: z.number(),
   files: z.number(),
+  /** Additive since #751, and present ONLY when true: the numbers cover uncommitted work
+   *  alone, because the worktree's HEAD had been repointed off the task's own branch (every
+   *  review/QA run does this) and the merge-base anchor would otherwise have reported the
+   *  checked-out branch's entire diff as this task's. Absent on every normal run and on every
+   *  record written before #751 — a consumer that ignores it sees exactly the old shape. */
+  repointed: z.boolean().optional(),
 });
 export type DiffStat = z.infer<typeof diffStatSchema>;
 
@@ -138,6 +149,9 @@ export const runRecordSchema = z.object({
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
+  /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
+   *  on `runner`. Absent = the run follows the project's own selection. */
+  agentProfile: z.string().optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
@@ -171,6 +185,12 @@ export const runRecordSchema = z.object({
   monitoringWakeAt: z.string().optional(),
   /** The current live monitoring epoch exhausted its 40 automatic checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /** Exact ISO-8601 instant this run resumes itself after a provider usage limit stopped it
+   *  (spec 2026-08-03-auto-resume-after-usage-limit). Present only on a `failed` run with a
+   *  pending automatic resume — its absence is what "no resume is scheduled" looks like. */
+  autoResumeAt: z.string().optional(),
+  /** Consecutive automatic resumes since the last human turn, against the safety cap. */
+  autoResumeAttempts: z.number().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -218,6 +238,11 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean(),
   archivedAt: z.string().optional(),
+  /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
+   *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
+   *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
+   *  runs and on any run not yet opened, both of which count as unread. */
+  seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -267,9 +292,24 @@ export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
 export const cancelResponseSchema = z.object({ cancelled: z.boolean() });
 export type CancelResponse = z.infer<typeof cancelResponseSchema>;
 
+/**
+ * `DELETE /runs/:id/auto-resume` (spec 2026-08-03-auto-resume-after-usage-limit) — the per-task
+ * off switch for a pending usage-limit resume, next to the workspace-wide setting.
+ *
+ * `z.literal(true)`, not a boolean, and that IS the shape: the route is idempotent, so a run with
+ * nothing pending answers 200 as well — "this task will not resume itself" is equally true either
+ * way. Only an unknown run refuses, with 404.
+ */
+export const cancelAutoResumeResponseSchema = z.object({ cancelled: z.literal(true) });
+export type CancelAutoResumeResponse = z.infer<typeof cancelAutoResumeResponseSchema>;
+
 /** `POST /runs/archive-finished` — how many runs the sweep archived. */
 export const archiveFinishedResponseSchema = z.object({ archived: z.number() });
 export type ArchiveFinishedResponse = z.infer<typeof archiveFinishedResponseSchema>;
+
+/** `POST /runs/read-all` — how many unread finished runs the sweep marked read. */
+export const markAllReadResponseSchema = z.object({ read: z.number() });
+export type MarkAllReadResponse = z.infer<typeof markAllReadResponseSchema>;
 
 /** `DELETE /runs/:id` — an active run is a 409 and an unknown one a 404, so this only ever
  *  reports success. */
@@ -448,6 +488,9 @@ export const createRunInputBaseSchema = z
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     runner: runnerSchema.optional(),
+    /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
+     *  project's own selection; an id that no longer exists is a 400, not a silent default. */
+    agentProfile: z.string().max(64).optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).

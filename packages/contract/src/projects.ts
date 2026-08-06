@@ -87,6 +87,9 @@ export type UpdateProjectResponse = z.infer<typeof updateProjectResponseSchema>;
  * clear a project's per-project concurrency ceiling. `null` clears the override back to "inherit
  * the workspace cap"; an integer `1..16` pins it. The bounds mirror `workspaceProjectSchema`
  * exactly, so a value this schema accepts can never be degraded away by the next load's `.catch`.
+ *
+ * Deliberately NOT where the agent-account selection lives — that is
+ * `PUT /api/v1/workspace/agent-profiles/selection`, stored beside the accounts it names.
  */
 export const updateProjectInputSchema = z.object({
   maxParallel: z.number().int().min(1).max(16).nullable(),

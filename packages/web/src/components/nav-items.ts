@@ -19,7 +19,7 @@ export type NavItem = {
   /** Path prefixes that light this item up. See `activeNavPath` for the longest-prefix rule. */
   match: string[]
   /** Optional trailing status affordance. Rendering/data stay with the shell. */
-  badge?: 'inbox-count' | 'skills-update'
+  badge?: 'inbox-count' | 'skills-update' | 'tasks-unread'
   /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports the forge
    *  driver available — see `visibleNavItems`. */
   forge?: boolean
@@ -36,7 +36,7 @@ export type NavItem = {
  *  compare (`/compare/:groupId`) is open.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: 'Tasks', icon: ListChecksIcon, match: ['/', '/tasks', '/compare'] },
+  { to: '/', label: 'Tasks', icon: ListChecksIcon, match: ['/', '/tasks', '/compare'], badge: 'tasks-unread' },
   { to: '/inbox', label: 'Inbox', icon: InboxIcon, match: ['/inbox'], badge: 'inbox-count', inbox: true },
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },

@@ -61,6 +61,14 @@ const resourcesSchema = z
     maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
     /** Optional cadence for re-checking monitored work; null parks at zero model cost. */
     monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().default(null).catch(null),
+    /**
+     * Resume a task the provider's usage limit stopped, once that limit resets
+     * (spec 2026-08-03-auto-resume-after-usage-limit). ON by default, which is the one
+     * cost-bearing automation in this file that is: it spends nothing while it waits, and it
+     * finishes the work the user already asked for rather than starting any of its own. Switching
+     * it off leaves the run `failed` with its Continue button, exactly as before the feature.
+     */
+    autoResumeOnUsageLimit: z.boolean().default(true).catch(true),
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
@@ -73,6 +81,32 @@ const composerDefaultsSchema = z
   .object({
     autonomous: z.boolean().optional().catch(undefined),
     worktree: z.boolean().optional().catch(undefined),
+  })
+  .passthrough();
+
+/**
+ * What a repo that has said nothing runs (spec 2026-07-29-agent-profiles).
+ *
+ * The point is not to configure every checkout: a repo's own `.ai/cezar/config.json` still wins
+ * key by key, and this is only consulted where that file is SILENT. Which is why every key here is
+ * optional with no default — an absent `runner` has to stay distinguishable from one someone chose,
+ * or "fall back to the machine default" collapses into "always claude".
+ *
+ * Personal and per-machine, like everything else in this file. The repo config is the team's; this
+ * is yours.
+ */
+const agentDefaultsSchema = z
+  .object({
+    runner: z.enum(PROVIDER_IDS).optional().catch(undefined),
+    models: z
+      .object({
+        claude: z.string().trim().min(1).max(200).optional().catch(undefined),
+        codex: z.string().trim().min(1).max(200).optional().catch(undefined),
+        opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
+      })
+      .passthrough()
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 
@@ -111,6 +145,9 @@ const workspaceConfigSchema = z
     /** Optional auto-update override. Absence inherits the environment/default
      *  and must stay absent on unrelated merge-writes. */
     skillsAutoUpdate: z.boolean().optional().catch(undefined),
+    /** Global opt-in model policy. The native coding-agent model becomes
+     * authoritative while runner choice remains available. */
+    modelsLocked: z.boolean().optional().catch(undefined),
     // Function-form default/catch: mutators (step 1.3's registerProject) edit
     // these objects in place, so parses must never share one reference.
     resources: resourcesSchema.prefault(() => ({})).catch(() => resourcesSchema.parse({})),
@@ -118,6 +155,8 @@ const workspaceConfigSchema = z
     composerDefaults: composerDefaultsSchema.default(() => ({})).catch(() => ({})),
     /** Host-wide provider preferences; absent means every provider is enabled. */
     disabledProviders: disabledProvidersSchema,
+    /** Machine-wide agent/model defaults for repos that set none of their own. */
+    agentDefaults: agentDefaultsSchema.default(() => ({})).catch(() => ({})),
     /** Per-entry salvage: a corrupt entry is dropped, the rest of the registry
      *  survives (a whole-array `.catch([])` would evict every project over one
      *  bad row). */

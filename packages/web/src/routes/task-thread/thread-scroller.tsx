@@ -53,7 +53,7 @@ export interface ThreadScrollControls {
 }
 
 /**
- * Stick-to-bottom, the jump pill, and the per-run scroll cache (spec §"Task thread").
+ * Stick-to-bottom, the jump pill, and the per-view scroll cache (spec §"Task thread").
  *
  *  - While content grows, stay pinned to the bottom ONLY while the reader is within
  *    {@link NEAR_BOTTOM_SLACK_PX} of it; the moment they scroll up, growth stops moving them
@@ -62,7 +62,10 @@ export interface ThreadScrollControls {
  *    including through the SSE replay, which re-grows the content after mount: the desired
  *    offset is re-applied on every growth until it is reachable or the user scrolls.
  */
-export function useThreadScroll(runId: string): ThreadScrollControls {
+export function useThreadScroll(
+  viewKey: string,
+  surface: 'document' | 'panel' = 'document',
+): ThreadScrollControls {
   const scrollElRef = useRef<HTMLElement | null>(null)
   // State, not a ref: crossing the virtualization threshold mid-replay REPLACES the rows
   // container, and the observers below must re-subscribe to the new element.
@@ -72,15 +75,19 @@ export function useThreadScroll(runId: string): ThreadScrollControls {
   const stuckRef = useRef(true)
   /** A cached offset not yet reachable (content still replaying). Cleared by user intent. */
   const pendingRestoreRef = useRef<number | null>(null)
-  /** Arrival (cache restore / land at tail) happens once per run, not once per container. */
+  /** Arrival (cache restore / land at tail) happens once per view, not once per container. */
   const arrivedForRef = useRef<string | null>(null)
   /** virtua's handle while virtualized (VirtualRows fills it), null in flat mode. */
   const virtualizerRef = useRef<VirtualizerHandle | null>(null)
 
   const attachContent = useCallback((el: HTMLElement | null) => {
     setContentEl(el)
-    if (el) scrollElRef.current = el.closest<HTMLElement>('[data-slot="main"]')
-  }, [])
+    if (el) {
+      scrollElRef.current = el.closest<HTMLElement>(
+        surface === 'panel' ? '[data-slot="transcript-viewport"]' : '[data-slot="main"]',
+      )
+    }
+  }, [surface])
 
   // EVERY programmatic scroll goes through virtua's handle when virtualized. A raw
   // `scrollTop` write races virtua's own jump compensation (it also writes scrollTop, from
@@ -117,10 +124,10 @@ export function useThreadScroll(runId: string): ThreadScrollControls {
     if (!scroller || !content) return
 
     // Arrival: cached position if the reader had one away from the tail, else the tail.
-    // Once per run — a container swap (threshold crossing) re-subscribes without re-arriving.
-    if (arrivedForRef.current !== runId) {
-      arrivedForRef.current = runId
-      const memory = readThreadScroll(runId)
+    // Once per view — a container swap (threshold crossing) re-subscribes without re-arriving.
+    if (arrivedForRef.current !== viewKey) {
+      arrivedForRef.current = viewKey
+      const memory = readThreadScroll(viewKey)
       if (memory && !memory.atBottom) {
         stuckRef.current = false
         pendingRestoreRef.current = memory.top
@@ -191,7 +198,7 @@ export function useThreadScroll(runId: string): ThreadScrollControls {
       // …and no overwriting the memory being restored, either — leaving again mid-restore
       // must find the parked position, not a replay artifact.
       if (pendingRestoreRef.current === null) {
-        saveThreadScroll(runId, { top: scroller.scrollTop, atBottom: near })
+        saveThreadScroll(viewKey, { top: scroller.scrollTop, atBottom: near })
       }
     }
     scroller.addEventListener('scroll', onScroll, { passive: true })
@@ -228,7 +235,7 @@ export function useThreadScroll(runId: string): ThreadScrollControls {
       scroller.removeEventListener('keydown', onKey)
       observer?.disconnect()
     }
-  }, [runId, contentEl, setOffset, toBottom])
+  }, [viewKey, contentEl, setOffset, toBottom])
 
   return { attachContent, scrollElRef, virtualizerRef, pillVisible, jumpToLatest, restickIfStuck }
 }

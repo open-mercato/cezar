@@ -45,8 +45,26 @@ export const workspaceConfigResponseSchema = z.object({
     maxParallel: z.number(),
     maxMonitoringSessions: z.number(),
     monitoringWakeIntervalMinutes: z.number().nullable(),
+    /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
+    autoResumeOnUsageLimit: z.boolean(),
     memoryLimitMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
+  }),
+  /**
+   * What a repo that has set none of its own runs (spec 2026-07-29-agent-profiles).
+   *
+   * Both keys are OPTIONAL on the wire, and that is load-bearing rather than lax: absent means
+   * "this machine has no opinion, the built-in default applies", and it has to stay distinguishable
+   * from a value someone chose or the fallback collapses into "always claude". Consulted only where
+   * the repo's own `.ai/cezar/config.json` is silent — a repo that chose is never overruled.
+   */
+  agentDefaults: z.object({
+    runner: runnerSchema.optional(),
+    models: z.object({
+      claude: z.string().optional(),
+      codex: z.string().optional(),
+      opencode: z.string().optional(),
+    }).optional(),
   }),
 });
 export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSchema>;
@@ -68,11 +86,26 @@ export const setWorkspaceConfigInputSchema = z.object({
       worktree: z.boolean().nullable().optional(),
     })
     .optional(),
+  /** Machine-wide agent defaults. `null` on a key CLEARS it back to "no opinion", which a bare
+   *  absent key cannot say in a partial patch. */
+  agentDefaults: z
+    .object({
+      runner: runnerSchema.nullable().optional(),
+      models: z
+        .object({
+          claude: z.string().trim().min(1).max(200).nullable().optional(),
+          codex: z.string().trim().min(1).max(200).nullable().optional(),
+          opencode: z.string().trim().min(1).max(200).nullable().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   resources: z
     .object({
       maxParallel: z.number().int().min(1).max(16).optional(),
       maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
+      autoResumeOnUsageLimit: z.boolean().optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
     })
@@ -213,6 +246,8 @@ export const configResponseSchema = z.object({
   defaultRunner: runnerSchema,
   systemPrompt: z.string().nullable(),
   defaultModels: runnerModelsSchema,
+  /** True when native coding-agent settings are authoritative and model picks are read-only. */
+  modelsLocked: z.boolean(),
   /** How many tasks run at once (1–16). */
   maxParallel: z.number(),
   /** Per-task memory ceiling in MiB (whole process tree); null = no limit. */
@@ -330,6 +365,11 @@ export const providerStatusSchema = z.object({
   enabled: z.boolean().optional(),
   hint: z.string().optional(),
   authFailureId: z.string().optional(),
+  /** Which agent account this row describes (spec 2026-07-29-agent-profiles). ABSENT on
+   *  `GET /api/v1/providers/status`, which deliberately keeps answering exactly one row per
+   *  provider — the discovered default — so an older client sees no change at all. Per-account
+   *  rows are carried by `GET /api/v1/workspace/agent-profiles` instead. */
+  profileId: z.string().optional(),
 });
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
 

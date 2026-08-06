@@ -22,6 +22,10 @@ export interface NewTaskDraft {
   text: string
   source: TaskSource | null
   runner: Runner | null
+  /** Per-task agent account (spec 2026-07-29-agent-profiles). `null` = follow the project's own
+   *  selection, which is what every draft that never touched the control means. Sticky like the
+   *  other pickers — which login a repo's work runs under is a way of working, not a whim. */
+  agentProfile: string | null
   model: string | null
   variants: number
   /** The `Start | Plan first` toggle (#383). Sticky like the pickers: plan-first is a way of
@@ -89,6 +93,7 @@ const EMPTY: NewTaskDraft = {
   text: '',
   source: null,
   runner: null,
+  agentProfile: null,
   model: null,
   variants: 1,
   planFirst: false,
@@ -126,6 +131,7 @@ function normalize(raw: unknown): NewTaskDraft {
     text: typeof obj.text === 'string' ? obj.text : '',
     source: isSource(obj.source) ? obj.source : null,
     runner: typeof obj.runner === 'string' ? (obj.runner as Runner) : null,
+    agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     model: typeof obj.model === 'string' ? obj.model : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     planFirst: obj.planFirst === true,

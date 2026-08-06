@@ -7,6 +7,7 @@ import {
   FolderGit2Icon,
   FoldersIcon,
   GaugeIcon,
+  IdCardIcon,
   PackageCheckIcon,
   KeyboardIcon,
   NotebookPenIcon,
@@ -16,6 +17,7 @@ import type { ComponentType, SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { AccountsSection } from './accounts-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
@@ -48,6 +50,7 @@ export type SettingsSectionId =
   | 'bookmarklets'
   | 'harness'
   | 'appearance'
+  | 'accounts'
   | 'agents'
   | 'agent-config'
   | 'resources'
@@ -170,6 +173,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Updates for skills installed on this machine.',
     icon: PackageCheckIcon,
     component: SkillsSection,
+    scope: 'global',
+  },
+  {
+    id: 'accounts',
+    title: 'Agent accounts',
+    description: 'Second logins, and the agent and models a project uses when it has chosen none.',
+    icon: IdCardIcon,
+    component: AccountsSection,
     scope: 'global',
   },
   {

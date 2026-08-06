@@ -51,7 +51,7 @@ export interface ScrollMemory {
   atBottom: boolean
 }
 
-/** Scroll positions per run id — module-level on purpose (the PlanDock collapse-memory
+/** Scroll positions per run/view key — module-level on purpose (the PlanDock collapse-memory
  *  pattern): survives route changes for the browser session, gone on reload, no server state. */
 const scrollByRun = new Map<string, ScrollMemory>()
 
@@ -64,7 +64,7 @@ export function readThreadScroll(runId: string): ScrollMemory | undefined {
 }
 
 /** virtua's per-session measurement cache (research §5: "per-session measurement cache"),
- *  keyed by run id: revisiting a virtualized thread restores measured row heights instead of
+ *  keyed by run/view: revisiting a virtualized thread restores measured row heights instead of
  *  re-estimating, so the restored scroll offset lands on the same content. The snapshot is
  *  opaque, so the row count it was taken at rides along — virtua's documented caveat is that
  *  a snapshot only fits the same item count, and a mid-replay remount must degrade to

@@ -60,9 +60,13 @@ function hasPendingPermission(_run: AttentionInput): boolean {
 /**
  * Whether a run finished while the user was not looking.
  *
- * Also always false today, and for the same reason: `unseen` needs a per-run "last seen" marker,
- * and cezar persists none — not in `RunRecord`, not in `UiState`. A terminal run therefore lands
- * in `none`, which is honest: the list shows its outcome, nothing is demanding attention.
+ * Still always false here, but now by DESIGN rather than for want of data. The "finished while
+ * you weren't looking" question is answered by the read/unread channel (#unread-done-items):
+ * `RunRecord.seenAt` + `isUnread()` in `lib/read-state.ts`. That signal is deliberately kept OFF
+ * the status dot — the dot keeps saying done/failed, and unread rides its own trailing violet
+ * marker (the approved "Option B") so status and "have I seen it" never collapse into one dot.
+ * Routing unread through this `unseen` bucket would recolor the status dot violet, which is
+ * exactly the conflation that design avoids, so the bucket stays reserved and unused.
  */
 function isUnseen(_run: AttentionInput): boolean {
   return false
@@ -72,7 +76,7 @@ function isUnseen(_run: AttentionInput): boolean {
  *  surfaces that only have a status — the compare view's `GroupVariant` columns — can use the
  *  same canonical function instead of inventing a second status-to-tone mapping. `activity` is
  *  optional (#490), so status-only callers keep working unchanged. */
-export type AttentionInput = Pick<RunRecord, 'status' | 'activity'>
+export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt'>
 
 /**
  * `RunRecord` → attention.
@@ -90,6 +94,15 @@ export type AttentionInput = Pick<RunRecord, 'status' | 'activity'>
 export function deriveAttention(run: AttentionInput): Attention {
   if (hasPendingPermission(run)) {
     return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
+  }
+  // A run a provider usage limit stopped is `failed` on the record, but it is not an outcome —
+  // it is a task with an appointment (spec 2026-08-03-auto-resume-after-usage-limit). Painting
+  // it red would report a failure that is about to undo itself, and putting it in the `error`
+  // bucket would notify the user about work that needs nothing from them. It reads as parked,
+  // like `queued`: amber, still, and asking for nothing. Ahead of the `failed` rung because the
+  // chain is first-match-wins.
+  if (run.status === 'failed' && run.autoResumeAt) {
+    return { bucket: 'none', tone: 'pending', pulse: false, label: 'scheduled' }
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }

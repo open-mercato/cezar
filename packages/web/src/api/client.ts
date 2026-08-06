@@ -1,5 +1,16 @@
 import type {
   AgentConfigFileContent,
+  AgentAccountDetailsResponse,
+  AgentAccountStatusResponse,
+  AgentProfileResponse,
+  AgentProfileSelectionsResponse,
+  AgentProfilesResponse,
+  CreateAgentProfileInput,
+  OpenAgentAccountFileInput,
+  OpenAgentAccountFileResponse,
+  RemoveAgentProfileResponse,
+  SelectAgentProfileInput,
+  UpdateAgentProfileInput,
   AutomationsResponse,
   AutomationCheck,
   AutomationCheckQueuedResponse,
@@ -10,6 +21,8 @@ import type {
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
+  MarkAllReadResponse,
+  CancelAutoResumeResponse,
   CancelResponse,
   ChangesPayload,
   CheckoutProjectInput,
@@ -391,12 +404,28 @@ export async function getProjects(opts?: ReadOptions): Promise<ProjectsResponse>
 /** One directory listing for the folder picker (`GET /api/fs/browse`, step 4.1). `path`
  *  omitted means the independently configured browse root, so the dialog never has to know
  *  or duplicate that workspace setting. */
-export async function browseFs(path?: string, opts?: ReadOptions): Promise<FsBrowseResponse> {
+export async function browseFs(
+  path?: string,
+  opts?: ReadOptions & {
+    /** Include dot-directories. Off by default (project folders are not hidden); ON for the
+     *  agent-account picker, where EVERY candidate is one — `~/.claude-klaudiusz` and friends. */
+    showHidden?: boolean
+  },
+): Promise<FsBrowseResponse> {
   return unwrap(
     // An absent `path` stays absent rather than becoming `?path=`: the server distinguishes
     // "no path" (the configured browse root) from an empty one only by `?? ''`, but `hc` drops
-    // an `undefined` value entirely, which keeps the URL the one this call always sent.
-    await cez.api.v1.fs.browse.$get({ query: { path: path === '' ? undefined : path } }, init(opts)),
+    // an `undefined` value entirely, which keeps the URL the one this call always sent. Same
+    // reason `showHidden` is omitted rather than sent as `0`.
+    await cez.api.v1.fs.browse.$get(
+      {
+        query: {
+          path: path === '' ? undefined : path,
+          ...(opts?.showHidden ? { showHidden: '1' } : {}),
+        },
+      },
+      init(opts),
+    ),
     '/fs/browse',
   )
 }
@@ -882,8 +911,24 @@ export async function getGroup(groupId: string, opts?: ReadOptions): Promise<Gro
 
 // ---- workspace mutations ------------------------------------------------------------------
 
-export async function connectProvider(provider: ProviderId): Promise<ProviderConnectResponse> {
-  return unwrap(await cez.api.v1.providers.connect.$post({ json: { provider } }), '/providers/connect')
+/**
+ * Open a terminal signed in to `provider`, optionally for a NAMED account.
+ *
+ * `profileId` aims the login at one agent account (spec 2026-07-29-agent-profiles): the server
+ * renders `CLAUDE_CONFIG_DIR=… claude /login` for it and fails closed rather than running the bare
+ * command, because a terminal silently pointed at the wrong account is invisible to the user.
+ * Omitted means the discovered account, which is how the Providers card has always called this.
+ */
+export async function connectProvider(
+  provider: ProviderId,
+  profileId?: string,
+): Promise<ProviderConnectResponse> {
+  return unwrap(
+    await cez.api.v1.providers.connect.$post({
+      json: { provider, ...(profileId ? { profileId } : {}) },
+    }),
+    '/providers/connect',
+  )
 }
 
 export async function setProviderEnabled(
@@ -976,10 +1021,14 @@ export async function removeProject(projectId: string): Promise<RemoveProjectRes
 
 /**
  * Set or clear a project's per-project concurrency ceiling
- * (`PATCH /api/projects/:projectId`, spec 2026-07-22). `maxParallel: null`
+ * (`PATCH /api/v1/projects/:projectId`, spec 2026-07-22). `maxParallel: null`
  * clears the override back to "inherit the workspace cap"; an integer pins it.
  * The server applies the new ceiling live (semaphore refresh), so the answer is
  * the updated entry the pane swaps into its list.
+ *
+ * Deliberately NOT where a project's agent account is set — that is
+ * `selectAgentProfile` (`PUT /api/v1/workspace/agent-profiles/selection`), so
+ * the selection is stored beside the accounts it names.
  */
 export async function updateProject(
   projectId: string,
@@ -1024,6 +1073,18 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
   )
 }
 
+/** Stop THIS task from resuming itself after a usage limit (spec
+ *  2026-08-03-auto-resume-after-usage-limit) — the per-task twin of the workspace setting.
+ *  Idempotent: a task with nothing scheduled answers the same way. */
+export async function cancelAutoResume(id: string): Promise<CancelAutoResumeResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['auto-resume'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/auto-resume'),
+  )
+}
+
 /** Sweep every finished (done/failed/cancelled) active run into the archive in one call —
  *  the Tasks header's "Archive finished" button. */
 export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
@@ -1032,6 +1093,27 @@ export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
       param: { projectId: queryScope() },
     }),
     '/runs/archive-finished',
+  )
+}
+
+/** Read receipt (#unread-done-items): opening a task's thread marks it read. Bodyless —
+ *  the server stamps `seenAt = now` and answers with the updated record. */
+export async function markRunSeen(id: string): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].read.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/read'),
+  )
+}
+
+/** "Mark all read": stamp every currently-unread finished run in one call. */
+export async function markAllRunsSeen(): Promise<MarkAllReadResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs['read-all'].$post({
+      param: { projectId: queryScope() },
+    }),
+    '/runs/read-all',
   )
 }
 
@@ -1473,10 +1555,145 @@ export async function putWorkspaceUiState(patch: WorkspaceUiState): Promise<Work
   )
 }
 
-/** The global settings slice of `~/.cezar/config.json` (step 2.7) — Settings → Resources and
- *  (step 4.4) the checkout-root field. Workspace-level, so never scope-prefixed. */
+/**
+ * The global settings slice of `~/.cezar/config.json` (step 2.7) — Settings → Resources, (step 4.4)
+ * the checkout-root field, and the agent defaults.
+ *
+ * `agentDefaults` is materialized HERE rather than guarded at each read site, for the same reason
+ * the agent-accounts collections are: during development the cockpit and the server can be
+ * different versions (Vite serves this bundle while `dist/` or another process serves the API), and
+ * an older server answering without the key crashed the accounts page on `.runner`. One boundary,
+ * one place a missing key becomes the empty answer it means.
+ */
 export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceConfigResponse> {
-  return unwrap(await cez.api.v1.workspace.config.$get({}, init(opts)), '/workspace/config')
+  const answer = await unwrap(
+    await cez.api.v1.workspace.config.$get({}, init(opts)),
+    '/workspace/config',
+  )
+  return { ...answer, agentDefaults: answer.agentDefaults ?? {} }
+}
+
+/**
+ * Every agent account on this machine (spec 2026-07-29-agent-profiles) — the discovered defaults
+ * plus any extra config dirs. Workspace-level, so never scope-prefixed. Hosted mode answers
+ * `{editable: false, profiles: [], …}` rather than leaking host paths.
+ *
+ * The collections are filled in HERE rather than guarded at each of the ~5 read sites. During
+ * development the cockpit and the server can be different versions (Vite serves this bundle while
+ * `dist/` or another process serves the API), and an older server answering without `files` or
+ * `selections` crashed the accounts pane on `.map` of undefined. Normalizing at the boundary — the
+ * job this module already does for provider status — means every consumer can trust the shape, and
+ * the next additive field is one line here instead of a hunt for missing `??`s.
+ */
+export async function getAgentProfiles(opts?: ReadOptions): Promise<AgentProfilesResponse> {
+  const answer = await unwrap(
+    await cez.api.v1.workspace['agent-profiles'].$get({}, init(opts)),
+    '/workspace/agent-profiles',
+  )
+  return {
+    ...answer,
+    profileCapableProviders: answer.profileCapableProviders ?? [],
+    selections: answer.selections ?? {},
+    defaults: answer.defaults ?? {},
+    profiles: (answer.profiles ?? []).map((profile) => ({ ...profile, files: profile.files ?? [] })),
+  }
+}
+
+/** Register an extra config dir as an account. The id is allocated server-side from the label. */
+export async function createAgentProfile(
+  input: CreateAgentProfileInput,
+): Promise<AgentProfileResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles'].$post({ json: input }),
+    '/workspace/agent-profiles',
+  )
+}
+
+/** One account's auth state, probed for real (spec 2026-07-29-agent-profiles). Off the listing on
+ *  purpose: a probe shells out to an agent CLI, so the pane paints first and fills rows in as these
+ *  land. `refresh` drops the server's cached answer for this account and re-probes. */
+export async function getAgentAccountStatus(
+  routeId: string,
+  opts?: ReadOptions & { refresh?: boolean },
+): Promise<AgentAccountStatusResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles'][':id'].status.$get(
+      {
+        param: { id: encodeURIComponent(routeId) },
+        query: opts?.refresh ? { refresh: '1' } : {},
+      },
+      init(opts),
+    ),
+    `/workspace/agent-profiles/${encodeURIComponent(routeId)}/status`,
+  )
+}
+
+/** Who an account is signed in as (spec 2026-07-29-agent-profiles). Fetched only when the user
+ *  asks for it — it is deliberately NOT part of the listing, so "hidden by default" means the data
+ *  is absent rather than merely unrendered. Address discovered accounts via `agentAccountRouteId`. */
+export async function getAgentAccountDetails(
+  routeId: string,
+  opts?: ReadOptions,
+): Promise<AgentAccountDetailsResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles'][':id'].details.$get(
+      { param: { id: encodeURIComponent(routeId) } },
+      init(opts),
+    ),
+    `/workspace/agent-profiles/${encodeURIComponent(routeId)}/details`,
+  )
+}
+
+/** Open one of an account's own config files — or its folder — in a local app. `file` is a catalog
+ *  id (or `folder`); this never sends a path, so the route has no traversal surface. */
+export async function openAgentAccountFile(
+  routeId: string,
+  input: OpenAgentAccountFileInput,
+): Promise<OpenAgentAccountFileResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles'][':id'].open.$post({
+      param: { id: encodeURIComponent(routeId) },
+      json: input,
+    }),
+    `/workspace/agent-profiles/${encodeURIComponent(routeId)}/open`,
+  )
+}
+
+/** Point one project's provider at an account. `profileId: null` clears it back to the
+ *  discovered account. Lives on the accounts family, not `PATCH /projects`, because the selection
+ *  is stored beside the accounts it names. */
+export async function selectAgentProfile(
+  input: SelectAgentProfileInput,
+): Promise<AgentProfileSelectionsResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles'].selection.$put({ json: input }),
+    '/workspace/agent-profiles/selection',
+  )
+}
+
+/** Rename an account or repoint its folder. Partial — send only what changed. */
+export async function updateAgentProfile(
+  id: string,
+  input: UpdateAgentProfileInput,
+): Promise<AgentProfileResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles'][':id'].$patch({
+      param: { id: encodeURIComponent(id) },
+      json: input,
+    }),
+    `/workspace/agent-profiles/${encodeURIComponent(id)}`,
+  )
+}
+
+/** Deregister an account. The folder is never touched, and projects using it fall back to the
+ *  discovered default (the server scrubs their references in the same write). */
+export async function removeAgentProfile(id: string): Promise<RemoveAgentProfileResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles'][':id'].$delete({
+      param: { id: encodeURIComponent(id) },
+    }),
+    `/workspace/agent-profiles/${encodeURIComponent(id)}`,
+  )
 }
 
 /** Cached Open Mercato update state for one registered project. The GET is immediate; the

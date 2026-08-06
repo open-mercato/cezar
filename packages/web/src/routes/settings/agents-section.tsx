@@ -3,15 +3,29 @@ import { BotIcon } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
 import { putConfig } from '@/api/client'
-import { queryKeys, useConfig, useProviderStatus, useRepo, useRunnerModels } from '@/api/queries'
+import {
+  queryKeys,
+  useAgentProfiles,
+  useConfig,
+  useProjects,
+  useProviderStatus,
+  useRepo,
+  useRunnerModels,
+  useSelectAgentProfile,
+} from '@/api/queries'
+import { useProjectScope } from '@/api/project-scope-context'
 import type { ConfigResponse, Runner, SetConfigInput } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
-import { cn } from '@/lib/utils'
 import { providerStatusFor } from '@/lib/provider-status'
+import {
+  DefaultAgentPicker,
+  agentPickerRows,
+  hasAgentAccounts,
+} from '@/components/default-agent-picker'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { ProviderSettings } from './provider-settings'
 
@@ -116,65 +130,20 @@ function AgentsForm({
     >
       <ProviderSettings />
 
-      <Field
-        title="Default runner"
-        hint="Preselected for new tasks and used by the chain planner. Each task can still pick another runner."
-      >
-        <div
-          role="radiogroup"
-          aria-label="Default runner"
-          data-slot="agents-runner"
-          className="inline-flex w-fit gap-0.5 rounded-md border border-border bg-card p-0.5"
-        >
-          {RUNNERS.map((option) => {
-            const checked = option.id === config.defaultRunner
-            const provider = providerStatusFor(providerStatus.data, option.id)
-            const providerConnected =
-              !providerStatus.isPending &&
-              !providerStatus.isError &&
-              provider?.enabled === true &&
-              provider.status === 'connected'
-            const providerReason = providerStatus.isPending
-              ? 'Checking provider authentication…'
-              : providerStatus.isError
-                ? 'Provider authentication could not be verified.'
-                : provider?.enabled === false
-                  ? 'This provider is disabled. Enable it above or choose another provider.'
-                : providerConnected
-                  ? undefined
-                  : 'Connect this provider before selecting it.'
-            return (
-              <button
-                key={option.id}
-                type="button"
-                role="radio"
-                aria-checked={checked}
-                data-value={option.id}
-                title={providerReason ?? option.desc}
-                disabled={save.isPending || !providerConnected}
-                onClick={() => save.mutate({ defaultRunner: option.id })}
-                className={cn(
-                  'rounded-sm px-3 py-1.5 font-mono text-[13px] font-medium transition-colors disabled:opacity-50',
-                  checked ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {option.label}
-              </button>
-            )
-          })}
-        </div>
-        {!providerStatus.isPending &&
-        !providerStatus.isError &&
-        providerStatusFor(providerStatus.data, config.defaultRunner)?.enabled === false ? (
-          <p className="text-[13px] text-muted-foreground">
-            This provider is disabled. Enable it above or choose another provider.
-          </p>
-        ) : null}
-      </Field>
+      <DefaultAgentField
+        defaultRunner={config.defaultRunner}
+        providerStatus={providerStatus}
+        saving={save.isPending}
+        onPick={(runner) => save.mutate({ defaultRunner: runner })}
+      />
 
       <Field
         title="Default models"
-        hint="The model preselected in the composer for each runner. Auto lets the runner decide per task."
+        hint={
+          config.modelsLocked
+            ? 'Models are locked to the defaults configured in the native coding-agent settings.'
+            : 'The model preselected in the composer for each runner. Auto lets the runner decide per task.'
+        }
       >
         <div className="flex max-w-md flex-col gap-2">
           {RUNNERS.map((runner) => {
@@ -193,38 +162,52 @@ function AgentsForm({
                 : providerConnected
                   ? undefined
                   : 'Connect this provider before selecting it.'
+            const modelOptions = modelsForRunner(runner.id, catalogs[runner.id], [config.defaultModels[runner.id]])
+            const configuredModel = config.defaultModels[runner.id] ?? ''
+            const configuredModelLabel =
+              modelOptions.find((model) => model.id === configuredModel)?.label ??
+              configuredModel ??
+              'auto (default)'
             return (
               <label key={runner.id} className="flex items-center gap-3">
                 <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{runner.label}</span>
-                <select
-                  aria-label={`Default model for ${runner.label}`}
-                  data-slot="agents-model"
-                  data-runner={runner.id}
-                  value={config.defaultModels[runner.id] ?? ''}
-                  title={providerReason ?? runner.desc}
-                  disabled={save.isPending || !providerConnected}
-                  onChange={(event) =>
-                    save.mutate({
-                      defaultModels: { [runner.id]: event.target.value || null } as Partial<
-                        Record<Runner, string | null>
-                      >,
-                    })
-                  }
-                  className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-                >
-                  {modelsForRunner(
-                    runner.id,
-                    catalogs[runner.id],
-                    [config.defaultModels[runner.id]],
-                  ).map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.id === '' ? 'auto (default)' : model.label}
-                    </option>
-                  ))}
-                  {modelCatalogStatus(runner.id, catalogs[runner.id]) ? (
-                    <option disabled>{modelCatalogStatus(runner.id, catalogs[runner.id])}</option>
-                  ) : null}
-                </select>
+                {config.modelsLocked ? (
+                  <output
+                    aria-label={`Default model for ${runner.label}`}
+                    data-slot="agents-model"
+                    data-runner={runner.id}
+                    title="Model selection is locked to native coding-agent settings."
+                    className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs"
+                  >
+                    {configuredModelLabel}
+                  </output>
+                ) : (
+                  <select
+                    aria-label={`Default model for ${runner.label}`}
+                    data-slot="agents-model"
+                    data-runner={runner.id}
+                    value={configuredModel}
+                    title={providerReason ?? runner.desc}
+                    disabled={save.isPending || !providerConnected}
+                    onChange={(event) =>
+                      save.mutate({
+                        defaultModels: { [runner.id]: event.target.value || null } as Partial<
+                          Record<Runner, string | null>
+                        >,
+                      })
+                    }
+                    className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+                  >
+                    {modelOptions.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.id === '' ? 'auto (default)' : model.label}
+                      </option>
+                    ))}
+                    {modelCatalogStatus(runner.id, catalogs[runner.id]) ? (
+                      <option disabled>{modelCatalogStatus(runner.id, catalogs[runner.id])}</option>
+                    ) : null}
+                  </select>
+                )}
               </label>
             )
           })}
@@ -342,6 +325,102 @@ function AgentsForm({
         )}
       </Field>
     </div>
+  )
+}
+
+/**
+ * The repo's default AGENT — and, when that agent has more than one login, which account (spec
+ * 2026-07-29-agent-profiles).
+ *
+ * One flat list, the same shape the composer's runner pill uses:
+ *
+ *     claude · Default
+ *     claude · Klaudiusz
+ *     codex
+ *
+ * Not a runner control with an account control beside it. Both answers are the same decision —
+ * "what does this repo run by default" — and splitting them meant reading two fields to learn one
+ * fact. An agent with a single login stays a single row, so a machine with no extra accounts sees
+ * exactly the control it always saw.
+ *
+ * The two halves land in DIFFERENT stores, and that is deliberate rather than incidental: the runner
+ * is a team decision and goes in the repo's committable config, while the account is personal and
+ * per-machine (`~/.cezar/agent-accounts.json`) — committing it would publish which login someone
+ * works under. Hence two writes for one click, and the copy says so.
+ */
+function DefaultAgentField({
+  defaultRunner,
+  providerStatus,
+  saving,
+  onPick,
+}: {
+  defaultRunner: Runner
+  providerStatus: ReturnType<typeof useProviderStatus>
+  saving: boolean
+  onPick: (runner: Runner) => void
+}) {
+  const profiles = useAgentProfiles()
+  const projects = useProjects()
+  const scope = useProjectScope()
+  const repo = useRepo()
+  const select = useSelectAgentProfile()
+
+  // `projectId: null` is the boot project, which every route addresses by the reserved `default`
+  // alias. The repo ROOT is the key the account store uses, and `useRepo` is project-scoped so it
+  // already answers for the ACTIVE project.
+  const projectId = scope.projectId ?? 'default'
+  const repoRoot = repo.data?.info?.root
+  // Repo first, then the machine-wide default — the same order the server resolves in, so the
+  // checked row is the account a task would really run under rather than a guess.
+  const selection = repoRoot ? profiles.data?.selections[repoRoot] : undefined
+  const machine = profiles.data?.defaults
+  const rows = agentPickerRows(profiles.data?.profiles ?? [])
+  const hasAccounts = hasAgentAccounts(rows)
+
+  return (
+    <Field
+      title={hasAccounts ? 'Default agent' : 'Default runner'}
+      hint={
+        hasAccounts
+          ? 'Preselected for new tasks in THIS repo, and used by the chain planner. Each task can still pick another agent or account. The account is stored on this machine only — it is never committed, so a teammate keeps their own.'
+          : 'Preselected for new tasks in THIS repo, and used by the chain planner. Each task can still pick another runner.'
+      }
+    >
+      <DefaultAgentPicker
+        rows={rows}
+        runner={defaultRunner}
+        accountFor={(id) => selection?.[id] ?? machine?.[id] ?? null}
+        providerStatus={providerStatus}
+        disabled={saving}
+        // The account half needs a project to write against; the runner half does not, so only an
+        // account row waits on the registry.
+        accountDisabled={select.isPending || projects.data === undefined}
+        onPick={(runner, account, hasAccountChoice) => {
+          if (runner !== defaultRunner) onPick(runner)
+          // Only when this agent HAS a choice of accounts: a single-login agent must not write a
+          // selection, or the store would fill up with rows that say nothing.
+          if (hasAccountChoice) {
+            select.mutate(
+              { projectId, provider: runner, profileId: account },
+              { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+            )
+          }
+        }}
+      />
+      {!providerStatus.isPending &&
+      !providerStatus.isError &&
+      providerStatusFor(providerStatus.data, defaultRunner)?.enabled === false ? (
+        <p className="text-[13px] text-muted-foreground">
+          This provider is disabled. Enable it above or choose another provider.
+        </p>
+      ) : null}
+      {hasAccounts ? (
+        <p className="max-w-md text-[13px] text-muted-foreground">
+          Tasks already started under another account can’t be resumed here — their sessions live in
+          that account’s folder.
+        </p>
+      ) : null}
+    </Field>
   )
 }
 

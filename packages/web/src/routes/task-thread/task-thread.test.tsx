@@ -15,7 +15,8 @@ import type {
   RunStatus,
 } from '@open-mercato/cezar-api-client'
 
-import { buildThreadRows, TaskThreadRoute, ThreadView } from './task-thread'
+import { TaskThreadRoute, ThreadView } from './task-thread'
+import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
 import { reduceThread } from './thread-state'
 
 afterEach(() => {
@@ -102,6 +103,9 @@ const EVENTS: RunEvent[] = [
   line(7, 'user-message', { text: 'Thanks!', imageCount: 2 }),
 ]
 
+const transcriptRows = (fixture: ApiRun, thread = reduceThread(EVENTS)) =>
+  buildTranscriptRows(mainTranscriptSections(fixture, thread), fixture.id)
+
 describe('ThreadView', () => {
   it('keeps provider authorization recovery visible after the run reaches done', () => {
     const authRequired = [
@@ -138,6 +142,36 @@ describe('ThreadView', () => {
     expect(bubbles[0]!.textContent).toContain('Summarize what this project does.')
     expect(bubbles[1]!.textContent).toContain('Thanks!')
     expect(bubbles[1]!.textContent).toContain('2 images attached')
+  })
+
+  it('turns the screenshot-shaped provisional marker into option cards without exposing JSON', () => {
+    const questions = [
+      {
+        header: 'Who books',
+        question: 'Who should be able to create bookings in v1?',
+        multiSelect: false,
+        options: [
+          { label: 'Staff only', description: 'Backend/admin CRUD only for v1' },
+          { label: 'Staff + customer self-service', description: 'Also let customers book through the portal' },
+        ],
+      },
+    ]
+    const raw = `later:\n\nCEZ:ASK ${JSON.stringify({ questions })}`
+    const events = [
+      line(1, 'item.completed', {
+        item: { kind: 'message', id: 'ask-message', role: 'assistant', text: raw },
+      }),
+    ]
+    renderView(<ThreadView run={run('running')} thread={reduceThread(events, { activeTurn: true })} />)
+    expect(document.body.textContent).toContain('later:')
+    expect(document.body.textContent).not.toContain('CEZ:ASK')
+
+    cleanup()
+    const settled = [...events, line(2, 'ask.requested', { requestId: 'ask-screenshot', questions })]
+    renderView(<ThreadView run={run('waiting')} thread={reduceThread(settled)} />)
+    expect(document.body.textContent).not.toContain('CEZ:ASK')
+    expect(screen.getByText('Staff only')).not.toBeNull()
+    expect(screen.getByText('Staff + customer self-service')).not.toBeNull()
   })
 
   it('renders assistant messages as markdown, not raw text', async () => {
@@ -198,6 +232,67 @@ describe('ThreadView', () => {
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
     expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
+  })
+
+  it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: Claude AI usage limit reached|1754236800',
+          autoResumeAt: '2026-08-03T17:00:30.000Z',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Usage limit reached — this task resumes automatically at')
+    // To the SECOND: "6:41 PM" cannot tell a wait that is nearly over from one that just
+    // started. Matched as a pattern because the rendered zone is the reader's own.
+    expect(hint?.querySelector('time')?.textContent).toMatch(/:\d{2}:30\b/)
+    // The absolute instant is the source of truth, not a countdown (spec
+    // 2026-08-03-auto-resume-after-usage-limit).
+    expect(hint?.querySelector('time')?.getAttribute('datetime')).toBe('2026-08-03T17:00:30.000Z')
+    // The other half of an automation nobody opted into: one click to switch it off.
+    expect(screen.getByRole('link', { name: 'Auto-resume settings' }).getAttribute('href')).toBe(
+      '/settings/global/resources',
+    )
+  })
+
+  it('offers a per-task opt-out that hits DELETE /auto-resume for THIS run only', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method ?? 'GET' })
+        const body = String(input).endsWith('/auto-resume') ? { cancelled: true } : []
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ThreadView
+            run={run('failed', { autoResumeAt: '2026-08-03T17:00:30.000Z' })}
+            thread={reduceThread(EVENTS)}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Don’t resume' }))
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/runs/r1/auto-resume'))).toBe(true),
+    )
+  })
+
+  it('an ordinary failure has no resume hint — the promise is only made when the server armed one', () => {
+    renderView(<ThreadView run={run('failed', { error: 'boom' })} thread={reduceThread(EVENTS)} />)
+    expect(document.querySelector('[data-slot="auto-resume-hint"]')).toBeNull()
   })
 
   it('running → the composer stays enabled with the "message" placeholder, no paused hint', () => {
@@ -319,12 +414,12 @@ describe('ThreadView', () => {
   /**
    * The no-regression assertion, at the row-builder level rather than the DOM:
    * an absent stack and an empty one must produce the same rows, and a run with
-   * no stack must produce exactly today's rows. Asserting on `buildThreadRows`
+   * no stack must produce exactly today's rows. Asserting on the shared row builder's
    * keys keeps this free of Radix's per-render generated ids.
    */
   it('builds the same rows whether the stack is absent or empty', () => {
     const keys = (extra: Partial<ApiRun>) =>
-      buildThreadRows(run('queued', extra), reduceThread(EVENTS)).map((r) => r.key)
+      transcriptRows(run('queued', extra)).map((r) => r.key)
 
     const absent = keys({})
     expect(absent[0]).toBe('task')
@@ -334,20 +429,19 @@ describe('ThreadView', () => {
   })
 
   it('inserts the stacked rows directly after the task row, in order', () => {
-    const keys = buildThreadRows(
+    const keys = transcriptRows(
       run('queued', {
         queuedMessages: [
           { id: 'm1', text: 'one', createdAt: '2026-07-21T10:00:00.000Z' },
           { id: 'm2', text: 'two', createdAt: '2026-07-21T10:01:00.000Z' },
         ],
       }),
-      reduceThread(EVENTS),
     ).map((r) => r.key)
 
     expect(keys.slice(0, 3)).toEqual(['task', 'queued:m1', 'queued:m2'])
     // …and the rest of the transcript is untouched behind them.
     expect(keys.slice(3)).toEqual(
-      buildThreadRows(run('queued'), reduceThread(EVENTS)).map((r) => r.key).slice(1),
+      transcriptRows(run('queued')).map((r) => r.key).slice(1),
     )
   })
 
@@ -367,8 +461,8 @@ describe('ThreadView', () => {
     const thread = reduceThread(EVENTS)
 
     // The row builder is pure: same inputs, same rows.
-    expect(buildThreadRows(fixture, thread).map((r) => r.key)).toEqual(
-      buildThreadRows(fixture, thread).map((r) => r.key),
+    expect(transcriptRows(fixture, thread).map((r) => r.key)).toEqual(
+      transcriptRows(fixture, thread).map((r) => r.key),
     )
 
     const { rerender } = renderView(<ThreadView run={fixture} thread={thread} />)
@@ -777,6 +871,44 @@ describe('TaskThreadRoute', () => {
     renderRoute('r1')
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Loading task…')
     expect(document.querySelector('[data-route="task-thread"]')).not.toBeNull()
+  })
+
+  it('renders the auto-resume hint from what GET /runs/:id actually answers', async () => {
+    // The whole path, not just the component: the record shape is copied verbatim from a live
+    // `GET /api/v1/runs/:id` after a `mock:limit` run, so a field that survives the server but
+    // gets lost between fetch, cache and dock fails here (spec
+    // 2026-08-03-auto-resume-after-usage-limit).
+    const record = {
+      id: 'r1',
+      title: 'mock:limit ship it',
+      workflow: 'quick-task',
+      task: 'mock:limit ship it',
+      status: 'failed',
+      error: 'step "task" failed: Claude AI usage limit reached|1785785603',
+      autoResumeAt: '2026-08-03T19:33:53.000Z',
+      createdAt: '2026-08-03T19:23:00.000Z',
+      finishedAt: '2026-08-03T19:23:13.000Z',
+      tokensUsed: 0,
+      archived: false,
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's1' }],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path = String(input)
+        const body = path === '/api/v1/runs/r1' ? record : path === '/api/v1/health' ? {} : []
+        return Promise.resolve(
+          new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
+        )
+      }),
+    )
+    renderRoute('r1')
+    const hint = await waitFor(() => {
+      const found = document.querySelector('[data-slot="auto-resume-hint"]')
+      expect(found).not.toBeNull()
+      return found
+    })
+    expect(hint?.textContent).toContain('Usage limit reached — this task resumes automatically at')
   })
 
   it('unknown run id → the 404-style CenteredState with a way home', async () => {

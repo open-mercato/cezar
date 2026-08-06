@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { defaultWorkspaceConfig, loadWorkspaceConfig } from './config.ts';
-import { runMigrations, type WorkspaceMigration } from './migrations.ts';
+import { runMigrations, WORKSPACE_MIGRATIONS, type WorkspaceMigration } from './migrations.ts';
 
 /**
  * Workspace migration framework + migration 001 under test (spec
@@ -183,5 +183,13 @@ describe('workspace migrations', () => {
     expect(second).not.toHaveBeenCalled();
     // nothing persisted — the next boot retries from 0 (idempotent)
     expect(existsSync(workspaceConfigPath())).toBe(false);
+  });
+
+  it('stays at schemaVersion 1 — a purely additive key needs no migration', () => {
+    // Agent profiles (spec 2026-07-29) added `agentProfiles` and `projects[].agentProfile`, both
+    // optional with an absent value that means exactly today's behaviour. There is nothing to
+    // move, so there is nothing to migrate; this pins that so a no-op migration is not added
+    // reflexively the next time a key lands here.
+    expect(WORKSPACE_MIGRATIONS.map((m) => m.to)).toEqual([1]);
   });
 });

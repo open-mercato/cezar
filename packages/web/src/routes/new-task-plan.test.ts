@@ -131,6 +131,12 @@ describe('buildPlannedRunBody — the POST /api/v1/runs wire contract for approv
     expect(buildPlannedRunBody({ ...base, runnerExplicit: true }).runner).toBe('claude')
   })
 
+  it('omits the displayed native default when model selection is locked', () => {
+    expect(
+      buildPlannedRunBody({ ...base, model: 'native-sonnet', modelsLocked: true }).model,
+    ).toBeUndefined()
+  })
+
   it.each([
     { name: 'model rides when chosen', patch: { model: 'sonnet' }, key: 'model', expected: 'sonnet' },
     { name: 'connected fallback rides when it differs from the default', patch: { runner: 'codex' as const }, key: 'runner', expected: 'codex' },

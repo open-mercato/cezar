@@ -8,6 +8,8 @@
 #             terminate the healthy server immediately after the script exits.
 #   2026-07-21 start a new session when setsid is available; some task runners reap
 #             every process left in the bootstrap shell's process group despite nohup.
+#   2026-07-30 stop requiring packages/api-client/dist after the contract-workspace
+#             migration made the client typecheck-only; server + web are the runtime artifacts.
 #   2026-07-30 run npm ci before building and cache-check installed runtime dependencies;
 #             fresh worktrees have no workspace links, so tsc otherwise resolves contract
 #             imports as missing/unknown and a cached build cannot start without node_modules.
