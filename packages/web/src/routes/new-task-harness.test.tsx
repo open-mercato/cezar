@@ -389,3 +389,70 @@ describe('free-tier reviewer warning', () => {
     expect(document.querySelector('[data-slot="harness-free-tier-warning"]')).toBeNull()
   })
 })
+
+describe('eval-gate certification surface (spec 2026-08-06-eval-gated-model-routing)', () => {
+  const noop = () => {}
+  const certified = (model: string, family: string, passed: number): HarnessModelOption => ({
+    runner: 'harness',
+    model,
+    label: `${model} · pro`,
+    family,
+    certification: {
+      status: 'certified',
+      roles: { reviewer: { cases: 28, passed } },
+      pack: 'omh',
+      catalogVersion: '203',
+    },
+  })
+
+  it('offers "Use best certified" only when receipts exist, and applies the lineup', () => {
+    render(<HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={noop} options={options} />)
+    expect(document.querySelector('[data-slot="harness-best-certified"]')).toBeNull()
+    cleanup()
+
+    const onRoles = vi.fn()
+    const withCerts = [...options, certified('deepseek', 'deepseek', 27), certified('kimi', 'moonshot', 24)]
+    render(
+      <HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={onRoles} options={withCerts} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /use best certified/i }))
+    expect(onRoles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewers: [
+          { runner: 'harness', model: 'deepseek', family: 'deepseek' },
+          { runner: 'harness', model: 'kimi', family: 'moonshot' },
+        ],
+      }),
+    )
+  })
+
+  it('hides the button when the picked lineup already IS the best certified one', () => {
+    const withCerts = [...options, certified('deepseek', 'deepseek', 27), certified('kimi', 'moonshot', 24)]
+    const picked: HarnessRoles = {
+      orchestrator: { runner: 'claude', model: 'sonnet' },
+      implementer: { runner: 'codex', model: '' },
+      reviewers: [
+        { runner: 'harness', model: 'deepseek', family: 'deepseek' },
+        { runner: 'harness', model: 'kimi', family: 'moonshot' },
+      ],
+    }
+    render(
+      <HarnessPanel mode="fix-issue" onMode={noop} roles={picked} onRoles={noop} options={withCerts} />,
+    )
+    expect(document.querySelector('[data-slot="harness-best-certified"]')).toBeNull()
+  })
+
+  it('advises on an unscored reviewer once receipts exist — and never before', () => {
+    render(<HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={noop} options={options} />)
+    expect(document.querySelector('[data-slot="harness-certification-advisory"]')).toBeNull()
+    cleanup()
+
+    const withCerts = [...options, certified('deepseek', 'deepseek', 27)]
+    render(
+      <HarnessPanel mode="fix-issue" onMode={noop} roles={roles} onRoles={noop} options={withCerts} />,
+    )
+    const advisory = document.querySelector('[data-slot="harness-certification-advisory"]')
+    expect(advisory).not.toBeNull()
+    expect(advisory!.textContent).toContain('not certified for review')
+  })
+})

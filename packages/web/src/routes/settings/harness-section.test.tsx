@@ -102,6 +102,38 @@ describe('Settings → Harness', () => {
     expect(decodeURIComponent(check.getAttribute('href') ?? '')).toContain('--check')
   })
 
+  it("shows each binding's recorded certification — receipt, staleness, or an honest uncertified", async () => {
+    serve({
+      enabled: true,
+      configured: true,
+      profiles: ['standard', 'multi'],
+      driven: ['standard'],
+      runtime: BUNDLED_RUNTIME,
+      models: [
+        {
+          id: 'deepseek', family: 'deepseek', model: 'deepseek-v4-pro', roles: ['reviewer'], profiles: ['multi'],
+          certification: {
+            status: 'certified',
+            roles: { reviewer: { cases: 28, passed: 27 } },
+            pack: 'omh',
+            catalogVersion: '203',
+            recordedAt: '2026-08-01T00:00:00.000Z',
+          },
+        },
+        {
+          id: 'kimi', family: 'moonshot', model: 'kimi-code/k3', roles: ['reviewer'], profiles: ['multi'],
+          certification: { status: 'uncertified' },
+        },
+      ],
+    })
+    mount()
+    await waitFor(() => expect(screen.getByText('certified · reviewer 27/28 · omh')).toBeTruthy())
+    const chips = document.querySelectorAll('[data-slot="harness-certification"]')
+    expect(chips).toHaveLength(2)
+    expect([...chips].map((chip) => chip.getAttribute('data-status'))).toEqual(['certified', 'uncertified'])
+    expect(screen.getByText('uncertified')).toBeTruthy()
+  })
+
   it('explains the gate instead of the roster while the multiModel flag is off', async () => {
     // The nav hides the section when the flag is off, but the route stays registered —
     // a direct URL deserves the reason, not a 404 or a working-looking roster.

@@ -45,7 +45,10 @@ import { cn } from '@/lib/utils'
 import {
   HARNESS_MODES,
   modelFamilyOf,
+  bestCertifiedRoles,
   canSaveHarnessPreset,
+  certificationAdvisory,
+  certifiedRoleRate,
   groupHarnessOptions,
   harnessRolesIssue,
   freeTierReviewerWarning,
@@ -107,6 +110,34 @@ const fromKey = (key: string): HarnessModelRef => {
 function optionLabel(options: readonly HarnessModelOption[], ref: HarnessModelRef): string {
   const match = options.find((o) => o.runner === ref.runner && o.model === ref.model)
   return match ? `${match.runner} · ${match.label}` : `${ref.runner} · ${ref.model || 'auto'}`
+}
+
+/** The recorded eval-suite score for the reviewer role, rendered as a tiny badge on a picker
+ *  row (spec 2026-08-06-eval-gated-model-routing). Absent evidence renders nothing — before
+ *  the first certify run every option is uncertified and a badge on all of them says nothing. */
+function CertificationBadge({ option }: { option: HarnessModelOption }) {
+  const rate = certifiedRoleRate(option, 'reviewer')
+  if (!rate) return null
+  return (
+    <span
+      data-slot="harness-certification-badge"
+      data-status={rate.status}
+      title={
+        rate.status === 'certified'
+          ? `Certified reviewer — passed ${rate.passed}/${rate.cases} eval-suite review cases`
+          : `Reviewer certification is stale (${rate.passed}/${rate.cases}) — re-run the certify lane`
+      }
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px font-mono text-[10px]',
+        rate.status === 'certified'
+          ? 'border-success/50 bg-success/10 text-foreground'
+          : 'border-warning/50 bg-warning/10 text-muted-foreground',
+      )}
+    >
+      <ShieldCheckIcon aria-hidden="true" className={cn('size-2.5', rate.status === 'certified' ? 'text-success' : 'text-warning')} />
+      {rate.status === 'certified' ? `${rate.passed}/${rate.cases}` : 'stale'}
+    </span>
+  )
 }
 
 /**
@@ -200,6 +231,7 @@ export function ModelPickerPill({
                       <span className="min-w-0 flex-1 truncate text-xs font-medium">
                         {option.runner} · {option.label}
                       </span>
+                      <CertificationBadge option={option} />
                       {key === currentKey ? (
                         <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
                       ) : null}
@@ -538,6 +570,8 @@ export function HarnessPanel({
 }) {
   const issue = roles ? harnessRolesIssue(roles) : null
   const freeTierWarning = freeTierReviewerWarning(roles)
+  const certAdvisory = certificationAdvisory(roles, options)
+  const certifiedLineup = bestCertifiedRoles(options)
   const readinessOf = (ref: HarnessModelRef) =>
     probe?.models.find((model) => model.id === `${ref.runner}/${ref.model || 'auto'}`)?.readiness
   return (
@@ -625,6 +659,18 @@ export function HarnessPanel({
               Model lineup
             </span>
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              {certifiedLineup && (!roles || !rolesEqual(certifiedLineup, roles)) ? (
+                <button
+                  type="button"
+                  data-slot="harness-best-certified"
+                  onClick={() => onRoles(certifiedLineup)}
+                  title="Seat the lineup with the best recorded eval-suite scores per role (spec 2026-08-06-eval-gated-model-routing) — you can still reshuffle freely"
+                  className="inline-flex h-[26px] items-center gap-1.5 rounded-full border border-success/50 bg-success/10 px-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-success/20"
+                >
+                  <ShieldCheckIcon aria-hidden="true" className="size-3 shrink-0 text-success" />
+                  Use best certified
+                </button>
+              ) : null}
               {onApplyPreset && onSavePreset && onDeletePreset ? (
                 <PresetRow
                   roles={roles}
@@ -821,6 +867,16 @@ export function HarnessPanel({
             >
               <CircleAlertIcon aria-hidden="true" className="mt-px size-3.5 shrink-0 text-warning" />
               <span>{freeTierWarning}</span>
+            </p>
+          ) : null}
+
+          {certAdvisory ? (
+            <p
+              data-slot="harness-certification-advisory"
+              className="flex items-start gap-2 text-[12px] leading-relaxed text-muted-foreground"
+            >
+              <ShieldCheckIcon aria-hidden="true" className="mt-px size-3.5 shrink-0 text-warning" />
+              <span>{certAdvisory}</span>
             </p>
           ) : null}
 

@@ -2,7 +2,7 @@ import { NetworkIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router'
 
 import { useHarnessStatus } from '@/api/queries'
-import type { HarnessModel } from '@open-mercato/cezar-api-client'
+import type { HarnessCertification, HarnessModel } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { cn } from '@/lib/utils'
 import { HARNESS_PROFILE_OPTIONS } from '../new-task-form'
@@ -169,6 +169,45 @@ function ModelRow({ model }: { model: HarnessModel }) {
       <span className="hidden shrink-0 text-[11px] text-soft-foreground md:inline">
         {(model.profiles ?? []).join(' · ') || 'unused'}
       </span>
+      <CertificationChip certification={model.certification} />
     </li>
+  )
+}
+
+/**
+ * The recorded eval-gate evidence for a binding (spec 2026-08-06-eval-gated-model-routing):
+ * the roster is where "why is this model seated here" gets answered, so the receipt — or the
+ * honest lack of one — sits on the row itself. Scores name their role slice; staleness names
+ * what aged out instead of pretending the evidence is gone.
+ */
+function CertificationChip({ certification }: { certification?: HarnessCertification }) {
+  if (!certification) return null
+  const rates = Object.entries(certification.roles ?? {})
+    .map(([role, rate]) => `${role} ${rate.passed}/${rate.cases}`)
+    .join(' · ')
+  const label =
+    certification.status === 'uncertified'
+      ? 'uncertified'
+      : `${certification.status} · ${rates}${certification.pack ? ` · ${certification.pack}` : ''}`
+  return (
+    <span
+      data-slot="harness-certification"
+      data-status={certification.status}
+      title={
+        certification.status === 'uncertified'
+          ? 'No recorded eval-suite evidence for this binding — runs are unaffected, results unverified.'
+          : `Recorded eval-suite result (${certification.pack ?? 'eval'} catalog ${certification.catalogVersion ?? '?'}, ${certification.recordedAt ?? ''})`
+      }
+      className={cn(
+        'shrink-0 rounded-full border px-2 py-px font-mono text-[10px]',
+        certification.status === 'certified'
+          ? 'border-success/50 bg-success/10 text-foreground'
+          : certification.status === 'stale'
+            ? 'border-warning/50 bg-warning/10 text-muted-foreground'
+            : 'border-border bg-muted text-soft-foreground',
+      )}
+    >
+      {label}
+    </span>
   )
 }
