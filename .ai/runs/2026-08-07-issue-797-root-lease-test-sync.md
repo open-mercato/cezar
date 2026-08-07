@@ -72,6 +72,8 @@ complete configured validation gate.
 
 ## Progress
 
+PR: #800
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Replace the fixed-duration holder with an explicit gate
