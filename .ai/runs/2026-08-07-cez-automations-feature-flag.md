@@ -77,6 +77,8 @@ The capability is resolved in one place and consumed everywhere else, so the UI 
 - [x] 2.1 `NavItem.automations` gate and `visibleNavItems` filtering, with tests — 1b78af98
 - [x] 2.2 Nav call sites pass the capability (shell, ⌘K palette, project groups) — 1b78af98
 - [x] 2.3 The four `/automations*` routes render a disabled state — 1b78af98
+- [x] Post-review fix: hold every `/automations` mode until health answers, so a cold deep link into `/automations/new` cannot paint a submittable editor on a gated server — e137ff2b
+- [x] Post-review fix: align the `capabilities.automations` read spelling with each file's neighbouring capability reads — e137ff2b
 - [x] 2.4 Cross-links into the feature degrade when the capability is off — 1b78af98
 
 ### Phase 3: Documentation, e2e, and the gate
