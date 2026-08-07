@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make `src/workflows/run-lease.test.ts` deterministic under full-suite load by replacing its
+Make `packages/cezar/src/workflows/run-lease.test.ts` deterministic under full-suite load by replacing its
 fixed wall-clock lease holder with explicit test synchronization, and make its teardown wait for
 every spawned run to settle before the temporary fixture repository is removed — without
 weakening the scheduling proof the file exists for.
@@ -24,11 +24,11 @@ holder releases the lease, while the holder itself is still finalizing (`settleS
 write → `dropActive`). The holder's trailing NDJSON event append then lands on a directory that no
 longer exists → `ENOENT`.
 
-Both are test-harness defects; `src/workflows/run.ts` behaves correctly and is not touched.
+Both are test-harness defects; `packages/cezar/src/workflows/run.ts` behaves correctly and is not touched.
 
 ## Scope
 
-- `src/workflows/run-lease.test.ts` only.
+- `packages/cezar/src/workflows/run-lease.test.ts` only.
 
 ### Non-goals
 
@@ -76,13 +76,16 @@ complete configured validation gate.
 
 ### Phase 1: Replace the fixed-duration holder with an explicit gate
 
-- [ ] 1.1 Add a gate-file-driven holder workflow and release helper to the fixture
-- [ ] 1.2 Drive both tests off the explicit release instead of the 1.5 s timer
+- [x] 1.1 Add a gate-file-driven holder workflow and release helper to the fixture — dedacffd
+- [x] 1.2 Drive both tests off the explicit release instead of the 1.5 s timer — dedacffd
 
 ### Phase 2: Drain every spawned run before removing the fixture
 
-- [ ] 2.1 Track every started run per fixture
-- [ ] 2.2 Open the gate, drain to settled and dispose the manager before `rmSync`
+- [x] Also landed: both tests now wait for the holder to actually own the lease before queueing
+  behind it — `startRun` order never guaranteed it, so the lease could go to the short run and the
+  first test would pass without exercising the slot hand-back at all — dedacffd
+- [x] 2.1 Track every started run per fixture — dedacffd
+- [x] 2.2 Open the gate, drain to settled and dispose the manager before `rmSync` — dedacffd
 
 ### Phase 3: Prove stability
 
