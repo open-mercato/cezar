@@ -22,6 +22,13 @@ const HOLD_SAFETY_MS = 20_000;
  *  full-suite run is half of what made this file flaky (#797). */
 const TEST_TIMEOUT_MS = 30_000;
 
+/** POSIX single-quote escaping. A check step is a command string handed to
+ *  `bash -lc`, so the fixture's temp path has to reach node verbatim whatever
+ *  `TMPDIR` happens to contain — double quotes would still expand `$`. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 /**
  * A root workflow whose single step blocks until `gate` appears on disk.
  *
@@ -32,6 +39,7 @@ const TEST_TIMEOUT_MS = 30_000;
  * can change.
  */
 function leaseHolder(gate: string): WorkflowDef {
+  // Double quotes only — the script itself is single-quoted for the shell.
   const hold = [
     'const fs = require("fs");',
     'const gate = process.argv[1];',
@@ -42,7 +50,7 @@ function leaseHolder(gate: string): WorkflowDef {
   return {
     name: 'held-root',
     source: 'built-in',
-    steps: [{ id: 'hold', command: `node -e '${hold}' ${JSON.stringify(gate)}` }],
+    steps: [{ id: 'hold', command: `node -e '${hold}' ${shellQuote(gate)}` }],
   };
 }
 
@@ -154,8 +162,16 @@ afterEach(async () => {
     // Open the gate first. A failed assertion skips the test's own release, and
     // teardown must not sit out HOLD_SAFETY_MS waiting for the holder to give up.
     fixture.release();
-    await drain(fixture);
-    fixture.manager.dispose();
+    try {
+      await drain(fixture);
+    } finally {
+      // Dispose either way: a manager left registered keeps its usage-sampler
+      // subscription and its semaphore membership alive for the rest of the suite.
+      fixture.manager.dispose();
+    }
+    // Reached only once nothing is still writing into the fixture. A failed
+    // drain therefore leaks a temp directory, which is strictly better than
+    // deleting one out from under a live run — the failure this file is fixing.
     rmSync(fixture.root, { recursive: true, force: true });
   }
 }, TEST_TIMEOUT_MS);
