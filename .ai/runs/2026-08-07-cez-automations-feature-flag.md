@@ -81,8 +81,8 @@ The capability is resolved in one place and consumed everywhere else, so the UI 
 
 ### Phase 3: Documentation, e2e, and the gate
 
-- [ ] 3.1 `.env.example` and the README env table document `CEZ_AUTOMATIONS`
-- [ ] 3.2 `BACKWARD_COMPATIBILITY.md` §2 note and the opt-in gating section
-- [ ] 3.3 Amend the automations spec's "no new `CEZ_*` variable" line
-- [ ] 3.4 e2e: skip when off, and assert the sidebar has no Automations item
-- [ ] 3.5 Full validation gate green
+- [x] 3.1 `.env.example` and the README env table document `CEZ_AUTOMATIONS` — 29c4e223
+- [x] 3.2 `BACKWARD_COMPATIBILITY.md` §2 note and the opt-in gating section — 29c4e223
+- [x] 3.3 Amend the automations spec's "no new `CEZ_*` variable" line — 29c4e223
+- [x] 3.4 e2e: skip when off, and assert the sidebar has no Automations item — 29c4e223
+- [x] 3.5 Full validation gate green — `npm run typecheck` ✅, `npm test` ✅ 5528 passed / 306 files, `npm run test:unit` ✅ 36 passed, `npm run build` ✅ check:pack ok, `npm run test:package` ✅ 12 passed
