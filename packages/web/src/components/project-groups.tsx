@@ -1,17 +1,15 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDownIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
-import { putWorkspaceUiState } from '@/api/client'
-import { useHealth, useProjectRuns, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
-import type { ProjectListEntry, WorkspaceUiState } from '@open-mercato/cezar-api-client'
+import { useHealth, useProjectRuns } from '@/api/queries'
+import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { QuickListBuckets } from '@/components/task-quick-list'
-import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
+import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
@@ -32,93 +30,33 @@ import { cn } from '@/lib/utils'
  *  row, because it occupies one row of sidebar. */
 const RECENT_LIMIT = 10
 
-/** Collapse is a click-through-a-list gesture: a user opening three groups in a row should cost
- *  the server one write, not three. Short enough that a reload right after a toggle still finds
- *  the new state. */
-const COLLAPSE_WRITE_DEBOUNCE_MS = 400
-
 /**
- * Whether a group renders collapsed.
+ * Read + write of the per-project collapse map (`lib/sidebar-collapse.ts`), which lives in
+ * localStorage rather than `~/.cezar/ui-state.json`.
  *
- * The stored answer wins whenever there is one — including an explicit `false`, which is how a
- * user pins a non-active project open. With no entry the default is "the project you are
- * looking at is open, the rest are shut": the alternative (everything open) turns a 40-project
- * workspace into an unusable scroll on first boot, and costs a runs request per project.
- */
-export function isProjectCollapsed(
-  collapsed: Record<string, boolean> | undefined,
-  projectId: string,
-  activeProjectId: string | null,
-): boolean {
-  const stored = collapsed?.[projectId]
-  if (stored !== undefined) return stored
-  return projectId !== activeProjectId
-}
-
-/**
- * Read + write of `sidebar.collapsed` in `~/.cezar/ui-state.json`.
- *
- * The house pattern for ui-state (see `skills-import-panel.tsx`): apply optimistically to the query cache
- * so the chevron turns on the click, PUT behind a debounce, reconcile with the server's merged
- * answer, and on failure toast + invalidate rather than leave the cache asserting a collapse
- * that never persisted.
- *
- * The PUT always carries the WHOLE `sidebar` object (spread from whatever is cached, not just
- * the one key): the route merges shallowly at the top level, so sending `{ sidebar: { collapsed
- * } }` replaces `sidebar` outright and would drop any sibling key a future step puts there.
+ * Seeded once from storage at mount, so the first paint already carries the user's answer — no
+ * request to wait for, and no flash of the active-project default. React state is the live copy
+ * and every toggle mirrors the new map straight to storage, which is synchronous, so a reload
+ * immediately after a click still finds it. There is no debounce, no optimistic-then-reconcile
+ * dance and no failure toast left, because there is no server round trip left to fail.
  */
 function useSidebarCollapse(activeProjectId: string | null) {
-  const queryClient = useQueryClient()
-  const uiState = useWorkspaceUiState()
-  const collapsed = uiState.data?.sidebar?.collapsed
-
-  const pending = React.useRef<WorkspaceUiState['sidebar'] | null>(null)
-  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const flush = React.useCallback(() => {
-    timer.current = null
-    const sidebar = pending.current
-    if (!sidebar) return
-    pending.current = null
-    putWorkspaceUiState({ sidebar })
-      .then((merged) => queryClient.setQueryData(workspaceQueryKeys.uiState, merged))
-      .catch((error: unknown) => {
-        toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
-        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.uiState })
-      })
-  }, [queryClient])
-
-  // A toggle in the last few hundred milliseconds before unmount (a full page navigation, a
-  // closing tab) still lands: the cleanup sends it rather than dropping the timer on the floor.
-  React.useEffect(
-    () => () => {
-      if (timer.current === null) return
-      clearTimeout(timer.current)
-      flush()
-    },
-    [flush],
-  )
+  const [collapsed, setCollapsed] = React.useState(readStoredCollapsed)
+  // The map as of the last toggle, updated synchronously: two clicks inside one render pass must
+  // compose, and the second must see the first one's entry rather than the batched-away state.
+  const latest = React.useRef(collapsed)
 
   const toggle = React.useCallback(
     (projectId: string) => {
-      // Read the cache rather than close over `uiState.data`: two toggles inside one debounce
-      // window must compose, and the second must see the first one's optimistic write.
-      const current = queryClient.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)
-      const currentCollapsed = current?.sidebar?.collapsed
-      const sidebar = {
-        ...current?.sidebar,
-        collapsed: {
-          ...currentCollapsed,
-          [projectId]: !isProjectCollapsed(currentCollapsed, projectId, activeProjectId),
-        },
+      const next = {
+        ...latest.current,
+        [projectId]: !isProjectCollapsed(latest.current, projectId, activeProjectId),
       }
-      queryClient.setQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState, { ...current, sidebar })
-
-      pending.current = sidebar
-      if (timer.current !== null) clearTimeout(timer.current)
-      timer.current = setTimeout(flush, COLLAPSE_WRITE_DEBOUNCE_MS)
+      latest.current = next
+      writeStoredCollapsed(next)
+      setCollapsed(next)
     },
-    [activeProjectId, flush, queryClient],
+    [activeProjectId],
   )
 
   return { collapsed, toggle }

@@ -26,6 +26,18 @@
   supported yet: it keeps credentials outside its config folder, so a second folder would change
   settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 
+## 🐛 Fixes
+- 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Which sidebar
+  project groups are collapsed, and which page a bare `/` restores, were stored workspace-wide in
+  `~/.cezar/ui-state.json` — so every open cockpit shared one answer: the last client to navigate
+  decided where the next launch landed on every other client, and a group collapsed on a narrow
+  screen collapsed everywhere. Both now live in each browser's own storage, which is also what they
+  always described. Each toggle costs zero requests, the sidebar paints its real state on the first
+  frame instead of after a fetch, and the bare-root restore no longer waits on the UI-state read.
+  The server keys stay accepted and round-tripped for older cockpits; existing collapse state and a
+  remembered location are workspace-wide values with no per-browser answer yet, so each browser
+  starts from the defaults once and remembers from there.
+
 # 0.9.2 (2026-08-04)
 
 ## ⚠️ Breaking

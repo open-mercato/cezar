@@ -450,10 +450,14 @@ leading `projectId` segment.
   - its **10 most recent tasks** (reusing `TaskQuickList` grouping, capped at
     10 across buckets) and a **"More…"** row linking to `/p/<id>/` (the tasks
     pane).
-- Collapse state persists per project in `~/.cezar/ui-state.json`
-  (`sidebar.collapsed`), via `/api/workspace/ui-state` — it survives browser
-  and server restarts, and is shared by all of the user's browsers as
-  bookmarklet-origin cockpits are. The active project (from the URL) auto-
+- Collapse state persists per project — **superseded on storage (2026-08-04):**
+  in the browser's own `localStorage` (`packages/web/src/lib/sidebar-collapse.ts`,
+  key `cez-sidebar-collapsed`), not in `~/.cezar/ui-state.json`. Sharing one map
+  across every browser meant collapsing a group on a phone collapsed it on the
+  desktop, and each toggle cost a PUT a second cockpit could clobber; which groups
+  are shut describes the window you are looking at. It still survives reloads and
+  server restarts, per browser. The server keeps accepting the legacy
+  `sidebar.collapsed` key for older cockpits. The active project (from the URL) auto-
   expands; a `missing` project renders greyed with a "folder not found —
   remove?" affordance.
 - **Footer** — unchanged (tools, version, theme) plus a **Global settings**

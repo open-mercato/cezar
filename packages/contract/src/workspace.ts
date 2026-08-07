@@ -192,9 +192,11 @@ export const workspaceLastLocationSchema = z.strictObject({
 export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
 
 export const workspaceUiStateSchema = z.looseObject({
-  /** The sidebar's per-project collapse map (step 3.3) — `true` collapses a group, `false` pins
-   *  it open, absent means the default (the active project expands, the rest collapse). Loose for
-   *  the same round-trip reason as its parent. */
+  /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
+   *  round-tripped so an older cockpit sharing this home keeps working, but the current cockpit
+   *  neither reads nor writes it: which groups are shut describes the WINDOW, not the workspace,
+   *  so it lives in that browser's localStorage (`packages/web/src/lib/sidebar-collapse.ts`).
+   *  One shared answer meant a phone collapsing a group collapsed it on the desktop too. */
   sidebar: z
     .looseObject({ collapsed: z.record(z.string(), z.boolean()).optional() })
     .optional(),
@@ -214,8 +216,10 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Settings → Notifications, GLOBAL since step 3.5 — one answer for the whole workspace, since
    *  the delivering browser is one browser whichever project you are looking at. */
   notifications: z.looseObject({ enabled: z.boolean().optional() }).optional(),
-  /** Last settled project-scoped page. Used only when entering at the exact bare root;
-   *  explicit deep links always win. */
+  /** LEGACY, exactly like `sidebar` above — the last settled project-scoped page, restored when
+   *  entering at the exact bare root. The shape is unchanged and still accepted, but the current
+   *  cockpit keeps it in localStorage (`packages/web/src/lib/last-location.ts`): stored here, the
+   *  last client to navigate decided where every OTHER client's next launch landed. */
   lastLocation: workspaceLastLocationSchema.optional(),
   /** The user's curated selection of default (vendor) skills. Tri-state: ABSENT means "not
    *  curated", so every default skill shows; a PRESENT array (even `[]`) means only those names

@@ -672,6 +672,12 @@ const workspaceUiStateSchema = z
     appearance: appearanceSchema.optional(),
     notifications: z.object({ enabled: z.boolean().optional() }).passthrough().optional(),
     dismissedProviderAuthFailures: providerAuthDismissalsSchema.optional(),
+    // LEGACY, like `sidebar` below: both moved into the browser's own
+    // localStorage (packages/web/src/lib/{last-location,sidebar-collapse}.ts),
+    // because one workspace-wide answer meant the last client to navigate — a
+    // phone, a second window — decided where every other client's next launch
+    // landed, and whose sidebar groups were shut. Kept named and bounded here
+    // so a cockpit from before that change still round-trips and validates.
     lastLocation: z
       .object({
         projectId: z.string().min(1).max(64),
