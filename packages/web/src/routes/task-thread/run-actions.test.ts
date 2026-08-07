@@ -101,6 +101,9 @@ describe('runActionFlags.markUnread — the read→unread affordance (#775)', ()
     { name: 'archived run — a stronger "handled" than reading', record: finished('done', { seenAt: SEEN_AT, archived: true }), expected: false },
     { name: 'review gate — not a finished done item', record: finished('review', { seenAt: SEEN_AT }), expected: false },
     { name: 'done status caught mid-transition, no finishedAt', record: run('done', { seenAt: SEEN_AT }), expected: false },
+    // Not offered: a usage-limit failure with a resume booked is not a done item — it has an
+    // appointment to continue, so there is no outcome to push back into the unread list.
+    { name: 'failed run waiting out a usage limit', record: finished('failed', { seenAt: SEEN_AT, autoResumeAt: '2026-08-03T19:33:53.000Z' }), expected: false },
   ]
 
   for (const status of ['queued', 'running', 'waiting'] as RunStatus[]) {

@@ -137,6 +137,16 @@ describe('a run waiting out a usage limit', () => {
     expect(isUnread(done({ status: 'failed' }))).toBe(true)
     expect(isUnread({ ...scheduled, autoResumeAt: undefined })).toBe(true)
   })
+
+  it('cannot be put back into unread either — eligibility excludes it, read receipt or not', () => {
+    // The seam where #775 (`canBeUnread`) met the auto-resume rule: a scheduled row is not a
+    // done item, so "Mark unread" must not be offered for it — otherwise a run with an
+    // appointment to continue would be pushed into a list of outcomes to review. Asserted for
+    // both receipt states, because eligibility is deliberately receipt-independent.
+    expect(canBeUnread(scheduled)).toBe(false)
+    expect(canBeUnread({ ...scheduled, seenAt: '2026-08-03T19:00:00.000Z' })).toBe(false)
+    expect(canBeUnread({ ...scheduled, autoResumeAt: undefined })).toBe(true)
+  })
 })
 
 describe('unreadDoneCount', () => {
