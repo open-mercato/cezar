@@ -15,6 +15,7 @@ import {
   useHealthSubscription,
   useRunnerModels,
   useMarkRunSeen,
+  useMarkRunUnseen,
   usePatchRun,
   usePutAgentConfigFile,
   useRun,
@@ -758,6 +759,74 @@ describe('useMarkRunSeen', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(client.getQueryData<typeof RUN & { seenAt: string }>(queryKeys.runs.detail('run-1'))?.seenAt)
       .toBe('2026-08-03T19:23:14.000Z')
+  })
+})
+
+describe('useMarkRunUnseen', () => {
+  const RUN = {
+    id: 'run-1',
+    title: 'mock:limit ship it',
+    workflow: 'quick-task',
+    task: 'mock:limit ship it',
+    status: 'done',
+    createdAt: '2026-08-03T19:23:00.000Z',
+    finishedAt: '2026-08-03T19:23:13.000Z',
+    seenAt: '2026-08-03T19:23:14.000Z',
+    tokensUsed: 0,
+    archived: false,
+    steps: [],
+  }
+
+  it('clears only the receipt, keeping fields the stream advanced meanwhile', async () => {
+    // The same trap as the read twin above, and the reason this hook cannot simply write its
+    // answer into the cache: `POST /runs/:id/unread` replies with the snapshot the server held
+    // while the request was in flight, so writing it wholesale reverts anything the run stream
+    // landed in that window — permanently, because nothing refetches afterwards. A finished run
+    // is quieter than a just-finished one but not silent: here the janitor discovers the task's
+    // PR link a beat after the click.
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.runs.detail('run-1'), RUN)
+    client.setQueryData(queryKeys.runs.list(), [RUN])
+    const { result } = renderHook(() => useMarkRunUnseen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    const linked = { ...RUN, pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/776' }
+    client.setQueryData(queryKeys.runs.detail('run-1'), linked)
+    client.setQueryData(queryKeys.runs.list(), [linked])
+
+    // The answer is the pre-link snapshot the server had when it cleared the receipt.
+    await act(async () => deferred.resolve(json({ ...RUN, seenAt: undefined })))
+
+    const detail = client.getQueryData<typeof linked>(queryKeys.runs.detail('run-1'))
+    expect(detail?.pullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/776')
+    // Absent, not blanked — `isUnread` keys on the field being missing.
+    expect(detail && 'seenAt' in detail).toBe(false)
+    const list = client.getQueryData<Array<typeof linked>>(queryKeys.runs.list())
+    expect(list?.[0]?.pullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/776')
+    expect(list?.[0] && 'seenAt' in list[0]).toBe(false)
+  })
+
+  it('still falls back to the answer for a detail cache that arrived only with it', async () => {
+    fetchMock.mockResolvedValue(json({ ...RUN, seenAt: undefined }))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useMarkRunUnseen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const detail = client.getQueryData<typeof RUN>(queryKeys.runs.detail('run-1'))
+    expect(detail?.id).toBe('run-1')
+    expect(detail?.seenAt).toBeUndefined()
   })
 })
 

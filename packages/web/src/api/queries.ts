@@ -1127,10 +1127,20 @@ export function useMarkRunUnseen() {
       if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
     },
     onSuccess: (updated) => {
-      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
-        list?.map((run) => (run.id === updated.id ? updated : run)),
+      // Clear ONLY the receipt on the record already in cache — never write the answer wholesale.
+      //
+      // Same reason as the read twin above: `POST /runs/:id/unread` answers with a SNAPSHOT taken
+      // while the request was in flight, so writing it over the cached record permanently reverts
+      // every field the run stream advanced in that window (nothing refetches afterwards). A
+      // finished run is quieter than a just-finished one, but it is not silent — the janitor still
+      // discovers PR links, titles still get summarized, and a `failed` run still publishes its
+      // `autoResumeAt`. Clearing the one field this mutation owns cannot lose any of them.
+      const clearReceipt = (run: RunRecord): RunRecord =>
+        run.id === updated.id ? withoutReceipt(run) : run
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) => list?.map(clearReceipt))
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
+        current ? clearReceipt(current) : updated,
       )
-      queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
     },
   })
 }
