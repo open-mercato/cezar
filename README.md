@@ -350,11 +350,12 @@ cezar projects remove api         # drop the registry entry; the repo is untouch
 These read and write `~/.cezar/config.json` directly, so they work with the
 server stopped, and `CEZ_HOME` selects which workspace they operate on.
 
-Settings split along the same line: **Agents**, **Worktrees**, **Bookmarklets**,
-**Prompt templates** and **MCP** describe one repo and live under
-`/p/<projectId>/settings`; **Appearance**, **Notifications**, **Resources**,
-**Projects** and **Keyboard** are yours or the machine's and live at
-`/settings/global`.
+Settings split along the same line: **General** (the project's folder, its
+registry facts, its parallel-task ceiling, and Remove), **Agents**,
+**Worktrees**, **Bookmarklets**, **Prompt templates** and **MCP** describe one
+repo and live under `/p/<projectId>/settings`; **Appearance**,
+**Notifications**, **Resources**, **Projects** and **Keyboard** are yours or the
+machine's and live at `/settings/global`.
 
 **Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
 `/settings` — still answers, bound to the project cezar was started in; the

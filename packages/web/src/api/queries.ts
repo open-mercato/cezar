@@ -353,13 +353,21 @@ export function useRegisterProject() {
  *
  * No retry: the interesting failures are the deliberate 409s (running tasks, the boot
  * project), and re-asking cannot change those answers.
+ *
+ * The invalidation is deliberately NOT returned: TanStack awaits a promise a mutation callback
+ * returns before running the per-call ones, so returning it would make the caller's `onSuccess`
+ * wait for the registry REFETCH. Settings → General removes the project its own URL names and
+ * navigates away in that callback — gating that on a second round-trip leaves the user on a page
+ * for a project that no longer exists for as long as the refetch takes.
  */
 export function useRemoveProject() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (projectId: string) => removeProject(projectId),
     retry: false,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
+    },
   })
 }
 

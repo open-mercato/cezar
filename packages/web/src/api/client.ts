@@ -56,6 +56,7 @@ import type {
   MessageResponse,
   RemoveQueuedMessageResponse,
   OpenInCliResponse,
+  OpenProjectInResponse,
   OpenTargetsResponse,
   ParsedWorkflow,
   PatchRunInput,
@@ -1171,6 +1172,19 @@ export async function getOpenTargets(opts?: ReadOptions): Promise<OpenTargetsRes
       init(opts),
     ),
     '/open-targets',
+  )
+}
+
+/** Open the ACTIVE PROJECT's own folder in the chosen local app (Settings → "Project folder").
+ *  No path travels: the server opens the scoped project's registered root. 400 for an app this
+ *  machine does not have or a `cli:` handoff, 409 in hosted mode or when the launch failed. */
+export async function openProjectIn(target: string): Promise<OpenProjectInResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['open-in'].$post({
+      param: { projectId: queryScope() },
+      json: { target },
+    }),
+    '/open-in',
   )
 }
 

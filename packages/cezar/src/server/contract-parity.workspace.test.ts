@@ -23,6 +23,7 @@ import type {
 import type { runsIndexResponseSchema } from '@open-mercato/cezar-contract';
 import type {
   configResponseSchema,
+  openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
   providerStatusResponseSchema,
@@ -120,6 +121,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type ProviderConnect200 = InferResponseType<typeof client.api.v1.providers.connect.$post, 200>;
   type Models200 = InferResponseType<typeof client.api.v1.models.$get, 200>;
   type OpenTargets200 = InferResponseType<(typeof client.api.v1)['open-targets']['$get'], 200>;
+  type OpenProjectIn200 = InferResponseType<(typeof client.api.v1)['open-in']['$post'], 200>;
 
   // ---- agent profiles / accounts (spec 2026-07-29-agent-profiles) --------------------------
   type AgentProfiles200 = InferResponseType<
@@ -192,6 +194,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof providerConnectResponseSchema>, ProviderConnect200>>,
     Assert<Exact<z.infer<typeof runnerModelCatalogResponseSchema>, Models200>>,
     Assert<Exact<z.infer<typeof openTargetsResponseSchema>, OpenTargets200>>,
+    Assert<Exact<z.infer<typeof openProjectInResponseSchema>, OpenProjectIn200>>,
     // agent profiles
     Assert<Exact<z.infer<typeof agentProfilesResponseSchema>, AgentProfiles200>>,
     Assert<Exact<z.infer<typeof agentProfileResponseSchema>, CreateAgentProfile201>>,

@@ -422,3 +422,24 @@ export const openTargetsResponseSchema = z.object({
   targets: z.array(openTargetSchema),
 });
 export type OpenTargetsResponse = z.infer<typeof openTargetsResponseSchema>;
+
+/**
+ * `POST /api/v1/open-in` — open THIS PROJECT'S root in a detected app (Settings → the project
+ * folder row). The path is never sent: it is the scoped project's own registered root, resolved
+ * server-side, so the route has no traversal surface at all. `target` is an
+ * `/api/v1/open-targets` id; unlike the run route there is no `default`/`cli:` handling, because
+ * a repo root is a directory and an agent CLI belongs in a task worktree.
+ */
+export const openProjectInSchema = z.object({
+  // A short bound (#429): matched against a downstream allowlist, so an app id is never long.
+  target: z.string().trim().min(1, 'target required').max(200),
+});
+export type OpenProjectInRequest = z.infer<typeof openProjectInSchema>;
+
+/** The 200 for the above — `opened` is a literal because every failure is a 409 with `{ error }`,
+ *  so a `false` would be unreachable and would only invite a client to branch on it. */
+export const openProjectInResponseSchema = z.object({
+  opened: z.literal(true),
+  path: z.string(),
+});
+export type OpenProjectInResponse = z.infer<typeof openProjectInResponseSchema>;
