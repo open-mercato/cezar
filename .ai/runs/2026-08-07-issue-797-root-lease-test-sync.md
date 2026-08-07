@@ -89,6 +89,9 @@ complete configured validation gate.
 
 ### Phase 3: Prove stability
 
+- [x] Post-review fix: POSIX single-quote escaping for the gate path handed to `bash -lc`, and
+  `manager.dispose()` moved into a `finally` so a failed drain cannot leak the usage-sampler
+  subscription — d33e91e8
 - [x] 3.1 Repeated targeted runs plus a full-suite run — 6× targeted (all green, ~0.9 s of test time
   each, down from ~3 s of sleeping) and 3× `npm test` (303 files / 5407 tests, green each time). The
   proof was also checked negatively: with the #438 slot hand-back reverted locally, the first test
