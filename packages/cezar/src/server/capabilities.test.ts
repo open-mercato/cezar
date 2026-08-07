@@ -159,6 +159,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       localHandoff: false,
       followups: true,
       singleProject: false,
+      automations: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
@@ -181,6 +182,33 @@ describe('resolveCapabilities — singleProject', () => {
       expect(resolveCapabilities({ CEZ_SINGLE_PROJECT: value }).singleProject).toBe(false);
     },
   );
+});
+
+describe('resolveCapabilities — automations (#801)', () => {
+  it('is OFF by default — GitHub automations are opt-in', () => {
+    expect(resolveCapabilities({}).automations).toBe(false);
+  });
+
+  it('is on with CEZ_AUTOMATIONS=1', () => {
+    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' }).automations).toBe(true);
+  });
+
+  it.each(['0', 'true', 'yes', '', 'on'])(
+    'stays off for CEZ_AUTOMATIONS=%j — only an exact "1" opts in',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_AUTOMATIONS: value }).automations).toBe(false);
+    },
+  );
+
+  // The three opt-in capabilities are independent switches; turning one on must never
+  // imply another, or a user enabling automations would silently get the inbox too.
+  it('does not turn on any other opt-in capability', () => {
+    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' })).toMatchObject({
+      automations: true,
+      followups: false,
+      singleProject: false,
+    });
+  });
 });
 
 describe('resolveCapabilities — usage presentation', () => {

@@ -398,6 +398,9 @@ export function projectRouteManifest(app: Hono): ProjectRouteInfo[] {
 /** 409 body for the inbox mutators while the follow-up inbox is off (#471). */
 const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 to enable it';
 
+/** 409 body for every automations route while GitHub automations are off (#801). */
+const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them';
+
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's
 // hand-mirrored copies (`web/app/src/api/types.ts`) against the real thing.
@@ -3202,12 +3205,35 @@ export function createApp(deps: ServerDeps) {
   };
   const manualChecks = new Map<string, ManualCheck>();
 
+  /**
+   * The automations gate (#801): with `CEZ_AUTOMATIONS` unset, every route of the feature
+   * answers 409 before touching a store, a lease or GitHub.
+   *
+   * Written as MIDDLEWARE rather than a line in each handler so the family cannot drift: a route
+   * added to either chain below inherits the gate from its path, where a per-handler check is one
+   * omission away from an ungated endpoint.
+   *
+   * Registered against EXPLICIT paths, never `use('*')`. Both chains are mounted with
+   * `.route('/', …)` alongside a dozen unrelated sub-apps, and `route()` re-registers a sub-app's
+   * middleware under the mount prefix — so a `'*'` here would gate the entire `/api/v1` surface,
+   * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
+   * a path match both the collection and everything under it.
+   */
+  const requireAutomations = async (c: Context, next: Next) => {
+    if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
+    await next();
+  };
+
   // ---- chained family: GitHub automations (project-scoped) ----
   // Every handler below reads `c.get('project')` — the definitions, their runtime state and the
   // execution log are per-project files — so the family is project-scoped and mounted with the
   // rest of the mirrored table. The one exception is the manual-check read, which touches no
   // project at all; it is its own workspace-level family below.
   const automationsRoutes = new Hono<ProjectApiEnv>()
+    .use('/automations', requireAutomations)
+    .use('/automations/*', requireAutomations)
+    .use('/automation-log', requireAutomations)
+    .use('/automation-log/*', requireAutomations)
     .get('/automations', async (c) => {
       const { root, automationStore } = c.get('project');
       const forge = resolveForge(await getRepoInfo(root));
@@ -3421,6 +3447,7 @@ export function createApp(deps: ServerDeps) {
   // above, keyed by an unguessable id that the project-scoped POST hands back. Mounting it under
   // `/api/v1/p/:projectId` too would be a second spelling of a lookup that consults no project.
   const automationChecksRoutes = new Hono()
+    .use('/automation-checks/*', requireAutomations)
     .get('/automation-checks/:checkId', (c) => {
       const check = manualChecks.get(c.req.param('checkId'));
       return check ? c.json(check) : c.json({ error: 'not found' }, 404);
@@ -5279,6 +5306,11 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     semaphore: deps.semaphore,
     automationStore: (projectId, root) => automationCoordinator.store(projectId, root)!,
   });
+  // #801: GitHub automations are opt-in. Off, the flag must remove the BEHAVIOR and not merely
+  // the UI — no scheduler, no GitHub polling, no launched runs — so every entry point into the
+  // workspace scheduler below is gated on it. Read per call rather than captured, for the same
+  // reason `capabilities()` is inside `createApp`: tests flip the variable between apps.
+  const automationsEnabled = () => resolveCapabilities(process.env, deps.bindHost).automations;
   let rescheduleAutomations = () => {};
   const app = createApp({
     ...deps,
@@ -5332,7 +5364,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       };
     },
   });
-  rescheduleAutomations = () => { void automationScheduler.reschedule(); };
+  // The scheduler is inert until `start()` anyway (it constructs `stopped`), but the gate is
+  // stated here rather than inherited from that detail: a definition saved while the flag is off
+  // must not even ask the coordinator to refresh.
+  rescheduleAutomations = () => {
+    if (!automationsEnabled()) return;
+    void automationScheduler.reschedule();
+  };
   const unsubscribe = workspaceEvents.on((event, data) => {
     if (event === 'project-added') {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
@@ -5341,7 +5379,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
         void getRepoInfo(project.root).then((info) => {
           const parsed = parseRemote(info?.remote ?? '');
           if (parsed?.host === 'github.com') automationProjects.set(project.id as string, { root: project.root as string, owner: parsed.owner, repo: parsed.repo });
-          return automationScheduler.reschedule();
+          return rescheduleAutomations();
         });
       }
     } else if (event === 'project-removed') {
@@ -5350,7 +5388,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       if (typeof id === 'string') {
         automationCoordinator.remove(id);
         automationProjects.delete(id);
-        void automationScheduler.reschedule();
+        rescheduleAutomations();
       }
     }
   });
@@ -5359,6 +5397,10 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       const all = projects.some((project) => project.root === deps.repoRoot)
         ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
       coordinator.start(all);
+      // #801: with automations off there is nothing to warm — no remote to resolve, no receipts
+      // to reconcile, and above all no scheduler to start. The skills-update coordinator above is
+      // a separate feature and starts either way.
+      if (!automationsEnabled()) return;
       void Promise.all(all.map(async (project) => {
         const parsed = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
         if (parsed?.host === 'github.com') automationProjects.set(project.id, { root: project.root, owner: parsed.owner, repo: parsed.repo });
