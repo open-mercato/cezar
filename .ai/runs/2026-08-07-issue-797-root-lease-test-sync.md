@@ -89,5 +89,10 @@ complete configured validation gate.
 
 ### Phase 3: Prove stability
 
-- [ ] 3.1 Repeated targeted runs plus a full-suite run
-- [ ] 3.2 Full validation gate
+- [x] 3.1 Repeated targeted runs plus a full-suite run — 6× targeted (all green, ~0.9 s of test time
+  each, down from ~3 s of sleeping) and 3× `npm test` (303 files / 5407 tests, green each time). The
+  proof was also checked negatively: with the #438 slot hand-back reverted locally, the first test
+  fails on the isolated run starving.
+- [x] 3.2 Full validation gate — `npm run typecheck` ✅, `npm test` ✅ (5407 passed), `npm run
+  test:unit` ✅ (36 passed), `npm run build` ✅ (`check:pack ok — 459 files`), `npm run test:package`
+  ✅ (12 passed).
