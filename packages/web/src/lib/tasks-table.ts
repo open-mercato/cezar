@@ -41,6 +41,38 @@ export function formatCost(usd: number | undefined): string {
   return `$${usd >= 10 ? usd.toFixed(0) : usd.toFixed(2)}`
 }
 
+/**
+ * When a `scheduled` run resumes itself, sized for a list row (spec
+ * 2026-08-03-auto-resume-after-usage-limit).
+ *
+ * `label` rides in the status pill beside the word "scheduled", so it is deliberately terse:
+ * clock time alone for an appointment later today, a short date in front once it is not. `title`
+ * carries the full instant to the second for the hover — a row has no space for it, and the
+ * thread's own hint is where the exact time belongs.
+ *
+ * Undefined for anything without a live schedule, including an unparseable stamp: a row must
+ * never print `Invalid Date` next to "scheduled".
+ */
+export function scheduledResume(
+  run: Pick<RunRecord, 'status' | 'autoResumeAt'>,
+  now: Date = new Date(),
+): { label: string; title: string } | undefined {
+  if (run.status !== 'failed' || !run.autoResumeAt) return undefined
+  const at = new Date(run.autoResumeAt)
+  if (!Number.isFinite(at.getTime())) return undefined
+  const sameDay = at.toDateString() === now.toDateString()
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(at)
+  return {
+    label: sameDay
+      ? time
+      : `${new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(at)} ${time}`,
+    title: `Resumes automatically at ${new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'long',
+    }).format(at)}`,
+  }
+}
+
 /** The Workflow column's text. `(planned)` chains and inbox runs carry their meaning in their
  *  first agent step, so that name reads better than the placeholder. Legacy `workflowLabel`. */
 export function workflowLabel(run: RunRecord): string {

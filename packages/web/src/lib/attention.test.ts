@@ -140,6 +140,33 @@ describe('ATTENTION_RANK', () => {
   })
 })
 
+describe('a run waiting out a usage limit', () => {
+  const scheduled = run({ status: 'failed', autoResumeAt: '2026-08-03T19:33:53.000Z' })
+
+  it('reads as scheduled and parked, never as a red failure', () => {
+    // It IS `failed` on the record, but the failure is about to undo itself (spec
+    // 2026-08-03-auto-resume-after-usage-limit) — amber and still, like `queued`.
+    expect(deriveAttention(scheduled)).toEqual({
+      bucket: 'none',
+      tone: 'pending',
+      pulse: false,
+      label: 'scheduled',
+    })
+  })
+
+  it('asks for nothing — no notification, no attention bucket', () => {
+    expect(wantsAttention(scheduled)).toBe(false)
+    // …while a failure with no schedule is unchanged.
+    expect(deriveAttention(run({ status: 'failed' })).label).toBe('failed')
+    expect(wantsAttention(run({ status: 'failed' }))).toBe(true)
+  })
+
+  it('only applies to a FAILED run — a live run with a stale stamp is still live', () => {
+    expect(deriveAttention(run({ status: 'running', autoResumeAt: '2026-08-03T19:33:53.000Z' })).label)
+      .toBe('running')
+  })
+})
+
 describe('wantsAttention', () => {
   it.each(ALL_STATUSES)('%s', (status) => {
     // The spec's notification trigger (Phase R6): "waiting/review/failed".

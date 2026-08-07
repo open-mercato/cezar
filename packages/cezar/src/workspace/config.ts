@@ -61,6 +61,14 @@ const resourcesSchema = z
     maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
     /** Optional cadence for re-checking monitored work; null parks at zero model cost. */
     monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().default(null).catch(null),
+    /**
+     * Resume a task the provider's usage limit stopped, once that limit resets
+     * (spec 2026-08-03-auto-resume-after-usage-limit). ON by default, which is the one
+     * cost-bearing automation in this file that is: it spends nothing while it waits, and it
+     * finishes the work the user already asked for rather than starting any of its own. Switching
+     * it off leaves the run `failed` with its Continue button, exactly as before the feature.
+     */
+    autoResumeOnUsageLimit: z.boolean().default(true).catch(true),
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),

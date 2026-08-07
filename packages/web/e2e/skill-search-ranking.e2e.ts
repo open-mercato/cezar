@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, cezarCli, fixtureServeEnv } from './agent-browser'
 
 /**
  * #484 end-to-end: skill search must rank the (almost-)exact match to the TOP wherever it is
@@ -19,7 +19,6 @@ import { AgentBrowser, fixtureServeEnv } from './agent-browser'
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
-const repoRoot = resolve(import.meta.dirname, '../../..')
 const sessionId = `e2e-skill-search-${process.pid}`
 
 function freePort(): Promise<number> {
@@ -87,7 +86,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)

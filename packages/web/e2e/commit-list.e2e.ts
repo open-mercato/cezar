@@ -2,10 +2,10 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, cezarCli, fixtureServeEnv } from './agent-browser'
 import record from './fixtures/thread-run.record.json'
 
 /**
@@ -22,7 +22,6 @@ import record from './fixtures/thread-run.record.json'
  * is not measured. The fixture is generated so the row count is controlled rather than ambient.
  */
 
-const repoRoot = resolve(import.meta.dirname, '../../..')
 const sessionId = `e2e-commit-list-${process.pid}`
 
 /** Past COMMIT_VIRTUALIZE_THRESHOLD (150) with room to spare. */
@@ -140,7 +139,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)

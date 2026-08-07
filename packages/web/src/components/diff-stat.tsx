@@ -11,9 +11,10 @@ import { cn } from '@/lib/utils'
  * honest `—`, the quick-list's nothing), because what absence means differs per surface.
  * The `−` is U+2212 (minus sign), as in the mockup — a hyphen is not a math sign.
  *
- * `stat.repointed` (#751) marks a number that covers uncommitted work only, because the agent
- * checked another branch out into the task's worktree — every review and QA run does. Before
- * the fix those runs reported the reviewed branch's entire diff; the number is right now, but
+ * `stat.repointed` (#751) marks a number measured against a branch the agent checked out into
+ * the task's worktree — every review and QA run does that, and so does every skill that opens
+ * its work on a named branch. Those runs used to report that branch's entire history as their
+ * own; the number counts only what the run itself did to it now, but
  * it is right for a *different* reason than the one next to it, so it says so: a dotted
  * underline and `cursor-help` advertise the explanation, the `title` carries it, and
  * `data-repointed` lets a surface style or assert on it without re-deriving the rule.
@@ -33,7 +34,7 @@ import { cn } from '@/lib/utils'
 export function DiffStatLabel({ stat, className }: { stat: DiffStat; className?: string }) {
   const counts = `+${stat.adds} −${stat.dels} across ${stat.files} ${stat.files === 1 ? 'file' : 'files'}`
   const caveat = stat.repointed
-    ? `${counts} — uncommitted changes only, measured with another branch checked out in this task's worktree`
+    ? `${counts} — measured against another branch checked out in this task's worktree, as this task found it`
     : undefined
   return (
     <span

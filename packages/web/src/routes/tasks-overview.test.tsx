@@ -111,6 +111,26 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
   })
 
+  it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
+    // The record is `failed`, but the task has an appointment (spec
+    // 2026-08-03-auto-resume-after-usage-limit): amber, still, and carrying the instant the way
+    // a queued row carries its position.
+    renderOverview({
+      runs: [
+        run({ id: 'sched', status: 'failed', autoResumeAt: new Date(NOW + 45 * 60_000).toISOString() }),
+        run({ id: 'broke', status: 'failed' }),
+      ],
+    })
+    const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
+    expect(pillOf('sched')?.textContent).toContain('scheduled')
+    // The time itself, locale-formatted — assert it is there rather than its spelling.
+    expect(pillOf('sched')?.querySelector('.tabular-nums')?.textContent).toMatch(/\d{1,2}[:.]\d{2}/)
+    expect(pillOf('sched')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    // …and an ordinary failure is untouched.
+    expect(pillOf('broke')?.textContent).toBe('failed')
+    expect(pillOf('broke')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+  })
+
   it('shows a queued issue reference before the agent starts', () => {
     renderOverview({
       runs: [
@@ -176,7 +196,7 @@ describe('TasksOverview — the table', () => {
     expect(diff?.getAttribute('data-repointed')).toBeNull()
   })
 
-  it('annotates the ± column when the stat covers uncommitted work only (#751)', () => {
+  it('annotates the ± column when the stat was measured on a repointed worktree (#751)', () => {
     renderOverview({
       runs: [
         run({
@@ -195,7 +215,7 @@ describe('TasksOverview — the table', () => {
     expect(diff?.textContent).toBe('+1 −0')
     expect(diff?.getAttribute('data-repointed')).toBe('true')
     expect(diff?.getAttribute('title')).toBe(
-      "+1 −0 across 1 file — uncommitted changes only, measured with another branch checked out in this task's worktree"
+      "+1 −0 across 1 file — measured against another branch checked out in this task's worktree, as this task found it"
     )
   })
 

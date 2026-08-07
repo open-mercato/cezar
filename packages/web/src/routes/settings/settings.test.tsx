@@ -173,6 +173,33 @@ describe('the settings shell', () => {
     expect([...pills.querySelectorAll('[data-section]')].length).toBe(PROJECT_SECTIONS.length)
   })
 
+  it('every section keeps a way BACK to the index: the "General" nav entry', () => {
+    renderAt('/settings/worktrees')
+    // Project scope: scoped like every other project link, and pointing at the area index.
+    expect(
+      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
+    ).toBe('/p/boot/settings')
+    // The mobile pill row carries it too — the index is the ONLY place small screens see it.
+    expect(
+      document.querySelector('[data-slot="settings-nav-mobile"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
+    ).toBe('/p/boot/settings')
+    // A section is open, so "General" is not the current page.
+    expect(document.querySelector('[data-slot="settings-nav-index"][aria-current="page"]')).toBeNull()
+  })
+
+  it('"General" is the current page on the index itself, and unprefixed in the global area', () => {
+    renderAt('/settings')
+    expect(
+      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('aria-current'),
+    ).toBe('page')
+    cleanup()
+
+    renderAt('/settings/global/resources')
+    expect(
+      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
+    ).toBe('/settings/global')
+  })
+
   it('renders the GLOBAL nav at /settings/global — global sections, unprefixed links', () => {
     renderAt('/settings/global/appearance')
     const nav = document.querySelector('[data-slot="settings-nav"]')!

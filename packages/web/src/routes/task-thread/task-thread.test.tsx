@@ -234,6 +234,67 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
   })
 
+  it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: Claude AI usage limit reached|1754236800',
+          autoResumeAt: '2026-08-03T17:00:30.000Z',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Usage limit reached — this task resumes automatically at')
+    // To the SECOND: "6:41 PM" cannot tell a wait that is nearly over from one that just
+    // started. Matched as a pattern because the rendered zone is the reader's own.
+    expect(hint?.querySelector('time')?.textContent).toMatch(/:\d{2}:30\b/)
+    // The absolute instant is the source of truth, not a countdown (spec
+    // 2026-08-03-auto-resume-after-usage-limit).
+    expect(hint?.querySelector('time')?.getAttribute('datetime')).toBe('2026-08-03T17:00:30.000Z')
+    // The other half of an automation nobody opted into: one click to switch it off.
+    expect(screen.getByRole('link', { name: 'Auto-resume settings' }).getAttribute('href')).toBe(
+      '/settings/global/resources',
+    )
+  })
+
+  it('offers a per-task opt-out that hits DELETE /auto-resume for THIS run only', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method ?? 'GET' })
+        const body = String(input).endsWith('/auto-resume') ? { cancelled: true } : []
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ThreadView
+            run={run('failed', { autoResumeAt: '2026-08-03T17:00:30.000Z' })}
+            thread={reduceThread(EVENTS)}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Don’t resume' }))
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/runs/r1/auto-resume'))).toBe(true),
+    )
+  })
+
+  it('an ordinary failure has no resume hint — the promise is only made when the server armed one', () => {
+    renderView(<ThreadView run={run('failed', { error: 'boom' })} thread={reduceThread(EVENTS)} />)
+    expect(document.querySelector('[data-slot="auto-resume-hint"]')).toBeNull()
+  })
+
   it('running → the composer stays enabled with the "message" placeholder, no paused hint', () => {
     renderView(<ThreadView run={run('running')} thread={reduceThread(EVENTS)} />)
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
@@ -810,6 +871,44 @@ describe('TaskThreadRoute', () => {
     renderRoute('r1')
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Loading task…')
     expect(document.querySelector('[data-route="task-thread"]')).not.toBeNull()
+  })
+
+  it('renders the auto-resume hint from what GET /runs/:id actually answers', async () => {
+    // The whole path, not just the component: the record shape is copied verbatim from a live
+    // `GET /api/v1/runs/:id` after a `mock:limit` run, so a field that survives the server but
+    // gets lost between fetch, cache and dock fails here (spec
+    // 2026-08-03-auto-resume-after-usage-limit).
+    const record = {
+      id: 'r1',
+      title: 'mock:limit ship it',
+      workflow: 'quick-task',
+      task: 'mock:limit ship it',
+      status: 'failed',
+      error: 'step "task" failed: Claude AI usage limit reached|1785785603',
+      autoResumeAt: '2026-08-03T19:33:53.000Z',
+      createdAt: '2026-08-03T19:23:00.000Z',
+      finishedAt: '2026-08-03T19:23:13.000Z',
+      tokensUsed: 0,
+      archived: false,
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's1' }],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path = String(input)
+        const body = path === '/api/v1/runs/r1' ? record : path === '/api/v1/health' ? {} : []
+        return Promise.resolve(
+          new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
+        )
+      }),
+    )
+    renderRoute('r1')
+    const hint = await waitFor(() => {
+      const found = document.querySelector('[data-slot="auto-resume-hint"]')
+      expect(found).not.toBeNull()
+      return found
+    })
+    expect(hint?.textContent).toContain('Usage limit reached — this task resumes automatically at')
   })
 
   it('unknown run id → the 404-style CenteredState with a way home', async () => {
