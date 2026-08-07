@@ -102,6 +102,21 @@ describe('AppShell', () => {
     expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
   })
 
+  // #801: same degradation for the opt-in automations capability — the item disappears, it does
+  // not render disabled. The two gates on that item are independent: a forge alone is not enough.
+  it('drops the Automations item when the capability is off', () => {
+    renderShell('/', { automationsAvailable: false })
+    const links = within(nav()).getAllByRole('link')
+    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.automations).length)
+  })
+
+  it('shows the Automations item once the capability is on', () => {
+    renderShell('/', { automationsAvailable: true })
+    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
+      .toContain('/automations')
+  })
+
   describe('active nav state follows the current route', () => {
     const cases: Array<[entry: string, active: string]> = [
       ['/', 'Tasks'],

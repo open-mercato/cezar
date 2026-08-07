@@ -630,6 +630,56 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
+  // #801: automation provenance is history — a run launched while automations were on keeps it
+  // forever — so the chip stays, but it only LINKS while the capability is on. Following it with
+  // automations off would land on the disabled `/automations` state, which says nothing about
+  // this task.
+  const automated = () => run('done', {
+    automation: {
+      automationId: 'a-1',
+      automationRevision: 1,
+      receiptId: 'r-1',
+      event: 'issue.opened',
+      githubUrl: 'https://github.com/open-mercato/cezar/issues/801',
+    },
+  })
+
+  it('links the automation chip to its log while automations are on', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true, followups: false, singleProject: false, automations: true,
+            tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          },
+        }),
+    })
+    renderHeader(automated())
+
+    const link = await screen.findByRole('link', { name: 'Automation' })
+    expect(link.getAttribute('href')).toBe('/automations/a-1/log')
+  })
+
+  it('degrades the automation chip to plain text while automations are off', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true, followups: false, singleProject: false, automations: false,
+            tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          },
+        }),
+    })
+    renderHeader(automated())
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() =>
+      expect(meta.querySelector('[data-slot="automation-origin"]')).not.toBeNull(),
+    )
+    expect(meta.textContent).toContain('Automation')
+    expect(screen.queryByRole('link', { name: 'Automation' })).toBeNull()
+  })
+
   it('omits token and cost text when health disables token metrics', async () => {
     stubFetch({
       '/api/v1/health': () =>

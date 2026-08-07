@@ -139,6 +139,7 @@ export function RunHeader({
           run={run}
           showTokens={metricVisibility.tokens}
           showCost={metricVisibility.cost}
+          automationsAvailable={health.data?.capabilities?.automations === true}
         />
         <MonitoringSchedule run={run} />
 
@@ -431,10 +432,15 @@ function MetaRow({
   run,
   showTokens,
   showCost,
+  automationsAvailable,
 }: {
   run: ApiRun
   showTokens: boolean
   showCost: boolean
+  /** `capabilities.automations` (#801). A run launched while automations were on keeps its
+   *  `run.automation` provenance forever, so the chip must survive the flag going off — as
+   *  plain text, because the route it used to link to is disabled. */
+  automationsAvailable: boolean
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
@@ -479,14 +485,28 @@ function MetaRow({
   }
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
   if (run.automation) {
+    // Provenance is history and is always shown; only the LINK is gated. Following it with the
+    // capability off would land on the disabled `/automations` state, which says nothing about
+    // this task.
     parts.push(
-      <Link
-        key="automation"
-        to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-        className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
-      >
-        Automation
-      </Link>,
+      automationsAvailable ? (
+        <Link
+          key="automation"
+          to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+        >
+          Automation
+        </Link>
+      ) : (
+        <span
+          key="automation"
+          data-slot="automation-origin"
+          title="Automations are off on this server (CEZ_AUTOMATIONS)"
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+        >
+          Automation
+        </span>
+      ),
     )
   }
 

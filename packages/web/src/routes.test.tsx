@@ -49,7 +49,7 @@ const HEALTH = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, followups: true, singleProject: false, automations: false },
   projects: [{ id: BOOT, name: 'cezar' }],
   bootProject: BOOT,
 }
@@ -346,6 +346,19 @@ describe('the global settings area (/settings/global)', () => {
       // Never redirected into a project: the pathname is the one that was asked for.
       expect(currentPathname()).toBe(url)
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
+    })
+  }
+
+  // #801: a bookmarked deep link into any of the four `/automations*` routes still resolves — the
+  // route map is unchanged — but the view says the feature is off instead of rendering an editor
+  // whose every request would 409.
+  for (const path of ['automations', 'automations/new', 'automations/a-1', 'automations/a-1/log']) {
+    it(`/${path} renders the disabled state while the capability is off`, async () => {
+      renderAt(`/p/${BOOT}/${path}`)
+      expect(currentPathname()).toBe(`/p/${BOOT}/${path}`)
+      expect(routeName()).toBe('automations')
+      expect(await screen.findByText('GitHub automations are off')).not.toBeNull()
+      expect(screen.getByText(/CEZ_AUTOMATIONS=1/)).not.toBeNull()
     })
   }
 

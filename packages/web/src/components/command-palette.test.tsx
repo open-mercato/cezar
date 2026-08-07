@@ -92,7 +92,7 @@ function project(overrides: Partial<ProjectListEntry> & { id: string }): Project
 }
 
 /** Health with/without a working forge — what gates the Views group's GitHub row (R6 1.1). */
-function health(forgeAvailable: boolean): HealthResponse {
+function health(forgeAvailable: boolean, automations = false): HealthResponse {
   return {
     version: '0.0.0-test',
     projects: [],
@@ -102,7 +102,7 @@ function health(forgeAvailable: boolean): HealthResponse {
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations },
   }
 }
 
@@ -131,6 +131,7 @@ function renderPalette({
   truncated = [] as string[],
   theme,
   forge = true,
+  automations = false,
   uiState = {} as Record<string, unknown>,
   entry = '/',
 }: {
@@ -142,6 +143,8 @@ function renderPalette({
   truncated?: string[]
   theme?: Theme
   forge?: boolean
+  /** `capabilities.automations` (#801) — off by default, exactly as a default server reports. */
+  automations?: boolean
   uiState?: Record<string, unknown>
   /** The URL to mount at. `/p/<id>/…` is what gives the palette an ACTIVE project. */
   entry?: string
@@ -150,7 +153,7 @@ function renderPalette({
   serve({
     '/api/v1/runs': runs,
     '/api/v1/skills': skills,
-    '/api/v1/health': health(forge),
+    '/api/v1/health': health(forge, automations),
     '/api/v1/ui-state': uiState,
     '/api/v1/projects': { projects, bootProject: projects[0]?.id ?? 'default', projectsDir: '/repos' },
     '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated },
@@ -231,7 +234,7 @@ describe('opening and closing', () => {
 
 describe('Views group', () => {
   it('leads with New task and its C hint, then the 8 nav destinations', async () => {
-    renderPalette()
+    renderPalette({ automations: true })
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
@@ -249,8 +252,24 @@ describe('Views group', () => {
     expect(views[0]?.textContent).toContain('C')
   })
 
-  it('offers exactly ONE New task row — not one per group', async () => {
+  // #801: the palette's Views group renders through the same `visibleNavItems` the sidebar does,
+  // so the two can never disagree about whether Automations exists.
+  it('omits Automations while the capability is off — the default', async () => {
     renderPalette()
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(8),
+    )
+    const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
+    expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
+      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings',
+    ])
+  })
+
+  it('offers exactly ONE New task row — not one per group', async () => {
+    renderPalette({ automations: true })
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
     await waitFor(() =>
