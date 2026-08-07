@@ -62,6 +62,8 @@ The capability is resolved in one place and consumed everywhere else, so the UI 
 
 ## Progress
 
+PR: #802
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server — capability, API gate, no background work
