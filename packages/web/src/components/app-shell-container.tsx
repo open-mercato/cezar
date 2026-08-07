@@ -62,7 +62,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   const inboxAvailable = health.data?.capabilities.followups === true
   // GitHub automations are opt-in too (#801) — same honesty rule: without the server's word for
   // it the nav must not offer a tab whose every request would 409.
-  const automationsAvailable = health.data?.capabilities?.automations === true
+  const automationsAvailable = health.data?.capabilities.automations === true
   const todos = useTodos(inboxAvailable)
   // One query in the shell feeds every rendering of the active project's navigation (desktop,
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.

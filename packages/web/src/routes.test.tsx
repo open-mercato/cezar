@@ -362,6 +362,17 @@ describe('the global settings area (/settings/global)', () => {
     })
   }
 
+  // The window before health answers is the one that bites: `/automations/new` used to paint a
+  // full creation form optimistically, so a cold deep link on a gated server offered a submit
+  // that POSTs into a 409. No mode renders until the capability is known.
+  it('holds every /automations mode on a loading state until health answers', () => {
+    renderAt(`/p/${BOOT}/automations/new`, { health: null })
+    expect(routeName()).toBe('automations')
+    expect(screen.getByText('Loading automations…')).not.toBeNull()
+    expect(document.querySelector('#automation-name')).toBeNull()
+    expect(screen.queryByText('GitHub automations are off')).toBeNull()
+  })
+
   it('omits the Projects route when single-project mode is active', () => {
     renderAt('/settings/global/projects', {
       health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject: true } },

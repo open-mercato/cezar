@@ -119,6 +119,8 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const list = useGithub({ limit: LIST_LIMIT })
   // #801: automations are opt-in, so the cross-link into them exists exactly while the server
   // says the feature does — otherwise this tab would advertise a page that only says "off".
+  // `capabilities?.` because this tab renders against minimal health payloads too; absent is
+  // fail-closed, which is the honest answer while the server has not spoken.
   const automationsAvailable = useHealth().data?.capabilities?.automations === true
   const gh = list.data
 

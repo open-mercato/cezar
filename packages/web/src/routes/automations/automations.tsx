@@ -38,6 +38,18 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
     if (typeof changed.project === 'string' && (projectId === null || changed.project === projectId)) void refresh()
   }), [projectId])
 
+  // Every mode below needs the capability answer, so none of them renders before health has given
+  // it. Without this the list mode alone degraded honestly (it has a loading state of its own)
+  // while a cold deep link into `/automations/new` painted a full creation form on a gated
+  // server — and a submit inside that window POSTs straight into a 409.
+  if (!healthKnown) {
+    return (
+      <div data-route="automations" className="flex min-h-full flex-col p-3 md:p-5">
+        <PageState text="Loading automations…" />
+      </div>
+    )
+  }
+
   // Before every mode branch, so all four `/automations*` routes degrade the same way.
   if (automationsOff) {
     return (

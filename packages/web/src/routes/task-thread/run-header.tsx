@@ -139,6 +139,10 @@ export function RunHeader({
           run={run}
           showTokens={metricVisibility.tokens}
           showCost={metricVisibility.cost}
+          // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
+          // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
+          // own test), so every capability read here tolerates an absent object. Absent stays
+          // fail-closed — the chip degrades to text rather than linking into a disabled view.
           automationsAvailable={health.data?.capabilities?.automations === true}
         />
         <MonitoringSchedule run={run} />
