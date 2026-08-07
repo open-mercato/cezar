@@ -66,11 +66,11 @@ The capability is resolved in one place and consumed everywhere else, so the UI 
 
 ### Phase 1: Server — capability, API gate, no background work
 
-- [ ] 1.1 Contract: required `capabilities.automations` on the health schema
-- [ ] 1.2 `resolveCapabilities` resolves `CEZ_AUTOMATIONS` strictly, with tests
-- [ ] 1.3 `AUTOMATIONS_OFF` 409 guard over both automations route families
-- [ ] 1.4 Workspace automation scheduler does no work while the flag is off
-- [ ] 1.5 `automations-gate.test.ts` plus opting the existing suites into `CEZ_AUTOMATIONS=1`
+- [x] 1.1 Contract: required `capabilities.automations` on the health schema — 09438e2e
+- [x] 1.2 `resolveCapabilities` resolves `CEZ_AUTOMATIONS` strictly, with tests — 09438e2e
+- [x] 1.3 `AUTOMATIONS_OFF` 409 guard over both automations route families — 09438e2e
+- [x] 1.4 Workspace automation scheduler does no work while the flag is off — 09438e2e
+- [x] 1.5 `automations-gate.test.ts` plus opting the existing suites into `CEZ_AUTOMATIONS=1` — 09438e2e
 
 ### Phase 2: Cockpit — nav gate, route fallback, cross-links
 
