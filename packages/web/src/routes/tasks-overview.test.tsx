@@ -196,7 +196,7 @@ describe('TasksOverview — the table', () => {
     expect(diff?.getAttribute('data-repointed')).toBeNull()
   })
 
-  it('annotates the ± column when the stat covers uncommitted work only (#751)', () => {
+  it('annotates the ± column when the stat was measured on a repointed worktree (#751)', () => {
     renderOverview({
       runs: [
         run({
@@ -215,7 +215,7 @@ describe('TasksOverview — the table', () => {
     expect(diff?.textContent).toBe('+1 −0')
     expect(diff?.getAttribute('data-repointed')).toBe('true')
     expect(diff?.getAttribute('title')).toBe(
-      "+1 −0 across 1 file — uncommitted changes only, measured with another branch checked out in this task's worktree"
+      "+1 −0 across 1 file — measured against another branch checked out in this task's worktree, as this task found it"
     )
   })
 

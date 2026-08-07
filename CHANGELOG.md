@@ -26,6 +26,18 @@
   supported yet: it keeps credentials outside its config folder, so a second folder would change
   settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 
+## 🐛 Fixes
+- 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Which sidebar
+  project groups are collapsed, and which page a bare `/` restores, were stored workspace-wide in
+  `~/.cezar/ui-state.json` — so every open cockpit shared one answer: the last client to navigate
+  decided where the next launch landed on every other client, and a group collapsed on a narrow
+  screen collapsed everywhere. Both now live in each browser's own storage, which is also what they
+  always described. Each toggle costs zero requests, the sidebar paints its real state on the first
+  frame instead of after a fetch, and the bare-root restore no longer waits on the UI-state read.
+  The server keys stay accepted and round-tripped for older cockpits; existing collapse state and a
+  remembered location are workspace-wide values with no per-browser answer yet, so each browser
+  starts from the defaults once and remembers from there.
+
 # 0.9.2 (2026-08-04)
 
 ## ⚠️ Breaking
@@ -54,6 +66,23 @@
   shows how many are unread, opening a task's thread clears it, and a "Mark all read" sweep clears
   the lot. Unread is a deliberately separate channel from the status dot, which keeps saying
   done/failed, so "what happened" and "have I seen it" never collapse into one signal.
+
+- ✨ **⌘K searches the whole workspace, not just the project you are standing in.** The palette
+  now lists your **projects** — recency-ordered like the sidebar, the active one last — so
+  switching is a keystroke, and it finds **tasks in any project**, each row labelled with the
+  project it belongs to. That is backed by one new workspace-level route,
+  `GET /api/v1/workspace/runs-index`, which answers a deliberately slim row per run instead of the
+  full record: it never builds a project context, so reading it cannot prune worktrees or resume
+  interrupted runs — typing in a search box must not restart agents. Projects this process has
+  never opened are read straight off `runs.json`, sharing `RunStore`'s own reconciliation so a
+  crashed process's `running` row reads as interrupted here exactly as it would once opened.
+  The palette also opens on **New task** (one row now, not three scattered copies) followed by
+  **Recently finished** — the tasks you have not opened since they finished, the same signal
+  behind the Tasks badge. Ranking is substring-based rather than cmdk's fuzzy subsequence, because
+  a run id is a uuid and typing a task number used to match stray digits inside unrelated ids
+  ahead of the task actually named that; searching also folds the sections into one ranked list so
+  a near-miss can never sit above an exact hit. The dialog is wider on wider screens, taller on
+  taller ones, and anchored near the top so it no longer jumps as results come and go.
 
 ## 🔧 Changed
 - Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.

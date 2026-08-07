@@ -29,6 +29,15 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
+import {
+  DEFAULT_SIDEBAR_WIDTH,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_STEP,
+  clampSidebarWidth,
+  readStoredSidebarWidth,
+  writeStoredSidebarWidth,
+} from '@/lib/sidebar-width'
 import { cn } from '@/lib/utils'
 // The Open Mercato brand mark. A `public/` asset, not a bundled import: the service serves the
 // same file at this exact path (`GET /open-mercato.svg` — the favicon index.html points at), so
@@ -149,6 +158,17 @@ export function AppShell({
   const current = activeNavItem(areaPathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const mainRef = React.useRef<HTMLElement>(null)
+  // The desktop column's width (#788). Read once, lazily, from `localStorage` — it is a
+  // browser-local preference like the theme, so there is nothing to fetch and nothing to wait
+  // for, and the first paint is already the user's width rather than a default that jumps.
+  const [sidebarWidth, setSidebarWidth] = React.useState(readStoredSidebarWidth)
+  const changeSidebarWidth = React.useCallback((next: number) => {
+    const width = clampSidebarWidth(next)
+    setSidebarWidth(width)
+    // Persist on every change rather than on drag end: a drag is a stream of small writes to one
+    // key, which localStorage is fine with, and it means a tab closed mid-drag still remembers.
+    writeStoredSidebarWidth(width)
+  }, [])
 
   // The scroller PERSISTS across routes (it is the shell's, not the view's), so without this
   // a deep scroll on one page carries into the next — most visibly on mobile, where Tasks or
@@ -204,7 +224,9 @@ export function AppShell({
         data-slot="app-shell"
         className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
       >
-        <Sidebar {...nav} />
+        <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} />
+        {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
+            there is no second column to trade width with and no pointer to drag a border. */}
         <MobileNavDrawer {...nav} onNavigate={() => setMenuOpen(false)} />
 
         <div className="grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden">
@@ -251,15 +273,124 @@ type NavProps = {
   singleProject: boolean
 }
 
-/** The desktop frame: a fixed 264px column, from `md` up. */
-function Sidebar(props: NavProps) {
+/**
+ * The desktop frame, from `md` up — 264px by default and draggable up to 420px (#788).
+ *
+ * The width is the user's, not the layout's: the sidebar is the app's primary navigation and its
+ * rows carry task names, so the right column width depends on the screen someone is sitting at.
+ * It lives in `localStorage` rather than in the workspace config for exactly that reason — see
+ * `lib/sidebar-width.ts`.
+ *
+ * An inline `width` rather than a Tailwind class because the value is a number from state, and
+ * the class is left off entirely below `md`, where `hidden` takes the element out of flow and the
+ * drawer (a fixed 264px) is the sidebar instead.
+ */
+function Sidebar({ width, onWidthChange, ...props }: NavProps & SidebarResize) {
   return (
     <aside
       data-slot="sidebar"
-      className="hidden w-[264px] shrink-0 flex-col border-r border-border bg-sidebar md:flex"
+      style={{ width }}
+      className="relative hidden shrink-0 flex-col border-r border-border bg-sidebar md:flex"
     >
       <SidebarContent {...props} />
+      <SidebarResizeHandle width={width} onWidthChange={onWidthChange} />
     </aside>
+  )
+}
+
+type SidebarResize = {
+  width: number
+  onWidthChange: (width: number) => void
+}
+
+/**
+ * The drag handle on the sidebar's right border (#788).
+ *
+ * A `separator` with `aria-orientation="vertical"` — the ARIA window-splitter pattern — which is
+ * the one role that is BOTH focusable and carries a value range, so the same affordance serves a
+ * pointer and a keyboard. Arrow keys step it, Home/End go to the bounds, and a double-click puts
+ * it back to the default, which is the cheap way out of a width you dragged by accident.
+ *
+ * Pointer capture rather than window listeners: the drag must survive the pointer leaving a 5px
+ * hit area (it will, immediately, on any real drag), and capture is how the browser keeps
+ * delivering the moves to this element without us installing and remembering to remove global
+ * handlers. `touch-none` stops a touch-drag from scrolling the page instead of resizing — the
+ * handle is `md`-only, but `md` includes touch laptops and tablets.
+ *
+ * Rendered inside the `<aside>` and absolutely positioned over its border, so it inherits the
+ * column's height without a second element having to track it.
+ */
+function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
+  // The width the drag started from, plus the pointer x it started at. Refs, not state: they
+  // change on every pointermove and nothing renders from them.
+  const origin = React.useRef<{ x: number; width: number } | null>(null)
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Primary button only — a right-click on the border must not start a resize.
+    if (event.button !== 0) return
+    origin.current = { x: event.clientX, width }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    // Without this the drag selects the sidebar's text as it passes over it.
+    event.preventDefault()
+    // …but preventing the default also suppresses the focus the press would have given a
+    // `tabIndex=0` element, which would leave someone who grabbed the handle with a mouse unable
+    // to fine-tune with the arrow keys immediately afterwards. Focus it explicitly instead.
+    event.currentTarget.focus()
+  }
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = origin.current
+    if (!start) return
+    onWidthChange(clampSidebarWidth(start.width + (event.clientX - start.x)))
+  }
+
+  const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!origin.current) return
+    origin.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const next =
+      event.key === 'ArrowLeft'
+        ? width - SIDEBAR_WIDTH_STEP
+        : event.key === 'ArrowRight'
+          ? width + SIDEBAR_WIDTH_STEP
+          : event.key === 'Home'
+            ? MIN_SIDEBAR_WIDTH
+            : event.key === 'End'
+              ? MAX_SIDEBAR_WIDTH
+              : null
+    if (next === null) return
+    // Only for the keys we handled: Tab, Escape and the rest stay the browser's.
+    event.preventDefault()
+    onWidthChange(clampSidebarWidth(next))
+  }
+
+  return (
+    <div
+      data-slot="sidebar-resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the sidebar"
+      aria-valuenow={width}
+      aria-valuemin={MIN_SIDEBAR_WIDTH}
+      aria-valuemax={MAX_SIDEBAR_WIDTH}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onKeyDown={onKeyDown}
+      onDoubleClick={() => onWidthChange(DEFAULT_SIDEBAR_WIDTH)}
+      title="Drag to resize the sidebar — double-click to reset"
+      // A 5px grab strip straddling the border, invisible until you reach for it. `touch-none`
+      // is load-bearing rather than decorative: without it a touch drag is claimed by the
+      // browser's own panning and scrolls the page instead of resizing the column.
+      className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+    />
   )
 }
 
@@ -336,7 +467,11 @@ function SidebarContent({
   return (
     <div
       data-slot="sidebar-content"
-      className="flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      // `@container/sidebar` (#788): the sidebar is no longer one fixed width, so what its rows
+      // can afford to paint is a question about THIS column, not about the viewport. Everything
+      // inside that is droppable metadata — the quick-list's diff pair today — hides itself with
+      // an `@min-[…]/sidebar:` query and returns when the user drags the column wider.
+      className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
         <BrandTile />

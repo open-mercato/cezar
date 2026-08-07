@@ -56,6 +56,7 @@ import type {
   MessageResponse,
   RemoveQueuedMessageResponse,
   OpenInCliResponse,
+  OpenProjectInResponse,
   OpenTargetsResponse,
   ParsedWorkflow,
   PatchRunInput,
@@ -77,6 +78,7 @@ import type {
   Runner,
   RunnerModelCatalogResponse,
   RunRecord,
+  RunsIndexResponse,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -433,6 +435,13 @@ export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
  *  correct whatever scope is mounted. */
 export async function getProjectRuns(projectId: string, opts?: ReadOptions): Promise<ApiRun[]> {
   return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId } }, init(opts)), '/runs')
+}
+
+/** The cross-project task index (`GET /api/v1/workspace/runs-index`) — what lets ⌘K find a task
+ *  without knowing which project it lives in. Workspace-level like the registry, so it has no
+ *  project-scoped spelling and never takes `queryScope()`. */
+export async function getRunsIndex(opts?: ReadOptions): Promise<RunsIndexResponse> {
+  return unwrap(await cez.api.v1.workspace['runs-index'].$get({}, init(opts)), '/workspace/runs-index')
 }
 
 export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
@@ -1163,6 +1172,19 @@ export async function getOpenTargets(opts?: ReadOptions): Promise<OpenTargetsRes
       init(opts),
     ),
     '/open-targets',
+  )
+}
+
+/** Open the ACTIVE PROJECT's own folder in the chosen local app (Settings → "Project folder").
+ *  No path travels: the server opens the scoped project's registered root. 400 for an app this
+ *  machine does not have or a `cli:` handoff, 409 in hosted mode or when the launch failed. */
+export async function openProjectIn(target: string): Promise<OpenProjectInResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['open-in'].$post({
+      param: { projectId: queryScope() },
+      json: { target },
+    }),
+    '/open-in',
   )
 }
 

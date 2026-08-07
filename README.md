@@ -19,7 +19,7 @@ your phone, working your backlog while you're away.
 
 [A look inside](#a-look-inside) · [What cezar does best](#what-cezar-does-best) · [What it solves](#what-it-solves) · [Who it's for](#who-its-for) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Core concepts](#core-concepts) · [Cockpit tour](#cockpit-tour) · [Agent backends](#coding-agent-backends) · [Remote access](#remote-access-host-cezar-on-a-server)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Node 20+](https://img.shields.io/badge/Node-20%2B-339933)
 ![TypeScript 7.x](https://img.shields.io/badge/TypeScript-7.x-3178c6)
 ![Zero config](https://img.shields.io/badge/config-zero-success)
@@ -350,11 +350,12 @@ cezar projects remove api         # drop the registry entry; the repo is untouch
 These read and write `~/.cezar/config.json` directly, so they work with the
 server stopped, and `CEZ_HOME` selects which workspace they operate on.
 
-Settings split along the same line: **Agents**, **Worktrees**, **Bookmarklets**,
-**Prompt templates** and **MCP** describe one repo and live under
-`/p/<projectId>/settings`; **Appearance**, **Notifications**, **Resources**,
-**Projects** and **Keyboard** are yours or the machine's and live at
-`/settings/global`.
+Settings split along the same line: **General** (the project's folder, its
+registry facts, its parallel-task ceiling, and Remove), **Agents**,
+**Worktrees**, **Bookmarklets**, **Prompt templates** and **MCP** describe one
+repo and live under `/p/<projectId>/settings`; **Appearance**,
+**Notifications**, **Resources**, **Projects** and **Keyboard** are yours or the
+machine's and live at `/settings/global`.
 
 **Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
 `/settings` — still answers, bound to the project cezar was started in; the
@@ -742,4 +743,4 @@ Start here; graduate to cezar when a team needs shared visibility.
 
 ## License
 
-**MIT** © Patryk Lewczuk
+**MIT** © Patryk Lewczuk — full text in [LICENSE](LICENSE).

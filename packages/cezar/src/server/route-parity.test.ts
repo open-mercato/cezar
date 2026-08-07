@@ -179,6 +179,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       'GET /projects',
       'POST /projects',
       'GET /fs/browse',
+      'GET /workspace/runs-index',
       'GET /workspace/agent-profiles',
       'POST /workspace/agent-profiles',
       'PATCH /workspace/agent-profiles/:id',

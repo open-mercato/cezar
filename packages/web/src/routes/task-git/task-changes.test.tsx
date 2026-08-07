@@ -177,7 +177,7 @@ describe('the Changes tab route', () => {
     expect(toolbarAction('commit')?.title).toContain('no changes to commit')
   })
 
-  it('explains when a repointed review worktree shows only uncommitted changes', async () => {
+  it('explains what a repointed review worktree is showing', async () => {
     stubFetch({
       'GET /api/v1/runs/r1/changes': () =>
         jsonResponse({
@@ -190,7 +190,7 @@ describe('the Changes tab route', () => {
 
     await waitFor(() => expect(document.querySelector('[data-slot="repointed-head-note"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="repointed-head-note"]')?.textContent).toContain(
-      "HEAD is on review/pr-42, not this task's branch cez/abc12345 — showing uncommitted changes only.",
+      "HEAD is on review/pr-42, not this task's branch cez/abc12345 — showing only what this task changed there.",
     )
   })
 

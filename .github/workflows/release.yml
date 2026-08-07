@@ -32,8 +32,12 @@ jobs:
     name: Release ${{ inputs.bump }} to npm (latest)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Releases only from main — the stable branch.
-    if: github.ref == 'refs/heads/main'
+    # Releases from `main` (the stable trunk) or a `release/*` maintenance branch —
+    # the latter is how a patch line (e.g. `release/0.9.x`) ships fixes without the
+    # newer features already merged to `main`. Dispatch from the BRANCH, never a tag:
+    # workflow_dispatch reads this file from the ref it runs on, and a tag's copy is
+    # frozen, so a tag would still evaluate the old gate.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     # Gate the publish behind a required-reviewer approval. If the environment
     # isn't configured yet, GitHub creates it on first use without reviewers
     # (non-blocking); add reviewers at Settings → Environments → production.
@@ -92,9 +96,9 @@ jobs:
           git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json
           git commit -m "chore(release): v${VERSION}"
           git push origin "$BRANCH"
-          gh pr create --base main --head "$BRANCH" \
+          gh pr create --base "${{ github.ref_name }}" --head "$BRANCH" \
             --title "chore(release): v${VERSION}" \
-            --body "Record the \`v${VERSION}\` version bump that the Release workflow published to npm \`latest\`. Merge to keep \`main\`'s manifests in sync with the published version."
+            --body "Record the \`v${VERSION}\` version bump that the Release workflow published to npm \`latest\`. Merge to keep \`${{ github.ref_name }}\`'s manifests in sync with the published version."
 
       - name: Create GitHub Release
         if: steps.release.outputs.published == 'true'

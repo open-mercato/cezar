@@ -71,7 +71,9 @@ const queuedMessageSchema = z.object({
   createdAt: z.string(),
 });
 
-const runRecordSchema = z.object({
+/** Exported for `./run-index.ts`, the read-only reader of the same file. Nothing else should
+ *  parse `runs.json` — see `reconcileLoadedRun` for why a second parser is a correctness risk. */
+export const runRecordSchema = z.object({
   id: z.string(),
   title: z.string(),
   /** Display title (#389): the auto-derived summary of the first agent turn,
@@ -399,6 +401,50 @@ function createdPrUrl(haystack: string): string | undefined {
 }
 
 /**
+ * Reconcile one record just read off disk with the fact that whichever process wrote it is gone.
+ *
+ * Mutates and returns `run`. Extracted from `RunStore.open` so the read-only index reader
+ * (`./run-index.ts`) answers the SAME question about a `running` row on disk. Two parsers that
+ * disagree here is a visible bug, not an internal one: the cockpit would show a task as running
+ * in the ⌘K index and failed the moment you opened it.
+ *
+ * `keepLive` (#367): leave `queued`/`running`/`waiting` untouched so the caller can recover them
+ * (RunManager.recover re-queues queued runs, resumes interrupted ones). Without it — one-shot CLI
+ * paths that never recover, and the index reader, which has no manager at all — live-looking runs
+ * are marked failed so no ghost stays behind.
+ */
+export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }): RunRecord {
+  // A run that was live when the previous process exited can never finish —
+  // surface that instead of a forever-"running" ghost. `review` survives
+  // restarts on purpose: the gate is pure data (worktree + branch + record)
+  // with no live process, so the diff panel, Send back (resume) and Draft PR
+  // all still work.
+  if (
+    !opts?.keepLive &&
+    (run.status === 'running' || run.status === 'queued' || run.status === 'waiting')
+  ) {
+    run.status = 'failed';
+    run.error = 'interrupted — cezar process exited during the run';
+    run.finishedAt = run.finishedAt ?? new Date().toISOString();
+    for (const step of run.steps) {
+      if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
+    }
+  }
+  if (!['running', 'waiting', 'queued'].includes(run.status)) {
+    run.activity = undefined;
+    run.monitoringWakeAt = undefined;
+  }
+  // A pending usage-limit resume survives the restart on purpose (the wait can be
+  // hours) — `RunManager.recover()` re-arms it from this field. It can only mean
+  // anything on a `failed` run, so anywhere else it is stale bookkeeping.
+  if (run.status !== 'failed') run.autoResumeAt = undefined;
+  // The wake counter is intentionally process-local, so a restarted process
+  // starts a fresh epoch instead of displaying a stale cap.
+  run.monitoringWakeCapReached = undefined;
+  return run;
+}
+
+/**
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
  * file per run. Also the in-process event bus the SSE endpoints subscribe to:
@@ -413,12 +459,7 @@ export class RunStore extends EventEmitter {
     this.setMaxListeners(100);
   }
 
-  /**
-   * `keepLive` (#367): leave `queued`/`running`/`waiting` statuses untouched
-   * so the caller can recover them (RunManager.recover re-queues queued runs,
-   * resumes interrupted ones). Without it — one-shot CLI paths that never
-   * recover — live-looking runs are marked failed so no ghost stays behind.
-   */
+  /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
     mkdirSync(join(dataDir, 'runs'), { recursive: true });
     const store = new RunStore(dataDir);
@@ -429,36 +470,7 @@ export class RunStore extends EventEmitter {
         const parsed = z.array(runRecordSchema).safeParse(raw);
         if (parsed.success) {
           for (const run of parsed.data) {
-            // A run that was live when the previous process exited can never
-            // finish — surface that instead of a forever-"running" ghost.
-            // `review` survives restarts on purpose: the gate is pure data
-            // (worktree + branch + record) with no live process, so the diff
-            // panel, Send back (resume) and Draft PR all still work.
-            if (
-              !opts?.keepLive &&
-              (run.status === 'running' ||
-                run.status === 'queued' ||
-                run.status === 'waiting')
-            ) {
-              run.status = 'failed';
-              run.error = 'interrupted — cezar process exited during the run';
-              run.finishedAt = run.finishedAt ?? new Date().toISOString();
-              for (const step of run.steps) {
-                if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
-              }
-            }
-            if (!['running', 'waiting', 'queued'].includes(run.status)) {
-              run.activity = undefined;
-              run.monitoringWakeAt = undefined;
-            }
-            // A pending usage-limit resume survives the restart on purpose (the wait can be
-            // hours) — `RunManager.recover()` re-arms it from this field. It can only mean
-            // anything on a `failed` run, so anywhere else it is stale bookkeeping.
-            if (run.status !== 'failed') run.autoResumeAt = undefined;
-            // The wake counter is intentionally process-local, so a restarted
-            // process starts a fresh epoch instead of displaying a stale cap.
-            run.monitoringWakeCapReached = undefined;
-            store.runs.set(run.id, run);
+            store.runs.set(run.id, reconcileLoadedRun(run, opts));
           }
         }
       } catch {
