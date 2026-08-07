@@ -1,6 +1,12 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **Advanced users can opt out of repository-root run serialization.** Set the exact value
+  `CEZ_DISABLE_REPO_LOCK=1` to let runs executing in the shared checkout overlap, including
+  explicit `worktree=false` runs, non-Git degradation, and continuations whose worktree cannot be
+  restored. The safe default is unchanged and isolated worktree runs are unaffected. This escape
+  hatch is intentionally dangerous: concurrent agents can overwrite each other's files or Git
+  state, so cezar emits a visible unsafe-mode note whenever it is active. (#762)
 - ✨ **Agent accounts: run one project on your work login and another on your personal one.**
   The same CLI logged in twice — `CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
   Codex — is now something cezar can address. Add the extra config folder under **Settings → Agent

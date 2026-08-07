@@ -132,13 +132,17 @@ export function periodicAutosaveEnabled(env: NodeJS.ProcessEnv = process.env): b
 
 /**
  * Explicitly opt out of the repository-root lease for runs that execute in the
- * current checkout (`worktree: false`). This is intentionally unsafe: concurrent
- * agents may overwrite each other's files or Git state. Isolated worktree runs
- * are unaffected.
+ * current checkout. This covers explicit worktree opt-out, non-Git degradation,
+ * and continuations whose worktree cannot be restored (spec 006 hardening, #438).
+ * This is intentionally unsafe: concurrent agents may overwrite each other's
+ * files or Git state. Isolated worktree runs are unaffected.
  */
 export function repositoryRootLockDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.CEZ_DISABLE_REPO_LOCK === '1';
 }
+
+const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
+  'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
 
 interface ActiveRun {
   cancelled: boolean;
@@ -168,7 +172,8 @@ interface ActiveRun {
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
   /** Release for exclusive execution in the user's repository working tree.
-   *  Worktree-backed runs never need it; every degradation/opt-out path does. */
+   *  Worktree-backed runs never need it; root runs ordinarily do unless the
+   *  explicit unsafe bypass is active. */
   releaseRepoRoot?: () => void;
   /** Durable directional-usage accounting state for the current runner
    * invocation. Provider-local turn ids are unique only within this epoch. */
@@ -496,8 +501,9 @@ export class RunManager {
   private pumpAgain = false;
   /**
    * Runs normally isolate in worktrees and may execute in parallel. When that
-   * isolation is unavailable (or explicitly disabled), serialize access to
-   * `repoRoot` so two agents can never edit/revert the same files (#438).
+   * isolation is unavailable (or explicitly disabled), access to `repoRoot` is
+   * serialized by default so two agents cannot edit/revert the same files
+   * (#438). `CEZ_DISABLE_REPO_LOCK=1` deliberately bypasses this safety lease.
    */
   private repoRootTail: Promise<void> = Promise.resolve();
 
@@ -2079,7 +2085,7 @@ export class RunManager {
       if (repositoryRootLockDisabled()) {
         this.store.appendEvent(runId, {
           type: 'note',
-          message: 'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)',
+          message: REPOSITORY_ROOT_LOCK_DISABLED_NOTE,
         });
       } else {
         this.store.appendEvent(runId, {
@@ -2431,7 +2437,8 @@ export class RunManager {
     const repo = await getRepoInfo(this.repoRoot);
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
-      // repository-root lease serializes these runs so workflows cannot overlap.
+      // repository-root lease serializes these runs by default; the explicit
+      // CEZ_DISABLE_REPO_LOCK=1 escape hatch allows unsafe overlap.
       // Pin the starting commit: the session's Changes and Commits views use it
       // as their stable lower bound while reading the current working copy.
       const startingCommit = await getHeadCommit(repo.root);
@@ -2502,7 +2509,7 @@ export class RunManager {
       if (repositoryRootLockDisabled()) {
         emit({
           type: 'note',
-          message: 'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)',
+          message: REPOSITORY_ROOT_LOCK_DISABLED_NOTE,
         });
       } else {
         emit({
