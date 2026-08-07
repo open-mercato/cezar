@@ -26,6 +26,7 @@ import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
+import { AutoResumeHint } from './auto-resume-hint'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
@@ -359,6 +360,10 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
             // Keyed by run id: the collapse default re-derives per task (see PlanDock).
             <PlanDock key={run.id} runId={run.id} entries={plan} />
           ) : null}
+
+          {/* A usage-limit stop is the one `failed` state that is still going somewhere — the
+              dock says so before the composer offers a Continue nobody needs to press. */}
+          <AutoResumeHint run={run} />
 
           {run.status === 'waiting' ? (
             <div

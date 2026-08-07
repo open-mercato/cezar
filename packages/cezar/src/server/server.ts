@@ -29,6 +29,8 @@ import type {
   GroupResponse,
   GroupVariant,
   PickVariantResponse,
+  RunIndexEntry,
+  RunsIndexResponse,
 } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -62,6 +64,7 @@ import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../sk
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
@@ -457,6 +460,7 @@ export interface WorkspaceConfigResponse {
     maxParallel: number;
     maxMonitoringSessions: number;
     monitoringWakeIntervalMinutes: number | null;
+    autoResumeOnUsageLimit: boolean;
     memoryLimitMb: number | null;
     worktreeRetentionDefault: number;
   };
@@ -2815,6 +2819,7 @@ export function createApp(deps: ServerDeps) {
       maxParallel: config.resources.maxParallel,
       maxMonitoringSessions: config.resources.maxMonitoringSessions,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
+      autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
@@ -2882,6 +2887,9 @@ export function createApp(deps: ServerDeps) {
           }
           if (resources?.monitoringWakeIntervalMinutes !== undefined) {
             config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
+          }
+          if (resources?.autoResumeOnUsageLimit !== undefined) {
+            config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
@@ -2957,6 +2965,7 @@ export function createApp(deps: ServerDeps) {
         maxParallel: z.number().int().min(1).max(16).optional(),
         maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
         monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
+        autoResumeOnUsageLimit: z.boolean().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       })
@@ -3461,9 +3470,23 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       // An empty/absent body archives (the common case); a malformed body degrades
       // to `{}` just as before, but a wrong-typed `archived` is now a 400 (#429).
+      // Archiving also retires any pending usage-limit resume, but that rule belongs to
+      // `setArchived` itself — the bulk sweep must obey it too (spec
+      // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
+    // The per-task off switch for that resume (the workspace setting is Settings → Resources).
+    // Idempotent: a run with nothing pending answers 200 too, because "this task will not
+    // resume itself" is equally true either way.
+    .delete('/runs/:id/auto-resume', (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      manager.cancelAutoResume(id);
+      return c.json({ cancelled: true as const });
     })
 
     .post('/runs/:id/read', (c) => {
@@ -5085,6 +5108,88 @@ export function createApp(deps: ServerDeps) {
     .route('/', configRoutes)
     .route('/', agentConfigRoutes);
 
+  // ---- chained family: the cross-project run index (workspace-level) -------
+  /**
+   * How many runs each project may contribute, newest first. The index is a FINDER, not a
+   * listing: past the newest couple of hundred per project you are looking for something the
+   * project's own Tasks table answers better, and every extra row is a DOM node the palette's
+   * filter walks on each keystroke. `truncated` names the projects this bit, so a consumer never
+   * has to pretend the list is complete.
+   */
+  const RUNS_INDEX_PER_PROJECT = 200;
+
+  /** `RunRecord` → the wire row. Optional keys are spread CONDITIONALLY: writing
+   *  `titleSummary: run.titleSummary` types a key as always-present that `JSON.stringify` then
+   *  drops when it is undefined, which is exactly the drift the parity guard fails on. */
+  const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => ({
+    projectId,
+    id: run.id,
+    title: run.title,
+    ...(run.titleSummary !== undefined ? { titleSummary: run.titleSummary } : {}),
+    ...(run.titleOrigin !== undefined ? { titleOrigin: run.titleOrigin } : {}),
+    status: run.status,
+    ...(run.activity !== undefined ? { activity: run.activity } : {}),
+    createdAt: run.createdAt,
+    ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
+    ...(run.seenAt !== undefined ? { seenAt: run.seenAt } : {}),
+    archived: run.archived,
+    ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
+  });
+
+  /**
+   * `GET /workspace/runs-index` — every registered project's recent tasks in one slim answer, so
+   * ⌘K can find a task without knowing which project it lives in.
+   *
+   * Workspace-level and single-mount for the obvious reason: a project-scoped spelling of "all
+   * projects" is a contradiction. The per-project source is chosen the same way the automation
+   * coordinator's boot fan-out chooses it (`bootContext` for the boot project, `contexts.peek`
+   * for anything this process already owns, disk otherwise) — and never `contexts.context()`,
+   * which would build a context, prune worktrees and `recover()` running agents. Typing in a
+   * search box must not resume work; see `runs/run-index.ts`.
+   */
+  const runsIndexRoutes = new Hono()
+    .get('/workspace/runs-index', async (c) => {
+      let projects: ProjectListEntry[] = [];
+      try {
+        const selector = capabilities().singleProject
+          ? { projectId: await resolveBootProject() }
+          : undefined;
+        projects = await listProjects(selector);
+      } catch {
+        // unreadable workspace — an empty index, never a 500. The palette degrades to the
+        // active project's own run list, which it holds either way.
+      }
+      const bootId = await resolveBootProject(projects);
+      const runs: RunIndexEntry[] = [];
+      const truncated: string[] = [];
+      for (const project of projects) {
+        // No folder, no runs to read. `not-git` still has an `.ai/cezar` worth indexing.
+        if (project.status === 'missing') continue;
+        const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
+        // `listRuns()` already sorts newest-first; the disk reader returns file order, so both
+        // paths get sorted below rather than trusting either.
+        //
+        // Archived runs are INCLUDED. The active project's rows reach the palette through
+        // `GET /runs`, which has always carried them, and excluding them here would mean a task
+        // is findable while you stand in its project and vanishes the moment you leave — the
+        // exact asymmetry a cross-project finder exists to remove.
+        const recent = (
+          owned ? owned.store.listRuns() : readRunIndexFromDisk(join(project.root, '.ai/cezar'))
+        ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        if (recent.length > RUNS_INDEX_PER_PROJECT) truncated.push(project.id);
+        for (const run of recent.slice(0, RUNS_INDEX_PER_PROJECT)) {
+          runs.push(runIndexEntry(project.id, run));
+        }
+      }
+      runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const body: RunsIndexResponse = {
+        runs,
+        perProjectLimit: RUNS_INDEX_PER_PROJECT,
+        truncated,
+      };
+      return c.json(body);
+    });
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -5097,6 +5202,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', workspaceConfigRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
+    .route('/', runsIndexRoutes)
     .route('/', workspaceEventsRoutes);
 
   // ---- mount ---------------------------------------------------------------

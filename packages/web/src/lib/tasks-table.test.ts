@@ -9,6 +9,7 @@ import {
   formatMem,
   githubRepoBase,
   prNumber,
+  scheduledResume,
   taskReference,
   taskPrUrl,
   taskIssueUrl,
@@ -50,6 +51,34 @@ describe('formatMem', () => {
   for (const [input, expected] of cases) {
     it(`${input} → "${expected}"`, () => expect(formatMem(input)).toBe(expected))
   }
+})
+
+describe('scheduledResume', () => {
+  const NOW = new Date('2026-08-03T19:00:00.000Z')
+  const scheduled = (autoResumeAt?: string) =>
+    scheduledResume(run({ status: 'failed', autoResumeAt }), NOW)
+
+  it('is the clock time alone for an appointment later the same day', () => {
+    const answer = scheduled('2026-08-03T19:33:53.000Z')
+    // Locale-formatted, so assert the SHAPE rather than a fixed spelling: a bare time, no date.
+    expect(answer?.label).toMatch(/^\d{1,2}[:.]\d{2}(\s?[AP]M)?$/)
+    expect(answer?.title).toContain('Resumes automatically at')
+  })
+
+  it('puts a short date in front once the appointment is not today', () => {
+    const answer = scheduled('2026-08-05T07:15:00.000Z')
+    expect(answer?.label).not.toMatch(/^\d{1,2}[:.]\d{2}(\s?[AP]M)?$/)
+    expect(answer?.label.length).toBeGreaterThan(5)
+  })
+
+  it('is undefined without a live schedule, and for a stamp it cannot read', () => {
+    expect(scheduled(undefined)).toBeUndefined()
+    // A row must never print `Invalid Date` beside the word "scheduled".
+    expect(scheduled('not-a-date')).toBeUndefined()
+    // Only a FAILED run is waiting on one — a running record with a stale stamp is not.
+    expect(scheduledResume(run({ status: 'running', autoResumeAt: '2026-08-03T19:33:53.000Z' }), NOW))
+      .toBeUndefined()
+  })
 })
 
 describe('formatCost', () => {

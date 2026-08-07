@@ -22,6 +22,7 @@ import type {
   ApiRun,
   ArchiveFinishedResponse,
   MarkAllReadResponse,
+  CancelAutoResumeResponse,
   CancelResponse,
   ChangesPayload,
   CheckoutProjectInput,
@@ -76,6 +77,7 @@ import type {
   Runner,
   RunnerModelCatalogResponse,
   RunRecord,
+  RunsIndexResponse,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -432,6 +434,13 @@ export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
  *  correct whatever scope is mounted. */
 export async function getProjectRuns(projectId: string, opts?: ReadOptions): Promise<ApiRun[]> {
   return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId } }, init(opts)), '/runs')
+}
+
+/** The cross-project task index (`GET /api/v1/workspace/runs-index`) — what lets ⌘K find a task
+ *  without knowing which project it lives in. Workspace-level like the registry, so it has no
+ *  project-scoped spelling and never takes `queryScope()`. */
+export async function getRunsIndex(opts?: ReadOptions): Promise<RunsIndexResponse> {
+  return unwrap(await cez.api.v1.workspace['runs-index'].$get({}, init(opts)), '/workspace/runs-index')
 }
 
 export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
@@ -962,6 +971,18 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
       json: { archived },
     }),
     runPath(id, '/archive'),
+  )
+}
+
+/** Stop THIS task from resuming itself after a usage limit (spec
+ *  2026-08-03-auto-resume-after-usage-limit) — the per-task twin of the workspace setting.
+ *  Idempotent: a task with nothing scheduled answers the same way. */
+export async function cancelAutoResume(id: string): Promise<CancelAutoResumeResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['auto-resume'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/auto-resume'),
   )
 }
 
