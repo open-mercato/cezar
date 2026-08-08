@@ -224,6 +224,20 @@ export function AppShell({
         data-slot="app-shell"
         className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
       >
+        {/* WCAG 2.4.1: the sidebar is 7+ tab stops of repeated chrome on every page — keyboard
+            users get one jump past it. Visible only while focused. */}
+        <a
+          href="#main"
+          // Explicit focus: the SPA layer swallows same-page fragment navigation, so the
+          // native jump-to-target never fires (verified with a real keyboard).
+          onClick={(event) => {
+            event.preventDefault()
+            mainRef.current?.focus()
+          }}
+          className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:left-2 focus-visible:top-2 focus-visible:z-50 focus-visible:rounded-md focus-visible:bg-contrast focus-visible:px-3 focus-visible:py-2 focus-visible:text-sm focus-visible:font-medium focus-visible:text-contrast-foreground"
+        >
+          Skip to content
+        </a>
         <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} />
         {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
             there is no second column to trade width with and no pointer to drag a border. */}
@@ -240,8 +254,10 @@ export function AppShell({
 
           <main
             ref={mainRef}
+            id="main"
+            tabIndex={-1}
             data-slot="main"
-            className="row-start-3 min-h-0 overflow-y-auto overscroll-contain"
+            className="row-start-3 min-h-0 overflow-y-auto overscroll-contain outline-none"
           >
             {children}
           </main>
