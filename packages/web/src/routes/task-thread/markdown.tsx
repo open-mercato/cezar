@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import {
   Streamdown,
+  defaultRehypePlugins,
   defaultRemarkPlugins,
   type CodeHighlighterPlugin,
   type LinkSafetyConfig,
@@ -99,6 +100,46 @@ const HARD_BREAKS = [...Object.values(defaultRemarkPlugins), remarkHardBreaks]
 const INLINE_ELEMENTS = ['p', 'strong', 'em', 'del', 'code', 'a'] as const
 const INLINE_COMPONENTS = { p: 'span', a: 'span' } as const
 
+interface HastNode {
+  type: string
+  tagName?: string
+  value?: string
+  properties?: Record<string, unknown>
+  children?: HastNode[]
+}
+
+/** The concatenated text of a hast subtree. */
+function hastText(node: HastNode): string {
+  if (node.type === 'text') return node.value ?? ''
+  return (node.children ?? []).map(hastText).join('')
+}
+
+/**
+ * GFM task-list items render a `disabled` checkbox with no accessible name, so a screen reader
+ * announces a bare, stateful checkbox with nothing to attach its checked state to (audit
+ * finding B5, WCAG 1.3.1 / 3.3.2 — axe `label`, critical). This rehype pass names each task
+ * checkbox from its own item text, at the hast level, so every Streamdown default renderer
+ * (the `data-streamdown` list treatment included) stays exactly as it was. Runs after GFM,
+ * which is why it composes ONTO Streamdown's default rehype plugins rather than replacing them.
+ */
+function rehypeLabelTaskCheckboxes() {
+  const visit = (node: HastNode): void => {
+    const classes = node.properties?.className
+    const isTaskItem =
+      node.tagName === 'li' && Array.isArray(classes) && classes.includes('task-list-item')
+    if (isTaskItem) {
+      const box = (node.children ?? []).find(
+        (child) => child.tagName === 'input' && child.properties?.type === 'checkbox',
+      )
+      if (box) box.properties = { ...box.properties, ariaLabel: hastText(node).trim() || 'Task item' }
+    }
+    for (const child of node.children ?? []) visit(child)
+  }
+  return visit
+}
+
+const TASK_LABELS = [...Object.values(defaultRehypePlugins), rehypeLabelTaskCheckboxes]
+
 /**
  * Streamdown's link confirm, rendered by US so it portals out of the thread's contained rows —
  * see link-safety-dialog.tsx for the whole story. Module-level, not built per render: Streamdown
@@ -133,6 +174,7 @@ export const Markdown = memo(function Markdown({
       plugins={{ code: shikiPlugin }}
       shikiTheme={[SYN_THEME, SYN_THEME]}
       remarkPlugins={breaks ? HARD_BREAKS : undefined}
+      rehypePlugins={inline ? undefined : TASK_LABELS}
       allowedElements={inline ? INLINE_ELEMENTS : undefined}
       unwrapDisallowed={inline || undefined}
       components={inline ? INLINE_COMPONENTS : undefined}

@@ -23,7 +23,7 @@ single fix can be reverted or shipped alone.
 | A1 | `--soft-foreground` is `#a3a3a3` in the light theme — 2.52:1 on white at 11–12 px, ~301 usages plus the global `::placeholder`; dark's `#7b7b7b` is 4.08:1 on `--card` | WCAG 1.4.3 | retune the two hex values; no call-site changes |
 | X1 | `--input` border `#ebebeb` on a white field ≈ 1.19:1 — the Search box has almost no boundary in light | WCAG 1.4.11 | darken light `--input` to ≥3:1 against `--background` |
 | B3 | No skip link — every page starts its tab order in the sidebar (7+ stops) | WCAG 2.4.1 (A) | `sr-only focus:visible` link to `#main` before the sidebar |
-| B4 | The "Delete this task?" dialog ignores Escape (two real key presses; focus inside) | platform convention | remove the Escape suppression; safe default focus already guards against slips |
+| ~~B4~~ | ~~"Delete this task?" dialog ignores Escape~~ — **withdrawn: harness false positive.** The audit's Escape presses never reached the page (a document-capture probe caught zero keydowns from the browser panel). A component test with a real `keyDown` proves the Radix `AlertDialog` closes on Escape as designed; no suppression exists in the code. No change. | — | none |
 | B5 | Markdown task-list checkboxes render unlabeled (`axe: label`, critical) | WCAG 1.3.1 / 3.3.2 | label them from the list item's text in the markdown renderer |
 | B1 | Scrollable regions (markdown tables, code blocks, workflow `pre`) are mouse-only | WCAG 2.1.1 | `tabindex="0"` + `role="region"` + label on the overflow containers |
 | A4 | Agent screenshot `alt` is the raw filename (`screenshot-1.png`) | WCAG 1.1.1 | descriptive alt ("Screenshot captured by the agent") |

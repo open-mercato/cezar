@@ -76,6 +76,25 @@ describe('Markdown', () => {
     expect(document.body.textContent).not.toContain('```')
   })
 
+  // GFM task-list checkboxes must carry an accessible name (audit B5, WCAG 1.3.1 / 3.3.2).
+  describe('task-list checkboxes', () => {
+    it('names each checkbox from its own item text, both states', () => {
+      const { container } = render(<Markdown>{'- [x] Ship the fix\n- [ ] Write the tests'}</Markdown>)
+      const boxes = [...container.querySelectorAll('input[type="checkbox"]')]
+      expect(boxes).toHaveLength(2)
+      expect(boxes.map((b) => b.getAttribute('aria-label'))).toEqual([
+        'Ship the fix',
+        'Write the tests',
+      ])
+    })
+
+    it('leaves ordinary list items untouched', () => {
+      const { container } = render(<Markdown>{'- one\n- two'}</Markdown>)
+      expect(container.querySelector('input[type="checkbox"]')).toBeNull()
+      expect(container.querySelectorAll('[data-streamdown="list-item"]')).toHaveLength(2)
+    })
+  })
+
   // `breaks` — hard line breaks for human-typed text (#524).
   describe('breaks', () => {
     it('off by default: a single newline is CommonMark paragraph glue', () => {
