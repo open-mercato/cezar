@@ -250,10 +250,11 @@ export function Composer({
 
   // cmdk's own keyboard handler never sees ArrowUp/Down (preventDefault in onKeyDown),
   // so its built-in scrollIntoView doesn't fire. Scroll the selected item ourselves.
+  // Note: PopoverContent is portalled outside rootRef, so we query via data-slot.
   useLayoutEffect(() => {
     if (!menuOpen) return
-    rootRef.current
-      ?.querySelector<HTMLElement>('[cmdk-item][data-selected="true"]')
+    document
+      .querySelector<HTMLElement>('[data-slot="composer-menu"] [cmdk-item][data-selected="true"]')
       ?.scrollIntoView({ block: 'nearest' })
   }, [activeValue, menuOpen])
 
