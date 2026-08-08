@@ -48,6 +48,25 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
+/**
+ * The tone of the progress bar (audit A2). Amber is the RUNNING color; a bar left amber at 100%
+ * is why a finished run reads as still working. So: still an active step → amber; else a failed
+ * or cancelled step → danger; else the workflow ran to the end → success. Derived from the steps
+ * alone, so it settles the moment the run does — no run-status prop to thread.
+ */
+export type RailBarTone = 'active' | 'done' | 'failed'
+export function railBarTone(steps: ReadonlyArray<Pick<StepState, 'status'>>): RailBarTone {
+  if (steps.some((step) => railVisual(step.status) === 'active')) return 'active'
+  if (steps.some((step) => railVisual(step.status) === 'failed')) return 'failed'
+  return 'done'
+}
+
+const BAR_TONE_CLASS: Record<RailBarTone, string> = {
+  active: 'bg-pending',
+  done: 'bg-success',
+  failed: 'bg-danger',
+}
+
 export function StepRail({ steps }: { steps: StepState[] }) {
   if (steps.length === 0) return null
   const pct = railProgress(steps) * 100
@@ -73,7 +92,11 @@ export function StepRail({ steps }: { steps: StepState[] }) {
         </div>
       ))}
       <div data-slot="step-progress" className="mt-1 h-0.5 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-pending" style={{ width: `${pct}%` }} />
+        <div
+          data-tone={railBarTone(steps)}
+          className={cn('h-full rounded-full', BAR_TONE_CLASS[railBarTone(steps)])}
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   )
@@ -173,7 +196,11 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
           step {index + 1} of {steps.length}
         </span>
         <span data-slot="step-summary-progress" className="h-0.5 min-w-[36px] flex-1 overflow-hidden rounded-full bg-muted">
-          <span className="block h-full rounded-full bg-pending" style={{ width: `${pct}%` }} />
+          <span
+            data-tone={railBarTone(steps)}
+            className={cn('block h-full rounded-full', BAR_TONE_CLASS[railBarTone(steps)])}
+            style={{ width: `${pct}%` }}
+          />
         </span>
         <ChevronDownIcon
           aria-hidden

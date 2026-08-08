@@ -3,7 +3,16 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
 
-import { activeStepIndex, railProgress, railVisual, StepRail, WorkflowSteps, type RailVisual } from './step-rail'
+import {
+  activeStepIndex,
+  railBarTone,
+  railProgress,
+  railVisual,
+  StepRail,
+  WorkflowSteps,
+  type RailBarTone,
+  type RailVisual,
+} from './step-rail'
 
 afterEach(cleanup)
 
@@ -94,6 +103,37 @@ describe('StepRail', () => {
     render(<StepRail steps={[step('a', 'done'), step('b', 'running'), step('c', 'pending'), step('d', 'pending')]} />)
     const bar = document.querySelector<HTMLElement>('[data-slot="step-progress"] > div')!
     expect(bar.style.width).toBe('37.5%') // (1 + 0.5) / 4
+  })
+
+  // Audit A2: the bar tone must settle when the run does — amber is the RUNNING color.
+  it.each<[string, RailBarTone, string]>([
+    ['a running step keeps the amber bar', 'active', 'bg-pending'],
+    ['all steps done → success bar', 'done', 'bg-success'],
+    ['a cancelled step → danger bar', 'failed', 'bg-danger'],
+  ])('%s', (_label, _tone, cls) => {
+    const steps =
+      cls === 'bg-pending'
+        ? [step('a', 'done'), step('b', 'running')]
+        : cls === 'bg-success'
+          ? [step('a', 'done'), step('b', 'done')]
+          : [step('a', 'done'), step('b', 'cancelled')]
+    render(<StepRail steps={steps} />)
+    const bar = document.querySelector<HTMLElement>('[data-slot="step-progress"] > div')!
+    expect(bar.className).toContain(cls)
+    expect(bar.className).not.toContain(cls === 'bg-pending' ? 'bg-success' : 'bg-pending')
+  })
+})
+
+describe('railBarTone — the bar settles with the run', () => {
+  it.each<[StepStatus[], RailBarTone]>([
+    [['done', 'done'], 'done'],
+    [['done', 'running'], 'active'],
+    [['done', 'waiting'], 'active'],
+    [['done', 'review'], 'active'],
+    [['done', 'cancelled'], 'failed'],
+    [['failed'], 'failed'],
+  ])('%j → %s', (statuses, tone) => {
+    expect(railBarTone(statuses.map((status, i) => step(`s${i}`, status)))).toBe(tone)
   })
 })
 

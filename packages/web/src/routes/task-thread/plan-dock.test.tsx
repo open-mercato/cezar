@@ -128,6 +128,27 @@ describe('PlanDock', () => {
     expect(document.querySelector('[data-slot="plan-current"]')?.textContent).toBe('— Running tests')
   })
 
+  // Audit A2: once the run has settled, the frozen snapshot must stop reading as live.
+  describe('settled (the run has stopped)', () => {
+    it('expanded: the in-progress row keeps its text but drops the pulse and the tag', () => {
+      render(<PlanDock runId="dock-settled" entries={GOLDEN} settled />)
+      const rows = [...document.querySelectorAll('[data-slot="plan-item"]')]
+      const inProgress = rows[1]!
+      expect(inProgress.getAttribute('data-status')).toBe('in_progress')
+      expect(inProgress.textContent).toBe('Run tests') // no "in progress" tag appended
+      expect(inProgress.querySelector('[data-slot="plan-tag"]')).toBeNull()
+      expect(inProgress.querySelector('svg')?.getAttribute('class')).not.toContain('animate-pulse')
+    })
+
+    it('collapsed: the present-tense current line is gone — the odometer stands alone', () => {
+      render(<PlanDock runId="dock-settled-collapsed" entries={GOLDEN} settled />)
+      fireEvent.click(head())
+      expect(dock().getAttribute('data-state')).toBe('collapsed')
+      expect(document.querySelector('[data-slot="plan-current"]')).toBeNull()
+      expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('· 1/3')
+    })
+  })
+
   it('falls back to the entry content when the current item has no activeForm', () => {
     render(
       <PlanDock

@@ -43,7 +43,22 @@ export function planActiveEntry(entries: PlanEntry[]): PlanEntry | undefined {
   return entries.find((entry) => entry.status === 'in_progress') ?? entries.find((entry) => entry.status === 'pending')
 }
 
-export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry[] }) {
+/**
+ * `settled` (audit A2): once the run is no longer producing output, the agent's last plan
+ * snapshot is frozen, not live. A snapshot that still held an `in_progress` entry when the run
+ * ended would otherwise pulse and read in the present tense ("Summarizing…") forever. When
+ * settled the dock drops the present-tense current line and stops the in-progress entry pulsing
+ * and claiming activity — the odometer and the struck-through completions tell the real story.
+ */
+export function PlanDock({
+  runId,
+  entries,
+  settled = false,
+}: {
+  runId: string
+  entries: PlanEntry[]
+  settled?: boolean
+}) {
   const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen())
   if (entries.length === 0) return null // full-replacement can empty the plan — nothing to dock
 
@@ -73,7 +88,7 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
         <span data-slot="plan-count" className="shrink-0 text-muted-foreground tabular-nums">
           · {done}/{total}
         </span>
-        {!open && active !== undefined ? (
+        {!open && active !== undefined && !settled ? (
           <span data-slot="plan-current" className="min-w-0 truncate text-muted-foreground">
             — {active.activeForm ?? active.content}
           </span>
@@ -86,7 +101,7 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
       {open ? (
         <ul data-slot="plan-list" className="flex flex-col gap-[7px] px-3.5 pb-3">
           {entries.map((entry, index) => (
-            <PlanRow key={`${index}:${entry.content}`} entry={entry} />
+            <PlanRow key={`${index}:${entry.content}`} entry={entry} settled={settled} />
           ))}
         </ul>
       ) : null}
@@ -94,7 +109,7 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
   )
 }
 
-function PlanRow({ entry }: { entry: PlanEntry }) {
+function PlanRow({ entry, settled = false }: { entry: PlanEntry; settled?: boolean }) {
   return (
     <li
       data-slot="plan-item"
@@ -108,9 +123,10 @@ function PlanRow({ entry }: { entry: PlanEntry }) {
         entry.status === 'cancelled' && 'text-soft-foreground/70 line-through',
       )}
     >
-      <PlanIcon status={entry.status} />
+      <PlanIcon status={entry.status} settled={settled} />
       <span className="min-w-0 truncate">{entry.content}</span>
-      {entry.status === 'in_progress' ? (
+      {/* The present-tense tag is a live-run signal — a frozen snapshot must not keep claiming it. */}
+      {entry.status === 'in_progress' && !settled ? (
         <span
           data-slot="plan-tag"
           className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
@@ -125,7 +141,7 @@ function PlanRow({ entry }: { entry: PlanEntry }) {
 /** The mockup's three checkbox glyphs, verbatim paths: ✓ in a faint circle / a pulsing
  *  half-filled ◐ / an empty ○ — plus a ⊘ for `cancelled`, which the mockup predates.
  *  Inline because lucide has no half-filled circle. */
-function PlanIcon({ status }: { status: PlanStatus }) {
+function PlanIcon({ status, settled = false }: { status: PlanStatus; settled?: boolean }) {
   if (status === 'cancelled') {
     return (
       <svg
@@ -163,7 +179,8 @@ function PlanIcon({ status }: { status: PlanStatus }) {
     return (
       <svg
         aria-hidden
-        className="size-[15px] shrink-0 animate-pulse motion-reduce:animate-none"
+        // A frozen snapshot doesn't pulse — the animation is a live-run signal (audit A2).
+        className={cn('size-[15px] shrink-0', !settled && 'animate-pulse motion-reduce:animate-none')}
         viewBox="0 0 24 24"
         fill="none"
       >
