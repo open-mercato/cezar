@@ -642,7 +642,11 @@ export function ImageItem({ image }: { image: ThreadImage }) {
     <ZoomableImage
       data-slot="thread-image"
       src={image.url}
-      alt={image.name ?? 'image from the agent session'}
+      // A11y (audit A4): the persisted name is a filename ("screenshot-1.png"), not a
+      // description — a poor accessible name. Describe what it is; keep the filename as a
+      // hover title for sighted users.
+      alt="Image the agent captured during the session"
+      title={image.name}
       className="max-h-72 max-w-full self-start rounded-lg border border-border"
     />
   )
