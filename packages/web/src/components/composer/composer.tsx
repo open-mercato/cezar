@@ -248,6 +248,15 @@ export function Composer({
     el.focus()
   }
 
+  // cmdk's own keyboard handler never sees ArrowUp/Down (preventDefault in onKeyDown),
+  // so its built-in scrollIntoView doesn't fire. Scroll the selected item ourselves.
+  useLayoutEffect(() => {
+    if (!menuOpen) return
+    rootRef.current
+      ?.querySelector<HTMLElement>('[cmdk-item][data-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [activeValue, menuOpen])
+
   // Restore the caret after a completion replaced the token mid-draft.
   useLayoutEffect(() => {
     const caret = pendingCaretRef.current
