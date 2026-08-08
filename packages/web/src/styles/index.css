@@ -167,7 +167,11 @@
    * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f. */
   --soft-foreground: #6f6f6f;
   --border: #ebebeb;
-  --input: #ebebeb;
+  /* AA-checked (audit 2026-08-08, X1): the interactive field/control border, kept separate
+   * from the decorative --border (#ebebeb) precisely so it can meet 1.4.11's 3:1 for UI
+   * components. #ebebeb was 1.19:1 on white — the Search box had almost no boundary. Don't
+   * lighten back above #949494. */
+  --input: #949494;
   --contrast: #262626;
   --contrast-foreground: #ffffff;
 
