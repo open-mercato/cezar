@@ -86,7 +86,9 @@
   --sidebar: var(--card);
   --muted: #262626;
   --muted-foreground: #a3a3a3;
-  --soft-foreground: #7b7b7b;
+  /* AA-checked (audit 2026-08-08): ≥4.5:1 on --background, --card and --card-2 — the three
+   * surfaces soft text renders on. Don't darken back below #848484. */
+  --soft-foreground: #848484;
   --border: #262626;
   --input: #262626;
   --contrast: #ebebeb;
@@ -161,7 +163,9 @@
   --sidebar: #fafafa;
   --muted: #f7f7f7;
   --muted-foreground: #5c5c5c;
-  --soft-foreground: #a3a3a3;
+  /* AA-checked (audit 2026-08-08): ≥4.5:1 on every light surface incl. --muted; #a3a3a3 was
+   * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f. */
+  --soft-foreground: #6f6f6f;
   --border: #ebebeb;
   --input: #ebebeb;
   --contrast: #262626;
