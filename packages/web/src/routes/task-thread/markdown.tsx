@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import {
   Streamdown,
   defaultRehypePlugins,
@@ -141,6 +141,23 @@ function rehypeLabelTaskCheckboxes() {
 const TASK_LABELS = [...Object.values(defaultRehypePlugins), rehypeLabelTaskCheckboxes]
 
 /**
+ * Streamdown renders wide tables and code blocks inside its own `overflow-x-auto` wrappers,
+ * which a mouse can scroll but a keyboard cannot reach (audit finding B1, WCAG 2.1.1 — axe
+ * `scrollable-region-focusable`). Those wrappers are Streamdown-internal DOM, so rather than
+ * override its renderers (which drops their `data-streamdown` treatment), tag them after
+ * render: a horizontally-overflowing region becomes a focusable, named group. Idempotent, so
+ * the re-run on every streamed mutation only ever tags newly-overflowing regions.
+ */
+export function tagScrollableRegions(root: HTMLElement): void {
+  for (const el of root.querySelectorAll<HTMLElement>('.overflow-x-auto')) {
+    if (el.scrollWidth <= el.clientWidth) continue
+    if (el.tabIndex < 0) el.tabIndex = 0
+    if (!el.hasAttribute('role')) el.setAttribute('role', 'group')
+    if (!el.hasAttribute('aria-label')) el.setAttribute('aria-label', 'Scrollable region')
+  }
+}
+
+/**
  * Streamdown's link confirm, rendered by US so it portals out of the thread's contained rows —
  * see link-safety-dialog.tsx for the whole story. Module-level, not built per render: Streamdown
  * memoizes on `linkSafety` by identity, so a fresh object here would re-render every message on
@@ -168,7 +185,21 @@ export const Markdown = memo(function Markdown({
   breaks?: boolean
   inline?: boolean
 }) {
-  return (
+  // Tag Streamdown's overflow wrappers as focusable regions after each render (B1). Skipped
+  // inline: the compact preview carries no tables or code blocks. `display: contents` keeps the
+  // ref host layout-transparent, so Streamdown's own spacing is untouched.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (inline) return
+    const root = rootRef.current
+    if (!root) return
+    tagScrollableRegions(root)
+    const observer = new MutationObserver(() => tagScrollableRegions(root))
+    observer.observe(root, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [children, inline])
+
+  const markdown = (
     <Streamdown
       className={inline ? 'thread-markdown thread-markdown-inline' : 'thread-markdown'}
       plugins={{ code: shikiPlugin }}
@@ -186,5 +217,11 @@ export const Markdown = memo(function Markdown({
     >
       {children}
     </Streamdown>
+  )
+  if (inline) return markdown
+  return (
+    <div ref={rootRef} style={{ display: 'contents' }}>
+      {markdown}
+    </div>
   )
 })

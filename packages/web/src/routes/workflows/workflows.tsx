@@ -611,7 +611,12 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
             </div>
             <pre
               data-slot="wb-yaml"
-              className="mt-2 overflow-x-auto rounded-lg border border-border bg-card p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre text-muted-foreground shadow-xs"
+              // A11y (audit B1, WCAG 2.1.1): a horizontally scrollable region needs keyboard
+              // access. Focusable + named so it can be reached and scrolled without a mouse.
+              tabIndex={0}
+              role="group"
+              aria-label="workflow.yaml preview"
+              className="mt-2 overflow-x-auto rounded-lg border border-border bg-card p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre text-muted-foreground shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               {yaml}
             </pre>
