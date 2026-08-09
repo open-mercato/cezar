@@ -10,7 +10,8 @@ cezar is a published npm CLI (`@open-mercato/cezar`, currently 0.x — renamed f
 - **Commands:** bare invocation = `serve` (cockpit); `cezar run "<task>"`; `cezar init`.
 - **Flags:** `-p/--port` (default 4321, auto-picks the next free port), `--repo <dir>`, `--workflow <name>` (default `quick-task`), `--model <model>`, `--no-open`, `-h/--help`.
 - **Exit codes:** `run` exits 0 on `done` **and** `review` (spec 009 — headless runs must not hang on the review gate), 1 on `failed`/`cancelled`/unknown workflow. CI scripts depend on this.
-- **Env vars:** `CEZ_DRY_RUN`, `CEZ_AGENT_MODELS_LOCKED`, `CEZ_APPROVAL_GATE`, `CEZ_FOLLOWUPS`, `CEZ_HIDE_TOKEN_USAGE`, `CEZ_HIDE_COST`, `CEZ_HIDE_TOKEN_METRICS`, `CEZ_CLAUDE_BIN`, `CEZ_CODEX_BIN`, `CEZ_OPENCODE_BIN`, `GITHUB_TOKEN`.
+- **Env vars:** `CEZ_DRY_RUN`, `CEZ_AGENT_MODELS_LOCKED`, `CEZ_APPROVAL_GATE`, `CEZ_FOLLOWUPS`, `CEZ_HIDE_TOKEN_USAGE`, `CEZ_HIDE_COST`, `CEZ_HIDE_TOKEN_METRICS`, `CEZ_CLAUDE_BIN`, `CEZ_CODEX_BIN`, `CEZ_OPENCODE_BIN`, `CEZ_AGENT_TMPDIR`, `GITHUB_TOKEN`.
+  - `CEZ_AGENT_TMPDIR` (#785) is an **opt-out** for a changed default, not a new feature switch: spawned agents now receive `TMPDIR`/`TEMP`/`TMP` pointing at this run's own `.ai/cezar/tmp/<runId>` instead of the host's values, which the least-privilege env used to forward verbatim. An exact `0` restores the host `TMPDIR` **and** skips the new pre-spawn writability check — the pre-#785 behaviour, not merely the pre-#785 environment, so a run that used to start still starts. Removing that opt-out, weakening it to cover only the variables, or changing which spelling disables it, is breaking and takes the deprecation path below. The host `TMPDIR` is still forwarded unchanged to every process cezar spawns that is *not* an agent session.
 
 Breaking: renaming/removing a command, flag, alias or env var; changing a default (port, workflow); changing `run` exit-code semantics. Required path: keep the old spelling as a deprecated alias for at least one minor release, print a one-line deprecation warning, document the replacement.
 
@@ -39,8 +40,8 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - `GET /api/v1/workspace/runs-index` — the cross-project task finder behind ⌘K, workspace-level and never mirrored under `/api/v1/p/`. Answers `{runs, perProjectLimit, truncated}` where each run is the deliberately SLIM `{projectId, id, title, titleSummary?, titleOrigin?, status, activity?, createdAt, finishedAt?, seenAt?, archived, autoResumeAt?}` — not `RunRecord`, whose `steps[]` multiplied by the registry is what this shape exists to avoid; adding a field is additive, swapping in the fat record is not. Archived runs are included — the project-scoped `GET /runs` has always carried them, and dropping them here would make a task findable only while you stand in its project — and each project contributes at most `perProjectLimit` of its newest, with `truncated` naming the projects that hit the cap so a consumer never has to present a capped list as a complete one. Reading it is **side-effect free by contract**: a project this process does not already own is read straight off `runs.json`, never through a built context, because building one prunes worktrees and resumes interrupted runs — a search box must not restart agents. Live-looking rows from a crashed process therefore read as interrupted here exactly as they would once the project were opened (both readers share `reconcileLoadedRun`). An unreadable workspace or a corrupt per-project index degrades to fewer rows, never a 500. Breaking: mirroring it under `/api/v1/p/`, removing a run field, or letting the read build project contexts.
 - Skills: `GET /api/v1/skills`, `GET /api/v1/skills/importable`, `POST /api/v1/skills/refresh`
 - Workflows: `GET/POST /api/v1/workflows`, `DELETE /api/v1/workflows/:name`, `POST /api/v1/workflows/parse`, `POST /api/v1/plan`
-- Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check}`, `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry`
-- Runs: `GET/POST /api/v1/runs`, `GET /api/v1/runs/:id`, `PATCH /api/v1/runs/:id`, `PATCH/DELETE /api/v1/runs/:id/queued-messages/:msgId`, `POST /api/v1/runs/:id/{cancel,messages,finish,continue,open-in-cli,open-in,pr,archive,read,remove-worktree,git/commit,git/push}`, `POST /api/v1/runs/{archive-finished,read-all}`, `DELETE /api/v1/runs/:id`, `DELETE /api/v1/runs/:id/auto-resume`, `GET /api/v1/runs/:id/{handoff,diff,changes,files,commits,events}`, `GET /api/v1/runs/:id/commit/:sha`, `GET /api/v1/runs/:id/images/:file`
+- Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check}`, `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry` — present always, but **gated** on `CEZ_AUTOMATIONS=1` (#801, off by default): every route above answers `409` naming the flag, reads included. Unlike the inbox's `200 []` degradation, an off automations read refuses rather than answering empty — `{automations: []}` would read as "you have configured none", and a client would then offer to create one against a `409`ing POST. The routes themselves must keep existing and must behave exactly as before once the flag is on.
+- Runs: `GET/POST /api/v1/runs`, `GET /api/v1/runs/:id`, `PATCH /api/v1/runs/:id`, `PATCH/DELETE /api/v1/runs/:id/queued-messages/:msgId`, `POST /api/v1/runs/:id/{cancel,messages,finish,continue,open-in-cli,open-in,pr,archive,read,unread,remove-worktree,git/commit,git/push}`, `POST /api/v1/runs/{archive-finished,read-all}`, `DELETE /api/v1/runs/:id`, `DELETE /api/v1/runs/:id/auto-resume`, `GET /api/v1/runs/:id/{handoff,diff,changes,files,commits,events}`, `GET /api/v1/runs/:id/commit/:sha`, `GET /api/v1/runs/:id/images/:file`
   - `DELETE /api/v1/runs/:id/auto-resume` (spec `.ai/specs/2026-08-03-auto-resume-after-usage-limit.md`, additive) retires a pending usage-limit resume for ONE task, leaving the workspace-wide `resources.autoResumeOnUsageLimit` untouched. Idempotent — a run with nothing scheduled answers `200 {cancelled: true}` too; only an unknown run 404s. Archiving a run does the same thing implicitly, because archiving is how a user resigns from a task.
 - Worktrees: `GET /api/v1/worktrees`, `POST /api/v1/worktrees/reclaim`
 - Open-in: `GET /api/v1/open-targets`, `POST /api/v1/open-in` — the latter opens the SCOPED PROJECT'S root in an `open-targets` id (Settings → "Project folder"). It takes `{target}` and no path at all: the folder is the registry's own root, so there is nothing for a client to point elsewhere. `cli:<runner>` targets are refused with a 400 (an agent CLI belongs in a task worktree), as is an app this machine does not have; localHandoff-gated like the rest of the family.
@@ -94,6 +95,7 @@ Written by one version, read by the next, and hand-editable by design:
 - **`ui-state.json`** — GUI prefs; schema is `.passthrough()` so unknown keys survive round-trips. Keep it that way — never strip keys you don't know.
 - **`config.json`** — user-owned (`packages/cezar/src/config.ts`): missing/invalid degrades to defaults; the `PUT /api/config` handler merges into the raw file so user keys survive and defaults are never materialized. Renaming a key (`skillsRepos`, `maxParallel`, `defaultRunner`, `modelsLocked`, `plannerModel`, `baseBranch`) or changing a default is breaking; accept the old key as an alias during migration. `modelsLocked` is additive and optional: only `true` makes native per-runner model settings authoritative, while absence/`false` preserves the normal model selectors. (Since the multi-project workspace, the per-repo `maxParallel`/`memoryLimitMb` keys are still parsed and written but no longer drive enforcement — the workspace `resources` do, seeded from these keys once by migration 001; sections 2 and 9.)
 - **`todos.json`**, **`launch-key`** — inbox entries (spec 007) and the bookmarklet secret. The inbox is opt-in since #471, but the file's format is unchanged and its entries are **never** deleted by the gate: turning `CEZ_FOLLOWUPS=1` back on must surface exactly what was there before.
+- **`tmp/<runId>/`** (#785) — the temp directory handed to that run's agent as `TMPDIR`/`TEMP`/`TMP`. Purely additive scratch: nothing else reads it, it is re-created on demand by the next spawn, and it is removed when the run leaves the active registry (plus a startup sweep for whatever a crash left behind). The sweep is confined to this subtree and enumerates nothing beside it — reaping anything under `runs/`, `worktrees/` or `runs.json` from here would be breaking.
 - **`.gitignore`** — maintained by `ensureDataGitignore` in `packages/cezar/src/index.ts`; any new run-data file must be added there in the same PR.
 
 Breaking: any change that makes an existing file unparseable, silently discarded, or rewritten into a new shape without reading the old one. Required path: read old + new shapes for at least one minor release (a lazy upgrade-on-read is fine since writes go through the schema), or ship an explicit migration; never require the user to delete `.ai/cezar/`.
@@ -213,6 +215,43 @@ an empty value, and an unset variable all preserve the default multi-project beh
 - **No deprecation alias**: no previously accepted input or default behavior changed. The explicit
   flag is the boundary authorizing the narrower protected surface, and removing it restores the
   protected default wholesale, so an old-spelling compatibility window would serve no purpose.
+
+## GitHub automations — opt-in gating (#801), 2026-08-07
+
+GitHub automations (spec `.ai/specs/2026-07-25-github-automations.md`) shipped gated only by forge
+availability, so every project with a GitHub remote saw the feature and there was no way to switch
+it off. `CEZ_AUTOMATIONS=1` makes the whole surface opt-in and **off by default**. Activation is
+strict: only the exact string `1` enables it; `true`, `yes`, an empty value, and an unset variable
+all keep it off. The flag is read at boot — the workspace scheduler starts once, on `listening` —
+so set it and restart, exactly like `CEZ_FOLLOWUPS`.
+
+This deliberately flips the *default* answers of section 2's automations routes, the same kind of
+break the "Follow-up inbox default flip (#471)" entry above documents, taken on an explicit
+instruction rather than silently.
+
+- **Broken**: the *default* answers of `GET/POST /api/v1/automations`,
+  `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check}`,
+  `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log` and
+  `POST /api/v1/automation-log/:receiptId/retry` — all now `409` with a reason naming the flag,
+  under every one of the three scope spellings. The default behavior of the workspace automation
+  scheduler also changes: it no longer starts, so a default cezar makes no GitHub requests on the
+  operator's behalf and launches no runs from them.
+- **Additive on health**: `capabilities.automations` is a new required boolean on the CORS-open
+  `GET /api/v1/health`. Every pre-existing field stays byte-identical, so a consumer that ignores
+  the key sees no change; it is what the cockpit's nav gate reads.
+- **Not broken**: every route still exists and behaves exactly as before under
+  `CEZ_AUTOMATIONS=1`; the storage formats of `automations.json`, the runtime-state files, the
+  receipts and the execution log are unchanged; `RunRecord.automation` provenance on already
+  launched runs is untouched, and the cockpit keeps showing it (as plain text rather than a link
+  into the disabled view). The per-automation `enabled` toggle, the no-backfill baseline, the
+  bounded filters and the polling caps are all unchanged — the flag wraps the feature, it does not
+  reshape it.
+- **Non-destructive rollback**: the gate never deletes, rewrites, or migrates automation
+  definitions, receipts, or frozen high-watermarks. Set `CEZ_AUTOMATIONS=1` and restart to get the
+  feature back exactly as it was; no manual repair or state migration is required.
+- **No deprecation alias**: the flag *is* the migration path — one env var restores the previous
+  behavior wholesale, which is what the "keep the old spelling for a minor release" rule exists to
+  provide.
 
 ## When in doubt
 

@@ -80,4 +80,41 @@ describe('read receipts (#unread-done-items)', () => {
       expect((await res.json()) as { read: number }).toEqual({ read: 0 });
     });
   });
+
+  describe('POST /api/v1/runs/:id/unread (#775)', () => {
+    it('clears seenAt, answers the record, and persists', async () => {
+      const id = finished('done');
+      await post(`/api/v1/runs/${id}/read`);
+      expect(store.getRun(id)?.seenAt).toBeDefined();
+
+      const res = await post(`/api/v1/runs/${id}/unread`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as RunRecord;
+      expect(body.seenAt).toBeUndefined();
+      expect(store.getRun(id)?.seenAt).toBeUndefined();
+    });
+
+    it('404s an unknown id', async () => {
+      expect((await post('/api/v1/runs/nope/unread')).status).toBe(404);
+    });
+
+    it('round-trips read → unread → read without leaving the record inconsistent', async () => {
+      // The grammar the cockpit relies on: after the round-trip the run is read again with a
+      // fresh receipt, and the sweep that would have claimed it mid-trip finds nothing left.
+      const id = finished('done');
+
+      await post(`/api/v1/runs/${id}/read`);
+      const firstReceipt = store.getRun(id)?.seenAt;
+      expect(firstReceipt).toBeDefined();
+
+      await post(`/api/v1/runs/${id}/unread`);
+      expect(store.getRun(id)?.seenAt).toBeUndefined();
+      // Back in the unread population the badge counts.
+      expect((await (await post('/api/v1/runs/read-all')).json()) as { read: number }).toEqual({ read: 1 });
+
+      const secondReceipt = store.getRun(id)?.seenAt;
+      expect(secondReceipt).toBeDefined();
+      expect(secondReceipt! >= firstReceipt!).toBe(true);
+    });
+  });
 });

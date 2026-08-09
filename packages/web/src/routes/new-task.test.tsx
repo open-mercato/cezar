@@ -64,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -520,6 +520,23 @@ describe('picker data flows', () => {
     expect(pill.disabled).toBe(true)
     expect(pill.title).toContain('need a git repository')
     expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
+  })
+
+  // #791: health is bound to the boot folder, so a cezar booted outside a git repo answered
+  // `repo: null` for EVERY project. Reading git state from the project-scoped `/repo` instead is
+  // what keeps the worktree controls alive for a git project under a non-git boot root.
+  it('gates variants on the project repo, not the boot folder: boot without git still offers worktrees', async () => {
+    serve({ health: HEALTH_NO_GIT, repo: REPO })
+    renderNewTask()
+    await pillReady()
+    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
+    expect(pill.disabled).toBe(false)
+    expect(document.querySelector('[data-slot="worktree-toggle"]')).not.toBeNull()
+    fireEvent.change(textarea(), { target: { value: 'Fix the composer git detection' } })
+    await startTask()
+    // `worktree` is sent only when explicitly OFF (new-task-form.ts): an absent key IS the
+    // isolated-worktree default, so absence — not `worktree: false` — is what the fix restores.
+    expect(postedBody()).not.toHaveProperty('worktree')
   })
 
   it('base branch pill shows config default (falling back to the checkout) and PUTs /api/v1/config', async () => {
@@ -1068,7 +1085,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')

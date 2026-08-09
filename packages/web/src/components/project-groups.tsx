@@ -66,6 +66,7 @@ export function ProjectGroups({
   projects,
   bootProjectId,
   inboxAvailable = false,
+  automationsAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
 }: {
@@ -74,6 +75,9 @@ export function ProjectGroups({
    *  auto-expands before the user has navigated into any `/p/<id>` scope. */
   bootProjectId: string
   inboxAvailable?: boolean
+  /** `capabilities.automations` (#801) — workspace-wide, unlike the per-project forge gate:
+   *  the opt-in is one env var on the one server that serves every group. */
+  automationsAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
 }) {
@@ -116,6 +120,7 @@ export function ProjectGroups({
           currentRunId={currentRunId}
           now={now}
           inboxAvailable={inboxAvailable}
+          automationsAvailable={automationsAvailable}
           inboxCount={inboxCount}
           skillsUpdateAvailable={skillsUpdateAvailable}
           showTokens={metricVisibility.tokens}
@@ -137,6 +142,7 @@ function ProjectGroup({
   currentRunId,
   now,
   inboxAvailable,
+  automationsAvailable,
   inboxCount,
   skillsUpdateAvailable,
   showTokens,
@@ -155,6 +161,7 @@ function ProjectGroup({
   currentRunId: string | null
   now: number
   inboxAvailable: boolean
+  automationsAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
   showTokens: boolean
@@ -261,7 +268,11 @@ function ProjectGroup({
                 group offers a GitHub tab — the boot folder's health-level forge answer says
                 nothing about the other projects in the workspace. Whether `gh` itself works
                 still surfaces inside the tab as its availability hint. */}
-            {visibleNavItems({ forge: project.forge === 'github', inbox: inboxAvailable }).map((item) => {
+            {visibleNavItems({
+              forge: project.forge === 'github',
+              inbox: inboxAvailable,
+              automations: automationsAvailable,
+            }).map((item) => {
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.
               const isActive = active && item.to === activeTo

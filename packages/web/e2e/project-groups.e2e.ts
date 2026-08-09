@@ -42,6 +42,7 @@ let singleProject = false
 
 let forgeAvailable = false
 let followupsAvailable = false
+let automationsAvailable = false
 
 const scoped = (projectId: string, path: string) => `/p/${projectId}${path}`
 
@@ -51,7 +52,10 @@ function expectedNavHrefs(projectId: string): string[] {
     scoped(projectId, '/'),
     ...(followupsAvailable ? [scoped(projectId, '/inbox')] : []),
     scoped(projectId, '/git'),
-    ...(forgeAvailable ? [scoped(projectId, '/github'), scoped(projectId, '/automations')] : []),
+    ...(forgeAvailable ? [scoped(projectId, '/github')] : []),
+    // #801: the automations opt-in is workspace-wide, the forge gate is per project — the item
+    // needs both.
+    ...(forgeAvailable && automationsAvailable ? [scoped(projectId, '/automations')] : []),
     scoped(projectId, '/skills'),
     scoped(projectId, '/workflows'),
     scoped(projectId, '/settings'),
@@ -84,10 +88,11 @@ beforeAll(async () => {
   bootProject = await bootProjectId(baseUrl)
   const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
     forge: { available: boolean } | null
-    capabilities: { followups: boolean; singleProject: boolean }
+    capabilities: { followups: boolean; singleProject: boolean; automations: boolean }
   }
   forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
+  automationsAvailable = health.capabilities.automations
   singleProject = health.capabilities.singleProject
 
   // `ui-state.json` too: the collapse assertion below reads it to prove nothing was written

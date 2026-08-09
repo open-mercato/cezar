@@ -35,6 +35,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
   const savedRemote = process.env.CEZ_REMOTE;
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
   const savedSingleProject = process.env.CEZ_SINGLE_PROJECT;
+  const savedAutomations = process.env.CEZ_AUTOMATIONS;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   let home: string;
   let repoRoot: string;
@@ -53,6 +54,10 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     delete process.env.CEZ_REMOTE;
     delete process.env.CEZ_FOLLOWUPS;
     delete process.env.CEZ_SINGLE_PROJECT;
+    // #801: automations are opt-in, and this suite compares the REAL answers of every mirrored
+    // route. Left off, the whole `/automations*` family would answer an identical 409 under all
+    // three spellings — parity would pass while testing nothing about those routes.
+    process.env.CEZ_AUTOMATIONS = '1';
     // Deterministic on any machine: no network, no real agent CLIs.
     process.env.CEZ_DRY_RUN = '1';
     // `skillsRepos: []` disables team skills — no background clone can warm a
@@ -94,6 +99,8 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     else process.env.CEZ_FOLLOWUPS = savedFollowups;
     if (savedSingleProject === undefined) delete process.env.CEZ_SINGLE_PROJECT;
     else process.env.CEZ_SINGLE_PROJECT = savedSingleProject;
+    if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
+    else process.env.CEZ_AUTOMATIONS = savedAutomations;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });

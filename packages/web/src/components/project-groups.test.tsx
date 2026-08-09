@@ -85,12 +85,18 @@ function serve(routes: Record<string, unknown>): void {
   })
 }
 
-function renderGroups(projects: ProjectListEntry[], entry = '/p/cezar/') {
+function renderGroups(
+  projects: ProjectListEntry[],
+  entry = '/p/cezar/',
+  // #801: workspace-wide, unlike the per-project forge gate — one env var on the one server that
+  // serves every group. Off by default here, exactly as a default server reports it.
+  { automations = false }: { automations?: boolean } = {},
+) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
         <ListViewProvider>
-          <ProjectGroups projects={projects} bootProjectId="cezar" />
+          <ProjectGroups projects={projects} bootProjectId="cezar" automationsAvailable={automations} />
         </ListViewProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -155,7 +161,6 @@ describe('ProjectGroups', () => {
       '/p/shop/',
       '/p/shop/git',
       '/p/shop/github',
-      '/p/shop/automations',
       '/p/shop/skills',
       '/p/shop/workflows',
       '/p/shop/settings',
@@ -186,6 +191,30 @@ describe('ProjectGroups', () => {
     expect(within(cezarNav).getByRole('link', { name: 'GitHub' }).getAttribute('href')).toBe('/p/cezar/github')
     const plainNav = within(group('plain')).getByRole('navigation', { name: 'plain navigation' })
     expect(within(plainNav).queryByRole('link', { name: 'GitHub' })).toBeNull()
+  })
+
+  // #801: every group reads ONE workspace capability, so no group can offer Automations while
+  // another hides it — and with the opt-in off, none of them offers it at all.
+  it("gates every group's Automations tab on the workspace capability (#801)", async () => {
+    storeCollapsed({ shop: false })
+    serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
+    const shop = project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })
+    const view = renderGroups([project(), shop], '/p/cezar/', { automations: true })
+
+    await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
+    for (const id of ['cezar', 'shop']) {
+      const nav = within(group(id)).getByRole('navigation', { name: `${id} navigation` })
+      expect(within(nav).getByRole('link', { name: 'Automations' }).getAttribute('href'))
+        .toBe(`/p/${id}/automations`)
+    }
+
+    view.unmount()
+    renderGroups([project(), shop])
+    await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
+    for (const id of ['cezar', 'shop']) {
+      const nav = within(group(id)).getByRole('navigation', { name: `${id} navigation` })
+      expect(within(nav).queryByRole('link', { name: 'Automations' })).toBeNull()
+    }
   })
 
   it('round-trips a collapse through this browser’s storage, never the server', async () => {

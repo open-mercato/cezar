@@ -53,14 +53,43 @@ const workspaceProjectSchema = z
 
 export type WorkspaceProject = z.infer<typeof workspaceProjectSchema>;
 
+/**
+ * Zero-config cadence, in minutes, for re-checking a run parked with
+ * `CEZ:MONITORING` (#810). The single source of truth for that default — the
+ * schema below and `WorkspaceSemaphore`'s fallback both read it, so an install
+ * with no `~/.cezar/config.json` and a semaphore built without boot wiring
+ * agree. `null` (explicit park) is a user choice and is never replaced by it.
+ */
+export const DEFAULT_MONITORING_WAKE_MINUTES = 5;
+
 const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
     maxParallel: z.number().int().min(1).max(16).default(2).catch(2),
     /** Extra durable `CEZ:MONITORING` sessions exempt from the active-task cap. */
     maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
-    /** Optional cadence for re-checking monitored work; null parks at zero model cost. */
-    monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().default(null).catch(null),
+    /**
+     * Cadence for re-checking monitored work; `null` parks at zero model cost until a
+     * user (or an external integration) resumes the session.
+     *
+     * Default-ON at 5 minutes (#810). It shipped as `null` and that made monitoring a
+     * dead end: #661 removed the 15-minute idle timer that used to bound a parked
+     * monitor, so with no wake timer a `CEZ:MONITORING` run has NO timer at all — and
+     * cezar has no other resume path (no process-exit callback, no CI webhook, no
+     * sub-agent-completion event). Tasks sat in `monitoring` for hours until a human
+     * typed something. Same reasoning as `autoResumeOnUsageLimit` below: it spends
+     * nothing while the downstream work is genuinely pending and it finishes the work
+     * the user already asked for. `MAX_AUTO_CONTINUES` still caps a forgotten loop, and
+     * an explicit `null` (Settings → Resources → "Park until resumed") is preserved.
+     */
+    monitoringWakeIntervalMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(60)
+      .nullable()
+      .default(DEFAULT_MONITORING_WAKE_MINUTES)
+      .catch(DEFAULT_MONITORING_WAKE_MINUTES),
     /**
      * Resume a task the provider's usage limit stopped, once that limit resets
      * (spec 2026-08-03-auto-resume-after-usage-limit). ON by default, which is the one
