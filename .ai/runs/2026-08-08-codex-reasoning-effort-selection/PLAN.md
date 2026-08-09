@@ -15,7 +15,7 @@ Source spec: `.ai/specs/2026-08-08-codex-reasoning-effort-selection.md`
 | 3 | 3.1 | Wire typed HTTP entry points and headless CLI effort input | inline | done | df66cf70 |
 | 3 | 3.2 | Add the New Task and planned-run Effort picker | inline | done | d482710f |
 | 3 | 3.3 | Reuse Effort selection in Inbox, GitHub handoff, and Continue | inline | done | 97cdbfd4 |
-| 4 | 4.1 | Complete cross-surface regression coverage and compatibility checks | inline | todo | — |
+| 4 | 4.1 | Complete cross-surface regression coverage and compatibility checks | inline | done | this commit |
 
 ## Goal
 

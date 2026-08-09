@@ -175,44 +175,20 @@ if (args.join(' ') === 'auth status --json') {
     );
 
     // The headless Codex path uses the same AgentRunSpec seam as the cockpit.
-    // This small app-server fixture records requests so `--effort` is proven
-    // to arrive on the turn itself, not merely on the durable run record.
-    const codexShim = join(root, 'codex-shim.mjs');
+    // Reuse the complete app-server fixture the runner contract tests use. It
+    // records requests and exits on EOF, so the packaged CLI is exercised over
+    // the real JSON-RPC lifecycle rather than a partial test double.
+    const codexShim = resolve(repoRoot, 'src/core/__fixtures__/codex/mock-codex-app-server.mjs');
     const codexCapture = join(root, 'codex-requests.ndjson');
-    await writeFile(
-      codexShim,
-      `#!/usr/bin/env node
-import { appendFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
-if (process.argv.slice(2).join(' ') === 'login status') {
-  process.stdout.write('Logged in using ChatGPT\\n');
-} else {
-  const capture = process.env.CEZ_CLI_CODEX_CAPTURE;
-  const emit = (frame) => process.stdout.write(JSON.stringify(frame) + '\\n');
-  const input = createInterface({ input: process.stdin });
-  input.on('line', (line) => {
-    const request = JSON.parse(line);
-    if (capture) appendFileSync(capture, JSON.stringify(request) + '\\n');
-    if (request.method === 'initialize') emit({ id: request.id, result: { userAgent: 'codex-cli-test' } });
-    else if (request.method === 'thread/start') {
-      emit({ method: 'thread/started', params: { thread: { id: 'thread_cli' } } });
-      emit({ id: request.id, result: { thread: { id: 'thread_cli' } } });
-    } else if (request.method === 'turn/start') {
-      emit({ id: request.id, result: { turn: { id: 'turn_cli' } } });
-      emit({ method: 'turn/started', params: { turn: { id: 'turn_cli', status: 'inProgress' } } });
-      emit({ method: 'turn/completed', params: { turn: { id: 'turn_cli', status: 'completed' } } });
-    }
-  });
-}
-`,
-      { mode: 0o755 },
-    );
     const codexWorkflowDir = join(fixtureRepo, '.ai', 'cezar', 'workflows');
     await mkdir(codexWorkflowDir, { recursive: true });
     await writeFile(join(fixtureRepo, '.ai', 'cezar', 'config.json'), '{"defaultRunner":"codex"}\n', 'utf8');
     await writeFile(
       join(codexWorkflowDir, 'cli-codex.yaml'),
-      'name: cli-codex\nsteps:\n  - id: work\n    prompt: "{{task}}"\n',
+      // A trailing check keeps the agent step non-interactive. Without it, a
+      // one-step workflow rightly remains open for a human follow-up unless
+      // the model emits CEZ:DONE, which would make this CLI wiring test hang.
+      'name: cli-codex\nsteps:\n  - id: work\n    prompt: "{{task}}"\n  - id: verify\n    command: "true"\n',
       'utf8',
     );
     const codexRun = await execFile(
@@ -220,7 +196,12 @@ if (process.argv.slice(2).join(' ') === 'login status') {
       [cliPath, 'run', 'check CLI effort forwarding', '--repo', fixtureRepo, '--workflow', 'cli-codex', '--effort', 'high'],
       {
         cwd: consumerDir,
-        env: { ...process.env, CEZ_CODEX_BIN: codexShim, CEZ_CLI_CODEX_CAPTURE: codexCapture, CEZ_HOME: cezHome },
+        env: {
+          ...process.env,
+          CEZ_CODEX_BIN: codexShim,
+          CEZ_MOCK_CODEX_REQUESTS_FILE: codexCapture,
+          CEZ_HOME: cezHome,
+        },
         timeout: 60_000,
         maxBuffer: 10 * 1024 * 1024,
       },
@@ -230,10 +211,14 @@ if (process.argv.slice(2).join(' ') === 'login status') {
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as { method?: string; params?: { effort?: string } });
-    assert.equal(
-      codexRequests.find((request) => request.method === 'turn/start')?.params?.effort,
-      'high',
-      'cezar run --effort forwards the value only when the Codex turn starts',
+    const turnEfforts = codexRequests
+      .filter((request) => request.method === 'turn/start')
+      .map((request) => request.params?.effort)
+      .filter((effort): effort is string => typeof effort === 'string');
+    assert.deepEqual(
+      turnEfforts,
+      ['high'],
+      'cezar run --effort forwards the value only for the task Codex turn, not task naming',
     );
 
     // `cezar projects` (step 5.2) reads the same registry with no server

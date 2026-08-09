@@ -25,3 +25,9 @@
 - Finished Phase 1–3 through shared UI selection on New Task, planned runs, Inbox, GitHub handoff, and Continue.
 - `npm run typecheck:web` and 249 focused web/client tests pass; checkpoint evidence is recorded in `checkpoint-1-checks.md`.
 - The local dev process started and discovered Codex, but the configured browser provider was unavailable and an isolated follow-up shell could not reach its ports; no screenshot was captured. The process was stopped cleanly and final validation will retry browser/integration evidence when possible.
+
+## 2026-08-09T14:01:00Z — final validation
+
+- Added package-level CLI coverage using the shared Codex App Server fixture; it proves `--effort high` reaches only the task `turn/start` and not task naming.
+- All configured code/package gates pass; the final live browser check captured the labelled Effort control.
+- Full `npm run test:e2e` is red: 31 of 208 tests fail plus two cleanup suites. The report identifies a non-isolated global skill/config fixture as the leading concrete cause and records every failure in `final-validation.md`.

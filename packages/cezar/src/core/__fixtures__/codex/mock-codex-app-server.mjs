@@ -11,6 +11,13 @@
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
+// The same fixture can stand in for the executable at provider-auth time.
+// `codex login status` is the only probe that precedes `codex app-server`.
+if (process.argv.slice(2).join(' ') === 'login status') {
+  process.stdout.write('Logged in using ChatGPT\n');
+  process.exit(0);
+}
+
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
 
