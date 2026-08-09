@@ -78,6 +78,13 @@ limit, the project General settings page) stay on `main` for the next minor.
   the repository-root lease test (#800) and the continuation model-identity test, which polled for
   a terminal status that the run still carried for a tick after Continue was pressed.
 
+## 👥 Contributors
+
+- @pat-lewczuk
+- @dominikpalatynski
+- @patzick
+- @sapersky
+
 # 0.9.2 (2026-08-04)
 
 ## ⚠️ Breaking
@@ -151,6 +158,15 @@ limit, the project General settings page) stay on `main` for the next minor.
   HEAD was repointed onto another branch, the ± diff stat folded in that branch's whole history; it
   is now anchored at HEAD so it counts only the task's own changes, and the Changes tab says so when
   a repointed HEAD has narrowed what it shows.
+
+## 👥 Contributors
+
+- @pkarw
+- @pat-lewczuk
+- @patzick
+- @andrzejewsky
+- @sheeerth
+- @wojciechszyjka
 
 # 0.9.1 (2026-07-24)
 
