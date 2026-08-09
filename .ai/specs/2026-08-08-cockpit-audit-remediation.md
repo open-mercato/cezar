@@ -28,9 +28,11 @@ single fix can be reverted or shipped alone.
 | B1 | Scrollable regions (markdown tables, code blocks, workflow `pre`) are mouse-only | WCAG 2.1.1 | `tabindex="0"` + `role="region"` + label on the overflow containers |
 | A4 | Agent screenshot `alt` is the raw filename (`screenshot-1.png`) | WCAG 1.1.1 | descriptive alt ("Screenshot captured by the agent") |
 | A2 | A finished/cancelled/review session still looks mid-run: amber full-width step bar, plan dock stuck at "in progress" (present tense) forever | Nielsen #1 | terminal styling for the step rail + plan dock copy in past tense when `status ∈ {done, review, cancelled}` |
+| #765 | The desktop run-header action row is dense — up to six actions beside four tabs (a `Mark unread` #776 landed while this branch was open, pushing a done run to Continue · Open in… · Notes · Mark unread · Archive · Delete) | issue #765; audit round-4 D4 | keep the state's primary actions inline (Finish / Continue / Open in…); fold the rest (Notes · Mark unread · Archive · Cancel · Delete) into a "More actions" overflow menu, desktop only — the mobile kebab already holds the full set |
 
 ## Explicitly out of scope (follow-up branches, in order)
 
+0. **#765 — dense header (added mid-branch).** Now in scope, above.
 1. **C1 — silent server death**: offline banner from the health watchdog, error states with
    retry on failed queries, refetch on reconnect. Medium; touches the query layer.
 2. **D1 — ×2 compare dead end**: disabled "Pick this one" styled as primary with the reason

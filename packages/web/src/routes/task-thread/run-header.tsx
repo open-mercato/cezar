@@ -184,46 +184,13 @@ export function RunHeader({
             ) : null}
             {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
             <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
-            <Button
-              variant="ghost"
-              size="sm"
-              title="Handoff notes — what the agent did and what's left"
-              aria-expanded={notesOpen}
-              onClick={() => setNotesOpen((open) => !open)}
-            >
-              <FileTextIcon aria-hidden="true" />
-              Notes
-            </Button>
-            {flags.markUnread ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                title="Put this task back in the unread list"
-                disabled={actions.markUnread.isPending}
-                onClick={() => actions.markUnread.mutate()}
-              >
-                <MailIcon aria-hidden="true" />
-                Mark unread
-              </Button>
-            ) : null}
-            {flags.archive ? (
-              <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
-                {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
-                {run.archived ? 'Unarchive' : 'Archive'}
-              </Button>
-            ) : null}
-            {flags.cancel ? (
-              <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('cancel')}>
-                <CircleStopIcon aria-hidden="true" />
-                Cancel
-              </Button>
-            ) : null}
-            {flags.deleteRun ? (
-              <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('delete')}>
-                <Trash2Icon aria-hidden="true" />
-                Delete
-              </Button>
-            ) : null}
+            {/* Everything past the state's primary actions folds behind one disclosure so the row
+                stays shallow (#765): Notes, Mark unread, Archive, and the destructive pair. */}
+            <SecondaryActionsMenu
+              run={run}
+              actions={actions}
+              onToggleNotes={() => setNotesOpen((open) => !open)}
+            />
           </div>
         </div>
 
@@ -719,6 +686,61 @@ function ActionsKebab({
             <SquareTerminalIcon aria-hidden="true" /> Terminal
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem onSelect={onToggleNotes}>
+          <FileTextIcon aria-hidden="true" /> Notes
+        </DropdownMenuItem>
+        {flags.markUnread ? (
+          <DropdownMenuItem
+            disabled={actions.markUnread.isPending}
+            onSelect={() => actions.markUnread.mutate()}
+          >
+            <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
+        {flags.archive ? (
+          <DropdownMenuItem onSelect={() => actions.archive.mutate()}>
+            {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
+            {run.archived ? 'Unarchive' : 'Archive'}
+          </DropdownMenuItem>
+        ) : null}
+        {flags.cancel || flags.deleteRun ? <DropdownMenuSeparator /> : null}
+        {flags.cancel ? (
+          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('cancel')}>
+            <CircleStopIcon aria-hidden="true" /> Cancel
+          </DropdownMenuItem>
+        ) : null}
+        {flags.deleteRun ? (
+          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('delete')}>
+            <Trash2Icon aria-hidden="true" /> Delete
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** The desktop overflow (#765): the secondary actions that used to crowd the row, folded behind
+ *  one "More actions" disclosure. The state's primary actions (Finish / Continue / Open in…) stay
+ *  inline beside it; the mobile kebab still carries the full set, so this is desktop-only. Renders
+ *  nothing when there is no secondary action for the current state. */
+function SecondaryActionsMenu({
+  run,
+  actions,
+  onToggleNotes,
+}: {
+  run: ApiRun
+  actions: RunActions
+  onToggleNotes: () => void
+}) {
+  const flags = runActionFlags(run)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="More actions">
+          <EllipsisVerticalIcon aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-slot="run-actions-overflow">
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>

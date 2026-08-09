@@ -98,6 +98,18 @@ function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
 
+/** Accessible name of each inline action (the icon-only "More actions" trigger reads its label). */
+const inlineActionNames = () =>
+  actionBar()
+    .getAllByRole('button')
+    .map((el) => el.getAttribute('aria-label') ?? el.textContent?.trim())
+
+/** Open the desktop overflow (#765) and return a scope over its folded secondary actions. */
+const openOverflow = async () => {
+  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'More actions' }))
+  return within(await screen.findByRole('menu'))
+}
+
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
     stubFetch()
@@ -184,32 +196,33 @@ describe('editable title (#389)', () => {
   })
 })
 
-describe('action bar visibility per status (the legacy rules, rendered)', () => {
-  const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Cancel'] },
-    // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
+describe('action bar visibility per status (#765: primaries inline, the rest folded)', () => {
+  // Inline = the state's primary actions (Finish / Continue / Open in…) then the single
+  // "More actions" disclosure; the secondary actions live in that overflow menu.
+  const matrix: Array<{ status: RunStatus; inline: string[]; overflow: string[] }> = [
+    { status: 'queued', inline: [], overflow: ['Notes', 'Cancel'] },
+    { status: 'running', inline: [], overflow: ['Notes', 'Cancel'] },
+    { status: 'waiting', inline: ['Finish'], overflow: ['Notes', 'Cancel'] },
+    { status: 'review', inline: ['Finish', 'Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'done', inline: ['Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'failed', inline: ['Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'cancelled', inline: ['Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
   ]
 
-  it.each(matrix)('$status → $visible', ({ status, visible }) => {
+  it.each(matrix)('$status → inline $inline, overflow $overflow', async ({ status, inline, overflow }) => {
     stubFetch()
     renderHeader(run(status))
-    const names = within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
-      .getAllByRole('button')
-      .map((el) => el.textContent?.trim())
-    expect(names).toEqual(visible)
+    expect(inlineActionNames()).toEqual([...inline, 'More actions'])
+    const menu = await openOverflow()
+    expect(menu.getAllByRole('menuitem').map((el) => el.textContent?.trim())).toEqual(overflow)
   })
 
-  it('an archived run offers Unarchive instead of Archive', () => {
+  it('an archived run offers Unarchive instead of Archive', async () => {
     stubFetch()
     renderHeader(run('done', { archived: true }))
-    expect(actionBar().queryByRole('button', { name: 'Archive' })).toBeNull()
-    expect(actionBar().getByRole('button', { name: 'Unarchive' })).not.toBeNull()
+    const menu = await openOverflow()
+    expect(menu.queryByRole('menuitem', { name: 'Archive' })).toBeNull()
+    expect(menu.getByRole('menuitem', { name: 'Unarchive' })).not.toBeNull()
   })
 
   it('VS Code is absent everywhere — the open-in-editor endpoint does not exist yet (R5)', () => {
@@ -232,13 +245,16 @@ describe('Mark unread (#775)', () => {
   const readDone = (extra: Partial<ApiRun> = {}) =>
     run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT, ...extra })
 
-  it('offers the control for a read, finished run — next to Archive', () => {
+  it('offers the control for a read, finished run — in the overflow, before Archive', async () => {
     stubFetch()
     renderHeader(readDone())
-    const names = actionBar()
-      .getAllByRole('button')
-      .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+    const menu = await openOverflow()
+    expect(menu.getAllByRole('menuitem').map((el) => el.textContent?.trim())).toEqual([
+      'Notes',
+      'Mark unread',
+      'Archive',
+      'Delete',
+    ])
   })
 
   it.each([
@@ -247,16 +263,17 @@ describe('Mark unread (#775)', () => {
     ['a cancelled run', run('cancelled', { finishedAt: FINISHED_AT, seenAt: SEEN_AT })],
     ['a still-running run', run('running', { seenAt: SEEN_AT })],
     ['a done run caught with no finishedAt', run('done', { seenAt: SEEN_AT })],
-  ] as Array<[string, ApiRun]>)('hides the control for %s', (_name, record) => {
+  ] as Array<[string, ApiRun]>)('hides the control for %s', async (_name, record) => {
     stubFetch()
     renderHeader(record)
-    expect(actionBar().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+    const menu = await openOverflow()
+    expect(menu.queryByRole('menuitem', { name: 'Mark unread' })).toBeNull()
   })
 
   it('Mark unread → POST /unread, bodyless like its read twin', async () => {
     const sent = stubFetch()
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Mark unread' }))
     await waitFor(() => {
       const request = sent.find((r) => r.path === '/api/v1/runs/r1/unread')
       expect(request?.method).toBe('POST')
@@ -273,7 +290,7 @@ describe('Mark unread (#775)', () => {
       expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(false)
     })
     renderHeader(readDone(), onMarkedUnread)
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Mark unread' }))
     expect(onMarkedUnread).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(true))
   })
@@ -286,7 +303,7 @@ describe('Mark unread (#775)', () => {
       '/api/v1/runs/r1/unread': () => jsonResponse({ error: 'not found' }, 404),
     })
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Mark unread' }))
     await waitFor(() => expect(screen.getByText('not found')).not.toBeNull())
   })
 
@@ -391,7 +408,7 @@ describe('actions hit their endpoints', () => {
   it('Archive → POST /archive with the flipped flag', async () => {
     const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Unarchive' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Unarchive' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
@@ -400,7 +417,7 @@ describe('actions hit their endpoints', () => {
   it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
     const sent = stubFetch()
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Cancel' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Cancel' }))
 
     // Nothing sent yet; the AlertDialog (never a native confirm) is up instead.
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/cancel')).toBe(false)
@@ -414,7 +431,7 @@ describe('actions hit their endpoints', () => {
   it('Delete confirms, DELETEs, and navigates home', async () => {
     const sent = stubFetch()
     renderHeader(run('failed'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Delete' }))
 
     expect(sent.some((r) => r.method === 'DELETE')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
@@ -431,7 +448,7 @@ describe('actions hit their endpoints', () => {
   it('the delete confirm button stays "Delete" even for a long task name, which appears in the description instead (#403)', async () => {
     const longTitle = 'create a github issue for saving unsuccessfully finished tasks automatically'
     renderHeader(run('failed', { titleSummary: longTitle }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Delete' }))
 
     const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('button', { name: 'Delete' })).not.toBeNull()
@@ -441,7 +458,7 @@ describe('actions hit their endpoints', () => {
   it('dismissing the confirm keeps the run', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Delete' }))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }))
     await waitFor(() => {
@@ -648,7 +665,7 @@ describe('notes panel', () => {
     })
     renderHeader(run('done'))
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Notes' }))
     await waitFor(() => {
       expect(document.querySelector('[data-slot="notes-panel"]')).not.toBeNull()
     })
@@ -656,7 +673,8 @@ describe('notes panel', () => {
     // Rendered markdown, not echoed source.
     expect(document.querySelector('[data-slot="notes-panel"]')?.textContent).not.toContain('#')
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    // Notes toggles: reopen the overflow and pick it again to close the panel.
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Notes' }))
     expect(document.querySelector('[data-slot="notes-panel"]')).toBeNull()
   })
 
@@ -665,7 +683,7 @@ describe('notes panel', () => {
       '/api/v1/runs/r1/handoff': () => new Response('', { status: 200 }),
     })
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Notes' }))
     await screen.findByText('No notes yet — the handoff file is seeded when the task starts.')
   })
 })
