@@ -89,6 +89,8 @@ export function buildPlannedRunBody(opts: {
   task: string
   steps: readonly WorkflowStepDef[]
   model: string
+  /** Empty means the selected Codex model's native default; it is omitted on the wire. */
+  reasoningEffort?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
   runner: Runner
@@ -100,12 +102,13 @@ export function buildPlannedRunBody(opts: {
   generateFollowups?: boolean
   todoId?: string
 }): CreateRunInput {
-  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
+  const { task, steps, model, reasoningEffort, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
     opts
   return {
     task,
     steps: [...steps],
     model: modelsLocked ? undefined : model || undefined,
+    ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
