@@ -104,6 +104,8 @@ State maps GitHub `OPEN|MERGED|CLOSED` → the schema's `open|merged|closed`. No
 
 Detail pane (right side) is **out of scope** — this spec is the issues *list* row only.
 
+**Visuals** (attached to the spec PR): the list today, `assets/issue-linked-pr-chip/current-01-issues-list.png`; the proposed row with state-tinted chips, `assets/issue-linked-pr-chip/mockup-01-issues-list.png` (source: `mockup-01-issues-list.html`).
+
 ## 📝 Edge Cases & Failure Scenarios
 
 - **Forge degraded** (`gh` missing / offline / no remote): `{ available: false }` → no chips; the list itself already shows its own unavailable state.
