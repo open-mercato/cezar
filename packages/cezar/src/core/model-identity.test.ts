@@ -113,17 +113,43 @@ describe('resolveModelIdentity — bare ids per backend', () => {
     });
   });
 
-  it('a FOREIGN explicit provider on a single-provider backend is rejected (#405 review M2)', () => {
-    // claude serves anthropic only: it would drop `openrouter` on the wire yet persist it,
-    // asserting a provider that never ran. Fail loud instead.
-    expect(() => resolveModelIdentity('claude', 'openrouter/some-model')).toThrow(ModelIdentityError);
-    try {
-      resolveModelIdentity('claude', 'openrouter/some-model');
-    } catch (err) {
-      expect((err as Error).message).toContain('openrouter');
-      expect((err as Error).message).toContain('anthropic');
-    }
-    expect(() => resolveModelIdentity('codex', 'anthropic/claude-opus-4-8')).toThrow(ModelIdentityError);
+  it('Claude preserves an explicit foreign provider for custom gateways', () => {
+    expect(resolveModelIdentity('claude', 'deepseek/deepseek-v4-flash')).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+    });
+    expect(toBackendModel('claude', { provider: 'deepseek', model: 'deepseek-v4-flash' })).toBe(
+      'deepseek/deepseek-v4-flash',
+    );
+  });
+
+  it('Codex accepts a foreign prefix only when it matches the configured provider', () => {
+    expect(
+      resolveModelIdentity('codex', 'deepseek/deepseek-chat', {
+        configuredProvider: 'deepseek',
+      }),
+    ).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    });
+    expect(
+      resolveModelIdentity('codex', 'deepseek-chat', { configuredProvider: 'deepseek' }),
+    ).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    });
+    expect(toBackendModel('codex', { provider: 'deepseek', model: 'deepseek-chat' })).toBe('deepseek-chat');
+  });
+
+  it('Codex rejects an unverified or mismatched foreign provider prefix', () => {
+    expect(() => resolveModelIdentity('codex', 'deepseek/deepseek-chat')).toThrow(
+      ModelIdentityError,
+    );
+    expect(() =>
+      resolveModelIdentity('codex', 'deepseek/deepseek-chat', {
+        configuredProvider: 'openai',
+      }),
+    ).toThrow(/configured provider "openai"/);
   });
 });
 
@@ -173,6 +199,14 @@ describe('normalizeModelForBackend', () => {
     expect(normalizeModelForBackend('opencode', 'anthropic/claude-sonnet-5')).toEqual({
       backendModel: 'anthropic/claude-sonnet-5',
       identity: { provider: 'anthropic', model: 'claude-sonnet-5' },
+    });
+    expect(
+      normalizeModelForBackend('codex', 'deepseek/deepseek-chat', {
+        configuredProvider: 'deepseek',
+      }),
+    ).toEqual({
+      backendModel: 'deepseek-chat',
+      identity: { provider: 'deepseek', model: 'deepseek-chat' },
     });
   });
 

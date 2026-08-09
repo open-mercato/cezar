@@ -90,10 +90,28 @@ async function respond(userText, imageCount) {
   // `mock:ask-invalid` → syntactically valid JSON that FAILS the ask schema
   // (empty questions) — the shape behind the blank-question bug: no card will
   // ever render it, so the marker must survive in the v1 text.
+  // `mock:ask-near` → bounded presentation drift: harmless extra keys plus
+  // an overlong header/description. It should normalize into exactly one card.
   const askMarker = userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
     : userText.includes('mock:ask-invalid')
       ? '\n\nCEZ:ASK {"questions":[]}'
+      : userText.includes('mock:ask-near')
+        ? '\n\nCEZ:ASK ' +
+          JSON.stringify({
+            transportHint: 'render as chips',
+            questions: [
+              {
+                header: 'Implementation path',
+                question: 'Which implementation should I use?',
+                presentation: 'compact',
+                options: [
+                  { label: 'Minimal', description: 'd'.repeat(300), recommended: true },
+                  { label: 'Expanded', description: 'Touch the wider surface' },
+                ],
+              },
+            ],
+          })
       : userText.includes('mock:ask')
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({
@@ -127,6 +145,26 @@ async function respond(userText, imageCount) {
       subtype: 'success',
       is_error: true,
       result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+
+  // `mock:limit` → the envelope Claude Code emits when the subscription window is
+  // exhausted: an `is_error` result whose text is the machine-readable
+  // `Claude AI usage limit reached|<epoch seconds>` marker. Makes the auto-resume path
+  // (spec 2026-08-03-auto-resume-after-usage-limit) reachable under CEZ_DRY_RUN=1 for QA and
+  // the e2e smoke. `CEZ_MOCK_LIMIT_RESET_SECONDS` moves the reset instant (default 60 s out),
+  // so a dry run can actually watch the resume fire instead of reading about it.
+  if (userText.includes('mock:limit')) {
+    const configured = Number(process.env.CEZ_MOCK_LIMIT_RESET_SECONDS ?? '60');
+    const seconds = Number.isFinite(configured) ? configured : 60;
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + seconds}`,
       usage: { input_tokens: 0, output_tokens: 0 },
       total_cost_usd: 0,
     });

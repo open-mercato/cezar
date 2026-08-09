@@ -31,7 +31,13 @@ async function fixtureRepo(prefix: string): Promise<string> {
 }
 
 afterEach(() => {
-  for (const root of worktreeRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  // `maxRetries` is the point: git detaches background maintenance after a clone or a
+  // commit, so a fixture's `.git` can still gain files while the removal walks it, and the
+  // rmdir fails with ENOTEMPTY. It is load-dependent — this teardown reddened CI while
+  // passing locally every time. Retrying lets the stray writer finish instead.
+  for (const root of worktreeRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 describe('parseShortstat', () => {
@@ -209,6 +215,253 @@ describe('worktreeShortstat (real git)', () => {
     // Only task.txt (1 add) — NOT the merged-in upstream lines.
     expect(await worktreeShortstat(r, 'main')).toEqual({ adds: 1, dels: 0, files: 1 });
   });
+
+  /**
+   * #751: a review/QA task checks the branch under review out into its own
+   * worktree, which repoints HEAD off the task's branch. Anchoring at the
+   * merge-base then attributes that whole branch's diff to a task that
+   * committed nothing — the measured symptom was `+22505 −2628 / 774 files`
+   * on a task whose own branch sat exactly on `main`.
+   */
+  describe('repointed HEAD (#751)', () => {
+    /** `main` + a task branch at main's tip + an `other` branch far ahead. */
+    async function repoWithForeignBranch(): Promise<string> {
+      const r = mkdtempSync(join(tmpdir(), 'cez-repointed-'));
+      worktreeRoots.push(r);
+      await run('git', ['init', '-q', '-b', 'main'], { cwd: r });
+      writeFileSync(join(r, 'f.txt'), 'base\n');
+      await run('git', ['add', '-A'], { cwd: r });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c0'], { cwd: r });
+      // The task's own branch: created off main and never committed to.
+      await run('git', ['branch', 'cez/x'], { cwd: r });
+      // Somebody else's branch, with real commits on it.
+      await run('git', ['checkout', '-q', '-b', 'other'], { cwd: r });
+      writeFileSync(join(r, 'theirs.txt'), 'a\nb\nc\nd\ne\n'); // 5 adds that are NOT this task's
+      await run('git', ['add', '-A'], { cwd: r });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'their work'], { cwd: r });
+      return r;
+    }
+
+    it('counts only uncommitted work when HEAD sits on someone else\'s branch', async () => {
+      const r = await repoWithForeignBranch();
+      writeFileSync(join(r, 'mine.txt'), 'z\n'); // the 1 line this task actually produced
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+        repointed: true,
+      });
+    });
+
+    it('reports the foreign branch\'s whole diff without the guard — the bug being fixed', async () => {
+      const r = await repoWithForeignBranch();
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+
+      // No `taskBranch` → nothing to compare HEAD against → the pre-#751 answer,
+      // which swallows `other`'s 5 committed lines. Pinned so a future refactor
+      // cannot quietly re-narrow the no-taskBranch path (the main working tree
+      // has no task branch and must keep the whole-branch anchor).
+      expect(await worktreeShortstat(r, 'main')).toEqual({ adds: 6, dels: 0, files: 2 });
+    });
+
+    it('leaves the normal on-task-branch case exactly as it was — no `repointed` key', async () => {
+      const r = await repoWithForeignBranch();
+      await run('git', ['checkout', '-q', 'cez/x'], { cwd: r });
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+
+      const stat = await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' });
+      expect(stat).toEqual({ adds: 1, dels: 0, files: 1 });
+      expect(stat).not.toHaveProperty('repointed');
+    });
+
+    it('narrows a detached HEAD too — it is not the task branch either', async () => {
+      const r = await repoWithForeignBranch();
+      await run('git', ['checkout', '-q', '--detach'], { cwd: r });
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+        repointed: true,
+      });
+    });
+
+    it('answers an honest all-zeros (still flagged) when a repointed task changed nothing', async () => {
+      const r = await repoWithForeignBranch();
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 0,
+        dels: 0,
+        files: 0,
+        repointed: true,
+      });
+    });
+
+    /**
+     * The other half of #751: `HEAD` alone is right for a review that committed
+     * nothing and wrong for the far more common run whose agent opened a named
+     * branch and committed real work on it — those reported `+0 −0`. With the
+     * run's start time the anchor becomes the branch as the run FOUND it, which
+     * answers both cases. Reflog entries take their timestamps from the
+     * committer ident, so the fixtures below date the pre-run history explicitly
+     * instead of sleeping.
+     */
+    describe('with the run start to read the branch at', () => {
+      const LONG_AGO = '2026-01-01T00:00:00Z';
+      const RUN_STARTED_AT = '2026-06-01T00:00:00Z';
+      /** Reflog entries take their timestamp from the committer ident, so dating a
+       *  command's environment is how a fixture puts history *before* the run. */
+      const dated = (iso: string, cwd: string) => ({
+        cwd,
+        env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+      });
+
+      /** `main`, an untouched `cez/x`, and a foreign branch whose commits predate the run. */
+      async function repoWithOlderForeignBranch(): Promise<string> {
+        const r = mkdtempSync(join(tmpdir(), 'cez-baseline-'));
+        worktreeRoots.push(r);
+        const old = dated(LONG_AGO, r);
+        await run('git', ['init', '-q', '-b', 'main'], { cwd: r });
+        writeFileSync(join(r, 'f.txt'), 'base\n');
+        await run('git', ['add', '-A'], { cwd: r });
+        await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c0'], old);
+        await run('git', ['branch', 'cez/x'], old);
+        await run('git', ['checkout', '-q', '-b', 'other'], old);
+        writeFileSync(join(r, 'theirs.txt'), 'a\nb\nc\nd\ne\n'); // 5 lines that predate the run
+        await run('git', ['add', '-A'], { cwd: r });
+        await run('git', [...GIT_ID, 'commit', '-q', '-m', 'their work'], old);
+        return r;
+      }
+
+      it('counts what the run committed on a foreign branch, never what was already there', async () => {
+        const r = await repoWithOlderForeignBranch();
+        writeFileSync(join(r, 'mine.txt'), 'z\n');
+        await run('git', ['add', '-A'], { cwd: r });
+        await run('git', [...GIT_ID, 'commit', '-q', '-m', 'the run\'s own fix'], { cwd: r });
+        writeFileSync(join(r, 'wip.txt'), 'w\n'); // uncommitted, also this run's
+
+        expect(
+          await worktreeShortstat(r, 'main', { taskBranch: 'cez/x', runStartedAt: RUN_STARTED_AT }),
+        ).toEqual({ adds: 2, dels: 0, files: 2, repointed: true });
+      });
+
+      it('still reports zero for a review run that only read the branch', async () => {
+        const r = await repoWithOlderForeignBranch();
+
+        expect(
+          await worktreeShortstat(r, 'main', { taskBranch: 'cez/x', runStartedAt: RUN_STARTED_AT }),
+        ).toEqual({ adds: 0, dels: 0, files: 0, repointed: true });
+      });
+
+      it('counts the committed work on a branch the agent opened during the run', async () => {
+        // The `+0 −0` case: every om-* skill commits on its own `feat/…` branch, so
+        // the uncommitted-only anchor reported nothing for the run's real output.
+        const r = await repoWithOlderForeignBranch();
+        await run('git', ['checkout', '-q', 'main'], { cwd: r });
+        await run('git', ['checkout', '-q', '-b', 'feat/mine'], { cwd: r });
+        writeFileSync(join(r, 'mine.txt'), 'a\nb\nc\n');
+        await run('git', ['add', '-A'], { cwd: r });
+        await run('git', [...GIT_ID, 'commit', '-q', '-m', 'the run\'s work'], { cwd: r });
+
+        expect(
+          await worktreeShortstat(r, 'main', { taskBranch: 'cez/x', runStartedAt: RUN_STARTED_AT }),
+        ).toEqual({ adds: 3, dels: 0, files: 1, repointed: true });
+      });
+
+      it('prefers the merge-base when the run merged the base into the branch it checked out', async () => {
+        // Then the pre-run tip is behind everything that merge dragged in, and anchoring
+        // there would re-attribute the whole upstream delta to this task.
+        const r = await repoWithOlderForeignBranch();
+        await run('git', ['checkout', '-q', 'main'], { cwd: r });
+        for (let i = 0; i < 3; i += 1) {
+          writeFileSync(join(r, 'big.txt'), 'upstream\n'.repeat(i + 1));
+          await run('git', ['add', '-A'], { cwd: r });
+          await run('git', [...GIT_ID, 'commit', '-q', '-m', `upstream ${i}`], { cwd: r });
+        }
+        await run('git', ['checkout', '-q', 'other'], { cwd: r });
+        await run('git', [...GIT_ID, 'merge', '-q', '--no-edit', 'main'], { cwd: r });
+        writeFileSync(join(r, 'mine.txt'), 'z\n');
+
+        // The pre-run tip now trails the 3 merged-in upstream lines, so the merge-base
+        // is the tighter anchor: `theirs.txt` (5, written before the run) drops out.
+        expect(
+          await worktreeShortstat(r, 'main', { taskBranch: 'cez/x', runStartedAt: RUN_STARTED_AT }),
+        ).toEqual({ adds: 4, dels: 0, files: 2, repointed: true });
+      });
+    });
+  });
+
+  /**
+   * The stale-local-base trap: agents `git fetch`, they never pull, so a repo the
+   * user does not pull either keeps a `main` that drifts arbitrarily far behind
+   * `origin/main`. The merge-base then collapses onto that stale tip and the
+   * upstream history the task forked from counts as its own — a one-line change
+   * measured five figures.
+   */
+  describe('a stale local base ref (real git)', () => {
+    async function workRepoBehindOrigin(): Promise<string> {
+      const origin = mkdtempSync(join(tmpdir(), 'cez-stale-origin-'));
+      worktreeRoots.push(origin);
+      await run('git', ['init', '-q', '-b', 'main'], { cwd: origin });
+      writeFileSync(join(origin, 'f.txt'), 'base\n');
+      await run('git', ['add', '-A'], { cwd: origin });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c0'], { cwd: origin });
+
+      const work = mkdtempSync(join(tmpdir(), 'cez-stale-work-'));
+      worktreeRoots.push(work);
+      // `-c gc.auto=0` is `clone --config`: it lands in the new repo, so neither the clone
+      // nor any later commit in it detaches a background gc that would still be writing
+      // into `.git` when the afterEach above removes the fixture.
+      await run('git', ['clone', '-q', '-c', 'gc.auto=0', origin, work], { cwd: tmpdir() });
+
+      // Origin moves on by a lot; the work repo only ever fetches, so `origin/main`
+      // advances while the local `main` ref stays where the clone left it.
+      for (let i = 0; i < 4; i += 1) {
+        writeFileSync(join(origin, 'upstream.txt'), 'upstream\n'.repeat(i + 1));
+        await run('git', ['add', '-A'], { cwd: origin });
+        await run('git', [...GIT_ID, 'commit', '-q', '-m', `upstream ${i}`], { cwd: origin });
+      }
+      await run('git', ['fetch', '-q', 'origin'], { cwd: work });
+      return work;
+    }
+
+    it('measures against origin/<base>, not the local ref the task never pulled', async () => {
+      const work = await workRepoBehindOrigin();
+      // The task forks from the freshest base — exactly what `resolveBaseRef` does at
+      // worktree-creation time — and commits one line.
+      await run('git', ['checkout', '-q', '-b', 'cez/x', 'origin/main'], { cwd: work });
+      writeFileSync(join(work, 'mine.txt'), 'z\n');
+      await run('git', ['add', '-A'], { cwd: work });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'the task'], { cwd: work });
+
+      // 1 line — not the 4 upstream lines the stale `main` would have swallowed.
+      expect(await worktreeShortstat(work, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+      });
+    });
+
+    it('keeps counting unpushed base commits as base, not as the task\'s work', async () => {
+      const work = await workRepoBehindOrigin();
+      // A local base that is AHEAD of origin is not stale — it is the better answer.
+      await run('git', ['checkout', '-q', 'main'], { cwd: work });
+      await run('git', ['merge', '-q', 'origin/main'], { cwd: work });
+      writeFileSync(join(work, 'unpushed.txt'), 'local base work\n');
+      await run('git', ['add', '-A'], { cwd: work });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'unpushed base commit'], { cwd: work });
+      await run('git', ['checkout', '-q', '-b', 'cez/x'], { cwd: work });
+      writeFileSync(join(work, 'mine.txt'), 'z\n');
+
+      expect(await worktreeShortstat(work, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+      });
+    });
+  });
 });
 
 describe('resolveBaseRef (real git)', () => {
@@ -228,7 +481,10 @@ describe('resolveBaseRef (real git)', () => {
     }
     const work = mkdtempSync(join(tmpdir(), 'cez-work-'));
     worktreeRoots.push(work);
-    await run('git', ['clone', '-q', origin, work], { cwd: tmpdir() });
+    // `-c gc.auto=0` is `clone --config`: it lands in the new repo, so neither the clone
+    // nor any later commit in it detaches a background gc that would still be writing
+    // into `.git` when the afterEach above removes the fixture.
+    await run('git', ['clone', '-q', '-c', 'gc.auto=0', origin, work], { cwd: tmpdir() });
     // Materialize a local `develop` tracking origin/develop.
     await run('git', ['checkout', '-q', 'develop'], { cwd: work });
     await run('git', ['checkout', '-q', 'main'], { cwd: work });

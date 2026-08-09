@@ -118,7 +118,16 @@ afterEach(() => {
 })
 
 const PROJECT_SECTIONS = ['agents', 'agent-config', 'worktrees', 'bookmarklets', 'prompt-templates']
-const GLOBAL_SECTIONS = ['appearance', 'notifications', 'resources', 'skills', 'projects']
+const GLOBAL_SECTIONS = [
+  'appearance',
+  'notifications',
+  'resources',
+  'skills',
+  // Agent accounts (spec 2026-07-29-agent-profiles) sit beside Projects: both describe the
+  // machine and the person at it, not any one repo.
+  'accounts',
+  'projects',
+]
 
 describe('the section registry', () => {
   it('declares the spec §Settings sections, later ones hidden', () => {
@@ -141,8 +150,10 @@ describe('the section registry', () => {
   })
 
   it('hides Projects only when the single-project capability is active', () => {
+    // Accounts survives: a single-project cockpit still runs on ONE of possibly several logins,
+    // so "which account" is orthogonal to "how many projects".
     expect(visibleSettingsSections('global', { singleProject: true }).map((s) => s.id)).toEqual([
-      'appearance', 'notifications', 'resources', 'skills',
+      'appearance', 'notifications', 'resources', 'skills', 'accounts',
     ])
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
@@ -160,6 +171,33 @@ describe('the settings shell', () => {
     // The mobile pill row renders through the same registry — the two can never disagree.
     const pills = document.querySelector('[data-slot="settings-nav-mobile"]')!
     expect([...pills.querySelectorAll('[data-section]')].length).toBe(PROJECT_SECTIONS.length)
+  })
+
+  it('every section keeps a way BACK to the index: the "General" nav entry', () => {
+    renderAt('/settings/worktrees')
+    // Project scope: scoped like every other project link, and pointing at the area index.
+    expect(
+      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
+    ).toBe('/p/boot/settings')
+    // The mobile pill row carries it too — the index is the ONLY place small screens see it.
+    expect(
+      document.querySelector('[data-slot="settings-nav-mobile"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
+    ).toBe('/p/boot/settings')
+    // A section is open, so "General" is not the current page.
+    expect(document.querySelector('[data-slot="settings-nav-index"][aria-current="page"]')).toBeNull()
+  })
+
+  it('"General" is the current page on the index itself, and unprefixed in the global area', () => {
+    renderAt('/settings')
+    expect(
+      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('aria-current'),
+    ).toBe('page')
+    cleanup()
+
+    renderAt('/settings/global/resources')
+    expect(
+      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
+    ).toBe('/settings/global')
   })
 
   it('renders the GLOBAL nav at /settings/global — global sections, unprefixed links', () => {

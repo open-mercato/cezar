@@ -52,6 +52,8 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type RunGet200 = InferResponseType<Run['$get'], 200>;
   type RunCreate201 = InferResponseType<Runs['$post'], 201>;
   type RunArchive200 = InferResponseType<Run['archive']['$post'], 200>;
+  type RunRead200 = InferResponseType<Run['read']['$post'], 200>;
+  type RunUnread200 = InferResponseType<Run['unread']['$post'], 200>;
   type RunPatch200 = InferResponseType<Run['$patch'], 200>;
   type ArchiveFinished200 = InferResponseType<Runs['archive-finished']['$post'], 200>;
   type Cancel200 = InferResponseType<Run['cancel']['$post'], 200>;
@@ -74,6 +76,10 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof apiRunSchema>, RunGet200>>,
     Assert<Exact<z.infer<typeof runRecordSchema>, RunArchive200>>,
     Assert<Exact<z.infer<typeof runRecordSchema>, RunPatch200>>,
+    // the read receipt and its inverse (#unread-done-items, #775) — both answer the record, and
+    // pinning them here is what stops either drifting into a bespoke payload
+    Assert<Exact<z.infer<typeof runRecordSchema>, RunRead200>>,
+    Assert<Exact<z.infer<typeof runRecordSchema>, RunUnread200>>,
     // POST /runs answers 201, and its ×1 branch carries no `usage`
     Assert<
       Exact<

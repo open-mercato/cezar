@@ -1,14 +1,17 @@
-import type {
-  ProviderId,
-  ProviderStatus,
-  ProviderStatusResponse,
+import {
+  providerAuthChecksDisabled,
+  type ProviderId,
+  type ProviderStatus,
+  type ProviderStatusResponse,
 } from './provider-auth.ts';
 
 export function applyProviderEnablement(
   response: ProviderStatusResponse,
   disabledProviders: readonly ProviderId[],
 ): ProviderStatusResponse {
-  const disabled = new Set(disabledProviders);
+  const disabled = new Set(
+    providerAuthChecksDisabled() ? [] : disabledProviders,
+  );
   return {
     providers: response.providers.map((row) => ({
       ...row,

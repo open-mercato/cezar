@@ -49,6 +49,12 @@ const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse. */
   backend: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
+   *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
+   *  only means something inside the config dir that created it: `sessionId` and `profileId` are
+   *  a PAIR. Without it, changing the project's account would silently make Continue resume
+   *  against the wrong account's session store. Absent = the discovered default. */
+  profileId: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -65,7 +71,9 @@ const queuedMessageSchema = z.object({
   createdAt: z.string(),
 });
 
-const runRecordSchema = z.object({
+/** Exported for `./run-index.ts`, the read-only reader of the same file. Nothing else should
+ *  parse `runs.json` — see `reconcileLoadedRun` for why a second parser is a correctness risk. */
+export const runRecordSchema = z.object({
   id: z.string(),
   title: z.string(),
   /** Display title (#389): the auto-derived summary of the first agent turn,
@@ -73,9 +81,19 @@ const runRecordSchema = z.object({
    *  `title` so edits always win). The UI shows `titleSummary ?? title`. */
   titleSummary: z.string().optional(),
   /** `git diff --shortstat` of the worktree vs its base, refreshed on every
-   *  turn-end (#389) — what the quick list / table shows without a git call. */
+   *  turn-end (#389) — what the quick list / table shows without a git call.
+   *  `repointed` (#751) is optional and only ever written as `true`: it marks the
+   *  runs whose numbers were narrowed to uncommitted work because the agent had
+   *  checked another branch out into the worktree. Optional is load-bearing here —
+   *  `runs.json` is `safeParse`d as one array, so a required addition would
+   *  silently drop every pre-existing run. */
   diffStat: z
-    .object({ adds: z.number(), dels: z.number(), files: z.number() })
+    .object({
+      adds: z.number(),
+      dels: z.number(),
+      files: z.number(),
+      repointed: z.boolean().optional(),
+    })
     .optional(),
   workflow: z.string(),
   task: z.string(),
@@ -97,6 +115,11 @@ const runRecordSchema = z.object({
   modelIdentity: z.string().optional(),
   /** Agent backend this run used — drives "open in CLI" resume command. */
   runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Per-task agent-account override from the composer (spec 2026-07-29-agent-profiles), applying
+   *  to steps that run on `runner`. Steps on a DIFFERENT backend still resolve from the project's
+   *  own selection — an override for Claude says nothing about which Codex account a mixed
+   *  workflow's codex step should use. Absent = follow the project. */
+  agentProfile: z.string().optional(),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
    *  Deliberately NOT the full composed prompt — skill bodies and the handoff
@@ -131,6 +154,17 @@ const runRecordSchema = z.object({
   monitoringWakeAt: z.string().datetime().optional().catch(undefined),
   /** True only for the live epoch that exhausted all automatic monitoring checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /**
+   * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
+   * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a
+   * short grace. Present only while such a resume is pending: the run is `failed`, the timer is
+   * armed, and the cockpit says so. Deliberately survives a restart (`RunStore.open` keeps it) —
+   * it is what lets `recover()` re-arm a wait that may be hours long.
+   */
+  autoResumeAt: z.string().datetime().optional().catch(undefined),
+  /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
+   *  Persisted so a restart cannot reset a loop back to zero. */
+  autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -201,6 +235,12 @@ const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean().default(false),
   archivedAt: z.string().optional(),
+  /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
+   *  run's thread. A finished run reads as "unread" until it has been seen since it
+   *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
+   *  runs, on every run not yet opened, and on one `setUnread` put back to unread
+   *  (#775) — the unread rule treats all three alike. */
+  seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -261,6 +301,20 @@ const MAX_PR_CANDIDATES = 8;
  * invisible to the janitor, #407). Reasoning items are skipped: thinking text
  * speculates about PRs the task never touches.
  */
+/**
+ * Archiving IS resigning from a task, so an archived run can never carry a pending usage-limit
+ * resume (spec 2026-08-03-auto-resume-after-usage-limit). The rule lives HERE rather than in the
+ * archive route because the bulk "Archive finished" sweep never goes through that route, and a
+ * user who archives fifty finished tasks has resigned from all fifty.
+ *
+ * The engine needs no telling: its timer re-reads the record before it fires and no sweep re-arms
+ * an archived run, so a cleared field is the whole cancellation.
+ */
+function clearPendingAutoResume(run: RunRecord): void {
+  run.autoResumeAt = undefined;
+  run.autoResumeAttempts = undefined;
+}
+
 function eventTextFragments(event: Record<string, unknown>): string[] {
   const fragments: string[] = [];
   for (const key of ['text', 'result', 'message'] as const) {
@@ -348,6 +402,50 @@ function createdPrUrl(haystack: string): string | undefined {
 }
 
 /**
+ * Reconcile one record just read off disk with the fact that whichever process wrote it is gone.
+ *
+ * Mutates and returns `run`. Extracted from `RunStore.open` so the read-only index reader
+ * (`./run-index.ts`) answers the SAME question about a `running` row on disk. Two parsers that
+ * disagree here is a visible bug, not an internal one: the cockpit would show a task as running
+ * in the ⌘K index and failed the moment you opened it.
+ *
+ * `keepLive` (#367): leave `queued`/`running`/`waiting` untouched so the caller can recover them
+ * (RunManager.recover re-queues queued runs, resumes interrupted ones). Without it — one-shot CLI
+ * paths that never recover, and the index reader, which has no manager at all — live-looking runs
+ * are marked failed so no ghost stays behind.
+ */
+export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }): RunRecord {
+  // A run that was live when the previous process exited can never finish —
+  // surface that instead of a forever-"running" ghost. `review` survives
+  // restarts on purpose: the gate is pure data (worktree + branch + record)
+  // with no live process, so the diff panel, Send back (resume) and Draft PR
+  // all still work.
+  if (
+    !opts?.keepLive &&
+    (run.status === 'running' || run.status === 'queued' || run.status === 'waiting')
+  ) {
+    run.status = 'failed';
+    run.error = 'interrupted — cezar process exited during the run';
+    run.finishedAt = run.finishedAt ?? new Date().toISOString();
+    for (const step of run.steps) {
+      if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
+    }
+  }
+  if (!['running', 'waiting', 'queued'].includes(run.status)) {
+    run.activity = undefined;
+    run.monitoringWakeAt = undefined;
+  }
+  // A pending usage-limit resume survives the restart on purpose (the wait can be
+  // hours) — `RunManager.recover()` re-arms it from this field. It can only mean
+  // anything on a `failed` run, so anywhere else it is stale bookkeeping.
+  if (run.status !== 'failed') run.autoResumeAt = undefined;
+  // The wake counter is intentionally process-local, so a restarted process
+  // starts a fresh epoch instead of displaying a stale cap.
+  run.monitoringWakeCapReached = undefined;
+  return run;
+}
+
+/**
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
  * file per run. Also the in-process event bus the SSE endpoints subscribe to:
@@ -362,12 +460,7 @@ export class RunStore extends EventEmitter {
     this.setMaxListeners(100);
   }
 
-  /**
-   * `keepLive` (#367): leave `queued`/`running`/`waiting` statuses untouched
-   * so the caller can recover them (RunManager.recover re-queues queued runs,
-   * resumes interrupted ones). Without it — one-shot CLI paths that never
-   * recover — live-looking runs are marked failed so no ghost stays behind.
-   */
+  /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
     mkdirSync(join(dataDir, 'runs'), { recursive: true });
     const store = new RunStore(dataDir);
@@ -378,32 +471,7 @@ export class RunStore extends EventEmitter {
         const parsed = z.array(runRecordSchema).safeParse(raw);
         if (parsed.success) {
           for (const run of parsed.data) {
-            // A run that was live when the previous process exited can never
-            // finish — surface that instead of a forever-"running" ghost.
-            // `review` survives restarts on purpose: the gate is pure data
-            // (worktree + branch + record) with no live process, so the diff
-            // panel, Send back (resume) and Draft PR all still work.
-            if (
-              !opts?.keepLive &&
-              (run.status === 'running' ||
-                run.status === 'queued' ||
-                run.status === 'waiting')
-            ) {
-              run.status = 'failed';
-              run.error = 'interrupted — cezar process exited during the run';
-              run.finishedAt = run.finishedAt ?? new Date().toISOString();
-              for (const step of run.steps) {
-                if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
-              }
-            }
-            if (!['running', 'waiting', 'queued'].includes(run.status)) {
-              run.activity = undefined;
-              run.monitoringWakeAt = undefined;
-            }
-            // The wake counter is intentionally process-local, so a restarted
-            // process starts a fresh epoch instead of displaying a stale cap.
-            run.monitoringWakeCapReached = undefined;
-            store.runs.set(run.id, run);
+            store.runs.set(run.id, reconcileLoadedRun(run, opts));
           }
         }
       } catch {
@@ -427,6 +495,8 @@ export class RunStore extends EventEmitter {
     task: string;
     model?: string;
     runner?: 'claude' | 'codex' | 'opencode';
+    /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
+    agentProfile?: string;
     generateFollowups?: boolean;
     autonomous?: boolean;
     worktree?: false;
@@ -447,6 +517,7 @@ export class RunStore extends EventEmitter {
       task: input.task,
       model: input.model,
       runner: input.runner,
+      agentProfile: input.agentProfile,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
       worktree: input.worktree,
@@ -485,6 +556,13 @@ export class RunStore extends EventEmitter {
       normalized.activity = undefined;
       normalized.monitoringWakeAt = undefined;
       normalized.monitoringWakeCapReached = undefined;
+    }
+    // …and the mirror image for the usage-limit resume (spec
+    // 2026-08-03-auto-resume-after-usage-limit): it is a promise made ABOUT a failed run, so a
+    // run coming back to life — the resume itself, a user Continue, a re-queue — retires it.
+    // The manager's timer re-checks the record before it fires, so a cleared field is enough.
+    if (normalized.status && ['running', 'waiting', 'queued'].includes(normalized.status)) {
+      normalized.autoResumeAt = undefined;
     }
     Object.assign(run, this.redactPatch(normalized));
     this.touch(run);
@@ -576,6 +654,7 @@ export class RunStore extends EventEmitter {
     if (!run) return undefined;
     run.archived = archived;
     run.archivedAt = archived ? new Date().toISOString() : undefined;
+    if (archived) clearPendingAutoResume(run);
     this.touch(run);
     return run;
   }
@@ -587,9 +666,67 @@ export class RunStore extends EventEmitter {
       if (!run.archived && ['done', 'failed', 'cancelled'].includes(run.status)) {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
+        clearPendingAutoResume(run);
         this.touch(run);
         count++;
       }
+    }
+    return count;
+  }
+
+  /** Mark one run as read (#unread-done-items): stamp the read receipt now. Mirrors
+   *  `setArchived` — sets the field then persists + broadcasts via `touch`, so the
+   *  updated record rides the existing `run` SSE with no new event. Idempotent by
+   *  design: opening an already-read thread just re-stamps a later `seenAt`. */
+  setRead(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    run.seenAt = new Date().toISOString();
+    this.touch(run);
+    return run;
+  }
+
+  /** Mark one run as UNread (#775): drop the read receipt so the run rejoins the unread
+   *  list. The inverse of `setRead` and, like it, `touch`es so the updated record rides the
+   *  existing `run` SSE.
+   *
+   *  Deleting the field rather than adding a "manually unread" flag is the whole point:
+   *  absent `seenAt` is ALREADY what every reader treats as unread (`isUnread` in the
+   *  cockpit's read-state.ts, and `markAllRead`'s clause-for-clause copy of it below), so
+   *  clearing needs no new state and writes a shape any older cezar already parses.
+   *
+   *  Deliberately unconditional: clearing a receipt is always a legal write, so this
+   *  succeeds for an already-unread run (idempotent) and for statuses that can never wear
+   *  the marker. WHETHER the action means anything for a given run is UI policy, and lives
+   *  in the cockpit's `runActionFlags` — the same split the rest of the store keeps. */
+  setUnread(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    delete run.seenAt;
+    this.touch(run);
+    return run;
+  }
+
+  /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
+   *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
+   *  clause for clause: a `done` or `failed` run that finished and has not been seen
+   *  since. Cancelled runs are never unread — you stopped them yourself — and archived
+   *  ones never are either, since archiving is a stronger "done with this" than reading;
+   *  both are skipped, as are runs already read. Keeping the two rules identical is what
+   *  makes the returned count the number the cockpit's unread badge was showing. */
+  markAllRead(): number {
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const run of this.runs.values()) {
+      const unread =
+        !run.archived &&
+        (run.status === 'done' || run.status === 'failed') &&
+        run.finishedAt !== undefined &&
+        (run.seenAt === undefined || run.seenAt < run.finishedAt);
+      if (!unread) continue;
+      run.seenAt = now;
+      this.touch(run);
+      count++;
     }
     return count;
   }

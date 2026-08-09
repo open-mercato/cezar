@@ -10,8 +10,9 @@ import { atomicWriteJsonSync } from './config.ts';
  * read and the atomic write; the schema and key cap live at the route boundary
  * (`GET/PUT /api/workspace/ui-state`, step 2.7). The state is an opaque
  * `.passthrough()`-style bag — cross-project prefs (appearance, notifications,
- * per-project sidebar collapse) live here; project-scoped prefs stay in each
- * repo's own file.
+ * curated skills) live here; project-scoped prefs stay in each repo's own file,
+ * and prefs that describe the BROWSER rather than the workspace (sidebar
+ * collapse, the last visited location) stay in that browser's localStorage.
  */
 
 /** Read `~/.cezar/ui-state.json` on demand — never cached, never throws.
@@ -21,9 +22,11 @@ import { atomicWriteJsonSync } from './config.ts';
  *  `src/ui-state.ts`: `GET /api/v1/workspace/ui-state` answers this value verbatim, so a loose
  *  record left the route naming no key. The schema is a `z.looseObject`, so unknown prefs keep
  *  round-tripping (BACKWARD_COMPATIBILITY.md §3) — the type only adds the known names. */
-export async function readWorkspaceUiState(): Promise<WorkspaceUiState> {
+export async function readWorkspaceUiState(
+  path: string = workspaceUiStatePath(),
+): Promise<WorkspaceUiState> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(workspaceUiStatePath(), 'utf8'));
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as WorkspaceUiState)
       : {};
@@ -40,12 +43,17 @@ export async function readWorkspaceUiState(): Promise<WorkspaceUiState> {
  * corrupt file merges from `{}`. The mutator may mutate its argument in place
  * or return a replacement. Throws on write failure (e.g. a read-only home) —
  * degrading is the caller's policy, per house rules.
+ *
+ * Path resolved once, before the `await`, for the same reason as
+ * `mergeWriteWorkspaceConfig`: a `CEZ_HOME` that changes mid-flight must not be
+ * able to send the read and the write to two different files.
  */
 export async function mergeWriteWorkspaceUiState(
   mutator: (state: WorkspaceUiState) => WorkspaceUiState | void,
 ): Promise<WorkspaceUiState> {
-  const current = await readWorkspaceUiState();
+  const path = workspaceUiStatePath();
+  const current = await readWorkspaceUiState(path);
   const next = mutator(current) ?? current;
-  atomicWriteJsonSync(workspaceUiStatePath(), next);
+  atomicWriteJsonSync(path, next);
   return next;
 }

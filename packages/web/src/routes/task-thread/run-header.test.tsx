@@ -82,12 +82,12 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
-function renderHeader(record: ApiRun) {
+function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
-          <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+          <Route path="/tasks/:id" element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} />} />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
@@ -222,6 +222,80 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     stubFetch()
     renderHeader(run('running'))
     expect(screen.getByRole('button', { name: 'Run actions' })).not.toBeNull()
+  })
+})
+
+describe('Mark unread (#775)', () => {
+  const FINISHED_AT = '2026-07-14T13:00:00.000Z'
+  const SEEN_AT = '2026-07-14T13:05:00.000Z'
+  /** A finished run that has already been read — the one state the action is offered in. */
+  const readDone = (extra: Partial<ApiRun> = {}) =>
+    run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT, ...extra })
+
+  it('offers the control for a read, finished run — next to Archive', () => {
+    stubFetch()
+    renderHeader(readDone())
+    const names = actionBar()
+      .getAllByRole('button')
+      .map((el) => el.textContent?.trim())
+    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+  })
+
+  it.each([
+    ['an already-unread run', run('done', { finishedAt: FINISHED_AT })],
+    ['an archived run', readDone({ archived: true })],
+    ['a cancelled run', run('cancelled', { finishedAt: FINISHED_AT, seenAt: SEEN_AT })],
+    ['a still-running run', run('running', { seenAt: SEEN_AT })],
+    ['a done run caught with no finishedAt', run('done', { seenAt: SEEN_AT })],
+  ] as Array<[string, ApiRun]>)('hides the control for %s', (_name, record) => {
+    stubFetch()
+    renderHeader(record)
+    expect(actionBar().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+  })
+
+  it('Mark unread → POST /unread, bodyless like its read twin', async () => {
+    const sent = stubFetch()
+    renderHeader(readDone())
+    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => {
+      const request = sent.find((r) => r.path === '/api/v1/runs/r1/unread')
+      expect(request?.method).toBe('POST')
+      expect(request?.body).toBeUndefined()
+    })
+  })
+
+  it('notifies the host BEFORE the request goes out, so the thread can suppress its auto-read', async () => {
+    // Ordering is the whole contract: the optimistic cache write re-renders the open thread and
+    // re-runs its auto-mark-read effect, which would re-stamp the receipt if it were not already
+    // suppressed by the time that happens.
+    const sent = stubFetch()
+    const onMarkedUnread = vi.fn(() => {
+      expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(false)
+    })
+    renderHeader(readDone(), onMarkedUnread)
+    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    expect(onMarkedUnread).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(true))
+  })
+
+  it('surfaces a server refusal as a danger toast and leaves the run read', async () => {
+    // The mixed-version failure mode (#769): an older server has no such route. The guarded
+    // rollback in `useMarkRunUnseen` means the cockpit says so rather than showing a marker
+    // the server does not agree with.
+    stubFetch({
+      '/api/v1/runs/r1/unread': () => jsonResponse({ error: 'not found' }, 404),
+    })
+    renderHeader(readDone())
+    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => expect(screen.getByText('not found')).not.toBeNull())
+  })
+
+  it('is in the mobile kebab too, under the same rule', async () => {
+    stubFetch()
+    renderHeader(readDone())
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.getByRole('menuitem', { name: 'Mark unread' })).not.toBeNull()
   })
 })
 
@@ -597,7 +671,7 @@ describe('notes panel', () => {
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
-  it('meta shows workflow · branch chip · ± · input/output · cost, with runner/model tucked into the agent badge', () => {
+  it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -610,9 +684,16 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     expect(meta.textContent).toContain('quick-task')
-    // Runner/model are no longer loose text next to the workflow — they live in the badge.
-    expect(meta.textContent).not.toContain('codex')
-    expect(meta.textContent).not.toContain('gpt-5.2-codex')
+    // #416 pulled runner/model out of the loose dot-list to cut noise, and that still holds — they
+    // are not separate chips beside the workflow. But an icon ALONE made "which agent, account and
+    // model produced this?" unanswerable without knowing to click it, which is the one question the
+    // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
+    // labelled breakdown.
+    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
+    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent)
+      .toBe('codex · gpt-5.2-codex')
+    // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
+    expect(meta.textContent?.replace(badge.textContent ?? '', '')).not.toContain('codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
     expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
@@ -620,8 +701,57 @@ describe('meta line, tabs, pill and resume hint', () => {
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
 
-    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+  })
+
+  // #801: automation provenance is history — a run launched while automations were on keeps it
+  // forever — so the chip stays, but it only LINKS while the capability is on. Following it with
+  // automations off would land on the disabled `/automations` state, which says nothing about
+  // this task.
+  const automated = () => run('done', {
+    automation: {
+      automationId: 'a-1',
+      automationRevision: 1,
+      receiptId: 'r-1',
+      event: 'issue.opened',
+      githubUrl: 'https://github.com/open-mercato/cezar/issues/801',
+    },
+  })
+
+  it('links the automation chip to its log while automations are on', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true, followups: false, singleProject: false, automations: true,
+            tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          },
+        }),
+    })
+    renderHeader(automated())
+
+    const link = await screen.findByRole('link', { name: 'Automation' })
+    expect(link.getAttribute('href')).toBe('/automations/a-1/log')
+  })
+
+  it('degrades the automation chip to plain text while automations are off', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true, followups: false, singleProject: false, automations: false,
+            tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          },
+        }),
+    })
+    renderHeader(automated())
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() =>
+      expect(meta.querySelector('[data-slot="automation-origin"]')).not.toBeNull(),
+    )
+    expect(meta.textContent).toContain('Automation')
+    expect(screen.queryByRole('link', { name: 'Automation' })).toBeNull()
   })
 
   it('omits token and cost text when health disables token metrics', async () => {
@@ -716,12 +846,85 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
+  /**
+   * Which ACCOUNT a task ran under (spec 2026-07-29-agent-profiles). Read from the step that
+   * actually spawned, never from the run's composer override or the project's current selection:
+   * the override is absent whenever the run simply followed the project, and the selection can have
+   * changed since — either would name an account this run may never have touched.
+   */
+  describe('the account a task ran under', () => {
+    const withAccounts = (extra: Record<string, () => Response> = {}) => stubFetch({
+      '/api/v1/workspace/agent-profiles': () => jsonResponse({
+        editable: true,
+        profileCapableProviders: ['claude', 'codex'],
+        selections: {},
+        defaults: {},
+        profiles: [
+          { id: 'default', provider: 'claude', label: 'Default', configDir: '~/.claude', path: '/home/u/.claude', exists: true, looksValid: true, isDefault: true, files: [] },
+          { id: 'klaudiusz', provider: 'claude', label: 'Klaudiusz', configDir: '~/.claude-klaudiusz', path: '/home/u/.claude-klaudiusz', exists: true, looksValid: true, isDefault: false, files: [] },
+        ],
+      }),
+      ...extra,
+    })
+
+    it('names the account the step recorded, by its label — visibly, not only on click', async () => {
+      withAccounts()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'opus',
+        steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
+      }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
+      // The regression this guards: it read as a bare bot icon, so the answer was there but nobody
+      // could find it without knowing to open a menu.
+      await waitFor(() => expect(
+        badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent,
+      ).toBe('claude · Klaudiusz · opus'))
+    })
+
+    it('prefers what RAN over what the composer asked for', async () => {
+      // A resumed run reattaches to the account that owns the session, whatever the run record's
+      // override says — so the badge must report the step, or it would name the wrong subscription.
+      withAccounts()
+      renderHeader(run('done', {
+        runner: 'claude',
+        agentProfile: 'default',
+        steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
+      }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      await within(meta).findByRole('button', { name: /account Klaudiusz/ })
+    })
+
+    it('says nothing at all for a run from before accounts existed', async () => {
+      // Nothing wrote it down, so claiming the discovered account would be an invention.
+      withAccounts()
+      renderHeader(run('done', { runner: 'claude', steps: [step({ sessionId: 'sess-1' })] }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      await within(meta).findByRole('button', { name: /Agent: claude, model auto/ })
+      expect(meta.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
+    })
+
+    it('still names an account that has since been removed', async () => {
+      // The id is the only remaining pointer to the folder this run's sessions live in.
+      withAccounts()
+      renderHeader(run('done', {
+        runner: 'claude',
+        steps: [step({ sessionId: 'sess-1', profileId: 'deleted-one' })],
+      }))
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      await within(meta).findByRole('button', { name: /account deleted-one \(removed\)/ })
+    })
+  })
+
   it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'claude' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    expect(meta.textContent).not.toContain('claude')
-    expect(within(meta).getByRole('button', { name: /Agent: claude, model auto/ })).not.toBeNull()
+    const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
+    // Named on the badge like any other agent — claude being the default is not a reason to leave
+    // "what produced this?" unanswered.
+    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude · auto')
   })
 
   it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {

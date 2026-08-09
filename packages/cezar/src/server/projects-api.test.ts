@@ -44,7 +44,13 @@ interface HealthBody {
   checks: unknown[];
   defaultRunner?: string;
   forge: unknown;
-  capabilities: { localHandoff: boolean; followups: boolean; singleProject: boolean; tokenMetrics: boolean };
+  capabilities: {
+    localHandoff: boolean;
+    followups: boolean;
+    singleProject: boolean;
+    automations: boolean;
+    tokenMetrics: boolean;
+  };
   projects: { id: string; name: string }[];
   bootProject: string;
 }
@@ -644,6 +650,7 @@ describe('workspace projects API', () => {
       }
       expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
     });
+
   });
 
   describe('GET /api/v1/health — additive projects + bootProject', () => {
@@ -688,6 +695,7 @@ describe('workspace projects API', () => {
         localHandoff: true,
         followups: false,
         singleProject: false,
+        automations: false,
         tokenMetrics: true,
         tokenUsageMetrics: true,
         costMetrics: true,

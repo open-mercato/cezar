@@ -79,6 +79,51 @@ describe('buildChildEnv — least-privilege child env (#427)', () => {
     expect(env.PATH).toBe('/override');
   });
 
+  /**
+   * #785: the run's own temp directory is delivered as `extraEnv`, and it only
+   * works if it genuinely REPLACES the host's. The host copy must be gone, not
+   * merely shadowed — env names are matched case-insensitively (and Windows
+   * treats them that way), so a surviving `Temp`/`Tmp` beside our `TEMP`/`TMP`
+   * would hand the backend the exhausted host directory under another spelling.
+   */
+  describe('per-run temp directory replaces the host’s (#785)', () => {
+    it('overrides all three spellings when the host set all three', () => {
+      const env = buildChildEnv({
+        backend: 'claude',
+        source: { ...HOST, TMPDIR: '/tmp', TEMP: '/tmp', TMP: '/tmp' },
+        extraEnv: { TMPDIR: '/data/tmp/run-1', TEMP: '/data/tmp/run-1', TMP: '/data/tmp/run-1' },
+      });
+      expect(env.TMPDIR).toBe('/data/tmp/run-1');
+      expect(env.TEMP).toBe('/data/tmp/run-1');
+      expect(env.TMP).toBe('/data/tmp/run-1');
+    });
+
+    it('leaves no host-cased duplicate pointing back at the shared directory', () => {
+      const env = buildChildEnv({
+        backend: 'claude',
+        source: { ...HOST, Temp: 'C:\\Windows\\Temp', Tmp: 'C:\\Windows\\Temp' },
+        extraEnv: { TMPDIR: 'D:\\run-1', TEMP: 'D:\\run-1', TMP: 'D:\\run-1' },
+      });
+      const tempish = Object.entries(env).filter(([k]) => /^(tmpdir|temp|tmp)$/i.test(k));
+      expect(tempish.map(([, v]) => v)).toEqual(['D:\\run-1', 'D:\\run-1', 'D:\\run-1']);
+    });
+
+    it('the host value still comes through when the run overrides nothing', () => {
+      const env = buildChildEnv({ backend: 'claude', source: { ...HOST, TMPDIR: '/tmp' } });
+      expect(env.TMPDIR).toBe('/tmp');
+    });
+
+    it('the escape hatch does not resurrect the host value either', () => {
+      const env = buildChildEnv({
+        backend: 'claude',
+        source: { ...HOST, CEZ_AGENT_ENV_FULL: '1', Temp: 'C:\\Windows\\Temp' },
+        extraEnv: { TEMP: 'D:\\run-1' },
+      });
+      expect(env.Temp).toBeUndefined();
+      expect(env.TEMP).toBe('D:\\run-1');
+    });
+  });
+
   it('opt-in CEZ_ENV_PASSTHROUGH forwards named extras', () => {
     const src = { ...HOST, MY_TOOLCHAIN_DIR: '/opt/tc', CEZ_ENV_PASSTHROUGH: 'MY_TOOLCHAIN_DIR' };
     const env = buildChildEnv({ backend: 'claude', source: src });
@@ -234,6 +279,52 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
     });
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  });
+});
+
+/**
+ * Agent accounts (spec 2026-07-29-agent-profiles) reach the child through `extraEnv`, which is
+ * applied AFTER the allowlist and so bypasses it. That makes `profileEnv` the only gatekeeper —
+ * these pin the two properties the rest of the design leans on.
+ */
+describe('agent-profile config dirs reach the child', () => {
+  it('CLAUDE_CONFIG_DIR survives for claude, and via the host allowlist too', () => {
+    expect(
+      buildChildEnv({
+        backend: 'claude',
+        extraEnv: { CLAUDE_CONFIG_DIR: '/home/u/.claude-klaudiusz' },
+        source: { PATH: '/usr/bin' },
+      }).CLAUDE_CONFIG_DIR,
+    ).toBe('/home/u/.claude-klaudiusz');
+    // The `CLAUDE_` prefix means a host-level override also rides in, which is what makes it the
+    // DEFAULT profile's dir rather than something cezar has to re-export.
+    expect(
+      buildChildEnv({
+        backend: 'claude',
+        source: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/home/u/.claude-host' },
+      }).CLAUDE_CONFIG_DIR,
+    ).toBe('/home/u/.claude-host');
+  });
+
+  it('CODEX_HOME survives for codex', () => {
+    expect(
+      buildChildEnv({
+        backend: 'codex',
+        extraEnv: { CODEX_HOME: '/home/u/.codex-klaudiusz' },
+        source: { PATH: '/usr/bin' },
+      }).CODEX_HOME,
+    ).toBe('/home/u/.codex-klaudiusz');
+  });
+
+  it('the per-run account still wins under the CEZ_AGENT_ENV_FULL escape hatch', () => {
+    // The hatch restores full inheritance, but `extraEnv` is applied last there too — otherwise
+    // a host-level CLAUDE_CONFIG_DIR would silently outrank the account the user picked.
+    const env = buildChildEnv({
+      backend: 'claude',
+      extraEnv: { CLAUDE_CONFIG_DIR: '/home/u/.claude-klaudiusz' },
+      source: { PATH: '/usr/bin', CEZ_AGENT_ENV_FULL: '1', CLAUDE_CONFIG_DIR: '/home/u/.claude' },
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/home/u/.claude-klaudiusz');
   });
 });
 

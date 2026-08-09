@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { agentHomePaths } from '../paths.ts';
+import { agentHomePaths, claudeStateFilePath } from '../paths.ts';
 import { CONFIG_FILES, type ConfigFileDef } from './catalog.ts';
 import { hashBytes, statConfigPath } from './files.ts';
 
@@ -63,8 +62,9 @@ async function versionOf(path: string, exists: boolean): Promise<string | null> 
 
 /** Read the user-scope MCP server *names* from ~/.claude.json — never its contents, never for writing. */
 export async function readUserMcpServers(env: NodeJS.ProcessEnv): Promise<UserMcpListing> {
-  // ~/.claude.json is a sibling of ~/.claude/ — Claude's own MCP state file.
-  const path = join(dirname(agentHomePaths(env).claude), '.claude.json');
+  // Claude's own MCP state file. Sibling of `~/.claude/` by default, INSIDE the
+  // dir once CLAUDE_CONFIG_DIR relocates it — `claudeStateFilePath` owns that rule.
+  const path = claudeStateFilePath(agentHomePaths(env).claude, env);
   try {
     const { size } = await statConfigPath(path);
     if (size > CLAUDE_JSON_CAP) return { path, servers: [], readable: false };

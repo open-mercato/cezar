@@ -10,6 +10,8 @@ import {
   effectiveComposerDefault,
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
+  workspaceConfigBackupPath,
+  type WorkspaceConfig,
 } from './config.ts';
 
 /**
@@ -66,7 +68,7 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.composerDefaults).toEqual({});
     expect(config.projects).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
@@ -87,6 +89,17 @@ describe('workspace config', () => {
     expect(written.disabledProviders).toEqual(['claude']);
     const raw = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as Record<string, unknown>;
     expect(raw.futureTopLevelKey).toEqual({ keep: true });
+  });
+
+  it('keeps the global model lock optional and degrades a non-boolean value per key', async () => {
+    expect(defaultWorkspaceConfig().modelsLocked).toBeUndefined();
+    write({ modelsLocked: true, projectsDir: '/tmp/projects' });
+    expect((await loadWorkspaceConfig()).modelsLocked).toBe(true);
+
+    write({ modelsLocked: 'yes', projectsDir: '/tmp/projects' });
+    const config = await loadWorkspaceConfig();
+    expect(config.modelsLocked).toBeUndefined();
+    expect(config.projectsDir).toBe('/tmp/projects');
   });
 
   it('takes zero-config roots from the environment while explicit stored values win', async () => {
@@ -237,8 +250,40 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.projects).toEqual([project('good')]);
+  });
+
+  /**
+   * #810 — the monitoring re-check cadence ships ON. It shipped as `null` and that
+   * made a `CEZ:MONITORING` run a dead end: #661 had already removed the idle timer
+   * that used to bound a parked monitor, so nothing was left to resume it. `null`
+   * remains reachable, but only as a deliberate operator choice.
+   */
+  describe('monitoringWakeIntervalMinutes default (#810)', () => {
+    it('defaults to 5 minutes when the key is absent', async () => {
+      write({ resources: { maxParallel: 3 } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBe(5);
+    });
+
+    it('preserves an explicit null — "park until resumed" is a real choice, not a missing value', async () => {
+      write({ resources: { monitoringWakeIntervalMinutes: null } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBeNull();
+    });
+
+    it('keeps an explicit in-range cadence', async () => {
+      write({ resources: { monitoringWakeIntervalMinutes: 17 } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBe(17);
+    });
+
+    it('degrades an out-of-range cadence to the working default, not to park', async () => {
+      write({ resources: { monitoringWakeIntervalMinutes: 999 } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBe(5);
+    });
   });
 
   it('drops a corrupt registry entry but keeps the rest (per-entry salvage)', async () => {
@@ -286,5 +331,79 @@ describe('workspace config', () => {
     }));
     expect(written.projectsDir).toBe('/srv/checkouts');
     expect((await loadWorkspaceConfig()).projectsDir).toBe('/srv/checkouts');
+  });
+
+  describe('registry backup and self-heal', () => {
+    const registerOne = () =>
+      mergeWriteWorkspaceConfig((config) => {
+        config.projects.push(project('shop'));
+      });
+
+    it('snapshots a non-empty registry beside the config on every merge-write', async () => {
+      await registerOne();
+      const snapshot = JSON.parse(readFileSync(workspaceConfigBackupPath(), 'utf8')) as WorkspaceConfig;
+      expect(snapshot.projects.map((p) => p.id)).toEqual(['shop']);
+      expect(statSync(workspaceConfigBackupPath()).mode & 0o777).toBe(0o600);
+    });
+
+    it('refreshes the snapshot when the last project is unregistered, so it cannot resurrect (#731)', async () => {
+      await registerOne();
+      await mergeWriteWorkspaceConfig((config) => {
+        config.projects = [];
+      });
+      // The snapshot now mirrors the emptied registry — no stale entry survives.
+      expect(
+        (JSON.parse(readFileSync(workspaceConfigBackupPath(), 'utf8')) as WorkspaceConfig).projects,
+      ).toEqual([]);
+      // A config that parses and is simply empty is the user's own state.
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+      // And losing config.json entirely must NOT bring the removed project back
+      // from a stale snapshot — recovery settles on the empty registry the user
+      // intended, which was the #731 data-integrity defect.
+      rmSync(workspaceConfigPath());
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+    });
+
+    it('restores the registry when the config file went missing', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await registerOne();
+      rmSync(workspaceConfigPath());
+
+      const restored = await loadWorkspaceConfig();
+      expect(restored.projects.map((p) => p.id)).toEqual(['shop']);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('restored 1 project(s)'));
+    });
+
+    it('restores the registry from an empty or corrupt config file', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await registerOne();
+
+      write('');
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.id)).toEqual(['shop']);
+
+      write('{ not json');
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.id)).toEqual(['shop']);
+    });
+
+    it('writes the recovered registry back on the next merge-write, so a restart keeps it', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await registerOne();
+      rmSync(workspaceConfigPath());
+
+      await mergeWriteWorkspaceConfig((config) => {
+        config.projects.push(project('warehouse'));
+      });
+      const onDisk = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as WorkspaceConfig;
+      expect(onDisk.projects.map((p) => p.id)).toEqual(['shop', 'warehouse']);
+    });
+
+    it('falls back to the defaults when neither the config nor a usable snapshot exists', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      writeFileSync(workspaceConfigBackupPath(), JSON.stringify({ projects: [] }), 'utf8');
+      write('{ not json');
+
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('is corrupt'));
+    });
   });
 });

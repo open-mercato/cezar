@@ -97,6 +97,13 @@ export interface ThreadState {
   sessionEnded?: { reason: StopReason; message?: string }
 }
 
+export interface ThreadReduceOptions {
+  /** The current assistant turn still belongs to a running session. A complete
+   * trailing ask block is provisional protocol text until turn-end either
+   * emits its card or settles into the readable invalid-marker fallback. */
+  activeTurn?: boolean
+}
+
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
 export type ThreadFooter =
   | { state: 'waiting' }
@@ -304,7 +311,7 @@ function planFromTodos(input: unknown): PlanEntry[] | undefined {
   return entries
 }
 
-export function reduceThread(events: RunEvent[]): ThreadState {
+export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = {}): ThreadState {
   const turns: DraftTurn[] = []
   /** stepId:itemId → live item. Runner sessions restart ids at `item_1`, while every current
    *  persisted event is stamped with its workflow step. Old recordings without a step id keep
@@ -666,9 +673,14 @@ export function reduceThread(events: RunEvent[]): ThreadState {
   }
 
   return {
-    turns: turns.map((draft) => {
+    turns: turns.map((draft, index) => {
       // The ask card renders the questions, so only then is the marker redundant (#473).
       const hasAskCard = draft.entries.some(({ entry }) => entry.kind === 'ask')
+      // A completed v2 assistant item lands before the v1 turn-end handler can
+      // parse the marker and emit ask.requested. Hide that provisional transport
+      // block only on the live latest turn. Once the run leaves `running`, a
+      // hard-invalid marker returns as readable fallback (#671).
+      const provisionalAsk = options.activeTurn === true && index === turns.length - 1
       return {
         id: draft.id,
         ...(draft.turnId !== undefined ? { turnId: draft.turnId } : {}),
@@ -677,7 +689,7 @@ export function reduceThread(events: RunEvent[]): ThreadState {
         ...(draft.completed !== undefined ? { completed: draft.completed } : {}),
         items: draft.entries.map(({ entry }) =>
           entry.kind === 'message' && entry.role === 'assistant'
-            ? { ...entry, text: stripDoneMarker(entry.text, hasAskCard) }
+            ? { ...entry, text: stripDoneMarker(entry.text, hasAskCard || provisionalAsk) }
             : entry,
         ),
       }

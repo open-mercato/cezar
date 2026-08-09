@@ -53,6 +53,10 @@ export const SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
   { dir: '.opencode/skills', source: 'agents' },
 ];
 
+/* Deliberately `homedir()` and not `agentHomePaths().claude`: these do NOT follow an
+   agent profile (`src/core/agent-profiles.ts`). A skill is CONTENT — a playbook — not
+   identity, and a second Claude login is not a second skill library. `npx skills`, which
+   writes the `~/.claude/skills` mirror, is profile-unaware for the same reason. */
 const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
   { dir: join(homedir(), '.agents/skills'), source: 'global' },
   { dir: join(homedir(), '.claude/skills'), source: 'global' },

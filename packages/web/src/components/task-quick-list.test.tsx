@@ -124,6 +124,22 @@ describe('TaskQuickList', () => {
     expect(row('plain')?.textContent).not.toContain('—')
   })
 
+  it('flags a repointed-worktree diff so the sidebar number explains itself (#751)', () => {
+    renderList({
+      runs: [
+        run({ id: 'review', title: 'Review PR 694', status: 'review', diffStat: { adds: 1, dels: 0, files: 1, repointed: true } }),
+        run({ id: 'own', title: 'Own work', status: 'review', diffStat: { adds: 42, dels: 7, files: 3 } }),
+      ],
+    })
+
+    const narrowed = row('review')?.querySelector('[data-slot="diff-stat"]')
+    expect(narrowed?.textContent).toBe('+1 −0')
+    expect(narrowed?.getAttribute('data-repointed')).toBe('true')
+    expect(narrowed?.getAttribute('title')).toContain('as this task found it')
+    // A task working on its own branch is untouched by the annotation.
+    expect(row('own')?.querySelector('[data-slot="diff-stat"]')?.getAttribute('data-repointed')).toBeNull()
+  })
+
   it('marks the row for the open task active, from the route', () => {
     const runs = [run({ id: 'open', title: 'Open one' }), run({ id: 'other', title: 'Other one' })]
     renderList({ runs, currentRunId: 'open' }, '/tasks/open')
@@ -209,11 +225,138 @@ describe('TaskQuickList', () => {
       expect(chip.parentElement?.getAttribute('data-slot')).toBe('task-row')
     })
 
-    it('takes the age slot', () => {
+    it('leads the row and takes the age slot, spelling the number rather than the word "PR" (#788)', () => {
       renderList({
         runs: [run({ id: 'x', title: 'Has a PR', status: 'review', pullRequestUrl: 'https://github.com/o/r/pull/7' })],
       })
-      expect(rowsIn('Needs you')).toEqual(['Has a PRPR'])
+      // Chip first, then the name: the number is the row's leading identifier, and the age it
+      // displaces was the weaker of the two signals.
+      expect(rowsIn('Needs you')).toEqual(['#7Has a PR'])
+    })
+
+    it('carries the issue when no PR exists yet — the number the title prefix was about', () => {
+      renderList({
+        runs: [
+          run({
+            id: 'iss',
+            title: '788: implementing readable task names',
+            status: 'running',
+            referencedIssueUrl: 'https://github.com/o/r/issues/788',
+          }),
+        ],
+      })
+      const chip = within(row('iss') as HTMLElement).getByRole('link', {
+        name: 'Open the issue for 788: implementing readable task names',
+      })
+      expect(chip.getAttribute('href')).toBe('https://github.com/o/r/issues/788')
+      // `#788`, not `Issue #788`: in this column the word costs six glyphs the name needs.
+      expect(chip.textContent).toBe('#788')
+    })
+
+    it('still paints a number it cannot link — an inert chip beats losing the reference', () => {
+      // A record that knows its PR number but has no URL (or a non-http one, #431). The title's
+      // prefix is dropped in favour of the chip, so the chip has to exist or the number is gone.
+      renderList({ runs: [run({ id: 'noturl', title: '402: no url for this one', prNumber: 402 })] })
+      const chip = document.querySelector('[data-run-id="noturl"] [data-slot="pr-chip"]') as HTMLElement
+      expect(chip.tagName).toBe('SPAN')
+      expect(chip.textContent).toBe('#402')
+    })
+  })
+
+  describe('the title vs. its metadata (#788, option C)', () => {
+    it('drops the NNN: prefix the chip is already showing, and keeps the full title on hover', () => {
+      renderList({
+        runs: [
+          run({
+            id: 'dedup',
+            title: '775: implementing comment threads',
+            status: 'review',
+            pullRequestUrl: 'https://github.com/o/r/pull/775',
+          }),
+        ],
+      })
+
+      const title = document.querySelector('[data-run-id="dedup"] [data-slot="task-row-title"]')
+      expect(title?.textContent).toBe('implementing comment threads')
+      // Nothing is lost: the number is a chip, and the stored title is still the row's tooltip.
+      expect(document.querySelector('[data-run-id="dedup"] [data-slot="pr-chip"]')?.textContent).toBe('#775')
+      expect(
+        document.querySelector('[data-run-id="dedup"] a[href="/tasks/dedup"]')?.getAttribute('title')
+      ).toBe('775: implementing comment threads')
+    })
+
+    it('keeps the prefix when it is a DIFFERENT number from the chip — two facts, not one', () => {
+      // Opened on issue #788, shipped as PR #790. Stripping `788: ` here would delete the only
+      // place the issue number appears.
+      renderList({
+        runs: [
+          run({
+            id: 'two',
+            title: '788: implementing readable task names',
+            status: 'review',
+            pullRequestUrl: 'https://github.com/o/r/pull/790',
+            referencedIssueUrl: 'https://github.com/o/r/issues/788',
+          }),
+        ],
+      })
+      expect(document.querySelector('[data-run-id="two"] [data-slot="task-row-title"]')?.textContent).toBe(
+        '788: implementing readable task names'
+      )
+      expect(document.querySelector('[data-run-id="two"] [data-slot="pr-chip"]')?.textContent).toBe('#790')
+    })
+
+    it('keeps a leading number that is not a reference at all', () => {
+      renderList({ runs: [run({ id: 'year', title: '2026: the year in review' })] })
+      expect(document.querySelector('[data-run-id="year"] [data-slot="task-row-title"]')?.textContent).toBe(
+        '2026: the year in review'
+      )
+    })
+
+    it('gives the title a floor and makes the diff pair the element that drops', () => {
+      // The worst case from the issue: a title competing with a 5-digit diff pair, a PR chip and
+      // the unread dot all at once. The title must still be the growing element with a floor,
+      // and the diff pair must be the one carrying the container query that drops it.
+      renderList({
+        runs: [
+          run({
+            id: 'worst',
+            title: '775: implementing comment threads across the whole thread view',
+            status: 'done',
+            finishedAt: ago(60_000),
+            diffStat: { adds: 59_514, dels: 12_160, files: 208 },
+            pullRequestUrl: 'https://github.com/o/r/pull/775',
+          }),
+        ],
+      })
+
+      const rowEl = row('worst') as HTMLElement
+      const title = rowEl.querySelector('[data-slot="task-row-title"]') as HTMLElement
+      expect(title.className).toContain('min-w-[7rem]')
+      expect(title.className).toContain('flex-1')
+      expect(title.textContent).toBe('implementing comment threads across the whole thread view')
+
+      const diff = rowEl.querySelector('[data-slot="diff-stat"]') as HTMLElement
+      // Hidden by default at the 264px column, back once the column is dragged past 23rem —
+      // the width at which the pair fits without costing the name any of its default budget.
+      expect(diff.className).toContain('hidden')
+      expect(diff.className).toContain('@min-[23rem]/sidebar:inline')
+      // Dropped from view, never from reach — the exact numbers stay in its tooltip.
+      expect(diff.getAttribute('title')).toBe('+59514 −12160 across 208 files')
+
+      // Everything the row paints, in reading order: reference, name, diff, unread marker. No
+      // age — the reference took that slot.
+      expect(rowsIn('Recent')).toEqual(['#775implementing comment threads across the whole thread view+59514 −12160'])
+    })
+
+    it('gives the collapsed variant tile the same floor', () => {
+      renderList({
+        runs: [
+          run({ id: 'ga', title: 'Add skills autocomplete (A)', groupId: 'g', variant: 'A' }),
+          run({ id: 'gb', title: 'Add skills autocomplete (B)', groupId: 'g', variant: 'B' }),
+        ],
+      })
+      const tileTitle = document.querySelector('[data-slot="group-tile"] span') as HTMLElement
+      expect(tileTitle.className).toContain('min-w-[7rem]')
     })
   })
 
@@ -244,6 +387,39 @@ describe('TaskQuickList', () => {
       })
       expect(row('q1')?.textContent).toBe('First#1')
       expect(row('q2')?.textContent).toBe('Second#2')
+    })
+
+    it('keeps the queue position even when the row has a reference chip', () => {
+      // The chip takes the AGE's slot, never the queue position's: `#1` is where the engine will
+      // pick this run up, it is carried nowhere else in the row, and an issue-driven queued run —
+      // an issue reference, no PR yet — is exactly the shape that would have silently lost it.
+      renderList({
+        runs: [
+          run({
+            id: 'qref',
+            title: '788: queued on an issue',
+            status: 'queued',
+            createdAt: ago(120_000),
+            referencedIssueUrl: 'https://github.com/o/r/issues/788',
+          }),
+        ],
+      })
+      expect(row('qref')?.textContent).toBe('#788queued on an issue#1')
+    })
+
+    it('still drops the age for a referenced row that is not queued', () => {
+      renderList({
+        runs: [
+          run({
+            id: 'aged',
+            title: 'Finished with a PR',
+            status: 'done',
+            finishedAt: ago(2 * 3_600_000),
+            pullRequestUrl: 'https://github.com/o/r/pull/9',
+          }),
+        ],
+      })
+      expect(row('aged')?.textContent).toBe('#9Finished with a PR')
     })
   })
 

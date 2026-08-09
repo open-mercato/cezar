@@ -56,6 +56,20 @@ export type AskOption = z.infer<typeof askOptionSchema>;
 export type AskQuestion = z.infer<typeof askQuestionSchema>;
 export type AskRequest = z.infer<typeof askRequestSchema>;
 
+export interface AskParseIssue {
+  code: string;
+  path: PropertyKey[];
+  message: string;
+}
+
+/** The diagnostic parse result used at turn-end. The compatibility wrapper
+ * below deliberately keeps returning `AskRequest | null`. */
+export type AskMarkerParseResult =
+  | { kind: 'none' }
+  | { kind: 'invalid-json'; message: string }
+  | { kind: 'invalid-structure'; issues: AskParseIssue[] }
+  | { kind: 'valid'; request: AskRequest; normalized: boolean };
+
 /**
  * Parse a value into a validated `AskRequest`, or `null` when it does not match
  * (bad counts, over-length header, non-unique labels/questions, extra keys).
@@ -76,22 +90,105 @@ export function parseAskRequest(value: unknown): AskRequest | null {
  */
 export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
 
+/** Looser than `ASK_MARKER_RE` so diagnostics can distinguish a malformed
+ * trailing marker from ordinary assistant prose. */
+const ASK_MARKER_CANDIDATE_RE = /CEZ:ASK[ \t]+([\s\S]*)$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 /**
- * Extract and validate a trailing `CEZ:ASK <json>` marker from assembled turn
- * text. Returns the validated `AskRequest`, or `null` when there is no marker or
- * its payload is not valid JSON / fails the schema (caller degrades to plain
- * text — the prose fallback is never made worse).
+ * Recover only presentation drift that cannot change the user's available
+ * choices. Unknown keys are discarded, and the display-only header and option
+ * description are clipped to their documented bounds. Counts, required text,
+ * types, and uniqueness remain schema-enforced; questions/options are never
+ * dropped to manufacture validity.
  */
-export function parseAskMarker(turnText: string): AskRequest | null {
-  const match = ASK_MARKER_RE.exec(turnText.trimEnd());
-  if (!match || match[1] === undefined) return null;
+function normalizeAskRequest(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const request: Record<string, unknown> = {};
+  if (!hasOwn(value, 'questions')) return request;
+  request.questions = Array.isArray(value.questions)
+    ? value.questions.map((question) => {
+        if (!isRecord(question)) return question;
+        const normalized: Record<string, unknown> = {};
+        for (const key of ['id', 'question', 'multiSelect'] as const) {
+          if (hasOwn(question, key)) normalized[key] = question[key];
+        }
+        if (hasOwn(question, 'header')) {
+          normalized.header =
+            typeof question.header === 'string' ? question.header.slice(0, 12) : question.header;
+        }
+        if (hasOwn(question, 'options')) {
+          normalized.options = Array.isArray(question.options)
+            ? question.options.map((option) => {
+                if (!isRecord(option)) return option;
+                const next: Record<string, unknown> = {};
+                if (hasOwn(option, 'label')) next.label = option.label;
+                if (hasOwn(option, 'description')) {
+                  next.description =
+                    typeof option.description === 'string'
+                      ? option.description.slice(0, 280)
+                      : option.description;
+                }
+                return next;
+              })
+            : question.options;
+        }
+        return normalized;
+      })
+    : value.questions;
+  return request;
+}
+
+function issuesOf(error: z.ZodError): AskParseIssue[] {
+  return error.issues.map((issue) => ({
+    code: issue.code,
+    path: issue.path,
+    message: issue.message,
+  }));
+}
+
+/**
+ * Parse a trailing marker with an actionable result for diagnostics. A
+ * parseable near-valid request gets one bounded normalization pass; structural
+ * violations remain rejected so the raw fallback stays readable.
+ */
+export function parseAskMarkerResult(turnText: string): AskMarkerParseResult {
+  const match = ASK_MARKER_CANDIDATE_RE.exec(turnText.trimEnd());
+  if (!match || match[1] === undefined) return { kind: 'none' };
   let raw: unknown;
   try {
     raw = JSON.parse(match[1]);
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      kind: 'invalid-json',
+      message: error instanceof Error ? error.message : 'invalid JSON',
+    };
   }
-  return parseAskRequest(raw);
+
+  const strict = askRequestSchema.safeParse(raw);
+  if (strict.success) return { kind: 'valid', request: strict.data, normalized: false };
+
+  const normalized = askRequestSchema.safeParse(normalizeAskRequest(raw));
+  if (normalized.success) return { kind: 'valid', request: normalized.data, normalized: true };
+  return { kind: 'invalid-structure', issues: issuesOf(normalized.error) };
+}
+
+/**
+ * Extract and validate a trailing `CEZ:ASK <json>` marker from assembled turn
+ * text. Returns a strict or safely normalized `AskRequest`, or `null` when
+ * there is no marker or its payload remains invalid (caller degrades to plain
+ * text — the prose fallback is never made worse).
+ */
+export function parseAskMarker(turnText: string): AskRequest | null {
+  const parsed = parseAskMarkerResult(turnText);
+  return parsed.kind === 'valid' ? parsed.request : null;
 }
 
 /**

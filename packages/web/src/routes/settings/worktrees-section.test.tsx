@@ -29,6 +29,7 @@ function serve(config: Partial<ConfigResponse> = {}) {
     defaultRunner: 'claude',
     systemPrompt: null,
     defaultModels: {},
+    modelsLocked: false,
     maxParallel: 2,
     memoryLimitMb: null,
     worktreeRetention: 10,
