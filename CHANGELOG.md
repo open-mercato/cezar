@@ -53,6 +53,12 @@ limit, the project General settings page) stay on `main` for the next minor.
   freshest base *and* at the branch the run found, so a review or QA run that repoints its
   worktree onto the branch under review no longer attributes that whole branch's history to the
   task. (#782)
+- 🐛 **A task about another repository no longer links its issue into the project you are viewing.**
+  A run whose subject lives elsewhere — an `om-auto-fix-pr` started in one project for a PR in
+  another — picked up that repository's issue number from its own transcript, and the header chip
+  rebuilt it against the project on screen: `Issue #4143` pointed at `…/cezar/issues/4143`, an
+  issue that does not exist. The chip is now omitted when the number demonstrably belongs to
+  another repository; a wrong link is worse than none. The PR chip was always correct. (#819)
 - 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Which sidebar
   project groups are collapsed, and which page a bare `/` restores, were stored workspace-wide in
   `~/.cezar/ui-state.json` — so every open cockpit shared one answer: the last client to navigate
