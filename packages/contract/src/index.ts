@@ -4,6 +4,7 @@
  */
 export * from './events.ts';
 export * from './health.ts';
+export * from './agent.ts';
 export * from './runs.ts';
 export * from './repo.ts';
 export * from './github.ts';

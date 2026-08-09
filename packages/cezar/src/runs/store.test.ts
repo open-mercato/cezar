@@ -35,10 +35,12 @@ describe('RunStore — directional usage persistence', () => {
       title: 'metered task',
       workflow: 'quick-task',
       task: 'metered task',
+      reasoningEffort: 'high',
       steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
     });
     store.updateStep(run.id, 'task', {
       iterations: 1,
+      reasoningEffort: 'medium',
       inputTokens: 120,
       outputTokens: 30,
       usageInvocationsStarted: 1,
@@ -47,11 +49,11 @@ describe('RunStore — directional usage persistence', () => {
       usageTurnsRecorded: 1,
       usageInvocationEpoch: 1,
     });
-    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30, reasoningEffort: 'high' });
     store.flush();
 
     const reopened = RunStore.open(dataDir).getRun(run.id);
-    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30, reasoningEffort: 'high' });
     expect(reopened?.steps[0]).toMatchObject({
       inputTokens: 120,
       outputTokens: 30,
@@ -60,6 +62,7 @@ describe('RunStore — directional usage persistence', () => {
       usageTurnsStarted: 1,
       usageTurnsRecorded: 1,
       usageInvocationEpoch: 1,
+      reasoningEffort: 'medium',
     });
   });
 
@@ -156,6 +159,7 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(run?.titleSummary).toBeUndefined();
     expect(run?.diffStat).toBeUndefined();
     expect(run?.generateFollowups).toBeUndefined();
+    expect(run?.reasoningEffort).toBeUndefined();
     // Retention field (#483) is additive: a record without it parses and reads undefined.
     expect(run?.worktreeReclaimedAt).toBeUndefined();
   });
