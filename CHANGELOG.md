@@ -135,6 +135,15 @@
   is now anchored at HEAD so it counts only the task's own changes, and the Changes tab says so when
   a repointed HEAD has narrowed what it shows.
 
+## 👥 Contributors
+
+- @pkarw
+- @pat-lewczuk
+- @patzick
+- @andrzejewsky
+- @sheeerth
+- @wojciechszyjka
+
 # 0.9.1 (2026-07-24)
 
 ## Highlights
