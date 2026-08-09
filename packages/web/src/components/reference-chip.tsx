@@ -1,6 +1,17 @@
 import { ArrowUpRightIcon } from 'lucide-react'
 
+import { GithubIcon } from '@/components/icons'
 import { cn, isHttpUrl } from '@/lib/utils'
+
+/** A github.com link earns the mark; other forges stay neutral until they have their own. */
+function isGithub(url: string | undefined): boolean {
+  if (!url) return false
+  try {
+    return new URL(url).hostname.endsWith('github.com')
+  } catch {
+    return false
+  }
+}
 
 /** A task's out-of-app tracker link. The record carries no open/closed state, so PR and issue
  * references deliberately share one neutral treatment. */
@@ -29,11 +40,14 @@ export function ReferenceChip({
     className,
   )
   const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
+  // The forge mark, so the chip reads as "this opens on GitHub" at a glance (compact rows skip it).
+  const mark = !compact && isGithub(url) ? <GithubIcon className="size-3" aria-hidden="true" /> : null
 
   // href protocol guard (#431): a transcript-scraped non-http URL degrades to inert text.
   if (!url || !isHttpUrl(url)) {
     return (
       <span data-slot={kind === 'PR' ? 'pr-chip' : 'issue-chip'} className={chipClass}>
+        {mark}
         {label}
       </span>
     )
@@ -48,6 +62,7 @@ export function ReferenceChip({
       aria-label={`Open the ${kind === 'PR' ? 'pull request' : 'issue'} for ${taskTitle}`}
       className={cn(chipClass, 'hover:bg-violet/10')}
     >
+      {mark}
       {label}
       <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />
     </a>

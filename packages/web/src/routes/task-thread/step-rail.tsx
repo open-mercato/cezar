@@ -86,8 +86,14 @@ export function StepRail({ steps }: { steps: StepState[] }) {
               ×{step.iterations}
             </span>
           ) : null}
-          <span className="ml-auto shrink-0 pl-2 text-[11.5px] text-soft-foreground tabular-nums">
-            {step.kind} · step {index + 1} of {steps.length}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-[11.5px] text-soft-foreground">
+            {/* Kind as a subtle tag, not a dot-joined word — no middot separators (house rule). */}
+            <span className="rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium tracking-wide uppercase">
+              {step.kind}
+            </span>
+            <span className="tabular-nums">
+              step {index + 1} of {steps.length}
+            </span>
           </span>
         </div>
       ))}

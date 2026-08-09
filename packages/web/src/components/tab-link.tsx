@@ -27,7 +27,7 @@ export function TabLink({
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
       className={cn(
-        '-mb-px flex h-8 items-center rounded-t-md border-b-2 px-3 text-[13px] font-medium',
+        '-mb-px flex h-8 items-center gap-1.5 rounded-t-md border-b-2 px-3 text-[13px] font-medium',
         active
           ? 'border-foreground font-semibold text-foreground'
           : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground',

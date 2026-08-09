@@ -76,8 +76,11 @@ describe('StepRail', () => {
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
     expect(rows[0]!.textContent).toContain('Do the task')
-    expect(rows[0]!.textContent).toContain('agent · step 1 of 3')
-    expect(rows[1]!.textContent).toContain('check · step 2 of 3')
+    // Kind is a tag now, not dot-joined to the position — no middot (house rule).
+    expect(rows[0]!.textContent).toContain('agent')
+    expect(rows[0]!.textContent).toContain('step 1 of 3')
+    expect(rows[1]!.textContent).toContain('check')
+    expect(rows[1]!.textContent).toContain('step 2 of 3')
     // The amber spinner announces itself; done/pending rows carry no live status.
     expect(screen.getAllByRole('status', { name: 'Step running' })).toHaveLength(1)
   })
@@ -179,7 +182,8 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     fireEvent.click(screen.getByRole('button'))
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
-    expect(rows[1]!.textContent).toContain('check · step 2 of 3')
+    expect(rows[1]!.textContent).toContain('check')
+    expect(rows[1]!.textContent).toContain('step 2 of 3')
   })
 
   it('remembers an explicit expand per run across remounts — a tab switch must not collapse it', () => {

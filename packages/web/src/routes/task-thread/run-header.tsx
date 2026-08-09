@@ -7,8 +7,12 @@ import {
   CircleStopIcon,
   CopyIcon,
   EllipsisVerticalIcon,
+  FileDiffIcon,
+  FilesIcon,
   FileTextIcon,
+  GitCommitHorizontalIcon,
   MailIcon,
+  MessageSquareTextIcon,
   PencilIcon,
   PlayIcon,
   SquareTerminalIcon,
@@ -121,7 +125,7 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
+      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-5 pb-2 backdrop-blur md:px-6"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
@@ -151,15 +155,19 @@ export function RunHeader({
 
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
+            <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
             Session
           </TabLink>
           <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
+            <FileDiffIcon aria-hidden="true" className="size-3.5" />
             Changes
           </TabLink>
           <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
+            <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5" />
             Commits
           </TabLink>
           <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
+            <FilesIcon aria-hidden="true" className="size-3.5" />
             Files
           </TabLink>
 
@@ -442,7 +450,15 @@ function MetaRow({
   const repoBase = useProjectRepoBase()
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
-  const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
+  const parts: ReactNode[] = [
+    <span
+      key="workflow"
+      data-slot="workflow-chip"
+      className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+    >
+      {workflowLabel(run)}
+    </span>,
+  ]
   if (run.branch) {
     parts.push(
       <span
@@ -478,7 +494,16 @@ function MetaRow({
       />,
     )
   }
-  if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
+  if (run.diffStat)
+    parts.push(
+      // A chip like its neighbours (the +/− colours stay) so it belongs to the row instead of
+      // floating past the last chip.
+      <DiffStatLabel
+        key="diff"
+        stat={run.diffStat}
+        className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px]"
+      />,
+    )
   if (run.automation) {
     parts.push(
       <Link
@@ -514,26 +539,13 @@ function MetaRow({
       data-slot="run-meta"
       className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
     >
+      {/* Chips, spaced by the row gap — no middot separators (house rule). */}
       {parts.map((part, index) => (
-        <Fragment key={index}>
-          {index > 0 ? (
-            <span className="text-soft-foreground" aria-hidden="true">
-              ·
-            </span>
-          ) : null}
-          {part}
-        </Fragment>
+        <Fragment key={index}>{part}</Fragment>
       ))}
-      <span className="ml-auto flex shrink-0 items-center gap-1.5">
+      <span className="ml-auto flex shrink-0 items-center gap-2">
         {usage.map((part, index) => (
-          <Fragment key={index}>
-            {index > 0 ? (
-              <span className="text-soft-foreground" aria-hidden="true">
-                ·
-              </span>
-            ) : null}
-            {part}
-          </Fragment>
+          <Fragment key={index}>{part}</Fragment>
         ))}
         <AgentBadge run={run} />
       </span>
