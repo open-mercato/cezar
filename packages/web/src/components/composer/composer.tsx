@@ -103,7 +103,25 @@ export interface ComposerHandle {
   insertAtCaret: (snippet: string) => void
 }
 
-const QUICK_REPLIES: Record<string, string> = { KeyA: 'Yes, approved.', KeyC: 'Continue.' }
+// Alt+A → approve, Alt+C → continue. Each entry pins the BARE Latin letter the physical key must
+// have produced: the chord fires only when the keystroke actually yielded that letter (`event.key`
+// still 'a'/'c'), never a character composed off it. On a Polish (and many other) layout, AltGr
+// (right Alt) + a/c types ą/ć — that must reach the draft as text, not be swallowed as a canned
+// reply. Windows AltGr also sets ctrlKey and Linux AltGr sets the standardized AltGraph modifier
+// (both guarded below); neither guard costs the plain left-Alt chord anything, since that leaves
+// the letter bare with no AltGraph.
+//
+// Deliberate macOS trade-off (chosen over a mac-specific rebind): macOS has no separate AltGr —
+// the single Option key IS the compose modifier and composes on the plain US layout too (Option+A
+// = å, Option+C = ç), so `event.key` is never the bare letter and these chords are INACTIVE on
+// macOS. That is intentional: the same physical Option+a/Option+c a macOS user presses to TYPE
+// ą/ć is indistinguishable from the chord, so no key/code predicate can separate the two intents —
+// and silently sending a canned reply mid-word is the worse failure. The quick replies are a
+// Linux/Windows convenience; the send button and Enter stay the portable path on every platform.
+const QUICK_REPLIES: Record<string, { letter: string; reply: string }> = {
+  KeyA: { letter: 'a', reply: 'Yes, approved.' },
+  KeyC: { letter: 'c', reply: 'Continue.' },
+}
 
 export function Composer({
   onSubmit,
@@ -391,11 +409,15 @@ export function Composer({
     if (!quickReplies || disabled) return
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!event.altKey || event.metaKey || event.ctrlKey || event.repeat) return
-      const reply = QUICK_REPLIES[event.code]
-      if (reply === undefined) return
+      // AltGr composes text on many layouts — never treat it as the plain-Alt chord.
+      if (event.getModifierState?.('AltGraph')) return
+      const match = QUICK_REPLIES[event.code]
+      // Only when Alt left the letter bare: a composed diacritic (ą/ć off AltGr+a/c) has
+      // `event.key` === 'ą'/'ć', so it falls through to the textarea as typed text.
+      if (match === undefined || event.key.toLowerCase() !== match.letter) return
       event.preventDefault()
       // Canned replies bypass the draft entirely — nothing to restore on failure.
-      void send(reply, [], false)
+      void send(match.reply, [], false)
     }
     window.addEventListener('keydown', onWindowKeyDown)
     return () => window.removeEventListener('keydown', onWindowKeyDown)

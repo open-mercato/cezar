@@ -418,7 +418,7 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
       .mockResolvedValue(undefined)
     const { textarea } = renderComposer({ quickReplies: true, onSubmit })
     type(textarea, 'draft in progress')
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [])
     expect(textarea.value).toBe('draft in progress')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
@@ -430,20 +430,45 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     await waitFor(() =>
       expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(false),
     )
-    fireEvent.keyDown(window, { code: 'KeyC', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyC', key: 'c', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Continue.', [])
   })
 
   it('does nothing without the flag, with other modifiers, or while disabled', () => {
     const { onSubmit } = renderComposer({ quickReplies: true, disabled: true })
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true, ctrlKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true, ctrlKey: true })
     expect(onSubmit).not.toHaveBeenCalled()
     cleanup()
 
     const second = renderComposer() // no quickReplies flag
-    fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true })
     expect(second.onSubmit).not.toHaveBeenCalled()
+  })
+
+  // Regression: a keystroke that produced a COMPOSED character (not the bare letter) is text,
+  // never the chord — this is what keeps Polish "wywołać"/"są" out of Continue/approve, and it is
+  // also why the chord is inactive on macOS, where Option composes on the US layout too.
+  it('does NOT fire on composed characters — ć/ą (AltGr) or å/ç (macOS Option) are text', () => {
+    const { onSubmit } = renderComposer({ quickReplies: true })
+    // Linux/macOS AltGr/Option set altKey without ctrlKey; the composed char is in `event.key`.
+    fireEvent.keyDown(window, { code: 'KeyC', key: 'ć', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'ą', altKey: true })
+    // macOS has no bare-letter Alt chord (documented trade-off in composer.tsx): Option composes
+    // on the plain US layout, so these never carry the bare letter and never fire.
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'å', altKey: true })
+    fireEvent.keyDown(window, { code: 'KeyC', key: 'ç', altKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  // The AltGraph guard is load-bearing on its own: even where a layout leaves the letter BARE
+  // ('a'/'c') while AltGr is held, the standardized AltGraph modifier marks it as compose input,
+  // so the chord must stay silent. Without this guard the letter check alone would let it through.
+  it('does NOT fire when AltGraph is held even if the letter is bare', () => {
+    const { onSubmit } = renderComposer({ quickReplies: true })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a', altKey: true, modifierAltGraph: true })
+    fireEvent.keyDown(window, { code: 'KeyC', key: 'c', altKey: true, modifierAltGraph: true })
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })
 
