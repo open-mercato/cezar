@@ -13,3 +13,14 @@ export function GithubIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+/** Claude's radial burst (Anthropic mark), same 24×24 / currentColor contract as the others so it
+ *  sizes and themes like a lucide glyph. Ten rounded spokes — a recognisable stand-in for the
+ *  brand mark lucide does not ship. */
+export function ClaudeIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M12 2.2c.35 0 .64.28.66.63l.28 4.02 2.2-3.38c.19-.3.58-.38.87-.19.28.19.36.57.19.86l-2.02 3.5 3.5-2.02c.3-.17.68-.09.87.19.19.29.11.68-.19.87l-3.38 2.2 4.02.28c.35.02.63.31.63.66s-.28.64-.63.66l-4.02.28 3.38 2.2c.3.19.38.58.19.87-.19.28-.57.36-.86.19l-3.5-2.02 2.02 3.5c.17.3.09.68-.19.87-.29.19-.68.11-.87-.19l-2.2-3.38-.28 4.02c-.02.35-.31.63-.66.63s-.64-.28-.66-.63l-.28-4.02-2.2 3.38c-.19.3-.58.38-.87.19-.28-.19-.36-.57-.19-.86l2.02-3.5-3.5 2.02c-.3.17-.68.09-.86-.19-.19-.29-.11-.68.19-.87l3.38-2.2-4.02-.28A.66.66 0 0 1 2.2 12c0-.35.28-.64.63-.66l4.02-.28-3.38-2.2c-.3-.19-.38-.58-.19-.87.18-.28.56-.36.86-.19l3.5 2.02-2.02-3.5c-.17-.29-.09-.67.19-.86.29-.19.68-.11.87.19l2.2 3.38.28-4.02c.02-.35.31-.63.66-.63z" />
+    </svg>
+  )
+}

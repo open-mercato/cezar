@@ -37,8 +37,9 @@ import {
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { ClaudeIcon } from '@/components/icons'
+import { StatusDot } from '@/components/status-dot'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
-import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { TabLink } from '@/components/tab-link'
 import {
@@ -131,25 +132,22 @@ export function RunHeader({
         <div className="flex min-w-0 items-center gap-2">
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
-            {planTally ? (
-              // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
-              // the run header").
-              <span data-slot="plan-mirror" className="text-[11px] text-soft-foreground tabular-nums">
-                Plan {planTally.done}/{planTally.total}
-              </span>
-            ) : null}
-            <Pill dot={attention.tone} pulse={attention.pulse}>
-              {attention.label}
-              {queuePosition !== undefined ? ` #${queuePosition}` : ''}
-            </Pill>
             <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
           </span>
         </div>
 
         <MetaRow
           run={run}
-          showTokens={metricVisibility.tokens}
-          showCost={metricVisibility.cost}
+          trailing={
+            <StatStrip
+              run={run}
+              attention={attention}
+              planTally={planTally}
+              queuePosition={queuePosition}
+              showTokens={metricVisibility.tokens}
+              showCost={metricVisibility.cost}
+            />
+          }
         />
         <MonitoringSchedule run={run} />
 
@@ -431,20 +429,138 @@ function EditableTitle({ run }: { run: ApiRun }) {
   )
 }
 
-/** workflow · branch chip · ± on the left; tokens · cost · agent icon on the right (mockup
- *  `.meta-row`, #416). Each part renders only when the record carries it — absence is absence,
- *  not a placeholder. Runner and model no longer sit in the loose dot-list (#416): they read as
- *  a status for the *active* session, so they move into the agent badge next to the token
- *  count, revealed on hover/focus rather than always-on text. */
-function MetaRow({
+/** The Claude burst for a claude run, a neutral bot otherwise — the runner's face in the Agent
+ *  stat. */
+function RunnerIcon({ runner, className }: { runner: ApiRun['runner']; className?: string }) {
+  return runner === 'claude' ? (
+    <ClaudeIcon className={className} aria-hidden="true" />
+  ) : (
+    <BotIcon className={className} aria-hidden="true" />
+  )
+}
+
+/** The Agent stat's value: the runner's face and name, a button that opens the runner / account /
+ *  model breakdown (spec 2026-07-29-agent-profiles, #416). The account only ever had a home here,
+ *  so the click-through keeps it reachable while the strip stays to the mockup's icon + name. */
+function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['runner']> }) {
+  const profiles = useAgentProfiles()
+  const model = run.model ?? 'auto'
+  // The account is read from the STEP that actually spawned (see the agent-profiles spec): a
+  // resumed run reattaches to the session's account, whatever the composer override said.
+  const accountId = [...run.steps].reverse().find((step) => step.profileId)?.profileId
+  const account =
+    accountId === undefined
+      ? undefined
+      : accountId === DEFAULT_AGENT_ACCOUNT_ID
+        ? 'default'
+        : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="agent-badge"
+          aria-label={`Agent: ${runner}${account ? `, account ${account}` : ''}, model ${model}`}
+          className="flex items-center gap-1.5 rounded-sm text-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <RunnerIcon runner={runner} className="size-4 shrink-0" />
+          {runner}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[9rem]">
+        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+          runner: {runner}
+        </DropdownMenuLabel>
+        {account ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-account"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            account: {account}
+          </DropdownMenuLabel>
+        ) : null}
+        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+          model: {model}
+        </DropdownMenuLabel>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** One labelled figure in the run's stat strip — a small-caps label over its value. The strip
+ *  replaces the old loose dot-list (Plan mirror, status pill, cost, agent) with one aligned row,
+ *  hairline-separated, never middot-joined. */
+function StatTile({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div data-slot="stat-tile" className="flex flex-col items-center gap-1 px-4 text-center">
+      <span className="text-[10px] font-medium tracking-wide text-soft-foreground uppercase">{label}</span>
+      <span className="flex items-center gap-1.5 text-[13px] leading-none font-medium whitespace-nowrap text-foreground">
+        {children}
+      </span>
+    </div>
+  )
+}
+
+/** The run's headline figures as a labelled, hairline-separated strip (the mockup's meta row):
+ *  Plan · Status · Tokens · Cost · Agent · Mode, each present only when the record carries it. */
+function StatStrip({
   run,
+  attention,
+  planTally,
+  queuePosition,
   showTokens,
   showCost,
 }: {
   run: ApiRun
+  attention: ReturnType<typeof deriveAttention>
+  planTally: { done: number; total: number } | undefined
+  queuePosition: number | undefined
   showTokens: boolean
   showCost: boolean
 }) {
+  const config = useConfig()
+  // Same resolution as the run actually executes with (input.runner ?? config.defaultRunner).
+  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
+  const model = run.model ?? 'auto'
+  return (
+    <div
+      data-slot="run-stats"
+      className="flex flex-wrap items-stretch divide-x divide-border [&>*:first-child]:pl-0"
+    >
+      {planTally ? (
+        <StatTile label="Plan">
+          <span className="tabular-nums">
+            {planTally.done}/{planTally.total}
+          </span>
+        </StatTile>
+      ) : null}
+      <StatTile label="Status">
+        <StatusDot tone={attention.tone} pulse={attention.pulse} />
+        {attention.label}
+        {queuePosition !== undefined ? ` #${queuePosition}` : ''}
+      </StatTile>
+      {showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined) ? (
+        <StatTile label="Tokens">
+          <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
+        </StatTile>
+      ) : null}
+      {showCost && run.costUsd ? (
+        <StatTile label="Cost">
+          <span className="tabular-nums">{formatCost(run.costUsd)}</span>
+        </StatTile>
+      ) : null}
+      <StatTile label="Agent">
+        <AgentStat run={run} runner={runner} />
+      </StatTile>
+      <StatTile label="Mode">{model}</StatTile>
+    </div>
+  )
+}
+
+/** workflow · branch chip · ± on the left; the labelled stat strip on the right (mockup
+ *  `.meta-row`). Each part renders only when the record carries it — absence is absence,
+ *  not a placeholder. */
+function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
@@ -516,39 +632,16 @@ function MetaRow({
     )
   }
 
-  const usage: ReactNode[] = []
-  if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
-    usage.push(
-      <DirectionalUsage
-        key="tokens"
-        inputTokens={run.inputTokens}
-        outputTokens={run.outputTokens}
-      />,
-    )
-  }
-  if (showCost && run.costUsd) {
-    usage.push(
-      <span key="cost" className="tabular-nums">
-        {formatCost(run.costUsd)}
-      </span>,
-    )
-  }
-
   return (
     <div
       data-slot="run-meta"
-      className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+      className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted-foreground"
     >
-      {/* Chips, spaced by the row gap — no middot separators (house rule). */}
+      {/* Identity chips on the left, spaced by the row gap — no middot separators (house rule). */}
       {parts.map((part, index) => (
         <Fragment key={index}>{part}</Fragment>
       ))}
-      <span className="ml-auto flex shrink-0 items-center gap-2">
-        {usage.map((part, index) => (
-          <Fragment key={index}>{part}</Fragment>
-        ))}
-        <AgentBadge run={run} />
-      </span>
+      {trailing ? <div className="ml-auto shrink-0">{trailing}</div> : null}
     </div>
   )
 }
@@ -585,79 +678,6 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
   )
 }
 
-/** The agent icon by the token counter (#416): hover/focus reveals the runner, account and model —
- *  the answer to "what am I actually running here?" — without turning them into permanent text next
- *  to the live status pill. Always rendered (a run always has an effective runner, `model`
- *  reads "auto" when the runner picks it), and reuses the same click/keyboard-accessible
- *  `DropdownMenu` as the rest of this header instead of inventing a hover-only affordance. */
-function AgentBadge({ run }: { run: ApiRun }) {
-  // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
-  // `runner` (`src/runs/store.ts`), while the run actually executes as
-  // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
-  // hardcoding 'claude' would name the wrong agent on a repo whose `defaultRunner` is
-  // codex/opencode, and "which agent produced this?" is the one question #416 exists to answer.
-  // 'claude' stays the last resort only while the active project's config is in flight.
-  // `/api/health` describes the boot project and can name the wrong runner on scoped routes.
-  const config = useConfig()
-  const profiles = useAgentProfiles()
-  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
-  const model = run.model ?? 'auto'
-  // The account is read from the STEP that actually spawned, never from the run's composer
-  // override or the project's current selection (spec 2026-07-29-agent-profiles): the override is
-  // absent whenever the run just followed the project, and the project's selection can have been
-  // changed since — both would name an account this run may never have touched. The last step that
-  // recorded one is what ran; `sessionId` and `profileId` are a pair for exactly this reason.
-  const accountId = [...run.steps].reverse().find((step) => step.profileId)?.profileId
-  const account = accountId === undefined
-    ? undefined
-    : accountId === DEFAULT_AGENT_ACCOUNT_ID
-      ? 'default'
-      // A deleted account still names the folder this run's sessions live in, so the id is shown
-      // rather than swallowed — "gone" is the useful half of that answer.
-      : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
-  const summary = [runner, account, model].filter(Boolean).join(' · ')
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-slot="agent-badge"
-          title={summary}
-          aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
-          className="flex min-w-0 shrink items-center gap-1.5 rounded-sm px-1 py-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
-          {/* READ, not just reachable. This was an icon alone, and "which agent, account and model
-              produced this?" turned out to be unanswerable without knowing to click it — the whole
-              point of the badge. #416 moved runner/model out of the loose dot-list to cut noise;
-              this puts them back as ONE quiet, truncating string rather than three chips, and the
-              menu still carries the labelled breakdown. */}
-          <span data-slot="agent-badge-summary" className="truncate font-mono text-[11px]">
-            {summary}
-          </span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[9rem]">
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          runner: {runner}
-        </DropdownMenuLabel>
-        {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
-            cannot be said to have used the discovered account — nothing wrote that down. */}
-        {account ? (
-          <DropdownMenuLabel
-            data-slot="agent-badge-account"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
-          >
-            account: {account}
-          </DropdownMenuLabel>
-        ) : null}
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          model: {model}
-        </DropdownMenuLabel>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
 
 /** The <md action surface: everything the desktop bar offers, folded into a kebab menu next to
  *  the pill (the mockup's mobile pattern — `.tabs-row .actions { display:none }` under 768px). */

@@ -702,24 +702,18 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     expect(meta.textContent).toContain('quick-task')
-    // #416 pulled runner/model out of the loose dot-list to cut noise, and that still holds — they
-    // are not separate chips beside the workflow. But an icon ALONE made "which agent, account and
-    // model produced this?" unanswerable without knowing to click it, which is the one question the
-    // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
-    // labelled breakdown.
+    // The stat strip: the Agent tile names the runner (icon + name), a button that opens the
+    // runner/account/model breakdown; the Mode tile carries the model; Tokens and Cost their own.
     const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent)
-      .toBe('codex · gpt-5.2-codex')
-    // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
-    expect(meta.textContent?.replace(badge.textContent ?? '', '')).not.toContain('codex')
+    expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+    expect(badge.textContent).toContain('codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
+    expect(meta.textContent).toContain('gpt-5.2-codex')
     expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
     expect(meta.textContent).toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
-
-    expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
   it('omits token and cost text when health disables token metrics', async () => {
@@ -836,7 +830,7 @@ describe('meta line, tabs, pill and resume hint', () => {
       ...extra,
     })
 
-    it('names the account the step recorded, by its label — visibly, not only on click', async () => {
+    it('names the account the step recorded, by its label — on the Agent tile and its menu', async () => {
       withAccounts()
       renderHeader(run('done', {
         runner: 'claude',
@@ -844,12 +838,13 @@ describe('meta line, tabs, pill and resume hint', () => {
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      // The accessible name carries the account; the menu spells it out (its only home — the strip
+      // shows runner + model, the account rides the click-through).
       const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
-      // The regression this guards: it read as a bare bot icon, so the answer was there but nobody
-      // could find it without knowing to open a menu.
-      await waitFor(() => expect(
-        badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent,
-      ).toBe('claude · Klaudiusz · opus'))
+      fireEvent.pointerDown(badge)
+      const menu = within(await screen.findByRole('menu'))
+      expect(menu.getByText('account: Klaudiusz')).not.toBeNull()
+      expect(menu.getByText('model: opus')).not.toBeNull()
     })
 
     it('prefers what RAN over what the composer asked for', async () => {
@@ -891,9 +886,9 @@ describe('meta line, tabs, pill and resume hint', () => {
     renderHeader(run('done', { runner: 'claude' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
-    // Named on the badge like any other agent — claude being the default is not a reason to leave
-    // "what produced this?" unanswered.
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude · auto')
+    // Named on the Agent tile like any other agent — claude being the default is not a reason to
+    // leave "what produced this?" unanswered.
+    expect(badge.textContent).toContain('claude')
   })
 
   it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {
@@ -905,7 +900,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
 
-  it('a queued run shows its position in the pill, from the shared runs list', async () => {
+  it('a queued run shows its position in the Status stat, from the shared runs list', async () => {
     stubFetch({
       '/api/v1/runs': () =>
         jsonResponse([
@@ -915,7 +910,11 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(run('queued'))
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="pill"]')?.textContent).toBe('queued #2')
+      // The status label and queue position read together in the Status tile — the old pill's job.
+      const status = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
+        /queued/.test(tile.textContent ?? ''),
+      )
+      expect(status?.textContent).toContain('queued #2')
     })
   })
 
