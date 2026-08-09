@@ -64,7 +64,17 @@ describe('Codex model discovery', () => {
   it('validates a wire response and keeps the first visible, non-blank model in server order', async () => {
     const fake = fakeChild(fixture('model-list-success'));
     await expect(discoverCodexModels({ cwd: '/repo', spawn: () => fake.child })).resolves.toEqual([
-      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Frontier coding model' },
+      {
+        id: 'gpt-5.6-sol',
+        label: 'GPT-5.6 Sol',
+        description: 'Frontier coding model',
+        defaultReasoningEffort: 'medium',
+        reasoningEfforts: [
+          { id: 'medium', description: '' },
+          { id: 'high', description: 'Thorough reasoning' },
+          { id: 'low', description: '' },
+        ],
+      },
       { id: 'gpt-5.4-mini', label: 'gpt-5.4-mini', description: 'Fast model' },
     ]);
     expect(fake.requests).toEqual([

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import type { ModelOption } from '../core/runner-model-catalog.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -22,7 +23,7 @@ describe('workspace model catalog API', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  const app = (discover: () => Promise<Array<{ id: string; label: string; description: string }>>) =>
+  const app = (discover: () => Promise<ModelOption[]>) =>
     createApp({
       repoRoot: root,
       store,
@@ -35,14 +36,24 @@ describe('workspace model catalog API', () => {
     let calls = 0;
     const server = app(async () => {
       calls += 1;
-      return [{ id: 'gpt-future', label: 'GPT Future', description: 'Newly available' }];
+      return [{
+        id: 'gpt-future',
+        label: 'GPT Future',
+        description: 'Newly available',
+        defaultReasoningEffort: 'medium',
+        reasoningEfforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+      }];
     });
     for (let i = 0; i < 2; i += 1) {
       const response = await apiRequest(server, '/api/v1/models?runner=codex');
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
         runner: 'codex',
-        models: [{ id: 'gpt-future' }],
+        models: [{
+          id: 'gpt-future',
+          defaultReasoningEffort: 'medium',
+          reasoningEfforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+        }],
         source: i === 0 ? 'live' : 'cache',
         stale: false,
       });
