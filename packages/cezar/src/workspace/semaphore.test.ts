@@ -28,7 +28,40 @@ describe('WorkspaceSemaphore', () => {
     const sem = new WorkspaceSemaphore();
     expect(sem.maxParallel()).toBe(2);
     expect(sem.memoryLimitMb()).toBeNull();
+    expect(sem.monitoringWakeIntervalMinutes()).toBe(5); // #810 — monitoring must self-resume
     expect(sem.busy()).toBe(0);
+  });
+
+  /** #810 — the getter used to be `?? null`. Flipping the default to 5 made that a trap:
+   *  `null ?? 5` is 5, which would have silently overridden every operator who chose
+   *  "Park until resumed". Absent and null must therefore answer differently. */
+  describe('monitoringWakeIntervalMinutes: absent vs. explicit null (#810)', () => {
+    it('falls back to the shipped default only when the key is ABSENT', () => {
+      const sem = new WorkspaceSemaphore({ initial: { maxParallel: 2, monitoringWakeIntervalMinutes: undefined } });
+      expect(sem.monitoringWakeIntervalMinutes()).toBe(5);
+    });
+
+    it('preserves an explicit null (park until resumed)', () => {
+      const sem = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: null } });
+      expect(sem.monitoringWakeIntervalMinutes()).toBeNull();
+    });
+
+    it('preserves an explicit cadence', () => {
+      const sem = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 12 } });
+      expect(sem.monitoringWakeIntervalMinutes()).toBe(12);
+    });
+
+    it('a refresh that reports null parks, and one that reports a number re-arms', async () => {
+      let wake: number | null = null;
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 2, memoryLimitMb: null, monitoringWakeIntervalMinutes: wake }),
+      });
+      await sem.refresh();
+      expect(sem.monitoringWakeIntervalMinutes()).toBeNull();
+      wake = 9;
+      await sem.refresh();
+      expect(sem.monitoringWakeIntervalMinutes()).toBe(9);
+    });
   });
 
   it('honors an initial override (test seam)', () => {

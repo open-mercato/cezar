@@ -40,6 +40,12 @@ import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import {
+  AgentTempDirError,
+  agentTmpEnv,
+  removeAgentTmpDir,
+  sweepAgentTmpDirs,
+} from '../runs/agent-tmpdir.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
@@ -130,6 +136,20 @@ export function periodicAutosaveEnabled(env: NodeJS.ProcessEnv = process.env): b
   return env.CEZ_AUTOSAVE === '1';
 }
 
+/**
+ * Explicitly opt out of the repository-root lease for runs that execute in the
+ * current checkout. This covers explicit worktree opt-out, non-Git degradation,
+ * and continuations whose worktree cannot be restored (spec 006 hardening, #438).
+ * This is intentionally unsafe: concurrent agents may overwrite each other's
+ * files or Git state. Isolated worktree runs are unaffected.
+ */
+export function repositoryRootLockDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CEZ_DISABLE_REPO_LOCK === '1';
+}
+
+const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
+  'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
+
 interface ActiveRun {
   cancelled: boolean;
   interrupt: () => void;
@@ -158,7 +178,8 @@ interface ActiveRun {
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
   /** Release for exclusive execution in the user's repository working tree.
-   *  Worktree-backed runs never need it; every degradation/opt-out path does. */
+   *  Worktree-backed runs never need it; root runs ordinarily do unless the
+   *  explicit unsafe bypass is active. */
   releaseRepoRoot?: () => void;
   /** Durable directional-usage accounting state for the current runner
    * invocation. Provider-local turn ids are unique only within this epoch. */
@@ -348,6 +369,18 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
 }
 
 /**
+ * The directories a spawned agent may reach outside its worktree: the run-state
+ * folder that holds its handoff file, plus its own temp directory when this run
+ * got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed to
+ * write would trade one silent failure for another, so the two travel together;
+ * under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the list is
+ * exactly what it always was.
+ */
+export function agentDirectories(runsDir: string, env: Record<string, string>): string[] {
+  return env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+}
+
+/**
  * Materialized pasted attachment: the on-disk name/serving-URL pair the
  * transcript already used, plus the absolute path that lets the agent
  * operate on the file itself — save it, `cp` it, attach it to a GitHub
@@ -486,8 +519,9 @@ export class RunManager {
   private pumpAgain = false;
   /**
    * Runs normally isolate in worktrees and may execute in parallel. When that
-   * isolation is unavailable (or explicitly disabled), serialize access to
-   * `repoRoot` so two agents can never edit/revert the same files (#438).
+   * isolation is unavailable (or explicitly disabled), access to `repoRoot` is
+   * serialized by default so two agents cannot edit/revert the same files
+   * (#438). `CEZ_DISABLE_REPO_LOCK=1` deliberately bypasses this safety lease.
    */
   private repoRootTail: Promise<void> = Promise.resolve();
 
@@ -626,12 +660,19 @@ export class RunManager {
    *  key would let a value inherited from *this* process through — a nested
    *  cezar (an agent running `cez serve`/`cez run`/the test suite) would then
    *  write follow-ups into the parent's inbox despite the opt-out. Empty is the
-   *  established "absent" spelling — consumers guard with `if (todosFile)`. */
+   *  established "absent" spelling — consumers guard with `if (todosFile)`.
+   *
+   *  `TMPDIR`/`TEMP`/`TMP` (#785) point at this run's own scratch directory
+   *  instead of the machine-wide one every agent used to share. Created and
+   *  write-probed here, on the last common path before a spawn, so an unusable
+   *  temp directory throws `AgentTempDirError` at the caller rather than
+   *  turning into empty command output inside a running agent. */
   private agentEnv(runId: string, generateFollowups = true): Record<string, string> {
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
+      ...agentTmpEnv(this.dataDir, runId),
     };
   }
 
@@ -1026,6 +1067,10 @@ export class RunManager {
       .listRuns()
       .filter((r) => ['queued', 'waiting', 'running'].includes(r.status))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // A crash never reaches `dropActive`, so its temp directory (#785) outlived the run.
+    // Startup is the one moment we know which runs are still live, so sweep every other
+    // per-run directory here — bounded to `<dataDir>/tmp`, never a sibling.
+    sweepAgentTmpDirs(this.dataDir, live.map((r) => r.id));
     for (const run of live) {
       if (run.status === 'queued') {
         await this.reviveQueuedRun(run, 'cezar restarted');
@@ -1123,6 +1168,11 @@ export class RunManager {
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
     void this.enforceRetention();
+    // The run's temp directory (#785) goes on the same terminal transition, and
+    // unconditionally — it is scratch, not an artifact, so unlike a worktree
+    // there is no keep-count to respect and nothing left to recover from it. A
+    // Continue (or an auto-resume) re-creates it through `agentEnv`.
+    removeAgentTmpDir(this.dataDir, runId);
   }
 
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
@@ -2066,23 +2116,35 @@ export class RunManager {
     this.active.set(runId, state);
     this.starting.delete(runId);
     if (state.cwd === this.repoRoot) {
-      this.store.appendEvent(runId, {
-        type: 'note',
-        message: 'waiting for exclusive access to the repository working tree',
-      });
-      if (!(await this.acquireRepoRoot(runId, state))) {
-        this.store.updateRun(runId, {
-          status: 'cancelled',
-          finishedAt: new Date().toISOString(),
-          currentStepId: undefined,
+      if (repositoryRootLockDisabled()) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: REPOSITORY_ROOT_LOCK_DISABLED_NOTE,
         });
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
-        this.dropActive(runId);
-        return;
+      } else {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: 'waiting for exclusive access to the repository working tree',
+        });
+        if (!(await this.acquireRepoRoot(runId, state))) {
+          this.store.updateRun(runId, {
+            status: 'cancelled',
+            finishedAt: new Date().toISOString(),
+            currentStepId: undefined,
+          });
+          this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+          this.dropActive(runId);
+          return;
+        }
       }
     }
     this.armAutosave(state);
     if (record) seedHandoffFile(this.dataDir, record); // idempotent — normally already there
+    // Registry snapshot for `/skill` expansion. `execute` loads this for the workflow's own
+    // sessions; a continuation builds its OWN ActiveRun, and without this the resumed session
+    // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
+    // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
+    state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
 
     this.store.updateRun(runId, {
       status: 'running',
@@ -2235,10 +2297,32 @@ export class RunManager {
     // Backend + model come off the record: the run's current backend by default, or the
     // follow-up override that `continueRun` persisted before scheduling (#401).
     const continueBackend = backend;
+    /** Settle this turn as a failure before anything is spawned — the shape both
+     *  pre-spawn gates below need (model identity, #405; temp directory, #785). */
+    const failBeforeSpawn = (message: string): void => {
+      const failedAt = new Date().toISOString();
+      sink.sessionEnded('error', message);
+      this.store.updateStep(runId, stepId, {
+        status: 'failed',
+        error: message,
+        finishedAt: failedAt,
+      });
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error: `continue failed: ${message}`,
+        finishedAt: failedAt,
+        currentStepId: undefined,
+      });
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `continue failed — ${message}`,
+      });
+      this.dropActive(runId);
+    };
     // Apply the SAME canonical-identity gate the first spawn applies (#405, review M1).
     // A follow-up may switch both runner and model (#401), so without this the record keeps
     // asserting the identity the run STARTED with while a different model serves the turn —
-    // the exact defect this PR exists to remove — and the raw record string reaches the CLI
+    // the exact defect that PR existed to remove — and the raw record string reaches the CLI
     // in the un-normalised wire form the first step already converted away (`anthropic/opus`
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
@@ -2254,24 +2338,7 @@ export class RunManager {
       });
     } catch (err) {
       if (!(err instanceof ModelIdentityError)) throw err;
-      const failedAt = new Date().toISOString();
-      sink.sessionEnded('error', err.message);
-      this.store.updateStep(runId, stepId, {
-        status: 'failed',
-        error: err.message,
-        finishedAt: failedAt,
-      });
-      this.store.updateRun(runId, {
-        status: 'failed',
-        error: `continue failed: ${err.message}`,
-        finishedAt: failedAt,
-        currentStepId: undefined,
-      });
-      this.store.appendEvent(runId, {
-        type: 'lifecycle',
-        message: `continue failed — ${err.message}`,
-      });
-      this.dropActive(runId);
+      failBeforeSpawn(err.message);
       return;
     }
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
@@ -2280,15 +2347,30 @@ export class RunManager {
     const resumedProfileId = sessionId === undefined
       ? undefined
       : record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
-    const continueProfile = await this.agentEnvForStep(runId, continueBackend, {
-      generateFollowups,
-      recordedProfileId: resumedProfileId,
-    });
+    // The temp-directory preflight (#785) rides along with the account resolution: a resumed
+    // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
+    // returns nothing is worse than a turn that refuses to start and says why.
+    let continueProfile: { env: Record<string, string>; profileId: string };
+    try {
+      continueProfile = await this.agentEnvForStep(runId, continueBackend, {
+        generateFollowups,
+        recordedProfileId: resumedProfileId,
+      });
+    } catch (err) {
+      if (!(err instanceof AgentTempDirError)) throw err;
+      failBeforeSpawn(err.message);
+      return;
+    }
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
     const runner = createRunner(continueBackend);
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
+    // A continuation's opening message becomes the session's `userPrompt` and never passes
+    // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
+    // live path applies (#811). Delivery-only: the `user-message` event above already
+    // persisted the user's original text, and the transcript must keep showing that.
+    const openingPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -2298,11 +2380,13 @@ export class RunManager {
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
-        userPrompt: attachments.length ? `${prompt}\n\n${pastedAttachmentsText(attachments)}` : prompt,
+        userPrompt: attachments.length
+          ? `${openingPrompt}\n\n${pastedAttachmentsText(attachments)}`
+          : openingPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: DEFAULT_ALLOWED_TOOLS,
-        additionalDirectories: [join(this.dataDir, 'runs')],
+        additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
         env: continueProfile.env,
         model: continueModel,
         sessionId,
@@ -2414,7 +2498,8 @@ export class RunManager {
     const repo = await getRepoInfo(this.repoRoot);
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
-      // repository-root lease serializes these runs so workflows cannot overlap.
+      // repository-root lease serializes these runs by default; the explicit
+      // CEZ_DISABLE_REPO_LOCK=1 escape hatch allows unsafe overlap.
       // Pin the starting commit: the session's Changes and Commits views use it
       // as their stable lower bound while reading the current working copy.
       const startingCommit = await getHeadCommit(repo.root);
@@ -2482,19 +2567,28 @@ export class RunManager {
     }
 
     if (state.cwd === this.repoRoot) {
-      emit({
-        type: 'note',
-        message: 'waiting for exclusive access to the repository working tree',
-      });
-      // A cancel during the wait leaves the lease ungranted; the step loop
-      // below breaks on `cancelled` before touching the tree and settles the
-      // run through the usual path.
-      await this.acquireRepoRoot(runId, state);
+      if (repositoryRootLockDisabled()) {
+        emit({
+          type: 'note',
+          message: REPOSITORY_ROOT_LOCK_DISABLED_NOTE,
+        });
+      } else {
+        emit({
+          type: 'note',
+          message: 'waiting for exclusive access to the repository working tree',
+        });
+        // A cancel during the wait leaves the lease ungranted; the step loop
+        // below breaks on `cancelled` before touching the tree and settles the
+        // run through the usual path.
+        await this.acquireRepoRoot(runId, state);
+      }
       // THE window that matters for an in-place run. Waiting for the exclusive tree can take
       // minutes, and a run parked on that lease holds no slot (#347) — so the queue keeps
       // advancing behind it and the dequeue-time gate is long past. Measured with five in-place
       // tasks and `maxParallel: 2`: four of them started. Re-ask here, where the very next thing
-      // is a spawn, and hand the run back to the queue if the account closed meanwhile.
+      // is a spawn, and hand the run back to the queue if the account closed meanwhile. This
+      // check also covers the explicit lock-bypass path, where the account may close while the
+      // run is preparing its first step.
       if (this.requeueWhileHeld(runId, workflow, input, taskBackend, state)) return;
     }
 
@@ -2504,6 +2598,8 @@ export class RunManager {
     if (seeded) seedHandoffFile(this.dataDir, seeded);
 
     const skills = await discoverSkills(this.repoRoot);
+    // Every ActiveRun construction site must carry the registry — `runContinuation` builds
+    // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
@@ -2841,9 +2937,17 @@ export class RunManager {
     // Which agent account this step spawns under, and — recorded on the step before the spawn —
     // which one its session belongs to. `sessionId` and `profileId` are a pair: a resume that
     // reads the wrong account's config dir finds no session and silently starts a fresh one.
-    const stepProfile = await this.agentEnvForStep(runId, stepBackend, {
-      generateFollowups: followupsEnabled() && input.generateFollowups !== false,
-    });
+    // Resolved together with the temp-directory preflight (#785): the step fails with a named,
+    // actionable error instead of spawning a backend whose shell would return empty output.
+    let stepProfile: { env: Record<string, string>; profileId: string };
+    try {
+      stepProfile = await this.agentEnvForStep(runId, stepBackend, {
+        generateFollowups: followupsEnabled() && input.generateFollowups !== false,
+      });
+    } catch (err) {
+      if (err instanceof AgentTempDirError) return err.message;
+      throw err;
+    }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     const runner = createRunner(stepBackend);
@@ -2868,7 +2972,7 @@ export class RunManager {
           allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: [join(this.dataDir, 'runs')],
+          additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), stepProfile.env),
           env: stepProfile.env,
           model: backendModel,
           sessionId,
@@ -3496,13 +3600,33 @@ export function skillSystemPrompt(
 }
 
 /**
- * Expand a registry-backed slash skill in a live chat message before it reaches
- * a backend. Claude otherwise intercepts an unknown leading slash command, and
+ * Expand a registry-backed slash skill in one prompt string before it reaches a
+ * backend. Claude otherwise intercepts an unknown leading slash command, and
  * Codex/OpenCode have no native slash-skill lookup at all (#676).
  *
- * Only the first text block is eligible, only at character zero, and unknown
- * commands pass through byte-for-byte. The caller persists the original user
- * content before applying this delivery-only rewrite.
+ * Only a match at character zero counts, and unknown commands pass through
+ * byte-for-byte — a backend's OWN slash commands must keep working. The caller
+ * persists the original user text before applying this delivery-only rewrite.
+ *
+ * Both delivery seams route through here: live-session messages via
+ * `expandRegistrySlashSkill`, and a continuation's opening prompt, which becomes
+ * the session's `userPrompt` and never passes through `deliverMessage` at all
+ * (#811).
+ */
+export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[]): string {
+  const match = /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(text);
+  if (!match) return text;
+  const skill = skills.find((candidate) => candidate.name === match[1]);
+  if (!skill) return text;
+
+  const request = text.slice(match[0].length).trim();
+  return request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill);
+}
+
+/**
+ * `expandRegistrySlashSkillText` over a live chat message: only the first text
+ * block is eligible, and an unchanged block returns the caller's array
+ * identity untouched.
  */
 export function expandRegistrySlashSkill(
   content: ContentBlock[],
@@ -3512,17 +3636,10 @@ export function expandRegistrySlashSkill(
   if (textIndex < 0) return content;
   const block = content[textIndex];
   if (!block || block.type !== 'text') return content;
-  const match = /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(block.text);
-  if (!match) return content;
-  const skill = skills.find((candidate) => candidate.name === match[1]);
-  if (!skill) return content;
+  const text = expandRegistrySlashSkillText(block.text, skills);
+  if (text === block.text) return content;
 
-  const request = block.text.slice(match[0].length).trim();
-  const replacement: ContentBlock = {
-    type: 'text',
-    text: request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill),
-  };
   const expanded = [...content];
-  expanded[textIndex] = replacement;
+  expanded[textIndex] = { type: 'text', text };
   return expanded;
 }

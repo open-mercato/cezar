@@ -1009,6 +1009,18 @@ export async function markRunSeen(id: string): Promise<RunRecord> {
   )
 }
 
+/** Put a finished task back to unread (#775): the inverse of `markRunSeen`. Bodyless — the
+ *  server CLEARS `seenAt` (an absent receipt is what every reader already treats as unread)
+ *  and answers with the updated record. */
+export async function markRunUnseen(id: string): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].unread.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/unread'),
+  )
+}
+
 /** "Mark all read": stamp every currently-unread finished run in one call. */
 export async function markAllRunsSeen(): Promise<MarkAllReadResponse> {
   return unwrap(

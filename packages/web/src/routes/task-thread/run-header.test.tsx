@@ -82,12 +82,12 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
-function renderHeader(record: ApiRun) {
+function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
-          <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+          <Route path="/tasks/:id" element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} />} />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
@@ -222,6 +222,80 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     stubFetch()
     renderHeader(run('running'))
     expect(screen.getByRole('button', { name: 'Run actions' })).not.toBeNull()
+  })
+})
+
+describe('Mark unread (#775)', () => {
+  const FINISHED_AT = '2026-07-14T13:00:00.000Z'
+  const SEEN_AT = '2026-07-14T13:05:00.000Z'
+  /** A finished run that has already been read — the one state the action is offered in. */
+  const readDone = (extra: Partial<ApiRun> = {}) =>
+    run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT, ...extra })
+
+  it('offers the control for a read, finished run — next to Archive', () => {
+    stubFetch()
+    renderHeader(readDone())
+    const names = actionBar()
+      .getAllByRole('button')
+      .map((el) => el.textContent?.trim())
+    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+  })
+
+  it.each([
+    ['an already-unread run', run('done', { finishedAt: FINISHED_AT })],
+    ['an archived run', readDone({ archived: true })],
+    ['a cancelled run', run('cancelled', { finishedAt: FINISHED_AT, seenAt: SEEN_AT })],
+    ['a still-running run', run('running', { seenAt: SEEN_AT })],
+    ['a done run caught with no finishedAt', run('done', { seenAt: SEEN_AT })],
+  ] as Array<[string, ApiRun]>)('hides the control for %s', (_name, record) => {
+    stubFetch()
+    renderHeader(record)
+    expect(actionBar().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+  })
+
+  it('Mark unread → POST /unread, bodyless like its read twin', async () => {
+    const sent = stubFetch()
+    renderHeader(readDone())
+    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => {
+      const request = sent.find((r) => r.path === '/api/v1/runs/r1/unread')
+      expect(request?.method).toBe('POST')
+      expect(request?.body).toBeUndefined()
+    })
+  })
+
+  it('notifies the host BEFORE the request goes out, so the thread can suppress its auto-read', async () => {
+    // Ordering is the whole contract: the optimistic cache write re-renders the open thread and
+    // re-runs its auto-mark-read effect, which would re-stamp the receipt if it were not already
+    // suppressed by the time that happens.
+    const sent = stubFetch()
+    const onMarkedUnread = vi.fn(() => {
+      expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(false)
+    })
+    renderHeader(readDone(), onMarkedUnread)
+    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    expect(onMarkedUnread).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(true))
+  })
+
+  it('surfaces a server refusal as a danger toast and leaves the run read', async () => {
+    // The mixed-version failure mode (#769): an older server has no such route. The guarded
+    // rollback in `useMarkRunUnseen` means the cockpit says so rather than showing a marker
+    // the server does not agree with.
+    stubFetch({
+      '/api/v1/runs/r1/unread': () => jsonResponse({ error: 'not found' }, 404),
+    })
+    renderHeader(readDone())
+    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => expect(screen.getByText('not found')).not.toBeNull())
+  })
+
+  it('is in the mobile kebab too, under the same rule', async () => {
+    stubFetch()
+    renderHeader(readDone())
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.getByRole('menuitem', { name: 'Mark unread' })).not.toBeNull()
   })
 })
 

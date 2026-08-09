@@ -3526,6 +3526,14 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
+    .post('/runs/:id/unread', (c) => {
+      // The mark-unread twin (#775) — bodyless like its read counterpart: clearing the
+      // receipt is the whole action, so there is nothing to say about it. Sits under
+      // `/runs/:id/`, so the `read-all` registration-order caveat above does not apply.
+      const run = c.get('project').store.setUnread(c.req.param('id'));
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
     .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
       const { root: repoRoot, dataDir, manager } = c.get('project');
       const parsed = { data: c.req.valid('json') };

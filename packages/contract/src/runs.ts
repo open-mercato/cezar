@@ -241,7 +241,8 @@ export const runRecordSchema = z.object({
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
-   *  runs and on any run not yet opened, both of which count as unread. */
+   *  runs, on any run not yet opened, and on one deliberately put back to unread via
+   *  `POST /runs/:id/unread` (#775) — all three count as unread. */
   seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),

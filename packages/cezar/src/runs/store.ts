@@ -238,7 +238,8 @@ export const runRecordSchema = z.object({
   /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
    *  run's thread. A finished run reads as "unread" until it has been seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
-   *  runs and on every run not yet opened, which the unread rule treats as unread. */
+   *  runs, on every run not yet opened, and on one `setUnread` put back to unread
+   *  (#775) — the unread rule treats all three alike. */
   seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
@@ -681,6 +682,27 @@ export class RunStore extends EventEmitter {
     const run = this.runs.get(id);
     if (!run) return undefined;
     run.seenAt = new Date().toISOString();
+    this.touch(run);
+    return run;
+  }
+
+  /** Mark one run as UNread (#775): drop the read receipt so the run rejoins the unread
+   *  list. The inverse of `setRead` and, like it, `touch`es so the updated record rides the
+   *  existing `run` SSE.
+   *
+   *  Deleting the field rather than adding a "manually unread" flag is the whole point:
+   *  absent `seenAt` is ALREADY what every reader treats as unread (`isUnread` in the
+   *  cockpit's read-state.ts, and `markAllRead`'s clause-for-clause copy of it below), so
+   *  clearing needs no new state and writes a shape any older cezar already parses.
+   *
+   *  Deliberately unconditional: clearing a receipt is always a legal write, so this
+   *  succeeds for an already-unread run (idempotent) and for statuses that can never wear
+   *  the marker. WHETHER the action means anything for a given run is UI policy, and lives
+   *  in the cockpit's `runActionFlags` — the same split the rest of the store keeps. */
+  setUnread(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    delete run.seenAt;
     this.touch(run);
     return run;
   }

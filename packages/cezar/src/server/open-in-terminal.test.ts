@@ -1,6 +1,8 @@
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { openInTerminal, wslTerminalLaunchers } from './open-in-terminal.ts';
+import { createLaunchScript, openInTerminal, wslTerminalLaunchers } from './open-in-terminal.ts';
 
 describe('wslTerminalLaunchers (#361 WSL support)', () => {
   it('tries Windows Terminal first, re-entering the distro through wsl.exe', () => {
@@ -27,6 +29,46 @@ describe('wslTerminalLaunchers (#361 WSL support)', () => {
   it('addresses the distro the launch actually runs in, not a hardcoded default', () => {
     const [first] = wslTerminalLaunchers('/tmp/script.sh', 'Debian');
     expect(first?.[1]).toContain('Debian');
+  });
+});
+
+/**
+ * #785: this opener used to `mkdtemp` a `cez-term-*` directory per launch and never
+ * remove it. On a host whose `/tmp` is a tmpfs that never reboots, that litter is part
+ * of what exhausts the directory the agents' output capture depends on — the failure
+ * this issue is really about. Asserted on `createLaunchScript` rather than through
+ * `openInTerminal`, so the test never spawns a real terminal emulator.
+ */
+describe('launch-script cleanup (#785)', () => {
+  const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** Poll rather than sleep a fixed span: the cleanup is a real timer, and a
+   *  loaded event loop (the full suite runs these files in parallel) makes any
+   *  single "long enough" wait a coin toss. */
+  const waitGone = async (path: string) => {
+    for (let i = 0; i < 200 && existsSync(path); i += 1) await settle(10);
+    return !existsSync(path);
+  };
+
+  it('writes a runnable script, then removes its directory', async () => {
+    const scriptPath = createLaunchScript('/some/worktree', 'claude --resume abc', 5);
+    expect(existsSync(scriptPath)).toBe(true);
+    expect(readFileSync(scriptPath, 'utf8')).toContain('claude --resume abc');
+    expect(dirname(scriptPath)).toMatch(/cez-term-/);
+
+    expect(await waitGone(dirname(scriptPath))).toBe(true);
+    expect(existsSync(scriptPath)).toBe(false);
+  });
+
+  it('survives long enough for a slow emulator to start', async () => {
+    const scriptPath = createLaunchScript('/some/worktree', ':', 10_000);
+    try {
+      await settle(20);
+      // Still there — the cleanup is a grace period, not a race with the launcher.
+      expect(existsSync(scriptPath)).toBe(true);
+    } finally {
+      rmSync(dirname(scriptPath), { recursive: true, force: true });
+    }
   });
 });
 

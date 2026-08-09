@@ -1,5 +1,5 @@
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -83,9 +83,23 @@ export function TaskThreadRoute() {
   // genuinely-unread done item, and keyed on the record's read-relevant fields so it converges:
   // the optimistic `seenAt` flips `isUnread` false and the effect does not re-fire. A run that
   // later resumes and re-finishes (its `finishedAt` moves past the receipt) marks read again.
+  //
+  // The one exception is "Mark unread" from this very thread (#775): clearing the receipt makes
+  // `isUnread` true again, which without a guard this effect would immediately undo — the action
+  // would look broken in exactly the place a user reaches for it. `suppressAutoRead` is that
+  // guard, and it holds the run id rather than a bare boolean so the reset is implicit: it only
+  // suppresses the run it was set for, and the FIRST render of a later visit (a fresh mount, or
+  // navigating to another task and back) starts from an empty ref and auto-reads normally. That
+  // is the email grammar this is modelled on — reopening the mail marks it read again.
+  const suppressAutoRead = useRef<string | undefined>(undefined)
+  const suppressAutoReadFor = useCallback((runId: string) => {
+    suppressAutoRead.current = runId
+  }, [])
   const { mutate: markRunSeen } = useMarkRunSeen()
   useEffect(() => {
-    if (run.data && isUnread(run.data)) markRunSeen(run.data.id)
+    if (!run.data) return
+    if (suppressAutoRead.current === run.data.id) return
+    if (isUnread(run.data)) markRunSeen(run.data.id)
   }, [
     markRunSeen,
     run.data?.id,
@@ -126,12 +140,23 @@ export function TaskThreadRoute() {
     )
   }
 
-  return <ThreadView run={run.data} thread={thread} />
+  return <ThreadView run={run.data} thread={thread} onMarkedUnread={suppressAutoReadFor} />
 }
 
 /** The loaded thread. The header owns its own data hooks (mutations, the runs list); the
  *  thread body stays presentational — tests drive it with reduced fixture states directly. */
-export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }) {
+export function ThreadView({
+  run,
+  thread,
+  onMarkedUnread,
+}: {
+  run: ApiRun
+  thread: ThreadState
+  /** Passed straight through to the header's "Mark unread" (#775) so the route can suppress its
+   *  auto-mark-read effect. Optional: every test that drives this view with a fixture, and the
+   *  header's other three tabs, have no such effect to suppress. */
+  onMarkedUnread?: (runId: string) => void
+}) {
   const footer = threadFooter(run.status, run.error)
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -247,7 +272,7 @@ export function ThreadView({ run, thread }: { run: ApiRun; thread: ThreadState }
 
   return (
     <div data-route="task-thread" className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} />
+      <RunHeader run={run} planTally={planTally} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}

@@ -102,7 +102,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 2,
         maxMonitoringSessions: 2,
-        monitoringWakeIntervalMinutes: null,
+        monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
@@ -174,13 +174,28 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.memoryLimitMb()).toBe(2048);
   });
 
+  /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
+   *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
+   *  it to 5 would silently overrule an operator who chose "Park until resumed". */
+  it('PUT null parks monitoring and is never re-defaulted back to the shipped cadence', async () => {
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBe(5); // the zero-config default
+    const res = await putConfig({ resources: { monitoringWakeIntervalMinutes: null } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.monitoringWakeIntervalMinutes).toBeNull();
+    expect(
+      ((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.monitoringWakeIntervalMinutes,
+    ).toBeNull();
+    expect((rawConfig().resources as Record<string, unknown>).monitoringWakeIntervalMinutes).toBeNull();
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBeNull();
+  });
+
   it('partial updates leave the other keys untouched', async () => {
     await putConfig({ resources: { maxParallel: 5 } });
     await putConfig({ resources: { worktreeRetentionDefault: 3 } });
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
       maxMonitoringSessions: 2,
-      monitoringWakeIntervalMinutes: null,
+      monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
