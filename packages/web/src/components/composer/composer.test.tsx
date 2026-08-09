@@ -294,6 +294,22 @@ describe('/ skills autocomplete (#380)', () => {
     expect(textarea.value).toBe('/om-review ')
   })
 
+  it('scrolls the newly selected item into view on arrow navigation', async () => {
+    const scrolled: (string | null)[] = []
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this.getAttribute('data-value'))
+    }) as unknown as typeof Element.prototype.scrollIntoView
+    const { textarea } = renderComposer()
+    type(textarea, '/om')
+    await screen.findByText('om-fix')
+    scrolled.length = 0
+    fireEvent.keyDown(textarea, { key: 'ArrowDown' })
+    const selected = document.querySelector(
+      '[data-slot="composer-menu"] [cmdk-item][data-selected="true"]',
+    )
+    expect(scrolled.at(-1)).toBe(selected?.getAttribute('data-value'))
+  })
+
   it('clicking an item inserts it too', async () => {
     const { textarea } = renderComposer()
     type(textarea, '/om')

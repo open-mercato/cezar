@@ -248,15 +248,21 @@ export function Composer({
     el.focus()
   }
 
-  // cmdk's own keyboard handler never sees ArrowUp/Down (preventDefault in onKeyDown),
-  // so its built-in scrollIntoView doesn't fire. Scroll the selected item ourselves.
-  // Note: PopoverContent is portalled outside rootRef, so we query via data-slot.
+  // cmdk's built-in scrollIntoView never fires here: the controlled value path
+  // writes to the store but doesn't schedule a scroll. Resolve by data-value
+  // (stamped synchronously by cmdk) rather than data-selected (deferred render).
   useLayoutEffect(() => {
-    if (!menuOpen) return
-    document
-      .querySelector<HTMLElement>('[data-slot="composer-menu"] [cmdk-item][data-selected="true"]')
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [activeValue, menuOpen])
+    if (!menuOpen || activeValue == null) return
+    const items = document.querySelectorAll<HTMLElement>(
+      '[data-slot="composer-menu"] [cmdk-item]',
+    )
+    for (const item of items) {
+      if (item.getAttribute('data-value') === activeValue) {
+        item.scrollIntoView({ block: 'nearest' })
+        break
+      }
+    }
+  }, [activeValue, menuOpen, candidates])
 
   // Restore the caret after a completion replaced the token mid-draft.
   useLayoutEffect(() => {
