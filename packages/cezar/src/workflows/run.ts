@@ -12,7 +12,12 @@ import { type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import type { RunnerId } from '../core/agent-runner.ts';
+import {
+  REASONING_EFFORT_UNSUPPORTED_ERROR,
+  type AgentEvent,
+  type ContentBlock,
+  type RunnerId,
+} from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -29,7 +34,6 @@ import {
   seedHandoffFile,
 } from '../handoff.ts';
 import { todosPath } from '../todos.ts';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
@@ -58,8 +62,6 @@ async function configuredModelProvider(
 ): Promise<string | undefined> {
   return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
 }
-
-export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex runner';
 
 /**
  * The run-level selection belongs to the task runner, not every Codex-looking step in a mixed
@@ -2375,6 +2377,7 @@ export class RunManager {
         additionalDirectories: [join(this.dataDir, 'runs')],
         env: continueProfile.env,
         model: continueModel,
+        reasoningEffort: continuationReasoningEffort,
         sessionId,
         resume: sessionId !== undefined,
         timeoutMs: 0,
@@ -2963,6 +2966,7 @@ export class RunManager {
           additionalDirectories: [join(this.dataDir, 'runs')],
           env: stepProfile.env,
           model: backendModel,
+          reasoningEffort,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.
           timeoutMs: interactive ? 0 : undefined,

@@ -386,6 +386,7 @@ class CodexSession implements AgentSession {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }

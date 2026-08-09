@@ -14,7 +14,7 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
-import { isSignalTerminationExit } from './agent-runner.ts';
+import { assertReasoningEffortSupported, isSignalTerminationExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
@@ -341,6 +341,7 @@ export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
+  assertReasoningEffortSupported('claude', spec.reasoningEffort);
   const args: string[] = [
     '--input-format',
     'stream-json',

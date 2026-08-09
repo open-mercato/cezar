@@ -1,7 +1,39 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { CodexAppServerRunner } from './codex-app-server-runner.js';
+
+const MOCK_BIN = fileURLToPath(
+  new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+);
+
+type RpcRequest = { method?: string; params?: Record<string, unknown> };
+
+function requestsFrom(file: string): RpcRequest[] {
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as RpcRequest);
+}
+
+async function waitForRequest(file: string, method: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (requestsFrom(file).some((request) => request.method === method)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for mock Codex request: ${method}`);
+}
+
+function paramsFor(requests: RpcRequest[], method: string): Record<string, unknown> {
+  const request = requests.find((candidate) => candidate.method === method);
+  if (!request) throw new Error(`missing mock Codex request: ${method}`);
+  return request.params ?? {};
+}
 
 /**
  * #703 backend parity — `claude-cli-runner.test.ts` proves the Claude half;
@@ -10,12 +42,8 @@ import { CodexAppServerRunner } from './codex-app-server-runner.js';
  * than an agent failure, so the Codex branch needs its own regression.
  */
 describe('a teardown cezar initiated (codex app-server)', () => {
-  const mockBin = fileURLToPath(
-    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
-  );
-
   it('settles the session instead of failing it when the app-server exits 143', async () => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     let sawText: () => void = () => {};
     const firstText = new Promise<void>((resolve) => {
@@ -45,7 +73,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
   }, 15_000);
 
   it('surfaces a failed turn as an AgentEvent error', async () => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     const session = runner.startSession(
       { userPrompt: 'mock:turn-failed', cwd: process.cwd() },
@@ -57,5 +85,85 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+});
+
+describe('Codex reasoning effort App Server mapping', () => {
+  it('sends effort only on turn/start, including a resumed thread, and never on steer', async () => {
+    const captureDir = mkdtempSync(join(tmpdir(), 'cezar-codex-effort-'));
+    const requestsFile = join(captureDir, 'requests.ndjson');
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'mock:hold-turn',
+        cwd: process.cwd(),
+        reasoningEffort: 'high',
+        env: { CEZ_MOCK_CODEX_REQUESTS_FILE: requestsFile },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+
+    try {
+      await waitForRequest(requestsFile, 'turn/start');
+      expect(session.sendMessage([{ type: 'text', text: 'steer this turn' }])).toBe(true);
+      await session.result;
+
+      const requests = requestsFrom(requestsFile);
+      expect(paramsFor(requests, 'turn/start')).toMatchObject({ effort: 'high' });
+      expect(paramsFor(requests, 'thread/start')).not.toHaveProperty('effort');
+      expect(paramsFor(requests, 'turn/steer')).not.toHaveProperty('effort');
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(captureDir, { recursive: true, force: true });
+    }
+
+    const resumedDir = mkdtempSync(join(tmpdir(), 'cezar-codex-effort-'));
+    const resumedRequestsFile = join(resumedDir, 'requests.ndjson');
+    const resumed = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+      {
+        userPrompt: 'continue',
+        cwd: process.cwd(),
+        sessionId: 'th_saved',
+        resume: true,
+        reasoningEffort: 'low',
+        env: { CEZ_MOCK_CODEX_REQUESTS_FILE: resumedRequestsFile },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    try {
+      await resumed.result;
+      const requests = requestsFrom(resumedRequestsFile);
+      expect(paramsFor(requests, 'turn/start')).toMatchObject({ effort: 'low' });
+      expect(paramsFor(requests, 'thread/resume')).not.toHaveProperty('effort');
+    } finally {
+      resumed.interrupt();
+      await resumed.result.catch(() => undefined);
+      rmSync(resumedDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('omits effort entirely when preserving Codex native defaults', async () => {
+    const captureDir = mkdtempSync(join(tmpdir(), 'cezar-codex-effort-'));
+    const requestsFile = join(captureDir, 'requests.ndjson');
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+      {
+        userPrompt: 'use native defaults',
+        cwd: process.cwd(),
+        env: { CEZ_MOCK_CODEX_REQUESTS_FILE: requestsFile },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    try {
+      await session.result;
+      expect(paramsFor(requestsFrom(requestsFile), 'turn/start')).not.toHaveProperty('effort');
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(captureDir, { recursive: true, force: true });
+    }
   }, 15_000);
 });
