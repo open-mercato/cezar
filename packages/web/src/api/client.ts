@@ -25,6 +25,7 @@ import type {
   CancelAutoResumeResponse,
   CancelResponse,
   ChangesPayload,
+  ContinueRunInput,
   CheckoutProjectInput,
   ConfigResponse,
   ReclaimWorktreesResponse,
@@ -75,7 +76,6 @@ import type {
   RepoCommitPayload,
   RunCommitsResponse,
   RepoResponse,
-  Runner,
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
@@ -88,6 +88,7 @@ import type {
   SetWorkspaceConfigInput,
   ImportableSkill,
   Skill,
+  StartTodoInput,
   StartTodoResponse,
   TodoItem,
   UiState,
@@ -1029,26 +1030,21 @@ export async function finishRun(id: string): Promise<FinishResponse> {
   )
 }
 
-/** The follow-up composer's optional overrides for a Continue (#401): pick which backend and
- *  model handle the reopened session. Omitted fields keep the run's current backend/model.
+/** The follow-up composer's optional overrides for a Continue (#401): pick which backend, model,
+ *  and Codex reasoning effort handle the reopened session. Omitted fields keep the run's current engine.
  *  `text`/`images` are the prompt the reopened session starts on — omitted, the engine opens
  *  with its plain "Continue.". */
-export interface ContinueOptions {
-  text?: string
-  images?: ImageInput[]
-  runner?: Runner
-  model?: string
-}
+export type ContinueOptions = ContinueRunInput
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
- *  runner/model override lets the follow-up choose the engine; omitted keeps the run's current
- *  backend (backward compat). */
+ *  runner/model/effort override lets the follow-up choose the engine; omission preserves continuity. */
 export async function continueRun(id: string, opts: ContinueOptions = {}): Promise<ContinueResponse> {
   const body = {
     ...(opts.text !== undefined ? { text: opts.text } : {}),
     ...(opts.images !== undefined ? { images: opts.images } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
@@ -1102,21 +1098,19 @@ export async function removeTodo(id: string): Promise<RemoveTodoResponse> {
   )
 }
 
-/** The Inbox card's optional backend choice + extra instructions for a Run. Unlike
- *  `ContinueOptions` these start a NEW run, so an omitted `runner`/`model` means the host's
- *  `defaultRunner`, not "keep the run's". `prompt` (#413) is extra instructions appended to the
- *  suggested/summary task text — e.g. a template inserted in the Inbox composer. */
-export interface StartTodoOptions {
-  runner?: Runner
-  model?: string
-  prompt?: string
-}
+/**
+ * The contract's optional `/todos/:id/start` body. Unlike `ContinueOptions`, an omitted
+ * `runner`/`model`/`reasoningEffort` starts a NEW run on the host's defaults rather than keeping
+ * an existing session. `prompt` is extra instructions appended to the suggestion.
+ */
+export type StartTodoOptions = NonNullable<StartTodoInput>
 
 /** Inbox "Run" (spec 007): the server turns the entry into a task — a one-off single-step
  *  workflow around the suggested skill when it exists, plain quick-task otherwise — and
  *  answers 201 with the new run. 409 when the entry was already started. An optional
- *  runner/model (#401) picks the engine and an optional `prompt` (#413) appends instructions;
- *  with neither, sends no body at all — the pre-#401/#413 bodyless POST, kept for compat. */
+ *  runner/model/reasoningEffort picks the Codex engine settings and an optional `prompt` appends
+ *  instructions; with neither, sends no body at all — the historic bodyless POST, kept for
+ *  compatibility. */
 export async function startTodo(
   id: string,
   opts: StartTodoOptions = {},
@@ -1124,6 +1118,7 @@ export async function startTodo(
   const body = {
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     ...(opts.prompt !== undefined ? { prompt: opts.prompt } : {}),
   }
   // No override → no body at all, exactly the bodyless POST this endpoint has always sent

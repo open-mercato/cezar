@@ -96,7 +96,19 @@ function serve(
       requests.push({ method, url, body })
       if (url === '/api/v1/health') return json(health)
       if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=codex') {
+        return json({
+          runner: 'codex',
+          models: [{
+            id: 'gpt-future',
+            label: 'gpt-future',
+            description: 'Newest',
+            reasoningEfforts: [{ id: 'high', description: 'More thorough' }],
+          }],
+          source: 'live',
+          stale: false,
+        })
+      }
       if (url === '/api/v1/config' && method === 'GET')
         return json({
           baseBranch: null,
@@ -194,7 +206,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     expect(continueBody()).toEqual({ text: 'now also update the changelog' })
   })
 
-  it('sends the chosen runner + model through to /continue', async () => {
+  it('sends the chosen runner, model, and effort through to /continue', async () => {
     serve()
     renderAction(makeRun())
 
@@ -208,9 +220,23 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('gpt-future')) as HTMLElement)
 
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Effort' }))
+    options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((o) => o.textContent?.includes('high')) as HTMLElement)
+
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future' })
+    expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' })
+  })
+
+  it('shows the persisted Codex effort without overriding it until the user picks a new value', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
+
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('high')
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({})
   })
 
   it('shows a read-only native model while locked and still permits switching runners', async () => {

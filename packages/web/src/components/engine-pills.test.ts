@@ -18,6 +18,8 @@ const resolved = (over: Partial<ResolvedEngine> = {}): ResolvedEngine => ({
   runner: 'claude',
   runnerExplicit: false,
   model: '',
+  reasoningEffort: '',
+  reasoningEfforts: [],
   runners: ['claude'],
   defaultRunner: 'claude',
   canRun: true,
@@ -196,6 +198,12 @@ describe('engineBody', () => {
     expect(engineBody(resolved({ model: 'opus', modelsLocked: true })).model).toBeUndefined()
   })
 
+  it('sends a selected Codex effort but omits the native default', () => {
+    expect(engineBody(resolved({ runner: 'codex', reasoningEffort: 'high' })).reasoningEffort).toBe('high')
+    expect(engineBody(resolved({ runner: 'codex', reasoningEffort: '' })).reasoningEffort).toBeUndefined()
+    expect(engineBody(resolved({ runner: 'codex', reasoningEffort: 'high', modelsLocked: true })).reasoningEffort).toBeUndefined()
+  })
+
   it('omits the runner when it is already what the server would choose', () => {
     const body = engineBody(resolved({ runner: 'claude', defaultRunner: 'claude' }))
     expect(body.runner).toBeUndefined()
@@ -233,7 +241,7 @@ describe('engineBody', () => {
     const body = engineBody(
       resolved({ runner: 'claude', defaultRunner: 'claude', runners: ['claude'], model: '' }),
     )
-    expect(body).toEqual({ runner: undefined, model: undefined })
+    expect(body).toEqual({ runner: undefined, model: undefined, reasoningEffort: undefined })
   })
 
   it.each<Runner>(['claude', 'codex', 'opencode'])(
