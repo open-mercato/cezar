@@ -250,6 +250,66 @@ describe('taskIssueUrl', () => {
     expect(taskIssueUrl(r)).toBeUndefined()
   })
 
+  /**
+   * The wrong-repo link found while testing 0.9.3 locally. `issueNumber` is NOT always read off
+   * this project's prompt — the LLM namer sets it from the transcript — so a task whose subject
+   * lives in another repository comes back carrying that repository's number, and synthesizing it
+   * against the project on screen produces a confident 404.
+   */
+  describe('a number that demonstrably belongs to another repository', () => {
+    /** Real record: `/om-auto-fix-pr <open-mercato PR 1977>` started inside the cezar project. */
+    const crossRepo = () =>
+      run({
+        prNumber: 1977,
+        issueNumber: 4143,
+        markerRefs: { pr: 1977 },
+        referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+        referencedIssueCandidates: [
+          'https://github.com/open-mercato/open-mercato/issues/4143',
+          'https://github.com/open-mercato/open-mercato/issues/4824',
+        ],
+      })
+
+    it('synthesizes no issue link at all — a wrong chip is worse than none', () => {
+      // Was: https://github.com/open-mercato/cezar/issues/4143 — an issue that does not exist.
+      expect(taskIssueUrl(crossRepo(), 'https://github.com/open-mercato/cezar')).toBeUndefined()
+    })
+
+    it('still links the PR, which carries a real discovered URL', () => {
+      expect(taskPrUrl(crossRepo())).toBe('https://github.com/open-mercato/open-mercato/pull/1977')
+    })
+
+    it('links normally when the SAME repo is on screen', () => {
+      expect(taskIssueUrl(crossRepo(), 'https://github.com/open-mercato/open-mercato')).toBe(
+        'https://github.com/open-mercato/open-mercato/issues/4143',
+      )
+    })
+
+    it.each([
+      ['a differently-cased spelling', 'https://github.com/OPEN-MERCATO/CEZAR'],
+      ['a trailing slash', 'https://github.com/open-mercato/cezar/'],
+    ])('still suppresses through %s of the project repo', (_name, repoBase) => {
+      // The comparison normalizes both sides, so neither spelling can smuggle the wrong link back.
+      expect(taskIssueUrl(crossRepo(), repoBase)).toBeUndefined()
+    })
+
+    it('a candidate for a DIFFERENT number is not evidence about this one', () => {
+      // #526's own case: the marker declares 524, and the foreign candidate names 9. The
+      // suppression must not fire, or every issue-subject run beside an unrelated link loses
+      // its link.
+      const r = run({
+        markerRefs: { issue: 524 },
+        referencedIssueCandidates: ['https://github.com/third/repo/issues/9'],
+      })
+      expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/524')
+    })
+
+    it('an unparseable candidate is ignored, never trusted as evidence', () => {
+      const r = run({ issueNumber: 7, referencedIssueCandidates: ['not a url', 'https://example.com/x'] })
+      expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/7')
+    })
+  })
+
   it('prefers a real discovered issue URL over the synthesized one (#526)', () => {
     const r = run({
       markerRefs: { issue: 524 },

@@ -125,7 +125,40 @@ export function taskIssueUrl(run: RunRecord, repoBase?: string): string | undefi
   // wrong-link defect #526 exists to kill, just pointing at an issue instead of a PR.
   const number = run.markerRefs?.issue ?? run.issueNumber
   if (!number || !repoBase) return undefined
+  // …but the NUMBER can be foreign too, which is #526's defect arriving through the other door.
+  // `issueNumber` is not always read off this project's prompt: the LLM namer sets it from the
+  // transcript, so a task whose subject lives in another repository comes back carrying that
+  // repository's number. Synthesizing it against the project on screen then produces a confident
+  // 404 — the observed case was an `om-auto-fix-pr` run started in cezar for
+  // `open-mercato#1977`, whose scraped `issueNumber: 4143` rendered as `…/cezar/issues/4143`.
+  // A candidate naming THIS number in another repository is proof the number is not ours, so
+  // drop the link. The candidate still never BECOMES the link — it is evidence, not a source.
+  if (numberBelongsToAnotherRepo(run.referencedIssueCandidates, number, repoBase)) return undefined
   return `${repoBase}/issues/${number}`
+}
+
+/** `https://github.com/o/r/issues/9` → `{repo: 'https://github.com/o/r', number: 9}`, or
+ *  undefined for anything that is not a forge item URL we recognize. */
+function parseItemUrl(url: string): { repo: string; number: number } | undefined {
+  const match = /^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\/(?:issues|pull)\/(\d+)/i.exec(url.trim())
+  if (!match?.[1] || !match[2]) return undefined
+  return { repo: match[1].replace(/\/+$/, '').toLowerCase(), number: Number(match[2]) }
+}
+
+/** Does a transcript candidate name this exact number in a DIFFERENT repository than the project
+ *  on screen? Then the number is demonstrably not this repo's, and no link may be synthesized
+ *  for it — no chip beats a wrong chip. Unparseable candidates are ignored rather than trusted. */
+function numberBelongsToAnotherRepo(
+  candidates: readonly string[] | undefined,
+  number: number,
+  repoBase: string,
+): boolean {
+  if (!candidates?.length) return false
+  const ours = repoBase.replace(/\/+$/, '').toLowerCase()
+  return candidates.some((candidate) => {
+    const parsed = parseItemUrl(candidate)
+    return parsed !== undefined && parsed.number === number && parsed.repo !== ours
+  })
 }
 
 export interface TaskReference {
