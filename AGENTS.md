@@ -18,6 +18,65 @@ Practical rules:
 - Never trade a working default for a knob.
 - Adding, renaming, or removing a `CEZ_*` env var — or changing what its default does — MUST update `.env.example` in the same commit (and the README env table when the var is user-facing). `.env.example` is the env contract's single documentation surface; an undocumented env var is a bug.
 
+## Changing a mechanism that already works
+
+Replacing working behavior is the highest-risk change in this repo, and it fails in a
+characteristic way: the new mechanism is correct, the tests are green, the spec is
+thorough — and the DEFAULT path quietly lost a guarantee nobody wrote down. #810 and #811
+are the worked examples; both shipped a well-specified improvement that left the
+zero-config user worse off than before.
+
+**Name what the old mechanism was load-bearing FOR, not what it was for.** Those are
+different questions. `IDLE_TIMEOUT_MS` read as session hygiene, and #661 removed it from
+the monitoring branch for a good reason (it was closing live sessions mid-CI and recording
+them as `done`). It was also the only liveness bound on `CEZ:MONITORING` and the only
+reason a parked monitor eventually stopped holding a `maxParallel` slot. Neither
+dependency was named in the spec, so neither was replaced, and `monitoring` became a state
+with no exit. Before deleting a timer, lock, cap or timeout, grep for everything that
+reaches a terminal state *because* of it.
+
+**A replacement that ships OFF is not a replacement.** Diff the default path, not the
+feature. The question is always: *with every new knob at its shipped default, what does
+the old scenario do now?* If the answer is "nothing", the change removed a mechanism and
+added a setting. A spec's "Resolved assumptions" table answering a COST question with
+"opt-in, default null" is not an answer to whether the zero-config path still works —
+cost-safe and functional are separate reviews. See § Zero config: *never trade a working
+default for a knob*.
+
+**Enumerate the transitions out of every state you add or keep.** "Who fires this?" is the
+question that finds these bugs in one step. A parked run has exactly three wake sources —
+a user message (`deliverMessage`), the autonomous nudge (turn-end only), and the monitoring
+wake timer. Cezar has no process-exit callback, no CI webhook and no sub-agent-completion
+event, so a state whose only on-by-default exit is "a human types something" is a dead end,
+however well it renders.
+
+**Find every construction site of a shared in-memory object — grep the TYPE, not the
+field.** `ActiveRun` is built in `execute` AND in `runContinuation`; #811 populated
+`state.skills` in the first only, so registry `/skill` expansion worked on new tasks and
+silently failed on every Continue and every restart recovery. The same shape recurs in the
+two near-identical turn-end handlers in `workflows/run.ts` (streaming and non-streaming):
+a lifecycle change applied to one of them ships half a fix. When you add a field that a
+delivery path reads, add it everywhere in the same commit or route both sites through one
+helper.
+
+**A fail-open helper needs a populated-input guarantee, or it lies.**
+`expandRegistrySlashSkill` returning its input unchanged on no-match is right on its own —
+a backend's own slash commands must survive. Against an empty registry that same branch
+turns "cezar never loaded the list" into a confident user-facing "Unknown skill". Pair
+every silent pass-through with a test that pins the *empty/absent input* case.
+
+**Prove the regression test fails without the fix.** `git stash push -- <source files>`,
+run the new test, confirm red, `git stash pop`. A test written after the diagnosis passes
+against the bug more often than anyone expects, and a green-either-way test is how the
+same regression ships twice. Keep the guard tests that pass both ways — they pin the
+behavior you did NOT want to change (park mode stays reachable; unknown slashes stay
+untouched) — but know which is which.
+
+**Read the run-history evidence before theorizing, and cite it.** `.ai/specs/` records the
+design, `git log -S` and `git merge-base --is-ancestor <commit> <tag>` settle "was this in
+the release the user is on", and a user's "it worked in 0.9.1" is a testable claim, not an
+opinion. #810 was confirmed in one command before a line of code was read.
+
 ## The HTTP API
 
 Four invariants. A feature that breaks any of them compiles on its own branch and stops working
