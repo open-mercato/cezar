@@ -604,7 +604,8 @@ export const continueRunInputSchema = z.object({
   images: z.array(imageInputSchema).max(4).optional(),
   runner: runnerSchema.optional(),
   model: z.string().max(200).optional(),
-  reasoningEffort: reasoningEffortSchema.optional(),
+  /** Empty string is the explicit reset token; omission preserves the stored run choice. */
+  reasoningEffort: z.union([reasoningEffortSchema, z.literal('')]).optional(),
 });
 export type ContinueRunInput = z.input<typeof continueRunInputSchema>;
 

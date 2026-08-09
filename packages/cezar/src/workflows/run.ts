@@ -58,6 +58,44 @@ async function configuredModelProvider(
 ): Promise<string | undefined> {
   return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
 }
+
+export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex runner';
+
+/**
+ * The run-level selection belongs to the task runner, not every Codex-looking step in a mixed
+ * workflow. A workflow that starts as Claude and explicitly delegates one step to Codex must opt
+ * that step in itself; otherwise a Codex-only setting from the task would leak across engines.
+ */
+export function resolveStepReasoningEffort(
+  step: Pick<WorkflowStepDef, 'runner' | 'reasoningEffort'>,
+  taskBackend: RunnerId,
+  runReasoningEffort: string | undefined,
+): string | undefined {
+  const backend = step.runner ?? taskBackend;
+  if (backend !== 'codex') return undefined;
+  return step.reasoningEffort ?? (taskBackend === 'codex' ? runReasoningEffort : undefined);
+}
+
+/** Return the first configuration error that must stop execution before any agent spawn. */
+export function reasoningEffortIssue(
+  workflow: Pick<WorkflowDef, 'steps'>,
+  taskBackend: RunnerId,
+  runReasoningEffort: string | undefined,
+): string | undefined {
+  const agentSteps = workflow.steps.filter((step) => stepKind(step) === 'agent');
+  const invalidStep = agentSteps.find(
+    (step) => step.reasoningEffort !== undefined && (step.runner ?? taskBackend) !== 'codex',
+  );
+  if (invalidStep) {
+    return `step "${invalidStep.id}": ${REASONING_EFFORT_UNSUPPORTED_ERROR}`;
+  }
+  if (runReasoningEffort === undefined) return undefined;
+  if (taskBackend !== 'codex') return REASONING_EFFORT_UNSUPPORTED_ERROR;
+  const inheritsRunEffort = agentSteps.some(
+    (step) => (step.runner ?? taskBackend) === 'codex' && step.reasoningEffort === undefined,
+  );
+  return inheritsRunEffort ? undefined : 'reasoning effort has no Codex agent step to apply to';
+}
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 /**
@@ -285,6 +323,8 @@ function formatWakeInstant(at: Date): string {
 export interface StartRunInput {
   task: string;
   model?: string;
+  /** Per-task Codex reasoning level. Undefined delegates to the native App Server default. */
+  reasoningEffort?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
   /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
@@ -676,13 +716,14 @@ export class RunManager {
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = agentModelsLocked(this.repoRoot)
-      ? { ...input, model: undefined }
+      ? { ...input, model: undefined, reasoningEffort: undefined }
       : input;
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
+      reasoningEffort: effectiveInput.reasoningEffort,
       runner: input.runner,
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
@@ -996,6 +1037,7 @@ export class RunManager {
       input: this.hydrateQueuedInput(run.id, {
         task: run.task,
         model: run.model,
+        reasoningEffort: run.reasoningEffort,
         runner: run.runner,
         generateFollowups,
         // Re-thread autonomy (#489): the rebuilt input feeds `execute`, whose mid-run auto-nudge
@@ -1923,12 +1965,12 @@ export class RunManager {
    */
   continueRun(
     runId: string,
-    opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string } = {},
+    opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string; reasoningEffort?: string } = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
-    if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
+    if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.reasoningEffort?.trim())) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
@@ -1946,6 +1988,9 @@ export class RunManager {
     // owner until a continuation emits a new, attributed session id (#562).
     const sessionBackend = sessionStep.backend ?? run.runner ?? 'claude';
     const resume = sessionBackend === targetRunner;
+    if (opts.reasoningEffort && targetRunner !== 'codex') {
+      return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
+    }
 
     // Follow-up runner/model override (#401): the composer lets the user pick which backend and
     // model handle this continuation. Omitted → the run's current backend/model is kept
@@ -1953,7 +1998,9 @@ export class RunManager {
     // run's current backend — `runContinuation` reads it off the record, later continuations
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
-    if (opts.runner !== undefined || opts.model !== undefined) {
+    const runnerChanged = opts.runner !== undefined && opts.runner !== (run.runner ?? 'claude');
+    const engineChanged = runnerChanged || opts.model !== undefined;
+    if (opts.runner !== undefined || opts.model !== undefined || opts.reasoningEffort !== undefined) {
       // Guard the pairing before persisting anything: the model override applies to the runner
       // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
       // same resolution `runContinuation` reads off the record). A model that is recognizably
@@ -1978,6 +2025,13 @@ export class RunManager {
           : inheritedPinIsForeign
             ? { model: undefined }
             : {}),
+        // Omission retains the run selection, while either an engine change or the empty
+        // Continue reset token explicitly returns to the App Server's native default.
+        ...(opts.reasoningEffort !== undefined
+          ? { reasoningEffort: opts.reasoningEffort || undefined }
+          : engineChanged
+            ? { reasoningEffort: undefined }
+            : {}),
       });
     }
 
@@ -1990,6 +2044,18 @@ export class RunManager {
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
+    const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : opts.reasoningEffort !== undefined
+        ? opts.reasoningEffort || undefined
+        : engineChanged
+          ? undefined
+          : targetRunner === 'codex'
+            ? sessionStep.reasoningEffort ?? run.reasoningEffort
+            : undefined;
+    if (continuationReasoningEffort) {
+      this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort });
+    }
     const prompt = opts.text?.trim() || 'Continue.';
     const images = opts.images ?? [];
     if (deferForCapacity) {
@@ -2055,6 +2121,9 @@ export class RunManager {
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
     const record = this.store.getRun(runId);
+    const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : record?.steps.find((step) => step.id === stepId)?.reasoningEffort;
     // The env is a live ceiling: a run created while the inbox was on must not keep writing
     // follow-ups after it is switched off.
     const generateFollowups = followupsEnabled() && record?.generateFollowups !== false;
@@ -2097,6 +2166,7 @@ export class RunManager {
       startedAt: new Date().toISOString(),
       sessionId,
       backend,
+      ...(continuationReasoningEffort ? { reasoningEffort: continuationReasoningEffort } : {}),
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
@@ -2374,6 +2444,21 @@ export class RunManager {
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
     const taskBackend: RunnerId = input.runner ?? config.defaultRunner;
+    const effortIssue = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : reasoningEffortIssue(workflow, taskBackend, input.reasoningEffort);
+    if (effortIssue) {
+      const finishedAt = new Date().toISOString();
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error: effortIssue,
+        finishedAt,
+        currentStepId: undefined,
+      });
+      emit({ type: 'lifecycle', message: `run failed — ${effortIssue}` });
+      this.dropActive(runId);
+      return;
+    }
     // The account may have gone into a usage-limit hold since this run was dequeued — the queue
     // gate cannot be the only one, because dequeue is not the moment of no return. Nothing has
     // happened yet here, so the run goes back to the queue untouched (spec
@@ -2708,7 +2793,14 @@ export class RunManager {
 
     const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
-    this.store.updateStep(runId, step.id, { sessionId, backend });
+    const reasoningEffort = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
+    this.store.updateStep(runId, step.id, {
+      sessionId,
+      backend,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
     const startTokens = stepRecord?.tokensUsed ?? 0;

@@ -9,8 +9,8 @@ Source spec: `.ai/specs/2026-08-08-codex-reasoning-effort-selection.md`
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
 | 1 | 1.1 | Discover and expose per-model Codex effort capabilities | inline | done | 9996937b |
-| 1 | 1.2 | Add effort to contract, workflow, and persistent run schemas | inline | done | 26a1e802 |
-| 2 | 2.1 | Resolve and persist effective effort across runs and continuations | inline | todo | — |
+| 1 | 1.2 | Add effort to contract, workflow, and persistent run schemas | inline | done | 8ed58528 |
+| 2 | 2.1 | Resolve and persist effective effort across runs and continuations | inline | done | 917019db |
 | 2 | 2.2 | Send effort only through Codex turn starts | inline | todo | — |
 | 3 | 3.1 | Wire typed HTTP entry points and headless CLI effort input | inline | todo | — |
 | 3 | 3.2 | Add the New Task and planned-run Effort picker | inline | todo | — |
