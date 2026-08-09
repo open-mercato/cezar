@@ -19,3 +19,9 @@
 - Owner approved a fork workflow. Created `vloneskorpion/cezar`, pushed `feat/codex-reasoning-effort-selection`, and opened draft upstream PR #815.
 - Posted the run claim comment. The fork account lacks upstream assignment and label permissions, so `in-progress` remains unavailable; the claim comment is the available ownership signal.
 - GitHub CLA automation reports the commit author email is not associated with a GitHub account; record for merge follow-up, but continue implementation.
+
+## 2026-08-09T11:11:01Z — checkpoint 1
+
+- Finished Phase 1–3 through shared UI selection on New Task, planned runs, Inbox, GitHub handoff, and Continue.
+- `npm run typecheck:web` and 249 focused web/client tests pass; checkpoint evidence is recorded in `checkpoint-1-checks.md`.
+- The local dev process started and discovered Codex, but the configured browser provider was unavailable and an isolated follow-up shell could not reach its ports; no screenshot was captured. The process was stopped cleanly and final validation will retry browser/integration evidence when possible.
