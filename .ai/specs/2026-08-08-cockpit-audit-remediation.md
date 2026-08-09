@@ -59,6 +59,16 @@ plus a live check in the running cockpit in BOTH themes (the audit's measurement
 re-run on the changed element). Full suite (`npm run build`, `npm run test:package`) once at
 the branch tip.
 
+Branch-tip run (rebased onto `origin/main`):
+
+- `npm run build` (server + web + `check:pack`) ✅ · `npm run typecheck` ✅ 4/4 workspaces ·
+  `npm run test:unit` ✅ (35 pass, 1 skip) · `npm test` — the whole web suite green.
+- `npm test` reports 8 failures, all in `workflows/{run-lease,run-isolation,workspace-semaphore}`.
+  They are pre-existing and unrelated to this branch: a temp-dir race (`ENOENT … .ai/cezar/
+  runs.json.tmp`, the flaky-CI pattern of #804), reproduced identically on a pristine
+  `origin/main` worktree with a fresh `npm ci`. This branch touches only `packages/web` UI, so
+  it cannot affect server run-scheduling; left for #804.
+
 ## Changelog
 
 - 2026-08-08 — v1, phase-1 scope after audit rounds 1–4 (+ accessibility cross-check).
