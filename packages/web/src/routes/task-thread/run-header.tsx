@@ -126,7 +126,7 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-5 pb-2 backdrop-blur md:px-6"
+      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-4 backdrop-blur md:px-6"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
@@ -151,7 +151,7 @@ export function RunHeader({
         />
         <MonitoringSchedule run={run} />
 
-        <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
+        <div data-slot="run-tabs" className="mt-5 flex items-end gap-1">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
             Session
@@ -492,7 +492,7 @@ function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['r
  *  hairline-separated, never middot-joined. */
 function StatTile({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div data-slot="stat-tile" className="flex flex-col items-center gap-1 px-4 text-center">
+    <div data-slot="stat-tile" className="flex flex-col items-center gap-2 px-6 text-center">
       <span className="text-[10px] font-medium tracking-wide text-soft-foreground uppercase">{label}</span>
       <span className="flex items-center gap-1.5 text-[13px] leading-none font-medium whitespace-nowrap text-foreground">
         {children}
@@ -570,7 +570,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
     <span
       key="workflow"
       data-slot="workflow-chip"
-      className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+      className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-[11px] font-medium"
     >
       {workflowLabel(run)}
     </span>,
@@ -580,7 +580,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
       <span
         key="branch"
         data-slot="branch-chip"
-        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
+        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 font-mono text-[11px] font-medium"
       >
         {run.branch}
       </span>,
@@ -594,7 +594,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
         key="pr"
         reference={{ kind: 'PR', ...(number ? { number: Number(number) } : {}), url: prUrl }}
         taskTitle={runTitle(run)}
-        className="h-5"
+        className="h-6"
       />,
     )
   }
@@ -606,7 +606,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
         key="issue"
         reference={{ kind: 'Issue', ...(number ? { number: Number(number) } : {}), url: issueUrl }}
         taskTitle={runTitle(run)}
-        className="h-5"
+        className="h-6"
       />,
     )
   }
@@ -617,7 +617,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
       <DiffStatLabel
         key="diff"
         stat={run.diffStat}
-        className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px]"
+        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-[11px]"
       />,
     )
   if (run.automation) {
@@ -625,7 +625,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
       <Link
         key="automation"
         to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-        className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-[11px] font-medium hover:text-foreground"
       >
         Automation
       </Link>,
@@ -635,7 +635,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
   return (
     <div
       data-slot="run-meta"
-      className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted-foreground"
+      className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2.5 text-xs text-muted-foreground"
     >
       {/* Identity chips on the left, spaced by the row gap — no middot separators (house rule). */}
       {parts.map((part, index) => (
