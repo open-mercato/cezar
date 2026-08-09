@@ -249,9 +249,11 @@ export function Composer({
   }
 
   // cmdk's built-in scrollIntoView never fires here: the controlled value path
-  // writes to the store but doesn't schedule a scroll. Resolve by data-value
-  // (stamped synchronously by cmdk) rather than data-selected (deferred render).
-  useLayoutEffect(() => {
+  // writes to the store but doesn't schedule a scroll. useEffect (not
+  // useLayoutEffect) so the browser has painted and layout is settled before we
+  // ask scrollIntoView for position data. Resolve by data-value (stamped
+  // synchronously by cmdk) rather than data-selected (deferred render).
+  useEffect(() => {
     if (!menuOpen || activeValue == null) return
     const items = document.querySelectorAll<HTMLElement>(
       '[data-slot="composer-menu"] [cmdk-item]',
