@@ -1653,6 +1653,52 @@ describe('searchGithubItems (#730)', () => {
     expect(argvs.find((a) => a[0] === 'search')?.slice(0, 2)).toEqual(['search', 'issues']);
   });
 
+  /**
+   * `gh search issues` does not define `isDraft` and rejects the whole call with
+   * `Unknown JSON field: "isDraft"` — so asking for it made EVERY text query on the Issues tab
+   * degrade to "GitHub could not be searched", leaving a closed issue reachable by number only.
+   * Stubbing `gh` cannot reproduce the CLI's own rejection, so what is pinned here is the input
+   * that provokes it: the field list this path sends, per kind.
+   */
+  it('never asks `gh search issues` for the PR-only isDraft field', async () => {
+    const argvs = ghSpy((argv) => {
+      if (argv[0] === 'repo') return 'owner/n\n';
+      // The real CLI omits the key entirely for issues; the hit must still parse.
+      if (argv[0] === 'search') {
+        const { isDraft: _drop, ...issueHit } = searchHit({ number: 797 });
+        return JSON.stringify([issueHit]);
+      }
+      return '';
+    });
+
+    const res = await searchGithubItems('/repo/search-issue-fields', 'issue', 'lease timing');
+
+    const search = argvs.find((a) => a[0] === 'search');
+    const fields = search?.[search.indexOf('--json') + 1];
+    expect(fields).not.toContain('isDraft');
+    expect(fields).toContain('commentsCount');
+    expect(res.available).toBe(true);
+    expect(res.items.map((i) => i.number)).toEqual([797]);
+    // Issues have no draft concept — the flag must not leak onto the row or its labels.
+    expect(res.items[0]?.isDraft).toBeUndefined();
+    expect(res.items[0]?.labels).not.toContain('draft');
+  });
+
+  it('still asks `gh search prs` for isDraft, which that search does define', async () => {
+    const argvs = ghSpy((argv) => {
+      if (argv[0] === 'repo') return 'owner/n\n';
+      if (argv[0] === 'search') return JSON.stringify([searchHit({ isDraft: true })]);
+      return '';
+    });
+
+    const res = await searchGithubItems('/repo/search-pr-fields', 'pr', 'payment-session');
+
+    const search = argvs.find((a) => a[0] === 'search');
+    expect(search?.[search.indexOf('--json') + 1]).toContain('isDraft');
+    expect(res.items[0]?.isDraft).toBe(true);
+    expect(res.items[0]?.labels).toContain('draft');
+  });
+
   it('falls back to a text search when the number resolves to nothing', async () => {
     const argvs = ghSpy((argv) => {
       if (argv[0] === 'repo') return 'owner/n\n';

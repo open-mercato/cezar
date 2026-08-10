@@ -501,10 +501,24 @@ function firstLine(s: string): string {
  *  loading spec settled on and keeps one search to a single `gh` round-trip. */
 export const GH_SEARCH_MAX = 50;
 
-/** The `--json` field set each search path requests. PRs additionally carry `isDraft` (the row's
- *  draft chip); neither path asks for `additions`/`deletions` or `statusCheckRollup` — the same
- *  reason the list tier stopped (#664), those are the expensive per-PR lookups. */
+/** The `--json` field set each search path requests. Neither path asks for `additions`/`deletions`
+ *  or `statusCheckRollup` — the same reason the list tier stopped (#664), those are the expensive
+ *  per-PR lookups.
+ *
+ *  `isDraft` is added for PRs only, and that is a hard requirement rather than a nicety: `gh search
+ *  issues` does not define the field at all and rejects the whole call with `Unknown JSON field:
+ *  "isDraft"`, which would turn every text query on the Issues tab into the "could not be searched"
+ *  degrade. `gh {issue,pr} view` is the opposite — it tolerates the field for both kinds — so only
+ *  the search path needs to discriminate. */
 const SEARCH_FIELDS = 'number,title,author,createdAt,labels,body,url';
+
+/** `gh search {prs,issues} --json` field list for `kind`. See `SEARCH_FIELDS` on why `isDraft`
+ *  cannot be sent to the issues search. */
+function searchJsonFields(kind: 'issue' | 'pr'): string {
+  return kind === 'pr'
+    ? `${SEARCH_FIELDS},isDraft,commentsCount`
+    : `${SEARCH_FIELDS},commentsCount`;
+}
 
 /** `gh search issues|prs` returns `commentsCount` where the list tier gets its counts from a
  *  separate GraphQL walk. Same value, different spelling — normalized into `ForgeItem.comments`. */
@@ -635,7 +649,7 @@ export async function searchGithubItems(
       '--limit',
       String(capped),
       '--json',
-      `${SEARCH_FIELDS},isDraft,commentsCount`,
+      searchJsonFields(kind),
     ]);
     const hits = z.array(ghSearchHitSchema).parse(JSON.parse(out));
     return {
