@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve as resolvePath } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -342,8 +344,13 @@ function wrapSpawnError(error: NodeJS.ErrnoException, bin: string): Error {
   return error;
 }
 
+/** Path to the bundled mock (`scripts/mock-pi-rpc.mjs`), for CEZ_DRY_RUN=1. */
 function mockPiPath(): string {
-  return new URL('../../scripts/mock-pi-rpc.mjs', import.meta.url).pathname;
+  // Resolved the same way `mockClaudePath` is, rather than through `new URL().pathname`:
+  // on Windows that yields a leading-slash `/C:/…` which `spawn` cannot execute.
+  const here = dirname(fileURLToPath(import.meta.url));
+  // here = <pkg>/dist/core (built) or <pkg>/src/core (tsx dev).
+  return resolvePath(here, '..', '..', 'scripts', 'mock-pi-rpc.mjs');
 }
 
 function truncate(value: string, max = 200): string {

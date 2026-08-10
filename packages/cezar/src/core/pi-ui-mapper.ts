@@ -4,7 +4,15 @@
  * Contract: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
  * Unknown or malformed wire data is ignored; this mapper never throws.
  */
-import type { PlanEntry, StopReason, UiEvent, UiMessageItem, UiReasoningItem, UiToolItem } from './ui-events.js';
+import type {
+  PlanEntry,
+  StopReason,
+  TokenUsage,
+  UiEvent,
+  UiMessageItem,
+  UiReasoningItem,
+  UiToolItem,
+} from './ui-events.js';
 import { toolDisplay } from './tool-display.js';
 
 export interface PiUiMapperState {
@@ -13,6 +21,16 @@ export interface PiUiMapperState {
   readonly turnSeq: number;
   readonly turnId: string | null;
   readonly stopReason: StopReason;
+  /**
+   * The usage pi reported for the turn currently in flight, held between `message_end` (which
+   * carries it) and `agent_settled` (which ends the turn).
+   *
+   * pi splits the two the way claude does not: its terminal frame has no usage of its own, so
+   * without this the `turn.completed` event would ship without the per-turn directional counts
+   * every other backend emits — a parity capability, not a nicety (`ui-parity.test.ts`).
+   */
+  readonly turnUsage: TokenUsage | null;
+  readonly turnCostUsd: number | null;
   readonly startedItems: ReadonlySet<string>;
   readonly textByItem: ReadonlyMap<string, string>;
   readonly tools: ReadonlyMap<string, UiToolItem>;
@@ -30,6 +48,8 @@ export function createPiUiState(): PiUiMapperState {
     turnSeq: 0,
     turnId: null,
     stopReason: 'end_turn',
+    turnUsage: null,
+    turnCostUsd: null,
     startedItems: new Set(),
     textByItem: new Map(),
     tools: new Map(),
@@ -199,16 +219,26 @@ function mapToolEnd(value: Record<string, unknown>, state: PiUiMapperState): PiU
 
 function completeTurn(reason: StopReason, state: PiUiMapperState): PiUiMapping {
   if (!state.turnId) return { events: [], state };
-  return {
-    events: [{ type: 'turn.completed', turnId: state.turnId, stopReason: reason }],
-    state: { ...state, turnId: null },
+  const event: Extract<UiEvent, { type: 'turn.completed' }> = {
+    type: 'turn.completed',
+    turnId: state.turnId,
+    stopReason: reason,
   };
+  if (state.turnUsage) event.usage = state.turnUsage;
+  if (state.turnCostUsd !== null) event.costUsd = state.turnCostUsd;
+  // Cleared with the turn id: the next turn's counts are its own, and a turn pi ends without
+  // reporting usage must not inherit the previous turn's numbers.
+  return { events: [event], state: { ...state, turnId: null, turnUsage: null, turnCostUsd: null } };
 }
 
 function mapMessageEnd(value: Record<string, unknown>, state: PiUiMapperState): PiUiMapping {
   const message = isRecord(value.message) ? value.message : undefined;
   const usage = message && message.role === 'assistant' ? usageEvent(message.usage) : undefined;
-  return { events: usage ? [usage] : [], state };
+  if (!usage) return { events: [], state };
+  return {
+    events: [usage],
+    state: { ...state, turnUsage: usage.usage, turnCostUsd: usage.costUsd ?? null },
+  };
 }
 
 function usageEvent(value: unknown): Extract<UiEvent, { type: 'usage.updated' }> | undefined {

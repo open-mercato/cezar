@@ -140,5 +140,11 @@
     "usage": { "input": 10, "output": 5, "total": 18, "cacheRead": 2, "cacheWrite": 1 },
     "costUsd": 0.01
   },
-  { "type": "turn.completed", "turnId": "turn_1", "stopReason": "end_turn" }
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": { "input": 10, "output": 5, "total": 18, "cacheRead": 2, "cacheWrite": 1 },
+    "costUsd": 0.01
+  }
 ]

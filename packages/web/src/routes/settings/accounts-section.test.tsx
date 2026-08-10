@@ -745,13 +745,13 @@ describe('the agent accounts section', () => {
     renderAccounts()
 
     await waitFor(() => expect(rows()).toHaveLength(1))
-    // OpenCode gets a tab too: it is where "is OpenCode installed?" is answered, and hiding it
-    // would only move that question somewhere else.
+    // OpenCode and pi get a tab too: it is where "is this agent installed?" is answered, and
+    // hiding the ones that cannot carry a second login would only move that question elsewhere.
     expect(
       [...document.querySelectorAll('[data-slot="accounts-tabs"] [data-provider]')].map((el) =>
         el.getAttribute('data-provider'),
       ),
-    ).toEqual(['claude', 'codex', 'opencode'])
+    ).toEqual(['claude', 'codex', 'opencode', 'pi'])
   })
 
   it('offers no Add on an agent that cannot carry a second account, and says why', async () => {
