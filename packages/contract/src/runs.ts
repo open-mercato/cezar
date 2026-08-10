@@ -277,7 +277,7 @@ export type ApiRun = z.infer<typeof apiRunSchema>;
 
 /**
  * One run in the WORKSPACE-level index (`GET /api/v1/workspace/runs-index`) — the ⌘K palette's
- * "find a task in any project" list.
+ * "find a task in any project" list, and the global Tasks page's rows.
  *
  * Deliberately a separate, slim shape rather than `ApiRun`. The index answers for every
  * registered project at once, and `runRecordSchema` carries `steps[]` and `workflowDef` — a fat
@@ -315,6 +315,34 @@ export const runIndexEntrySchema = z.object({
    *  it, so without it here a cross-project row would show a red "failed" dot and land in
    *  Recently finished for work that is simply waiting for its appointment. */
   autoResumeAt: z.string().optional(),
+  /** The workflow the run executes — the global Tasks page shows it in a column and groups by
+   *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
+   *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
+   *  a `(planned)` chain reads as itself here rather than as its first agent's name. */
+  workflow: z.string(),
+  /** The task's branch, when it has one — a column on the global page, and the one field that
+   *  makes a cross-project row identifiable at a glance without opening it. */
+  branch: z.string().optional(),
+  /** When the agent actually started, as opposed to when the task was created. The global page's
+   *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
+  startedAt: z.string().optional(),
+  /**
+   * The six fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
+   * or issue chip. Carried verbatim rather than pre-resolved into a `{kind, number, url}` on the
+   * server, because the rule that picks between them is subtle (#407, #526: a run that REVIEWED
+   * a PR must not claim it as its own, an issue-subject run must not adopt an incidental
+   * transcript PR) and it already exists, tested, on the client. Resolving it a second time
+   * server-side would be a second rule, and the two would drift.
+   *
+   * Six scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
+   * the expensive half, stay off it.
+   */
+  pullRequestUrl: z.string().optional(),
+  referencedPullRequestUrl: z.string().optional(),
+  prNumber: z.number().optional(),
+  issueNumber: z.number().optional(),
+  referencedIssueUrl: z.string().optional(),
+  markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
 });
 export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
 

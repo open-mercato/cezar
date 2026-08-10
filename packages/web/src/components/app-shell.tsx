@@ -1,6 +1,7 @@
 import {
   FolderIcon,
   FolderOpenIcon,
+  LayersIcon,
   MenuIcon,
   PlusIcon,
   SearchIcon,
@@ -520,16 +521,27 @@ function SidebarContent({
       </div>
 
       {projectGroups ? (
-        // Step 3.3: one collapsible group per registered project — nav + task list per group.
-        // The whole area scrolls as one (per the sidebar mockup); collapsed groups are one row.
-        <div
-          data-slot="project-groups"
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-2"
-        >
-          <SidebarNavigateContext.Provider value={onNavigate}>
-            {projectGroups}
-          </SidebarNavigateContext.Provider>
-        </div>
+        <>
+          {/* PINNED above the scroller, not the first row inside it. It is about every group
+              rather than a peer of them, and a workspace with enough projects to want this page
+              is exactly the workspace that scrolls it out of sight. Its own bordered band is
+              what stops it reading as an unusually-worded project. Only in a multi-project
+              workspace: with one project the page would be that project's own Tasks table
+              wearing a second name. */}
+          <div className="shrink-0 border-b border-border px-1.5 pt-0.5 pb-2">
+            <AllTasksLink onNavigate={onNavigate} />
+          </div>
+          {/* Step 3.3: one collapsible group per registered project — nav + task list per group.
+              The whole area scrolls as one (per the sidebar mockup); collapsed groups are one row. */}
+          <div
+            data-slot="project-groups"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pt-1.5 pb-2"
+          >
+            <SidebarNavigateContext.Provider value={onNavigate}>
+              {projectGroups}
+            </SidebarNavigateContext.Provider>
+          </div>
+        </>
       ) : (
         <>
           <nav aria-label="Main" className="px-2.5 py-1.5">
@@ -618,6 +630,42 @@ function SidebarContent({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * The way into the global Tasks page (`/tasks`) — every project's work in one table, filtered
+ * and grouped by project, tag, status or workflow.
+ *
+ * A PLAIN router Link, like the footer's global-settings one and for the same reason: the page
+ * sits outside every project, and the scoped `Link` this file otherwise uses would prefix it
+ * with the active `/p/<id>`, which is not a route. Its own icon (layers, not the per-project
+ * checklist) so the two Tasks surfaces never read as the same button.
+ */
+function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
+  const { pathname } = useLocation()
+  const isActive = pathname === '/tasks'
+  return (
+    <RouterLink
+      to="/tasks"
+      data-slot="all-tasks-link"
+      onClick={onNavigate}
+      aria-current={isActive ? 'page' : undefined}
+      // Reads at the weight of a section header rather than a nav row: full-strength foreground
+      // and semibold, where the project groups below it are semibold-on-default and their nav
+      // rows are muted. The violet icon is the one spot of accent — the same hue the tag chips
+      // and this page's own selected filters use, so the door and the room match.
+      className={cn(
+        'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9',
+        isActive && 'bg-muted',
+      )}
+    >
+      <LayersIcon
+        className={cn('size-4 shrink-0', isActive ? 'text-violet' : 'text-violet/70')}
+        aria-hidden="true"
+      />
+      All tasks
+    </RouterLink>
   )
 }
 

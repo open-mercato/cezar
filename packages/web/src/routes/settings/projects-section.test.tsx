@@ -24,6 +24,8 @@ import { AppRoutes } from '@/routes'
  */
 
 let requests: Array<{ method: string; url: string; body?: unknown }> = []
+/** Set by a test to make every subsequent PATCH answer 400 with this message. */
+let failPatches: string | null = null
 
 const PROJECTS: ProjectListEntry[] = [
   {
@@ -53,6 +55,10 @@ const PROJECTS: ProjectListEntry[] = [
     lastOpenedAt: '2026-06-02T09:00:00.000Z',
     source: 'local',
     status: 'missing',
+    // The workspace's existing vocabulary — what the OTHER rows autocomplete from. Parked on a
+    // project no other test mutates, so the suggestion cases and the add/remove cases cannot
+    // interfere with each other.
+    tags: ['storefront', 'backend'],
   },
 ]
 
@@ -65,6 +71,7 @@ type Answers = {
 
 function serve(answers: Answers = {}) {
   requests = []
+  failPatches = null
   const registry: ProjectsResponse = {
     // Copies, not the shared PROJECTS objects: the PATCH handler mutates entries.
     projects: PROJECTS.map((p) => ({ ...p })),
@@ -110,12 +117,28 @@ function serve(answers: Answers = {}) {
         return json(config)
       }
       if (url.startsWith('/api/v1/projects/') && method === 'PATCH') {
+        if (failPatches) return json({ error: failPatches }, 400)
         const id = url.split('/').pop() ?? ''
         const entry = registry.projects.find((p) => p.id === id)
         if (!entry) return json({ error: `unknown project: ${id}` }, 404)
-        const mp = body?.maxParallel
-        if (mp === null) delete entry.maxParallel
-        else entry.maxParallel = mp as number
+        // Mirrors the route: each key applies only when the body NAMED it, so a tags-only
+        // PATCH must leave maxParallel alone (and vice versa).
+        if (body && 'maxParallel' in body) {
+          const mp = body.maxParallel
+          if (mp === null) delete entry.maxParallel
+          else entry.maxParallel = mp as number
+        }
+        if (body && 'tags' in body) {
+          const raw = Array.isArray(body.tags) ? (body.tags as string[]) : []
+          // The server normalizes (trim, case-insensitive dedupe, sort) before storing.
+          const bySpelling = new Map<string, string>()
+          for (const tag of raw.map((t) => t.trim()).filter(Boolean)) {
+            if (!bySpelling.has(tag.toLowerCase())) bySpelling.set(tag.toLowerCase(), tag)
+          }
+          const tags = [...bySpelling.values()].sort((a, b) => a.localeCompare(b))
+          if (tags.length === 0) delete entry.tags
+          else entry.tags = tags
+        }
         return json({ project: entry })
       }
       if (url.startsWith('/api/v1/projects/') && method === 'DELETE') {
@@ -169,6 +192,18 @@ const deletes = () => requests.filter((r) => r.method === 'DELETE')
 const patches = () => requests.filter((r) => r.method === 'PATCH')
 const maxParallelSelect = (id: string) =>
   row(id)?.querySelector<HTMLSelectElement>('[data-slot="project-max-parallel"]')
+const tagInput = (id: string) =>
+  row(id)?.querySelector<HTMLInputElement>('[data-slot="project-tag-input"]')
+const tagChips = (id: string) =>
+  [...(row(id)?.querySelectorAll('[data-slot="project-tag"]') ?? [])].map((chip) =>
+    (chip.textContent ?? '').trim(),
+  )
+/** The suggestion list is PORTALLED (the registry table clips overflow), so it is queried from
+ *  the document rather than from inside the row. */
+const suggestions = () =>
+  [...document.querySelectorAll('[data-slot="project-tag-suggestion"]')].map((option) =>
+    (option.textContent ?? '').trim(),
+  )
 
 afterEach(() => {
   act(() => resetToasts())
@@ -352,6 +387,257 @@ describe('Global settings → Projects', () => {
       }),
     )
     await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe(''))
+  })
+
+  /**
+   * Tags: the labels that group connected repositories, which the global Tasks page filters by.
+   * What matters here is that the editor never keeps its own copy of the list — every gesture
+   * sends the WHOLE new list and the row re-renders from the server's answer.
+   */
+  describe('tags', () => {
+    it('adds a tag on Enter, sending the whole list', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(tagInput('shop-backend')!, { target: { value: 'storefront' } })
+      fireEvent.keyDown(tagInput('shop-backend')!, { key: 'Enter' })
+
+      await waitFor(() =>
+        expect(patches()).toEqual([
+          { method: 'PATCH', url: '/api/v1/projects/shop-backend', body: { tags: ['storefront'] } },
+        ]),
+      )
+      await waitFor(() => expect(tagChips('shop-backend')).toEqual(['storefront']))
+      // The draft is consumed, not left sitting in the field.
+      expect(tagInput('shop-backend')!.value).toBe('')
+
+      // A second tag sends BOTH — the list is replaced wholesale, never merged server-side.
+      fireEvent.change(tagInput('shop-backend')!, { target: { value: 'api' } })
+      fireEvent.keyDown(tagInput('shop-backend')!, { key: 'Enter' })
+      await waitFor(() =>
+        expect(patches().at(-1)!.body).toEqual({ tags: ['storefront', 'api'] }),
+      )
+    })
+
+    it('treats a comma as a separator', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'infra' } })
+      fireEvent.keyDown(tagInput('cezar')!, { key: ',' })
+      await waitFor(() => expect(patches().at(-1)!.body).toEqual({ tags: ['infra'] }))
+    })
+
+    it('refuses a duplicate locally rather than sending a no-op the server would 200', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'infra' } })
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+      await waitFor(() => expect(tagChips('cezar')).toEqual(['infra']))
+
+      // Same tag in a different case: the server would dedupe it away and answer 200, which
+      // would look like it worked.
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'INFRA' } })
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+      await waitFor(() => expect(tagInput('cezar')!.value).toBe(''))
+      expect(patches()).toHaveLength(1)
+    })
+
+    it('removes a tag from its chip, and with Backspace on an empty field', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      for (const tag of ['api', 'web']) {
+        fireEvent.change(tagInput('cezar')!, { target: { value: tag } })
+        fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+        await waitFor(() => expect(tagChips('cezar')).toContain(tag))
+      }
+
+      fireEvent.click(
+        row('cezar')!.querySelector<HTMLButtonElement>('[data-action="project-tag-remove"]')!,
+      )
+      await waitFor(() => expect(tagChips('cezar')).toEqual(['web']))
+
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Backspace' })
+      await waitFor(() => expect(patches().at(-1)!.body).toEqual({ tags: [] }))
+      await waitFor(() => expect(tagChips('cezar')).toEqual([]))
+    })
+
+    it('autocompletes from the tags already used in the workspace', async () => {
+      // The point of the vocabulary: tags only group anything if the second repo lands on the
+      // first one's spelling, and free text does not converge on its own.
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      // Focusing the empty field answers "which tags exist here?" before a keystroke.
+      fireEvent.focus(tagInput('cezar')!)
+      await waitFor(() => expect(suggestions()).toEqual(['backend', 'storefront']))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'stor' } })
+      await waitFor(() => expect(suggestions()).toEqual(['storefront']))
+
+      fireEvent.click(document.querySelector('[data-slot="project-tag-suggestion"]')!)
+      await waitFor(() => expect(patches().at(-1)!.body).toEqual({ tags: ['storefront'] }))
+      await waitFor(() => expect(tagChips('cezar')).toEqual(['storefront']))
+    })
+
+    it('stays open on the very click that opened it', async () => {
+      // The reported bug: the list appeared for a blink and vanished. Opening on `focus` mounts
+      // Radix's DismissableLayer mid-dispatch, so its fresh document listeners saw the focus
+      // that OPENED the layer as an interaction outside it and dismissed immediately. Replayed
+      // here as the events that reach those listeners while the list is already up.
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.focus(tagInput('cezar')!)
+      await waitFor(() => expect(suggestions()).toEqual(['backend', 'storefront']))
+
+      fireEvent.focusIn(tagInput('cezar')!)
+      fireEvent.pointerDown(tagInput('cezar')!)
+      fireEvent.mouseDown(tagInput('cezar')!)
+
+      expect(suggestions()).toEqual(['backend', 'storefront'])
+      expect(tagInput('cezar')!.getAttribute('aria-expanded')).toBe('true')
+    })
+
+    it('closes when focus really does leave the field', async () => {
+      // The other half: with the layer no longer owning dismissal, blur is what closes it.
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.focus(tagInput('cezar')!)
+      await waitFor(() => expect(suggestions()).toHaveLength(2))
+
+      fireEvent.blur(tagInput('cezar')!)
+      await waitFor(() => expect(suggestions()).toEqual([]))
+    })
+
+    it('does not suggest a tag the project already has', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      // old-spike already carries both, so its own field has nothing left to offer.
+      fireEvent.focus(tagInput('old-spike')!)
+      await waitFor(() => expect(tagInput('old-spike')!.getAttribute('aria-expanded')).toBe('false'))
+      expect(suggestions()).toEqual([])
+    })
+
+    it('picks the highlighted suggestion with the arrow keys and Enter', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.focus(tagInput('cezar')!)
+      await waitFor(() => expect(suggestions()).toEqual(['backend', 'storefront']))
+
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'ArrowDown' })
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'ArrowDown' })
+      await waitFor(() =>
+        expect(tagInput('cezar')!.getAttribute('aria-activedescendant')).toBe(
+          'project-tag-suggestions-cezar-1',
+        ),
+      )
+
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+      await waitFor(() => expect(patches().at(-1)!.body).toEqual({ tags: ['storefront'] }))
+    })
+
+    it('still creates a tag nobody has used yet', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'brand-new' } })
+      // Nothing to suggest — the field is a plain token input again.
+      await waitFor(() => expect(suggestions()).toEqual([]))
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+      await waitFor(() => expect(patches().at(-1)!.body).toEqual({ tags: ['brand-new'] }))
+    })
+
+    it('Escape closes the list without discarding what was typed', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'stor' } })
+      await waitFor(() => expect(suggestions()).toEqual(['storefront']))
+
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Escape' })
+      await waitFor(() => expect(suggestions()).toEqual([]))
+      // Dismissing a suggestion list is not the same gesture as abandoning the draft.
+      expect(tagInput('cezar')!.value).toBe('stor')
+    })
+
+    it('keeps the first tag when a second is added before the refetch lands', async () => {
+      // The reported bug. The editor is bound to the server value with no local mirror, so
+      // between the PATCH and the refetch the cached project still held the OLD list — and the
+      // whole list is replaced wholesale, so the second save silently DELETED the first tag.
+      // The optimistic write in `useUpdateProject` is what makes the second click compose on
+      // top of the first.
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'api' } })
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+      await waitFor(() => expect(tagChips('cezar')).toEqual(['api']))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'web' } })
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+
+      // The second request carries BOTH — it read the list the first one just produced.
+      await waitFor(() => expect(patches().at(-1)!.body).toEqual({ tags: ['api', 'web'] }))
+      await waitFor(() => expect(tagChips('cezar')).toEqual(['api', 'web']))
+    })
+
+    it('puts the row back when the server refuses the edit', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'infra' } })
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+      await waitFor(() => expect(tagChips('cezar')).toEqual(['infra']))
+
+      // A 400 from here on: the optimistic chip must not survive a refusal.
+      failPatches = 'tag too long'
+      fireEvent.change(tagInput('cezar')!, { target: { value: 'nope' } })
+      fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
+
+      // `getAllByRole`: the successful first add left its own toast up, so there are two.
+      await waitFor(() =>
+        expect(
+          screen.getAllByRole('status').some((toast) => toast.textContent?.includes('tag too long')),
+        ).toBe(true),
+      )
+      await waitFor(() => expect(tagChips('cezar')).toEqual(['infra']))
+    })
+
+    it('never touches maxParallel when only tags change', async () => {
+      serve()
+      renderProjects()
+      await waitFor(() => expect(rows()).toHaveLength(3))
+
+      fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '3' } })
+      await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('3'))
+
+      fireEvent.change(tagInput('shop-backend')!, { target: { value: 'storefront' } })
+      fireEvent.keyDown(tagInput('shop-backend')!, { key: 'Enter' })
+
+      await waitFor(() => expect(tagChips('shop-backend')).toEqual(['storefront']))
+      // The tags PATCH named only `tags`, so the ceiling survived it.
+      expect(patches().at(-1)!.body).toEqual({ tags: ['storefront'] })
+      expect(maxParallelSelect('shop-backend')!.value).toBe('3')
+    })
   })
 
   it('disables Remove for the project cezar is serving', async () => {

@@ -746,6 +746,32 @@ describe('useMarkRunSeen', () => {
     expect(list?.[0]?.seenAt).toBe('2026-08-03T19:23:14.000Z')
   })
 
+  it('marks the workspace run index stale, so the global Tasks page stops showing it unread', async () => {
+    // The bug this pins: the receipt patches the project-scoped list and detail, and the global
+    // page renders from a THIRD cache with a 30s staleTime. Opening an unread task from /tasks
+    // and coming straight back showed it still unread until a refresh.
+    fetchMock.mockResolvedValue(json({ ...RUN, seenAt: '2026-08-03T19:23:14.000Z' }))
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.runsIndex, {
+      runs: [{ projectId: 'api', id: 'run-1', title: 'x', status: 'done', createdAt: RUN.createdAt, archived: false, workflow: 'quick-task' }],
+      perProjectLimit: 200,
+      truncated: [],
+    })
+    expect(client.getQueryState(workspaceQueryKeys.runsIndex)?.isInvalidated).toBe(false)
+
+    const { result } = renderHook(() => useMarkRunSeen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    // Stale, not refetched: nothing is observing the index from a task thread, so this costs no
+    // request — the global page's next mount reads the truth.
+    expect(client.getQueryState(workspaceQueryKeys.runsIndex)?.isInvalidated).toBe(true)
+  })
+
   it('still stamps a detail cache that arrived only with the answer', async () => {
     fetchMock.mockResolvedValue(json({ ...RUN, seenAt: '2026-08-03T19:23:14.000Z' }))
     const client = createQueryClient()

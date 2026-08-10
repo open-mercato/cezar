@@ -305,4 +305,42 @@ describe('ProjectGroups', () => {
     expect(within(group('gone')).queryAllByRole('link')).toHaveLength(0)
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/v1/p/gone/runs')
   })
+
+  /**
+   * A `/p/` prefix is the ONLY thing that makes a project the one you are standing in. On the
+   * global pages — `/tasks` and `/settings/global` — there is no such prefix and no selected
+   * project, so nothing may be painted as selected: highlighting the boot project while the
+   * user reads an all-projects table says the page is about that project when it is not.
+   */
+  it('marks no project as selected on a page that belongs to none', async () => {
+    serve({ '/api/v1/p/cezar/runs': [] })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/tasks',
+    )
+
+    await waitFor(() => expect(group('cezar')).not.toBeNull())
+    for (const id of ['cezar', 'shop']) {
+      expect(group(id).hasAttribute('data-active')).toBe(false)
+      expect(group(id).querySelector('[aria-current="page"]')).toBeNull()
+    }
+    // The boot group still OPENS by default: landing on a global page must not fold the whole
+    // sidebar shut — that is a different question from which one is selected.
+    expect(header('cezar').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('still marks the scoped project on a project page', async () => {
+    serve({ '/api/v1/p/shop/runs': [] })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/git',
+    )
+
+    await waitFor(() => expect(group('shop')).not.toBeNull())
+    expect(group('shop').hasAttribute('data-active')).toBe(true)
+    expect(group('cezar').hasAttribute('data-active')).toBe(false)
+    // …and the nav row for the URL's own area is the current page inside that group only.
+    expect(group('shop').querySelector('[aria-current="page"]')?.textContent).toBe('Git')
+    expect(group('cezar').querySelector('[aria-current="page"]')).toBeNull()
+  })
 })

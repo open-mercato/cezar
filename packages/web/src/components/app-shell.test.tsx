@@ -316,6 +316,38 @@ describe('AppShell', () => {
   })
 
   /** The global banner slot (#391). */
+  describe('All tasks link (multi-project only)', () => {
+    const allTasks = () => document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement | null
+
+    it('is absent without project groups — one project needs no "all projects" door', () => {
+      renderShell()
+      expect(allTasks()).toBeNull()
+    })
+
+    it('links out of every project scope', () => {
+      renderShell('/p/shop/git', { projectGroups: <p>groups</p> })
+      // A PLAIN target: the scope-aware Link would prefix it with `/p/shop`, which is no route.
+      expect(allTasks()!.getAttribute('href')).toBe('/tasks')
+    })
+
+    it('stays put while the project groups scroll', () => {
+      // It is about every group rather than a peer of them, and a workspace with enough
+      // projects to want this page is exactly the one that scrolls it out of sight.
+      renderShell('/', { projectGroups: <p>groups</p> })
+      const scroller = document.querySelector('[data-slot="project-groups"]') as HTMLElement
+      expect(scroller.contains(allTasks())).toBe(false)
+      expect(scroller.className).toContain('overflow-y-auto')
+    })
+
+    it('marks itself the current page only on /tasks', () => {
+      renderShell('/tasks', { projectGroups: <p>groups</p> })
+      expect(allTasks()!.getAttribute('aria-current')).toBe('page')
+      cleanup()
+      renderShell('/p/shop/', { projectGroups: <p>groups</p> })
+      expect(allTasks()!.getAttribute('aria-current')).toBeNull()
+    })
+  })
+
   describe('banner slot', () => {
     it('renders the banner when one is passed', () => {
       renderShell('/', { banner: <p>banner content</p> })

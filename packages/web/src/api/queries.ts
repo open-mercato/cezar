@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
@@ -72,6 +72,7 @@ import {
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { githubRepoBase } from '@/lib/tasks-table'
+import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
@@ -81,6 +82,8 @@ import type {
   PatchRunInput,
   ProviderId,
   OpenAgentAccountFileInput,
+  ProjectListEntry,
+  ProjectsResponse,
   ProviderStatusResponse,
   RunRecord,
   SelectAgentProfileInput,
@@ -373,13 +376,22 @@ export function useRemoveProject() {
 }
 
 /**
- * Set or clear a project's per-project concurrency ceiling
- * (`PATCH /api/projects/:projectId`, spec 2026-07-22 — Settings → Projects).
+ * Edit one registry entry — the per-project concurrency ceiling (spec 2026-07-22) and the
+ * grouping tags — from Settings → Projects.
  *
- * Same registry invalidation as the add/remove paths: the pane reads the ceiling
- * off the projects query, so the row must reflect the new value without a reload.
- * No retry — an out-of-range value or unknown id (400/404) is a deterministic
- * refusal re-asking cannot change.
+ * **Optimistic, and that is load-bearing rather than cosmetic.** The editors are bound to the
+ * server value with no local mirror, so between the PATCH and the refetch the cached project
+ * still holds the OLD list. Adding two tags in a row therefore read the stale list twice and the
+ * second save overwrote the first: click `api`, click `web`, and `api` was gone — the whole list
+ * is replaced wholesale, so a stale read is a silent deletion, not a stale display.
+ *
+ * Writing the new value into the cache immediately closes that window: the next click composes on
+ * top of it. The server's own answer then replaces the row (it is the authority on normalization),
+ * and the final invalidate re-reads the registry. A failure rolls the snapshot back, so a refused
+ * edit leaves the row exactly as it was.
+ *
+ * No retry — an out-of-range value or unknown id (400/404) is a deterministic refusal re-asking
+ * cannot change.
  */
 export function useUpdateProject() {
   const queryClient = useQueryClient()
@@ -391,8 +403,58 @@ export function useUpdateProject() {
       return updateProject(id, patch)
     },
     retry: false,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+    onMutate: async ({ id, ...patch }) => {
+      await queryClient.cancelQueries({ queryKey: workspaceQueryKeys.projects })
+      const previous = queryClient.getQueryData<ProjectsResponse>(workspaceQueryKeys.projects)
+      queryClient.setQueryData<ProjectsResponse>(workspaceQueryKeys.projects, (current) =>
+        current === undefined
+          ? current
+          : {
+              ...current,
+              projects: current.projects.map((project) =>
+                project.id === id ? applyProjectPatch(project, patch) : project,
+              ),
+            },
+      )
+      return { previous }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(workspaceQueryKeys.projects, context.previous)
+      }
+    },
+    onSuccess: ({ project: updated }) => {
+      // The server is the authority on normalization (trim, case-insensitive dedupe, sort), so
+      // its entry replaces the optimistic one rather than merging with it.
+      queryClient.setQueryData<ProjectsResponse>(workspaceQueryKeys.projects, (current) =>
+        current === undefined
+          ? current
+          : {
+              ...current,
+              projects: current.projects.map((project) =>
+                project.id === updated.id ? updated : project,
+              ),
+            },
+      )
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
   })
+}
+
+/** One registry entry with a PATCH body applied — the same per-key rule the route follows: a
+ *  field changes only when the body NAMED it, and `null` (or, for tags, an empty list) clears. */
+function applyProjectPatch(
+  project: ProjectListEntry,
+  patch: UpdateProjectInput,
+): ProjectListEntry {
+  const { maxParallel: _mp, tags: _tags, ...rest } = project
+  const next: ProjectListEntry = { ...rest }
+  const maxParallel = 'maxParallel' in patch ? patch.maxParallel : project.maxParallel
+  if (maxParallel !== null && maxParallel !== undefined) next.maxParallel = maxParallel
+  const tags = 'tags' in patch && patch.tags !== undefined ? patch.tags : project.tags
+  const normalized = tags === null || tags === undefined ? [] : normalizeTagsForDisplay(tags)
+  if (normalized.length > 0) next.tags = normalized
+  return next
 }
 
 /**
@@ -653,12 +715,19 @@ export function useRuns() {
  * open, and re-opening it seconds later should not re-ask the whole workspace. The active
  * project's rows come from `useRuns()` anyway, so the live half of the list is never this stale.
  */
-export function useRunsIndex(enabled = true) {
+export function useRunsIndex(enabled = true, refetchIntervalMs?: number) {
   return useQuery({
     queryKey: workspaceQueryKeys.runsIndex,
     queryFn: ({ signal }) => getRunsIndex({ signal }),
     enabled,
     staleTime: 30_000,
+    // The cockpit's default is NO polling, because the run stream says when something changed
+    // (see `createQueryClient`). This index is the one list with no stream behind it: the run
+    // SSE is per-project, and a page showing forty projects cannot open forty of them. An
+    // interval here is therefore not papering over a broken stream — it is the only freshness
+    // mechanism there is, and only the global Tasks page (which is a live view rather than a
+    // glance) asks for one. The palette leaves it off and keeps its 30s staleness.
+    ...(refetchIntervalMs === undefined ? {} : { refetchInterval: refetchIntervalMs }),
   })
 }
 
@@ -1035,6 +1104,25 @@ export function usePatchRun(id: string) {
 }
 
 /**
+ * Mark the WORKSPACE run index stale after a change to one run's read state.
+ *
+ * The index (`GET /workspace/runs-index`) is a third cache, independent of the project-scoped
+ * run list and detail these mutations patch, and it has a 30s staleTime. Without this, opening an
+ * unread task from the global Tasks page and coming straight back showed it STILL unread until
+ * the next poll or a refresh — which reads as "the click did not work".
+ *
+ * Invalidate rather than patch, deliberately. Patching would need the run's project id (the index
+ * keys on `projectId + id`, because a run id is only unique inside one project), and this
+ * mutation knows a run only by id — deriving the project from the router would couple a data hook
+ * to a `<Router>` that its own unit tests, and any non-routed caller, do not provide. Nothing is
+ * observing the index while you are in a thread, so this costs no request: it simply means the
+ * global page's next mount reads the truth instead of a stale snapshot.
+ */
+function invalidateRunsIndex(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.runsIndex })
+}
+
+/**
  * Mark one run read (#unread-done-items): `POST /api/runs/:id/read`. Opening a finished task's
  * thread fires this so the unread dot clears without waiting for the round-trip — the list and
  * detail caches are stamped with `seenAt` optimistically, then reconciled to the server's exact
@@ -1089,6 +1177,7 @@ export function useMarkRunSeen() {
       queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
         current ? stampReceipt(current) : updated,
       )
+      invalidateRunsIndex(queryClient)
     },
   })
 }
@@ -1141,6 +1230,7 @@ export function useMarkRunUnseen() {
       queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
         current ? clearReceipt(current) : updated,
       )
+      invalidateRunsIndex(queryClient)
     },
   })
 }

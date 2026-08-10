@@ -35,7 +35,7 @@ import {
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
-import { openProjectInSchema } from '@open-mercato/cezar-contract';
+import { openProjectInSchema, updateProjectInputSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -126,6 +126,7 @@ import { withEnvPrefix } from '../core/shell-env.ts';
 import {
   allocateProjectSlug,
   listProjects,
+  normalizeProjectTags,
   probeProjectStatus,
   registerProject,
   removeProject,
@@ -2390,7 +2391,21 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     })
 
-    .patch('/projects/:projectId', jsonZodValidator(() => updateProjectSchema), async (c) => {
+    // Edit the per-project registry fields the cockpit owns: the concurrency ceiling (spec
+    // 2026-07-22-per-project-concurrency) and the grouping tags (spec
+    // 2026-08-10-global-tasks-and-project-tags). A PATCH (not PUT) because it touches named
+    // fields and leaves the rest of the entry alone, and a distinct route from POST
+    // (register-a-folder) to keep register vs. edit semantics clear.
+    //
+    // The body schema is the CONTRACT's, passed directly rather than restated behind a thunk:
+    // it is already in scope, and a second copy is a second thing to keep in step. Its bounds
+    // mirror `workspaceProjectSchema` (config.ts) exactly, so a value this route accepts can
+    // never be degraded away by the next load's `.catch`.
+    //
+    // Deliberately NOT the home of the agent-account selection: that lives in
+    // `~/.cezar/agent-accounts.json` beside the accounts it names, so a cezar version that has
+    // never heard of accounts cannot drop it (see workspace/agent-accounts.ts).
+    .patch('/projects/:projectId', jsonZodValidator(updateProjectInputSchema), async (c) => {
       if (capabilities().singleProject) {
         return c.json(singleProjectRefusal('editing projects'), 409);
       }
@@ -2402,7 +2417,7 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       // `default` is the boot alias the cockpit is allowed to use everywhere else.
       const id = raw === 'default' ? await resolveBootProject() : raw;
-      const { maxParallel } = parsed.data;
+      const { maxParallel, tags } = parsed.data;
 
       // Read-first (mirroring DELETE, server.ts:1252-1258): a well-formed but
       // unknown id must 404 WITHOUT rewriting the config — otherwise it would both
@@ -2422,10 +2437,23 @@ export function createApp(deps: ServerDeps) {
         await mergeWriteWorkspaceConfig((config) => {
           const entry = config.projects.find((p) => p.id === id);
           if (!entry) return; // lost a race with a concurrent remove — answered below
-          // null clears the override; a number sets it. Mutated in place so
-          // `.passthrough()` keys on the entry survive.
-          if (maxParallel === null) delete entry.maxParallel;
-          else entry.maxParallel = maxParallel;
+          // Each key is applied only when the body NAMED it: a PATCH that says
+          // nothing about a field must leave it exactly as it was, which is what
+          // keeps the tags editor from clearing a concurrency ceiling (and the
+          // pre-tags `{ maxParallel }` body from clearing tags). null clears;
+          // a value sets. Mutated in place so `.passthrough()` keys survive.
+          if (maxParallel !== undefined) {
+            if (maxParallel === null) delete entry.maxParallel;
+            else entry.maxParallel = maxParallel;
+          }
+          if (tags !== undefined) {
+            // Normalized on the way IN, so every reader — this API, the CLI, the
+            // global Tasks page — sees one spelling per tag and never has to
+            // fold case itself.
+            const normalized = normalizeProjectTags(tags);
+            if (normalized === undefined) delete entry.tags;
+            else entry.tags = normalized;
+          }
           updated = entry;
         });
       } catch (err) {
@@ -2702,21 +2730,6 @@ export function createApp(deps: ServerDeps) {
       }
     });
 
-  // Edit one field of an existing registry entry (spec
-  // 2026-07-22-per-project-concurrency): the per-project concurrency ceiling.
-  // A PATCH (not PUT) because it touches a single field, and a distinct route
-  // from POST (register-a-folder) to keep register vs. edit semantics clear.
-  // `maxParallel: null` clears the override back to "inherit the workspace
-  // cap". Bounds mirror `workspaceProjectSchema` (config.ts) exactly, so a
-  // value this route accepts can never be degraded away by the next load's
-  // `.catch`.
-  //
-  // Deliberately NOT the home of the agent-account selection: that lives in
-  // `~/.cezar/agent-accounts.json` beside the accounts it names, so a cezar version that has
-  // never heard of accounts cannot drop it (see workspace/agent-accounts.ts).
-  const updateProjectSchema = z.object({
-    maxParallel: z.number().int().min(1).max(16).nullable(),
-  });
   // ---- GUI clone (multi-project spec, step 4.3) ----------------------------
   // "Add project → Clone from GitHub": clone into the checkout root, then
   // register the result through `registerFolder` above (same guards, same
@@ -5139,6 +5152,19 @@ export function createApp(deps: ServerDeps) {
     ...(run.seenAt !== undefined ? { seenAt: run.seenAt } : {}),
     archived: run.archived,
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
+    workflow: run.workflow,
+    ...(run.branch !== undefined ? { branch: run.branch } : {}),
+    ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
+    // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
+    // that picks between them (see the schema's note).
+    ...(run.pullRequestUrl !== undefined ? { pullRequestUrl: run.pullRequestUrl } : {}),
+    ...(run.referencedPullRequestUrl !== undefined
+      ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
+      : {}),
+    ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
+    ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
+    ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
+    ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
   });
 
   /**
