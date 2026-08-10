@@ -78,13 +78,15 @@ export function StepRail({ steps }: { steps: StepState[] }) {
           className="flex min-h-[22px] min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
         >
           <RailIcon visual={railVisual(step.status)} />
-          <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
+          <span className="font-medium text-foreground">{step.name}</span>
           {step.iterations > 1 ? (
             <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
               ×{step.iterations}
             </span>
           ) : null}
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-[11.5px] text-soft-foreground">
+          {/* A small fixed gap, not `ml-auto` — the rail sits in a fit-to-content popover now, so
+              pushing the meta to a far right edge would only manufacture empty space. */}
+          <span className="ml-3 flex shrink-0 items-center gap-1.5 text-[11.5px] text-soft-foreground">
             {/* Kind as a subtle tag, not a dot-joined word — no middot separators (house rule). */}
             <span className="rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium tracking-wide uppercase">
               {step.kind}
