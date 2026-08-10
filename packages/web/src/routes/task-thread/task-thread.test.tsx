@@ -216,10 +216,13 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="reasoning"]')?.textContent).toContain('Thinking — Considering the layout…')
   })
 
-  it('shows the header title (auto-summary, never the raw title) and the status pill', () => {
+  it('shows the header title (auto-summary, never the raw title) and the status stat', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Do the thing')
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('needs you')
+    const status = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
+      /Status/i.test(tile.textContent ?? ''),
+    )
+    expect(status?.textContent).toContain('needs you')
   })
 
   it('waiting → the paused hint (pulsing dot) in the dock, right above an ENABLED composer', () => {
@@ -350,11 +353,14 @@ describe('ThreadView', () => {
     await waitFor(() => expect(textarea.disabled).toBe(false))
   })
 
-  it('monitoring → no paused hint, "message" placeholder, and a "monitoring" pill (#490)', () => {
+  it('monitoring → no paused hint, "message" placeholder, and a "monitoring" status (#490)', () => {
     renderView(<ThreadView run={run('running', { activity: 'monitoring' })} thread={reduceThread(EVENTS)} />)
     // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner.
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('monitoring')
+    const status = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
+      /Status/i.test(tile.textContent ?? ''),
+    )
+    expect(status?.textContent).toContain('monitoring')
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
@@ -822,8 +828,12 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('running')} thread={reduceThread(withPlan)} />)
     expect(document.querySelector('[data-slot="plan-dock"]')).not.toBeNull()
-    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('· 1/3')
-    expect(document.querySelector('[data-slot="plan-mirror"]')?.textContent).toBe('Plan 1/3')
+    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
+    // The header mirror is now the Plan stat tile.
+    const planStat = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
+      /Plan/i.test(tile.textContent ?? ''),
+    )
+    expect(planStat?.textContent).toContain('1/3')
     // No steps on this run — the rail knows to stay away.
     expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
   })
@@ -1000,6 +1010,12 @@ describe('TaskThreadRoute — read receipts', () => {
   const posted = (sent: Array<{ path: string; method: string }>, path: string) =>
     sent.filter((r) => r.method === 'POST' && r.path === path).length
 
+  /** Mark unread now lives in the desktop overflow (#765): open it, then pick the item. */
+  const openMarkUnread = async () => {
+    fireEvent.pointerDown((await screen.findAllByRole('button', { name: 'More actions' }))[0]!)
+    return screen.findByRole('menuitem', { name: 'Mark unread' })
+  }
+
   it('opening an unread finished task marks it read', async () => {
     const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
     visit('r1')
@@ -1015,7 +1031,7 @@ describe('TaskThreadRoute — read receipts', () => {
     )
     visit('r1')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    fireEvent.click(await openMarkUnread())
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/unread')).toBe(1))
 
     // Let every settled mutation, cache write and re-render drain before judging.
@@ -1033,7 +1049,7 @@ describe('TaskThreadRoute — read receipts', () => {
     )
     const first = visit('r1')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    fireEvent.click(await openMarkUnread())
     await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
     expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
     first.unmount()
@@ -1051,6 +1067,6 @@ describe('TaskThreadRoute — read receipts', () => {
     const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
     visit('r1')
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
-    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+    expect(await openMarkUnread()).not.toBeNull()
   })
 })

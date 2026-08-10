@@ -2,6 +2,7 @@ import {
   BotIcon,
   BrainIcon,
   ChevronRightIcon,
+  CircleXIcon,
   FileTextIcon,
   FolderInputIcon,
   GlobeIcon,
@@ -226,14 +227,16 @@ export function AssistantMessage({ text }: { text: string }) {
 
 /** A dim (lifecycle/note) or danger (error) transcript line. */
 export function NoteLine({ note }: { note: ThreadNote }) {
+  const danger = note.tone === 'danger'
   return (
     <div
       data-slot="note-line"
       data-tone={note.tone}
-      className={cn('px-0.5 text-xs', note.tone === 'danger' ? 'text-danger' : 'text-soft-foreground')}
+      // No leading middot (house rule): a dim line is marker enough; a failure earns a real icon.
+      className={cn('flex items-start gap-1.5 px-0.5 text-xs', danger ? 'text-danger' : 'text-soft-foreground')}
     >
-      {note.tone === 'danger' ? '✗ ' : '· '}
-      {note.text}
+      {danger ? <CircleXIcon aria-hidden className="mt-[1px] size-3 shrink-0" /> : null}
+      <span className="min-w-0">{note.text}</span>
     </div>
   )
 }
