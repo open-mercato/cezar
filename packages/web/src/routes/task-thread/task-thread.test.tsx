@@ -809,8 +809,7 @@ describe('ThreadView', () => {
     expect(chip).not.toBeNull()
     expect(chip!.textContent).toContain('Do the task')
     expect(chip!.textContent).toContain('1/2')
-    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
-    expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['active', 'pending'])
+    // The full rail only mounts once its popover opens.
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 

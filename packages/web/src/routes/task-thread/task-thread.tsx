@@ -382,11 +382,6 @@ export function ThreadView({
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
 
-          {/* Steps + plan as collapsed chips that expand upward into popovers (#header-density):
-              the workflow rail moved down out of the header, the plan out of its always-open dock.
-              `settled` freezes the plan's live styling once the run stops (audit A2). */}
-          <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
-
           {/* A usage-limit stop is the one `failed` state that is still going somewhere — the
               dock says so before the composer offers a Continue nobody needs to press. */}
           <AutoResumeHint run={run} />
@@ -411,6 +406,12 @@ export function ThreadView({
             </div>
           ) : null}
 
+          {/* Steps + plan as tabs glued to the composer's top edge (#header-density): the workflow
+              rail left the header, the plan left its always-open dock, and both collapse into
+              overlapping tabs that expand upward on click. `settled` freezes the plan's live
+              styling once the run stops (audit A2). */}
+          <div className="flex min-w-0 flex-col">
+          <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
           <Composer
             onSubmit={
               continuable
@@ -447,6 +448,7 @@ export function ThreadView({
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
+          </div>
         </div>
       </div>
     </div>

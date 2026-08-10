@@ -48,13 +48,12 @@ describe('ThreadContextBar', () => {
     expect(document.querySelector('[data-slot="thread-context-bar"]')).toBeNull()
   })
 
-  it('collapsed by default: a Steps chip that names the active step, no rail rows yet', () => {
+  it('collapsed by default: a Steps tab that names the active step, no rail rows yet', () => {
     render(<ThreadContextBar steps={STEPS} plan={undefined} />)
     const chip = document.querySelector('[data-slot="steps-chip"]')!
     expect(chip.textContent).toContain('Verify')
     expect(chip.textContent).toContain('2/2')
-    // A dot per step, and the full rail is not mounted until the popover opens.
-    expect([...document.querySelectorAll('[data-slot="step-dot"]')]).toHaveLength(2)
+    // The full rail is not mounted until the popover opens.
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 
@@ -66,20 +65,13 @@ describe('ThreadContextBar', () => {
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active'])
   })
 
-  it('collapsed Plan chip shows the odometer and the current item; opening reveals the checklist', async () => {
+  it('collapsed Plan tab shows the odometer; opening reveals the checklist', async () => {
     render(<ThreadContextBar steps={[]} plan={PLAN} />)
     const chip = document.querySelector('[data-slot="plan-chip"]')!
     expect(chip.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
-    expect(chip.querySelector('[data-slot="plan-current"]')?.textContent).toBe('Summarizing')
 
     fireEvent.click(chip as HTMLButtonElement)
     await screen.findByRole('dialog')
     expect([...document.querySelectorAll('[data-slot="plan-item"]')]).toHaveLength(3)
-  })
-
-  it('settled: the Plan chip drops the present-tense current item', () => {
-    render(<ThreadContextBar steps={[]} plan={PLAN} settled />)
-    expect(document.querySelector('[data-slot="plan-current"]')).toBeNull()
-    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
   })
 })
