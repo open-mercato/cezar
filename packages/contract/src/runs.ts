@@ -177,6 +177,21 @@ export const runRecordSchema = z.object({
       githubUrl: z.string(),
     })
     .optional(),
+  /**
+   * Provenance for a task a one-time scheduled definition launched (spec 2026-08-01-postponed-tasks).
+   * Absent on every ordinary run, which is what makes it additive; carried into the record at
+   * CREATION (never patched afterwards) so startup reconciliation can match a durable run back to
+   * the occurrence that reserved it. `trigger` is `manual` for a `Run now`, `scheduled` otherwise.
+   */
+  scheduledTask: z
+    .object({
+      scheduledTaskId: z.string(),
+      revision: z.number(),
+      occurrenceId: z.string(),
+      scheduledFor: z.string(),
+      trigger: z.enum(['scheduled', 'manual']),
+    })
+    .optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
