@@ -30,9 +30,11 @@ function serve(
       maxParallel: 2,
       maxMonitoringSessions: 2,
       monitoringWakeIntervalMinutes: null,
+      autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
     },
+    agentDefaults: {},
     ...overrides,
   }
   const update: SkillsUpdateState = {

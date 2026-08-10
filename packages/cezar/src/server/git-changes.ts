@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 
 /**
@@ -75,7 +76,7 @@ export interface ChangesPayload {
   /** Present when a run worktree was repointed away from the task branch (#591). In that case the
    *  payload is intentionally limited to uncommitted changes instead of attributing the
    *  checked-out branch's history to this task. */
-  repointedHead?: { headBranch: string; taskBranch: string };
+  repointedHead?: RepointedHead;
 }
 
 export type ChangesResult = { ok: true; changes: ChangesPayload } | { ok: false; error: string };
@@ -242,15 +243,23 @@ function statusWord(letter: string): ChangedFile['status'] {
 
 /**
  * Structured "what changed here" for a directory vs its base branch:
- * committed + uncommitted + untracked (via `add -N`), anchored at the
- * merge-base so the diff stays *this task's* changes even after the base
- * moves on — the exact resolution `worktreeDiff` (src/git-worktree.ts) uses
- * for the text-blob `/diff` endpoint, which stays untouched.
+ * committed + uncommitted + untracked (via `add -N`), anchored by the shared
+ * `resolveTaskDiffBase` rule (`src/git-diff-base.ts`) — the merge-base against
+ * the freshest base ref, so the diff stays *this task's* changes even after the
+ * base moves on, and the branch's state at `runStartedAt` when the agent
+ * repointed the worktree onto another branch (#591, #751).
+ * `worktreeShortstat` resolves through the same helper; the text-blob `/diff`
+ * endpoint (`worktreeDiff`) deliberately does not — see its own note.
  */
 export async function collectChanges(
   dir: string,
   baseBranch: string,
-  opts: { patchCap?: number; intentToAdd?: boolean; taskBranch?: string } = {},
+  opts: {
+    patchCap?: number;
+    intentToAdd?: boolean;
+    taskBranch?: string;
+    runStartedAt?: string;
+  } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
   const patchCap = opts.patchCap ?? PATCH_CAP;
@@ -270,19 +279,21 @@ export async function collectChanges(
     } else {
       await git(dir, ['add', '-N', '.']);
     }
-    const mergeBase = await git(dir, ['merge-base', baseBranch, 'HEAD']);
-    const headBranchResult = opts.taskBranch
-      ? await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])
-      : undefined;
-    const headBranch = headBranchResult?.ok ? headBranchResult.stdout.trim() : '';
-    const repointedHead = opts.taskBranch && headBranch && headBranch !== opts.taskBranch
-      ? { headBranch, taskBranch: opts.taskBranch }
-      : undefined;
-    const base = repointedHead
-      ? 'HEAD'
-      : mergeBase.ok && mergeBase.stdout.trim()
-        ? mergeBase.stdout.trim()
-        : baseBranch;
+    // Which ref anchors this task's diff — merge-base normally, the checked-out branch's
+    // pre-run state when the agent repointed the worktree onto it (#591, #751). The rule is
+    // shared with `worktreeShortstat`, and it runs WITH the scratch-index `env`: picking
+    // between two repointed anchors compares them with `git diff --shortstat`, and `git diff`
+    // refreshes and rewrites the index it reads. On the user's real main tree that would be a
+    // read-only GET writing their index, and it would measure against a different index than
+    // the listing below. The ref lookups themselves ignore `GIT_INDEX_FILE`.
+    const { base, repointedHead } = await resolveTaskDiffBase(
+      (args) => git(dir, args, env),
+      baseBranch,
+      {
+        taskBranch: opts.taskBranch,
+        runStartedAt: opts.runStartedAt,
+      },
+    );
 
     const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
     if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };

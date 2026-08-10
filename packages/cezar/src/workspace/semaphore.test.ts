@@ -28,7 +28,40 @@ describe('WorkspaceSemaphore', () => {
     const sem = new WorkspaceSemaphore();
     expect(sem.maxParallel()).toBe(2);
     expect(sem.memoryLimitMb()).toBeNull();
+    expect(sem.monitoringWakeIntervalMinutes()).toBe(5); // #810 — monitoring must self-resume
     expect(sem.busy()).toBe(0);
+  });
+
+  /** #810 — the getter used to be `?? null`. Flipping the default to 5 made that a trap:
+   *  `null ?? 5` is 5, which would have silently overridden every operator who chose
+   *  "Park until resumed". Absent and null must therefore answer differently. */
+  describe('monitoringWakeIntervalMinutes: absent vs. explicit null (#810)', () => {
+    it('falls back to the shipped default only when the key is ABSENT', () => {
+      const sem = new WorkspaceSemaphore({ initial: { maxParallel: 2, monitoringWakeIntervalMinutes: undefined } });
+      expect(sem.monitoringWakeIntervalMinutes()).toBe(5);
+    });
+
+    it('preserves an explicit null (park until resumed)', () => {
+      const sem = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: null } });
+      expect(sem.monitoringWakeIntervalMinutes()).toBeNull();
+    });
+
+    it('preserves an explicit cadence', () => {
+      const sem = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 12 } });
+      expect(sem.monitoringWakeIntervalMinutes()).toBe(12);
+    });
+
+    it('a refresh that reports null parks, and one that reports a number re-arms', async () => {
+      let wake: number | null = null;
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 2, memoryLimitMb: null, monitoringWakeIntervalMinutes: wake }),
+      });
+      await sem.refresh();
+      expect(sem.monitoringWakeIntervalMinutes()).toBeNull();
+      wake = 9;
+      await sem.refresh();
+      expect(sem.monitoringWakeIntervalMinutes()).toBe(9);
+    });
   });
 
   it('honors an initial override (test seam)', () => {
@@ -36,6 +69,36 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.maxParallel()).toBe(5);
     expect(sem.memoryLimitMb()).toBe(512);
   });
+
+  it('accountHolds() unions every participant by kind, and is empty for stubs that hold none', () => {
+    // A usage limit closes an ACCOUNT, and one account can drive tasks in several projects, so
+    // the hold spans managers the way the parallel cap does (spec
+    // 2026-08-03-auto-resume-after-usage-limit). The two kinds bind different work, so they are
+    // aggregated separately. `accountHolds` is optional on the participant, so a stub that
+    // predates it — like the ones above — simply holds nothing.
+    const sem = new WorkspaceSemaphore();
+    expect(sem.accountHolds().deadline.size + sem.accountHolds().inFlight.size).toBe(0);
+
+    sem.register(participant(0));
+    const offA = sem.register({
+      ...participant(0),
+      accountHolds: () => ({ deadline: new Set(['claude:default']), inFlight: new Set<string>() }),
+    });
+    sem.register({
+      ...participant(0),
+      accountHolds: () => ({
+        deadline: new Set(['codex:work']),
+        inFlight: new Set(['claude:second']),
+      }),
+    });
+    expect([...sem.accountHolds().deadline].sort()).toEqual(['claude:default', 'codex:work'])
+    expect([...sem.accountHolds().inFlight]).toEqual(['claude:second'])
+
+    // A torn-down project stops holding the workspace's queue with it.
+    offA()
+    expect([...sem.accountHolds().deadline]).toEqual(['codex:work'])
+  })
+
 
   it('busy() sums every registered participant; unregister stops counting', () => {
     const sem = new WorkspaceSemaphore();

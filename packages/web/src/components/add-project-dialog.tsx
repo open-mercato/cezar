@@ -1,8 +1,7 @@
-import { ChevronRightIcon, CornerLeftUpIcon, FolderIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import { useFsBrowse, useProjects, useRegisterProject } from '@/api/queries'
+import { useProjects, useRegisterProject } from '@/api/queries'
 import type { FsBrowseDir } from '@open-mercato/cezar-api-client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,28 +13,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { cn } from '@/lib/utils'
+import { FolderBrowser, useBrowseTarget } from '@/components/folder-browser'
 
 /**
  * "Add project → Open local folder" (multi-project spec, "Add project" / step 4.2).
  *
- * Browses the server's filesystem through `GET /api/fs/browse` and registers the chosen folder
- * with `POST /api/projects`, then navigates to the new project's scope.
+ * Registers the folder chosen in the shared `FolderBrowser` with `POST /api/v1/projects`, then
+ * navigates to the new project's scope. The browsing itself — and the three API shapes it is
+ * faithful to — lives in `components/folder-browser.tsx`, shared with "Add agent account".
  *
- * Three shapes of the API this dialog is deliberately faithful to, because each one is a place
- * a picker usually lies:
+ * A non-git folder is selectable: `isRepo` only earns a badge, because cezar degrades in a
+ * non-git folder exactly as `cezar serve` does today, so gating selection on it would invent a
+ * restriction the server does not have.
  *
- * - **`parent === null` means the browse root.** No "up" row is rendered there — the root's
- *   parent is not part of the surface, and a row that 400s is worse than no row.
- * - **`truncated`** is surfaced as a visible note. A silently short listing in a huge directory
- *   would read as "the folder isn't there".
- * - **A non-git folder is selectable.** `isRepo` only earns a badge; cezar degrades in a
- *   non-git folder exactly as `cezar serve` does today, so gating selection on it would invent
- *   a restriction the server does not have.
- *
- * The browse errors (400 outside the root, 404 gone) and the register errors (a home directory,
- * hosted-mode narrowing) are shown VERBATIM: the server writes them for the person reading
- * them, and this dialog cannot know which of them is the user's real situation.
+ * The register errors (a home directory, hosted-mode narrowing) are shown VERBATIM: the server
+ * writes them for the person reading them, and this dialog cannot know which of them is the
+ * user's real situation.
  */
 export function AddProjectDialog({
   open,
@@ -48,7 +41,6 @@ export function AddProjectDialog({
   // — it only ever echoes what it was told.
   const [path, setPath] = useState<string | null>(null)
   const [selected, setSelected] = useState<FsBrowseDir | null>(null)
-  const listing = useFsBrowse(path)
   const projects = useProjects()
   const register = useRegisterProject()
   const navigate = useNavigate()
@@ -66,10 +58,7 @@ export function AddProjectDialog({
 
   // Nothing selected means "add the folder I am looking at" — the mockup's footer path. That is
   // also the only way to add the browse root itself.
-  const target = selected?.path ?? listing.data?.path ?? null
-  /** `null` at the browse root (and while loading) — the "up" row exists only when it leads
-   *  somewhere the server is willing to list. */
-  const parent = listing.data?.parent ?? null
+  const target = useBrowseTarget(path, selected)
 
   const add = () => {
     if (target === null || register.isPending) return
@@ -93,91 +82,27 @@ export function AddProjectDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* The breadcrumb is the server's realpath'd answer, not the spelling we asked for. */}
-        <p
-          data-slot="fs-breadcrumb"
-          className="truncate font-mono text-[11.5px] text-soft-foreground"
-          title={listing.data?.path ?? undefined}
-        >
-          {listing.data?.path ?? (listing.isError ? '' : 'Loading…')}
-        </p>
-
-        {listing.isError ? (
-          <p data-slot="fs-error" className="min-w-0 break-words text-[13px] text-danger">
-            {listing.error instanceof Error ? listing.error.message : 'could not list that folder'}
-          </p>
-        ) : (
-          <ul
-            data-slot="fs-listing"
-            className="max-h-64 divide-y divide-border/60 overflow-y-auto overscroll-contain rounded-md border border-border"
-          >
-            {/* Only when the server said there IS a parent — at the root there is no up. */}
-            {parent !== null ? (
-              <li className="flex">
-                <button
-                  type="button"
-                  data-slot="fs-up"
-                  onClick={() => enter(parent)}
-                  className="flex flex-1 items-center gap-2 px-3 py-2 text-left text-[13px] hover:bg-muted"
-                >
-                  <CornerLeftUpIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  Up one level
-                </button>
-              </li>
-            ) : null}
-            {(listing.data?.dirs ?? []).map((dir) => (
-              <li key={dir.path} className="flex items-stretch">
-                <button
-                  type="button"
-                  data-slot="fs-dir"
-                  aria-pressed={selected?.path === dir.path}
-                  onClick={() => setSelected(dir)}
-                  onDoubleClick={() => enter(dir.path)}
-                  className={cn(
-                    'flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-[13px] hover:bg-muted',
-                    selected?.path === dir.path && 'bg-muted',
-                  )}
-                >
-                  <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <span className="truncate">{dir.name}</span>
-                  {dir.isRepo ? (
-                    <Badge variant="outline" className="shrink-0 text-[10px]">
-                      git
-                    </Badge>
-                  ) : null}
-                  {registered.has(dir.path) ? (
-                    <Badge variant="ghost" className="shrink-0 text-[10px] text-muted-foreground">
-                      already added
-                    </Badge>
-                  ) : null}
-                </button>
-                {/* Navigating IN is its own control rather than a click-to-enter row: the row
-                    click has to stay "select this one", or the folder you actually want (the one
-                    you can see) would be the one you cannot choose. Double-click enters too. */}
-                <button
-                  type="button"
-                  data-slot="fs-enter"
-                  aria-label={`Open ${dir.name}`}
-                  onClick={() => enter(dir.path)}
-                  className="flex shrink-0 items-center px-2.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <ChevronRightIcon className="size-3.5" aria-hidden="true" />
-                </button>
-              </li>
-            ))}
-            {listing.data && listing.data.dirs.length === 0 ? (
-              <li className="px-3 py-2 text-[13px] text-muted-foreground">
-                No subfolders here — “Add project” registers this folder.
-              </li>
-            ) : null}
-          </ul>
-        )}
-
-        {listing.data?.truncated ? (
-          <p data-slot="fs-truncated" className="text-[11.5px] text-muted-foreground">
-            Too many folders to list — only the first ones are shown.
-          </p>
-        ) : null}
+        <FolderBrowser
+          path={path}
+          selected={selected}
+          onSelect={setSelected}
+          onEnter={enter}
+          emptyHint="No subfolders here — “Add project” registers this folder."
+          decorate={(dir) => (
+            <>
+              {dir.isRepo ? (
+                <Badge variant="outline" className="shrink-0 text-[10px]">
+                  git
+                </Badge>
+              ) : null}
+              {registered.has(dir.path) ? (
+                <Badge variant="ghost" className="shrink-0 text-[10px] text-muted-foreground">
+                  already added
+                </Badge>
+              ) : null}
+            </>
+          )}
+        />
 
         {register.isError ? (
           <p data-slot="add-project-error" className="min-w-0 break-words text-[13px] text-danger">

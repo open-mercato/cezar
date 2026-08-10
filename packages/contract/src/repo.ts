@@ -91,7 +91,7 @@ export const changedFileSchema = z.object({
 export type ChangedFile = z.infer<typeof changedFileSchema>;
 
 /** `GET /api/v1/runs/:id/changes` and `GET /api/v1/repo/changes` — the structured diff.
- *  409 (+ reason) when there is no worktree or git itself refuses; never HTML. */
+ *  409 (+ reason) when the run's backing directory is unavailable or git itself refuses; never HTML. */
 export const changesPayloadSchema = z.object({
   files: z.array(changedFileSchema),
   stat: diffStatSchema,

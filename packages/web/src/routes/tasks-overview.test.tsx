@@ -42,6 +42,7 @@ function LocationProbe() {
 function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {}) {
   const onViewChange = props.onViewChange ?? vi.fn()
   const onArchiveFinished = props.onArchiveFinished ?? vi.fn()
+  const onMarkAllRead = props.onMarkAllRead ?? vi.fn()
   const onRename = props.onRename ?? vi.fn()
   const utils = render(
     <MemoryRouter initialEntries={['/']}>
@@ -54,9 +55,11 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
               runs={[]}
               view="active"
               now={NOW}
+              expandedColumns={{ branch: true }}
               {...props}
               onViewChange={onViewChange}
               onArchiveFinished={onArchiveFinished}
+              onMarkAllRead={onMarkAllRead}
               onRename={onRename}
             />
           }
@@ -66,7 +69,7 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
       </Routes>
     </MemoryRouter>
   )
-  return { ...utils, onViewChange, onArchiveFinished, onRename }
+  return { ...utils, onViewChange, onArchiveFinished, onMarkAllRead, onRename }
 }
 
 const location = () => screen.getByTestId('location').textContent
@@ -77,6 +80,49 @@ const cellsOf = (id: string): string[] => [...(tableRow(id)?.querySelectorAll('t
 afterEach(cleanup)
 
 describe('TasksOverview — the table', () => {
+  it('starts with Branch folded while keeping fixed columns and an in-place restore control', () => {
+    const onToggleColumn = vi.fn()
+    renderOverview({
+      expandedColumns: {},
+      onToggleColumn,
+      runs: [run({ id: 'fresh', branch: 'feat/fresh-workspace' })],
+    })
+
+    const branchHeader = document.querySelector<HTMLElement>('th[data-column-id="branch"]')
+    expect(branchHeader?.getAttribute('data-folded')).toBe('true')
+    const restore = within(branchHeader as HTMLElement).getByRole('button', {
+      name: 'Expand Branch column',
+      pressed: false,
+    })
+    expect(restore.tagName).toBe('BUTTON')
+    fireEvent.click(restore)
+    expect(onToggleColumn).toHaveBeenCalledWith('branch')
+    expect(location()).toBe('/')
+
+    expect(tableRow('fresh')?.querySelector('td[data-column-id="branch"]')?.textContent).toBe('')
+    expect(tableRow('fresh')?.querySelector('td[data-column-id="branch"]')?.getAttribute('aria-hidden')).toBe(
+      'true',
+    )
+    expect(document.querySelector('col[data-column-id="branch"]')?.getAttribute('style')).toContain('42px')
+    expect(document.querySelector('th[data-column-id="status"] button')).toBeNull()
+    expect(document.querySelector('th[data-column-id="task"] button')).toBeNull()
+    expect(document.querySelector('[data-slot="tasks-table"] table')?.className).not.toContain('min-w-[1040px]')
+  })
+
+  it('disables optional headers while workspace column state is loading', () => {
+    const onToggleColumn = vi.fn()
+    renderOverview({
+      columnsPending: true,
+      onToggleColumn,
+      runs: [run({ id: 'pending-columns' })],
+    })
+
+    const branch = screen.getByRole('button', { name: 'Fold Branch column', pressed: true })
+    expect((branch as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(branch)
+    expect(onToggleColumn).not.toHaveBeenCalled()
+  })
+
   it('renders one row per run, in the sidebar order (needs-you first, then recency)', () => {
     renderOverview({
       runs: [
@@ -109,6 +155,26 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
   })
 
+  it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
+    // The record is `failed`, but the task has an appointment (spec
+    // 2026-08-03-auto-resume-after-usage-limit): amber, still, and carrying the instant the way
+    // a queued row carries its position.
+    renderOverview({
+      runs: [
+        run({ id: 'sched', status: 'failed', autoResumeAt: new Date(NOW + 45 * 60_000).toISOString() }),
+        run({ id: 'broke', status: 'failed' }),
+      ],
+    })
+    const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
+    expect(pillOf('sched')?.textContent).toContain('scheduled')
+    // The time itself, locale-formatted — assert it is there rather than its spelling.
+    expect(pillOf('sched')?.querySelector('.tabular-nums')?.textContent).toMatch(/\d{1,2}[:.]\d{2}/)
+    expect(pillOf('sched')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    // …and an ordinary failure is untouched.
+    expect(pillOf('broke')?.textContent).toBe('failed')
+    expect(pillOf('broke')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+  })
+
   it('shows a queued issue reference before the agent starts', () => {
     renderOverview({
       runs: [
@@ -136,6 +202,8 @@ describe('TasksOverview — the table', () => {
           branch: 'cez/8f31ab02',
           diffStat: { adds: 128, dels: 14, files: 6 },
           tokensUsed: 184_700,
+          inputTokens: 184_700,
+          outputTokens: 2_400,
           costUsd: 0.31,
           pullRequestUrl: 'https://github.com/o/r/pull/402',
           createdAt: ago(40 * 60_000),
@@ -145,7 +213,7 @@ describe('TasksOverview — the table', () => {
       ],
     })
 
-    // Status | Task | Workflow | Branch | ± | PR | Tokens | Cost | CPU | Mem | Started
+    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | CPU | Mem | Started
     expect(cellsOf('full')).toEqual([
       'needs review',
       'Structured changes endpoint',
@@ -153,7 +221,7 @@ describe('TasksOverview — the table', () => {
       'cez/8f31ab02',
       '+128 −14', // the ± column (R2 #389) — adds and dels, the mockup's pair
       '#402',
-      '184.7k',
+      '184.7k / 2.4k',
       '$0.31',
       '—', // no live sample, CPU has no persisted peak
       '—',
@@ -162,17 +230,43 @@ describe('TasksOverview — the table', () => {
     // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
     // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '0', '—', '—', '—', '26m'])
+    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
     expect(diff?.querySelector('.text-danger')?.textContent).toBe('−14')
     expect(diff?.getAttribute('title')).toBe('+128 −14 across 6 files')
+    // Nothing was narrowed here, so nothing claims it was (#751).
+    expect(diff?.getAttribute('data-repointed')).toBeNull()
+  })
+
+  it('annotates the ± column when the stat was measured on a repointed worktree (#751)', () => {
+    renderOverview({
+      runs: [
+        run({
+          id: 'reviewer',
+          title: 'Review PR 694',
+          status: 'review',
+          branch: 'cez/d8ff6490',
+          diffStat: { adds: 1, dels: 0, files: 1, repointed: true },
+          createdAt: ago(20 * 60_000),
+        }),
+      ],
+    })
+
+    const diff = tableRow('reviewer')?.querySelector('[data-slot="diff-stat"]')
+    // The numbers stay the numbers — the column still reads as a diff pair.
+    expect(diff?.textContent).toBe('+1 −0')
+    expect(diff?.getAttribute('data-repointed')).toBe('true')
+    expect(diff?.getAttribute('title')).toBe(
+      "+1 −0 across 1 file — measured against another branch checked out in this task's worktree, as this task found it"
+    )
   })
 
   it('removes token/cost headers and cells while preserving table and queue semantics', () => {
     renderOverview({
-      showTokenMetrics: false,
+      showTokens: false,
+      showCost: false,
       runs: [
         run({ id: 'hidden', title: 'Hidden metrics', tokensUsed: 184_700, costUsd: 0.31 }),
         run({ id: 'queued-hidden', status: 'queued', tokensUsed: 12_000, costUsd: 0.02 }),
@@ -200,6 +294,108 @@ describe('TasksOverview — the table', () => {
     expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
     expect(queued.textContent).not.toContain('12.0k')
     expect(queued.textContent).not.toContain('$0.02')
+  })
+
+  it('keeps headers and normal/queued rows logically aligned when several columns are folded', () => {
+    renderOverview({
+      expandedColumns: { branch: false, workflow: false, cpu: false, memory: false },
+      runs: [
+        run({ id: 'aligned', branch: 'feat/aligned' }),
+        run({ id: 'aligned-queue', status: 'queued', branch: 'feat/queued' }),
+      ],
+    })
+
+    const headerIds = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map((header) =>
+      header.getAttribute('data-column-id'),
+    )
+    const logicalRowIds = (id: string) =>
+      [...(tableRow(id)?.querySelectorAll('td') ?? [])].flatMap((cell) =>
+        cell.getAttribute('data-column-id') === 'cpu-memory'
+          ? ['cpu', 'memory']
+          : [cell.getAttribute('data-column-id')],
+      )
+
+    expect(logicalRowIds('aligned')).toEqual(headerIds)
+    expect(logicalRowIds('aligned-queue')).toEqual(headerIds)
+    expect(tableRow('aligned-queue')?.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
+    expect(document.querySelector('th[data-column-id="cpu"]')?.getAttribute('data-folded')).toBe('true')
+    expect(document.querySelector('th[data-column-id="memory"]')?.getAttribute('data-folded')).toBe('true')
+  })
+
+  it('uses action-oriented names and pressed state on every optional header', () => {
+    renderOverview({
+      expandedColumns: { workflow: false, branch: true },
+      runs: [run({ id: 'accessible' })],
+    })
+
+    expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Fold Branch column', pressed: true })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Fold CPU column', pressed: true })).not.toBeNull()
+    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(9)
+    expect(document.querySelector('th[data-column-id="status"]')?.textContent).toBe('Status')
+    expect(document.querySelector('th[data-column-id="task"]')?.textContent).toBe('Task')
+  })
+
+  it('does not render capability-hidden columns or disturb their saved choices', () => {
+    const expandedColumns = { tokens: false, cost: false, branch: true } as const
+    renderOverview({
+      expandedColumns,
+      showTokens: false,
+      showCost: false,
+      runs: [run({ id: 'capability-hidden', inputTokens: 123, costUsd: 0.42 })],
+    })
+
+    expect(document.querySelector('th[data-column-id="tokens"]')).toBeNull()
+    expect(document.querySelector('th[data-column-id="cost"]')).toBeNull()
+    expect(tableRow('capability-hidden')?.querySelector('td[data-column-id="tokens"]')).toBeNull()
+    expect(tableRow('capability-hidden')?.querySelector('td[data-column-id="cost"]')).toBeNull()
+    expect(expandedColumns).toEqual({ tokens: false, cost: false, branch: true })
+  })
+
+  it('reuses the same folded state for archived rows and filtered results', () => {
+    renderOverview({
+      view: 'archived',
+      expandedColumns: { workflow: false, branch: false },
+      runs: [run({ id: 'archived-folded', archived: true, title: 'Needle task', workflow: 'autofix' })],
+    })
+
+    expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
+    expect(tableRow('archived-folded')?.querySelector('td[data-column-id="workflow"]')?.textContent).toBe('')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), { target: { value: 'needle' } })
+    expect(tableRow('archived-folded')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
+  })
+
+  it.each([
+    { name: 'both visible', showTokens: true, showCost: true, headers: ['IN / OUT', 'Cost'], tokens: true, cost: true },
+    { name: 'tokens only', showTokens: true, showCost: false, headers: ['IN / OUT'], tokens: true, cost: false },
+    { name: 'cost only', showTokens: false, showCost: true, headers: ['Cost'], tokens: false, cost: true },
+    { name: 'both hidden', showTokens: false, showCost: false, headers: [], tokens: false, cost: false },
+  ])('keeps desktop and mobile metrics independent when $name', ({ showTokens, showCost, headers, tokens, cost }) => {
+    renderOverview({
+      showTokens,
+      showCost,
+      runs: [
+        run({
+          id: 'visibility',
+          branch: 'cez/visibility',
+          inputTokens: 184_700,
+          outputTokens: 2_400,
+          costUsd: 0.31,
+        }),
+      ],
+    })
+
+    const allHeaders = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
+      (cell) => cell.textContent,
+    )
+    expect(allHeaders.filter((header) => header === 'IN / OUT' || header === 'Cost')).toEqual(headers)
+    const rowText = tableRow('visibility')?.textContent ?? ''
+    const cardText = card('visibility')?.textContent ?? ''
+    expect(rowText.includes('184.7k / 2.4k')).toBe(tokens)
+    expect(cardText.includes('IN 184.7k · OUT 2.4k')).toBe(tokens)
+    expect(rowText.includes('$0.31')).toBe(cost)
+    expect(cardText.includes('$0.31')).toBe(cost)
   })
 
   it('shows the auto-summary title once a turn produced one, falling back to the raw title', () => {
@@ -401,6 +597,7 @@ describe('TasksOverview — usage cells', () => {
               view="active"
               onViewChange={vi.fn()}
               onArchiveFinished={vi.fn()}
+              onMarkAllRead={vi.fn()}
               onRename={vi.fn()}
               now={NOW}
             />
@@ -471,6 +668,46 @@ describe('TasksOverview — header', () => {
     // Archived view → the sweep acts on the other tab; offering it here would be misleading.
     renderOverview({ runs: [run({ status: 'done' })], view: 'archived' })
     expect(screen.queryByRole('button', { name: /Archive finished/ })).toBeNull()
+  })
+
+  // Read/unread (#unread-done-items). The rule itself is table-tested in lib/read-state.test.ts;
+  // what these cover is the PAINT — that the table actually wears the marker the rule decides,
+  // and that the sweep control is offered exactly when there is unread history to sweep.
+  it('marks an unread done row with a violet dot and leaves read history unmarked', () => {
+    const FINISHED = ago(60_000)
+    renderOverview({
+      runs: [
+        run({ id: 'unread', status: 'done', finishedAt: FINISHED }),
+        run({ id: 'read', status: 'done', finishedAt: FINISHED, seenAt: ago(30_000) }),
+        // Cancelled is never unread — you stopped it yourself.
+        run({ id: 'cancelled', status: 'cancelled', finishedAt: FINISHED }),
+      ],
+    })
+    // Keyed on the aria-label, not on the violet tone alone: the attention pill's OWN dot is
+    // violet for the live states (running/waiting/review), so a tone-only selector would be
+    // matching two different signals and would quietly stop meaning what it says.
+    const unreadDot = (id: string) =>
+      tableRow(id)?.querySelector('[data-slot="status-dot"][aria-label="unread"]')
+    expect(unreadDot('unread')).not.toBeNull()
+    expect(unreadDot('unread')?.getAttribute('data-tone')).toBe('violet')
+    expect(unreadDot('read')).toBeNull()
+    expect(unreadDot('cancelled')).toBeNull()
+  })
+
+  it('offers Mark all read only while something is unread, and calls back on click', () => {
+    const FINISHED = ago(60_000)
+    const { onMarkAllRead, unmount } = renderOverview({
+      runs: [run({ status: 'done', finishedAt: FINISHED })],
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Mark all read/ }))
+    expect(onMarkAllRead).toHaveBeenCalledTimes(1)
+    unmount()
+
+    // Everything already seen → nothing left to sweep, so no control.
+    renderOverview({
+      runs: [run({ status: 'done', finishedAt: FINISHED, seenAt: ago(30_000) })],
+    })
+    expect(screen.queryByRole('button', { name: /Mark all read/ })).toBeNull()
   })
 
   it('filters by title, branch and workflow through the search box', () => {
@@ -545,6 +782,18 @@ describe('TasksOverview — empty and loading states', () => {
 })
 
 describe('TasksOverview — mobile cards and FAB', () => {
+  it('keeps mobile metadata unchanged when its desktop columns are folded', () => {
+    renderOverview({
+      expandedColumns: { workflow: false, branch: false },
+      runs: [run({ id: 'folded-mobile', workflow: 'autofix', branch: 'feat/mobile-stays' })],
+    })
+
+    expect(tableRow('folded-mobile')?.querySelector('td[data-column-id="workflow"]')?.textContent).toBe('')
+    expect(tableRow('folded-mobile')?.querySelector('td[data-column-id="branch"]')?.textContent).toBe('')
+    expect(card('folded-mobile')?.textContent).toContain('autofix')
+    expect(card('folded-mobile')?.textContent).toContain('feat/mobile-stays')
+  })
+
   it('renders the same runs as cards, in the same order', () => {
     renderOverview({
       runs: [
@@ -574,6 +823,9 @@ describe('TasksOverview — mobile cards and FAB', () => {
           branch: 'cez/8f31ab02',
           diffStat: { adds: 128, dels: 14, files: 6 },
           tokensUsed: 184_700,
+          inputTokens: 184_700,
+          outputTokens: 2_400,
+          costUsd: 0.31,
           pullRequestUrl: 'https://github.com/o/r/pull/402',
           createdAt: ago(40 * 60_000),
           finishedAt: ago(12 * 60_000),
@@ -590,14 +842,16 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(c.textContent).toContain('cez/8f31ab02')
     // The meta row carries the diff pair, like the mockup card (branch · ± · tokens).
     expect(c.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+128 −14')
-    expect(c.textContent).toContain('184.7k')
+    expect(c.textContent).toContain('IN 184.7k · OUT 2.4k')
+    expect(c.textContent).toContain('$0.31')
     expect(c.textContent).toContain('12m')
     expect(c.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/r/pull/402')
   })
 
   it('removes token text and its separator from cards when metrics are hidden', () => {
     renderOverview({
-      showTokenMetrics: false,
+      showTokens: false,
+      showCost: false,
       runs: [
         run({
           id: 'hidden-card',
@@ -700,6 +954,13 @@ describe('TasksOverviewRoute — wired to the app', () => {
     )
   }
 
+  function json(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
   const sidebarTab = (view: string) =>
     document.querySelector(`[data-slot="view-tab"][data-view="${view}"]`) as HTMLElement
   const overviewTab = (view: string) =>
@@ -724,6 +985,67 @@ describe('TasksOverviewRoute — wired to the app', () => {
     expect(overviewTab('active').getAttribute('aria-pressed')).toBe('true')
     expect(tableRow('act')).not.toBeNull()
     expect(tableRow('arc')).toBeNull()
+  })
+
+  it('adopts persisted workspace choices, updates optimistically, and reloads the server answer', async () => {
+    let workspaceState = {
+      taskTable: {
+        expandedColumns: { branch: false },
+        futureSibling: 'preserve',
+      },
+    }
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url === '/api/v1/workspace/ui-state') {
+        if (init?.method === 'PUT') {
+          workspaceState = { ...workspaceState, ...JSON.parse(String(init.body)) }
+        }
+        return json(workspaceState)
+      }
+      if (url === '/api/v1/runs') return json([run({ id: 'persisted', branch: 'feat/persisted' })])
+      return json({})
+    })
+
+    const first = render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ListViewProvider>
+            <TasksOverviewRoute />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const restore = await screen.findByRole('button', { name: 'Expand Branch column', pressed: false })
+    restore.focus()
+    fireEvent.click(restore)
+    const fold = await screen.findByRole('button', { name: 'Fold Branch column', pressed: true })
+    expect(document.activeElement).toBe(fold)
+    const put = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([path, options]) => String(path) === '/api/v1/workspace/ui-state' && options?.method === 'PUT',
+      )
+      if (!call) throw new Error('workspace PUT missing')
+      return call
+    })
+    expect(JSON.parse(String(put[1]?.body))).toEqual({
+      taskTable: {
+        expandedColumns: { branch: true },
+        futureSibling: 'preserve',
+      },
+    })
+    expect(put[1]?.keepalive).toBe(true)
+
+    first.unmount()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ListViewProvider>
+            <TasksOverviewRoute />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByRole('button', { name: 'Fold Branch column', pressed: true })).not.toBeNull()
   })
 
   it('posts to /api/v1/runs/archive-finished and refetches the authoritative list', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
-import { expandRegistrySlashSkill, skillSystemPrompt } from './run.ts';
+import { expandRegistrySlashSkill, expandRegistrySlashSkillText, skillSystemPrompt } from './run.ts';
 
 describe('skillSystemPrompt — installed-path hint for worktree agents', () => {
   const base = { name: 'om-code-review', description: 'Review a diff.', body: 'Do the review.' };
@@ -70,5 +70,38 @@ describe('expandRegistrySlashSkill — live chat delivery', () => {
 
     expect(expanded[0]).toBe(image);
     expect((expanded[1] as Extract<ContentBlock, { type: 'text' }>).text).toContain('Do the review.');
+  });
+
+  /**
+   * #811 — a continuation's opening message becomes the session's `userPrompt` and
+   * never passes through `deliverMessage`, so the string form is the seam that path
+   * needs. Both spellings must agree, or `/skill` would expand on a live follow-up and
+   * leak verbatim on the Reply-after-finish that opens the same session.
+   */
+  describe('expandRegistrySlashSkillText — the continuation seam (#811)', () => {
+    it('expands the same way the content-block form does', () => {
+      const text = '/om-code-review PR 42';
+      const viaText = expandRegistrySlashSkillText(text, [skill]);
+      const viaBlocks = expandRegistrySlashSkill([{ type: 'text', text }], [skill]);
+
+      expect(viaText).toContain('Selected skill: /om-code-review');
+      expect(viaText).toContain('Skill instructions:\nDo the review.\n\nUser request:\nPR 42');
+      expect((viaBlocks[0] as Extract<ContentBlock, { type: 'text' }>).text).toBe(viaText);
+    });
+
+    it('expands a bare skill name with no trailing request', () => {
+      expect(expandRegistrySlashSkillText('/om-code-review', [skill])).toBe(skillSystemPrompt(skill));
+    });
+
+    it.each(['/unknown PR 42', ' /om-code-review PR 42', '/om-code-reviewer PR 42', 'Continue.'])(
+      'returns non-matching text unchanged so a backend keeps its own slash commands: %s',
+      (text) => {
+        expect(expandRegistrySlashSkillText(text, [skill])).toBe(text);
+      },
+    );
+
+    it('returns the text unchanged against an empty registry (the #811 failure mode)', () => {
+      expect(expandRegistrySlashSkillText('/om-code-review PR 42', [])).toBe('/om-code-review PR 42');
+    });
   });
 });

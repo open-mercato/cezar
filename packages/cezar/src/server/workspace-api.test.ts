@@ -102,10 +102,15 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 2,
         maxMonitoringSessions: 2,
-        monitoringWakeIntervalMinutes: null,
+        monitoringWakeIntervalMinutes: 5,
+        autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
       },
+      // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
+      // keys mean "this machine has no opinion", which is what makes them defaults a repo can be
+      // silent about rather than settings every checkout inherits a value from.
+      agentDefaults: {},
     });
     // Absolute project roots belong on /api/v1/projects; schemaVersion is a
     // migration cursor, not a setting.
@@ -123,7 +128,13 @@ describe('the workspace settings API (step 2.7)', () => {
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {
     expect(semaphore.maxParallel()).toBe(2); // the pre-PUT snapshot
     const res = await putConfig({
-      resources: { maxParallel: 5, maxMonitoringSessions: 3, monitoringWakeIntervalMinutes: 5, memoryLimitMb: 2048 },
+      resources: {
+        maxParallel: 5,
+        maxMonitoringSessions: 3,
+        monitoringWakeIntervalMinutes: 5,
+        autoResumeOnUsageLimit: false,
+        memoryLimitMb: 2048,
+      },
     });
     expect(res.status).toBe(200);
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
@@ -141,9 +152,13 @@ describe('the workspace settings API (step 2.7)', () => {
         maxParallel: 5,
         maxMonitoringSessions: 3,
         monitoringWakeIntervalMinutes: 5,
+        autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
       },
+      // Untouched by a resources write, and still empty — the two live in the same file but answer
+      // unrelated questions, so one must never materialize the other.
+      agentDefaults: {},
     });
     // Round-trip through GET and the raw file.
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.maxParallel).toBe(5);
@@ -152,7 +167,26 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.maxParallel()).toBe(5);
     expect(semaphore.maxMonitoringSessions()).toBe(3);
     expect(semaphore.monitoringWakeIntervalMinutes()).toBe(5);
+    // Default-ON, so the write worth pinning is the one that turns it OFF (spec
+    // 2026-08-03-auto-resume-after-usage-limit) — and it reaches the shared cache the engine
+    // asks, not just the file.
+    expect(semaphore.autoResumeOnUsageLimit()).toBe(false);
     expect(semaphore.memoryLimitMb()).toBe(2048);
+  });
+
+  /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
+   *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
+   *  it to 5 would silently overrule an operator who chose "Park until resumed". */
+  it('PUT null parks monitoring and is never re-defaulted back to the shipped cadence', async () => {
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBe(5); // the zero-config default
+    const res = await putConfig({ resources: { monitoringWakeIntervalMinutes: null } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.monitoringWakeIntervalMinutes).toBeNull();
+    expect(
+      ((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.monitoringWakeIntervalMinutes,
+    ).toBeNull();
+    expect((rawConfig().resources as Record<string, unknown>).monitoringWakeIntervalMinutes).toBeNull();
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBeNull();
   });
 
   it('partial updates leave the other keys untouched', async () => {
@@ -161,7 +195,8 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
       maxMonitoringSessions: 2,
-      monitoringWakeIntervalMinutes: null,
+      monitoringWakeIntervalMinutes: 5,
+      autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
     });
@@ -340,6 +375,85 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
     expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
+  });
+
+  it('round-trips task-table choices and preserves unknown nested siblings', async () => {
+    const res = await putUiState({
+      taskTable: {
+        expandedColumns: { branch: false, workflow: true, futureColumn: false },
+        futurePreference: { compact: true },
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      taskTable: {
+        expandedColumns: { branch: false, workflow: true, futureColumn: false },
+        futurePreference: { compact: true },
+      },
+    });
+    expect(rawUiState()).toEqual({
+      taskTable: {
+        expandedColumns: { branch: false, workflow: true, futureColumn: false },
+        futurePreference: { compact: true },
+      },
+    });
+  });
+
+  it.each([
+    ['a non-boolean value', { branch: 'yes' }],
+    ['an empty id', { '': true }],
+    ['an overlong id', { ['x'.repeat(65)]: true }],
+    [
+      'more than 50 entries',
+      Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`column-${index}`, true])),
+    ],
+  ])('rejects task-table expanded columns with %s without writing state', async (_case, expandedColumns) => {
+    const res = await putUiState({ taskTable: { expandedColumns } });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toHaveProperty('error');
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
+  });
+
+  it('round-trips a bounded last project location including query and hash', async () => {
+    const lastLocation = {
+      projectId: 'storefront',
+      pathname: '/p/storefront/runs/run-123',
+      search: '?tab=events',
+      hash: '#tool-call-9',
+    };
+
+    const res = await putUiState({ lastLocation });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ lastLocation });
+    expect(await (await getUiState()).json()).toMatchObject({ lastLocation });
+    expect(rawUiState()).toMatchObject({ lastLocation });
+  });
+
+  it.each([
+    ['an empty project id', { projectId: '', pathname: '/p/storefront/' }],
+    ['an overlong project id', { projectId: 'p'.repeat(65), pathname: '/p/storefront/' }],
+    ['a non-project pathname', { projectId: 'storefront', pathname: '/settings/global' }],
+    ['an overlong pathname', { projectId: 'storefront', pathname: `/p/storefront/${'x'.repeat(2035)}` }],
+    ['a search without its prefix', { projectId: 'storefront', pathname: '/p/storefront/', search: 'tab=runs' }],
+    [
+      'an overlong search',
+      { projectId: 'storefront', pathname: '/p/storefront/', search: `?${'x'.repeat(4096)}` },
+    ],
+    ['a hash without its prefix', { projectId: 'storefront', pathname: '/p/storefront/', hash: 'run-1' }],
+    [
+      'an overlong hash',
+      { projectId: 'storefront', pathname: '/p/storefront/', hash: `#${'x'.repeat(2048)}` },
+    ],
+    ['a non-string field', { projectId: 'storefront', pathname: 42 }],
+    ['an unknown field', { projectId: 'storefront', pathname: '/p/storefront/', extra: true }],
+  ])('rejects lastLocation with %s without writing state', async (_case, lastLocation) => {
+    const res = await putUiState({ lastLocation });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toHaveProperty('error');
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
   });
 
   // Every Settings → Appearance preference has to be listed in `appearanceSchema`: the top-level

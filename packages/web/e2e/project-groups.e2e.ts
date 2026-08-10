@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 import { readSharedProjects, snapshotSharedHome, writeSharedProjects } from './workspace-registry'
@@ -17,9 +17,9 @@ import { readSharedProjects, snapshotSharedHome, writeSharedProjects } from './w
  * load — no server restart — and `afterAll` puts the operator's scratch home back byte for byte.
  *
  * What is worth proving here rather than in `project-groups.test.tsx`: that the registry file,
- * the projects API, the per-project route prefixes and the collapse round-trip through
- * `~/.cezar/ui-state.json` are one working chain. The component's own rules (ordering, missing
- * roots, badge attribution) are pinned in jsdom against fixtures.
+ * the projects API, the per-project route prefixes and the collapse round-trip through a REAL
+ * browser's localStorage (across a real reload) are one working chain. The component's own rules
+ * (ordering, missing roots, badge attribution) are pinned in jsdom against fixtures.
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
@@ -42,6 +42,7 @@ let singleProject = false
 
 let forgeAvailable = false
 let followupsAvailable = false
+let automationsAvailable = false
 
 const scoped = (projectId: string, path: string) => `/p/${projectId}${path}`
 
@@ -51,7 +52,10 @@ function expectedNavHrefs(projectId: string): string[] {
     scoped(projectId, '/'),
     ...(followupsAvailable ? [scoped(projectId, '/inbox')] : []),
     scoped(projectId, '/git'),
-    ...(forgeAvailable ? [scoped(projectId, '/github'), scoped(projectId, '/automations')] : []),
+    ...(forgeAvailable ? [scoped(projectId, '/github')] : []),
+    // #801: the automations opt-in is workspace-wide, the forge gate is per project — the item
+    // needs both.
+    ...(forgeAvailable && automationsAvailable ? [scoped(projectId, '/automations')] : []),
     scoped(projectId, '/skills'),
     scoped(projectId, '/workflows'),
     scoped(projectId, '/settings'),
@@ -72,19 +76,27 @@ async function workspaceUiState(): Promise<{ sidebar?: { collapsed?: Record<stri
   }
 }
 
+/** The collapse map as THIS browser holds it — the cockpit's own storage since the map stopped
+ *  being a workspace-wide setting every client had to share. */
+function storedCollapse(): Record<string, boolean> {
+  const raw = browser.evaluate(`localStorage.getItem('cez-sidebar-collapsed')`)
+  return typeof raw === 'string' ? (JSON.parse(raw) as Record<string, boolean>) : {}
+}
+
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   bootProject = await bootProjectId(baseUrl)
   const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
     forge: { available: boolean } | null
-    capabilities: { followups: boolean; singleProject: boolean }
+    capabilities: { followups: boolean; singleProject: boolean; automations: boolean }
   }
   forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
+  automationsAvailable = health.capabilities.automations
   singleProject = health.capabilities.singleProject
 
-  // `ui-state.json` too: the collapse assertions below write into it, and a developer's scratch
-  // home must not come out of this run holding `e2e-alpha: false`.
+  // `ui-state.json` too: the collapse assertion below reads it to prove nothing was written
+  // there, and a developer's scratch home must not come out of this run holding a seeded map.
   restoreHome = snapshotSharedHome('config.json', 'ui-state.json')
   seedDir = mkdtempSync(join(tmpdir(), 'cezar-e2e-groups-'))
 
@@ -251,19 +263,22 @@ describe('the grouped multi-project sidebar', () => {
     ).toBe(scoped(ALPHA.id, '/'))
   })
 
-  it('persists a collapse through the workspace ui-state, so a reload keeps it', async ({ skip }) => {
+  it('persists a collapse in THIS browser, so a reload keeps it and the workspace file does not', async ({
+    skip,
+  }) => {
     if (singleProject) skip()
+    // Whatever the shared home already holds under the legacy key, verbatim — the assertion at
+    // the end is that these toggles left it exactly there.
+    const workspaceSidebar = JSON.stringify((await workspaceUiState()).sidebar ?? null)
     gotoGrouped(scoped(bootProject, '/'))
 
     // Shut the active group — the one case the default would re-open on its own, so a reload
     // that still finds it shut can only mean the state was stored and read back.
     setGroupExpanded(bootProject, false)
 
-    // The PUT is debounced, so wait for the server to actually hold it rather than for a clock.
-    await vi.waitFor(
-      async () => expect((await workspaceUiState()).sidebar?.collapsed?.[bootProject]).toBe(true),
-      { timeout: 10_000, interval: 200 }
-    )
+    // Stored locally and synchronously: there is no debounced PUT to wait on any more, so the
+    // value is already there when the chevron has turned.
+    expect(storedCollapse()[bootProject]).toBe(true)
 
     gotoGrouped(scoped(bootProject, '/'))
     expect(browser.count(groupBody(bootProject))).toBe(0)
@@ -273,10 +288,11 @@ describe('the grouped multi-project sidebar', () => {
 
     // And back: the same gesture re-opens it, so the stored `true` is a toggle and not a trap.
     setGroupExpanded(bootProject, true)
-    await vi.waitFor(
-      async () => expect((await workspaceUiState()).sidebar?.collapsed?.[bootProject]).toBe(false),
-      { timeout: 10_000, interval: 200 }
-    )
+    expect(storedCollapse()[bootProject]).toBe(false)
+
+    // The whole point of the move: a second cockpit — a phone, another window — keeps its own
+    // answer, which it cannot do if either toggle reached the shared workspace file.
+    expect(JSON.stringify((await workspaceUiState()).sidebar ?? null)).toBe(workspaceSidebar)
   })
 })
 

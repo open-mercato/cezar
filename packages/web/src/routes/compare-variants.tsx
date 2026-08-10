@@ -9,6 +9,7 @@ import { ApiError, pickVariant } from '@/api/client'
 import { queryKeys, useGroup, useHealth, useRuns } from '@/api/queries'
 import type { GroupVariant } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { DirectionalUsage } from '@/components/directional-usage'
 import { Pill } from '@/components/pill'
 import { RunDiff } from '@/components/run-diff'
 import {
@@ -25,10 +26,9 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
-import { compactTokens } from '@/lib/format'
 import { groupTitle } from '@/lib/task-groups'
 import { TERMINAL_STATUSES, formatCost } from '@/lib/tasks-table'
-import { tokenMetricsVisible } from '@/lib/token-metrics'
+import { usageMetricVisibility } from '@/lib/token-metrics'
 import { cn } from '@/lib/utils'
 
 import { Markdown } from './task-thread/markdown'
@@ -51,6 +51,7 @@ export function CompareVariantsRoute() {
   const { groupId } = useParams<{ groupId: string }>()
   const group = useGroup(groupId)
   const health = useHealth()
+  const metricVisibility = usageMetricVisibility(health.data)
   const queryClient = useQueryClient()
 
   // Freshness without polling (the sync doctrine): the group endpoint is not on the SSE stream,
@@ -97,7 +98,8 @@ export function CompareVariantsRoute() {
     <CompareView
       groupId={groupId as string}
       variants={group.data.runs}
-      showTokenMetrics={tokenMetricsVisible(health.data)}
+      showTokens={metricVisibility.tokens}
+      showCost={metricVisibility.cost}
     />
   )
 }
@@ -105,11 +107,13 @@ export function CompareVariantsRoute() {
 function CompareView({
   groupId,
   variants,
-  showTokenMetrics,
+  showTokens,
+  showCost,
 }: {
   groupId: string
   variants: GroupVariant[]
-  showTokenMetrics: boolean
+  showTokens: boolean
+  showCost: boolean
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -161,7 +165,8 @@ function CompareView({
             allTerminal={allTerminal}
             pickPending={pick.isPending}
             onPick={() => setConfirming(variant)}
-            showTokenMetrics={showTokenMetrics}
+            showTokens={showTokens}
+            showCost={showCost}
           />
         ))}
       </div>
@@ -209,16 +214,19 @@ function VariantColumn({
   allTerminal,
   pickPending,
   onPick,
-  showTokenMetrics,
+  showTokens,
+  showCost,
 }: {
   variant: GroupVariant
   allTerminal: boolean
   pickPending: boolean
   onPick: () => void
-  showTokenMetrics: boolean
+  showTokens: boolean
+  showCost: boolean
 }) {
   const attention = deriveAttention(variant)
   const cost = formatCost(variant.costUsd)
+  const hasDirectionalUsage = variant.inputTokens !== undefined || variant.outputTokens !== undefined
   return (
     <article
       data-slot="variant-column"
@@ -236,13 +244,21 @@ function VariantColumn({
         <Pill dot={attention.tone} pulse={attention.pulse}>
           {attention.label}
         </Pill>
-        {showTokenMetrics ? (
+        {(showTokens && hasDirectionalUsage) || (showCost && cost) ? (
           <span
             data-slot="variant-token-metrics"
-            className="ml-auto shrink-0 font-mono text-[11px] text-soft-foreground tabular-nums"
+            className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-soft-foreground"
           >
-            {compactTokens(variant.tokensUsed)}
-            {cost ? ` · ${cost}` : ''}
+            {showTokens ? (
+              <DirectionalUsage
+                inputTokens={variant.inputTokens}
+                outputTokens={variant.outputTokens}
+              />
+            ) : null}
+            {showTokens && hasDirectionalUsage && showCost && cost ? (
+              <span aria-hidden="true">·</span>
+            ) : null}
+            {showCost && cost ? <span className="font-mono tabular-nums">{cost}</span> : null}
           </span>
         ) : null}
       </div>

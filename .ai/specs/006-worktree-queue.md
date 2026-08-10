@@ -106,8 +106,12 @@ For a Git repository, an isolated task now has a fail-closed contract:
 - If isolation still cannot be established, the task fails before any workflow
   step or agent process starts. It does not run in the repository root.
 - The explicit `worktree: false` opt-out and non-Git degradation remain
-  supported. Repository-root execution stays serialized for those intentional
-  modes.
+  supported. Repository-root execution stays serialized by default for those
+  intentional modes. Advanced users may set the exact opt-in
+  `CEZ_DISABLE_REPO_LOCK=1` to bypass that lease for any run executing in the
+  repository root, including a resumed session whose worktree cannot be
+  restored. This mode is intentionally unsafe: concurrent agents may overwrite
+  each other's files or Git state. Isolated worktree runs are unaffected.
 
 Hardening acceptance checks:
 
@@ -116,4 +120,6 @@ Hardening acceptance checks:
   again reattaches the surviving task branch and preserves its commits.
 - A forced worktree-creation error produces a failed run and executes no
   workflow command in the repository root.
-- Two explicit worktree opt-out runs still serialize repository-root access.
+- Two explicit worktree opt-out runs still serialize repository-root access by
+  default; with `CEZ_DISABLE_REPO_LOCK=1`, two root runs may overlap and each
+  emits a visible unsafe-mode note.

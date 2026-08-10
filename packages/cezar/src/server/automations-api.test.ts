@@ -14,11 +14,15 @@ describe('GitHub automation API', () => {
   let root: string;
   let home: string;
   let store: RunStore;
+  // #801 turned the whole family into an opt-in capability. This suite is about what the routes
+  // DO, so it opts in explicitly; what they answer while the flag is off is `automations-gate.test.ts`.
+  const savedAutomations = process.env.CEZ_AUTOMATIONS;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cezar-automation-api-'));
     home = mkdtempSync(join(tmpdir(), 'cezar-automation-home-'));
     process.env.CEZ_HOME = home;
+    process.env.CEZ_AUTOMATIONS = '1';
     mkdirSync(join(root, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(root, '.ai/cezar'));
   });
@@ -27,6 +31,8 @@ describe('GitHub automation API', () => {
     rmSync(root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
     delete process.env.CEZ_HOME;
+    if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
+    else process.env.CEZ_AUTOMATIONS = savedAutomations;
   });
 
   const input = {

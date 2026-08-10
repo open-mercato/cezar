@@ -3,42 +3,35 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   BotIcon,
-  BoxesIcon,
-  BracesIcon,
   CheckIcon,
   CircleStopIcon,
-  CodeIcon,
   CopyIcon,
-  CpuIcon,
-  DiamondIcon,
   EllipsisVerticalIcon,
-  ExternalLinkIcon,
-  FeatherIcon,
   FileTextIcon,
-  FolderIcon,
-  GemIcon,
-  GlobeIcon,
-  HammerIcon,
-  HexagonIcon,
-  type LucideIcon,
-  MousePointer2Icon,
+  MailIcon,
   PencilIcon,
   PlayIcon,
-  RocketIcon,
-  ShapesIcon,
-  SmartphoneIcon,
-  SparklesIcon,
   SquareTerminalIcon,
   Trash2Icon,
-  WavesIcon,
-  ZapIcon,
 } from 'lucide-react'
 import { Fragment, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
-import { queryKeys, useConfig, useHealth, useOpenTargets, usePatchRun, useProviderStatus, useRunHandoff, useRuns } from '@/api/queries'
-import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
+import {
+  queryKeys,
+  useAgentProfiles,
+  useConfig,
+  useHealth,
+  useMarkRunUnseen,
+  useOpenTargets,
+  usePatchRun,
+  useProjectRepoBase,
+  useProviderStatus,
+  useRunHandoff,
+  useRuns,
+} from '@/api/queries'
+import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
@@ -63,13 +56,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
+import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
-import { compactTokens } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
-import { tokenMetricsVisible } from '@/lib/token-metrics'
+import { usageMetricVisibility } from '@/lib/token-metrics'
 import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
@@ -99,22 +93,28 @@ export function RunHeader({
   run,
   planTally,
   tab = 'session',
+  onMarkedUnread,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
+  /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
+   *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
+   *  the three `task-git` tabs render this same header and run no such effect. */
+  onMarkedUnread?: () => void
 }) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
-  const actions = useRunActions(run)
+  const actions = useRunActions(run, onMarkedUnread)
 
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
   // whole queue, not of this record.
   const runs = useRuns()
   const health = useHealth()
+  const metricVisibility = usageMetricVisibility(health.data)
   const queuePosition =
     run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
@@ -142,7 +142,16 @@ export function RunHeader({
           </span>
         </div>
 
-        <MetaRow run={run} showTokenMetrics={tokenMetricsVisible(health.data)} />
+        <MetaRow
+          run={run}
+          showTokens={metricVisibility.tokens}
+          showCost={metricVisibility.cost}
+          // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
+          // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
+          // own test), so every capability read here tolerates an absent object. Absent stays
+          // fail-closed — the chip degrades to text rather than linking into a disabled view.
+          automationsAvailable={health.data?.capabilities?.automations === true}
+        />
         <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
@@ -179,7 +188,7 @@ export function RunHeader({
               </Button>
             ) : null}
             {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-            <OpenInMenu run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+            <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
             <Button
               variant="ghost"
               size="sm"
@@ -190,6 +199,18 @@ export function RunHeader({
               <FileTextIcon aria-hidden="true" />
               Notes
             </Button>
+            {flags.markUnread ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Put this task back in the unread list"
+                disabled={actions.markUnread.isPending}
+                onClick={() => actions.markUnread.mutate()}
+              >
+                <MailIcon aria-hidden="true" />
+                Mark unread
+              </Button>
+            ) : null}
             {flags.archive ? (
               <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
                 {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
@@ -226,48 +247,16 @@ export function RunHeader({
   )
 }
 
-/** Icon key (`OpenTarget.icon`, #361) → the Lucide icon that renders it in the menu. Distinct per
- *  target so the "Open in…" list reads at a glance instead of as a wall of text — a few picks
- *  lean on the target's own branding (RubyMine → gem, Android Studio → phone, CLion → cpu),
- *  the rest just aim for visual variety. An icon key the client doesn't recognize (older server,
- *  newer server) falls back to the menu's own ExternalLinkIcon rather than rendering nothing. */
-const OPEN_IN_ICONS: Record<string, LucideIcon> = {
-  folder: FolderIcon,
-  terminal: SquareTerminalIcon,
-  vscode: CodeIcon,
-  cursor: MousePointer2Icon,
-  zed: ZapIcon,
-  windsurf: WavesIcon,
-  sublime: FeatherIcon,
-  idea: DiamondIcon,
-  pycharm: HexagonIcon,
-  webstorm: GlobeIcon,
-  goland: ShapesIcon,
-  rubymine: GemIcon,
-  phpstorm: BracesIcon,
-  clion: CpuIcon,
-  rider: BoxesIcon,
-  'android-studio': SmartphoneIcon,
-  xcode: HammerIcon,
-  warp: RocketIcon,
-  claude: BotIcon,
-  codex: SparklesIcon,
-  opencode: BotIcon,
-}
-
-/** The icon component for a target — `target.icon` when it's one the UI knows, else the
- *  same generic glyph the trigger button itself uses. */
-function openInIcon(target: OpenTarget): LucideIcon {
-  return (target.icon && OPEN_IN_ICONS[target.icon]) || ExternalLinkIcon
-}
-
 /**
  * "Open in…" session takeover (#open-in): resume the session in a real terminal, open the run's
- * worktree in a local editor / Finder / terminal / agent CLI, or copy its path. The old standalone
- * Terminal button folds in here as the first item. Renders when the session can be resumed OR the
+ * worktree in a local editor / Finder / terminal / agent CLI, or copy its path.
+ *
+ * The menu itself is the shared `OpenInMenu` (components/open-in-menu.tsx); what lives here is
+ * everything run-SPECIFIC — the resume item, which agent handoffs are currently usable, the
+ * `(resume)` labelling, and the copy-path row. Renders when the session can be resumed OR the
  * machine offers worktree targets (both empty in hosted mode → nothing to show).
  */
-function OpenInMenu({
+function OpenInMenuForRun({
   run,
   canResume,
   onResume,
@@ -289,13 +278,25 @@ function OpenInMenu({
   const agentAvailable = (runner: ApiRun['runner']) =>
     !providers.isSuccess || availableRunners.includes(runner ?? 'claude')
   const canResumeHere = canResume && agentAvailable(run.runner)
-  const worktreeTargets = run.worktreePath
-    ? (targets.data?.targets ?? []).filter((target) => {
-        const runner = cliTargetRunner(target.id)
-        return runner === undefined || agentAvailable(runner)
-      })
+  const choices: OpenInChoice[] = run.worktreePath
+    ? (targets.data?.targets ?? [])
+        .filter((target) => {
+          const runner = cliTargetRunner(target.id)
+          return runner === undefined || agentAvailable(runner)
+        })
+        // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
+        // session when one exists — label that explicitly so it reads as different from just
+        // opening the editor/file-manager entries. Every other CLI (wrong backend, or no session
+        // yet) still opens, just starts clean — no silent cross-backend resume attempt.
+        .map((target) => {
+          const resumes = cliTargetResumes(run, target.id)
+          return {
+            target,
+            ...(resumes ? { suffix: ' (resume)', title: "Resume this run's session" } : {}),
+          }
+        })
     : []
-  if (!canResumeHere && worktreeTargets.length === 0) return null
+  if (!canResumeHere && choices.length === 0) return null
 
   const copyPath = () => {
     const path = run.worktreePath
@@ -307,42 +308,20 @@ function OpenInMenu({
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" title="Resume in a terminal, or open the worktree locally">
-          <ExternalLinkIcon aria-hidden="true" />
-          Open in…
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {canResumeHere ? (
+    <OpenInMenu
+      choices={choices}
+      onPick={(target) => open.mutate(target)}
+      title="Resume in a terminal, or open the worktree locally"
+      leading={
+        canResumeHere ? (
           <DropdownMenuItem data-target="terminal-resume" onSelect={onResume}>
             <SquareTerminalIcon aria-hidden="true" />
             Terminal (resume session)
           </DropdownMenuItem>
-        ) : null}
-        {canResumeHere && worktreeTargets.length > 0 ? <DropdownMenuSeparator /> : null}
-        {worktreeTargets.map((target) => {
-          // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
-          // session when one exists — label that explicitly so it reads as different from just
-          // opening the editor/file-manager entries above. Every other CLI (wrong backend, or no
-          // session yet) still opens, just starts clean — no silent cross-backend resume attempt.
-          const resumes = cliTargetResumes(run, target.id)
-          const Icon = openInIcon(target)
-          return (
-            <DropdownMenuItem
-              key={target.id}
-              data-target={target.id}
-              title={resumes ? "Resume this run's session" : undefined}
-              onSelect={() => open.mutate(target.id)}
-            >
-              <Icon aria-hidden="true" />
-              {target.label}
-              {resumes ? ' (resume)' : ''}
-            </DropdownMenuItem>
-          )
-        })}
-        {run.worktreePath ? (
+        ) : null
+      }
+      trailing={
+        run.worktreePath ? (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={copyPath}>
@@ -350,15 +329,15 @@ function OpenInMenu({
               Copy worktree path
             </DropdownMenuItem>
           </>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        ) : null
+      }
+    />
   )
 }
 
 /** The mutations + confirm state, bundled so the desktop bar and the mobile kebab drive the
  *  exact same behavior. Every failure surfaces the server's own words as a danger toast. */
-function useRunActions(run: ApiRun) {
+function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [confirming, setConfirming] = useState<'cancel' | 'delete' | null>(null)
@@ -385,6 +364,20 @@ function useRunActions(run: ApiRun) {
     onSuccess: invalidate,
     onError,
   })
+  // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
+  // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
+  // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
+  // and reinstate the receipt before the server's own answer lands.
+  const markUnreadMutation = useMarkRunUnseen()
+  const markUnread = {
+    isPending: markUnreadMutation.isPending,
+    mutate: () => {
+      // Before the mutation, so the Session tab's suppression is in place by the time the
+      // optimistic write re-renders the thread and re-evaluates its auto-mark-read effect.
+      onMarkedUnread?.()
+      markUnreadMutation.mutate(run.id, { onError })
+    },
+  }
   const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
   const deleteMutation = useMutation({
     mutationFn: () => deleteRun(run.id),
@@ -413,6 +406,7 @@ function useRunActions(run: ApiRun) {
     continuation,
     continueRun: continueMutation,
     archive,
+    markUnread,
     cancel,
     delete: deleteMutation,
     terminal,
@@ -472,7 +466,23 @@ function EditableTitle({ run }: { run: ApiRun }) {
  *  not a placeholder. Runner and model no longer sit in the loose dot-list (#416): they read as
  *  a status for the *active* session, so they move into the agent badge next to the token
  *  count, revealed on hover/focus rather than always-on text. */
-function MetaRow({ run, showTokenMetrics }: { run: ApiRun; showTokenMetrics: boolean }) {
+function MetaRow({
+  run,
+  showTokens,
+  showCost,
+  automationsAvailable,
+}: {
+  run: ApiRun
+  showTokens: boolean
+  showCost: boolean
+  /** `capabilities.automations` (#801). A run launched while automations were on keeps its
+   *  `run.automation` provenance forever, so the chip must survive the flag going off — as
+   *  plain text, because the route it used to link to is disabled. */
+  automationsAvailable: boolean
+}) {
+  // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
+  // such a link may name is the one on screen — never the transcript's.
+  const repoBase = useProjectRepoBase()
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -499,7 +509,7 @@ function MetaRow({ run, showTokenMetrics }: { run: ApiRun; showTokenMetrics: boo
       />,
     )
   }
-  const issueUrl = taskIssueUrl(run)
+  const issueUrl = taskIssueUrl(run, repoBase)
   if (issueUrl && isHttpUrl(issueUrl)) {
     const number = prNumber(issueUrl)
     parts.push(
@@ -513,29 +523,42 @@ function MetaRow({ run, showTokenMetrics }: { run: ApiRun; showTokenMetrics: boo
   }
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
   if (run.automation) {
+    // Provenance is history and is always shown; only the LINK is gated. Following it with the
+    // capability off would land on the disabled `/automations` state, which says nothing about
+    // this task.
     parts.push(
-      <Link
-        key="automation"
-        to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-        className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
-      >
-        Automation
-      </Link>,
+      automationsAvailable ? (
+        <Link
+          key="automation"
+          to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+        >
+          Automation
+        </Link>
+      ) : (
+        <span
+          key="automation"
+          data-slot="automation-origin"
+          title="Automations are off on this server (CEZ_AUTOMATIONS)"
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+        >
+          Automation
+        </span>
+      ),
     )
   }
 
   const usage: ReactNode[] = []
-  if (showTokenMetrics && run.tokensUsed > 0) {
-    // Tokens WITHOUT the mockup's context gauge, on purpose: the gauge needs "used / window",
-    // and RunRecord carries only the lifetime `tokensUsed` — no context-window size, no
-    // per-session usage. When the protocol starts persisting one, the bar goes here.
+  if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
     usage.push(
-      <span key="tokens" className="tabular-nums">
-        {compactTokens(run.tokensUsed)} tokens
-      </span>,
+      <DirectionalUsage
+        key="tokens"
+        inputTokens={run.inputTokens}
+        outputTokens={run.outputTokens}
+      />,
     )
   }
-  if (showTokenMetrics && run.costUsd) {
+  if (showCost && run.costUsd) {
     usage.push(
       <span key="cost" className="tabular-nums">
         {formatCost(run.costUsd)}
@@ -607,8 +630,8 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
   )
 }
 
-/** The agent icon by the token counter (#416): hover/focus reveals the runner and model — the
- *  answer to "what am I actually running here?" — without turning them into permanent text next
+/** The agent icon by the token counter (#416): hover/focus reveals the runner, account and model —
+ *  the answer to "what am I actually running here?" — without turning them into permanent text next
  *  to the live status pill. Always rendered (a run always has an effective runner, `model`
  *  reads "auto" when the runner picks it), and reuses the same click/keyboard-accessible
  *  `DropdownMenu` as the rest of this header instead of inventing a hover-only affordance. */
@@ -621,25 +644,58 @@ function AgentBadge({ run }: { run: ApiRun }) {
   // 'claude' stays the last resort only while the active project's config is in flight.
   // `/api/health` describes the boot project and can name the wrong runner on scoped routes.
   const config = useConfig()
+  const profiles = useAgentProfiles()
   const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
   const model = run.model ?? 'auto'
+  // The account is read from the STEP that actually spawned, never from the run's composer
+  // override or the project's current selection (spec 2026-07-29-agent-profiles): the override is
+  // absent whenever the run just followed the project, and the project's selection can have been
+  // changed since — both would name an account this run may never have touched. The last step that
+  // recorded one is what ran; `sessionId` and `profileId` are a pair for exactly this reason.
+  const accountId = [...run.steps].reverse().find((step) => step.profileId)?.profileId
+  const account = accountId === undefined
+    ? undefined
+    : accountId === DEFAULT_AGENT_ACCOUNT_ID
+      ? 'default'
+      // A deleted account still names the folder this run's sessions live in, so the id is shown
+      // rather than swallowed — "gone" is the useful half of that answer.
+      : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
+  const summary = [runner, account, model].filter(Boolean).join(' · ')
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           data-slot="agent-badge"
-          title={`${runner} · ${model}`}
-          aria-label={`Agent: ${runner}, model ${model}`}
-          className="flex shrink-0 items-center justify-center rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          title={summary}
+          aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
+          className="flex min-w-0 shrink items-center gap-1.5 rounded-sm px-1 py-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
-          <BotIcon className="size-3.5" aria-hidden="true" />
+          <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
+          {/* READ, not just reachable. This was an icon alone, and "which agent, account and model
+              produced this?" turned out to be unanswerable without knowing to click it — the whole
+              point of the badge. #416 moved runner/model out of the loose dot-list to cut noise;
+              this puts them back as ONE quiet, truncating string rather than three chips, and the
+              menu still carries the labelled breakdown. */}
+          <span data-slot="agent-badge-summary" className="truncate font-mono text-[11px]">
+            {summary}
+          </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[9rem]">
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
           runner: {runner}
         </DropdownMenuLabel>
+        {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
+            cannot be said to have used the discovered account — nothing wrote that down. */}
+        {account ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-account"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            account: {account}
+          </DropdownMenuLabel>
+        ) : null}
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
@@ -690,6 +746,14 @@ function ActionsKebab({
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>
+        {flags.markUnread ? (
+          <DropdownMenuItem
+            disabled={actions.markUnread.isPending}
+            onSelect={() => actions.markUnread.mutate()}
+          >
+            <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
         {flags.archive ? (
           <DropdownMenuItem onSelect={() => actions.archive.mutate()}>
             {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}

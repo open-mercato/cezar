@@ -490,10 +490,12 @@ export function ToolCard({
   item,
   nested = [],
   cacheKey,
+  renderNested,
 }: {
   item: UiToolItem
-  nested?: ThreadEntry[]
+  nested?: readonly ThreadEntry[]
   cacheKey?: string
+  renderNested?: (entries: readonly ThreadEntry[], scope: string) => ReactNode
 }) {
   const cache = useThreadCardCache()
   const [userOpen, setUserOpenState] = useState<boolean | null>(
@@ -583,40 +585,13 @@ export function ToolCard({
           ) : null}
           {nested.length > 0 ? (
             <div data-slot="tool-nested" className="flex flex-col gap-2 border-l-2 border-border py-2.5 pr-3 pl-3 ml-4 my-2">
-              {nested.map((entry) => (
-                <NestedEntry key={entry.id} entry={entry} scope={cacheKey} />
-              ))}
+              {renderNested?.(nested, cacheKey ?? item.id)}
             </div>
           ) : null}
         </div>
       </CollapsibleContent>
     </Collapsible>
   )
-}
-
-/** A sub-agent entry inside a Task card — one level deep by design, so nested tools render
- *  without their own children. `scope` is the parent card's cache key, extended per child.
- *
- *  Exported for the sub-agent sheet (#474), which renders the SAME child entries in a focused
- *  panel: the drill-down must look like the inline nesting, not like a second renderer that
- *  drifts from it. */
-export function NestedEntry({ entry, scope }: { entry: ThreadEntry; scope?: string }) {
-  switch (entry.kind) {
-    case 'message':
-      return <AssistantMessage text={entry.text} />
-    case 'reasoning':
-      return <ReasoningItem text={entry.text} />
-    case 'tool':
-      return <ToolCard item={entry} cacheKey={scope !== undefined ? `${scope}:${entry.id}` : undefined} />
-    case 'note':
-      return <NoteLine note={entry} />
-    case 'image':
-      return <ImageItem image={entry} />
-    case 'ask':
-      // AskUser cards are always top-level turn entries (#473) — they never nest
-      // under a tool group, so there is nothing to render here.
-      return null
-  }
 }
 
 /** "Explored N files · M searches" — consecutive finished read/search tools, one row,

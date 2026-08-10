@@ -23,18 +23,34 @@ export type BucketLabel = 'Needs you' | 'Working' | 'Recent' | 'Archived'
 export const BUCKET_ORDER: readonly BucketLabel[] = ['Needs you', 'Working', 'Recent', 'Archived']
 
 /**
- * Sort weight per status: needs-you first, then in-flight, then everything terminal. Ties break
- * on recency. Ported verbatim from the legacy `STATUS_ORDER` — a run that moves from `running`
- * to `waiting` must climb the list in both cockpits identically.
+ * Sort weight per status: needs-you first, then the pipeline in the order it will actually
+ * happen — running now, resuming next, waiting for a slot — and finally the outcomes. Ties break
+ * on recency. The top of the list therefore answers "what is happening, and what happens next?"
+ * without reading a single row's detail.
+ *
+ * Grown from the legacy `STATUS_ORDER` (waiting/review/running/queued, everything else 9): the
+ * terminal states are now ranked among themselves, and `scheduled` — a run waiting out a usage
+ * limit — sits between running and queued, because it is work with an appointment rather than an
+ * outcome (spec 2026-08-03-auto-resume-after-usage-limit).
  */
 const STATUS_ORDER: Partial<Record<RunRecord['status'], number>> = {
   waiting: 0,
   review: 1,
   running: 2,
-  queued: 3,
+  queued: 4,
+  done: 5,
+  failed: 6,
+  cancelled: 7,
 }
 
-const statusWeight = (run: RunRecord): number => STATUS_ORDER[run.status] ?? 9
+/** Not a status of its own: `scheduled` is a `failed` run holding a live resume deadline, which
+ *  is the same rule the status pill and the sidebar bucket read (`lib/attention.ts`). */
+const SCHEDULED_WEIGHT = 3
+
+const statusWeight = (run: RunRecord): number =>
+  run.status === 'failed' && run.autoResumeAt !== undefined
+    ? SCHEDULED_WEIGHT
+    : STATUS_ORDER[run.status] ?? 9
 
 /** One row of the quick-list: either a single run, or a collapsed variant group (spec 010). */
 export type QuickListRow =
@@ -68,6 +84,10 @@ export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
   if (view === 'archived') return 'Archived'
   if (run.status === 'waiting' || run.status === 'review') return 'Needs you'
   if (run.status === 'running' || run.status === 'queued') return 'Working'
+  // A run waiting out a provider usage limit is `failed` on the record but has an appointment to
+  // resume itself (spec 2026-08-03-auto-resume-after-usage-limit) — it belongs with the work in
+  // flight, not filed under Recent as an outcome. It asks for nothing, so never "Needs you".
+  if (run.status === 'failed' && run.autoResumeAt) return 'Working'
   return 'Recent'
 }
 
@@ -81,12 +101,56 @@ export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
  *
  * `??`, not `||`: the server never stores an empty summary (trimmed, 1–300 chars), so only
  * absence falls back — a falsy-but-present value would be a server bug worth seeing.
+ *
+ * Takes the three fields it reads rather than a whole `RunRecord`, for the same reason
+ * `AttentionInput` does: the ⌘K palette's cross-project index (`RunIndexEntry`) is a slim row,
+ * not a record, and it must name a task exactly as every other surface does. Widening the
+ * parameter is what makes that a shared function instead of a second title rule.
  */
-export function runTitle(run: RunRecord): string {
+export type RunTitleInput = Pick<RunRecord, 'title' | 'titleSummary' | 'titleOrigin'>
+
+export function runTitle(run: RunTitleInput): string {
   const summary = run.titleSummary
   if (summary === undefined) return run.title
   const protectedTitle = run.titleOrigin === 'user' || run.titleOrigin === 'marker'
   return !protectedTitle && /[.!?][A-Z]/.test(summary) ? run.title : summary
+}
+
+/**
+ * The `NNN: ` reference prefix `postValidateTitle` writes onto every auto-named run
+ * (`packages/cezar/src/runs/auto-name.ts`), split off the display title — issue #788, option C.
+ *
+ * RENDER-ONLY. The stored `title`/`titleSummary` keep the prefix: it is what makes a run findable
+ * by number in search, in the Tasks table and in the page title, and `runs.json` field semantics
+ * are a protected surface. This only lets a surface that ALREADY paints the number elsewhere —
+ * the sidebar row, whose leading chip is the reference — stop spending five characters of a
+ * ~10-character title budget saying it twice.
+ *
+ * The shape is exactly what `postValidateTitle` produces (`^\d+: `) and nothing looser, so a title
+ * that merely contains a colon (`"fix: the login bug"`) or a number in prose is left alone. The
+ * caller decides whether the split is safe to use — see `refPrefixMatches`.
+ */
+export function splitRefPrefix(title: string): { ref: number | null; rest: string } {
+  const match = /^(\d{1,9}): (.+)$/.exec(title)
+  const digits = match?.[1]
+  const rest = match?.[2]
+  // Both groups are non-optional in the pattern, so this narrowing is only for the type system —
+  // but it is the narrowing rather than a cast, so a future edit to the pattern is caught here
+  // instead of producing an `undefined` that has been asserted to be a string.
+  if (digits === undefined || rest === undefined) return { ref: null, rest: title }
+  return { ref: Number(digits), rest }
+}
+
+/**
+ * May the row drop the title's `NNN: ` prefix in favour of its reference chip?
+ *
+ * Only when the two numbers are the SAME number. A task opened on issue `#788` whose PR later
+ * becomes `#790` shows `790` in its chip while its title still leads with `788: ` — two different
+ * facts, and hiding one of them would be a lie rather than a saving. An unrelated leading number
+ * (`"2026: the year in review"`) fails the same test, which is what keeps this from over-matching.
+ */
+export function refPrefixMatches(title: string, reference: number | undefined): boolean {
+  return reference !== undefined && splitRefPrefix(title).ref === reference
 }
 
 /**
@@ -114,13 +178,36 @@ export function queuePositions(runs: readonly RunRecord[]): Map<string, number> 
   return new Map(queued.map((run, index) => [run.id, index + 1]))
 }
 
-/** Runs in the view, ordered: status weight first, then newest first. */
+/**
+ * Runs in the view, ordered: status weight first, then whatever "next" means inside that rank.
+ *
+ * For most ranks that is recency — newest first, the historical rule. For the two ranks that are
+ * genuinely a QUEUE it is the order they will actually happen in, because a list sorted by
+ * "what happens next" that then shuffles its own waiting rows is only half the promise:
+ *
+ *  - `scheduled` — soonest appointment on top. A task resuming at 11:14 sits above one resuming
+ *    at 11:40, whichever was created first.
+ *  - `queued` — oldest first, which is FIFO and therefore exactly the `#1 in queue` position the
+ *    row already prints beside itself. Newest-first rendered those positions backwards.
+ *
+ * ISO-8601 strings compare lexicographically because every timestamp cezar writes is UTC
+ * (`toISOString()` → trailing `Z`), the same reason `read-state.ts` compares them directly.
+ */
 export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[] {
   return runs
     .filter((run) => (view === 'archived' ? run.archived : !run.archived))
     .sort((a, b) => {
       const weight = statusWeight(a) - statusWeight(b)
       if (weight !== 0) return weight
+      // Equal weights, and that weight is the scheduled one — so both sides carry an
+      // `autoResumeAt` (nothing else earns the rank), and the appointment is the answer.
+      if (statusWeight(a) === SCHEDULED_WEIGHT && a.autoResumeAt && b.autoResumeAt) {
+        const order = a.autoResumeAt.localeCompare(b.autoResumeAt)
+        if (order !== 0) return order
+      }
+      if (a.status === 'queued' && b.status === 'queued') {
+        return a.createdAt.localeCompare(b.createdAt)
+      }
       return b.createdAt.localeCompare(a.createdAt)
     })
 }

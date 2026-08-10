@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -35,6 +35,16 @@ import { apiRequest } from './loopback-request.testkit.ts';
 
 function g(dir: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+}
+
+/** `g`, with the clock moved: reflog entries take their timestamp from the committer
+ *  ident, so this is how a fixture puts branch history *before* a run started. */
+function gAt(dir: string, iso: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+  });
 }
 
 /** Fresh repo with identity configured and one initial commit on `main`. */
@@ -149,6 +159,38 @@ describe('collectChanges — structured diff vs base', () => {
     });
   });
 
+  it('keeps what the run committed on a repointed branch, and drops what predates it', async () => {
+    // `runStartedAt` turns the repointed answer from "uncommitted work only" into "the
+    // branch as this run found it" — the difference between a review run's honest zero
+    // and a `feat/…` run's committed work being reported as nothing at all (#751).
+    const before = '2026-01-01T00:00:00Z';
+    gAt(dir, before, 'commit', '--allow-empty', '-m', 'root');
+    writeFileSync(join(dir, 'base.txt'), 'base\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'base');
+    gAt(dir, before, 'checkout', '-b', 'review/pr-42');
+    writeFileSync(join(dir, 'theirs.txt'), 'belongs to the reviewed PR\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'reviewed change');
+    // Everything below happens during the run.
+    writeFileSync(join(dir, 'mine.txt'), 'the run committed this\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'the run\'s own commit');
+    writeFileSync(join(dir, 'wip.txt'), 'uncommitted, also the run\'s\n');
+
+    const result = await collectChanges(dir, 'main', {
+      taskBranch: 'cez/task1234',
+      runStartedAt: '2026-06-01T00:00:00Z',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changes.files.map((file) => file.path).sort()).toEqual(['mine.txt', 'wip.txt']);
+    expect(result.changes.repointedHead).toEqual({
+      headBranch: 'review/pr-42',
+      taskBranch: 'cez/task1234',
+    });
+  });
+
   it('keeps committed task changes when HEAD matches the task branch', async () => {
     writeFileSync(join(dir, 'base.txt'), 'base\n');
     g(dir, 'add', '-A');
@@ -197,6 +239,40 @@ describe('collectChanges — structured diff vs base', () => {
     const withAdd = await collectChanges(dir, 'main');
     expect(withAdd.ok).toBe(true);
     if (withAdd.ok) expect(withAdd.changes.files.some((f) => f.path === 'untracked.txt')).toBe(true);
+  });
+
+  it('intentToAdd:false leaves the real index untouched on a repointed HEAD too', async () => {
+    // Choosing between the two repointed anchors compares them with `git diff --shortstat`,
+    // and `git diff` REWRITES the index it reads (a stat refresh). Those probes must run on
+    // the scratch index like every other diff here, or a read-only GET against the user's own
+    // checkout writes their `.git/index` — the same invariant as the test above, one call
+    // deeper.
+    const before = '2026-01-01T00:00:00Z';
+    gAt(dir, before, 'commit', '--allow-empty', '-m', 'root');
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'base');
+    gAt(dir, before, 'checkout', '-b', 'review/pr-42');
+    writeFileSync(join(dir, 'theirs.txt'), 'belongs to the reviewed PR\n');
+    g(dir, 'add', '-A');
+    gAt(dir, before, 'commit', '-m', 'reviewed change');
+    // Backdating a tracked file is what makes the index stale: the recorded stat data no
+    // longer matches, git's refresh finds the content clean anyway, and it persists the new
+    // stat. (Rewriting the file in-place would not do it — a mtime inside the index's own
+    // second is "racily clean" and git declines to record it.)
+    const staleTime = new Date(Date.now() - 600_000);
+    utimesSync(join(dir, 'tracked.txt'), staleTime, staleTime);
+    const indexBefore = readFileSync(join(dir, '.git', 'index'));
+
+    const result = await collectChanges(dir, 'main', {
+      intentToAdd: false,
+      taskBranch: 'cez/task1234',
+      runStartedAt: '2026-06-01T00:00:00Z',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changes.repointedHead?.headBranch).toBe('review/pr-42');
+    expect(readFileSync(join(dir, '.git', 'index'))).toEqual(indexBefore);
   });
 });
 
@@ -434,9 +510,16 @@ describe('session git API routes', () => {
   let store: RunStore;
   let app: Hono;
   let run: RunRecord;
+  let repoBaseSha: string;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-gitapi-'));
+    initRepo(repoRoot);
+    writeFileSync(join(repoRoot, '.gitignore'), '.ai/\nwt/\n');
+    writeFileSync(join(repoRoot, 'root-base.txt'), 'base\n');
+    g(repoRoot, 'add', '-A');
+    g(repoRoot, 'commit', '-m', 'root base');
+    repoBaseSha = g(repoRoot, 'rev-parse', 'HEAD').trim();
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     app = createApp({
       repoRoot,
@@ -495,14 +578,72 @@ describe('session git API routes', () => {
     expect(body.repointedHead).toEqual({ headBranch: 'review/pr-42', taskBranch: 'task' });
   });
 
-  it('runs without a worktree get 409 + reason (JSON, never HTML) on every session-git route', async () => {
-    const bare = store.createRun({ title: 'b', workflow: 'quick-task', task: 'b', steps: [] });
+  it('runs without a worktree read Changes, Files and Commits from the current checkout', async () => {
+    const bare = store.createRun({
+      title: 'b',
+      workflow: 'quick-task',
+      task: 'b',
+      worktree: false,
+      steps: [],
+    });
+    store.updateRun(bare.id, { baseBranch: repoBaseSha });
+
+    writeFileSync(join(repoRoot, 'committed.txt'), 'session commit\n');
+    g(repoRoot, 'add', 'committed.txt');
+    g(repoRoot, 'commit', '-m', 'session commit');
+    writeFileSync(join(repoRoot, 'untracked.txt'), 'working copy\n');
+
+    const changes = await apiRequest(app, `/api/v1/runs/${bare.id}/changes`);
+    expect(changes.status).toBe(200);
+    const changed = (await changes.json()) as ChangesPayload;
+    expect(changed.files.map((file) => file.path)).toEqual(['committed.txt', 'untracked.txt']);
+    // The read uses a scratch index, so surfacing an untracked file never stages it.
+    expect(g(repoRoot, 'status', '--porcelain', 'untracked.txt').startsWith('??')).toBe(true);
+
+    const files = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=untracked.txt`);
+    expect(files.status).toBe(200);
+    expect((await files.json()) as object).toMatchObject({ type: 'file', content: 'working copy\n' });
+
+    const commits = await apiRequest(app, `/api/v1/runs/${bare.id}/commits`);
+    expect(commits.status).toBe(200);
+    const commitList = (await commits.json()) as { commits: Array<{ sha: string; subject: string }> };
+    expect(commitList.commits).toHaveLength(1);
+    const sessionCommit = commitList.commits[0];
+    expect(sessionCommit?.subject).toBe('session commit');
+    if (!sessionCommit) throw new Error('expected the session commit');
+
+    const detail = await apiRequest(app, `/api/v1/runs/${bare.id}/commit/${sessionCommit.sha}`);
+    expect(detail.status).toBe(200);
+    expect((await detail.json()) as object).toMatchObject({
+      subject: 'session commit',
+      files: [{ path: 'committed.txt', status: 'added' }],
+    });
+
+    // Mutations still require an isolated worktree/branch.
     for (const req of [
-      apiRequest(app, `/api/v1/runs/${bare.id}/changes`),
-      apiRequest(app, `/api/v1/runs/${bare.id}/files`),
-      apiRequest(app, `/api/v1/runs/${bare.id}/commits`),
       commit(bare.id, { message: 'x' }),
       apiRequest(app, `/api/v1/runs/${bare.id}/git/push`, { method: 'POST' }),
+    ]) {
+      const res = await req;
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toContain('no worktree');
+    }
+  });
+
+  it('runs whose isolated worktree was removed never fall through to the current checkout', async () => {
+    const removed = store.createRun({ title: 'removed', workflow: 'quick-task', task: 'removed', steps: [] });
+    store.updateRun(removed.id, {
+      worktreePath: join(repoRoot, 'removed-worktree'),
+      branch: 'cez/removed',
+      baseBranch: repoBaseSha,
+    });
+    store.updateRun(removed.id, { worktreePath: undefined, branch: undefined });
+
+    for (const req of [
+      apiRequest(app, `/api/v1/runs/${removed.id}/changes`),
+      apiRequest(app, `/api/v1/runs/${removed.id}/files`),
+      apiRequest(app, `/api/v1/runs/${removed.id}/commits`),
+      apiRequest(app, `/api/v1/runs/${removed.id}/commit/${repoBaseSha}`),
     ]) {
       const res = await req;
       expect(res.status).toBe(409);

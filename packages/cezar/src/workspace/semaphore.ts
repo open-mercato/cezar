@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadWorkspaceConfig } from './config.ts';
+import { DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,
@@ -38,8 +38,12 @@ export interface WorkspaceResourceLimits {
   maxParallel: number;
   /** Durable monitoring sessions that do not consume active-task capacity. */
   maxMonitoringSessions?: number;
-  /** Optional automatic monitoring re-check cadence; null means stay parked. */
+  /** Automatic monitoring re-check cadence in minutes. Default ON at
+   *  `DEFAULT_MONITORING_WAKE_MINUTES`; explicit `null` means stay parked; absent means
+   *  "this loader predates the key" and reads as the default. */
   monitoringWakeIntervalMinutes?: number | null;
+  /** Resume a run stopped by a provider usage limit when that limit resets. Default ON. */
+  autoResumeOnUsageLimit?: boolean;
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
   memoryLimitMb: number | null;
   /**
@@ -64,6 +68,21 @@ function normalizeRootSync(root: string): string {
   }
 }
 
+/**
+ * The two kinds of usage-limit hold an account can be under, kept apart because they bind
+ * different work (spec 2026-08-03-auto-resume-after-usage-limit):
+ *
+ *  - `deadline` — a run is parked on a reset instant that has not arrived. The window is known to
+ *    be shut, so this blocks EVERYTHING on that account, resumes included.
+ *  - `inFlight` — a resume is running right now, re-testing the window. Nothing is proven yet, so
+ *    this blocks fresh work but NOT other resumes: a resume blocked by a resume is the deadlock
+ *    that stopped a live workspace dead.
+ */
+export interface AccountHolds {
+  deadline: ReadonlySet<string>;
+  inFlight: ReadonlySet<string>;
+}
+
 /** One manager's seam into the shared counter. */
 export interface SemaphoreParticipant {
   /** Slots this manager currently holds. The #347 exemption lives in the
@@ -78,17 +97,28 @@ export interface SemaphoreParticipant {
    *  workspace's longest-waiting run instead of whichever manager happens to
    *  have registered first. */
   oldestQueuedAt(): number | null;
+  /**
+   * Agent accounts this participant is holding, by KIND (spec
+   * 2026-08-03-auto-resume-after-usage-limit, `RunManager.accountHolds`).
+   *
+   * Workspace-scoped for the same reason the parallel cap is: a limit closes an ACCOUNT, and one
+   * account can be driving tasks in several projects at once. Optional so a stub participant —
+   * and any caller that predates the hold — keeps working; absent simply holds nothing.
+   */
+  accountHolds?(): AccountHolds;
 }
 
 const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   maxParallel: 2,
   maxMonitoringSessions: 2,
-  monitoringWakeIntervalMinutes: null,
+  monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
+  autoResumeOnUsageLimit: true,
   memoryLimitMb: null,
 };
 
 /** Production loader: the `resources` slice of `~/.cezar/config.json`
- *  (schema-defaulted, so a missing/corrupt file yields the zero-config 2/null),
+ *  (schema-defaulted, so a missing/corrupt file yields the zero-config
+ *  2 parallel / 2 monitoring / 5-minute wake / no memory cap),
  *  plus the per-project `maxParallel` overrides built into a root→limit map.
  *  The registry `root` is already realpath-normalized (`registerProject`), so
  *  the keys match `normalizeRootSync`'s output at lookup time. */
@@ -102,6 +132,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     maxParallel: resources.maxParallel,
     maxMonitoringSessions: resources.maxMonitoringSessions,
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
+    autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
     projectLimits,
   };
@@ -156,13 +187,46 @@ export class WorkspaceSemaphore {
     return this.limits.maxMonitoringSessions ?? 2;
   }
 
+  /** Cadence for automatic monitoring re-checks, or null when the operator chose "park
+   *  until resumed". Deliberately NOT `?? DEFAULT`: `null` is a real user choice and
+   *  `null ?? 5` would silently override it (#810). Only an ABSENT key — an older `load`
+   *  stub, a partial `initial` — falls back to the shipped default. */
   monitoringWakeIntervalMinutes(): number | null {
-    return this.limits.monitoringWakeIntervalMinutes ?? null;
+    const configured = this.limits.monitoringWakeIntervalMinutes;
+    return configured === undefined ? DEFAULT_MONITORING_WAKE_MINUTES : configured;
+  }
+
+  /** Whether a usage-limit stop schedules its own resume. Absent (an older `load` stub, a config
+   *  written before the key existed) reads as ON — the shipped default. */
+  autoResumeOnUsageLimit(): boolean {
+    return this.limits.autoResumeOnUsageLimit ?? true;
   }
 
   /** Cached per-task memory ceiling (MiB), or null for no limit. */
   memoryLimitMb(): number | null {
     return this.limits.memoryLimitMb;
+  }
+
+  /**
+   * Every agent account held across the WHOLE workspace, by kind — the union of what each manager
+   * reports (spec 2026-08-03-auto-resume-after-usage-limit). A `pump()` consults this before
+   * starting a queued run, so a limit hit in one project also stops the same account being walked
+   * into the wall from another.
+   *
+   * Asked live rather than cached: the underlying answer is derived from run records that change
+   * on every schedule, resume and cancel, and a stale snapshot here would either stall a queue
+   * whose window has reopened or leak a stampede through one that has not.
+   */
+  accountHolds(): AccountHolds {
+    const deadline = new Set<string>();
+    const inFlight = new Set<string>();
+    for (const participant of this.participants) {
+      const holds = participant.accountHolds?.();
+      if (!holds) continue;
+      for (const key of holds.deadline) deadline.add(key);
+      for (const key of holds.inFlight) inFlight.add(key);
+    }
+    return { deadline, inFlight };
   }
 
   /**

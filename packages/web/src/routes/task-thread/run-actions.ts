@@ -1,4 +1,9 @@
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
+import { cliTargetRunner } from '@/components/open-in-menu'
+import { canBeUnread, isUnread } from '@/lib/read-state'
+
+export { cliTargetRunner }
+
 
 /**
  * The run header's action policy — WHICH actions a run offers, as a pure function of the
@@ -59,14 +64,6 @@ export function resumeHint(run: RunRecord): string | undefined {
   return run.worktreePath ? `cd ${run.worktreePath} && ${command}` : command
 }
 
-/** The runner a `cli:<runner>` Open-in target hands off to, or undefined for every other
- *  target (editors, Finder, terminal) — mirrors the server's `agentCliRunner` (open-in-app.ts)
- *  without importing server code into the bundle. */
-export function cliTargetRunner(targetId: string): Runner | undefined {
-  const match = /^cli:(claude|codex|opencode)$/.exec(targetId)
-  return match ? (match[1] as Runner) : undefined
-}
-
 /** Does picking this "Open in…" CLI target resume THIS run's own session, or start a fresh
  *  one (#402)? Only the backend that produced the session can resume it — a foreign CLI's
  *  session id means nothing to a different agent, so cross-runner picks always launch clean.
@@ -94,6 +91,12 @@ export interface RunActionFlags {
   notes: boolean
   /** Archive when live, unarchive when archived — the record itself says which. */
   archive: boolean
+  /** Put a read, finished task back into the unread list (#775). Offered only where it would
+   *  MEAN something: the run must be eligible to wear the unread marker at all
+   *  (`canBeUnread` — done/failed, actually finished, not archived) and must currently be
+   *  read. Both halves come from `lib/read-state.ts` so the header can never offer an action
+   *  whose result the marker rule would ignore. */
+  markUnread: boolean
   /** Stop an active run. Mutually exclusive with delete, by construction below. */
   cancel: boolean
   /** Remove the run, its transcript, worktree and branch. Terminal runs only. */
@@ -109,6 +112,7 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
     terminal: !active && hasSession,
     notes: true,
     archive: !active,
+    markUnread: canBeUnread(run) && !isUnread(run),
     cancel: active,
     deleteRun: !active,
   }

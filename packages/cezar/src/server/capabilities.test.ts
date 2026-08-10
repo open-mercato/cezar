@@ -159,7 +159,10 @@ describe('resolveCapabilities — followups (#471)', () => {
       localHandoff: false,
       followups: true,
       singleProject: false,
+      automations: false,
       tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 });
@@ -181,23 +184,71 @@ describe('resolveCapabilities — singleProject', () => {
   );
 });
 
-describe('resolveCapabilities — tokenMetrics (#481)', () => {
-  it('is visible by default', () => {
-    expect(resolveCapabilities({}).tokenMetrics).toBe(true);
+describe('resolveCapabilities — automations (#801)', () => {
+  it('is OFF by default — GitHub automations are opt-in', () => {
+    expect(resolveCapabilities({}).automations).toBe(false);
   });
 
-  it('is hidden with CEZ_HIDE_TOKEN_METRICS=1', () => {
-    expect(resolveCapabilities({ CEZ_HIDE_TOKEN_METRICS: '1' }).tokenMetrics).toBe(false);
+  it('is on with CEZ_AUTOMATIONS=1', () => {
+    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' }).automations).toBe(true);
   });
+
+  it.each(['0', 'true', 'yes', '', 'on'])(
+    'stays off for CEZ_AUTOMATIONS=%j — only an exact "1" opts in',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_AUTOMATIONS: value }).automations).toBe(false);
+    },
+  );
+
+  // The three opt-in capabilities are independent switches; turning one on must never
+  // imply another, or a user enabling automations would silently get the inbox too.
+  it('does not turn on any other opt-in capability', () => {
+    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' })).toMatchObject({
+      automations: true,
+      followups: false,
+      singleProject: false,
+    });
+  });
+});
+
+describe('resolveCapabilities — usage presentation', () => {
+  it('shows token usage and cost by default', () => {
+    expect(resolveCapabilities({})).toMatchObject({
+      tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
+    });
+  });
+
+  it.each([
+    [{ CEZ_HIDE_TOKEN_METRICS: '1' }, false, false, false],
+    [{ CEZ_HIDE_TOKEN_USAGE: '1' }, false, false, true],
+    [{ CEZ_HIDE_COST: '1' }, false, true, false],
+    [{ CEZ_HIDE_TOKEN_USAGE: '1', CEZ_HIDE_COST: '1' }, false, false, false],
+    [{ CEZ_HIDE_TOKEN_METRICS: '1', CEZ_HIDE_TOKEN_USAGE: '0', CEZ_HIDE_COST: '0' }, false, false, false],
+  ] as const)(
+    'resolves strict visibility for %o',
+    (env, tokenMetrics, tokenUsageMetrics, costMetrics) => {
+      expect(resolveCapabilities(env)).toMatchObject({ tokenMetrics, tokenUsageMetrics, costMetrics });
+    },
+  );
 
   it.each(['0', 'true', 'yes', '', 'on'])(
     'stays visible for CEZ_HIDE_TOKEN_METRICS=%j — only an exact "1" opts out',
     (value) => {
-      expect(resolveCapabilities({ CEZ_HIDE_TOKEN_METRICS: value }).tokenMetrics).toBe(true);
+      expect(resolveCapabilities({
+        CEZ_HIDE_TOKEN_METRICS: value,
+        CEZ_HIDE_TOKEN_USAGE: value,
+        CEZ_HIDE_COST: value,
+      })).toMatchObject({ tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true });
     },
   );
 
   it('does not change telemetry visibility when another deployment capability is enabled', () => {
-    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FOLLOWUPS: '1' }).tokenMetrics).toBe(true);
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FOLLOWUPS: '1' })).toMatchObject({
+      tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
+    });
   });
 });

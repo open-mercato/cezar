@@ -70,6 +70,9 @@ export interface OpencodeUiMapperState {
   readonly sessionStarted: boolean;
   readonly turnSeq: number;
   readonly currentTurnId: string | null;
+  /** Message ids observed during the active turn. Their latest snapshots are
+   * summed once when the matching `session.idle` closes the turn. */
+  readonly currentTurnMessageIds: ReadonlySet<string>;
   /** A `session.error` arrived since the turn started → `session.idle`
    *  closes the turn with stopReason 'error' (§7.1). */
   readonly turnErrored: boolean;
@@ -109,6 +112,7 @@ export function createOpencodeUiState(): OpencodeUiMapperState {
     sessionStarted: false,
     turnSeq: 0,
     currentTurnId: null,
+    currentTurnMessageIds: new Set(),
     turnErrored: false,
     msgRoles: new Map(),
     cursors: new Map(),
@@ -149,7 +153,13 @@ export function opencodeTurnStarted(state: OpencodeUiMapperState): OpencodeUiMap
   const turnId = `turn_${state.turnSeq + 1}`;
   return {
     events: [{ type: 'turn.started', turnId }],
-    state: { ...state, turnSeq: state.turnSeq + 1, currentTurnId: turnId, turnErrored: false },
+    state: {
+      ...state,
+      turnSeq: state.turnSeq + 1,
+      currentTurnId: turnId,
+      currentTurnMessageIds: new Set(),
+      turnErrored: false,
+    },
   };
 }
 
@@ -192,6 +202,9 @@ function mapMessageInfo(props: Record<string, unknown>, state: OpencodeUiMapperS
     const msgRoles = new Map(state.msgRoles);
     msgRoles.set(id, role);
     next = { ...next, msgRoles };
+  }
+  if (id !== undefined && role === 'assistant' && next.currentTurnId !== null && !next.currentTurnMessageIds.has(id)) {
+    next = { ...next, currentTurnMessageIds: new Set(next.currentTurnMessageIds).add(id) };
   }
   // Telemetry rides only on assistant messages (cumulative per message).
   if (id !== undefined && role === 'assistant') {
@@ -547,7 +560,11 @@ function mapStepFinish(
   };
   const usageByMessage = new Map(state.usageByMessage);
   usageByMessage.set(messageID, merged);
-  return emitUsage({ ...state, usageByMessage });
+  const currentTurnMessageIds =
+    state.currentTurnId !== null
+      ? new Set(state.currentTurnMessageIds).add(messageID)
+      : state.currentTurnMessageIds;
+  return emitUsage({ ...state, usageByMessage, currentTurnMessageIds });
 }
 
 // ---- session lifecycle -------------------------------------------------------
@@ -572,18 +589,23 @@ function mapIdle(props: Record<string, unknown>, state: OpencodeUiMapperState): 
   // Idle with no turn in flight (or a repeated idle) closes nothing.
   if (state.currentTurnId === null) return { events: [], state };
   const openSubtasks = [...state.subtasks.values(), ...state.unboundSubtasks];
+  const completed: Extract<UiEvent, { type: 'turn.completed' }> = {
+    type: 'turn.completed',
+    turnId: state.currentTurnId,
+    stopReason: state.turnErrored ? 'error' : 'end_turn',
+  };
+  const turnUsage = usageForMessages(state.currentTurnMessageIds, state.usageByMessage);
+  if (turnUsage.usage !== null) completed.usage = turnUsage.usage;
+  if (turnUsage.cost !== null) completed.costUsd = turnUsage.cost;
   return {
     events: [
       ...openSubtasks.map((subtask): UiEvent => ({ type: 'item.completed', item: completedSubtask(subtask) })),
-      {
-        type: 'turn.completed',
-        turnId: state.currentTurnId,
-        stopReason: state.turnErrored ? 'error' : 'end_turn',
-      },
+      completed,
     ],
     state: {
       ...state,
       currentTurnId: null,
+      currentTurnMessageIds: new Set(),
       turnErrored: false,
       subtasks: new Map(),
       unboundSubtasks: [],
@@ -698,6 +720,26 @@ function emitUsage(state: OpencodeUiMapperState): OpencodeUiMapping {
   const event: UiUsageUpdatedEvent = { type: 'usage.updated', usage };
   if (cost !== null) event.costUsd = cost;
   return { events: [event], state: { ...state, lastUsage: { total: usage.total, cost } } };
+}
+
+function usageForMessages(
+  messageIds: ReadonlySet<string>,
+  usageByMessage: ReadonlyMap<string, MessageUsage>,
+): { usage: TokenUsage | null; cost: number | null } {
+  let usage: TokenUsage | null = null;
+  let cost: number | null = null;
+  for (const id of messageIds) {
+    const message = usageByMessage.get(id);
+    if (message === undefined) continue;
+    const effective =
+      message.info !== null && (message.steps === null || message.info.total >= message.steps.total)
+        ? message.info
+        : message.steps;
+    if (effective !== null && (effective.input > 0 || effective.output > 0)) usage = addUsage(usage, effective);
+    const effectiveCost = maxCost(message.infoCost, message.stepsCost ?? undefined);
+    if (effectiveCost !== null && effectiveCost > 0) cost = (cost ?? 0) + effectiveCost;
+  }
+  return { usage, cost };
 }
 
 // ---- tiny guards ---------------------------------------------------------------

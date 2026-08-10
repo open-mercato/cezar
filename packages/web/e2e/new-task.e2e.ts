@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
 
 /**
  * The full-screen /new composer (R4 Steps 1.1 + 1.3) end-to-end against a LIVE dry-run server:
@@ -18,7 +18,6 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
-const repoRoot = resolve(import.meta.dirname, '../../..')
 const sessionId = `e2e-new-task-${process.pid}`
 
 function freePort(): Promise<number> {
@@ -84,7 +83,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)

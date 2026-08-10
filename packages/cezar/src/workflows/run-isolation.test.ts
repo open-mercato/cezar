@@ -38,6 +38,15 @@ async function waitForRuns(store: RunStore, ids: string[]): Promise<void> {
   throw new Error('runs did not finish');
 }
 
+async function waitFor(predicate: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -92,6 +101,47 @@ describe('RunManager repository-root isolation', () => {
       const notes = store.readEvents(id).filter((event) => event.type === 'note');
       expect(notes.some((event) => String(event.message).includes('worktree off'))).toBe(true);
       expect(notes.some((event) => String(event.message).includes('exclusive access'))).toBe(true);
+    }
+  });
+
+  it('allows explicitly unsafe root runs to overlap when the repository lock is disabled', async () => {
+    const previous = process.env.CEZ_DISABLE_REPO_LOCK;
+    process.env.CEZ_DISABLE_REPO_LOCK = '1';
+    try {
+      const root = fixtureRepo();
+      const store = RunStore.open(join(root, '.ai/cezar'));
+      const manager = new RunManager(store, root);
+      const workflow: WorkflowDef = {
+        name: 'root-lock-bypass-check',
+        source: 'built-in',
+        steps: [{ id: 'hold', command: 'node -e "setTimeout(()=>{},1500)"' }],
+      };
+
+      const first = manager.startRun(workflow, { task: 'first', worktree: false });
+      const second = manager.startRun(workflow, { task: 'second', worktree: false });
+
+      await waitFor(
+        () =>
+          [first.id, second.id].every((id) =>
+            store.readEvents(id).some((event) => event.type === 'step-start'),
+          ),
+        'both unsafe root runs to start their workflow step',
+      );
+      expect(store.getRun(first.id)?.status).toBe('running');
+      expect(store.getRun(second.id)?.status).toBe('running');
+
+      await waitForRuns(store, [first.id, second.id]);
+
+      expect(store.getRun(first.id)?.status).toBe('done');
+      expect(store.getRun(second.id)?.status).toBe('done');
+      for (const id of [first.id, second.id]) {
+        const notes = store.readEvents(id).filter((event) => event.type === 'note');
+        expect(notes.some((event) => String(event.message).includes('repository-root lock disabled'))).toBe(true);
+        expect(notes.some((event) => String(event.message).includes('exclusive access'))).toBe(false);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CEZ_DISABLE_REPO_LOCK;
+      else process.env.CEZ_DISABLE_REPO_LOCK = previous;
     }
   });
 });

@@ -13,12 +13,23 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
+import type { UiEvent } from '../core/ui-events.ts';
 import { createWorktree } from '../git-worktree.ts';
-import { RunStore, type RunRecord } from '../runs/store.ts';
+import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
 import { appendTurnText, RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+
+type UsageAccountingHarness = {
+  beginUsageInvocation(runId: string, state: Record<string, unknown>, stepId: string): void;
+  handleRunnerUiEvent(
+    runId: string,
+    state: Record<string, unknown>,
+    sink: { handle(event: UiEvent): void },
+    event: UiEvent,
+  ): void;
+};
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -46,6 +57,182 @@ describe('appendTurnText', () => {
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
   });
+});
+
+describe('RunManager directional usage accounting', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let internal: UsageAccountingHarness;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-usage-accounting-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    internal = manager as unknown as UsageAccountingHarness;
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  function fixture() {
+    const run = store.createRun({
+      title: 'usage',
+      workflow: 'quick-task',
+      task: 'usage',
+      steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'work', { iterations: 1, status: 'running' });
+    const state: Record<string, unknown> = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const sink = { handle: (_event: UiEvent) => undefined };
+    return { run, state, sink };
+  }
+
+  it('deduplicates starts and completions while summing multiple turns in one invocation', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    const started: UiEvent = { type: 'turn.started', turnId: 'turn_1' };
+    internal.handleRunnerUiEvent(run.id, state, sink, started);
+    internal.handleRunnerUiEvent(run.id, state, sink, started);
+    const completed: UiEvent = {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 10, output: 2, total: 12 },
+    };
+    internal.handleRunnerUiEvent(run.id, state, sink, completed);
+    internal.handleRunnerUiEvent(run.id, state, sink, completed);
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_2' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_2',
+      stopReason: 'end_turn',
+      usage: { input: 5, output: 1, total: 6 },
+    });
+
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 2,
+      usageTurnsRecorded: 2,
+      inputTokens: 15,
+      outputTokens: 3,
+    });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 15, outputTokens: 3 });
+  });
+
+  it('keeps the run aggregate absent after a pre-turn failure even when a later invocation is metered', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    // The first startSession attempt fails before emitting turn.started.
+    internal.beginUsageInvocation(run.id, state, 'work');
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 8, output: 2, total: 10 },
+    });
+
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 2,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+      usageTurnsRecorded: 1,
+      inputTokens: 8,
+      outputTokens: 2,
+    });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+    expect(store.getRun(run.id)?.outputTokens).toBeUndefined();
+  });
+
+  it('writes each completeness checkpoint before launching or forwarding its boundary event', () => {
+    const { run, state } = fixture();
+    store.flush();
+
+    internal.beginUsageInvocation(run.id, state, 'work');
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 1,
+    });
+
+    const persistedAtSink: StepState[] = [];
+    const sink = {
+      handle: (_event: UiEvent) => {
+        const persisted = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.steps[0];
+        if (persisted) persistedAtSink.push(persisted);
+      },
+    };
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+      usage: { input: 8, output: 2, total: 10 },
+    });
+
+    expect(persistedAtSink[0]).toMatchObject({
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+    });
+    expect(persistedAtSink[1]).toMatchObject({
+      usageTurnsRecorded: 1,
+      inputTokens: 8,
+      outputTokens: 2,
+    });
+  });
+
+  it('tracks an unmetered turn without recording it and ignores a completion that never started', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'ghost',
+      stopReason: 'end_turn',
+      usage: { input: 99, output: 9, total: 108 },
+    });
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
+    internal.handleRunnerUiEvent(run.id, state, sink, {
+      type: 'turn.completed',
+      turnId: 'turn_1',
+      stopReason: 'end_turn',
+    });
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({
+      usageInvocationsStarted: 1,
+      usageInvocationsObserved: 1,
+      usageTurnsStarted: 1,
+    });
+    expect(store.getRun(run.id)?.steps[0]?.usageTurnsRecorded).toBeUndefined();
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+  });
+});
+
+it('parallel variants ignore a worktree opt-out and retain isolated mode', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'cez-variant-isolation-'));
+  const store = RunStore.open(join(repoRoot, '.ai/cezar'));
+  try {
+    const manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    const records = manager.startVariants(
+      {
+        name: 'quick-task',
+        description: 'x',
+        source: 'built-in',
+        steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
+      },
+      { task: 'compare approaches', worktree: false },
+      2,
+    );
+
+    expect(records.map((record) => record.worktree)).toEqual([undefined, undefined]);
+  } finally {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 /**
@@ -110,6 +297,52 @@ describe('RunManager.recordTurnEnd', () => {
     const later = store.getRun(record.id);
     expect(later?.titleSummary).toBeUndefined();
     expect(later?.diffStat).toEqual({ adds: 4, dels: 1, files: 3 });
+  });
+
+  /**
+   * #751: `recordTurnEnd` is the ONE place `RunRecord.diffStat` is written, so it
+   * is also the one place `run.branch` has to reach `worktreeShortstat` — without
+   * it, a review/QA run that checked another branch out into its worktree stores
+   * that branch's whole diff as this task's work.
+   */
+  it('stores only the uncommitted diff when the agent repointed the worktree HEAD', async () => {
+    const record = await makeWorktreeRun();
+    const wt = record.worktreePath as string;
+
+    // A branch with real commits on it, checked out into the task's worktree —
+    // exactly what a `review/pr-NNN` or QA run does.
+    await run('git', ['checkout', '-q', '-b', 'someone-elses-branch'], { cwd: wt });
+    writeFileSync(join(wt, 'theirs.txt'), 'a\nb\nc\nd\ne\nf\n'); // 6 lines that are NOT this task's
+    await run('git', ['add', '-A'], { cwd: wt });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'their work'], { cwd: wt });
+    writeFileSync(join(wt, 'mine.txt'), 'z\n'); // the 1 line this task produced
+
+    await manager.recordTurnEnd(record.id, TURN_TEXT);
+
+    // 1 uncommitted line, flagged — not the 6 committed ones the foreign branch carries
+    // (which, with `a.txt`'s edit and `new.txt`, would have read `+10 −1 / 4 files`).
+    expect(store.getRun(record.id)?.diffStat).toEqual({
+      adds: 1,
+      dels: 0,
+      files: 1,
+      repointed: true,
+    });
+  });
+
+  it('drops the repointed flag again once HEAD returns to the task branch', async () => {
+    const record = await makeWorktreeRun();
+    const wt = record.worktreePath as string;
+    await run('git', ['checkout', '-q', '-b', 'a-detour'], { cwd: wt });
+    await manager.recordTurnEnd(record.id, TURN_TEXT);
+    expect(store.getRun(record.id)?.diffStat?.repointed).toBe(true);
+
+    // `updateRun` replaces `diffStat` wholesale, so a stale `repointed: true` can
+    // never outlive the repoint that caused it.
+    await run('git', ['checkout', '-q', record.branch as string], { cwd: wt });
+    await manager.recordTurnEnd(record.id, TURN_TEXT);
+    const after = store.getRun(record.id);
+    expect(after?.diffStat).toEqual({ adds: 3, dels: 1, files: 2 });
+    expect(after?.diffStat).not.toHaveProperty('repointed');
   });
 
   it('never overwrites a user-edited title (PATCH sets titleSummary too)', async () => {
@@ -491,6 +724,9 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
     }
 
     const finished = store.getRun(record.id);
+    expect(finished?.worktree).toBe(false);
+    expect(finished?.worktreePath).toBeUndefined();
+    expect(finished?.baseBranch).toMatch(/^[0-9a-f]{40}$/);
     // Neither step failed or was skipped — the reported bug looked exactly
     // like this from the RunRecord's point of view (both `done`) while the
     // second step's session had done nothing; the assertion below on
@@ -651,6 +887,45 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
     expect(state?.idleTimer).toBeUndefined(); // durable monitors do not inherit the 15-minute user-wait timer
   }, 30_000);
 
+  /**
+   * #810 — the regression the two 0.9.2 reports describe. #661 removed the 15-minute
+   * idle timer from the monitoring branch and replaced it with a wake timer that
+   * defaulted OFF, so a zero-config parked monitor had NO timer at all and cezar has no
+   * other resume path (no process-exit callback, no CI webhook, no sub-agent-completion
+   * event). It sat in `monitoring` until a human typed something. A default manager must
+   * therefore publish a wake deadline: the run has to be able to resume itself.
+   */
+  it('a parked monitor schedules its own re-check under the zero-config default (#810)', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    await waitFor(record.id, (r) => Boolean(r?.monitoringWakeAt));
+    const parked = store.getRun(record.id);
+    const deadline = Date.parse(String(parked?.monitoringWakeAt));
+    expect(Number.isNaN(deadline)).toBe(false);
+    expect(deadline).toBeGreaterThan(Date.now()); // a real future re-check, not a stale stamp
+    const state = (manager as unknown as {
+      active: Map<string, { idleTimer?: NodeJS.Timeout; monitoringWakeTimer?: NodeJS.Timeout }>;
+    }).active.get(record.id);
+    expect(state?.monitoringWakeTimer).toBeDefined();
+    expect(state?.idleTimer).toBeUndefined(); // still no user-wait timeout — #661's fix stands
+  }, 30_000);
+
+  it('park mode remains reachable as an explicit operator choice (#810)', async () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: null } }),
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    expect(store.getRun(record.id)?.monitoringWakeAt).toBeUndefined();
+    const state = (manager as unknown as {
+      active: Map<string, { monitoringWakeTimer?: NodeJS.Timeout }>;
+    }).active.get(record.id);
+    expect(state?.monitoringWakeTimer).toBeUndefined();
+  }, 30_000);
+
   it('optionally wakes a parked monitor without fabricating a user message', async () => {
     manager.dispose();
     const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
@@ -784,6 +1059,22 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(v1Text.some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
 
+  it('normalizes a near-valid presentation-only marker into exactly one ask card', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-near choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((event) => event.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{
+      header: string;
+      options: Array<{ label: string; description?: string }>;
+    }>;
+    expect(questions[0]!.header).toBe('Implementati');
+    expect(questions[0]!.options[0]).toEqual({ label: 'Minimal', description: 'd'.repeat(280) });
+    expect(events.filter((event) => event.type === 'text').some((event) => String(event.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
+
   it('a markerless turn-end raises no ask.requested', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
     currentId = record.id;
@@ -798,7 +1089,9 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const parked = store.getRun(record.id);
     expect(parked?.status).toBe('waiting'); // still parks — never worse than the prose fallback
     expect(parked?.activity).toBeUndefined();
-    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(false);
+    const events = readEvents(record.id);
+    expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON'))).toHaveLength(1);
   }, 30_000);
 
   // Regression (blank-question bug): valid JSON that fails the ask schema used
@@ -812,6 +1105,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'waiting');
     const events = readEvents(record.id);
     expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
+    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('failed validation'))).toHaveLength(1);
     const assistantText = events.filter((e) => e.type === 'text');
     expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
   }, 30_000);
@@ -1510,4 +1804,130 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     await waitFor(() => readFileSync(eventsPath, 'utf8').includes('"type":"turn-end"'));
     expect(store.getRun(record.id)?.status).toBe('waiting');
   }, 30_000);
+});
+
+/**
+ * #811 — registry `/skill` expansion on the CONTINUATION path.
+ *
+ * `expandRegistrySlashSkill` (#676) reads `state.skills`, which only `execute` ever
+ * populated. `runContinuation` builds its OWN `ActiveRun`, so a Reply into a finished
+ * run — and every restart recovery, which routes through `continueRun` — expanded
+ * against an empty registry and handed the raw `/om-...` to the backend, which answered
+ * "Unknown skill". Two seams have to hold: the continuation's opening prompt (the
+ * session's `userPrompt`, which never passes through `deliverMessage`) and the
+ * follow-ups delivered into that same session.
+ *
+ * The mock CLI echoes the prompt it received (`Okay — looking into: …`), so the
+ * transcript is a faithful witness of what actually reached the backend.
+ */
+describe('registry /skill expansion survives a continuation (#811)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let runId: string | undefined;
+  let savedDryRun: string | undefined;
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-811-'));
+    savedDryRun = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    mkdirSync(join(repoRoot, '.ai/cezar/skills'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.ai/cezar/skills/demo-review.md'),
+      '---\nname: demo-review\ndescription: Review a diff.\n---\n\nRun the demo review playbook.\n',
+    );
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    runId = undefined;
+  });
+
+  afterEach(() => {
+    if (runId) manager.cancel(runId);
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const eventsOf = (id: string) =>
+    readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; text?: string; stepId?: string });
+
+  const waitFor = async (predicate: () => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  /** A finished run, ready for the cockpit's Reply composer. The dry-run mock ends its
+   *  turn with no marker, so the run parks at `waiting` with the session open — closing
+   *  it is what a user pressing Finish does, and `continueRun` only accepts a run that
+   *  reached a terminal status. */
+  const finishedRun = async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'do the first thing', worktree: false });
+    runId = record.id;
+    await waitFor(() => store.getRun(record.id)?.status === 'waiting');
+    expect(manager.finish(record.id)).toBe(true);
+    await waitFor(() => ['done', 'review'].includes(store.getRun(record.id)?.status ?? ''));
+    return record.id;
+  };
+
+  it("expands the continuation's OPENING prompt before it becomes the session userPrompt", async () => {
+    const id = await finishedRun();
+    expect(manager.continueRun(id, { text: '/demo-review look at the diff' })).toEqual({ ok: true });
+    await waitFor(() =>
+      eventsOf(id).some((e) => e.stepId === 'continue-1' && e.type === 'text' && e.text?.includes('looking into')),
+    );
+
+    const echoed = eventsOf(id).find(
+      (e) => e.stepId === 'continue-1' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    // The backend saw the expanded skill prompt, NOT a bare slash command it would
+    // reject as an unknown skill.
+    expect(echoed?.text).toContain('Selected skill: /demo-review');
+    expect(echoed?.text).not.toContain('/demo-review look at the diff');
+
+    // Delivery-only: the transcript still shows what the user actually typed.
+    const typed = eventsOf(id).find((e) => e.type === 'user-message' && e.stepId === 'continue-1');
+    expect(typed?.text).toBe('/demo-review look at the diff');
+  }, 40_000);
+
+  it('expands a FOLLOW-UP delivered into the reopened continuation session', async () => {
+    const id = await finishedRun();
+    expect(manager.continueRun(id, { text: 'keep going' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    expect(manager.sendMessage(id, [{ type: 'text', text: '/demo-review now review it' }])).toBe(true);
+    await waitFor(() =>
+      eventsOf(id).filter((e) => e.type === 'text' && e.text?.includes('Selected skill: /demo-review')).length > 0,
+    );
+    expect(
+      eventsOf(id).some((e) => e.type === 'text' && e.text?.includes('Selected skill: /demo-review')),
+    ).toBe(true);
+  }, 40_000);
+
+  it('leaves an unknown slash command untouched so backend-native commands still work', async () => {
+    const id = await finishedRun();
+    expect(manager.continueRun(id, { text: '/compact please' })).toEqual({ ok: true });
+    await waitFor(() =>
+      eventsOf(id).some((e) => e.stepId === 'continue-1' && e.type === 'text' && e.text?.includes('looking into')),
+    );
+    const echoed = eventsOf(id).find(
+      (e) => e.stepId === 'continue-1' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    expect(echoed?.text).toContain('/compact please');
+  }, 40_000);
 });

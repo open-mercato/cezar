@@ -56,12 +56,14 @@ const memoryWorkspaceConfig = (disabledProviders: ProviderId[] = []) => {
 describe('workspace provider API', () => {
   let root: string;
   let store: RunStore;
+  const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedRemote = process.env.CEZ_REMOTE;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cez-providers-api-'));
     store = RunStore.open(join(root, '.ai/cezar'));
+    delete process.env.CEZ_AGENT_MODELS_LOCKED;
     delete process.env.CEZ_DRY_RUN;
     delete process.env.CEZ_REMOTE;
   });
@@ -69,6 +71,8 @@ describe('workspace provider API', () => {
   afterEach(() => {
     store.flush();
     rmSync(root, { recursive: true, force: true });
+    if (savedModelsLocked === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+    else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
@@ -159,6 +163,26 @@ describe('workspace provider API', () => {
         },
       ],
     });
+  });
+
+  it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    const runCommand = vi.fn<RunProviderCommand>();
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode']);
+    const response = await apiRequest(app({
+      providerAuth: service({}, runCommand),
+      workspaceConfig,
+    }), '/api/v1/providers/status?refresh=1');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+        { provider: 'opencode', status: 'connected', enabled: true },
+      ],
+    });
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it('PUT /api/v1/providers/:provider/enabled updates the global preference and emits one enriched row', async () => {

@@ -158,27 +158,32 @@ describe('model identity wiring (dry run)', () => {
     expect(store.getRun(id)?.modelIdentity).toBe('anthropic/haiku');
   }, 40_000);
 
-  it('an unresolvable model fails the run loudly instead of silently defaulting', async () => {
-    // claude serves anthropic only: a foreign provider would be dropped on the
-    // wire yet persisted, asserting a provider that never ran (#405 review M2).
-    const id = await runToEnd({ task: 'do the thing', model: 'openrouter/some-model' });
+  it('Claude gateway models run with their provider-qualified wire id', async () => {
+    const id = await runToEnd({ task: 'do the thing', model: 'deepseek/deepseek-v4-flash' });
     const record = store.getRun(id);
-    expect(record?.status).toBe('failed');
-    expect(record?.error).toContain('openrouter');
-    // Nothing ran, so nothing is asserted about what ran.
-    expect(record?.modelIdentity).toBeUndefined();
+    expect(record?.status).toBe('done');
+    expect(record?.modelIdentity).toBe('deepseek/deepseek-v4-flash');
+    expect(capturedModel(0)).toBe('deepseek/deepseek-v4-flash');
   }, 30_000);
 
-  it('a continuation with an unresolvable model fails loudly too', async () => {
+  it('fails a run when the runner reports a model error instead of parking it as active', async () => {
+    const id = await runToEnd({ task: 'mock:auth-error' });
+    const record = store.getRun(id);
+    expect(record?.status).toBe('failed');
+    expect(record?.error).toContain('Failed to authenticate');
+    expect(record?.steps.find((step) => step.id === 'work')?.status).toBe('failed');
+  }, 30_000);
+
+  it('a continuation with an unsupported Codex provider still fails loudly', async () => {
     const id = await runToEnd({ task: 'do the thing', model: 'opus' });
     expect(store.getRun(id)?.modelIdentity).toBe('anthropic/opus');
 
-    expect(manager.continueRun(id, { text: 'keep going', model: 'openrouter/some-model' })).toEqual({
-      ok: true,
-    });
-    await settle(id);
-    const record = store.getRun(id);
-    expect(record?.status).toBe('failed');
-    expect(record?.error).toContain('openrouter');
+    expect(
+      manager.continueRun(id, {
+        text: 'keep going',
+        runner: 'codex',
+        model: 'anthropic/claude-opus-4-8',
+      }),
+    ).toEqual({ ok: false, error: "model 'anthropic/claude-opus-4-8' is not a codex model" });
   }, 40_000);
 });

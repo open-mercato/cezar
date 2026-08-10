@@ -61,6 +61,10 @@ export interface CodexUiMapperState {
   /** Fallback counter for turn frames that arrive without a wire turn id. */
   readonly turnSeq: number;
   readonly currentTurnId: string | null;
+  /** Fresh `tokenUsage.last` received while the current turn is active.
+   * Consumed exactly once by its matching turn end; cumulative `total` is
+   * never used as a persisted per-turn delta. */
+  readonly pendingTurnUsage: TokenUsage | null;
   /** Item ids already introduced — a delta for an unknown id synthesizes an
    *  `item.started` first so consumers always have something to upsert. */
   readonly knownItems: ReadonlySet<string>;
@@ -120,6 +124,7 @@ export function createCodexUiState(): CodexUiMapperState {
     sessionStarted: false,
     turnSeq: 0,
     currentTurnId: null,
+    pendingTurnUsage: null,
     knownItems: new Set(),
     outputs: new Map(),
     reasonings: new Map(),
@@ -194,7 +199,14 @@ function mapTurnStarted(params: Record<string, unknown>, state: CodexUiMapperSta
     // So are the reasoning accumulators: an interrupted item never completes,
     // so its text would otherwise leak into a later turn that reuses the id
     // and pin whole chains of thought in memory for the session (#528).
-    state: { ...state, turnSeq, currentTurnId: turnId, planFromNotification: false, reasonings: new Map() },
+    state: {
+      ...state,
+      turnSeq,
+      currentTurnId: turnId,
+      pendingTurnUsage: null,
+      planFromNotification: false,
+      reasonings: new Map(),
+    },
   };
 }
 
@@ -205,12 +217,13 @@ function mapTurnEnd(
 ): CodexUiMapping {
   let turnSeq = state.turnSeq;
   const turnId = turnIdOf(params) ?? state.currentTurnId ?? `turn_${++turnSeq}`;
+  const closesActiveTurn = state.currentTurnId === null || turnId === state.currentTurnId;
   // A review span still open when the turn ends never gets its `exitedReviewMode` — an
   // interrupted, cancelled or failed turn simply stops. Close it here, or the item stays
   // `running` forever and the Agents dock reads a finished run as a live fan-out (#474).
   // The status follows the turn: a turn that failed did not complete its review.
   const events: UiEvent[] = [];
-  if (state.reviewItemId !== null) {
+  if (closesActiveTurn && state.reviewItemId !== null) {
     events.push({
       type: 'item.completed',
       item: {
@@ -223,10 +236,20 @@ function mapTurnEnd(
       },
     });
   }
-  events.push({ type: 'turn.completed', turnId, stopReason: turnStopReason(params, failed) });
+  const completed: Extract<UiEvent, { type: 'turn.completed' }> = {
+    type: 'turn.completed',
+    turnId,
+    stopReason: turnStopReason(params, failed),
+  };
+  if (turnId === state.currentTurnId && state.pendingTurnUsage !== null) {
+    completed.usage = state.pendingTurnUsage;
+  }
+  events.push(completed);
   return {
     events,
-    state: { ...state, turnSeq, currentTurnId: null, reviewItemId: null },
+    state: closesActiveTurn
+      ? { ...state, turnSeq, currentTurnId: null, pendingTurnUsage: null, reviewItemId: null }
+      : { ...state, turnSeq },
   };
 }
 
@@ -803,20 +826,27 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
   const tokenUsage = params.tokenUsage;
   const total = isRecord(tokenUsage.total) ? tokenUsage.total : undefined;
   if (!total) return { events: [], state };
-  const input = num(total.inputTokens) ?? 0;
-  const output = num(total.outputTokens) ?? 0;
-  const cacheRead = num(total.cachedInputTokens);
-  const reasoning = num(total.reasoningOutputTokens);
-  const usage: TokenUsage = {
-    input,
-    output,
-    total: num(total.totalTokens) ?? input + output,
-  };
-  if (cacheRead !== undefined) usage.cacheRead = cacheRead;
-  if (reasoning !== undefined) usage.reasoning = reasoning;
+  const usage = codexUsage(total);
+  if (usage === undefined) return { events: [], state };
   const contextWindow = num(tokenUsage.modelContextWindow);
   if (contextWindow !== undefined) usage.contextWindow = contextWindow;
-  return { events: [{ type: 'usage.updated', usage }], state };
+  const last = isRecord(tokenUsage.last) ? codexUsage(tokenUsage.last) : undefined;
+  const nextState =
+    state.currentTurnId !== null && last !== undefined ? { ...state, pendingTurnUsage: last } : state;
+  return { events: [{ type: 'usage.updated', usage }], state: nextState };
+}
+
+function codexUsage(raw: Record<string, unknown>): TokenUsage | undefined {
+  const input = nonNegative(raw.inputTokens);
+  const output = nonNegative(raw.outputTokens);
+  if (input === undefined || output === undefined) return undefined;
+  const total = nonNegative(raw.totalTokens) ?? input + output;
+  const usage: TokenUsage = { input, output, total };
+  const cacheRead = nonNegative(raw.cachedInputTokens);
+  const reasoning = nonNegative(raw.reasoningOutputTokens);
+  if (cacheRead !== undefined) usage.cacheRead = cacheRead;
+  if (reasoning !== undefined) usage.reasoning = reasoning;
+  return usage;
 }
 
 // ---- tiny guards --------------------------------------------------------------
@@ -831,6 +861,11 @@ function str(value: unknown): string | undefined {
 
 function num(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function nonNegative(value: unknown): number | undefined {
+  const parsed = num(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }
 
 function stringArray(value: unknown): string[] {

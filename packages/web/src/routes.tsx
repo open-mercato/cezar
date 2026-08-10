@@ -11,6 +11,7 @@ import {
 
 import { useHealth, useProjects } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
+import { locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
@@ -218,16 +219,39 @@ function NewTaskProjectRoute() {
  * Legacy flat URLs — every pre-multi-project path, `/tasks/:id` bookmarks and the `/new?...`
  * bookmarklet grammar included — redirect to the boot project's scoped twin, preserving path,
  * query and hash byte-for-byte (BACKWARD_COMPATIBILITY.md protects the bookmarklet contract).
- * The boot id comes from `/api/health` (`bootProject`); until it answers, the quiet resolving
- * state — never a flashed wrong screen. `replace` keeps Back from bouncing off the redirect.
+ * The exact bare root is the sole exception: once health and the registry settle, it may restore
+ * the last valid project-scoped page THIS browser was on (localStorage, so a second client never
+ * decides where this one lands). Any query/hash makes `/` explicit, so pasted links always win.
+ * `replace` keeps Back from bouncing off either startup redirect.
  */
 function LegacyPathRedirect() {
   const location = useLocation()
   const health = useHealth()
-  if (health.data === undefined) return <ScopeResolving />
-  // Health always names the boot project; the alias is a just-in-case fallback that still
-  // lands (the gate above normalizes `default` from the registry, which always answers one).
-  const boot = health.data.bootProject ?? 'default'
+  const projects = useProjects()
+  const resolvedBoot = health.data?.bootProject ?? projects.data?.bootProject
+  const bootSourcesSettled =
+    (health.data !== undefined || health.isError) &&
+    (projects.data !== undefined || projects.isError)
+  if (resolvedBoot === undefined && !bootSourcesSettled) return <ScopeResolving />
+  // Health and the registry normally name the same boot project. If neither can answer after
+  // both queries settle, the server-side `default` alias remains the no-config fallback.
+  const boot = resolvedBoot ?? 'default'
+
+  const isBareRoot =
+    location.pathname === '/' && location.search === '' && location.hash === ''
+  if (isBareRoot) {
+    // The remembered location itself is local and synchronous; only the registry that validates
+    // its project is still worth waiting for.
+    if (projects.data === undefined && !projects.isError) return <ScopeResolving />
+
+    const restored = locationToRestore(
+      readStoredLastLocation(),
+      projects.data,
+      resolvedBoot,
+    )
+    if (restored !== null) return <Navigate to={restored} replace />
+  }
+
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
   // minting a nonsense `/p/<boot>/p` path.
   const path = location.pathname === '/p' || location.pathname === '/p/' ? '/' : location.pathname

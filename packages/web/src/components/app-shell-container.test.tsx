@@ -41,7 +41,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false },
 }
 
 /** One registered project — the degenerate workspace every existing install upgrades into. */
@@ -184,7 +184,7 @@ describe('sidebar wiring', () => {
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.
   it('drops the Inbox nav item and its badge when the server has follow-ups off', async () => {
     serve({
-      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, followups: false } },
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
     })
     renderShell()
@@ -199,7 +199,7 @@ describe('sidebar wiring', () => {
 
   it('never asks for todos on a server with the inbox off', async () => {
     serve({
-      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, followups: false } },
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
     })
     renderShell()
@@ -209,6 +209,32 @@ describe('sidebar wiring', () => {
     // nothing here needs the list before health has spoken.
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
     expect(asked).not.toContain('/api/v1/todos')
+  })
+
+  // #801 — the same honesty rule for the opt-in automations capability. Both cases carry a
+  // reachable forge, so the ONLY thing deciding the Automations item here is the capability:
+  // before the flag, every project with a GitHub remote saw that tab.
+  const WITH_FORGE = { ...HEALTH, forge: { kind: 'github' as const, available: true } }
+
+  it('drops the Automations nav item when the server has automations off', async () => {
+    serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.queryByRole('link', { name: /Automations/ })).toBeNull()
+    // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
+    expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+  })
+
+  it('shows the Automations nav item once health reports the capability', async () => {
+    serve({
+      '/api/v1/health': { ...WITH_FORGE, capabilities: { ...HEALTH.capabilities, automations: true } },
+      '/api/v1/todos': [],
+    })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
   })
 
   it('renders no badge for an empty inbox', async () => {

@@ -72,6 +72,7 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
   }
   const config: WorkspaceConfigResponse = {
+    agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
@@ -86,6 +87,7 @@ function serve(answers: Answers = {}) {
       maxParallel: 2,
       maxMonitoringSessions: 2,
       monitoringWakeIntervalMinutes: null,
+      autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
     },

@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
 import { RunStore } from '../runs/store.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -49,11 +50,18 @@ const workspaceConfig = (disabledProviders: ProviderId[] = []) => {
  */
 describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', () => {
   let repoRoot: string;
+  let home: string;
   let store: RunStore;
   const savedRemote = process.env.CEZ_REMOTE;
+  const savedHome = process.env.CEZ_HOME;
 
   beforeEach(() => {
-    repoRoot = mkdtempSync(join(tmpdir(), 'cez-open-in-cli-'));
+    repoRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-open-in-cli-'));
+    // The account resolution behind the handoff (spec 2026-07-29-agent-profiles) reads
+    // `~/.cezar/agent-accounts.json`, so this suite must own one — without `CEZ_HOME` it would read the
+    // developer's real workspace and its answers would depend on who ran it.
+    home = mkdtempSync(join(realpathSync(tmpdir()), 'cez-open-in-cli-home-'));
+    process.env.CEZ_HOME = home;
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     delete process.env.CEZ_REMOTE;
     mockOpenInTerminal.mockClear();
@@ -61,9 +69,11 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
 
   afterEach(() => {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    for (const dir of [repoRoot, home]) rmSync(dir, { recursive: true, force: true });
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
     else process.env.CEZ_REMOTE = savedRemote;
+    if (savedHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedHome;
   });
 
   const app = (options: { disabled?: ProviderId[]; disconnected?: ProviderId[] } = {}) =>
@@ -110,7 +120,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
     const res = await openIn(run.id, target);
     expect(res.status).toBe(200);
     expect(((await res.json()) as { command: string }).command).toBe(expected);
-    expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), expected);
+    expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), expected, {});
   });
 
   it('a legacy run with no runner recorded resumes as Claude (pre-runner-choice default)', async () => {
@@ -124,7 +134,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
     const res = await openIn(run.id, 'cli:codex');
     expect(res.status).toBe(200);
     expect(((await res.json()) as { command: string }).command).toBe('codex');
-    expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'codex');
+    expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'codex', {});
   });
 
   it('no session yet: even the matching CLI launches fresh instead of erroring', async () => {
@@ -146,7 +156,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
       const res = await openIn(run.id, 'cli:claude');
       expect(res.status).toBe(200);
       expect(((await res.json()) as { command: string }).command).toBe('claude');
-      expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'claude');
+      expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'claude', {});
     },
   );
 
@@ -211,5 +221,84 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
       error: 'Codex credentials are unavailable. Authorize it in Settings → Agents → Providers.',
     });
     expect(mockOpenInTerminal).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The handoff must land on the account that OWNS the session, not on whatever the project is
+   * pointed at now. Without the config dir, `claude --resume` finds nothing under the default
+   * account and silently opens a fresh conversation — a failure with no error message.
+   */
+  describe('agent accounts (spec 2026-07-29-agent-profiles)', () => {
+    const addAccount = async (id: string, provider: 'claude' | 'codex', dir: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'settings.json'), '{}', 'utf8');
+      await mergeWriteAgentAccounts((store) => {
+        store.accounts.push({ id, provider, configDir: dir, label: id, addedAt: '' });
+      });
+    };
+
+    it('resumes under the account recorded on the step', async () => {
+      const dir = join(home, 'claude-klaudiusz');
+      await addAccount('work', 'claude', dir);
+      const run = makeRun('claude', 'sess-1');
+      store.updateStep(run.id, 'work', { profileId: 'work' });
+
+      const res = await openIn(run.id, 'cli:claude');
+
+      expect(res.status).toBe(200);
+      expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'claude --resume sess-1', {
+        CLAUDE_CONFIG_DIR: dir,
+      });
+    });
+
+    it('keeps resuming under the recorded account after the PROJECT switched to another one', async () => {
+      const work = join(home, 'claude-klaudiusz');
+      await addAccount('work', 'claude', work);
+      await addAccount('client', 'claude', join(home, 'claude-client'));
+      await mergeWriteAgentAccounts((store) => {
+        store.selections[realpathSync(repoRoot)] = { claude: 'client' };
+      });
+      const run = makeRun('claude', 'sess-1');
+      store.updateStep(run.id, 'work', { profileId: 'work' });
+
+      await openIn(run.id, 'cli:claude');
+
+      expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'claude --resume sess-1', {
+        CLAUDE_CONFIG_DIR: work,
+      });
+    });
+
+    it('opens a FRESH CLI on the project\'s account, not the machine default', async () => {
+      const dir = join(home, 'claude-klaudiusz');
+      await addAccount('work', 'claude', dir);
+      await mergeWriteAgentAccounts((store) => {
+        store.selections[realpathSync(repoRoot)] = { claude: 'work' };
+      });
+      const run = makeRun('claude'); // no session — the fresh-launch branch
+
+      await openIn(run.id, 'cli:claude');
+
+      expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'claude', {
+        CLAUDE_CONFIG_DIR: dir,
+      });
+    });
+
+    it('refuses rather than resuming on the wrong account when the recorded one is gone', async () => {
+      const run = makeRun('claude', 'sess-1');
+      store.updateStep(run.id, 'work', { profileId: 'deleted-yesterday' });
+
+      const res = await openInCli(run.id);
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toContain('no longer exists');
+      expect(mockOpenInTerminal).not.toHaveBeenCalled();
+    });
+
+    it('adds nothing for a run recorded on the default account', async () => {
+      const run = makeRun('claude', 'sess-1');
+      store.updateStep(run.id, 'work', { profileId: 'default' });
+      await openIn(run.id, 'cli:claude');
+      expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), 'claude --resume sess-1', {});
+    });
   });
 });

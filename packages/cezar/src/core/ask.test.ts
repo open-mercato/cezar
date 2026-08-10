@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseAskMarker, parseAskRequest, stripAskMarker, type AskRequest } from './ask.ts';
+import {
+  parseAskMarker,
+  parseAskMarkerResult,
+  parseAskRequest,
+  stripAskMarker,
+  type AskRequest,
+} from './ask.ts';
 
 const valid: AskRequest = {
   questions: [
@@ -145,8 +151,72 @@ describe('parseAskMarker', () => {
     expect(parseAskMarker('CEZ:ASK {"questions":[]}')).toBeNull();
   });
 
+  it('normalizes bounded presentation drift without changing the choices', () => {
+    const description = 'd'.repeat(300);
+    const payload = {
+      transportHint: 'render as chips',
+      questions: [
+        {
+          header: 'Implementation path',
+          question: 'Which implementation should I use?',
+          multiSelect: false,
+          presentation: 'compact',
+          options: [
+            { label: 'Minimal', description, recommended: true },
+            { label: 'Expanded', description: 'Touch the wider surface' },
+          ],
+        },
+      ],
+    };
+    const result = parseAskMarkerResult(`CEZ:ASK ${JSON.stringify(payload)}`);
+    expect(result).toMatchObject({
+      kind: 'valid',
+      normalized: true,
+      request: {
+        questions: [
+          {
+            header: 'Implementati',
+            question: 'Which implementation should I use?',
+            options: [
+              { label: 'Minimal', description: 'd'.repeat(280) },
+              { label: 'Expanded', description: 'Touch the wider surface' },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it('ignores a marker that is not at the end of the turn', () => {
     expect(parseAskMarker(`CEZ:ASK ${askJson}\nand then more text after`)).toBeNull();
+  });
+});
+
+describe('parseAskMarkerResult diagnostics', () => {
+  it('distinguishes ordinary prose from malformed JSON', () => {
+    expect(parseAskMarkerResult('ordinary prose')).toEqual({ kind: 'none' });
+    expect(parseAskMarkerResult('CEZ:ASK {not json')).toMatchObject({ kind: 'invalid-json' });
+  });
+
+  it('reports the zod path for a hard structural failure', () => {
+    const result = parseAskMarkerResult('CEZ:ASK {"questions":[]}');
+    expect(result).toMatchObject({ kind: 'invalid-structure' });
+    if (result.kind === 'invalid-structure') expect(result.issues[0]?.path).toEqual(['questions']);
+  });
+
+  it('never drops options to force an over-cap request to validate', () => {
+    const payload = {
+      questions: [
+        {
+          header: 'Choice',
+          question: 'Which?',
+          options: ['a', 'b', 'c', 'd', 'e'].map((label) => ({ label })),
+        },
+      ],
+    };
+    expect(parseAskMarkerResult(`CEZ:ASK ${JSON.stringify(payload)}`)).toMatchObject({
+      kind: 'invalid-structure',
+    });
   });
 });
 
@@ -169,8 +239,8 @@ describe('stripAskMarker', () => {
     expect(stripAskMarker(invalid)).toBe(invalid);
   });
 
-  it('keeps a marker with an over-length header — the schema-invalid shape agents actually produce', () => {
-    const invalid =
+  it('strips a marker after safely clipping an over-length presentation header', () => {
+    const nearValid =
       'Zanim pójdziemy dalej:\nCEZ:ASK ' +
       JSON.stringify({
         questions: [
@@ -181,7 +251,7 @@ describe('stripAskMarker', () => {
           },
         ],
       });
-    expect(stripAskMarker(invalid)).toBe(invalid);
+    expect(stripAskMarker(nearValid)).toBe('Zanim pójdziemy dalej:');
   });
 
   it('keeps a marker whose payload is not valid JSON at all', () => {

@@ -83,7 +83,9 @@ describe('health topic + cache (live-server path)', () => {
    *  to a 1 s budget and a test to 5 s, so both had to be beaten by a probe sweep to pass —
    *  that is the whole flake (#701 class): these assertions are about cache POLICY, never
    *  about how fast a probe answers. The budget is generous on purpose; a genuinely broken
-   *  pre-warm never resolves and still fails, just later. */
+   *  pre-warm never resolves and still fails, just later. It supersedes the interim 10 s
+   *  `waitFor` budget, which `main` could never actually spend: the enclosing case still ran
+   *  under vitest's 5 s default and died first. */
   const PROBE_BUDGET_MS = 30_000;
   /** Per-test ceiling: a case may need a pre-warm sweep plus a couple of recomputes, and
    *  vitest's 5 s default cuts that off long before the policy under test has a verdict. */
@@ -160,6 +162,8 @@ describe('health topic + cache (live-server path)', () => {
     expect(await runner()).toBe('claude'); // stale served immediately…
     clock.mockReturnValue(realNow + 10_001);
     // …and the refresh lands behind it — within a probe sweep, not within the 1 s default.
+    // Same explicit budget as `settle`, for the same reason: this waits on a full cold
+    // snapshot compute, which outlives `waitFor`'s default under load.
     await vi.waitFor(async () => expect(await runner()).toBe('codex'), {
       timeout: PROBE_BUDGET_MS,
       interval: 50,
@@ -219,8 +223,9 @@ describe('health topic + cache (live-server path)', () => {
 
     const health = topics.get('health');
     if (!health) throw new Error('no health topic registered');
-    const viaSocket = (await health.snapshot()) as { defaultRunner?: string };
-    expect(viaSocket.defaultRunner).toBe(await runner());
+    const viaSocket = await health.snapshot();
+    const response = await apiRequest(app, '/api/v1/health');
+    expect(await response.json()).toEqual(viaSocket);
   }, TEST_BUDGET_MS);
 
   it('shares one compute between concurrent reads (in-flight dedupe)', async () => {

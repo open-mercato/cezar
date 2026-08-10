@@ -52,6 +52,14 @@ export interface ConfigFileDef {
   seeded?: boolean;
   /** True when this file holds MCP server definitions (drives the MCP section's filter). */
   holdsMcp?: boolean;
+  /** Top-level native setting that supplies the agent's new-session model, when present. */
+  modelKey?: string;
+  /** Native model keys checked in precedence order, including nested `env.*` settings. */
+  modelKeys?: readonly string[];
+  /** Native provider key paired with the model, when the vendor separates the two. */
+  modelProviderKey?: string;
+  /** Higher values win when resolving a native default model across config scopes. */
+  modelPriority?: number;
   /** VERBATIM from the vendor docs. Never computed, never generic. */
   precedence: string;
   /** Documented mid-run reload behaviour, or undefined when the vendor is silent. */
@@ -82,6 +90,9 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     label: '~/.claude/settings.json',
     format: 'json',
     tracked: 'outside-repo',
+    modelKey: 'model',
+    modelKeys: ['env.ANTHROPIC_MODEL', 'model'],
+    modelPriority: 1,
     precedence:
       'Lowest priority. Project and local settings override it key by key — except permission rules, which merge across all scopes.',
     hotReload: 'Edits to most keys — including permissions and hooks — apply to a running session without a restart.',
@@ -96,6 +107,9 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     label: '.claude/settings.json',
     format: 'json',
     tracked: 'tracked',
+    modelKey: 'model',
+    modelKeys: ['env.ANTHROPIC_MODEL', 'model'],
+    modelPriority: 2,
     precedence:
       'Overrides user settings key by key (permission rules merge). Local settings override this.',
     hotReload: 'Edits to most keys — including permissions and hooks — apply to a running session without a restart.',
@@ -111,6 +125,9 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'json',
     tracked: 'gitignored',
     seeded: true,
+    modelKey: 'model',
+    modelKeys: ['env.ANTHROPIC_MODEL', 'model'],
+    modelPriority: 3,
     precedence:
       'Highest of the file scopes — overrides project and user (permission rules merge). Git-ignored; copied into each run’s worktree so it takes effect immediately.',
     hotReload: 'Edits to most keys — including permissions and hooks — apply to a running session without a restart.',
@@ -181,6 +198,9 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'toml',
     tracked: 'outside-repo',
     holdsMcp: true,
+    modelKey: 'model',
+    modelProviderKey: 'model_provider',
+    modelPriority: 1,
     precedence:
       'User-level defaults. A trusted project’s .codex/config.toml overrides these; some keys (provider, auth, telemetry) cannot be overridden at project scope. MCP servers live here under [mcp_servers.<id>].',
     docsUrl: CODEX_CONFIG_DOCS,
@@ -194,6 +214,8 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     label: '.codex/config.toml',
     format: 'toml',
     tracked: 'tracked',
+    modelKey: 'model',
+    modelPriority: 2,
     holdsMcp: true,
     precedence:
       'Applies only in projects you have trusted. Some keys (provider, auth, telemetry) cannot be overridden here. MCP servers go under [mcp_servers.<id>]. Runs read the committed copy.',
@@ -224,6 +246,8 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'jsonc',
     tracked: 'outside-repo',
     holdsMcp: true,
+    modelKey: 'model',
+    modelPriority: 1,
     precedence:
       'Global config. Merged with the project config, not replaced — later configs override earlier ones only for conflicting keys. MCP servers live under the "mcp" key.',
     docsUrl: OPENCODE_CONFIG_DOCS,
@@ -238,6 +262,8 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'jsonc',
     tracked: 'tracked',
     holdsMcp: true,
+    modelKey: 'model',
+    modelPriority: 2,
     precedence:
       'Merged over the global config per conflicting key (not a wholesale replace). MCP servers live under the "mcp" key. Runs read the committed copy.',
     docsUrl: OPENCODE_CONFIG_DOCS,

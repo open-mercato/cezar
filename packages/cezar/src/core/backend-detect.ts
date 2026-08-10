@@ -25,8 +25,13 @@ async function probeClaude(): Promise<BackendCheck> {
   if (process.env.CEZ_DRY_RUN === '1') {
     return { name: 'claude', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
   }
+  // `CEZ_CLAUDE_BIN` like every other claude call site (the runner, provider-auth,
+  // open-in-app). Probing a bare `claude` reported "not installed" for a host whose
+  // only install is at a custom path — which drops claude from the composer and the
+  // installer's dependency step even though runs would have worked fine.
+  const bin = process.env.CEZ_CLAUDE_BIN ?? 'claude';
   try {
-    const { stdout } = await exec('claude', ['--version'], { timeout: 10_000 });
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
     const version = stdout.trim();
     // A generic `claude` binary (a shell wrapper, an unrelated tool) can shadow
     // the real CLI on $PATH — reject anything that doesn't match the banner.
@@ -34,7 +39,7 @@ async function probeClaude(): Promise<BackendCheck> {
       return {
         name: 'claude',
         available: false,
-        hint: `\`claude\` is on PATH but doesn't look like Claude Code (got: ${version.slice(0, 80)})`,
+        hint: `\`${bin}\` resolves but doesn't look like Claude Code (got: ${version.slice(0, 80)})`,
       };
     }
     return {

@@ -25,6 +25,7 @@ let requests: Array<{ method: string; url: string; body?: unknown }> = []
 function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
   requests = []
   const state: WorkspaceConfigResponse = {
+    agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
@@ -35,7 +36,15 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       inheritedAutonomous: 'source-dependent',
       inheritedWorktree: true,
     },
-    resources: { maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10, ...resources },
+    resources: {
+      maxParallel: 2,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: null,
+      autoResumeOnUsageLimit: true,
+      memoryLimitMb: null,
+      worktreeRetentionDefault: 10,
+      ...resources,
+    },
   }
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
@@ -152,6 +161,19 @@ describe('Global settings → Resources', () => {
     fireEvent.click(saveWake()!)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { monitoringWakeIntervalMinutes: 5 } })
+  })
+
+  it('shows auto-resume on by default and saves the opt-out', async () => {
+    serve()
+    renderResources()
+    const select = (await screen.findByLabelText('Auto-resume after a usage limit')) as HTMLSelectElement
+    // The shipped default (spec 2026-08-03-auto-resume-after-usage-limit) — a user who never
+    // opens this pane still gets their limited tasks finished.
+    expect(select.value).toBe('on')
+
+    fireEvent.change(select, { target: { value: 'off' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { autoResumeOnUsageLimit: false } })
   })
 
   it('saves a memory limit, and an empty field clears it back to "no limit"', async () => {
