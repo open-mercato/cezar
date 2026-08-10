@@ -12,6 +12,18 @@ import {
   automationTaskSchema,
   type AutomationDefinition,
 } from '../automations/types.ts';
+import { ScheduledTaskStore, ScheduledTaskLeaseBusyError } from '../scheduled-tasks/store.ts';
+import { ScheduledTaskCoordinator } from '../scheduled-tasks/coordinator.ts';
+import { WorkspaceScheduledScheduler, ProjectScheduledScheduler } from '../scheduled-tasks/scheduler.ts';
+import { launchScheduledRun, reconcileScheduledTasks } from '../scheduled-tasks/task-template.ts';
+import {
+  scheduledTaskTemplateSchema,
+  scheduledTaskOccurrenceStatusSchema,
+  type ScheduledTaskDefinition,
+  type ScheduledTaskOccurrence,
+  type ScheduledTaskRuntimeState,
+} from '../scheduled-tasks/types.ts';
+import { zonedTimeToUtc, isValidTimezone, formatLocalLabel, formatUtcLabel } from '../scheduled-tasks/timing.ts';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -190,6 +202,9 @@ export interface ServerDeps {
    *  coordinator-owned instance so HTTP routes and the scheduler never cache
    *  separate views of the same project files. */
   automationStore?: AutomationStore;
+  /** Boot project's shared scheduled-task store (spec 2026-08-01-postponed-tasks). `startServer`
+   *  injects the coordinator-owned instance so HTTP routes and the scheduler share one view. */
+  scheduledTaskStore?: ScheduledTaskStore;
   /** Workspace-wide parallel-cap semaphore + cached resource config (spec
    *  2026-07-20, step 2.5): the ONE instance boot created, refreshed, and gave
    *  the boot manager — threaded into the default `ProjectContexts` so every
@@ -236,6 +251,8 @@ export interface ServerDeps {
   socketHub?: SocketHub;
   /** Re-arm the workspace automation timer after definition mutations. */
   automationsChanged?: () => void;
+  /** Re-arm the workspace scheduled-task timer after definition mutations. */
+  scheduledTasksChanged?: () => void;
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -352,6 +369,83 @@ function editableAutomation(definition: AutomationDefinition) {
     filters: definition.filters,
     task: definition.task,
   };
+}
+
+// ---- scheduled tasks (spec 2026-08-01-postponed-tasks) --------------------
+
+const scheduledTaskTimingInputSchema = z
+  .object({
+    kind: z.literal('once'),
+    localAt: z.string().trim().min(1).max(40),
+    timezone: z.string().trim().min(1).max(200),
+  })
+  .strict();
+const scheduledTaskEditableSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    description: z.string().max(2_000).optional(),
+    enabled: z.boolean().optional(),
+    timing: scheduledTaskTimingInputSchema,
+    task: scheduledTaskTemplateSchema,
+  })
+  .strict();
+const scheduledTaskCreateSchema = scheduledTaskEditableSchema;
+const scheduledTaskUpdateSchema = scheduledTaskEditableSchema.extend({
+  expectedRevision: z.number().int().positive(),
+});
+const scheduledTaskPreviewSchema = z
+  .object({
+    localAt: z.string().trim().min(1).max(40),
+    timezone: z.string().trim().min(1).max(200),
+  })
+  .strict();
+const scheduledTaskOccurrencesQuerySchema = z.object({
+  scheduledTaskId: z.string().optional(),
+  status: scheduledTaskOccurrenceStatusSchema.optional(),
+  cursor: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+/** Resolve a composer's local timing into the stored `{kind:'once', at, timezone}`. */
+function resolveScheduledTiming(
+  input: { localAt: string; timezone: string },
+): { at: string; timezone: string } | { error: string } {
+  if (!isValidTimezone(input.timezone)) return { error: 'timezone is not a valid IANA identifier' };
+  const at = zonedTimeToUtc(input.localAt, input.timezone);
+  if (!at) return { error: 'localAt is not a valid local date/time (expected YYYY-MM-DDTHH:mm)' };
+  return { at: at.toISOString(), timezone: input.timezone };
+}
+
+/** The list/detail display status: `overdue` is derived from a pending instant already past. */
+function scheduledDisplayStatus(
+  definition: ScheduledTaskDefinition,
+  state: ScheduledTaskRuntimeState | undefined,
+  now: number,
+): 'pending' | 'overdue' | 'paused' | 'launching' | 'completed' | 'error' {
+  const status = state?.status;
+  if (status === 'completed') return 'completed';
+  if (status === 'error') return 'error';
+  if (status === 'launching') return 'launching';
+  if (!definition.enabled) return 'paused';
+  return Date.parse(definition.timing.at) <= now ? 'overdue' : 'pending';
+}
+
+/** The editable projection used to toggle `enabled` while keeping every other field intact. */
+function editableScheduledTask(definition: ScheduledTaskDefinition) {
+  return {
+    name: definition.name,
+    description: definition.description,
+    timing: definition.timing,
+    task: definition.task,
+  };
+}
+
+/** Map a scheduled-task mutation error to its status: lease contention and revision conflicts are
+ *  409, everything else 400. */
+function scheduledFailure(error: unknown): { message: string; status: 400 | 409 } {
+  if (error instanceof ScheduledTaskLeaseBusyError) return { message: error.message, status: 409 };
+  const message = error instanceof Error ? error.message : String(error);
+  return { message, status: message.includes('conflict') ? 409 : 400 };
 }
 
 /** One row of the mirrored project-route table. */
@@ -489,7 +583,8 @@ export type WorkspaceEventName =
   | 'project-removed'
   | 'checkout-progress'
   | 'provider-status'
-  | 'automation-change';
+  | 'automation-change'
+  | 'scheduled-task-change';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -1144,6 +1239,7 @@ export function createApp(deps: ServerDeps) {
     store: deps.store,
     manager: deps.manager,
     automationStore: deps.automationStore ?? AutomationStore.open(bootDataDir),
+    scheduledTaskStore: deps.scheduledTaskStore ?? ScheduledTaskStore.open(bootDataDir),
     launchKey: ensureLaunchKey(bootDataDir), // bookmarklet auto-start secret (spec 011)
   };
   // Non-boot projects build lazily on first scoped request; their managers
@@ -1172,6 +1268,20 @@ export function createApp(deps: ServerDeps) {
     ...(deleted ? { deleted: true } : {}),
   });
   const automationsChanged = () => deps.automationsChanged?.();
+  const emitScheduledTaskChange = (
+    project: ProjectContext,
+    scheduledTaskId: string,
+    revision: number,
+    occurrenceId?: string,
+    deleted = false,
+  ) => workspaceEvents.emit('scheduled-task-change', {
+    project: project.id,
+    scheduledTaskId,
+    revision,
+    ...(occurrenceId ? { occurrenceId } : {}),
+    ...(deleted ? { deleted: true } : {}),
+  });
+  const scheduledTasksChanged = () => deps.scheduledTasksChanged?.();
 
   const providerRuntimeAuth = deps.providerRuntimeAuth
     ?? new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -3380,6 +3490,313 @@ export function createApp(deps: ServerDeps) {
       }
     });
 
+  // ---- chained family: one-time scheduled tasks (project-scoped) ----
+  // Every handler reads `c.get('project').scheduledTaskStore` — the definitions, their runtime
+  // state and occurrence history are per-project files — so the family mirrors the automations
+  // family's shape (spec 2026-08-01-postponed-tasks) but is a SEPARATE, parallel feature.
+  const scheduledLaunchHandle = (project: ProjectContext) => ({
+    projectId: project.id,
+    store: project.scheduledTaskStore,
+    launch: (
+      definition: ScheduledTaskDefinition,
+      occurrenceId: string,
+      trigger: 'scheduled' | 'manual',
+      scheduledFor: string,
+    ) => launchScheduledRun({
+      root: project.root,
+      manager: project.manager,
+      store: project.store,
+      definition,
+      occurrenceId,
+      trigger,
+      scheduledFor,
+    }),
+    onChange: (id: string, revision: number, occurrenceId?: string) =>
+      emitScheduledTaskChange(project, id, revision, occurrenceId),
+  });
+
+  const scheduledListEntry = (project: ProjectContext, definition: ScheduledTaskDefinition) => {
+    const store = project.scheduledTaskStore;
+    const state = store.state(definition.id);
+    const latestOccurrence = store.occurrencesList({ scheduledTaskId: definition.id, limit: 1 })[0];
+    return {
+      ...definition,
+      displayStatus: scheduledDisplayStatus(definition, state, Date.now()),
+      ...(state ? { state } : {}),
+      ...(latestOccurrence ? { latestOccurrence } : {}),
+    };
+  };
+
+  const scheduledTasksRoutes = new Hono<ProjectApiEnv>()
+    .get('/scheduled-tasks', (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const scheduledTasks = store.list().map((definition) => scheduledListEntry(project, definition));
+      const pending = scheduledTasks.filter(
+        (item) => item.displayStatus === 'pending' || item.displayStatus === 'overdue',
+      );
+      const nextDue = pending.map((item) => item.timing.at).sort()[0];
+      return c.json({
+        scheduler: {
+          state: pending.length ? ('scheduled' as const) : ('idle' as const),
+          ...(nextDue ? { nextDue } : {}),
+        },
+        writable: store.isWritable(),
+        scheduledTasks,
+      });
+    })
+
+    .post('/scheduled-tasks', jsonZodValidator(() => scheduledTaskCreateSchema), (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const body = c.req.valid('json');
+      const timing = resolveScheduledTiming(body.timing);
+      if ('error' in timing) return c.json({ error: timing.error }, 400);
+      if (Date.parse(timing.at) < Date.now() + 60_000) {
+        return c.json({ error: 'scheduled time must be at least one minute in the future' }, 400);
+      }
+      try {
+        const created = store.runExclusive(() => store.create({
+          name: body.name,
+          description: body.description,
+          enabled: body.enabled ?? true,
+          timing: { kind: 'once', at: timing.at, timezone: timing.timezone },
+          task: body.task,
+        }));
+        const state = store.state(created.id);
+        emitScheduledTaskChange(project, created.id, created.revision);
+        scheduledTasksChanged();
+        return c.json({ scheduledTask: created, ...(state ? { state } : {}) }, 201);
+      } catch (error) {
+        const failure = scheduledFailure(error);
+        return c.json({ error: failure.message }, failure.status);
+      }
+    })
+
+    .get('/scheduled-tasks/:id', (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const definition = store.get(c.req.param('id'));
+      if (!definition) return c.json({ error: 'not found' }, 404);
+      const state = store.state(definition.id);
+      const latestOccurrence = store.occurrencesList({ scheduledTaskId: definition.id, limit: 1 })[0];
+      return c.json({
+        scheduledTask: definition,
+        displayStatus: scheduledDisplayStatus(definition, state, Date.now()),
+        ...(state ? { state } : {}),
+        ...(latestOccurrence ? { latestOccurrence } : {}),
+      });
+    })
+
+    .put('/scheduled-tasks/:id', jsonZodValidator(() => scheduledTaskUpdateSchema), (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const id = c.req.param('id');
+      const body = c.req.valid('json');
+      const timing = resolveScheduledTiming(body.timing);
+      if ('error' in timing) return c.json({ error: timing.error }, 400);
+      try {
+        const updated = store.runExclusive(() => {
+          const current = store.get(id);
+          if (!current) throw new Error('scheduled task not found');
+          // A metadata/task edit of an already-overdue definition is allowed without moving its
+          // instant; only a CHANGED instant must be at least a minute in the future.
+          if (timing.at !== current.timing.at && Date.parse(timing.at) < Date.now() + 60_000) {
+            throw new Error('scheduled time must be at least one minute in the future');
+          }
+          return store.update(id, body.expectedRevision, {
+            name: body.name,
+            description: body.description,
+            enabled: body.enabled ?? current.enabled,
+            timing: { kind: 'once', at: timing.at, timezone: timing.timezone },
+            task: body.task,
+          });
+        });
+        emitScheduledTaskChange(project, updated.id, updated.revision);
+        scheduledTasksChanged();
+        return c.json({ scheduledTask: updated, ...(store.state(updated.id) ? { state: store.state(updated.id) } : {}) });
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('not found')) return c.json({ error: 'not found' }, 404);
+        const failure = scheduledFailure(error);
+        return c.json({ error: failure.message }, failure.status);
+      }
+    })
+
+    .delete('/scheduled-tasks/:id', (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const id = c.req.param('id');
+      try {
+        const current = store.get(id);
+        if (!current) return c.json({ error: 'not found' }, 404);
+        const deleted = store.runExclusive(() => {
+          if (!store.get(id)) return false;
+          return store.delete(id);
+        });
+        if (!deleted) return c.json({ error: 'not found' }, 404);
+        emitScheduledTaskChange(project, id, current.revision, undefined, true);
+        scheduledTasksChanged();
+        return c.body(null, 204);
+      } catch (error) {
+        const failure = scheduledFailure(error);
+        return c.json({ error: failure.message }, failure.status);
+      }
+    })
+
+    .post('/scheduled-tasks/:id/pause', (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const id = c.req.param('id');
+      try {
+        const updated = store.runExclusive(() => {
+          const current = store.get(id);
+          if (!current) throw new Error('scheduled task not found');
+          return store.update(id, current.revision, { ...editableScheduledTask(current), enabled: false });
+        });
+        emitScheduledTaskChange(project, updated.id, updated.revision);
+        scheduledTasksChanged();
+        return c.json({ scheduledTask: updated, ...(store.state(updated.id) ? { state: store.state(updated.id) } : {}) });
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('not found')) return c.json({ error: 'not found' }, 404);
+        const failure = scheduledFailure(error);
+        return c.json({ error: failure.message }, failure.status);
+      }
+    })
+
+    .post('/scheduled-tasks/:id/resume', (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const id = c.req.param('id');
+      try {
+        const updated = store.runExclusive(() => {
+          const current = store.get(id);
+          if (!current) throw new Error('scheduled task not found');
+          const resumed = store.update(id, current.revision, { ...editableScheduledTask(current), enabled: true });
+          // Resuming clears a terminal runtime status so an overdue definition is immediately due.
+          const state = store.state(id);
+          if (state && (state.status === 'completed' || state.status === 'error')) {
+            store.setState(id, { ...state, status: 'pending' });
+          }
+          return resumed;
+        });
+        emitScheduledTaskChange(project, updated.id, updated.revision);
+        scheduledTasksChanged();
+        return c.json({ scheduledTask: updated, ...(store.state(updated.id) ? { state: store.state(updated.id) } : {}) });
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('not found')) return c.json({ error: 'not found' }, 404);
+        const failure = scheduledFailure(error);
+        return c.json({ error: failure.message }, failure.status);
+      }
+    })
+
+    .post('/scheduled-tasks/:id/run-now', async (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const definition = store.get(c.req.param('id'));
+      if (!definition) return c.json({ error: 'not found' }, 404);
+      if (!store.isWritable()) return c.json({ error: 'project is read-only' }, 409);
+      if (store.state(definition.id)?.status === 'completed') {
+        return c.json({ error: 'scheduled task already completed' }, 409);
+      }
+      try {
+        const result = await new ProjectScheduledScheduler(scheduledLaunchHandle(project)).runNow(definition);
+        emitScheduledTaskChange(project, definition.id, definition.revision, result.occurrenceId);
+        scheduledTasksChanged();
+        return c.json({ occurrenceId: result.occurrenceId, ...(result.runId ? { runId: result.runId } : {}) }, 202);
+      } catch (error) {
+        const failure = scheduledFailure(error);
+        return c.json({ error: failure.message }, failure.status);
+      }
+    })
+
+    .post('/scheduled-tasks/preview', jsonZodValidator(() => scheduledTaskPreviewSchema), (c) => {
+      const body = c.req.valid('json');
+      const timing = resolveScheduledTiming(body);
+      if ('error' in timing) return c.json({ error: timing.error }, 400);
+      const at = new Date(timing.at);
+      const warnings: string[] = [];
+      if (at.getTime() < Date.now() + 60_000) {
+        warnings.push('This time is under a minute away; a saved task with this time is immediately due.');
+      }
+      return c.json({
+        at: timing.at,
+        timezone: timing.timezone,
+        localLabel: formatLocalLabel(at, timing.timezone),
+        utcLabel: formatUtcLabel(at),
+        warnings,
+      });
+    })
+
+    .get('/scheduled-task-occurrences', queryZodValidator(scheduledTaskOccurrencesQuerySchema), (c) => {
+      const store = c.get('project').scheduledTaskStore;
+      return c.json({ occurrences: store.occurrencesList(c.req.valid('query')) });
+    })
+
+    .post('/scheduled-task-occurrences/:occurrenceId/retry', async (c) => {
+      const project = c.get('project');
+      const store = project.scheduledTaskStore;
+      const occurrenceId = c.req.param('occurrenceId');
+      const occurrence = store.latestOccurrencesById().get(occurrenceId);
+      if (!occurrence) return c.json({ error: 'not found' }, 404);
+      if (occurrence.status !== 'launch-error' || occurrence.runId) {
+        return c.json({ error: 'occurrence is not retryable' }, 409);
+      }
+      const definition = store.get(occurrence.scheduledTaskId);
+      if (!definition) return c.json({ error: 'scheduled task not found' }, 404);
+      try {
+        const result = await store.runExclusiveAsync(async () => {
+          const latest = store.latestOccurrencesById().get(occurrenceId);
+          if (!latest || latest.status !== 'launch-error' || latest.runId) {
+            throw new Error('occurrence is not retryable');
+          }
+          const { seq: _seq, ...base } = latest;
+          store.appendOccurrence({ ...base, status: 'reserved', reason: undefined, updatedAt: new Date().toISOString() });
+          try {
+            const launched = await launchScheduledRun({
+              root: project.root,
+              manager: project.manager,
+              store: project.store,
+              definition,
+              occurrenceId,
+              trigger: latest.trigger,
+              scheduledFor: latest.scheduledFor,
+            });
+            store.appendOccurrence({
+              ...base,
+              status: 'launched',
+              runId: launched.runId,
+              groupId: launched.groupId,
+              reason: undefined,
+              updatedAt: new Date().toISOString(),
+            });
+            const state = store.state(definition.id) ?? {};
+            store.setState(definition.id, {
+              ...state,
+              status: 'completed',
+              lastOccurrenceId: occurrenceId,
+              lastRunId: launched.runId,
+              lastObservedAt: new Date().toISOString(),
+            });
+            return { runId: launched.runId };
+          } catch (error) {
+            store.appendOccurrence({
+              ...base,
+              status: 'launch-error',
+              reason: error instanceof Error ? error.message : String(error),
+              updatedAt: new Date().toISOString(),
+            });
+            throw error;
+          }
+        });
+        emitScheduledTaskChange(project, definition.id, definition.revision, occurrenceId);
+        scheduledTasksChanged();
+        return c.json({ occurrenceId, ...(result.runId ? { runId: result.runId } : {}) }, 202);
+      } catch (error) {
+        const failure = scheduledFailure(error);
+        return c.json({ error: failure.message }, failure.status);
+      }
+    });
+
   // ---- chained family: manual automation checks (workspace-level) ----
   // Workspace-level because the handler reads no project: a check lives in the server-memory map
   // above, keyed by an unguessable id that the project-scoped POST hands back. Mounting it under
@@ -5102,6 +5519,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', workflowsRoutes)
     .route('/', planRoutes)
     .route('/', automationsRoutes)
+    .route('/', scheduledTasksRoutes)
     .route('/', runsRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
@@ -5245,12 +5663,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
   const automationCoordinator = new AutomationCoordinator({ listProjects });
+  const scheduledTaskCoordinator = new ScheduledTaskCoordinator({ listProjects });
   const bootProjectId = deps.bootProjectId ?? 'default';
   const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
+  const bootScheduledTaskStore = scheduledTaskCoordinator.store(bootProjectId, deps.repoRoot)!;
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
     semaphore: deps.semaphore,
     automationStore: (projectId, root) => automationCoordinator.store(projectId, root)!,
+    scheduledTaskStore: (projectId, root) => scheduledTaskCoordinator.store(projectId, root)!,
   });
   // #801: GitHub automations are opt-in. Off, the flag must remove the BEHAVIOR and not merely
   // the UI — no scheduler, no GitHub polling, no launched runs — so every entry point into the
@@ -5258,14 +5679,17 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // reason `capabilities()` is inside `createApp`: tests flip the variable between apps.
   const automationsEnabled = () => resolveCapabilities(process.env, deps.bindHost).automations;
   let rescheduleAutomations = () => {};
+  let rescheduleScheduledTasks = () => {};
   const app = createApp({
     ...deps,
     contexts: sharedContexts,
     automationStore: bootAutomationStore,
+    scheduledTaskStore: bootScheduledTaskStore,
     workspaceEvents,
     skillsUpdate,
     socketHub,
     automationsChanged: () => rescheduleAutomations(),
+    scheduledTasksChanged: () => rescheduleScheduledTasks(),
   });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
@@ -5317,11 +5741,41 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     if (!automationsEnabled()) return;
     void automationScheduler.reschedule();
   };
+  // The scheduled-task workspace timer, always armed for the earliest due instant across projects.
+  // Unlike automations it needs no forge and no `CEZ_*` flag — it launches ordinary tasks.
+  const scheduledTaskScheduler = new WorkspaceScheduledScheduler({
+    coordinator: scheduledTaskCoordinator,
+    handle: (projectId, store) => ({
+      projectId,
+      store,
+      onChange: (scheduledTaskId, revision, occurrenceId) =>
+        workspaceEvents.emit('scheduled-task-change', { project: projectId, scheduledTaskId, revision, ...(occurrenceId ? { occurrenceId } : {}) }),
+      launch: async (definition, occurrenceId, trigger, scheduledFor) => {
+        const bootId = deps.bootProjectId ?? 'default';
+        const context = projectId === bootId
+          ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
+          : await sharedContexts.context(projectId);
+        return launchScheduledRun({
+          root: context.root,
+          manager: context.manager,
+          store: context.store,
+          definition,
+          occurrenceId,
+          trigger,
+          scheduledFor,
+        });
+      },
+    }),
+  });
+  rescheduleScheduledTasks = () => {
+    void scheduledTaskScheduler.reschedule();
+  };
   const unsubscribe = workspaceEvents.on((event, data) => {
     if (event === 'project-added') {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
       if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
         coordinator.add(project.id, project.root);
+        rescheduleScheduledTasks();
         void getRepoInfo(project.root).then((info) => {
           const parsed = parseRemote(info?.remote ?? '');
           if (parsed?.host === 'github.com') automationProjects.set(project.id as string, { root: project.root as string, owner: parsed.owner, repo: parsed.repo });
@@ -5334,7 +5788,9 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       if (typeof id === 'string') {
         automationCoordinator.remove(id);
         automationProjects.delete(id);
+        scheduledTaskCoordinator.remove(id);
         rescheduleAutomations();
+        rescheduleScheduledTasks();
       }
     }
   });
@@ -5357,8 +5813,22 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
         if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
+    // Scheduled tasks (spec 2026-08-01-postponed-tasks): reconcile every project's reserved
+    // occurrences against durable run provenance, then arm the one workspace timer.
+    void listProjects().then((projects) => {
+      const all = projects.some((project) => project.root === deps.repoRoot)
+        ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
+      for (const project of all) {
+        if (project.status === 'missing') continue;
+        const scheduledTaskStore = scheduledTaskCoordinator.store(project.id, project.root);
+        const runStore = project.id === (deps.bootProjectId ?? 'default')
+          ? deps.store
+          : sharedContexts.peek(project.id)?.store;
+        if (scheduledTaskStore && runStore) reconcileScheduledTasks(scheduledTaskStore, runStore);
+      }
+    }).then(() => scheduledTaskScheduler.start()).catch(() => undefined);
   });
-  server.once('close', () => { unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => { unsubscribe(); coordinator.stop(); automationScheduler.stop(); scheduledTaskScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return server;
 }

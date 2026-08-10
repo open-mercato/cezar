@@ -89,6 +89,10 @@ export type AppShellProps = {
    *  opt-in via `CEZ_AUTOMATIONS=1`. Defaults to shown for the same reason as `forgeAvailable`;
    *  the container passes the health payload's truth. */
   automationsAvailable?: boolean
+  /** Scheduled-tasks gating (spec 2026-08-01-postponed-tasks): `false` drops the Scheduled nav
+   *  item. Defaults to shown for the same reason as `forgeAvailable`; the container passes the
+   *  health payload's truth. */
+  scheduledTasksAvailable?: boolean
   /** Single-project capability gating: hides workspace-expansion affordances. Defaults off so
    *  standalone and older callers preserve the multi-project shell. */
   singleProject?: boolean
@@ -151,6 +155,7 @@ export function AppShell({
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
+  scheduledTasksAvailable = true,
   singleProject = false,
   banner,
   projectGroups,
@@ -207,7 +212,7 @@ export function AppShell({
 
   const nav = {
     activeTo,
-    items: visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable }),
+    items: visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, scheduledTasks: scheduledTasksAvailable }),
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.
     inboxCount: inboxAvailable ? inboxCount : null,

@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
+import { ScheduledTaskStore } from '../scheduled-tasks/store.ts';
+import { reconcileScheduledTasks } from '../scheduled-tasks/task-template.ts';
 import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
 import { pruneOrphans } from '../git-worktree.ts';
 import { reclaimWorktrees } from '../runs/retention.ts';
@@ -36,6 +38,8 @@ export interface ProjectContext {
   store: RunStore;
   manager: RunManager;
   automationStore: AutomationStore;
+  /** One-time scheduled-task store owned by this project (spec 2026-08-01-postponed-tasks). */
+  scheduledTaskStore: ScheduledTaskStore;
   /** Bookmarklet auto-start secret (spec 011), ensured at context build. */
   launchKey: string;
 }
@@ -57,6 +61,9 @@ export interface ProjectContextDeps {
    *  injects the workspace automation coordinator's cached store so API
    *  mutations and scheduler reads share the same in-memory state. */
   automationStore?: (projectId: string, root: string) => AutomationStore;
+  /** Resolve the one scheduled-task store owned by this project. Production injects the workspace
+   *  scheduled-task coordinator's cached store so API mutations and the scheduler share state. */
+  scheduledTaskStore?: (projectId: string, root: string) => ScheduledTaskStore;
   /** Workspace-wide parallel-cap semaphore (spec 2026-07-20, step 2.5). Boot
    *  passes the ONE instance it already gave the boot manager, so every
    *  project's RunManager counts against the same `resources.maxParallel`.
@@ -212,6 +219,9 @@ export class ProjectContexts {
     const automationStore = this.deps.automationStore?.(project.id, project.root)
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
+    const scheduledTaskStore = this.deps.scheduledTaskStore?.(project.id, project.root)
+      ?? ScheduledTaskStore.open(dataDir);
+    reconcileScheduledTasks(scheduledTaskStore, store);
     this.notifyStoreCreated(store);
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore });
     try {
@@ -229,7 +239,7 @@ export class ProjectContexts {
         await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
       }
       await manager.recover();
-      return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
+      return { id: project.id, root: project.root, dataDir, store, manager, automationStore, scheduledTaskStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.
       teardown({ store, manager });

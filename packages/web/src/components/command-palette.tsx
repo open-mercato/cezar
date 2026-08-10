@@ -420,6 +420,7 @@ function PaletteContent({ close }: { close: () => void }) {
             forge: health.data?.forge?.available === true,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
+            scheduledTasks: health.data?.capabilities.scheduledTasks === true,
           }).map((item) => {
             const Icon = item.icon
             return (

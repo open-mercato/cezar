@@ -32,6 +32,7 @@ import {
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { AutomationsRoute } from './routes/automations/automations'
+import { ScheduledRoute } from './routes/scheduled-tasks/scheduled'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
  *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
@@ -275,6 +276,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
+  { pattern: '/scheduled/*', pageLabel: 'Scheduled' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
   { pattern: '/workflows/*', pageLabel: 'Workflows' },
@@ -443,6 +445,15 @@ export function AppRoutes() {
         <Route path="automations/new" element={<AutomationsRoute mode="new" />} />
         <Route path="automations/:automationId" element={<AutomationsRoute mode="edit" />} />
         <Route path="automations/:automationId/log" element={<AutomationsRoute mode="log" />} />
+
+        {/* One-time scheduled tasks (spec 2026-08-01-postponed-tasks). Like automations, the
+            routes stay reachable regardless of the capability so a pasted deep link renders the
+            honest unavailable explainer rather than a 404. */}
+        <Route path="scheduled" element={<ScheduledRoute />} />
+        <Route path="scheduled/new" element={<ScheduledRoute mode="new" />} />
+        <Route path="scheduled/:scheduledTaskId" element={<ScheduledRoute mode="detail" />} />
+        <Route path="scheduled/:scheduledTaskId/edit" element={<ScheduledRoute mode="edit" />} />
+        <Route path="scheduled/:scheduledTaskId/history" element={<ScheduledRoute mode="history" />} />
 
         {/* The skills catalog (R6 Step 1.4) — its own top-level surface, no settings sub-nav.
             `/settings/skills` redirects here (below) so pasted links keep working. */}

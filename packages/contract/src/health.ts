@@ -49,6 +49,13 @@ export const capabilitiesSchema = z.object({
    */
   automations: z.boolean(),
   /**
+   * `true` means the server serves the one-time scheduled-tasks family (spec
+   * 2026-08-01-postponed-tasks). Always on — the feature adds no `CEZ_*` opt-in — but threaded as
+   * a capability so the `Scheduled` nav item is gated the same additive way every other tab is,
+   * and so a future rollback can flip it off in one place. REQUIRED: this server always sends it.
+   */
+  scheduledTasks: z.boolean(),
+  /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation
    * only.

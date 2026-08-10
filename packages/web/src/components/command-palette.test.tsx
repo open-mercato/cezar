@@ -92,7 +92,7 @@ function project(overrides: Partial<ProjectListEntry> & { id: string }): Project
 }
 
 /** Health with/without a working forge — what gates the Views group's GitHub row (R6 1.1). */
-function health(forgeAvailable: boolean, automations = false): HealthResponse {
+function health(forgeAvailable: boolean, automations = false, scheduledTasks = false): HealthResponse {
   return {
     version: '0.0.0-test',
     projects: [],
@@ -102,7 +102,7 @@ function health(forgeAvailable: boolean, automations = false): HealthResponse {
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, scheduledTasks },
   }
 }
 
@@ -132,6 +132,7 @@ function renderPalette({
   theme,
   forge = true,
   automations = false,
+  scheduledTasks = false,
   uiState = {} as Record<string, unknown>,
   entry = '/',
 }: {
@@ -145,6 +146,9 @@ function renderPalette({
   forge?: boolean
   /** `capabilities.automations` (#801) — off by default, exactly as a default server reports. */
   automations?: boolean
+  /** `capabilities.scheduledTasks` (spec postponed-tasks) — off by default here so the existing
+   *  Views assertions stay stable; the dedicated test opts it on. */
+  scheduledTasks?: boolean
   uiState?: Record<string, unknown>
   /** The URL to mount at. `/p/<id>/…` is what gives the palette an ACTIVE project. */
   entry?: string
@@ -153,7 +157,7 @@ function renderPalette({
   serve({
     '/api/v1/runs': runs,
     '/api/v1/skills': skills,
-    '/api/v1/health': health(forge, automations),
+    '/api/v1/health': health(forge, automations, scheduledTasks),
     '/api/v1/ui-state': uiState,
     '/api/v1/projects': { projects, bootProject: projects[0]?.id ?? 'default', projectsDir: '/repos' },
     '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated },
@@ -265,6 +269,22 @@ describe('Views group', () => {
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
       '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings',
+    ])
+  })
+
+  // spec postponed-tasks: the Scheduled view renders through the same `visibleNavItems` the
+  // sidebar does, so the palette and the sidebar can never disagree about whether it exists.
+  it('adds the Scheduled view once the capability is on, between Automations and Skills', async () => {
+    renderPalette({ automations: true, scheduledTasks: true })
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+    )
+    const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
+    expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
+      '/new', '/', '/inbox', '/git', '/github', '/automations', '/scheduled', '/skills', '/workflows', '/settings',
     ])
   })
 

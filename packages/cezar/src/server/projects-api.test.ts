@@ -48,6 +48,7 @@ interface HealthBody {
     localHandoff: boolean;
     followups: boolean;
     singleProject: boolean;
+    scheduledTasks: boolean;
     automations: boolean;
     tokenMetrics: boolean;
   };
@@ -695,6 +696,7 @@ describe('workspace projects API', () => {
         localHandoff: true,
         followups: false,
         singleProject: false,
+        scheduledTasks: true,
         automations: false,
         tokenMetrics: true,
         tokenUsageMetrics: true,

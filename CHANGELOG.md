@@ -1,6 +1,20 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **Schedule a task for later.** The New task composer gains a `Now`/`Later` timing choice:
+  pick a date, local time and timezone and cezar holds the exact same quick task, workflow or
+  reviewed inline plan — with its runner, model, agent account, variants, worktree, autonomy and
+  follow-up choices — until the chosen instant, then starts it once through the ordinary workspace
+  scheduler. A postponed task is not a queued run: while `Later`, no run exists yet and the
+  definition stays editable, pausable and cancellable. A new **Scheduled** page lists one-time
+  definitions with their exact local/UTC due time and status (Pending, Overdue, Paused, Launching,
+  Completed, Error), and lets you Run now, pause/resume, edit, duplicate, delete and inspect
+  occurrence history. Postponed tasks run only while cezar is open; if it is closed at the due time
+  the task stays pending and starts once after reopen. Launch is crash-safe (durable occurrence
+  receipt + additive run provenance + startup reconciliation), so a restart never duplicates work.
+  Zero-config: no new environment variable, all state optional/additive, and immediate New task,
+  `POST /api/v1/runs`, `/new` deep links and bookmarklets are unchanged.
+  (spec `.ai/specs/2026-08-01-postponed-tasks.md`)
 - ✨ **Advanced users can opt out of repository-root run serialization.** Set the exact value
   `CEZ_DISABLE_REPO_LOCK=1` to let runs executing in the shared checkout overlap, including
   explicit `worktree=false` runs, non-Git degradation, and continuations whose worktree cannot be
