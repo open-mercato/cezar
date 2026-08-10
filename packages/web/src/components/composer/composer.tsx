@@ -463,7 +463,9 @@ export function Composer({
             aria-label={ariaLabel}
             placeholder={disabled ? disabledReason : placeholder}
             // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
-            className="block max-h-[220px] min-h-[54px] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
+            // One fixed size for the writing surface — placeholder inherits it, and there's no
+            // responsive 16→14 shift — so what you read and what you type never change size.
+            className="block max-h-[220px] min-h-[54px] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[15px] leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
             onChange={(event) => {
               setText(event.target.value)
               syncTrigger()
@@ -668,7 +670,7 @@ function DictationBar({
       <span
         data-slot="dictation-transcript"
         aria-live="polite"
-        className="min-w-0 flex-1 truncate text-sm text-foreground"
+        className="min-w-0 flex-1 truncate text-[13px] text-foreground"
       >
         {transcript === '' ? (
           <span className="text-muted-foreground">Listening…</span>
