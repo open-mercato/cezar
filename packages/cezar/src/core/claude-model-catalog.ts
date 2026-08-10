@@ -50,8 +50,8 @@ const DEFAULT_DISCOVERY_TIMEOUT_MS = 15_000;
 /** Defensive cap — a catalog this long is a malfunction, not a rollout. */
 const MAX_MODELS = 200;
 /** Grace between closing stdin and SIGTERM, then between SIGTERM and SIGKILL. */
-const TERM_GRACE_MS = 2_000;
-const KILL_GRACE_MS = 2_000;
+export const TERM_GRACE_MS = 2_000;
+export const KILL_GRACE_MS = 2_000;
 const REQUEST_ID = 'cez-list-models-1';
 
 /**
@@ -210,10 +210,19 @@ function endClaudeProbe(child: ChildProcessWithoutNullStreams): void {
   } catch {
     // already gone
   }
+  // `child.killed` only says a signal was *delivered* — Node flips it as soon as SIGTERM is sent,
+  // long before (and even if never) the child dies. Gating escalation on it would let a probe that
+  // ignores SIGTERM outlive the whole window, so track the actual termination instead.
+  let exited = child.exitCode != null || child.signalCode != null;
+  child.once('exit', () => {
+    exited = true;
+  });
   const term = setTimeout(() => {
-    if (child.exitCode == null && !child.killed) child.kill('SIGTERM');
+    if (exited) return;
+    child.kill('SIGTERM');
     const kill = setTimeout(() => {
-      if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
+      if (exited) return;
+      child.kill('SIGKILL');
     }, KILL_GRACE_MS);
     kill.unref?.();
   }, TERM_GRACE_MS);

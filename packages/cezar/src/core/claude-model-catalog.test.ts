@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
-import { discoverClaudeModels } from './claude-model-catalog.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { discoverClaudeModels, KILL_GRACE_MS, TERM_GRACE_MS } from './claude-model-catalog.ts';
 
 /**
  * A stand-in for the CLI's stream-json channel: it records the control requests written to stdin
@@ -40,9 +40,13 @@ function fakeChild(): {
     stdout,
     stderr,
     exitCode: null,
+    signalCode: null,
     killed: false,
+    // Mirrors Node: `killed` flips as soon as the signal is delivered, whether or not the child
+    // reacts to it. A child that installs an empty SIGTERM handler stays alive with `killed` true.
     kill: (signal: string) => {
       killed.push(signal);
+      Object.assign(proc, { killed: true });
       return true;
     },
     pid: 4242,
@@ -198,5 +202,48 @@ describe('discoverClaudeModels', () => {
     await expect(promise).rejects.toThrow('timed out');
     // stdin is closed on every exit path; TERM/KILL escalate on their own timers afterwards.
     expect(fake.child.stdin.writableEnded).toBe(true);
+  });
+
+  it('escalates to SIGKILL for a probe that ignores SIGTERM and stays alive', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeChild();
+      const promise = discoverClaudeModels({ cwd: '/repo', timeoutMs: 20, spawn: () => fake.child });
+      const settled = expect(promise).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(20);
+      await settled;
+
+      await vi.advanceTimersByTimeAsync(TERM_GRACE_MS);
+      expect(fake.killed).toEqual(['SIGTERM']);
+      // Node has already flagged the child as killed even though it never died — the escalation
+      // must not read that as "gone", or a wedged probe outlives every discovery.
+      expect(fake.child.killed).toBe(true);
+      expect(fake.child.exitCode).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+      expect(fake.killed).toEqual(['SIGTERM', 'SIGKILL']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops escalating once the child actually exits', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeChild();
+      const promise = discoverClaudeModels({ cwd: '/repo', timeoutMs: 20, spawn: () => fake.child });
+      const settled = expect(promise).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(20);
+      await settled;
+
+      await vi.advanceTimersByTimeAsync(TERM_GRACE_MS);
+      expect(fake.killed).toEqual(['SIGTERM']);
+      fake.emitExit(143);
+
+      await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+      expect(fake.killed).toEqual(['SIGTERM']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

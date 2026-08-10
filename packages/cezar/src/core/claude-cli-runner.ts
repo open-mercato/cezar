@@ -73,7 +73,6 @@ export function resolveClaudeExecutable(override?: string): string {
  * github-janitor's `claudeRunner.ts`; the original single-turn adaptation
  * came from @cezar/core's `ClaudeCodeCliRunner`.
  */
-
 export class ClaudeCliRunner implements AgentRunner {
   readonly backend = 'claude' as const;
 
