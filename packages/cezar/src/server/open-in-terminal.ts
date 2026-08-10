@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -52,8 +52,9 @@ export async function openInTerminal(
     return runDetached('cmd', ['/c', 'start', '', 'cmd', '/K', inner]);
   }
 
-  // Linux/other: a temp script avoids each emulator's own quoting rules.
-  const scriptPath = writeLaunchScript(cwd, prefixed);
+  // Linux/other: a temp script avoids each emulator's own quoting rules. It reaps
+  // itself afterwards (#785) — see `createLaunchScript`.
+  const scriptPath = createLaunchScript(cwd, prefixed);
 
   if (isWsl()) {
     // No Linux GUI here — go through interop to a Windows terminal, which re-enters this same
@@ -97,13 +98,44 @@ export function wslTerminalLaunchers(scriptPath: string, distro: string): Array<
   ];
 }
 
-/** Writes the temp launch script shared by the plain-Linux and WSL branches: `cd` into the
- *  worktree, run `command`, then drop into an interactive shell so the window stays open. */
-function writeLaunchScript(cwd: string, command: string): string {
+/** Grace period before a launch script's directory is removed. Generous next to the
+ *  ~250 ms each emulator candidate is given, because the cost of being early is a
+ *  window that never opens, and the cost of being late is a few hundred bytes. */
+export const LAUNCH_SCRIPT_TTL_MS = 60_000;
+
+/**
+ * Writes the temp launch script shared by the plain-Linux and WSL branches — `cd` into
+ * the worktree, run `command`, then drop into an interactive shell so the window stays
+ * open — and schedules its own removal (#785).
+ *
+ * Every "open in terminal" used to leave its `cez-term-*` directory behind forever. On a
+ * host whose `/tmp` is a tmpfs that never reboots, cezar's own litter is part of what
+ * exhausts the directory the agents' output capture depends on, so the opener cleans up
+ * after itself. Deleting the script mid-run is safe: the emulator has already `exec`'d
+ * bash on it, and POSIX keeps an unlinked file's inode alive for every open descriptor.
+ * The timer is `unref`'d — a pending cleanup must never be the reason `cezar serve`
+ * refuses to exit.
+ *
+ * Exported for the regression test, which must prove the directory does not survive
+ * without spawning a real terminal emulator.
+ */
+export function createLaunchScript(
+  cwd: string,
+  command: string,
+  ttlMs: number = LAUNCH_SCRIPT_TTL_MS,
+): string {
   const dir = mkdtempSync(join(tmpdir(), 'cez-term-'));
   const scriptPath = join(dir, 'launch.sh');
   writeFileSync(scriptPath, `#!/usr/bin/env bash\ncd ${shellQuote(cwd)}\n${command}\nexec bash\n`, 'utf8');
   chmodSync(scriptPath, 0o755);
+  const timer = setTimeout(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best-effort: a launch script we cannot remove is litter, not a failure.
+    }
+  }, ttlMs);
+  timer.unref?.();
   return scriptPath;
 }
 

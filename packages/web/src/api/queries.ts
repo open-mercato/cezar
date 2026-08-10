@@ -40,6 +40,7 @@ import {
   getRunFile,
   getRunHandoff,
   getRuns,
+  getRunsIndex,
   getImportableSkills,
   getImportableSkillsWhenReady,
   getSkills,
@@ -55,6 +56,7 @@ import {
   getWorktrees,
   editQueuedMessage,
   markRunSeen,
+  markRunUnseen,
   patchRun,
   removeQueuedMessage,
   registerProject,
@@ -199,6 +201,9 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
+  /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
+   *  it answers for every project at once, so no scope owns it. */
+  runsIndex: ['workspace', 'runs-index'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */
@@ -354,13 +359,21 @@ export function useRegisterProject() {
  *
  * No retry: the interesting failures are the deliberate 409s (running tasks, the boot
  * project), and re-asking cannot change those answers.
+ *
+ * The invalidation is deliberately NOT returned: TanStack awaits a promise a mutation callback
+ * returns before running the per-call ones, so returning it would make the caller's `onSuccess`
+ * wait for the registry REFETCH. Settings → General removes the project its own URL names and
+ * navigates away in that callback — gating that on a second round-trip leaves the user on a page
+ * for a project that no longer exists for as long as the refetch takes.
  */
 export function useRemoveProject() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (projectId: string) => removeProject(projectId),
     retry: false,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
+    },
   })
 }
 
@@ -629,6 +642,28 @@ export function useRuns() {
   return useQuery({
     queryKey: queryKeys.runs.list(),
     queryFn: ({ signal }) => getRuns({ signal }),
+  })
+}
+
+/**
+ * Every registered project's recent tasks, slim — the ⌘K palette's cross-project finder.
+ *
+ * `enabled` rather than always-on, and the palette passes `false` in a single-project workspace:
+ * there is nothing to aggregate there, and the active project's own `useRuns()` entry (already
+ * warm, and stream-patched) answers better than this snapshot could.
+ *
+ * ONE request for the whole registry, deliberately — the alternative, N `useProjectRuns` calls,
+ * ships a full `RunRecord` per run (`steps[]` and all) times the registry, to render a title and
+ * a dot. `staleTime` because a task search is a glance, not a live view: the palette mounts on
+ * open, and re-opening it seconds later should not re-ask the whole workspace. The active
+ * project's rows come from `useRuns()` anyway, so the live half of the list is never this stale.
+ */
+export function useRunsIndex(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.runsIndex,
+    queryFn: ({ signal }) => getRunsIndex({ signal }),
+    enabled,
+    staleTime: 30_000,
   })
 }
 
@@ -1038,12 +1073,87 @@ export function useMarkRunSeen() {
       if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
     },
     onSuccess: (updated) => {
-      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
-        list?.map((run) => (run.id === updated.id ? updated : run)),
+      // Take ONLY the receipt out of the answer — never the whole record.
+      //
+      // `POST /runs/:id/read` answers with a SNAPSHOT taken while the request was in flight, and
+      // this mutation fires at the exact moment a run finishes, which is also the busiest moment
+      // on the run stream. Writing the snapshot wholesale therefore reverts every field the
+      // stream advanced in that window, permanently — nothing refetches afterwards, so the
+      // thread stays wrong until the next reload.
+      //
+      // The case that exposed it (spec 2026-08-03-auto-resume-after-usage-limit): a run fails on
+      // a usage limit and, a beat later, publishes the instant it will resume itself. The read
+      // receipt raced that beat and put back a record with no `autoResumeAt`, so the thread's
+      // resume hint vanished on every LIVE schedule while a page refresh always showed it.
+      //
+      // `seenAt` is the only field this mutation changes, so it is the only one worth taking
+      // from its answer; everything else belongs to the stream and the authoritative fetch.
+      const stampReceipt = (run: RunRecord): RunRecord =>
+        run.id === updated.id ? { ...run, seenAt: updated.seenAt } : run
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) => list?.map(stampReceipt))
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
+        current ? stampReceipt(current) : updated,
       )
-      queryClient.setQueryData(queryKeys.runs.detail(updated.id), updated)
     },
   })
+}
+
+/**
+ * Put one finished run back to unread (#775): `POST /api/runs/:id/unread`. The exact inverse of
+ * `useMarkRunSeen`, down to the cache choreography — both caches cancelled so an in-flight
+ * refetch cannot re-stamp the receipt after the optimistic write, `seenAt` *cleared* instead of
+ * stamped, and a guarded rollback so a run that could not be marked unread honestly stays read
+ * (which is also the mixed-version failure mode: an older server 404s this route, and the user
+ * sees the marker not come back rather than a cockpit lying about the server's state).
+ *
+ * Clearing is spelled as a rest-destructure rather than `seenAt: undefined`: the reader is
+ * `isUnread`, which keys on the field being absent, and an explicit `undefined` would survive
+ * into a record shape the server never writes.
+ */
+export function useMarkRunUnseen() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => markRunUnseen(id),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.list() })
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.detail(id) })
+      const prevList = queryClient.getQueryData<RunRecord[]>(queryKeys.runs.list())
+      const prevDetail = queryClient.getQueryData<RunRecord>(queryKeys.runs.detail(id))
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === id ? withoutReceipt(run) : run)),
+      )
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(id), (run) =>
+        run ? withoutReceipt(run) : run,
+      )
+      return { prevList, prevDetail, id }
+    },
+    onError: (_error, id, context) => {
+      if (context?.prevList) queryClient.setQueryData(queryKeys.runs.list(), context.prevList)
+      if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
+    },
+    onSuccess: (updated) => {
+      // Clear ONLY the receipt on the record already in cache — never write the answer wholesale.
+      //
+      // Same reason as the read twin above: `POST /runs/:id/unread` answers with a SNAPSHOT taken
+      // while the request was in flight, so writing it over the cached record permanently reverts
+      // every field the run stream advanced in that window (nothing refetches afterwards). A
+      // finished run is quieter than a just-finished one, but it is not silent — the janitor still
+      // discovers PR links, titles still get summarized, and a `failed` run still publishes its
+      // `autoResumeAt`. Clearing the one field this mutation owns cannot lose any of them.
+      const clearReceipt = (run: RunRecord): RunRecord =>
+        run.id === updated.id ? withoutReceipt(run) : run
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) => list?.map(clearReceipt))
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
+        current ? clearReceipt(current) : updated,
+      )
+    },
+  })
+}
+
+/** A copy of the record with the read receipt gone — the optimistic half of `useMarkRunUnseen`. */
+function withoutReceipt(run: RunRecord): RunRecord {
+  const { seenAt: _dropped, ...rest } = run
+  return rest
 }
 
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself

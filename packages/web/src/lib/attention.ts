@@ -76,7 +76,7 @@ function isUnseen(_run: AttentionInput): boolean {
  *  surfaces that only have a status — the compare view's `GroupVariant` columns — can use the
  *  same canonical function instead of inventing a second status-to-tone mapping. `activity` is
  *  optional (#490), so status-only callers keep working unchanged. */
-export type AttentionInput = Pick<RunRecord, 'status' | 'activity'>
+export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt'>
 
 /**
  * `RunRecord` → attention.
@@ -94,6 +94,15 @@ export type AttentionInput = Pick<RunRecord, 'status' | 'activity'>
 export function deriveAttention(run: AttentionInput): Attention {
   if (hasPendingPermission(run)) {
     return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
+  }
+  // A run a provider usage limit stopped is `failed` on the record, but it is not an outcome —
+  // it is a task with an appointment (spec 2026-08-03-auto-resume-after-usage-limit). Painting
+  // it red would report a failure that is about to undo itself, and putting it in the `error`
+  // bucket would notify the user about work that needs nothing from them. It reads as parked,
+  // like `queued`: amber, still, and asking for nothing. Ahead of the `failed` rung because the
+  // chain is first-match-wins.
+  if (run.status === 'failed' && run.autoResumeAt) {
+    return { bucket: 'none', tone: 'pending', pulse: false, label: 'scheduled' }
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }

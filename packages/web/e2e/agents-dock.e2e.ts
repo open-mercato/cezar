@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, cezarCli, fixtureServeEnv } from './agent-browser'
 import record from './fixtures/subagents-run.record.json'
 
 /**
@@ -25,7 +25,6 @@ import record from './fixtures/subagents-run.record.json'
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
-const repoRoot = resolve(import.meta.dirname, '../../..')
 const sessionId = `e2e-agents-dock-${process.pid}`
 
 const RUN = record
@@ -111,7 +110,7 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     [
-      join(repoRoot, 'packages/cezar/dist/index.js'),
+      cezarCli,
       'serve',
       '--repo',
       dataRoot,

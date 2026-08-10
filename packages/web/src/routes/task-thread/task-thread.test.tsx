@@ -234,6 +234,67 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
   })
 
+  it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: Claude AI usage limit reached|1754236800',
+          autoResumeAt: '2026-08-03T17:00:30.000Z',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Usage limit reached — this task resumes automatically at')
+    // To the SECOND: "6:41 PM" cannot tell a wait that is nearly over from one that just
+    // started. Matched as a pattern because the rendered zone is the reader's own.
+    expect(hint?.querySelector('time')?.textContent).toMatch(/:\d{2}:30\b/)
+    // The absolute instant is the source of truth, not a countdown (spec
+    // 2026-08-03-auto-resume-after-usage-limit).
+    expect(hint?.querySelector('time')?.getAttribute('datetime')).toBe('2026-08-03T17:00:30.000Z')
+    // The other half of an automation nobody opted into: one click to switch it off.
+    expect(screen.getByRole('link', { name: 'Auto-resume settings' }).getAttribute('href')).toBe(
+      '/settings/global/resources',
+    )
+  })
+
+  it('offers a per-task opt-out that hits DELETE /auto-resume for THIS run only', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method ?? 'GET' })
+        const body = String(input).endsWith('/auto-resume') ? { cancelled: true } : []
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ThreadView
+            run={run('failed', { autoResumeAt: '2026-08-03T17:00:30.000Z' })}
+            thread={reduceThread(EVENTS)}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Don’t resume' }))
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/runs/r1/auto-resume'))).toBe(true),
+    )
+  })
+
+  it('an ordinary failure has no resume hint — the promise is only made when the server armed one', () => {
+    renderView(<ThreadView run={run('failed', { error: 'boom' })} thread={reduceThread(EVENTS)} />)
+    expect(document.querySelector('[data-slot="auto-resume-hint"]')).toBeNull()
+  })
+
   it('running → the composer stays enabled with the "message" placeholder, no paused hint', () => {
     renderView(<ThreadView run={run('running')} thread={reduceThread(EVENTS)} />)
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
@@ -812,6 +873,44 @@ describe('TaskThreadRoute', () => {
     expect(document.querySelector('[data-route="task-thread"]')).not.toBeNull()
   })
 
+  it('renders the auto-resume hint from what GET /runs/:id actually answers', async () => {
+    // The whole path, not just the component: the record shape is copied verbatim from a live
+    // `GET /api/v1/runs/:id` after a `mock:limit` run, so a field that survives the server but
+    // gets lost between fetch, cache and dock fails here (spec
+    // 2026-08-03-auto-resume-after-usage-limit).
+    const record = {
+      id: 'r1',
+      title: 'mock:limit ship it',
+      workflow: 'quick-task',
+      task: 'mock:limit ship it',
+      status: 'failed',
+      error: 'step "task" failed: Claude AI usage limit reached|1785785603',
+      autoResumeAt: '2026-08-03T19:33:53.000Z',
+      createdAt: '2026-08-03T19:23:00.000Z',
+      finishedAt: '2026-08-03T19:23:13.000Z',
+      tokensUsed: 0,
+      archived: false,
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's1' }],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path = String(input)
+        const body = path === '/api/v1/runs/r1' ? record : path === '/api/v1/health' ? {} : []
+        return Promise.resolve(
+          new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
+        )
+      }),
+    )
+    renderRoute('r1')
+    const hint = await waitFor(() => {
+      const found = document.querySelector('[data-slot="auto-resume-hint"]')
+      expect(found).not.toBeNull()
+      return found
+    })
+    expect(hint?.textContent).toContain('Usage limit reached — this task resumes automatically at')
+  })
+
   it('unknown run id → the 404-style CenteredState with a way home', async () => {
     vi.stubGlobal(
       'fetch',
@@ -825,5 +924,133 @@ describe('TaskThreadRoute', () => {
     })
     expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/')
     expect(document.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
+  })
+})
+
+/**
+ * Read receipts through the real route (#unread-done-items, #775). These drive the whole loop —
+ * fetch → cache → the auto-mark-read effect → the header's Mark unread → fetch again — because
+ * the interesting behavior only exists at that junction: the effect and the action pull the
+ * receipt in opposite directions on the very same record.
+ */
+describe('TaskThreadRoute — read receipts', () => {
+  const FINISHED_AT = '2026-07-14T13:00:00.000Z'
+  const SEEN_AT = '2026-07-14T13:05:00.000Z'
+  const RE_SEEN_AT = '2026-07-14T14:00:00.000Z'
+
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+
+  /** A fetch stub that actually MODELS the receipt: `/read` stamps it, `/unread` clears it, and
+   *  `GET /runs/:id` answers the current record. A stub that always replayed the initial record
+   *  would hide the exact bug this suite exists for — the effect re-firing on a cleared receipt. */
+  function stubReceiptServer(initial: ApiRun) {
+    const sent: Array<{ path: string; method: string }> = []
+    let current: ApiRun = { ...initial }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        const method = init.method ?? 'GET'
+        sent.push({ path, method })
+        if (method === 'POST' && path === `/api/v1/runs/${initial.id}/read`) {
+          current = { ...current, seenAt: RE_SEEN_AT }
+          return Promise.resolve(jsonResponse(current))
+        }
+        if (method === 'POST' && path === `/api/v1/runs/${initial.id}/unread`) {
+          const { seenAt: _cleared, ...rest } = current
+          current = rest as ApiRun
+          return Promise.resolve(jsonResponse(current))
+        }
+        if (path === `/api/v1/runs/${initial.id}`) return Promise.resolve(jsonResponse(current))
+        if (path === '/api/v1/runs') return Promise.resolve(jsonResponse([]))
+        if (path === '/api/v1/providers/status') {
+          return Promise.resolve(
+            jsonResponse({
+              providers: [
+                { provider: 'claude', status: 'connected', enabled: true },
+                { provider: 'codex', status: 'not-installed', enabled: true },
+                { provider: 'opencode', status: 'not-installed', enabled: true },
+              ],
+            }),
+          )
+        }
+        return Promise.resolve(jsonResponse({}))
+      }),
+    )
+    return { sent, currentRecord: () => current }
+  }
+
+  /** A fresh visit to `/tasks/:id` — a NEW route instance every time, which is what makes the
+   *  suppression's per-visit reset observable. The query client is shared across visits on
+   *  purpose: navigating away and back inside the cockpit does not empty the cache. */
+  function visit(id: string, queryClient = createQueryClient()) {
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/tasks/${id}`]}>
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskThreadRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    return { ...view, queryClient }
+  }
+
+  const posted = (sent: Array<{ path: string; method: string }>, path: string) =>
+    sent.filter((r) => r.method === 'POST' && r.path === path).length
+
+  it('opening an unread finished task marks it read', async () => {
+    const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
+    visit('r1')
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+  })
+
+  it('marking unread inside the open thread is NOT re-stamped by the auto-read effect', async () => {
+    // The regression this feature lives or dies on: clearing the receipt makes `isUnread` true
+    // again, and the auto-mark-read effect re-runs on exactly that change. Without the per-visit
+    // suppression it would immediately POST /read and the action would look broken.
+    const { sent, currentRecord } = stubReceiptServer(
+      run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT }),
+    )
+    visit('r1')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/unread')).toBe(1))
+
+    // Let every settled mutation, cache write and re-render drain before judging.
+    await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
+    expect(currentRecord().seenAt).toBeUndefined()
+  })
+
+  it('a later fresh visit marks it read again — reopening the mail still counts', async () => {
+    // The suppression is per-visit, not sticky: the email grammar this is modelled on says a
+    // task you deliberately put back to unread goes read again the next time you open it.
+    const { sent, currentRecord } = stubReceiptServer(
+      run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT }),
+    )
+    const first = visit('r1')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
+    expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
+    first.unmount()
+
+    visit('r1', first.queryClient)
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+    expect(currentRecord().seenAt).toBe(RE_SEEN_AT)
+  })
+
+  it('the control appears as soon as opening the task has marked it read', async () => {
+    // Opening an unread task is what makes the action meaningful in the first place: the auto-read
+    // effect stamps the receipt, and the header immediately offers the way back. (The
+    // still-unread case cannot be reached from this route — it is covered where the header's flag
+    // is driven directly, in run-header.test.tsx.)
+    const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
+    visit('r1')
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
   })
 })

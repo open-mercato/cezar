@@ -68,7 +68,7 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.composerDefaults).toEqual({});
     expect(config.projects).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
@@ -250,8 +250,40 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: null, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.projects).toEqual([project('good')]);
+  });
+
+  /**
+   * #810 — the monitoring re-check cadence ships ON. It shipped as `null` and that
+   * made a `CEZ:MONITORING` run a dead end: #661 had already removed the idle timer
+   * that used to bound a parked monitor, so nothing was left to resume it. `null`
+   * remains reachable, but only as a deliberate operator choice.
+   */
+  describe('monitoringWakeIntervalMinutes default (#810)', () => {
+    it('defaults to 5 minutes when the key is absent', async () => {
+      write({ resources: { maxParallel: 3 } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBe(5);
+    });
+
+    it('preserves an explicit null — "park until resumed" is a real choice, not a missing value', async () => {
+      write({ resources: { monitoringWakeIntervalMinutes: null } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBeNull();
+    });
+
+    it('keeps an explicit in-range cadence', async () => {
+      write({ resources: { monitoringWakeIntervalMinutes: 17 } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBe(17);
+    });
+
+    it('degrades an out-of-range cadence to the working default, not to park', async () => {
+      write({ resources: { monitoringWakeIntervalMinutes: 999 } });
+      const config = await loadWorkspaceConfig();
+      expect(config.resources.monitoringWakeIntervalMinutes).toBe(5);
+    });
   });
 
   it('drops a corrupt registry entry but keeps the rest (per-entry salvage)', async () => {

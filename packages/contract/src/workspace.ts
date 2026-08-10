@@ -44,6 +44,8 @@ export const workspaceConfigResponseSchema = z.object({
     maxParallel: z.number(),
     maxMonitoringSessions: z.number(),
     monitoringWakeIntervalMinutes: z.number().nullable(),
+    /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
+    autoResumeOnUsageLimit: z.boolean(),
     memoryLimitMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
   }),
@@ -102,6 +104,7 @@ export const setWorkspaceConfigInputSchema = z.object({
       maxParallel: z.number().int().min(1).max(16).optional(),
       maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
+      autoResumeOnUsageLimit: z.boolean().optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
     })
@@ -111,10 +114,16 @@ export type SetWorkspaceConfigInput = z.infer<typeof setWorkspaceConfigInputSche
 
 // ---- GUI prefs — the two open bags ----------------------------------------------------------
 
-/** Settings → Appearance: accent + density. ONE shape for both ui-state files. */
+/** Settings → Appearance: accent + density + reading width. ONE shape for both ui-state files. */
 const appearanceSchema = z.object({
   accent: z.enum(['lime', 'violet']).optional(),
   density: z.enum(['comfortable', 'compact', 'ultra']).optional(),
+  width: z.enum(['narrow', 'wide']).optional(),
+});
+
+const taskTableUiStateSchema = z.looseObject({
+  /** Explicit user choices only. Missing ids keep the registry-owned default. */
+  expandedColumns: z.record(z.string(), z.boolean()).optional(),
 });
 
 /**
@@ -189,9 +198,11 @@ export const workspaceLastLocationSchema = z.strictObject({
 export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
 
 export const workspaceUiStateSchema = z.looseObject({
-  /** The sidebar's per-project collapse map (step 3.3) — `true` collapses a group, `false` pins
-   *  it open, absent means the default (the active project expands, the rest collapse). Loose for
-   *  the same round-trip reason as its parent. */
+  /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
+   *  round-tripped so an older cockpit sharing this home keeps working, but the current cockpit
+   *  neither reads nor writes it: which groups are shut describes the WINDOW, not the workspace,
+   *  so it lives in that browser's localStorage (`packages/web/src/lib/sidebar-collapse.ts`).
+   *  One shared answer meant a phone collapsing a group collapsed it on the desktop too. */
   sidebar: z
     .looseObject({ collapsed: z.record(z.string(), z.boolean()).optional() })
     .optional(),
@@ -211,8 +222,12 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Settings → Notifications, GLOBAL since step 3.5 — one answer for the whole workspace, since
    *  the delivering browser is one browser whichever project you are looking at. */
   notifications: z.looseObject({ enabled: z.boolean().optional() }).optional(),
-  /** Last settled project-scoped page. Used only when entering at the exact bare root;
-   *  explicit deep links always win. */
+  /** Desktop Tasks-table density, shared across every project in this workspace. */
+  taskTable: taskTableUiStateSchema.optional(),
+  /** LEGACY, exactly like `sidebar` above — the last settled project-scoped page, restored when
+   *  entering at the exact bare root. The shape is unchanged and still accepted, but the current
+   *  cockpit keeps it in localStorage (`packages/web/src/lib/last-location.ts`): stored here, the
+   *  last client to navigate decided where every OTHER client's next launch landed. */
   lastLocation: workspaceLastLocationSchema.optional(),
   /** The user's curated selection of default (vendor) skills. Tri-state: ABSENT means "not
    *  curated", so every default skill shows; a PRESENT array (even `[]`) means only those names
@@ -220,6 +235,59 @@ export const workspaceUiStateSchema = z.looseObject({
   importedSkills: z.array(z.string()).optional(),
 });
 export type WorkspaceUiState = z.infer<typeof workspaceUiStateSchema>;
+
+const WORKSPACE_UI_STATE_MAX_KEYS = 200;
+const TASK_TABLE_MAX_COLUMNS = 50;
+
+/**
+ * `PUT /api/v1/workspace/ui-state` body. The response remains an open, tolerant bag so data from
+ * a newer cockpit survives an older server; this write-side schema adds bounded known fields so
+ * the current cockpit cannot grow the user-owned file without limit.
+ */
+export const setWorkspaceUiStateInputSchema = z
+  .looseObject({
+    ...workspaceUiStateSchema.shape,
+    sidebar: z
+      .looseObject({
+        collapsed: z
+          .record(z.string().min(1).max(64), z.boolean())
+          .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
+            message: `sidebar.collapsed must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
+          })
+          .optional(),
+      })
+      .optional(),
+    dismissedProviderAuthFailures: z
+      .strictObject({
+        claude: z.string().min(1).max(128).optional(),
+        codex: z.string().min(1).max(128).optional(),
+        opencode: z.string().min(1).max(128).optional(),
+      })
+      .optional(),
+    importedSkills: z
+      .array(z.string().min(1).max(200))
+      .max(WORKSPACE_UI_STATE_MAX_KEYS)
+      .optional(),
+    taskTable: taskTableUiStateSchema
+      .extend({
+        expandedColumns: z
+          .record(z.string().min(1).max(64), z.boolean())
+          .refine((map) => Object.keys(map).length <= TASK_TABLE_MAX_COLUMNS, {
+            message: `taskTable.expandedColumns must have at most ${TASK_TABLE_MAX_COLUMNS} entries`,
+          })
+          .optional(),
+      })
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (Object.keys(data).length > WORKSPACE_UI_STATE_MAX_KEYS) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `ui-state has too many keys (max ${WORKSPACE_UI_STATE_MAX_KEYS})`,
+      });
+    }
+  });
+export type SetWorkspaceUiStateInput = z.infer<typeof setWorkspaceUiStateInputSchema>;
 
 // ---- per-repo agent knobs (`GET/PUT /api/v1/config`) ----------------------------------------
 
@@ -419,3 +487,24 @@ export const openTargetsResponseSchema = z.object({
   targets: z.array(openTargetSchema),
 });
 export type OpenTargetsResponse = z.infer<typeof openTargetsResponseSchema>;
+
+/**
+ * `POST /api/v1/open-in` — open THIS PROJECT'S root in a detected app (Settings → the project
+ * folder row). The path is never sent: it is the scoped project's own registered root, resolved
+ * server-side, so the route has no traversal surface at all. `target` is an
+ * `/api/v1/open-targets` id; unlike the run route there is no `default`/`cli:` handling, because
+ * a repo root is a directory and an agent CLI belongs in a task worktree.
+ */
+export const openProjectInSchema = z.object({
+  // A short bound (#429): matched against a downstream allowlist, so an app id is never long.
+  target: z.string().trim().min(1, 'target required').max(200),
+});
+export type OpenProjectInRequest = z.infer<typeof openProjectInSchema>;
+
+/** The 200 for the above — `opened` is a literal because every failure is a 409 with `{ error }`,
+ *  so a `false` would be unreachable and would only invite a client to branch on it. */
+export const openProjectInResponseSchema = z.object({
+  opened: z.literal(true),
+  path: z.string(),
+});
+export type OpenProjectInResponse = z.infer<typeof openProjectInResponseSchema>;

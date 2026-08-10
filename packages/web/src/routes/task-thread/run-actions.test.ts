@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import type { RunRecord, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 
+import { isUnread } from '@/lib/read-state'
+
 import {
   cliTargetResumes,
   finishTitle,
@@ -41,14 +43,17 @@ describe('runActionFlags — the visibility matrix, all 7 statuses × archived',
   //   active(running|queued|waiting) → cancel, no delete/archive/continue/terminal;
   //   finish only at the waiting/review gates; continue+terminal need a closed run WITH a
   //   session; notes always. `archived` flips nothing here — it only relabels Archive.
+  // `markUnread` (#775) is false in every cell of this matrix because the fixture carries no
+  // `finishedAt` — a record with no finish instant can never wear the unread marker, whatever
+  // its status says. The flag's real matrix is the FINISHED one in its own describe below.
   const matrix: Array<{ status: RunStatus; expected: Omit<ReturnType<typeof runActionFlags>, 'notes'> }> = [
-    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, cancel: true, deleteRun: false } },
-    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, cancel: true, deleteRun: false } },
-    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, cancel: true, deleteRun: false } },
-    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, cancel: false, deleteRun: true } },
-    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, cancel: false, deleteRun: true } },
-    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, cancel: false, deleteRun: true } },
-    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, cancel: false, deleteRun: true } },
+    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, cancel: true, deleteRun: false } },
+    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, cancel: true, deleteRun: false } },
+    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, markUnread: false, cancel: true, deleteRun: false } },
+    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
+    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
+    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
+    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
   ]
 
   it.each(matrix)('$status (live)', ({ status, expected }) => {
@@ -73,6 +78,48 @@ describe('runActionFlags — the visibility matrix, all 7 statuses × archived',
     expect(flags.continueRun).toBe(false)
     expect(flags.terminal).toBe(false)
     expect(flags.deleteRun).toBe(true)
+  })
+})
+
+describe('runActionFlags.markUnread — the read→unread affordance (#775)', () => {
+  const FINISHED_AT = '2026-08-01T10:00:00.000Z'
+  const SEEN_AT = '2026-08-01T10:05:00.000Z'
+
+  /** A run that actually finished, so the read/unread rule has an instant to compare against. */
+  const finished = (status: RunStatus, extra: Partial<RunRecord> = {}) =>
+    run(status, { finishedAt: FINISHED_AT, ...extra })
+
+  const cases: Array<{ name: string; record: RunRecord; expected: boolean }> = [
+    // Offered: a finished run you have already read is exactly what you might want back.
+    { name: 'read done run', record: finished('done', { seenAt: SEEN_AT }), expected: true },
+    { name: 'read failed run', record: finished('failed', { seenAt: SEEN_AT }), expected: true },
+    // Not offered: it is already unread, so the action would be a no-op the UI shouldn't advertise.
+    { name: 'never-seen done run', record: finished('done'), expected: false },
+    { name: 'done run with a stale receipt (resumed and re-finished)', record: finished('done', { seenAt: '2026-08-01T09:00:00.000Z' }), expected: false },
+    // Not offered: these can never wear the marker, so unreading them would change nothing visible.
+    { name: 'cancelled run — self-initiated, never unread', record: finished('cancelled', { seenAt: SEEN_AT }), expected: false },
+    { name: 'archived run — a stronger "handled" than reading', record: finished('done', { seenAt: SEEN_AT, archived: true }), expected: false },
+    { name: 'review gate — not a finished done item', record: finished('review', { seenAt: SEEN_AT }), expected: false },
+    { name: 'done status caught mid-transition, no finishedAt', record: run('done', { seenAt: SEEN_AT }), expected: false },
+    // Not offered: a usage-limit failure with a resume booked is not a done item — it has an
+    // appointment to continue, so there is no outcome to push back into the unread list.
+    { name: 'failed run waiting out a usage limit', record: finished('failed', { seenAt: SEEN_AT, autoResumeAt: '2026-08-03T19:33:53.000Z' }), expected: false },
+  ]
+
+  for (const status of ['queued', 'running', 'waiting'] as RunStatus[]) {
+    cases.push({ name: `${status} — still active`, record: run(status, { seenAt: SEEN_AT }), expected: false })
+  }
+
+  it.each(cases)('$name → $expected', ({ record, expected }) => {
+    expect(runActionFlags(record).markUnread).toBe(expected)
+  })
+
+  it('never offers both marker directions at once', () => {
+    // The flag is the complement of "already unread" within the eligible set, so a row can
+    // never simultaneously wear the violet marker AND offer to be put back into it.
+    for (const { record } of cases) {
+      expect(runActionFlags(record).markUnread && isUnread(record)).toBe(false)
+    }
   })
 })
 

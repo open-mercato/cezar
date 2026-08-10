@@ -13,7 +13,14 @@ export function ReferenceChip({
   reference: { kind: 'PR' | 'Issue'; number?: number; url?: string }
   taskTitle: string
   className?: string
-  /** The narrow sidebar keeps its established `PR` label instead of spelling out a number. */
+  /**
+   * The narrow sidebar row (#788, option C): the number ALONE — `#402` — with no `Issue ` word
+   * and no `PR` label. There the chip is the row's leading identifier and every glyph it spends
+   * is a glyph the task's name does not get, and which kind of reference it is stays carried by
+   * the accessible name ("Open the pull request for …" / "Open the issue for …"), the `title`
+   * (the URL) and the `data-slot`. Without a number there is nothing shorter to say, so the kind
+   * is the label, exactly as in the full treatment.
+   */
   compact?: boolean
 }) {
   const { kind, number, url } = reference
@@ -21,12 +28,7 @@ export function ReferenceChip({
     'inline-flex h-[22px] items-center gap-1 rounded-full border border-violet/35 px-2 font-mono text-[11px] font-semibold text-violet',
     className,
   )
-  const label =
-    compact && kind === 'PR'
-      ? 'PR'
-      : number
-        ? `${kind === 'Issue' ? 'Issue ' : ''}#${number}`
-        : kind
+  const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
 
   // href protocol guard (#431): a transcript-scraped non-http URL degrades to inert text.
   if (!url || !isHttpUrl(url)) {

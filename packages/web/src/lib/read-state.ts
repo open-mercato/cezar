@@ -20,7 +20,23 @@ const UNREAD_ELIGIBLE: readonly RunRecord['status'][] = ['done', 'failed']
 
 /** What the read/unread rule reads — `Pick`ed (like `AttentionInput`) so a test or a partial
  *  record can call it without a full `RunRecord`. */
-export type ReadStateInput = Pick<RunRecord, 'status' | 'finishedAt' | 'seenAt' | 'archived'>
+export type ReadStateInput = Pick<
+  RunRecord,
+  'status' | 'finishedAt' | 'seenAt' | 'archived' | 'autoResumeAt'
+>
+
+/**
+ * A run stopped by a provider usage limit with a resume already scheduled (spec
+ * 2026-08-03-auto-resume-after-usage-limit).
+ *
+ * It is `failed` on the record, but it is not a *done item*: it has an appointment to pick the
+ * work back up, so neither half of this grammar applies — there is no outcome to have missed
+ * (no unread marker, no nav-badge count) and no history to dim (not a read done item). The
+ * status dot says `scheduled` for the same reason (`lib/attention.ts`).
+ */
+function isScheduledResume(run: ReadStateInput): boolean {
+  return run.status === 'failed' && run.autoResumeAt !== undefined
+}
 
 /** A finished run — done, failed, or cancelled. These are the rows the read/unread treatment
  *  applies to (the "Recent" bucket); everything else carries its live attention signal instead. */
@@ -29,25 +45,48 @@ export function isDoneItem(status: RunRecord['status']): boolean {
 }
 
 /**
- * Whether a done item is *unread*: a finished run you have not opened since it finished.
- *
- * The rule, in order:
+ * Whether a run is *eligible* to wear the unread marker at all — the receipt-independent half
+ * of `isUnread`:
  *  - only `done`/`failed` runs qualify (cancelled is self-initiated, so never unread);
+ *  - a usage-limit failure with a resume already scheduled is not a done item at all
+ *    (`isScheduledResume`) — there is no outcome to have missed yet, so it can neither wear
+ *    the marker nor be put back into it;
  *  - it must actually have finished (`finishedAt`) — a record caught mid-transition is not yet
  *    a done item;
- *  - archived runs are never unread: archiving is a stronger "I'm done with this" than reading;
- *  - unread until seen SINCE it finished. Comparing `seenAt < finishedAt` (not merely "has a
- *    receipt") is what makes a resumed-and-re-finished run go unread again for free — its
- *    `finishedAt` moves past the old receipt.
+ *  - archived runs are never unread: archiving is a stronger "I'm done with this" than reading.
+ *
+ * Split out (#775) because "Mark unread" needs exactly this question minus the receipt: the
+ * action is offered for a run that is currently read AND *could* be unread, which is
+ * `canBeUnread(run) && !isUnread(run)`. `isReadDoneItem` cannot answer it — that one is true
+ * for cancelled and archived rows too, neither of which can ever go unread. Exported rather
+ * than restated in `run-actions.ts` so the eligibility rule keeps exactly one definition.
+ */
+export function canBeUnread(run: ReadStateInput): boolean {
+  if (run.archived) return false
+  if (isScheduledResume(run)) return false
+  if (!UNREAD_ELIGIBLE.includes(run.status)) return false
+  return run.finishedAt !== undefined
+}
+
+/**
+ * Whether a done item is *unread*: a finished run you have not opened since it finished.
+ *
+ * Eligible (`canBeUnread` above) and unread until seen SINCE it finished. Comparing
+ * `seenAt < finishedAt` (not merely "has a receipt") is what makes a resumed-and-re-finished
+ * run go unread again for free — its `finishedAt` moves past the old receipt. An explicit
+ * "Mark unread" (#775) takes the other road: it *clears* the receipt, and an absent one is
+ * unread by this same clause.
  *
  * ISO-8601 strings compare lexicographically because every timestamp cezar writes is UTC
  * (`toISOString()` → trailing `Z`), so `<` on the strings is `<` on the instants.
  */
 export function isUnread(run: ReadStateInput): boolean {
-  if (run.archived) return false
-  if (!UNREAD_ELIGIBLE.includes(run.status)) return false
-  if (run.finishedAt === undefined) return false
-  return run.seenAt === undefined || run.seenAt < run.finishedAt
+  // Read into a local so the narrowing survives the `canBeUnread` call, which checks the same
+  // clause but cannot narrow the caller's field.
+  const finishedAt = run.finishedAt
+  if (finishedAt === undefined) return false
+  if (!canBeUnread(run)) return false
+  return run.seenAt === undefined || run.seenAt < finishedAt
 }
 
 /**
@@ -57,6 +96,7 @@ export function isUnread(run: ReadStateInput): boolean {
  * their live attention state, not a past outcome — so they are excluded here.
  */
 export function isReadDoneItem(run: ReadStateInput): boolean {
+  if (isScheduledResume(run)) return false
   return isDoneItem(run.status) && !isUnread(run)
 }
 

@@ -94,11 +94,12 @@ export const diffStatSchema = z.object({
   adds: z.number(),
   dels: z.number(),
   files: z.number(),
-  /** Additive since #751, and present ONLY when true: the numbers cover uncommitted work
-   *  alone, because the worktree's HEAD had been repointed off the task's own branch (every
-   *  review/QA run does this) and the merge-base anchor would otherwise have reported the
-   *  checked-out branch's entire diff as this task's. Absent on every normal run and on every
-   *  record written before #751 — a consumer that ignores it sees exactly the old shape. */
+  /** Additive since #751, and present ONLY when true: the numbers were measured against a
+   *  branch the agent checked out into the task's worktree, as the run found it, because the
+   *  worktree's HEAD had been repointed off the task's own branch (every review/QA run does
+   *  this) and the merge-base anchor would otherwise have reported that branch's entire diff
+   *  as this task's. Absent on every normal run and on every record written before #751 — a
+   *  consumer that ignores it sees exactly the old shape. */
   repointed: z.boolean().optional(),
 });
 export type DiffStat = z.infer<typeof diffStatSchema>;
@@ -184,6 +185,12 @@ export const runRecordSchema = z.object({
   monitoringWakeAt: z.string().optional(),
   /** The current live monitoring epoch exhausted its 40 automatic checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /** Exact ISO-8601 instant this run resumes itself after a provider usage limit stopped it
+   *  (spec 2026-08-03-auto-resume-after-usage-limit). Present only on a `failed` run with a
+   *  pending automatic resume — its absence is what "no resume is scheduled" looks like. */
+  autoResumeAt: z.string().optional(),
+  /** Consecutive automatic resumes since the last human turn, against the safety cap. */
+  autoResumeAttempts: z.number().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -234,7 +241,8 @@ export const runRecordSchema = z.object({
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
-   *  runs and on any run not yet opened, both of which count as unread. */
+   *  runs, on any run not yet opened, and on one deliberately put back to unread via
+   *  `POST /runs/:id/unread` (#775) — all three count as unread. */
   seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
@@ -265,6 +273,70 @@ export const apiRunSchema = runRecordSchema.extend({
 });
 export type ApiRun = z.infer<typeof apiRunSchema>;
 
+// ---- the cross-project index --------------------------------------------------------------
+
+/**
+ * One run in the WORKSPACE-level index (`GET /api/v1/workspace/runs-index`) — the ⌘K palette's
+ * "find a task in any project" list.
+ *
+ * Deliberately a separate, slim shape rather than `ApiRun`. The index answers for every
+ * registered project at once, and `runRecordSchema` carries `steps[]` and `workflowDef` — a fat
+ * record whose cost is fine per project and absurd multiplied by the registry. These are exactly
+ * the fields a palette row renders: `runTitle`'s three (`title`, `titleSummary`, `titleOrigin`),
+ * `deriveAttention`'s `AttentionInput`, `isUnread`'s `ReadStateInput`, and the timestamps
+ * `shortAge` reads. Adding a field here is cheap; adding the whole record is what this exists to
+ * avoid — but note that widening either of those two `Pick`s means widening this too, or the
+ * palette's cross-project rows silently answer differently from every other surface.
+ *
+ * `projectId` is the join key, NOT the project name: the registry is already on the client and is
+ * authoritative for display names, and duplicating one here would let a renamed project show two
+ * different labels in one palette.
+ */
+export const runIndexEntrySchema = z.object({
+  /** The registered project this run belongs to. Joins against `GET /projects`. */
+  projectId: z.string(),
+  id: z.string(),
+  title: z.string(),
+  titleSummary: z.string().optional(),
+  titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  status: runStatusSchema,
+  activity: runActivitySchema.optional(),
+  createdAt: z.string(),
+  finishedAt: z.string().optional(),
+  /** With `status`/`finishedAt`/`archived`, the four inputs `isUnread` reads — what lets the
+   *  palette lead with "finished while you weren't looking" across every project, not just the
+   *  one you happen to be standing in. */
+  seenAt: z.string().optional(),
+  /** Always present, like `RunRecord.archived`: absent would read as "not archived", and the
+   *  unread rule treats archiving as a stronger "done with this" than reading. */
+  archived: z.boolean(),
+  /** A run parked by a provider usage limit is `failed` on the record with a resume booked
+   *  (spec 2026-08-03-auto-resume-after-usage-limit). Both `deriveAttention` and `isUnread` read
+   *  it, so without it here a cross-project row would show a red "failed" dot and land in
+   *  Recently finished for work that is simply waiting for its appointment. */
+  autoResumeAt: z.string().optional(),
+});
+export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
+
+/**
+ * `GET /workspace/runs-index`.
+ *
+ * `truncated` is not decoration: the index caps each project's contribution, and a capped list
+ * that says nothing reads as "your task is not here" when the honest answer is "not in the
+ * newest N". Naming the projects that hit the cap is what lets a consumer say so.
+ */
+export const runsIndexResponseSchema = z.object({
+  /** Newest first, across every registered project. Archived runs are included — `GET /runs`
+   *  carries them for the project you are standing in, and a finder that dropped them elsewhere
+   *  would make a task vanish the moment you left its project. */
+  runs: z.array(runIndexEntrySchema),
+  /** The per-project cap that produced this list. */
+  perProjectLimit: z.number(),
+  /** Ids of the projects that had more runs than the cap allowed. */
+  truncated: z.array(z.string()),
+});
+export type RunsIndexResponse = z.infer<typeof runsIndexResponseSchema>;
+
 // ---- mutation responses ------------------------------------------------------------------
 
 /**
@@ -282,6 +354,17 @@ export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
 /** `POST /runs/:id/cancel` — genuinely a boolean: an already-settled run answers 200 + `false`. */
 export const cancelResponseSchema = z.object({ cancelled: z.boolean() });
 export type CancelResponse = z.infer<typeof cancelResponseSchema>;
+
+/**
+ * `DELETE /runs/:id/auto-resume` (spec 2026-08-03-auto-resume-after-usage-limit) — the per-task
+ * off switch for a pending usage-limit resume, next to the workspace-wide setting.
+ *
+ * `z.literal(true)`, not a boolean, and that IS the shape: the route is idempotent, so a run with
+ * nothing pending answers 200 as well — "this task will not resume itself" is equally true either
+ * way. Only an unknown run refuses, with 404.
+ */
+export const cancelAutoResumeResponseSchema = z.object({ cancelled: z.literal(true) });
+export type CancelAutoResumeResponse = z.infer<typeof cancelAutoResumeResponseSchema>;
 
 /** `POST /runs/archive-finished` — how many runs the sweep archived. */
 export const archiveFinishedResponseSchema = z.object({ archived: z.number() });

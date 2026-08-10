@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, cezarCli, fixtureServeEnv } from './agent-browser'
 
 /**
  * Diff virtualization in a real browser (`components/diff/diff-scroll.ts` §"THE PERFORMANCE
@@ -30,7 +30,6 @@ import { AgentBrowser, fixtureServeEnv } from './agent-browser'
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
-const repoRoot = resolve(import.meta.dirname, '../../..')
 const sessionId = `e2e-diff-scroll-${process.pid}`
 
 /**
@@ -127,7 +126,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', repo, '--port', String(port), '--no-open'],
+    [cezarCli, 'serve', '--repo', repo, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(repo), stdio: 'ignore' },
   )
   await waitForHealth(baseUrl)
