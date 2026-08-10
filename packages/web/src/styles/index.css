@@ -164,7 +164,7 @@
   --foreground: #171717;
   --card: #ffffff;
   --card-2: #fbfbfb;
-  --sidebar: #fafafa;
+  --sidebar: var(--background);
   --muted: #f7f7f7;
   --muted-foreground: #5c5c5c;
   /* AA-checked (audit 2026-08-08): ≥4.5:1 on every light surface incl. --muted; #a3a3a3 was
