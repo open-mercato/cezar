@@ -18,6 +18,16 @@ import type {
   AutomationResponse,
   CreateAutomationInput,
   UpdateAutomationInput,
+  ScheduledTasksResponse,
+  ScheduledTaskDetailResponse,
+  ScheduledTaskResponse,
+  ScheduledTaskRunNowResponse,
+  ScheduledTaskPreviewResponse,
+  ScheduledTaskPreviewInput,
+  ScheduledTaskOccurrencesResponse,
+  ScheduledTaskRetryResponse,
+  CreateScheduledTaskInput,
+  UpdateScheduledTaskInput,
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
@@ -1417,6 +1427,141 @@ export async function getAutomationLog(
       init(opts),
     ),
     `/automation-log?automationId=${encodeURIComponent(id)}`,
+  )
+}
+
+// ---- scheduled tasks (spec 2026-08-01-postponed-tasks) --------------------------------------
+//
+// Project-scoped, like the automations family: the definitions, their runtime state and the
+// occurrence history are per-project files. `previewScheduledTiming` is the one call that reads no
+// stored task — it turns a composer's local wall-clock + zone into the authoritative instant.
+
+/** Every scheduled task with its display status, runtime state and latest occurrence, plus the
+ *  scheduler summary and whether the project is writable — one read, the whole page. */
+export async function getScheduledTasks(opts?: ReadOptions): Promise<ScheduledTasksResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-tasks'].$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/scheduled-tasks',
+  )
+}
+
+/** One definition with its display status, state and latest occurrence. */
+export async function getScheduledTask(
+  id: string,
+  opts?: ReadOptions,
+): Promise<ScheduledTaskDetailResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-tasks'][':id'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `/scheduled-tasks/${encodeURIComponent(id)}`,
+  )
+}
+
+/** Create a one-time scheduled task (201). The server computes the absolute instant from the
+ *  composer's local wall-clock + IANA zone, and rejects a time under a minute away. */
+export async function createScheduledTask(
+  input: CreateScheduledTaskInput,
+): Promise<ScheduledTaskResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-tasks'].$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/scheduled-tasks',
+  )
+}
+
+/** Edit a definition. `expectedRevision` is the one the editor read — a stale one answers 409
+ *  rather than overwriting an edit made elsewhere. */
+export async function updateScheduledTask(
+  id: string,
+  input: UpdateScheduledTaskInput,
+): Promise<ScheduledTaskResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-tasks'][':id'].$put({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: input,
+    }),
+    `/scheduled-tasks/${encodeURIComponent(id)}`,
+  )
+}
+
+/** Delete a definition (204). */
+export async function deleteScheduledTask(id: string): Promise<void> {
+  const res = await cez.api.v1.p[':projectId']['scheduled-tasks'][':id'].$delete({
+    param: { projectId: queryScope(), id: encodeURIComponent(id) },
+  })
+  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+}
+
+/** Pause (never launches) or resume (an overdue definition becomes immediately due). Two routes,
+ *  because they are two acts — mirrors `setAutomationEnabled`. */
+export async function setScheduledTaskEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<ScheduledTaskResponse> {
+  const param = { projectId: queryScope(), id: encodeURIComponent(id) }
+  const label = `/scheduled-tasks/${encodeURIComponent(id)}/${enabled ? 'resume' : 'pause'}`
+  return unwrap(
+    enabled
+      ? await cez.api.v1.p[':projectId']['scheduled-tasks'][':id'].resume.$post({ param })
+      : await cez.api.v1.p[':projectId']['scheduled-tasks'][':id'].pause.$post({ param }),
+    label,
+  )
+}
+
+/** Launch the task now (202), out of band from its schedule. */
+export async function runScheduledTaskNow(id: string): Promise<ScheduledTaskRunNowResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-tasks'][':id']['run-now'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    `/scheduled-tasks/${encodeURIComponent(id)}/run-now`,
+  )
+}
+
+/** The authoritative local/UTC rendering of a composer's chosen timing plus soft warnings — the
+ *  server owns the timezone maths, so the preview line never guesses. */
+export async function previewScheduledTiming(
+  input: ScheduledTaskPreviewInput,
+): Promise<ScheduledTaskPreviewResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-tasks'].preview.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/scheduled-tasks/preview',
+  )
+}
+
+/** One definition's occurrence history — newest first, capped server-side at 100 rows. */
+export async function getScheduledTaskOccurrences(
+  scheduledTaskId: string,
+  opts?: ReadOptions,
+): Promise<ScheduledTaskOccurrencesResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-task-occurrences'].$get(
+      { param: { projectId: queryScope() }, query: { scheduledTaskId } },
+      init(opts),
+    ),
+    `/scheduled-task-occurrences?scheduledTaskId=${encodeURIComponent(scheduledTaskId)}`,
+  )
+}
+
+/** Retry a launch-error occurrence that never produced a run (202). 409 when it is not retryable. */
+export async function retryScheduledTaskOccurrence(
+  occurrenceId: string,
+): Promise<ScheduledTaskRetryResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['scheduled-task-occurrences'][':occurrenceId'].retry.$post({
+      param: { projectId: queryScope(), occurrenceId: encodeURIComponent(occurrenceId) },
+    }),
+    `/scheduled-task-occurrences/${encodeURIComponent(occurrenceId)}/retry`,
   )
 }
 

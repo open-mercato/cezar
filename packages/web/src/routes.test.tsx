@@ -168,6 +168,8 @@ describe('pageTitleContext', () => {
     ['/p/cezar/git', 'Git'],
     ['/p/cezar/git/commits/abc123', 'Git'],
     ['/p/cezar/github/issues/543', 'GitHub'],
+    ['/p/cezar/scheduled', 'Scheduled'],
+    ['/p/cezar/scheduled/abc123/history', 'Scheduled'],
     ['/p/cezar/skills', 'Skills'],
     ['/p/cezar/inbox', 'Inbox'],
     ['/p/cezar/workflows/quick-task', 'Workflows'],

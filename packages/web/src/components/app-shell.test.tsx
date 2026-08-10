@@ -76,6 +76,7 @@ describe('AppShell', () => {
       'Git',
       'GitHub',
       'Automations',
+      'Scheduled',
       'Skills',
       'Workflows',
       'Settings',
@@ -87,6 +88,7 @@ describe('AppShell', () => {
       '/git',
       '/github',
       '/automations',
+      '/scheduled',
       '/skills',
       '/workflows',
       '/settings',
@@ -115,6 +117,20 @@ describe('AppShell', () => {
     renderShell('/', { automationsAvailable: true })
     expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
       .toContain('/automations')
+  })
+
+  // spec postponed-tasks: same additive gating for the scheduled-tasks capability.
+  it('drops the Scheduled item when the capability is off', () => {
+    renderShell('/', { scheduledTasksAvailable: false })
+    const links = within(nav()).getAllByRole('link')
+    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/scheduled')
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.scheduledTasks).length)
+  })
+
+  it('shows the Scheduled item once the capability is on', () => {
+    renderShell('/', { scheduledTasksAvailable: true })
+    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
+      .toContain('/scheduled')
   })
 
   describe('active nav state follows the current route', () => {

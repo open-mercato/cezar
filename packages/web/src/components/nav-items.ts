@@ -1,4 +1,5 @@
 import {
+  ClockIcon,
   GitBranchIcon,
   InboxIcon,
   ListChecksIcon,
@@ -32,6 +33,11 @@ export type NavItem = {
    *  Independent of `forge`: the Automations item carries BOTH, because the feature needs a
    *  forge to poll AND the operator's opt-in to exist at all. See `visibleNavItems`. */
   automations?: boolean
+  /** Scheduled-tasks-gated (spec 2026-08-01-postponed-tasks): the item exists only while
+   *  `/api/health` reports `capabilities.scheduledTasks`. The feature has no `CEZ_*` opt-in — it
+   *  is always on — but is still gated so the tab is additive like every other one and a rollback
+   *  can hide it in one place. See `visibleNavItems`. */
+  scheduledTasks?: boolean
 }
 
 /** The sidebar nav from the spec's "App shell & navigation" section, in mockup order.
@@ -46,6 +52,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], forge: true, automations: true },
+  { to: '/scheduled', label: 'Scheduled', icon: ClockIcon, match: ['/scheduled'], scheduledTasks: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
@@ -59,6 +66,8 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — the opt-in GitHub automations (#801). */
   automations?: boolean
+  /** `capabilities.scheduledTasks` — one-time postponed tasks (spec 2026-08-01-postponed-tasks). */
+  scheduledTasks?: boolean
 }
 
 /**
@@ -80,11 +89,13 @@ export function visibleNavItems({
   forge = false,
   inbox = false,
   automations = false,
+  scheduledTasks = false,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
-    && (item.automations ? automations : true))
+    && (item.automations ? automations : true)
+    && (item.scheduledTasks ? scheduledTasks : true))
 }
 
 /** Does `pathname` sit inside the area rooted at `prefix`?

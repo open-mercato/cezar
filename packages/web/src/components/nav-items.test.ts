@@ -70,6 +70,7 @@ describe('NAV_ITEMS', () => {
       'Git',
       'GitHub',
       'Automations',
+      'Scheduled',
       'Skills',
       'Workflows',
       'Settings',
@@ -94,14 +95,15 @@ describe('visibleNavItems', () => {
     visibleNavItems(opts).map((item) => item.label)
 
   it('with everything available, the full nav renders', () => {
-    expect(visibleNavItems({ forge: true, inbox: true, automations: true })).toEqual(NAV_ITEMS)
+    expect(visibleNavItems({ forge: true, inbox: true, automations: true, scheduledTasks: true })).toEqual(NAV_ITEMS)
   })
 
   it('without a forge, the GitHub AND Automations items drop out', () => {
-    expect(labelsOf({ forge: false, inbox: true, automations: true })).toEqual([
+    expect(labelsOf({ forge: false, inbox: true, automations: true, scheduledTasks: true })).toEqual([
       'Tasks',
       'Inbox',
       'Git',
+      'Scheduled',
       'Skills',
       'Workflows',
       'Settings',
@@ -109,8 +111,35 @@ describe('visibleNavItems', () => {
   })
 
   it('without the inbox, exactly the Inbox item drops out (#471)', () => {
-    expect(labelsOf({ forge: true, inbox: false, automations: true })).toEqual([
+    expect(labelsOf({ forge: true, inbox: false, automations: true, scheduledTasks: true })).toEqual([
       'Tasks',
+      'Git',
+      'GitHub',
+      'Automations',
+      'Scheduled',
+      'Skills',
+      'Workflows',
+      'Settings',
+    ])
+  })
+
+  it('without the automations opt-in, exactly the Automations item drops out (#801)', () => {
+    expect(labelsOf({ forge: true, inbox: true, automations: false, scheduledTasks: true })).toEqual([
+      'Tasks',
+      'Inbox',
+      'Git',
+      'GitHub',
+      'Scheduled',
+      'Skills',
+      'Workflows',
+      'Settings',
+    ])
+  })
+
+  it('without the scheduled-tasks capability, exactly the Scheduled item drops out', () => {
+    expect(labelsOf({ forge: true, inbox: true, automations: true, scheduledTasks: false })).toEqual([
+      'Tasks',
+      'Inbox',
       'Git',
       'GitHub',
       'Automations',
@@ -120,16 +149,8 @@ describe('visibleNavItems', () => {
     ])
   })
 
-  it('without the automations opt-in, exactly the Automations item drops out (#801)', () => {
-    expect(labelsOf({ forge: true, inbox: true, automations: false })).toEqual([
-      'Tasks',
-      'Inbox',
-      'Git',
-      'GitHub',
-      'Skills',
-      'Workflows',
-      'Settings',
-    ])
+  it('shows the Scheduled item once the capability is on', () => {
+    expect(labelsOf({ forge: true, inbox: true, automations: true, scheduledTasks: true })).toContain('Scheduled')
   })
 
   // The two gates on that one item are ANDed: a forge alone does not resurrect it, which is the

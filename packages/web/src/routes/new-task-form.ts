@@ -290,6 +290,19 @@ export function buildAutomationTask(
   return { prompt: task, ...body }
 }
 
+/** A scheduled task carries the SAME New task serialization as an automation: a due occurrence
+ * launches an ordinary cezar task, so the template is the composer's own run-creation body with
+ * only the transport-specific keys stripped — `task` renamed to the stored `prompt`, and the
+ * browser-only `images` and inbox `todoId` dropped (a scheduled definition is a stored template,
+ * not one browser submission). Deliberately identical to `buildAutomationTask` so the two stay a
+ * one-line diff apart. */
+export function buildScheduledTaskTemplate(
+  opts: Parameters<typeof buildCreateRunBody>[0],
+): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
+  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+  return { prompt: task, ...body }
+}
+
 /** Where a successful POST navigates: the run's thread — for ×2/×3 the FIRST variant's thread,
  *  exactly what legacy `handleStarted` selects. */
 export function startedRunPath(response: CreateRunResponse): string {

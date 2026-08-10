@@ -4,6 +4,7 @@ import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-c
 
 import {
   buildAutomationTask,
+  buildScheduledTaskTemplate,
   availableRunners,
   buildCreateRunBody,
   MODELS_BY_RUNNER,
@@ -316,5 +317,45 @@ describe('buildAutomationTask', () => {
       variants: 2,
       autonomous: true,
     })
+  })
+})
+
+describe('buildScheduledTaskTemplate', () => {
+  // A scheduled definition is a stored template too, so it must match buildCreateRunBody exactly
+  // minus the three transport keys, with `task` renamed to `prompt` — the same contract as
+  // buildAutomationTask (a due occurrence launches an ordinary cezar task).
+  const opts = {
+    task: 'Ship the release notes',
+    source: { source: 'workflow' as const, ref: 'quick-task' },
+    model: 'sonnet',
+    runner: 'claude' as const,
+    defaultRunner: 'claude' as const,
+    variants: 2,
+    images: [{ mediaType: 'image/png' as const, data: 'ignored' }],
+    autonomous: true,
+    todoId: 'ignored',
+  }
+
+  it('is buildCreateRunBody minus images/todoId, with task renamed to prompt', () => {
+    const { task, images: _images, todoId: _todoId, ...rest } = buildCreateRunBody(opts)
+    expect(buildScheduledTaskTemplate(opts)).toEqual({ prompt: task, ...rest })
+  })
+
+  it('drops the browser-only image and inbox provenance, keeping prompt == task', () => {
+    const template = buildScheduledTaskTemplate(opts)
+    expect(template).toEqual({
+      prompt: 'Ship the release notes',
+      workflow: 'quick-task',
+      model: 'sonnet',
+      variants: 2,
+      autonomous: true,
+    })
+    expect('images' in template).toBe(false)
+    expect('todoId' in template).toBe(false)
+    expect('task' in template).toBe(false)
+  })
+
+  it('is byte-for-byte identical to buildAutomationTask', () => {
+    expect(buildScheduledTaskTemplate(opts)).toEqual(buildAutomationTask(opts))
   })
 })
