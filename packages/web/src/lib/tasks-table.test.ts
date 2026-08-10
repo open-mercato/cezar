@@ -279,6 +279,63 @@ describe('taskIssueUrl', () => {
     expect(taskIssueUrl(r)).toBeUndefined()
   })
 
+  it('synthesizes nothing when a candidate names this number in another repo (#819)', () => {
+    // The reported record: `/om-auto-fix-pr …/open-mercato/pull/1977` run inside the cezar
+    // project. No CEZ:ISSUE marker, so the auto-namer seeded `issueNumber` from the transcript —
+    // open-mercato's 4143, not cezar's. Rebuilt against the project repo it produced
+    // `…/open-mercato/cezar/issues/4143`, a confident 404. The candidate carrying 4143 under
+    // another repo is the proof the number is not ours.
+    const r = run({
+      issueNumber: 4143,
+      markerRefs: { pr: 1977 },
+      referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+      referencedIssueCandidates: [
+        'https://github.com/open-mercato/open-mercato/issues/4143',
+        'https://github.com/open-mercato/open-mercato/issues/4824',
+        'https://github.com/open-mercato/open-mercato/issues/4826',
+      ],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/open-mercato/cezar')).toBeUndefined()
+  })
+
+  it('still synthesizes when the foreign candidates carry other numbers (#819)', () => {
+    // The guard is evidence about THIS number only: a task that merely mentioned other repos'
+    // issues keeps the link its own prompt-derived number earns.
+    const r = run({
+      issueNumber: 544,
+      referencedIssueCandidates: ['https://github.com/other/repo/issues/9'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/544')
+  })
+
+  it('treats a candidate in this repo as ours whatever its spelling (#819)', () => {
+    // GitHub repo names are case-insensitive; a transcript spelling the remote differently must
+    // not suppress a correct chip.
+    const r = run({
+      issueNumber: 544,
+      referencedIssueCandidates: ['https://github.com/O/R/issues/544'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/544')
+  })
+
+  it('does not mistake a repo whose name merely starts the same for ours (#819)', () => {
+    const r = run({
+      issueNumber: 544,
+      referencedIssueCandidates: ['https://github.com/o/r-fork/issues/544'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBeUndefined()
+  })
+
+  it('suppresses a foreign-numbered marker too, since a marker names no repo (#819)', () => {
+    // CEZ:ISSUE declares the task's subject, not the project on screen — a run driving another
+    // repo's issue declares that repo's number, and rebuilding it locally is the same 404.
+    const r = run({
+      markerRefs: { issue: 4143 },
+      referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/open-mercato/cezar')).toBeUndefined()
+  })
+
   it('prefers a real discovered issue URL over the synthesized one (#526)', () => {
     const r = run({
       markerRefs: { issue: 524 },

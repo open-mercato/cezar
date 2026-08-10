@@ -157,7 +157,30 @@ export function taskIssueUrl(run: RunRecord, repoBase?: string): string | undefi
   // wrong-link defect #526 exists to kill, just pointing at an issue instead of a PR.
   const number = run.markerRefs?.issue ?? run.issueNumber
   if (!number || !repoBase) return undefined
+  // #819: the `?? run.issueNumber` fallback is the door #526 left open. `markerRefs.issue` is
+  // agent-declared and this project's, but `issueNumber` also arrives from the auto-namer, which
+  // scrapes the transcript — and a task working on ANOTHER repository scrapes that repo's numbers.
+  // Candidates stay evidence and never become the link (#526's rule): a candidate naming THIS
+  // number in a different repository proves the number is not ours, so synthesize nothing. The
+  // matching candidate is deliberately not promoted — a coincidental `#4143` in an unrelated repo
+  // would just be a different wrong link. No chip beats a wrong chip.
+  if (namesNumberElsewhere(run.referencedIssueCandidates, number, repoBase)) return undefined
   return `${repoBase}/issues/${number}`
+}
+
+/** True when a discovered candidate URL carries `number` under a repository other than `repoBase`
+ *  — the evidence that a synthesized `${repoBase}/issues/${number}` would be a foreign number
+ *  rebuilt locally (#819). Compared case-insensitively: GitHub repo names are case-insensitive, and
+ *  a transcript that spells the remote differently must not suppress a correct chip. */
+function namesNumberElsewhere(
+  candidates: readonly string[] | undefined,
+  number: number,
+  repoBase: string,
+): boolean {
+  const prefix = `${repoBase.toLowerCase()}/`
+  return (candidates ?? []).some(
+    (url) => url.endsWith(`/${number}`) && !url.toLowerCase().startsWith(prefix),
+  )
 }
 
 export interface TaskReference {
