@@ -233,7 +233,11 @@ export function NoteLine({ note }: { note: ThreadNote }) {
       data-slot="note-line"
       data-tone={note.tone}
       // No leading middot (house rule): a dim line is marker enough; a failure earns a real icon.
-      className={cn('flex items-start gap-1.5 px-0.5 text-xs', danger ? 'text-danger' : 'text-soft-foreground')}
+      // Capped at the reading measure like other flowing text — only blocks fill the wide column.
+      className={cn(
+        'flex max-w-[var(--prose)] items-start gap-1.5 px-0.5 text-xs',
+        danger ? 'text-danger' : 'text-soft-foreground',
+      )}
     >
       {danger ? <CircleXIcon aria-hidden className="mt-[1px] size-3 shrink-0" /> : null}
       <span className="min-w-0">{note.text}</span>

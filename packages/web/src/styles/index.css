@@ -124,11 +124,15 @@
   --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
 
-  /* reading measure — the max width of the task view's column (header, thread, changes,
-   * commits). The default is the shipped 820px reading column; Settings → Appearance → Reading
-   * width flips it to `wide` (see the `:root[data-width]` block). Consumed as
-   * `max-w-[var(--measure)]` so one token moves every column together. */
-  --measure: 820px;
+  /* The task view's COLUMN width (header, thread, changes, commits) — wide enough that tables,
+   * code, diffs and tool output use the screen. Flowing TEXT is capped tighter at `--prose`
+   * (below), so long lines stay readable while wide blocks fill the column: the "readable column,
+   * full-width blocks" pattern. Settings → Appearance → Reading width flips both to `wide`.
+   * Consumed as `max-w-[var(--measure)]` so one token moves every column together. */
+  --measure: 1040px;
+  /* The reading measure for flowing text (paragraphs, lists, notes) — narrower than the column
+   * on purpose, so prose never runs to a fatiguing line length even when the column is wide. */
+  --prose: 720px;
 
   /* shiki syntax highlighting (dark) */
   --syn-key: #c4b5fd;
@@ -227,7 +231,8 @@
  * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
  * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
 :root[data-width='wide'] {
-  --measure: 1180px;
+  --measure: 1320px;
+  --prose: 760px;
 }
 
 /* ---------- tokens: radius + shadow ----------
@@ -460,6 +465,7 @@
 }
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
+  max-width: var(--prose);
   font-size: 1.05em;
   font-weight: 600;
 }
@@ -469,7 +475,12 @@
 .thread-markdown h2 {
   font-size: 1.15em;
 }
-.thread-markdown :is(p, ul, ol, table, blockquote) {
+/* Flowing text is capped at the reading measure; tables and code (below) keep the full column. */
+.thread-markdown :is(p, ul, ol, blockquote) {
+  margin: 0.45em 0;
+  max-width: var(--prose);
+}
+.thread-markdown table {
   margin: 0.45em 0;
 }
 .thread-markdown :is(ul, ol) {
