@@ -109,7 +109,7 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-4 backdrop-blur md:px-6"
+      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur md:px-6"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
@@ -243,6 +243,8 @@ function OpenInMenuForRun({
     <OpenInMenu
       choices={choices}
       onPick={(target) => open.mutate(target)}
+      // A real bordered button, not a ghost link, so the label never reads as clipped plain text.
+      triggerVariant="outline"
       title="Resume in a terminal, or open the worktree locally"
       leading={
         canResumeHere ? (

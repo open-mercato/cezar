@@ -508,7 +508,7 @@ function SidebarContent({
       </div>
 
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
-        <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
+        <Button asChild variant="primary" className="relative min-w-0 flex-1 justify-center">
           {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
               New task affordances stay inside the SPA. Full document loads of /new (the
               bookmarklet contract) land on the shell like any route (static-ui.ts) — the
@@ -521,7 +521,7 @@ function SidebarContent({
                 reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
             <kbd
               aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-contrast-foreground/60"
+              className="absolute right-2.5 rounded-[5px] border border-b-2 border-primary-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-primary-foreground/60"
             >
               C
             </kbd>
