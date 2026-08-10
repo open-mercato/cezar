@@ -303,6 +303,20 @@ function formatWakeInstant(at: Date): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'long' }).format(at);
 }
 
+/** Launch-time options that are not part of the task input itself (spec 2026-08-01-postponed-tasks). */
+export interface StartRunOptions {
+  /** One-time scheduled provenance to bake into the run record at creation. */
+  scheduledTask?: {
+    scheduledTaskId: string;
+    revision: number;
+    occurrenceId: string;
+    scheduledFor: string;
+    trigger: 'scheduled' | 'manual';
+  };
+  /** Enqueue the job but do not pump: the caller flushes the record, then calls `pumpQueue()`. */
+  defer?: boolean;
+}
+
 export interface StartRunInput {
   task: string;
   model?: string;
@@ -713,6 +727,7 @@ export class RunManager {
     workflow: WorkflowDef,
     input: StartRunInput,
     group?: { groupId: string; variant: string },
+    options?: StartRunOptions,
   ): RunRecord {
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
@@ -725,6 +740,11 @@ export class RunManager {
       task: input.task,
       model: effectiveInput.model,
       runner: input.runner,
+      // Scheduled provenance (spec 2026-08-01-postponed-tasks) is carried into the record at
+      // CREATION, never patched after `startRun` returns — a debounced `runs.json` and an
+      // immediate pump would otherwise leave a running agent whose occurrence id is not yet on
+      // disk, the exact crash window the durable-launch contract closes.
+      scheduledTask: options?.scheduledTask,
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
@@ -776,8 +796,17 @@ export class RunManager {
     void this.autoNameRun(run.id, skillHint, input.task);
     this.pendingJobs.set(run.id, { workflow, input: effectiveInput });
     this.queue.push(run.id);
-    void this.pump();
+    // A deferred launch (scheduled tasks) enqueues the job but does NOT make it pumpable yet: the
+    // caller flushes the record's provenance to disk first, then calls `pumpQueue()`. Every other
+    // caller pumps immediately, exactly as before.
+    if (!options?.defer) void this.pump();
     return run;
+  }
+
+  /** Make deferred jobs (see `startRun`'s `defer` option) pumpable. The scheduled launch adapter
+   *  calls this only after the run store's synchronous `flush()` has persisted the provenance. */
+  pumpQueue(): void {
+    void this.pump();
   }
 
   /**
@@ -787,13 +816,18 @@ export class RunManager {
    * template), so diversification works with any workflow. The normal queue
    * applies — with maxParallel=2 a third variant simply waits.
    */
-  startVariants(workflow: WorkflowDef, input: StartRunInput, count: number): RunRecord[] {
+  startVariants(
+    workflow: WorkflowDef,
+    input: StartRunInput,
+    count: number,
+    options?: StartRunOptions,
+  ): RunRecord[] {
     const groupId = randomUUID();
     return VARIANT_LETTERS.slice(0, Math.min(Math.max(count, 1), VARIANT_LETTERS.length)).map(
       (variant) => {
         const hint = VARIANT_HINTS[variant];
         const task = hint ? `${input.task}\n\n${hint}` : input.task;
-        return this.startRun(workflow, { ...input, task, worktree: undefined }, { groupId, variant });
+        return this.startRun(workflow, { ...input, task, worktree: undefined }, { groupId, variant }, options);
       },
     );
   }

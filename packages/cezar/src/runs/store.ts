@@ -145,6 +145,18 @@ export const runRecordSchema = z.object({
       githubUrl: z.string().url(),
     })
     .optional(),
+  /** Optional provenance for tasks launched by a one-time scheduled definition
+   *  (spec 2026-08-01-postponed-tasks). Set at CREATION and never patched later, so a restart's
+   *  reconciliation can match a durable run to the occurrence that reserved it. */
+  scheduledTask: z
+    .object({
+      scheduledTaskId: z.string(),
+      revision: z.number().int().nonnegative(),
+      occurrenceId: z.string(),
+      scheduledFor: z.string(),
+      trigger: z.enum(['scheduled', 'manual']),
+    })
+    .optional(),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
@@ -502,6 +514,9 @@ export class RunStore extends EventEmitter {
     worktree?: false;
     groupId?: string;
     variant?: string;
+    /** One-time scheduled provenance (spec 2026-08-01-postponed-tasks), carried in at creation so
+     *  a flushed record already names the occurrence that reserved it. */
+    scheduledTask?: RunRecord['scheduledTask'];
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
   }): RunRecord {
     const run: RunRecord = {
@@ -523,6 +538,7 @@ export class RunStore extends EventEmitter {
       worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,
+      scheduledTask: input.scheduledTask,
       status: 'queued',
       createdAt: new Date().toISOString(),
       tokensUsed: 0,
