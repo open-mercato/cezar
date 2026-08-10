@@ -561,7 +561,7 @@ function SidebarContent({
                     // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
                     // they relax to 44px — the one place the two framings legitimately differ.
                     'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
-                    isActive && 'bg-muted font-semibold text-foreground'
+                    isActive && 'bg-accent font-semibold text-foreground hover:bg-accent'
                   )}
                 >
                   <Icon className="size-4 shrink-0" aria-hidden="true" />

@@ -66,7 +66,8 @@ import { runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
-import { isHttpUrl } from '@/lib/utils'
+import { chipClass, chevron } from '@/components/picker-pill'
+import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
@@ -427,10 +428,11 @@ function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['r
           type="button"
           data-slot="agent-badge"
           aria-label={`Agent: ${runner}${account ? `, account ${account}` : ''}, model ${model}`}
-          className="flex items-center gap-1.5 rounded-sm text-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className={cn(chipClass, 'text-foreground')}
         >
           <RunnerIcon runner={runner} className="size-4 shrink-0" />
           {runner}
+          {chevron}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[9rem]">
@@ -479,14 +481,18 @@ export function RunMetaFooter({ run, pickers }: { run: ApiRun; pickers?: ReactNo
           <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
         </FooterStat>
       ) : null}
-      {/* When the run can be continued, the runner/model PICKERS (moved out of the composer) stand
-          in for the read-only Agent/Mode — they carry the same facts and let you change them. */}
+      {/* When the run can be continued, the runner/model PICKERS (moved out of the composer) go
+          here. Otherwise — a live session that can't switch backend — the same facts render as
+          read-only pills, so the row reads the same either way instead of flipping to a label list. */}
       {pickers ?? (
         <>
-          <FooterStat label="Agent">
-            <AgentStat run={run} runner={runner} />
-          </FooterStat>
-          <FooterStat label="Mode">{model}</FooterStat>
+          <AgentStat run={run} runner={runner} />
+          <span
+            aria-label={`Model ${model}`}
+            className={cn(chipClass, 'cursor-default hover:bg-card hover:text-muted-foreground')}
+          >
+            {model}
+          </span>
         </>
       )}
     </div>
