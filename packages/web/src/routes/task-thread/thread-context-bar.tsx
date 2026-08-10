@@ -8,10 +8,11 @@ import { PlanList, planCounts } from './plan-dock'
 import { StepRail, activeStepIndex, railBarTone, type RailBarTone } from './step-rail'
 
 /**
- * The run's workflow steps and the agent's plan, as two chips sitting BELOW the composer —
- * detached from it (a gap above), separated from each other (no overlap), and labelled by a
- * status-colored top edge rather than an icon. Each is collapsed to a label + count and expands
- * into a popover on click — an overlay that never pushes the thread. Renders nothing without either.
+ * The run's workflow steps and the agent's plan, as two chips that slide UNDER the composer's top
+ * edge — the input overlaps their lower half, so only the labelled top shows, like index tabs
+ * tucked behind a card. Separated from each other (no overlap), not fused to the input, and
+ * labelled by a status-colored top edge rather than an icon. Each expands into a popover on click —
+ * an overlay that never pushes the thread. Renders nothing without either.
  */
 export function ThreadContextBar({
   steps,
@@ -26,18 +27,22 @@ export function ThreadContextBar({
   const hasPlan = plan !== undefined && plan.length > 0
   if (!hasSteps && !hasPlan) return null
   return (
-    // pt-2 cuts them free of the input above; gap-2 keeps the two chips apart, not overlapping.
-    <div data-slot="thread-context-bar" className="flex justify-end gap-2 pr-1 pt-2">
+    // -mb-2 pulls the composer up over the chips' lower half so they read as tucked UNDER it.
+    // Kept STATIC (no relative/z): a positioned tab bar would paint ABOVE the static composer and
+    // defeat the tuck — as a plain later sibling the composer's opaque top wins. gap-2 keeps the
+    // two chips apart, not overlapping each other.
+    <div data-slot="thread-context-bar" className="-mb-2 flex justify-end gap-2 pr-2">
       {hasSteps ? <StepsChip steps={steps} /> : null}
       {hasPlan ? <PlanChip entries={plan} settled={settled} /> : null}
     </div>
   )
 }
 
-/** A standalone chip on the composer's own `bg-card`, fully rounded and bordered — the status
- *  color rides the top edge (see the accent maps below). */
+/** A chip rounded only at the top with an open bottom (border-b-0): its lower half slides behind
+ *  the composer's opaque top edge, so it reads as tucked under. The status color rides the top
+ *  edge (see the accent maps below); pb-2 is the slice that disappears under the input. */
 const TAB_CLASS =
-  'flex min-w-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 hover:bg-muted data-[state=open]:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
+  'flex min-w-0 items-center gap-1.5 rounded-t-lg border border-border border-b-0 bg-card px-2.5 pt-1 pb-2 hover:bg-muted data-[state=open]:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
 
 /** A status-colored top edge is what tells the two tabs apart at a glance: Verify carries the
  *  workflow's live tone (green done / amber running / danger failed), Plan carries the accent. */

@@ -411,6 +411,7 @@ export function ThreadView({
               overlapping tabs that expand upward on click. `settled` freezes the plan's live
               styling once the run stops (audit A2). */}
           <div className="flex min-w-0 flex-col">
+          <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
           <Composer
             onSubmit={
               continuable
@@ -447,7 +448,6 @@ export function ThreadView({
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
-          <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
           </div>
         </div>
       </div>
