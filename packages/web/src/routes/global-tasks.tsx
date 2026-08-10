@@ -107,10 +107,11 @@ const QUERY_DEBOUNCE_MS = 250
 
 /** How many reference chips a row paints before the rest collapse into a `+N`.
  *
- *  TWO, because that is what fits on ONE line — `#5121` beside `Issue #5119` is already ~160px,
- *  and the alternative (letting them wrap) is what made the column look broken. The common case
- *  is a task's own PR plus the issue it came from, which is exactly two. */
-const MAX_VISIBLE_REFERENCES = 2
+ *  ONE. Two fit on a line but cost ~90px of a column that Task wants more, and nothing is lost
+ *  by folding the rest: the `+N` opens on HOVER and lists every reference as a real link, so the
+ *  second one is a pointer-move away rather than a click. The strongest reference — the PR a task
+ *  created, else the one it is about, else its issue — is the one worth the row's own space. */
+const MAX_VISIBLE_REFERENCES = 1
 
 /** How long the `+N` list survives the pointer leaving it. The trigger and the list are separate
  *  elements with a gap between them, so closing instantly would make the list unreachable. */
@@ -633,18 +634,22 @@ function TaskTable({
       <TooltipProvider>
         <table className="w-full border-collapse">
           <thead>
+            {/* Every other column is pinned as narrow as its content allows, because Task is the
+                only one with NO width and therefore the only one that grows on what they give
+                up. A cross-project list is scanned by title; everything else is the answer to a
+                question you ask about a row you already found. */}
             <tr>
-              <Th className="w-[116px]">Status</Th>
+              <Th className="w-[104px]">Status</Th>
               <Th>Task</Th>
-              {showProject ? <Th className="w-[150px]">Project</Th> : null}
-              <Th className="hidden w-[160px] lg:table-cell">Tags</Th>
-              <Th className="w-[172px]">Ref</Th>
-              <Th className="hidden w-[124px] xl:table-cell">Workflow</Th>
-              {showCost ? <Th className="hidden w-[76px] text-right lg:table-cell">Cost</Th> : null}
-              <Th className="hidden w-[68px] text-right xl:table-cell">CPU</Th>
-              <Th className="hidden w-[92px] text-right xl:table-cell">Mem</Th>
-              <Th className="w-[82px] text-right">Age</Th>
-              <Th className="w-[76px] text-right">
+              {showProject ? <Th className="w-[124px]">Project</Th> : null}
+              <Th className="hidden w-[120px] xl:table-cell">Tags</Th>
+              <Th className="w-[84px]">Ref</Th>
+              <Th className="hidden w-[108px] xl:table-cell">Workflow</Th>
+              {showCost ? <Th className="hidden w-[64px] text-right lg:table-cell">Cost</Th> : null}
+              <Th className="hidden w-[56px] text-right xl:table-cell">CPU</Th>
+              <Th className="hidden w-[84px] text-right xl:table-cell">Mem</Th>
+              <Th className="w-[56px] text-right">Age</Th>
+              <Th className="w-[64px] text-right">
                 <span className="sr-only">Actions</span>
               </Th>
             </tr>
@@ -737,7 +742,7 @@ function TaskRow({
       </td>
       {/* The one column with no fixed width, so every pixel the others give up lands here — and
           dropping Branch gave up 140 of them. A cross-project list is read by TITLE. */}
-      <td className={cn(TD_BASE, 'min-w-[280px] max-w-0')}>
+      <td className={cn(TD_BASE, 'min-w-[320px] max-w-0')}>
         <span className="flex min-w-0 items-center gap-1.5">
           <Link
             to={to}
@@ -771,7 +776,7 @@ function TaskRow({
           </Link>
         </td>
       ) : null}
-      <td className={cn(TD_BASE, 'hidden lg:table-cell')}>
+      <td className={cn(TD_BASE, 'hidden xl:table-cell')}>
         {task.tags.length > 0 ? (
           <span className="flex flex-wrap items-center gap-1">
             {task.tags.map((tag) => (

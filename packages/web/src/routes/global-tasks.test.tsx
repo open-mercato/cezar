@@ -541,12 +541,12 @@ describe('global tasks page', () => {
     await screen.findByText('Add checkout endpoint')
 
     const row = document.querySelector('[data-slot="global-task-row"][data-run-id="a1"]')!
-    // Two fit on the row, strongest first; the third collapses into the named `+N` beside them.
+    // The row itself paints the STRONGEST one — the width belongs to the task title — and the
+    // rest are one hover away behind the `+N`.
     expect([...row.querySelectorAll('a[data-slot$="-chip"]')].map((chip) => chip.getAttribute('href'))).toEqual([
       'https://github.com/acme/api/pull/42',
-      'https://github.com/acme/api/pull/40',
     ])
-    expect(row.querySelector('[data-slot="reference-overflow"]')?.textContent).toBe('+1')
+    expect(row.querySelector('[data-slot="reference-overflow"]')?.textContent).toBe('+2')
   })
 
   it('collapses a pathological pile of references into a named +N', async () => {
@@ -566,9 +566,9 @@ describe('global tasks page', () => {
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    expect(document.querySelectorAll('a[data-slot$="-chip"]')).toHaveLength(2)
+    expect(document.querySelectorAll('a[data-slot$="-chip"]')).toHaveLength(1)
     const overflow = screen.getByRole('button', { name: /Show all 4 references/ })
-    expect(overflow.textContent).toBe('+2')
+    expect(overflow.textContent).toBe('+3')
 
     // Collapsed, never unreachable: opening it lists EVERY reference as a real link.
     fireEvent.click(overflow)
