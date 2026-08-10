@@ -1,5 +1,14 @@
 import type { RunnerId } from './agent-runner.ts';
-import { BACKEND_MODEL_MAP, KNOWN_PROVIDERS, parseModelIdentity } from './model-identity.ts';
+import { BACKEND_MODEL_MAP, parseModelIdentity } from './model-identity.ts';
+
+/**
+ * The vendor prefixes this module treats as evidence of a mis-paired model. Deliberately local
+ * rather than an export of `model-identity.ts` (#548/#831): nothing else may gate on it, because
+ * `resolveModelIdentity` lets an unknown provider through on purpose. It is a heuristic for
+ * {@link namesAnotherKnownProvider} alone, and being short is a feature — every entry costs a
+ * false refusal if cezar is ever wrong about who serves it.
+ */
+const KNOWN_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const;
 
 /**
  * The model-preset ids each runner's picker offers — the ids of the web composer's

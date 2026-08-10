@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
 
 /**
  * The Files tab (R5 Step 1.6) end-to-end against a LIVE dry run, same doctrine as
@@ -22,7 +22,6 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
-const repoRoot = resolve(import.meta.dirname, '../../..')
 const sessionId = `e2e-files-${process.pid}`
 
 // 1×1 transparent PNG — real bytes so the <img> decode is a real test.
@@ -93,7 +92,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     // CEZ_REVIEW_GATE=1 because this spec is ABOUT the gate: it is opt-in (#489, default OFF),
     // so pinning it here is what makes the parked-at-review fixture reproducible instead of
     // depending on whatever the operator happens to export.

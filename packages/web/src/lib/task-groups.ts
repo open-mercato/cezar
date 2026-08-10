@@ -117,6 +117,43 @@ export function runTitle(run: RunTitleInput): string {
 }
 
 /**
+ * The `NNN: ` reference prefix `postValidateTitle` writes onto every auto-named run
+ * (`packages/cezar/src/runs/auto-name.ts`), split off the display title — issue #788, option C.
+ *
+ * RENDER-ONLY. The stored `title`/`titleSummary` keep the prefix: it is what makes a run findable
+ * by number in search, in the Tasks table and in the page title, and `runs.json` field semantics
+ * are a protected surface. This only lets a surface that ALREADY paints the number elsewhere —
+ * the sidebar row, whose leading chip is the reference — stop spending five characters of a
+ * ~10-character title budget saying it twice.
+ *
+ * The shape is exactly what `postValidateTitle` produces (`^\d+: `) and nothing looser, so a title
+ * that merely contains a colon (`"fix: the login bug"`) or a number in prose is left alone. The
+ * caller decides whether the split is safe to use — see `refPrefixMatches`.
+ */
+export function splitRefPrefix(title: string): { ref: number | null; rest: string } {
+  const match = /^(\d{1,9}): (.+)$/.exec(title)
+  const digits = match?.[1]
+  const rest = match?.[2]
+  // Both groups are non-optional in the pattern, so this narrowing is only for the type system —
+  // but it is the narrowing rather than a cast, so a future edit to the pattern is caught here
+  // instead of producing an `undefined` that has been asserted to be a string.
+  if (digits === undefined || rest === undefined) return { ref: null, rest: title }
+  return { ref: Number(digits), rest }
+}
+
+/**
+ * May the row drop the title's `NNN: ` prefix in favour of its reference chip?
+ *
+ * Only when the two numbers are the SAME number. A task opened on issue `#788` whose PR later
+ * becomes `#790` shows `790` in its chip while its title still leads with `788: ` — two different
+ * facts, and hiding one of them would be a lie rather than a saving. An unrelated leading number
+ * (`"2026: the year in review"`) fails the same test, which is what keeps this from over-matching.
+ */
+export function refPrefixMatches(title: string, reference: number | undefined): boolean {
+  return reference !== undefined && splitRefPrefix(title).ref === reference
+}
+
+/**
  * A variant's shared title: `"Add autocomplete (A)"` → `"Add autocomplete"`.
  *
  * The suffix is the server's own convention (`startVariants` appends ` (A)`…` (C)`), so this

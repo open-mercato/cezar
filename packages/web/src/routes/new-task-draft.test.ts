@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   clearDraftText,
+  composerRunModeNote,
   readDraft,
   resetDraft,
   resolveComposerRunMode,
@@ -180,5 +181,41 @@ describe('the new-task draft store', () => {
       autonomous: null,
       generateFollowups: null,
     })
+  })
+})
+
+describe('composerRunModeNote (#793)', () => {
+  // One line per place the run can land. The header used to print the first one unconditionally,
+  // so the other two states read as an outright false promise of isolation.
+  const cases: Array<{ worktree: boolean; hasGit: boolean; expected: string }> = [
+    {
+      worktree: true,
+      hasGit: true,
+      expected: 'Runs in an isolated worktree — review everything before it lands.',
+    },
+    {
+      worktree: false,
+      hasGit: true,
+      expected: 'Runs in the repo working tree — your checkout is modified directly.',
+    },
+    {
+      worktree: false,
+      hasGit: false,
+      expected: 'Runs in place — no git repository detected, so there is no worktree to isolate in.',
+    },
+  ]
+
+  for (const { worktree, hasGit, expected } of cases) {
+    it(`worktree=${worktree}, hasGit=${hasGit}`, () => {
+      expect(composerRunModeNote({ worktree, hasGit })).toBe(expected)
+    })
+  }
+
+  it('never promises isolation without a worktree', () => {
+    // The invariant the header actually owes the user, independent of the exact copy: the word
+    // only appears when the run really gets one.
+    for (const hasGit of [true, false]) {
+      expect(composerRunModeNote({ worktree: false, hasGit })).not.toContain('isolated worktree')
+    }
   })
 })

@@ -2,12 +2,23 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   CheckCheckIcon,
+  ChevronsLeftIcon,
+  ChevronsRightIcon,
+  Clock3Icon,
+  CoinsIcon,
+  CpuIcon,
+  DollarSignIcon,
+  FileDiffIcon,
+  GitBranchIcon,
   ListChecksIcon,
+  LinkIcon,
+  MemoryStickIcon,
   PencilIcon,
   PlusIcon,
   ScaleIcon,
   SearchIcon,
   SearchXIcon,
+  WorkflowIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
@@ -26,9 +37,19 @@ import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
+import {
+  isColumnExpanded,
+  normalizeExpandedColumns,
+  taskColumnsForCapabilities,
+  type NormalizedExpandedColumns,
+  type TaskColumnDefinition,
+  type TaskColumnIcon,
+  type TaskColumnId,
+} from '@/lib/task-columns'
 import { listCounts, queuePositions, runTitle, sortRuns, type ListView } from '@/lib/task-groups'
 import {
   compareGroups,
@@ -42,6 +63,7 @@ import {
   type UsageCell,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
+import { useTaskTableColumns } from '@/lib/use-task-table-columns'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
@@ -67,6 +89,9 @@ export function TasksOverview({
   now = Date.now(),
   showTokens = true,
   showCost = true,
+  expandedColumns = normalizeExpandedColumns(undefined),
+  onToggleColumn = () => undefined,
+  columnsPending = false,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
@@ -84,6 +109,11 @@ export function TasksOverview({
   /** Presentation capability; defaults visible for older health responses and direct renders. */
   showTokens?: boolean
   showCost?: boolean
+  /** Workspace-global desktop column choices; absent ids use registry defaults. */
+  expandedColumns?: NormalizedExpandedColumns
+  onToggleColumn?: (id: TaskColumnId) => void
+  /** Prevent a shallow write before the authoritative workspace state can preserve siblings. */
+  columnsPending?: boolean
 }) {
   const [query, setQuery] = React.useState('')
   const all = runs ?? []
@@ -94,6 +124,7 @@ export function TasksOverview({
   const positions = queuePositions(all)
   const strips = compareGroups(filterRuns(all, query), view)
   const finished = finishedRunCount(all)
+  const columns = taskColumnsForCapabilities({ tokens: showTokens, cost: showCost })
   const unread = unreadDoneCount(all)
 
   return (
@@ -165,36 +196,49 @@ export function TasksOverview({
               data-slot="tasks-table"
               className="hidden overflow-x-auto rounded-lg border border-border bg-card shadow-xs md:block"
             >
-              <table className="w-full min-w-[1040px] border-collapse">
-                <thead>
-                  <tr>
-                    <Th>Status</Th>
-                    <Th>Task</Th>
-                    <Th>Workflow</Th>
-                    <Th>Branch</Th>
-                    <Th>±</Th>
-                    <Th>Ref</Th>
-                    {showTokens ? <Th right>IN / OUT</Th> : null}
-                    {showCost ? <Th right>Cost</Th> : null}
-                    <Th right>CPU</Th>
-                    <Th right>Mem</Th>
-                    <Th right>Started</Th>
-                  </tr>
-                </thead>
-                <tbody className="[&>tr:last-child>td]:border-b-0">
-                  {visible.map((run) => (
-                    <TableRow
-                      key={run.id}
-                      run={run}
-                      queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
-                      onRename={onRename}
-                      now={now}
-                      showTokens={showTokens}
-                      showCost={showCost}
-                    />
-                  ))}
-                </tbody>
-              </table>
+              <TooltipProvider>
+                <table className="w-full border-collapse">
+                  <colgroup>
+                    {columns.map((column) => {
+                      const expanded = isColumnExpanded(column.id, expandedColumns)
+                      return (
+                        <col
+                          key={column.id}
+                          data-column-id={column.id}
+                          data-expanded={expanded}
+                          style={{ width: expanded ? column.width : '42px' }}
+                        />
+                      )
+                    })}
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      {columns.map((column) => (
+                        <TaskColumnHeader
+                          key={column.id}
+                          column={column}
+                          expanded={isColumnExpanded(column.id, expandedColumns)}
+                          onToggle={onToggleColumn}
+                          disabled={columnsPending}
+                        />
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="[&>tr:last-child>td]:border-b-0">
+                    {visible.map((run) => (
+                      <TableRow
+                        key={run.id}
+                        run={run}
+                        queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
+                        onRename={onRename}
+                        now={now}
+                        columns={columns}
+                        expandedColumns={expandedColumns}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </TooltipProvider>
             </div>
 
             {/* <md: the same runs as stacked cards. */}
@@ -329,17 +373,112 @@ function OverviewTab({
   )
 }
 
-function Th({ children, right = false }: { children: React.ReactNode; right?: boolean }) {
+function Th({
+  children,
+  right = false,
+  columnId,
+  folded = false,
+}: {
+  children: React.ReactNode
+  right?: boolean
+  columnId: TaskColumnId
+  folded?: boolean
+}) {
   return (
     <th
+      scope="col"
+      data-column-id={columnId}
+      data-folded={folded || undefined}
       className={cn(
         'h-[38px] border-b border-border px-2.5 text-left text-[11px] font-semibold tracking-[0.05em] whitespace-nowrap text-soft-foreground uppercase first:pl-4 last:pr-4',
-        right && 'text-right'
+        right && 'text-right',
+        folded && 'px-0 first:pl-0 last:pr-0',
       )}
     >
       {children}
     </th>
   )
+}
+
+function TaskColumnHeader({
+  column,
+  expanded,
+  onToggle,
+  disabled,
+}: {
+  column: TaskColumnDefinition
+  expanded: boolean
+  onToggle: (id: TaskColumnId) => void
+  disabled: boolean
+}) {
+  if (!column.canFold) {
+    return (
+      <Th columnId={column.id} right={column.align === 'right'}>
+        {column.label}
+      </Th>
+    )
+  }
+
+  const action = expanded ? 'Fold' : 'Expand'
+  return (
+    <Th columnId={column.id} right={column.align === 'right'} folded={!expanded}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`${action} ${column.label} column`}
+            aria-pressed={expanded}
+            disabled={disabled}
+            onClick={() => onToggle(column.id)}
+            className={cn(
+              'inline-flex h-8 w-full items-center gap-1 rounded-sm px-0.5 text-inherit outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-60',
+              column.align === 'right' ? 'justify-end' : 'justify-start',
+              !expanded && 'justify-center px-0',
+            )}
+          >
+            {expanded ? (
+              <>
+                <span>{column.label}</span>
+                <ChevronsLeftIcon className="size-3 opacity-55" aria-hidden="true" />
+              </>
+            ) : (
+              <>
+                <TaskColumnIconView icon={column.icon} />
+                <ChevronsRightIcon className="size-3 opacity-70" aria-hidden="true" />
+              </>
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top">{column.label} · {action} column</TooltipContent>
+      </Tooltip>
+    </Th>
+  )
+}
+
+function TaskColumnIconView({ icon }: { icon?: TaskColumnIcon }) {
+  const className = 'size-3.5'
+  switch (icon) {
+    case 'workflow':
+      return <WorkflowIcon className={className} aria-hidden="true" />
+    case 'branch':
+      return <GitBranchIcon className={className} aria-hidden="true" />
+    case 'diff':
+      return <FileDiffIcon className={className} aria-hidden="true" />
+    case 'reference':
+      return <LinkIcon className={className} aria-hidden="true" />
+    case 'tokens':
+      return <CoinsIcon className={className} aria-hidden="true" />
+    case 'cost':
+      return <DollarSignIcon className={className} aria-hidden="true" />
+    case 'cpu':
+      return <CpuIcon className={className} aria-hidden="true" />
+    case 'memory':
+      return <MemoryStickIcon className={className} aria-hidden="true" />
+    case 'started':
+      return <Clock3Icon className={className} aria-hidden="true" />
+    default:
+      return null
+  }
 }
 
 const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4 last:pr-4'
@@ -357,15 +496,15 @@ function TableRow({
   queuePosition,
   onRename,
   now,
-  showTokens,
-  showCost,
+  columns,
+  expandedColumns,
 }: {
   run: RunRecord
   queuePosition: number | null
   onRename: (id: string, title: string) => void
   now: number
-  showTokens: boolean
-  showCost: boolean
+  columns: readonly TaskColumnDefinition[]
+  expandedColumns: NormalizedExpandedColumns
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -384,24 +523,118 @@ function TableRow({
       }}
       className="group/row cursor-pointer hover:bg-muted"
     >
-      <td className={TD_BASE}>
-        {/* A scheduled run wears its appointment in the pill, the way a queued one wears its
-            queue position — the row's whole answer to "what is this waiting for?". */}
-        <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
-          {attention.label}
-          {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
-        </Pill>
-      </td>
-      <td className={cn(TD_BASE, 'w-[34%] max-w-0')}>
-        <TitleCell run={run} to={to} onRename={onRename} />
-      </td>
-      <td className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>{workflowLabel(run)}</td>
-      <td className={TD_BASE}>{run.branch ? <BranchChip branch={run.branch} /> : <Dash />}</td>
-      {/* ± — refreshed on every turn-end (#389); still an honest dash on records that predate it. */}
-      <td className={TD_BASE}>{run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : <Dash />}</td>
-      <td className={TD_BASE}>{reference ? <ReferenceChip reference={reference} taskTitle={runTitle(run)} /> : <Dash />}</td>
-      {showTokens ? (
-        <td className={cn(TD_BASE, 'text-right text-xs text-muted-foreground')}>
+      {columns.map((column) => {
+        if (column.id === 'memory') return null
+        if (column.id === 'cpu') {
+          return queuePosition !== null ? (
+            <td
+              key={column.id}
+              data-slot="queue-note"
+              data-column-id="cpu-memory"
+              colSpan={2}
+              className={cn(TD_BASE, 'text-right font-mono text-[11.5px] text-soft-foreground')}
+            >
+              #{queuePosition} in queue
+            </td>
+          ) : (
+            <UsageTds
+              key={column.id}
+              run={run}
+              cpuExpanded={isColumnExpanded('cpu', expandedColumns)}
+              memoryExpanded={isColumnExpanded('memory', expandedColumns)}
+            />
+          )
+        }
+        return (
+          <TaskTableCell
+            key={column.id}
+            column={column}
+            expanded={isColumnExpanded(column.id, expandedColumns)}
+            run={run}
+            attention={attention}
+            scheduled={scheduled}
+            reference={reference}
+            cost={cost}
+            to={to}
+            onRename={onRename}
+            now={now}
+          />
+        )
+      })}
+    </tr>
+  )
+}
+
+function TaskTableCell({
+  column,
+  expanded,
+  run,
+  attention,
+  scheduled,
+  reference,
+  cost,
+  to,
+  onRename,
+  now,
+}: {
+  column: TaskColumnDefinition
+  expanded: boolean
+  run: RunRecord
+  attention: ReturnType<typeof deriveAttention>
+  scheduled: ReturnType<typeof scheduledResume>
+  reference: ReturnType<typeof taskReference>
+  cost: string
+  to: string
+  onRename: (id: string, title: string) => void
+  now: number
+}) {
+  if (!expanded) return <FoldedTd column={column.id} />
+
+  switch (column.id) {
+    case 'status':
+      return (
+        <td data-column-id={column.id} className={TD_BASE}>
+          {/* A scheduled run wears its appointment in the pill, the way a queued one wears its
+              queue position — the row's whole answer to "what is this waiting for?". */}
+          <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
+            {attention.label}
+            {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
+          </Pill>
+        </td>
+      )
+    case 'task':
+      return (
+        <td data-column-id={column.id} className={cn(TD_BASE, 'min-w-[220px] max-w-0')}>
+          <TitleCell run={run} to={to} onRename={onRename} />
+        </td>
+      )
+    case 'workflow':
+      return (
+        <td data-column-id={column.id} className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>
+          {workflowLabel(run)}
+        </td>
+      )
+    case 'branch':
+      return (
+        <td data-column-id={column.id} className={TD_BASE}>
+          {run.branch ? <BranchChip branch={run.branch} /> : <Dash />}
+        </td>
+      )
+    case 'diff':
+      return (
+        <td data-column-id={column.id} className={TD_BASE}>
+          {run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : <Dash />}
+        </td>
+      )
+    case 'reference':
+      return (
+        <td data-column-id={column.id} className={TD_BASE}>
+          {reference ? <ReferenceChip reference={reference} taskTitle={runTitle(run)} /> : <Dash />}
+        </td>
+      )
+    case 'tokens':
+      return (
+        <td data-column-id={column.id} className={cn(TD_BASE, 'text-right text-xs text-muted-foreground')}>
           <DirectionalUsage
             inputTokens={run.inputTokens}
             outputTokens={run.outputTokens}
@@ -409,27 +642,37 @@ function TableRow({
             omitWhenUnknown={false}
           />
         </td>
-      ) : null}
-      {showCost ? (
-        <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
+      )
+    case 'cost':
+      return (
+        <td
+          data-column-id={column.id}
+          className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}
+        >
           {cost || <Dash />}
         </td>
-      ) : null}
-      {queuePosition !== null ? (
-        <td
-          data-slot="queue-note"
-          colSpan={2}
-          className={cn(TD_BASE, 'text-right font-mono text-[11.5px] text-soft-foreground')}
-        >
-          #{queuePosition} in queue
+      )
+    case 'started':
+      return (
+        <td data-column-id={column.id} className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
+          {shortAge(run.startedAt ?? run.createdAt, now)}
         </td>
-      ) : (
-        <UsageTds run={run} />
-      )}
-      <td className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
-        {shortAge(run.startedAt ?? run.createdAt, now)}
-      </td>
-    </tr>
+      )
+    case 'cpu':
+    case 'memory':
+      return null
+  }
+}
+
+function FoldedTd({ column }: { column: TaskColumnId }) {
+  return (
+    <td
+      role="presentation"
+      aria-hidden="true"
+      data-column-id={column}
+      data-folded="true"
+      className={cn(TD_BASE, 'px-0 first:pl-0 last:pr-0')}
+    />
   )
 }
 
@@ -499,21 +742,30 @@ function TitleCell({
  * the REST snapshot goes stale between refetches; the stream ticks every ~2s). Selected per run,
  * so a tick that says nothing about this run re-renders nothing.
  */
-function UsageTds({ run }: { run: RunRecord }) {
+function UsageTds({
+  run,
+  cpuExpanded,
+  memoryExpanded,
+}: {
+  run: RunRecord
+  cpuExpanded: boolean
+  memoryExpanded: boolean
+}) {
   const sample = useRunUsage(run.id)
   const cells = usageCells(run, sample)
   return (
     <>
-      <UsageTd column="cpu" cell={cells.cpu} />
-      <UsageTd column="mem" cell={cells.mem} />
+      {cpuExpanded ? <UsageTd column="cpu" cell={cells.cpu} /> : <FoldedTd column="cpu" />}
+      {memoryExpanded ? <UsageTd column="memory" cell={cells.mem} /> : <FoldedTd column="memory" />}
     </>
   )
 }
 
-function UsageTd({ column, cell }: { column: 'cpu' | 'mem'; cell: UsageCell }) {
+function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }) {
   return (
     <td
-      data-usage={column}
+      data-usage={column === 'memory' ? 'mem' : column}
+      data-column-id={column}
       data-usage-kind={cell.kind}
       title={cell.title}
       className={cn(
@@ -688,6 +940,7 @@ export function TasksOverviewRoute() {
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
   const now = useNow(30_000)
+  const taskTableColumns = useTaskTableColumns()
 
   return (
     <TasksOverview
@@ -700,6 +953,9 @@ export function TasksOverviewRoute() {
       now={now}
       showTokens={metricVisibility.tokens}
       showCost={metricVisibility.cost}
+      expandedColumns={taskTableColumns.expandedColumns}
+      onToggleColumn={taskTableColumns.toggleColumn}
+      columnsPending={taskTableColumns.isPending}
     />
   )
 }

@@ -77,7 +77,18 @@ describe('RunManager agent-profile resolution', () => {
     const run = newRun();
     const { env, profileId } = await seam().agentEnvForStep(run.id, 'claude');
     expect(profileId).toBe('default');
-    expect(Object.keys(env).sort()).toEqual(['CEZ_HANDOFF_FILE', 'CEZ_TASK_ID', 'CEZ_TODOS_FILE']);
+    // The base run env only: the handoff contract (spec 007) plus the task-scoped
+    // temp directory (#785). No ACCOUNT variable, which is this test's subject.
+    expect(Object.keys(env).sort()).toEqual([
+      'CEZ_HANDOFF_FILE',
+      'CEZ_TASK_ID',
+      'CEZ_TODOS_FILE',
+      'TEMP',
+      'TMP',
+      'TMPDIR',
+    ]);
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(env.CODEX_HOME).toBeUndefined();
   });
 
   it('points the CLI at the project\'s account and reports the id to record', async () => {

@@ -73,6 +73,27 @@ export function resolveComposerRunMode(input: ComposerRunModeInput): {
   return { autonomous, worktree }
 }
 
+/**
+ * The `/new` header's one-line answer to "where will this run land?" (#793).
+ *
+ * Derived from the RESOLVED run mode, never assumed. The header used to print the isolation
+ * line unconditionally, so it was simply false whenever the Worktree chip was unchecked — or,
+ * as in #791, not rendered at all — and it is the first thing a user reads when trying to work
+ * out where their run went. Three states, because they send the user to three different places
+ * to find their changes.
+ *
+ * Takes the resolved `worktree` rather than the draft so it cannot disagree with the chip:
+ * `resolveComposerRunMode` already folds in the variants constraint, the explicit opt-out, the
+ * interactive-skill recommendation and the workspace default. `hasGit` only distinguishes
+ * "opted out" from "there is no repository here", which is the difference between a warning
+ * and an explanation.
+ */
+export function composerRunModeNote(input: { worktree: boolean; hasGit: boolean }): string {
+  if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
+  if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
+  return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
+}
+
 const EMPTY: NewTaskDraft = {
   text: '',
   source: null,

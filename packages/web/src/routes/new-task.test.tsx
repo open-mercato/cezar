@@ -64,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -356,6 +356,9 @@ describe('the hero surface', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
     expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
+    // unconditionally, so it also claimed isolation for runs that had opted out of it — the
+    // per-state cases live in "the run-mode note" below.
     await pillReady()
     // ⌘N drops you here to type — after the provider check enables the composer, the caret
     // must land in the box without the user clicking it.
@@ -469,6 +472,49 @@ describe('picker data flows', () => {
     expect(options.some((option) => option.textContent?.includes('claude-opus-4-8'))).toBe(false)
   })
 
+  describe('the run-mode note (#793)', () => {
+    const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
+
+    it('promises isolation only while the run will actually get a worktree', async () => {
+      serve()
+      renderNewTask()
+      await pillReady()
+      expect(note()).toBe('Runs in an isolated worktree — review everything before it lands.')
+
+      // Unchecking the chip changes where the work lands, so it has to change what the header
+      // says. This is the regression: the line was printed unconditionally, so it kept promising
+      // isolation for a run that was about to edit the user's checkout directly.
+      fireEvent.click(document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement)
+      await waitFor(() => expect(note())
+        .toBe('Runs in the repo working tree — your checkout is modified directly.'))
+    })
+
+    it('explains a non-git folder rather than warning about a checkout', async () => {
+      // There is no worktree to opt into here, so "your checkout is modified directly" would be
+      // the wrong half of the truth — the user needs to know WHY there is no isolation on offer.
+      serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
+      renderNewTask()
+      await pillReady()
+      expect(note())
+        .toBe('Runs in place — no git repository detected, so there is no worktree to isolate in.')
+    })
+
+    it('follows the workspace Worktree-off policy, not just an explicit click', async () => {
+      // The resolved mode, not the draft: a run can land in the checkout because policy said so,
+      // and the header has to be honest about that too.
+      serve({
+        workspaceConfig: {
+          ...WORKSPACE_CONFIG,
+          composerDefaults: { ...WORKSPACE_CONFIG.composerDefaults!, inheritedWorktree: false },
+        },
+      })
+      renderNewTask()
+      await pillReady()
+      await waitFor(() => expect(note())
+        .toBe('Runs in the repo working tree — your checkout is modified directly.'))
+    })
+  })
+
   it('gates variants on git: no repo → pill disabled with the honest reason, base pill gone', async () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
     renderNewTask()
@@ -477,6 +523,23 @@ describe('picker data flows', () => {
     expect(pill.disabled).toBe(true)
     expect(pill.title).toContain('need a git repository')
     expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
+  })
+
+  // #791: health is bound to the boot folder, so a cezar booted outside a git repo answered
+  // `repo: null` for EVERY project. Reading git state from the project-scoped `/repo` instead is
+  // what keeps the worktree controls alive for a git project under a non-git boot root.
+  it('gates variants on the project repo, not the boot folder: boot without git still offers worktrees', async () => {
+    serve({ health: HEALTH_NO_GIT, repo: REPO })
+    renderNewTask()
+    await pillReady()
+    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
+    expect(pill.disabled).toBe(false)
+    expect(document.querySelector('[data-slot="worktree-toggle"]')).not.toBeNull()
+    fireEvent.change(textarea(), { target: { value: 'Fix the composer git detection' } })
+    await startTask()
+    // `worktree` is sent only when explicitly OFF (new-task-form.ts): an absent key IS the
+    // isolated-worktree default, so absence — not `worktree: false` — is what the fix restores.
+    expect(postedBody()).not.toHaveProperty('worktree')
   })
 
   it('base branch pill shows config default (falling back to the checkout) and PUTs /api/v1/config', async () => {
@@ -1025,7 +1088,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')

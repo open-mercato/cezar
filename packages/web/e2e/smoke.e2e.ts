@@ -26,6 +26,7 @@ let baseUrl: string
 
 let forgeAvailable = false
 let followupsAvailable = false
+let automationsAvailable = false
 let bootProject: string
 
 /** A flat route target under the shared env's project prefix (multi-project spec, step 3.2):
@@ -37,21 +38,24 @@ beforeAll(async () => {
   browser = AgentBrowser.open(runId)
   const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
     forge: { available: boolean } | null
-    capabilities: { followups: boolean }
+    capabilities: { followups: boolean; automations: boolean }
   }
   forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
+  automationsAvailable = health.capabilities.automations
   bootProject = await bootProjectId(baseUrl)
 })
 
-/** The nav the shell renders — GitHub and Inbox both gate on live health capabilities, so the
- *  expectation must too. */
+/** The nav the shell renders — GitHub, Inbox and Automations all gate on live health
+ *  capabilities, so the expectation must too. Automations carries BOTH gates (#801): it needs a
+ *  forge to poll AND the operator's opt-in to exist at all. */
 function expectedNavLabels(): string[] {
   return [
     'Tasks',
     ...(followupsAvailable ? ['Inbox'] : []),
     'Git',
-    ...(forgeAvailable ? ['GitHub', 'Automations'] : []),
+    ...(forgeAvailable ? ['GitHub'] : []),
+    ...(forgeAvailable && automationsAvailable ? ['Automations'] : []),
     'Skills',
     'Workflows',
     'Settings',

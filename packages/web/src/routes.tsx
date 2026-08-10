@@ -9,9 +9,9 @@ import {
   useParams,
 } from 'react-router'
 
-import { useHealth, useProjects, useWorkspaceUiState } from './api/queries'
+import { useHealth, useProjects } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
-import { locationToRestore } from './lib/last-location'
+import { locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
@@ -31,6 +31,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
+import { GlobalTasksRoute } from './routes/global-tasks'
 import { AutomationsRoute } from './routes/automations/automations'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
@@ -219,15 +220,15 @@ function NewTaskProjectRoute() {
  * Legacy flat URLs — every pre-multi-project path, `/tasks/:id` bookmarks and the `/new?...`
  * bookmarklet grammar included — redirect to the boot project's scoped twin, preserving path,
  * query and hash byte-for-byte (BACKWARD_COMPATIBILITY.md protects the bookmarklet contract).
- * The exact bare root is the sole exception: once health, registry, and workspace UI state
- * settle, it may restore the last valid project-scoped page. Any query/hash makes `/` explicit,
- * so pasted links always win. `replace` keeps Back from bouncing off either startup redirect.
+ * The exact bare root is the sole exception: once health and the registry settle, it may restore
+ * the last valid project-scoped page THIS browser was on (localStorage, so a second client never
+ * decides where this one lands). Any query/hash makes `/` explicit, so pasted links always win.
+ * `replace` keeps Back from bouncing off either startup redirect.
  */
 function LegacyPathRedirect() {
   const location = useLocation()
   const health = useHealth()
   const projects = useProjects()
-  const uiState = useWorkspaceUiState()
   const resolvedBoot = health.data?.bootProject ?? projects.data?.bootProject
   const bootSourcesSettled =
     (health.data !== undefined || health.isError) &&
@@ -240,15 +241,12 @@ function LegacyPathRedirect() {
   const isBareRoot =
     location.pathname === '/' && location.search === '' && location.hash === ''
   if (isBareRoot) {
-    if (
-      (projects.data === undefined && !projects.isError) ||
-      (uiState.data === undefined && !uiState.isError)
-    ) {
-      return <ScopeResolving />
-    }
+    // The remembered location itself is local and synchronous; only the registry that validates
+    // its project is still worth waiting for.
+    if (projects.data === undefined && !projects.isError) return <ScopeResolving />
 
     const restored = locationToRestore(
-      uiState.data?.lastLocation,
+      readStoredLastLocation(),
       projects.data,
       resolvedBoot,
     )
@@ -273,6 +271,9 @@ export interface PageTitleContext {
 
 const PAGE_TITLE_ROUTES = [
   { pattern: '/', pageLabel: 'Tasks' },
+  // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
+  // but it goes through the same table, because the browser title is one mechanism.
+  { pattern: '/tasks', pageLabel: 'All tasks' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
@@ -510,6 +511,16 @@ export function AppRoutes() {
 
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
+
+      {/* The global Tasks page — the second cockpit area outside `/p/:projectId`, and outside it
+          for the same reason global settings are: "every project's tasks" scoped to one project
+          is a contradiction. Its data is the workspace-level run index, which is never
+          scope-prefixed.
+
+          EXACTLY `/tasks`, never `/tasks/*`: `/tasks/:id` is a legacy flat task link and must
+          keep redirecting to the boot project's thread (`LegacyPathRedirect` below owns it).
+          React Router ranks this static segment above that `*`, so the two never compete. */}
+      <Route path="/tasks" element={<GlobalTasksRoute />} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
           under `/p/:projectId`, because nothing here belongs to a project: appearance and

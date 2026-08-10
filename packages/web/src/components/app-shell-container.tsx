@@ -60,6 +60,9 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // The global inbox is opt-in (#471). With the capability off there is no Inbox nav item to
   // badge and the endpoint can only answer [], so the query parks rather than polls.
   const inboxAvailable = health.data?.capabilities.followups === true
+  // GitHub automations are opt-in too (#801) — same honesty rule: without the server's word for
+  // it the nav must not offer a tab whose every request would 409.
+  const automationsAvailable = health.data?.capabilities.automations === true
   const todos = useTodos(inboxAvailable)
   // One query in the shell feeds every rendering of the active project's navigation (desktop,
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
@@ -127,6 +130,8 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
         // the nav must not offer an Inbox this server will never fill.
         inboxAvailable={inboxAvailable}
+        // Hidden unless health reports the opt-in automations capability (#801).
+        automationsAvailable={automationsAvailable}
         banner={<ProviderBannerContainer />}
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={<TaskQuickListContainer />}
@@ -141,6 +146,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
               // `forge` field (#698) — the boot folder's health-level answer says nothing
               // about the other projects in the workspace.
               inboxAvailable={inboxAvailable}
+              automationsAvailable={automationsAvailable}
               inboxCount={todos.data?.length ?? null}
               skillsUpdateAvailable={skillsUpdateAvailable}
             />

@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `vi.hoisted` so `spawnMock` is initialized before the (hoisted) vi.mock factory runs — the
 // factory sets its default implementation, so a bare `const` would be read before init.
@@ -16,6 +16,19 @@ vi.mock('node:child_process', async (importOriginal) => {
     (actual.spawn as (...a: unknown[]) => unknown)(...args),
   );
   return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+});
+
+// This file is the one place allowed past the #820 spawn guard, and both reasons are visible
+// above: `spawn` is replaced file-wide, and where it does fall through to the real one it launches
+// a stub binary this test wrote onto its own temp PATH — never a GUI app. Scoped to the file and
+// restored afterwards, so no other suite inherits the exemption.
+const savedAllowSpawn = process.env.CEZ_ALLOW_TEST_SPAWN;
+beforeAll(() => {
+  process.env.CEZ_ALLOW_TEST_SPAWN = '1';
+});
+afterAll(() => {
+  if (savedAllowSpawn === undefined) delete process.env.CEZ_ALLOW_TEST_SPAWN;
+  else process.env.CEZ_ALLOW_TEST_SPAWN = savedAllowSpawn;
 });
 
 import {

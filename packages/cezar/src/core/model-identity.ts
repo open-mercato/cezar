@@ -46,12 +46,13 @@ export class ModelIdentityError extends Error {
 }
 
 /**
- * Providers cezar names today. Informational and extensible — an unknown
- * provider in an explicit `provider/model` string still passes through, so
- * future models and new backends are never silently rejected.
+ * No provider allowlist lives here on purpose (#548). `resolveModelIdentity`
+ * lets an unknown provider in an explicit `provider/model` string pass through,
+ * so future models and new backends are never silently rejected — an exported
+ * roster of "providers cezar names today" would gate nothing, and an unused
+ * public export reads as a contract someone must keep current. The per-backend
+ * knowledge that IS load-bearing lives in `BACKEND_MODEL_MAP` below.
  */
-export const KNOWN_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const;
-export type KnownProvider = (typeof KNOWN_PROVIDERS)[number];
 
 interface BackendModelMap {
   /**

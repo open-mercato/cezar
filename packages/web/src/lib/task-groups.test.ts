@@ -8,8 +8,10 @@ import {
   groupTitle,
   listCounts,
   queuePositions,
+  refPrefixMatches,
   runTitle,
   sortRuns,
+  splitRefPrefix,
   type QuickListBucket,
 } from '@/lib/task-groups'
 
@@ -216,6 +218,41 @@ describe('queuePositions', () => {
     ]
     // The archived one is not in the engine's queue, so it must not push the real one to #2.
     expect(queuePositions(runs)).toEqual(new Map([['queued', 1]]))
+  })
+})
+
+describe('splitRefPrefix', () => {
+  it.each([
+    // Exactly what `postValidateTitle` writes.
+    ['775: implementing comment threads', 775, 'implementing comment threads'],
+    ['1: a', 1, 'a'],
+    ['123456789: nine digits still parse', 123_456_789, 'nine digits still parse'],
+    // Not the shape: no space, no digits, nothing after the colon, or a colon that is prose.
+    ['775:implementing comment threads', null, '775:implementing comment threads'],
+    ['fix: the login bug', null, 'fix: the login bug'],
+    ['775: ', null, '775: '],
+    ['775', null, '775'],
+    ['#775: hash-prefixed is not our shape', null, '#775: hash-prefixed is not our shape'],
+    [' 775: leading space is not our shape', null, ' 775: leading space is not our shape'],
+    ['1234567890: ten digits is not a tracker number', null, '1234567890: ten digits is not a tracker number'],
+    // A second `NNN: ` inside the rest is left alone — only the leading one is the prefix.
+    ['775: 776: nested', 775, '776: nested'],
+  ])('%s → %s / %s', (title, ref, rest) => {
+    expect(splitRefPrefix(title)).toEqual({ ref, rest })
+  })
+})
+
+describe('refPrefixMatches', () => {
+  it('agrees only when the prefix IS the reference the chip will show', () => {
+    expect(refPrefixMatches('775: implementing comment threads', 775)).toBe(true)
+    // Opened on issue #788, shipped as PR #790 — two numbers, two facts. Neither may be hidden.
+    expect(refPrefixMatches('788: implementing comment threads', 790)).toBe(false)
+    // A title that legitimately begins with a number is never mistaken for a reference.
+    expect(refPrefixMatches('2026: the year in review', 2026)).toBe(true)
+    expect(refPrefixMatches('2026: the year in review', 790)).toBe(false)
+    // Nothing to match against, or nothing to strip.
+    expect(refPrefixMatches('775: implementing comment threads', undefined)).toBe(false)
+    expect(refPrefixMatches('implementing comment threads', 775)).toBe(false)
   })
 })
 

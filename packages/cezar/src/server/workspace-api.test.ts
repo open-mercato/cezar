@@ -102,7 +102,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 2,
         maxMonitoringSessions: 2,
-        monitoringWakeIntervalMinutes: null,
+        monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
@@ -174,13 +174,28 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.memoryLimitMb()).toBe(2048);
   });
 
+  /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
+   *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
+   *  it to 5 would silently overrule an operator who chose "Park until resumed". */
+  it('PUT null parks monitoring and is never re-defaulted back to the shipped cadence', async () => {
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBe(5); // the zero-config default
+    const res = await putConfig({ resources: { monitoringWakeIntervalMinutes: null } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.monitoringWakeIntervalMinutes).toBeNull();
+    expect(
+      ((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.monitoringWakeIntervalMinutes,
+    ).toBeNull();
+    expect((rawConfig().resources as Record<string, unknown>).monitoringWakeIntervalMinutes).toBeNull();
+    expect(semaphore.monitoringWakeIntervalMinutes()).toBeNull();
+  });
+
   it('partial updates leave the other keys untouched', async () => {
     await putConfig({ resources: { maxParallel: 5 } });
     await putConfig({ resources: { worktreeRetentionDefault: 3 } });
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
       maxMonitoringSessions: 2,
-      monitoringWakeIntervalMinutes: null,
+      monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
@@ -360,6 +375,44 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
     expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
+  });
+
+  it('round-trips task-table choices and preserves unknown nested siblings', async () => {
+    const res = await putUiState({
+      taskTable: {
+        expandedColumns: { branch: false, workflow: true, futureColumn: false },
+        futurePreference: { compact: true },
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      taskTable: {
+        expandedColumns: { branch: false, workflow: true, futureColumn: false },
+        futurePreference: { compact: true },
+      },
+    });
+    expect(rawUiState()).toEqual({
+      taskTable: {
+        expandedColumns: { branch: false, workflow: true, futureColumn: false },
+        futurePreference: { compact: true },
+      },
+    });
+  });
+
+  it.each([
+    ['a non-boolean value', { branch: 'yes' }],
+    ['an empty id', { '': true }],
+    ['an overlong id', { ['x'.repeat(65)]: true }],
+    [
+      'more than 50 entries',
+      Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`column-${index}`, true])),
+    ],
+  ])('rejects task-table expanded columns with %s without writing state', async (_case, expandedColumns) => {
+    const res = await putUiState({ taskTable: { expandedColumns } });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toHaveProperty('error');
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
   });
 
   it('round-trips a bounded last project location including query and hash', async () => {

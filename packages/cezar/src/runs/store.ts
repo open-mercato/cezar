@@ -111,7 +111,11 @@ export const runRecordSchema = z.object({
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
    *  records carry only `model`, and it stays the human/hand-edit surface; this
-   *  is the parseable identity cost attribution and reproducible replay key off. */
+   *  is the parseable identity cost attribution and reproducible replay key off.
+   *
+   *  Read in production by the session header's agent badge (#546), which shows it
+   *  whenever it says something `model` does not — so this is no longer a
+   *  write-only field whose next reader has to guess whether it is load-bearing. */
   modelIdentity: z.string().optional(),
   /** Agent backend this run used — drives "open in CLI" resume command. */
   runner: z.enum(['claude', 'codex', 'opencode']).optional(),
@@ -238,7 +242,8 @@ export const runRecordSchema = z.object({
   /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
    *  run's thread. A finished run reads as "unread" until it has been seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
-   *  runs and on every run not yet opened, which the unread rule treats as unread. */
+   *  runs, on every run not yet opened, and on one `setUnread` put back to unread
+   *  (#775) — the unread rule treats all three alike. */
   seenAt: z.string().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
@@ -681,6 +686,27 @@ export class RunStore extends EventEmitter {
     const run = this.runs.get(id);
     if (!run) return undefined;
     run.seenAt = new Date().toISOString();
+    this.touch(run);
+    return run;
+  }
+
+  /** Mark one run as UNread (#775): drop the read receipt so the run rejoins the unread
+   *  list. The inverse of `setRead` and, like it, `touch`es so the updated record rides the
+   *  existing `run` SSE.
+   *
+   *  Deleting the field rather than adding a "manually unread" flag is the whole point:
+   *  absent `seenAt` is ALREADY what every reader treats as unread (`isUnread` in the
+   *  cockpit's read-state.ts, and `markAllRead`'s clause-for-clause copy of it below), so
+   *  clearing needs no new state and writes a shape any older cezar already parses.
+   *
+   *  Deliberately unconditional: clearing a receipt is always a legal write, so this
+   *  succeeds for an already-unread run (idempotent) and for statuses that can never wear
+   *  the marker. WHETHER the action means anything for a given run is UI policy, and lives
+   *  in the cockpit's `runActionFlags` — the same split the rest of the store keeps. */
+  setUnread(id: string): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    delete run.seenAt;
     this.touch(run);
     return run;
   }
