@@ -26,6 +26,7 @@ interface HealthBody {
     localHandoff: boolean;
     followups: boolean;
     singleProject: boolean;
+    scheduledTasks: boolean;
     automations: boolean;
     tokenMetrics: boolean;
     tokenUsageMetrics: boolean;
@@ -107,6 +108,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: false,
       singleProject: false,
+      scheduledTasks: true,
       automations: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -156,6 +158,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: false,
       followups: false,
       singleProject: false,
+      scheduledTasks: true,
       automations: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -184,6 +187,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: false,
       followups: false,
       singleProject: false,
+      scheduledTasks: true,
       automations: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -197,6 +201,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: false,
       singleProject: false,
+      scheduledTasks: true,
       automations: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -215,6 +220,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: true,
       singleProject: false,
+      scheduledTasks: true,
       automations: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -234,6 +240,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: false,
       singleProject: false,
+      scheduledTasks: true,
       automations: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -247,6 +254,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: false,
       singleProject: false,
+      scheduledTasks: true,
       automations: false,
       tokenMetrics: false,
       tokenUsageMetrics: false,

@@ -681,6 +681,13 @@ function ensureDataGitignore(repoRoot: string): void {
     'automation-log.ndjson',
     'automation-log.ndjson.tmp',
     'automation-poll.lock',
+    'scheduled-tasks.json',
+    'scheduled-tasks.json.tmp',
+    'scheduled-task-state.json',
+    'scheduled-task-state.json.tmp',
+    'scheduled-task-occurrences.ndjson',
+    'scheduled-task-occurrences.ndjson.tmp',
+    'scheduled-task.lock',
   ];
   try {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });

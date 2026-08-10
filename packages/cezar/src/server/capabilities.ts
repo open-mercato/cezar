@@ -149,6 +149,10 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS === '1',
+    // One-time scheduled tasks (spec 2026-08-01-postponed-tasks) add no `CEZ_*` opt-in: the
+    // feature is always on. It is still reported as a capability so the `Scheduled` nav item is
+    // gated additively like every other tab and a rollback can hide it in one place.
+    scheduledTasks: true,
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

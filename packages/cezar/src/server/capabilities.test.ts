@@ -160,10 +160,18 @@ describe('resolveCapabilities — followups (#471)', () => {
       followups: true,
       singleProject: false,
       automations: false,
+      scheduledTasks: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('resolveCapabilities — scheduledTasks (spec 2026-08-01-postponed-tasks)', () => {
+  it('is always on — one-time scheduled tasks add no CEZ_* opt-in', () => {
+    expect(resolveCapabilities({}).scheduledTasks).toBe(true);
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }, '0.0.0.0').scheduledTasks).toBe(true);
   });
 });
 
