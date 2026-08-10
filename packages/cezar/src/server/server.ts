@@ -35,10 +35,11 @@ import {
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
-import { openProjectInSchema } from '@open-mercato/cezar-contract';
+import { modelDiscoveryRunnerSchema, openProjectInSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
+import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import {
   PROVIDER_IDS,
@@ -1016,7 +1017,10 @@ export function createApp(deps: ServerDeps) {
   const bootRoot = deps.repoRoot;
   const bootDataDir = join(bootRoot, '.ai/cezar');
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
-    adapters: { codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) } },
+    adapters: {
+      claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
+      codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
+    },
   });
   const providerAuth = deps.providerAuth ?? new ProviderAuthService();
   const workspaceConfig = deps.workspaceConfig ?? {
@@ -1603,7 +1607,7 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(z.literal('codex')) }), { message: 'runner must be codex' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude or codex' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });

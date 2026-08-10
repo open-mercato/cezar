@@ -217,6 +217,7 @@ function stubFetch(
         return jsonResponse(PROVIDERS_CONNECTED)
       }
       if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/v1/runs') {
         return jsonResponse({
           id: 'run-1',
@@ -1119,8 +1120,14 @@ const SINGLE_BACKEND = () => jsonResponse(health(['claude']))
 /** Open a pill's dropdown and choose an option by label (Radix opens on pointerDown). */
 async function pickPill(slot: string, label: string) {
   fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`)!)
-  const options = await screen.findAllByRole('menuitemradio')
-  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  // The model catalog is fetched for the runner actually selected (#784), so an option can land
+  // a tick after the menu opens — poll for it rather than reading the first render.
+  const option = await waitFor(() => {
+    const match = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
+    if (!match) throw new Error(`no menu option matching ${label}`)
+    return match
+  })
+  fireEvent.click(option)
 }
 
 const postedRun = (sent: readonly SentRequest[]) =>

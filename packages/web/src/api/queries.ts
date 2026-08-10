@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
@@ -72,12 +72,16 @@ import {
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { githubRepoBase } from '@/lib/tasks-table'
+import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@/routes/new-task-form'
 import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
   CreateAgentProfileInput,
   HealthResponse,
   MessageInput,
+  ModelDiscoveryRunner,
+  Runner,
+  RunnerModelCatalogResponse,
   PatchRunInput,
   ProviderId,
   OpenAgentAccountFileInput,
@@ -225,15 +229,46 @@ export const workspaceQueryKeys = {
     [...workspaceQueryKeys.fsBrowseRoot, path, showHidden] as const,
 }
 
-/** `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue —
- *  hooks cannot be called conditionally) skip the fetch when it definitely won't. */
-export function useRunnerModels(enabled = true) {
+/**
+ * One runner's host catalog, cached per runner so switching the engine pill re-reads that
+ * backend's models instead of re-showing another backend's.
+ *
+ * `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue —
+ * hooks cannot be called conditionally) skip the fetch when it definitely won't. A runner with
+ * no discovery path never fetches at all: the route would 400, and its presets are the answer.
+ */
+export function useRunnerModels(runner: Runner, enabled = true) {
   return useQuery({
-    queryKey: workspaceQueryKeys.models('codex'),
-    queryFn: ({ signal }) => getRunnerModels({ signal }),
+    queryKey: workspaceQueryKeys.models(runner),
+    queryFn: ({ signal }) => getRunnerModels(runner as ModelDiscoveryRunner, { signal }),
     staleTime: 5 * 60 * 1_000,
-    enabled,
+    enabled: enabled && runnerDiscoversModels(runner),
   })
+}
+
+export interface RunnerModelCatalogs {
+  data: Partial<Record<Runner, RunnerModelCatalogResponse>>
+  isError: Partial<Record<Runner, boolean>>
+}
+
+/** Every runner's catalog at once, for the two Settings screens that render a row per runner.
+ *  Shares `useRunnerModels`' cache entries, so a screen that already fetched one pays nothing. */
+export function useRunnerModelCatalogs(): RunnerModelCatalogs {
+  const results = useQueries({
+    queries: MODEL_DISCOVERY_RUNNERS.map((runner) => ({
+      queryKey: workspaceQueryKeys.models(runner),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getRunnerModels(runner as ModelDiscoveryRunner, { signal }),
+      staleTime: 5 * 60 * 1_000,
+    })),
+  })
+  const data: Partial<Record<Runner, RunnerModelCatalogResponse>> = {}
+  const isError: Partial<Record<Runner, boolean>> = {}
+  MODEL_DISCOVERY_RUNNERS.forEach((runner, index) => {
+    data[runner] = results[index]?.data
+    isError[runner] = results[index]?.isError ?? false
+  })
+  return { data, isError }
 }
 
 export function useProviderStatus() {

@@ -11,15 +11,10 @@ import type { RunnerId } from './agent-runner.ts';
  * can produce (#401 review). Unknown ids never conflict (fail-open).
  */
 export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
-  claude: [
-    'opus',
-    'sonnet',
-    'haiku',
-    'claude-fable-5',
-    'claude-opus-4-8',
-    'claude-sonnet-5',
-    'claude-haiku-4-5',
-  ],
+  // Tier aliases only. The dated ids that used to sit here (`claude-opus-4-8` and friends) came
+  // off the picker when Claude gained host discovery (#784) — a guard that names a specific
+  // vendor release goes stale the same way the picker did, and this list mirrors the picker.
+  claude: ['opus', 'sonnet', 'haiku'],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex'],
   opencode: [
     'anthropic/claude-opus-4-8',
@@ -29,12 +24,30 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   ],
 };
 
-/** True when `model` is recognizably a preset of a runner OTHER than `runner` (and not also
- *  one of `runner`'s own presets). `''`/unknown/custom ids never conflict. */
+/**
+ * Bare id shapes that name a backend's OWN vendor — mirrored from the web's
+ * `NATIVE_MODEL_ID_PREFIX`. Structural rather than dated so the guard survives the preset lists
+ * dropping vendor releases (#784): every `claude-*` id is Anthropic's, including the ones that do
+ * not exist yet. A gateway id names its provider explicitly (`anthropic/claude-…`) and is left
+ * alone — some backends legitimately accept one.
+ */
+const NATIVE_MODEL_ID_PREFIX: Partial<Record<RunnerId, RegExp>> = {
+  claude: /^claude[-.]/,
+  codex: /^gpt[-.]/,
+};
+
+/** True when `model` is recognizably another runner's — its preset, or its vendor's bare id shape
+ *  — and not also one of `runner`'s own. `''`/unknown/custom ids never conflict. */
 export function modelConflictsWithRunner(model: string, runner: RunnerId): boolean {
   if (!model) return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return false;
-  return Object.entries(KNOWN_PRESETS_BY_RUNNER).some(
-    ([other, presets]) => other !== runner && presets.includes(model),
+  if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false;
+  return (
+    Object.entries(KNOWN_PRESETS_BY_RUNNER).some(
+      ([other, presets]) => other !== runner && presets.includes(model),
+    ) ||
+    Object.entries(NATIVE_MODEL_ID_PREFIX).some(
+      ([other, prefix]) => other !== runner && prefix.test(model),
+    )
   );
 }

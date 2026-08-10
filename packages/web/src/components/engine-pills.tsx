@@ -52,12 +52,14 @@ export interface ResolvedEngine {
 export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   const providers = useProviderStatus()
   const config = useConfig()
-  const catalog = useRunnerModels()
   const runners = usableRunners(providers.data)
   // `/api/health` is deliberately boot-project-only. Runner policy is per project, so every
   // scoped start surface must read the active project's `/api/config` instead (#699).
   const defaultRunner = config.data?.defaultRunner
   const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
+  // Fetched AFTER the runner is resolved — each backend has its own catalog, so asking before
+  // we know which one is selected would answer for the wrong CLI.
+  const catalog = useRunnerModels(runner)
   const modelsLocked = config.data?.modelsLocked === true
   return {
     runner,
@@ -107,7 +109,7 @@ export function EnginePills({
 }) {
   const { runner, model, runners, canRun, modelsLocked } = useResolvedEngine(pick)
   const config = useConfig()
-  const catalog = useRunnerModels()
+  const catalog = useRunnerModels(runner)
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
   const unavailable = disabled || !canRun
 

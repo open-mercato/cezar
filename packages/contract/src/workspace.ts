@@ -459,8 +459,17 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=codex` — discovered models, plus how fresh the answer is. Never an
- *  error: an unavailable CLI degrades to `source: 'unavailable'` with a `reason`. */
+/**
+ * The runners `GET /api/v1/models` will answer for: the ones with a host-local catalog cezar can
+ * interrogate — Codex through the app-server's `model/list`, Claude through the CLI's
+ * `list_models` control request. A runner absent here has no discovery path and 400s, so the
+ * client compiles against exactly what the route accepts.
+ */
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex']);
+export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
+
+/** `GET /api/v1/models?runner=claude|codex` — discovered models, plus how fresh the answer is.
+ *  Never an error: an unavailable CLI degrades to `source: 'unavailable'` with a `reason`. */
 export const runnerModelCatalogResponseSchema = z.object({
   runner: runnerSchema,
   models: z.array(runnerModelOptionSchema),

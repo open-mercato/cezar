@@ -117,12 +117,21 @@ class FakeHealthSocket {
 }
 
 describe('useRunnerModels', () => {
-  it('loads the workspace Codex catalog', async () => {
-    fetchMock.mockResolvedValue(json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false }))
-    const { result } = renderHook(() => useRunnerModels(), { wrapper: wrapper() })
+  it.each([
+    ['codex', 'gpt-future'],
+    ['claude', 'opus[1m]'],
+  ] as const)('loads the workspace %s catalog', async (runner, id) => {
+    fetchMock.mockResolvedValue(json({ runner, models: [{ id, label: 'Future', description: '' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels(runner), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.models[0]?.id).toBe('gpt-future')
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=codex')
+    expect(result.current.data?.models[0]?.id).toBe(id)
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(`/api/v1/models?runner=${runner}`)
+  })
+
+  it('never fetches for a runner with no host catalog', async () => {
+    const { result } = renderHook(() => useRunnerModels('opencode'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

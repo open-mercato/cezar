@@ -9,6 +9,15 @@ cezar currently renders a hard-coded Codex model list that has drifted far behin
 | # | Question | Applied default | Why | Confirm? |
 |---|----------|-----------------|-----|----------|
 | Q1 | Should this spec make all runners dynamically discover models? | Limit live discovery to Codex; keep Claude and OpenCode on their current presets. | The reported defect and an authoritative local protocol exist for Codex; widening the feature would couple unrelated provider contracts and delay the smallest complete fix. | ok |
+
+> **Q1's Claude half was lifted by #784.** Claude's presets drifted exactly as predicted (they
+> still advertised Opus 4.8), and the Claude Code CLI turned out to expose an authoritative
+> host-local catalog of its own — a `list_models` control request over the same stream-json
+> channel the runner already speaks. `src/core/claude-model-catalog.ts` is the Claude adapter
+> behind the same `RunnerModelCatalog`, and `GET /api/v1/models` now accepts `runner=claude`.
+> One deviation from the Codex design below: Claude's static presets are kept as an explicit
+> FALLBACK rather than emptied to `auto`, because its tier aliases (`opus`, `sonnet`, `haiku`)
+> are resolved by the CLI and therefore cannot go stale. Only the dated ids were removed.
 | Q2 | Should cezar persist a model catalog in user-authored configuration? | No. Keep only a short-lived in-memory last-known-good cache and discover again automatically. | Catalogs are host/account/version dependent; requiring persisted state violates cezar's zero-config rule and creates migration burden. | ok |
 | Q3 | Should hidden or legacy Codex models appear in the default picker? | No. Request the normal visible catalog and preserve arbitrary configured model IDs as a clearly marked custom option. | This matches Codex CLI's normal picker while retaining backward compatibility for users who deliberately pin a legacy/custom ID. | ok |
 

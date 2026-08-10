@@ -214,7 +214,8 @@ export function NewTaskRoute() {
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
-  const catalog = useRunnerModels()
+  // Keyed by the runner actually shown, so switching the engine pill re-reads that CLI's models.
+  const catalog = useRunnerModels(displayRunner)
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []

@@ -274,7 +274,10 @@ function serve(overrides: {
           ? data.providerStatus()
           : json(data.providerStatus, data.providerStatusStatus)
       }
+      // One catalog per discovering runner — the composer reads the selected runner's, so a
+      // single shared answer would let a codex-only fixture stand in for claude's picker.
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/skills') return json(data.skills)
       if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
       if (url === '/api/v1/workflows' && method === 'POST') {
@@ -412,9 +415,12 @@ describe('picker data flows', () => {
     // …the model reset to auto and the presets are codex's now.
     expect((document.querySelector('[data-slot="model-pill"]') as HTMLElement).textContent).toContain('auto')
     fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    options = await screen.findAllByRole('menuitemradio')
-    const labels = options.map((o) => o.textContent ?? '')
-    expect(labels.some((l) => l.includes('gpt-future'))).toBe(true)
+    // The catalog fetch FOLLOWS the runner pick now, so codex's models land a tick later.
+    await waitFor(() => {
+      const labels = screen.getAllByRole('menuitemradio').map((o) => o.textContent ?? '')
+      expect(labels.some((l) => l.includes('gpt-future'))).toBe(true)
+    })
+    const labels = screen.getAllByRole('menuitemradio').map((o) => o.textContent ?? '')
     expect(labels.some((l) => l.includes('opus'))).toBe(false)
   })
 

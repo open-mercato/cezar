@@ -133,6 +133,7 @@ function stubFetch(
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(backends))
       if (method === 'GET' && path === '/api/v1/providers/status') return jsonResponse(providers)
       if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (method === 'GET' && path === '/api/v1/config') {
         return jsonResponse({ defaultRunner: backends[0] ?? 'claude', defaultModels })
       }
@@ -164,8 +165,17 @@ const startBody = (sent: readonly SentRequest[], id: string): unknown =>
  *  card, because every runnable card carries its own pair. */
 async function pick(card: HTMLElement, slot: string, label: string) {
   fireEvent.pointerDown(card.querySelector(`[data-slot="${slot}"]`)!)
-  const options = await screen.findAllByRole('menuitemradio')
-  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  fireEvent.click(await findOption(label))
+}
+
+/** The model catalog is fetched for the runner actually selected (#784), so an option can land a
+ *  tick after the menu opens — poll for it rather than reading the first render. */
+async function findOption(label: string): Promise<HTMLElement> {
+  return waitFor(() => {
+    const match = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
+    if (!match) throw new Error(`no menu option matching ${label}`)
+    return match
+  })
 }
 
 function renderInbox(entry = '/inbox') {

@@ -97,6 +97,7 @@ function serve(
       if (url === '/api/v1/health') return json(health)
       if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/config' && method === 'GET')
         return json({
           baseBranch: null,
@@ -203,10 +204,15 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     let options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('codex')) as HTMLElement)
 
-    // The model pill now lists codex presets; pin one.
+    // The model pill now lists codex's catalog; pin one. It is fetched for the runner actually
+    // selected (#784), so the option lands a tick after the menu opens.
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Model' }))
-    options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('gpt-future')) as HTMLElement)
+    const option = await waitFor(() => {
+      const match = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes('gpt-future'))
+      if (!match) throw new Error('no gpt-future option yet')
+      return match
+    })
+    fireEvent.click(option)
 
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
