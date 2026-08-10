@@ -156,6 +156,33 @@ describe('pi spawns under pi credentials, not another runner', () => {
     expect(env.OPENROUTER_API_KEY).toBeUndefined();
   });
 
+  it('never inherits Claude Code’s cloud credentials — pi does not read its toggles', () => {
+    // `CLAUDE_CODE_USE_BEDROCK` / `_USE_VERTEX` unlock the AWS/GCP credential families for the
+    // backend that is given the `CLAUDE_` prefix to read them. pi is not Claude Code and reads
+    // neither toggle, so a host that configured Claude Code for Bedrock must not thereby hand a
+    // pi process its cloud keys. OpenCode — the same `provider/model` shape — is the control.
+    const cloudSource: NodeJS.ProcessEnv = {
+      PATH: '/usr/bin',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_USE_VERTEX: '1',
+      CLAUDE_CONFIG_DIR: '/home/u/.claude',
+      AWS_ACCESS_KEY_ID: 'akid',
+      AWS_SECRET_ACCESS_KEY: 'asak',
+      GOOGLE_APPLICATION_CREDENTIALS: '/home/u/gcp.json',
+      GOOGLE_CLOUD_PROJECT: 'proj',
+    };
+    for (const backend of ['pi', 'opencode'] as const) {
+      const env = buildChildEnv({ backend, source: cloudSource });
+      expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+      expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+      expect(env.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+      expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    }
+    // …and claude still gets exactly what the toggles exist to deliver.
+    expect(buildChildEnv({ backend: 'claude', source: cloudSource }).AWS_ACCESS_KEY_ID).toBe('akid');
+  });
+
   it('keeps the seam identity pi-specific', () => {
     expect(new PiRunner().backend).toBe('pi');
   });
