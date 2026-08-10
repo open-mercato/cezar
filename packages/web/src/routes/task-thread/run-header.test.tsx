@@ -7,7 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
-import { RunHeader, TakeOverButton } from './run-header'
+import { RunHeader, RunMetaFooter, TakeOverButton } from './run-header'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -87,7 +87,17 @@ function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
-          <Route path="/tasks/:id" element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} />} />
+          <Route
+            path="/tasks/:id"
+            element={
+              <>
+                <RunHeader run={record} onMarkedUnread={onMarkedUnread} />
+                {/* Cost/Agent/Mode/Tokens moved to the meta footer (mounted under the composer in
+                    production); render it here so the meta assertions still have a home. */}
+                <RunMetaFooter run={record} />
+              </>
+            }
+          />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
@@ -701,19 +711,20 @@ describe('meta line, tabs, pill and resume hint', () => {
       }),
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
     expect(meta.textContent).toContain('quick-task')
-    // The stat strip: the Agent tile names the runner (icon + name), a button that opens the
-    // runner/account/model breakdown; the Mode tile carries the model; Tokens and Cost their own.
-    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
-    expect(badge.getAttribute('data-slot')).toBe('agent-badge')
-    expect(badge.textContent).toContain('codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
-    expect(meta.textContent).toContain('gpt-5.2-codex')
-    expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
-    expect(meta.textContent).toContain('$0.04')
+    // The meta footer: the Agent stat names the runner (icon + name), a button that opens the
+    // runner/account/model breakdown; the Mode stat carries the model; Tokens and Cost their own.
+    const badge = within(footer).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
+    expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+    expect(badge.textContent).toContain('codex')
+    expect(footer.textContent).toContain('gpt-5.2-codex')
+    expect(footer.textContent).toContain('IN 24.6k · OUT 2.4k')
+    expect(footer.textContent).toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
-    expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
+    expect(footer.querySelector('[data-slot="context-gauge"]')).toBeNull()
   })
 
   it('omits token and cost text when health disables token metrics', async () => {
@@ -730,12 +741,12 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(run('done', { costUsd: 0.04 }))
 
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
     await waitFor(() => {
-      expect(meta.textContent).not.toContain('IN 24.6k')
-      expect(meta.textContent).not.toContain('$0.04')
+      expect(footer.textContent).not.toContain('IN 24.6k')
+      expect(footer.textContent).not.toContain('$0.04')
     })
-    expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
+    expect(within(footer).getByRole('button', { name: /Agent:/ })).not.toBeNull()
   })
 
   it.each([
@@ -786,8 +797,8 @@ describe('meta line, tabs, pill and resume hint', () => {
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: opencode/ }))
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+    fireEvent.pointerDown(within(footer).getByRole('button', { name: /Agent: opencode/ }))
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByText('runner: opencode')).not.toBeNull()
     expect(within(menu).getByText('model: auto')).not.toBeNull()
@@ -804,8 +815,8 @@ describe('meta line, tabs, pill and resume hint', () => {
       '/api/v1/config': () => jsonResponse({ defaultRunner: 'codex', defaultModels: {} }),
     })
     renderHeader(run('done', { runner: undefined }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = await within(meta).findByRole('button', { name: /Agent: codex, model auto/ })
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+    const badge = await within(footer).findByRole('button', { name: /Agent: codex, model auto/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
@@ -837,10 +848,10 @@ describe('meta line, tabs, pill and resume hint', () => {
         model: 'opus',
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
       // The accessible name carries the account; the menu spells it out (its only home — the strip
       // shows runner + model, the account rides the click-through).
-      const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
+      const badge = await within(footer).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
       fireEvent.pointerDown(badge)
       const menu = within(await screen.findByRole('menu'))
       expect(menu.getByText('account: Klaudiusz')).not.toBeNull()
@@ -856,17 +867,17 @@ describe('meta line, tabs, pill and resume hint', () => {
         agentProfile: 'default',
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /account Klaudiusz/ })
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      await within(footer).findByRole('button', { name: /account Klaudiusz/ })
     })
 
     it('says nothing at all for a run from before accounts existed', async () => {
       // Nothing wrote it down, so claiming the discovered account would be an invention.
       withAccounts()
       renderHeader(run('done', { runner: 'claude', steps: [step({ sessionId: 'sess-1' })] }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /Agent: claude, model auto/ })
-      expect(meta.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      await within(footer).findByRole('button', { name: /Agent: claude, model auto/ })
+      expect(footer.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
     })
 
     it('still names an account that has since been removed', async () => {
@@ -876,16 +887,16 @@ describe('meta line, tabs, pill and resume hint', () => {
         runner: 'claude',
         steps: [step({ sessionId: 'sess-1', profileId: 'deleted-one' })],
       }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /account deleted-one \(removed\)/ })
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      await within(footer).findByRole('button', { name: /account deleted-one \(removed\)/ })
     })
   })
 
   it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'claude' }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+    const badge = within(footer).getByRole('button', { name: /Agent: claude, model auto/ })
     // Named on the Agent tile like any other agent — claude being the default is not a reason to
     // leave "what produced this?" unanswered.
     expect(badge.textContent).toContain('claude')
@@ -900,23 +911,8 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
 
-  it('a queued run shows its position in the Status stat, from the shared runs list', async () => {
-    stubFetch({
-      '/api/v1/runs': () =>
-        jsonResponse([
-          run('queued', { id: 'earlier', createdAt: '2026-07-14T11:00:00.000Z' }),
-          run('queued'),
-        ]),
-    })
-    renderHeader(run('queued'))
-    await waitFor(() => {
-      // The status label and queue position read together in the Status tile — the old pill's job.
-      const status = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
-        /queued/.test(tile.textContent ?? ''),
-      )
-      expect(status?.textContent).toContain('queued #2')
-    })
-  })
+  // The Status stat left the header (it duplicated the paused/attention hint), so a queued run no
+  // longer shows its position here — the QueuedPlaceholder empty state carries it instead.
 
   // The take-over line is now a compact button UNDER the composer (TakeOverButton) — it no longer
   // prints the raw command; clicking it copies the per-backend resume command.

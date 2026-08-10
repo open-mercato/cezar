@@ -33,12 +33,10 @@ import {
   useProjectRepoBase,
   useProviderStatus,
   useRunHandoff,
-  useRuns,
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { ClaudeIcon } from '@/components/icons'
-import { StatusDot } from '@/components/status-dot'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { ReferenceChip } from '@/components/reference-chip'
 import { TabLink } from '@/components/tab-link'
@@ -64,8 +62,7 @@ import {
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { DirectionalUsage } from '@/components/directional-usage'
-import { deriveAttention } from '@/lib/attention'
-import { queuePositions, runTitle } from '@/lib/task-groups'
+import { runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
@@ -95,31 +92,19 @@ export type RunTab = 'session' | 'changes' | 'commits' | 'files'
 
 export function RunHeader({
   run,
-  planTally,
   tab = 'session',
   onMarkedUnread,
 }: {
   run: ApiRun
-  planTally?: { done: number; total: number }
   tab?: RunTab
   /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
 }) {
-  const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const [notesOpen, setNotesOpen] = useState(false)
   const actions = useRunActions(run, onMarkedUnread)
-
-  // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
-  // query — already warm from the sidebar quick-list — because position is a property of the
-  // whole queue, not of this record.
-  const runs = useRuns()
-  const health = useHealth()
-  const metricVisibility = usageMetricVisibility(health.data)
-  const queuePosition =
-    run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
   return (
     <header
@@ -134,19 +119,9 @@ export function RunHeader({
           </span>
         </div>
 
-        <MetaRow
-          run={run}
-          trailing={
-            <StatStrip
-              run={run}
-              attention={attention}
-              planTally={planTally}
-              queuePosition={queuePosition}
-              showTokens={metricVisibility.tokens}
-              showCost={metricVisibility.cost}
-            />
-          }
-        />
+        {/* The stat strip left the header: Plan is the context tab, Status duplicated the paused
+            hint, and Cost/Agent/Mode moved to a meta row UNDER the composer (task-thread.tsx). */}
+        <MetaRow run={run} />
         <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-5 flex items-end gap-1">
@@ -480,73 +455,49 @@ function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['r
   )
 }
 
-/** One labelled figure in the run's stat strip — a small-caps label over its value. The strip
- *  replaces the old loose dot-list (Plan mirror, status pill, cost, agent) with one aligned row,
- *  hairline-separated, never middot-joined. */
-function StatTile({ label, children }: { label: string; children: ReactNode }) {
+/** The run's read-only meta — Cost · Tokens · Agent · Mode — as a compact row UNDER the composer
+ *  (task-thread.tsx). Plan and Status left the old strip (they became the context tab and the
+ *  paused hint); these are the facts that still had nowhere else to live. Each renders only when
+ *  the record carries it — absence is absence, not a placeholder. */
+export function RunMetaFooter({ run }: { run: ApiRun }) {
+  const config = useConfig()
+  const health = useHealth()
+  const metricVisibility = usageMetricVisibility(health.data)
+  // Same resolution as the run actually executes with (input.runner ?? config.defaultRunner).
+  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
+  const model = run.model ?? 'auto'
+  const showTokens =
+    metricVisibility.tokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)
+  const showCost = metricVisibility.cost && !!run.costUsd
   return (
-    <div data-slot="stat-tile" className="flex flex-col items-center gap-2 px-6 text-center">
-      <span className="text-[10px] font-medium tracking-wide text-soft-foreground uppercase">{label}</span>
-      <span className="flex items-center gap-1.5 text-[13px] leading-none font-medium whitespace-nowrap text-foreground">
-        {children}
-      </span>
+    <div data-slot="run-meta-footer" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+      {showCost ? (
+        <FooterStat label="Cost">
+          <span className="tabular-nums">{formatCost(run.costUsd!)}</span>
+        </FooterStat>
+      ) : null}
+      {showTokens ? (
+        <FooterStat label="Tokens">
+          <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
+        </FooterStat>
+      ) : null}
+      <FooterStat label="Agent">
+        <AgentStat run={run} runner={runner} />
+      </FooterStat>
+      <FooterStat label="Mode">{model}</FooterStat>
     </div>
   )
 }
 
-/** The run's headline figures as a labelled, hairline-separated strip (the mockup's meta row):
- *  Plan · Status · Tokens · Cost · Agent · Mode, each present only when the record carries it. */
-function StatStrip({
-  run,
-  attention,
-  planTally,
-  queuePosition,
-  showTokens,
-  showCost,
-}: {
-  run: ApiRun
-  attention: ReturnType<typeof deriveAttention>
-  planTally: { done: number; total: number } | undefined
-  queuePosition: number | undefined
-  showTokens: boolean
-  showCost: boolean
-}) {
-  const config = useConfig()
-  // Same resolution as the run actually executes with (input.runner ?? config.defaultRunner).
-  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
-  const model = run.model ?? 'auto'
+/** One "LABEL value" pair on the meta footer — small-caps label, body-size value, inline. */
+function FooterStat({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div
-      data-slot="run-stats"
-      className="flex flex-wrap items-stretch divide-x divide-border [&>*:first-child]:pl-0"
-    >
-      {planTally ? (
-        <StatTile label="Plan">
-          <span className="tabular-nums">
-            {planTally.done}/{planTally.total}
-          </span>
-        </StatTile>
-      ) : null}
-      <StatTile label="Status">
-        <StatusDot tone={attention.tone} pulse={attention.pulse} />
-        {attention.label}
-        {queuePosition !== undefined ? ` #${queuePosition}` : ''}
-      </StatTile>
-      {showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined) ? (
-        <StatTile label="Tokens">
-          <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
-        </StatTile>
-      ) : null}
-      {showCost && run.costUsd ? (
-        <StatTile label="Cost">
-          <span className="tabular-nums">{formatCost(run.costUsd)}</span>
-        </StatTile>
-      ) : null}
-      <StatTile label="Agent">
-        <AgentStat run={run} runner={runner} />
-      </StatTile>
-      <StatTile label="Mode">{model}</StatTile>
-    </div>
+    <span data-slot="meta-stat" className="inline-flex items-center gap-1.5">
+      <span className="text-[10px] font-medium tracking-wide text-soft-foreground uppercase">{label}</span>
+      <span className="flex items-center gap-1.5 text-[13px] leading-none font-medium whitespace-nowrap text-foreground">
+        {children}
+      </span>
+    </span>
   )
 }
 
@@ -852,7 +803,7 @@ export function TakeOverButton({ run }: { run: ApiRun }) {
       data-slot="resume-hint"
       title={`Copy: ${hint}`}
       onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mt-2 inline-flex items-center gap-1.5 self-start rounded-md px-2 py-1 text-xs font-medium text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
     >
       <SquareTerminalIcon className="size-3.5 shrink-0" aria-hidden="true" />
       Take over in terminal

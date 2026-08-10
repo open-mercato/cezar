@@ -27,11 +27,9 @@ export function ThreadContextBar({
   const hasPlan = plan !== undefined && plan.length > 0
   if (!hasSteps && !hasPlan) return null
   return (
-    // -mb-2 pulls the composer up over the chips' lower half so they read as tucked UNDER it.
-    // Kept STATIC (no relative/z): a positioned tab bar would paint ABOVE the static composer and
-    // defeat the tuck — as a plain later sibling the composer's opaque top wins. gap-2 keeps the
-    // two chips apart, not overlapping each other.
-    <div data-slot="thread-context-bar" className="-mb-2 flex justify-end gap-2 pr-2">
+    // Just the two chips, right-grouped; the composer top-line wrapper owns the tuck (-mb-2) and
+    // the row layout. gap-2 keeps the chips apart, not overlapping each other.
+    <div data-slot="thread-context-bar" className="flex shrink-0 gap-2 pr-2">
       {hasSteps ? <StepsChip steps={steps} /> : null}
       {hasPlan ? <PlanChip entries={plan} settled={settled} /> : null}
     </div>

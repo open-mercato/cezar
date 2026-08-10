@@ -216,13 +216,13 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="reasoning"]')?.textContent).toContain('Thinking — Considering the layout…')
   })
 
-  it('shows the header title (auto-summary, never the raw title) and the status stat', () => {
+  it('shows the header title (auto-summary, never the raw title); status reads from the paused hint', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Do the thing')
-    const status = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
-      /Status/i.test(tile.textContent ?? ''),
+    // The Status stat left the header — a waiting run says so in the paused hint by the composer.
+    expect(document.querySelector('[data-slot="paused-hint"]')?.textContent).toContain(
+      'The agent is paused, waiting for your reply',
     )
-    expect(status?.textContent).toContain('needs you')
   })
 
   it('waiting → the paused hint (pulsing dot) in the dock, right above an ENABLED composer', () => {
@@ -353,14 +353,11 @@ describe('ThreadView', () => {
     await waitFor(() => expect(textarea.disabled).toBe(false))
   })
 
-  it('monitoring → no paused hint, "message" placeholder, and a "monitoring" status (#490)', () => {
+  it('monitoring → no paused hint and a "message" placeholder, not "reply" (#490)', () => {
     renderView(<ThreadView run={run('running', { activity: 'monitoring' })} thread={reduceThread(EVENTS)} />)
-    // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner.
+    // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner
+    // (the Status stat that used to label this left the header).
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
-    const status = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
-      /Status/i.test(tile.textContent ?? ''),
-    )
-    expect(status?.textContent).toContain('monitoring')
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
@@ -813,7 +810,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 
-  it('a plan in the stream → a collapsed Plan chip + the compact header Plan stat', () => {
+  it('a plan in the stream → a collapsed Plan chip (the header Plan stat is gone)', () => {
     const withPlan: RunEvent[] = [
       ...EVENTS,
       line(8, 'plan.updated', {
@@ -827,11 +824,7 @@ describe('ThreadView', () => {
     renderView(<ThreadView run={run('running')} thread={reduceThread(withPlan)} />)
     expect(document.querySelector('[data-slot="plan-chip"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
-    // The header mirror is the Plan stat tile.
-    const planStat = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
-      /Plan/i.test(tile.textContent ?? ''),
-    )
-    expect(planStat?.textContent).toContain('1/3')
+    // The Plan stat left the header — the collapsed Plan chip is now the only tally.
     // No steps on this run — no Steps chip.
     expect(document.querySelector('[data-slot="steps-chip"]')).toBeNull()
   })

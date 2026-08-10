@@ -30,13 +30,12 @@ import { AutoResumeHint } from './auto-resume-hint'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
-import { planCounts } from './plan-dock'
 import { ThreadContextBar } from './thread-context-bar'
 import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
-import { RunHeader, TakeOverButton } from './run-header'
+import { RunHeader, RunMetaFooter, TakeOverButton } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
 import { useActiveProviderAvailability } from './active-provider'
@@ -162,7 +161,6 @@ export function ThreadView({
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(thread)
-  const planTally = plan !== undefined && plan.length > 0 ? planCounts(plan) : undefined
   // The Agents dock's data: the current fan-out's sub-agents, or [] when there is none to
   // show (#474). Derived from the same reduced turns the thread renders — no new subscription.
   // The legacy session-open rule (web/app.js `updateDetail`): the composer can deliver while
@@ -273,7 +271,7 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
+      <RunHeader run={run} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
@@ -386,32 +384,26 @@ export function ThreadView({
               dock says so before the composer offers a Continue nobody needs to press. */}
           <AutoResumeHint run={run} />
 
-          {run.status === 'waiting' ? (
-            <div
-              data-slot="paused-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" pulse />
-              The agent is paused, waiting for your reply
-            </div>
-          ) : null}
-
-          {queued ? (
-            <div
-              data-slot="queued-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" />
-              Messages you add now are folded into the prompt before the run starts.
-            </div>
-          ) : null}
-
-          {/* Steps + plan as tabs glued to the composer's top edge (#header-density): the workflow
-              rail left the header, the plan left its always-open dock, and both collapse into
-              overlapping tabs that expand upward on click. `settled` freezes the plan's live
-              styling once the run stops (audit A2). */}
           <div className="flex min-w-0 flex-col">
-          <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
+          {/* The composer's top line sits at the tabs' height: the attention hint on the left
+              (Status left the header — it only echoed this), the Verify/Plan tabs on the right.
+              -mb-2 tucks the row's bottom a touch under the input's top edge. */}
+          <div data-slot="composer-topline" className="-mb-2 flex items-end justify-between gap-3 pl-1">
+            <div className="min-w-0 pb-2 text-xs text-muted-foreground">
+              {run.status === 'waiting' ? (
+                <span data-slot="paused-hint" className="flex items-center gap-2">
+                  <StatusDot tone="pending" pulse />
+                  The agent is paused, waiting for your reply
+                </span>
+              ) : queued ? (
+                <span data-slot="queued-hint" className="flex items-center gap-2">
+                  <StatusDot tone="pending" />
+                  Messages you add now are folded into the prompt before the run starts.
+                </span>
+              ) : null}
+            </div>
+            <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
+          </div>
           <Composer
             onSubmit={
               continuable
@@ -448,7 +440,12 @@ export function ThreadView({
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
-          <TakeOverButton run={run} />
+          {/* Under the input: the run's read-only meta (Cost/Agent/Mode) on the left, the
+              take-over-in-terminal handoff on the right. */}
+          <div data-slot="composer-underline" className="mt-2 flex items-center justify-between gap-3">
+            <RunMetaFooter run={run} />
+            <TakeOverButton run={run} />
+          </div>
           </div>
         </div>
       </div>
