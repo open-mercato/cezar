@@ -444,9 +444,13 @@ export function ThreadView({
           />
           {/* Under the input: the take-over-in-terminal handoff on the left, the run's read-only
               meta (Cost/Agent/Mode) on the right. */}
-          <div data-slot="composer-underline" className="mt-2 flex items-center justify-between gap-3">
+          <div data-slot="composer-underline" className="mt-2 flex items-center gap-3">
             <TakeOverButton run={run} />
-            <RunMetaFooter run={run} pickers={continuable ? continueAction.pills : undefined} />
+            {/* ml-auto keeps the meta hard right even when the take-over button isn't rendered
+                (a live session has no resume command), so the row never drifts left. */}
+            <div className="ml-auto min-w-0">
+              <RunMetaFooter run={run} pickers={continuable ? continueAction.pills : undefined} />
+            </div>
           </div>
           </div>
         </div>
