@@ -85,12 +85,16 @@ export function PlanDock({
         className={cn('flex w-full items-center gap-2 px-3.5 text-left text-[13px]', open ? 'pt-2 pb-1.5' : 'py-2')}
       >
         <span className="shrink-0 font-semibold">Plan</span>
+        {/* Spaced by the row gap, not middot/em-dash separators (house rule). */}
         <span data-slot="plan-count" className="shrink-0 text-muted-foreground tabular-nums">
-          · {done}/{total}
+          {done}/{total}
         </span>
         {!open && active !== undefined && !settled ? (
-          <span data-slot="plan-current" className="min-w-0 truncate text-muted-foreground">
-            — {active.activeForm ?? active.content}
+          <span
+            data-slot="plan-current"
+            className="min-w-0 truncate border-l border-border pl-2 text-muted-foreground"
+          >
+            {active.activeForm ?? active.content}
           </span>
         ) : null}
         <ChevronDownIcon

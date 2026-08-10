@@ -75,7 +75,7 @@ describe('PlanDock', () => {
     render(<PlanDock runId="dock-states" entries={GOLDEN} />)
     expect(dock().getAttribute('data-state')).toBe('open')
     expect(head().getAttribute('aria-expanded')).toBe('true')
-    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('· 1/3')
+    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
 
     const rows = [...document.querySelectorAll('[data-slot="plan-item"]')]
     expect(rows.map((row) => row.getAttribute('data-status'))).toEqual(['completed', 'in_progress', 'pending'])
@@ -104,7 +104,7 @@ describe('PlanDock', () => {
         ]}
       />,
     )
-    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('· 1/1')
+    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/1')
 
     const rows = [...document.querySelectorAll('[data-slot="plan-item"]')]
     expect(rows.map((row) => row.getAttribute('data-status'))).toEqual(['completed', 'cancelled'])
@@ -119,13 +119,13 @@ describe('PlanDock', () => {
     expect(cancelledIcon.getAttribute('class')).not.toContain('animate-pulse')
   })
 
-  it('collapsing folds the list to "Plan · N/M — {activeForm of the current item}"', () => {
+  it('collapsing folds the list to the odometer plus the current item, divider-separated', () => {
     render(<PlanDock runId="dock-collapse" entries={GOLDEN} />)
     fireEvent.click(head())
     expect(dock().getAttribute('data-state')).toBe('collapsed')
     expect(document.querySelector('[data-slot="plan-list"]')).toBeNull()
     // The in-progress entry, spelled with its present-continuous activeForm.
-    expect(document.querySelector('[data-slot="plan-current"]')?.textContent).toBe('— Running tests')
+    expect(document.querySelector('[data-slot="plan-current"]')?.textContent).toBe('Running tests')
   })
 
   // Audit A2: once the run has settled, the frozen snapshot must stop reading as live.
@@ -145,7 +145,7 @@ describe('PlanDock', () => {
       fireEvent.click(head())
       expect(dock().getAttribute('data-state')).toBe('collapsed')
       expect(document.querySelector('[data-slot="plan-current"]')).toBeNull()
-      expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('· 1/3')
+      expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
     })
   })
 
@@ -160,7 +160,7 @@ describe('PlanDock', () => {
       />,
     )
     fireEvent.click(head())
-    expect(document.querySelector('[data-slot="plan-current"]')?.textContent).toBe('— Ship it')
+    expect(document.querySelector('[data-slot="plan-current"]')?.textContent).toBe('Ship it')
   })
 
   it('remembers the collapse per run id across unmounts (the module-level cache)', () => {
