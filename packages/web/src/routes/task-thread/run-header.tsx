@@ -459,7 +459,7 @@ function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['r
  *  (task-thread.tsx). Plan and Status left the old strip (they became the context tab and the
  *  paused hint); these are the facts that still had nowhere else to live. Each renders only when
  *  the record carries it — absence is absence, not a placeholder. */
-export function RunMetaFooter({ run }: { run: ApiRun }) {
+export function RunMetaFooter({ run, pickers }: { run: ApiRun; pickers?: ReactNode }) {
   const config = useConfig()
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
@@ -481,10 +481,16 @@ export function RunMetaFooter({ run }: { run: ApiRun }) {
           <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
         </FooterStat>
       ) : null}
-      <FooterStat label="Agent">
-        <AgentStat run={run} runner={runner} />
-      </FooterStat>
-      <FooterStat label="Mode">{model}</FooterStat>
+      {/* When the run can be continued, the runner/model PICKERS (moved out of the composer) stand
+          in for the read-only Agent/Mode — they carry the same facts and let you change them. */}
+      {pickers ?? (
+        <>
+          <FooterStat label="Agent">
+            <AgentStat run={run} runner={runner} />
+          </FooterStat>
+          <FooterStat label="Mode">{model}</FooterStat>
+        </>
+      )}
     </div>
   )
 }

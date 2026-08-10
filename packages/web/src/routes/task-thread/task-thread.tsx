@@ -417,6 +417,8 @@ export function ThreadView({
             disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
             // The engine pills ride the enabled footer, so the picked runner/model and the
             // typed prompt reach `POST /continue` in one request.
+            // The runner/model pickers moved OUT of the message field down to the meta row below;
+            // only the provider-config nudge still rides the composer footer.
             footerEnd={
               providerBlocked && !continueAction.providerPending ? (
                 <Link
@@ -425,7 +427,7 @@ export function ThreadView({
                 >
                   Configure providers
                 </Link>
-              ) : continuable ? continueAction.pills : undefined
+              ) : undefined
             }
             // Continuing with nothing typed is the legacy one-click Continue.
             allowEmptySubmit={continuable}
@@ -440,11 +442,11 @@ export function ThreadView({
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
-          {/* Under the input: the run's read-only meta (Cost/Agent/Mode) on the left, the
-              take-over-in-terminal handoff on the right. */}
+          {/* Under the input: the take-over-in-terminal handoff on the left, the run's read-only
+              meta (Cost/Agent/Mode) on the right. */}
           <div data-slot="composer-underline" className="mt-2 flex items-center justify-between gap-3">
-            <RunMetaFooter run={run} />
             <TakeOverButton run={run} />
+            <RunMetaFooter run={run} pickers={continuable ? continueAction.pills : undefined} />
           </div>
           </div>
         </div>

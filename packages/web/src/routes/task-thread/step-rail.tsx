@@ -69,35 +69,38 @@ export function StepRail({ steps }: { steps: StepState[] }) {
   if (steps.length === 0) return null
   const pct = railProgress(steps) * 100
   return (
-    <div data-slot="step-rail" className="flex min-w-0 flex-col gap-1">
+    // A 4-track grid (icon · name · kind · position) with each row a subgrid, so the columns line
+    // up across rows however wide the individual step names are.
+    <div
+      data-slot="step-rail"
+      className="grid grid-cols-[auto_auto_auto_auto] items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground"
+    >
       {steps.map((step, index) => (
         <div
           key={step.id}
           data-slot="step-row"
           data-visual={railVisual(step.status)}
-          className="flex min-h-[22px] min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
+          className="col-span-4 grid min-h-[22px] grid-cols-subgrid items-center"
         >
           <RailIcon visual={railVisual(step.status)} />
-          <span className="font-medium text-foreground">{step.name}</span>
-          {step.iterations > 1 ? (
-            <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
-              ×{step.iterations}
-            </span>
-          ) : null}
-          {/* A small fixed gap, not `ml-auto` — the rail sits in a fit-to-content popover now, so
-              pushing the meta to a far right edge would only manufacture empty space. */}
-          <span className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-soft-foreground">
-            {/* Kind as a subtle tag, not a dot-joined word — no middot separators (house rule). */}
-            <span className="rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium tracking-wide uppercase">
-              {step.kind}
-            </span>
-            <span className="tabular-nums">
-              step {index + 1} of {steps.length}
-            </span>
+          <span className="font-medium text-foreground">
+            {step.name}
+            {step.iterations > 1 ? (
+              <span data-slot="step-iterations" className="ml-1 text-xs text-soft-foreground tabular-nums">
+                ×{step.iterations}
+              </span>
+            ) : null}
+          </span>
+          {/* Kind as a subtle tag, not a dot-joined word — no middot separators (house rule). */}
+          <span className="justify-self-start rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium tracking-wide uppercase">
+            {step.kind}
+          </span>
+          <span className="text-xs text-soft-foreground tabular-nums">
+            step {index + 1} of {steps.length}
           </span>
         </div>
       ))}
-      <div data-slot="step-progress" className="mt-1 h-0.5 overflow-hidden rounded-full bg-muted">
+      <div data-slot="step-progress" className="col-span-4 mt-1 h-0.5 overflow-hidden rounded-full bg-muted">
         <div
           data-tone={railBarTone(steps)}
           className={cn('h-full rounded-full', BAR_TONE_CLASS[railBarTone(steps)])}
