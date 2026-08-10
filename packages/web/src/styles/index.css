@@ -99,7 +99,7 @@
   --accent-lime: #a8f372;
   --primary: var(--accent-lime);
   --primary-foreground: #0d0d0d;
-  --violet: #8f86e8;
+  --violet: #9655fd;
   /* Text/icons printed *on* --violet (the Inbox count badge). White in both themes — the violet
    * never lightens enough for ink to pass AA against it. */
   --violet-foreground: #ffffff;
