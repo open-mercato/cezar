@@ -163,9 +163,9 @@
   --background: #f7f7fb;
   --foreground: #171717;
   --card: #ffffff;
-  --card-2: #fbfbfb;
+  --card-2: #f2f1f8;
   --sidebar: var(--background);
-  --muted: #f7f7f7;
+  --muted: #f2f1f8;
   /* Selection surface — a violet-tinted neutral (the 200 of the accent), so a picked/active thing
    * reads as the accent's quiet cousin, not plain grey. Overrides the shared `--accent: --muted`. */
   --accent: #e5e3f1;
