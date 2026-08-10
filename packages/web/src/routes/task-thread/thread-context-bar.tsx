@@ -1,4 +1,3 @@
-import { CircleCheckBigIcon, ListTodoIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import type { PlanEntry, StepState } from '@open-mercato/cezar-api-client'
@@ -9,10 +8,10 @@ import { PlanList, planCounts } from './plan-dock'
 import { StepRail, activeStepIndex, railBarTone, type RailBarTone } from './step-rail'
 
 /**
- * The run's workflow steps and the agent's plan, as TABS glued to the composer's top-right edge
- * (#header-density). Each is collapsed to an icon + count and expands UPWARD into a popover on
- * click — an overlay that never pushes the thread or composer. The tabs overlap like folder tabs
- * and share the composer's surface so they read as part of it. Renders nothing without either.
+ * The run's workflow steps and the agent's plan, as two chips sitting BELOW the composer —
+ * detached from it (a gap above), separated from each other (no overlap), and labelled by a
+ * status-colored top edge rather than an icon. Each is collapsed to a label + count and expands
+ * into a popover on click — an overlay that never pushes the thread. Renders nothing without either.
  */
 export function ThreadContextBar({
   steps,
@@ -27,22 +26,18 @@ export function ThreadContextBar({
   const hasPlan = plan !== undefined && plan.length > 0
   if (!hasSteps && !hasPlan) return null
   return (
-    // -mb-px drops the tabs' open bottoms onto the composer's top border so they merge into it;
-    // z-10 keeps them above it; -ml-2 on all but the first makes the tabs overlap.
-    <div
-      data-slot="thread-context-bar"
-      className="relative z-10 -mb-px flex justify-end pr-3 [&>*:not(:first-child)]:-ml-2"
-    >
+    // pt-2 cuts them free of the input above; gap-2 keeps the two chips apart, not overlapping.
+    <div data-slot="thread-context-bar" className="flex justify-end gap-2 pr-1 pt-2">
       {hasSteps ? <StepsChip steps={steps} /> : null}
       {hasPlan ? <PlanChip entries={plan} settled={settled} /> : null}
     </div>
   )
 }
 
-/** A tab: rounded top, open bottom (border-b-0) and the composer's own `bg-card`, so it looks cut
- *  from the same surface. Hover/open lifts it above its neighbour. */
+/** A standalone chip on the composer's own `bg-card`, fully rounded and bordered — the status
+ *  color rides the top edge (see the accent maps below). */
 const TAB_CLASS =
-  'relative flex min-w-0 items-center gap-1.5 rounded-t-lg border border-border border-b-0 bg-card px-3 py-1.5 hover:z-20 hover:bg-muted data-[state=open]:z-20 data-[state=open]:bg-muted focus-visible:z-20 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
+  'flex min-w-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 hover:bg-muted data-[state=open]:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
 
 /** A status-colored top edge is what tells the two tabs apart at a glance: Verify carries the
  *  workflow's live tone (green done / amber running / danger failed), Plan carries the accent. */
@@ -53,20 +48,18 @@ const STEPS_ACCENT: Record<RailBarTone, string> = {
 }
 
 /** Uppercase but a notch smaller than the body — a quiet tab label, not a shout. */
-const TAB_LABEL = 'shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.04em] text-foreground'
-const TAB_COUNT = 'shrink-0 text-[10.5px] tabular-nums text-soft-foreground'
+const TAB_LABEL = 'shrink-0 text-[10px] font-semibold uppercase tracking-[0.04em] text-foreground'
+const TAB_COUNT = 'shrink-0 text-[10px] tabular-nums text-soft-foreground'
 
 function ContextChip({
   slot,
   label,
-  icon,
   accentClass,
   children,
   panel,
 }: {
   slot: string
   label: string
-  icon: ReactNode
   accentClass: string
   children: ReactNode
   panel: ReactNode
@@ -80,7 +73,6 @@ function ContextChip({
           aria-label={label}
           className={cn(TAB_CLASS, accentClass)}
         >
-          {icon}
           {children}
         </button>
       </PopoverTrigger>
@@ -107,7 +99,6 @@ function StepsChip({ steps }: { steps: StepState[] }) {
       slot="steps-chip"
       label={`Workflow steps: ${current.name}, step ${index + 1} of ${steps.length}`}
       accentClass={STEPS_ACCENT[tone]}
-      icon={<CircleCheckBigIcon aria-hidden className="size-3.5 shrink-0 text-soft-foreground" />}
       panel={<StepRail steps={steps} />}
     >
       <span className={cn(TAB_LABEL, 'min-w-0 max-w-[12ch] truncate')}>{current.name}</span>
@@ -126,7 +117,6 @@ function PlanChip({ entries, settled }: { entries: PlanEntry[]; settled: boolean
       label={`Plan: ${done} of ${total} done`}
       // Plan owns the accent (violet) — distinct from Verify's status tone, so a glance separates them.
       accentClass="border-t-2 border-t-violet"
-      icon={<ListTodoIcon aria-hidden className="size-3.5 shrink-0 text-violet" />}
       panel={<PlanList entries={entries} settled={settled} />}
     >
       <span className={TAB_LABEL}>Plan</span>

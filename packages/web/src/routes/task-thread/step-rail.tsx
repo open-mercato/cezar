@@ -86,7 +86,7 @@ export function StepRail({ steps }: { steps: StepState[] }) {
           ) : null}
           {/* A small fixed gap, not `ml-auto` — the rail sits in a fit-to-content popover now, so
               pushing the meta to a far right edge would only manufacture empty space. */}
-          <span className="ml-3 flex shrink-0 items-center gap-1.5 text-[11.5px] text-soft-foreground">
+          <span className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-soft-foreground">
             {/* Kind as a subtle tag, not a dot-joined word — no middot separators (house rule). */}
             <span className="rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium tracking-wide uppercase">
               {step.kind}

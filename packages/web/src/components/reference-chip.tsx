@@ -36,7 +36,7 @@ export function ReferenceChip({
 }) {
   const { kind, number, url } = reference
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border border-violet/35 px-2 font-mono text-[11px] font-semibold text-violet',
+    'inline-flex h-[22px] items-center gap-1 rounded-full border border-violet/35 px-2 font-mono text-xs font-semibold text-violet',
     className,
   )
   const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind

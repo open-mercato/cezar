@@ -116,7 +116,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13px] leading-[1.55] md:max-w-[70%]"
       >
         <textarea
           autoFocus
@@ -134,7 +134,7 @@ export function UserBubble({
               void save()
             }
           }}
-          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[13.5px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[13px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
         <span className="mt-1.5 flex justify-end gap-1.5">
           <button
@@ -162,7 +162,7 @@ export function UserBubble({
   return (
     <div
       data-slot="user-bubble"
-      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13px] leading-[1.55] md:max-w-[70%]"
     >
       {onEdit || onRemove ? (
         <span
@@ -410,7 +410,7 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
           type="button"
           data-slot="tool-output-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-xs font-medium text-soft-foreground hover:text-foreground"
         >
           {expanded ? 'Show less' : `Show all ${lines} lines`}
         </button>
@@ -429,7 +429,7 @@ export function InlineDiffPreview({ diffs }: { diffs: FileDiff[] }) {
     <>
       {diffs.map((diff, index) => (
         <div key={`${diff.path}:${index}`} data-slot="diff-preview" className="min-w-0">
-          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-[11px] text-soft-foreground">
+          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-xs text-soft-foreground">
             {diff.path}
           </div>
           <pre className="overflow-x-auto py-2 font-mono text-xs leading-[1.7] whitespace-pre">
@@ -570,7 +570,7 @@ export function ToolCard({
             <span
               data-slot="tool-exit"
               className={cn(
-                'rounded-full px-2 py-px font-mono text-[10.5px] font-semibold',
+                'rounded-full px-2 py-px font-mono text-[10px] font-semibold',
                 item.exitCode === 0 ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger',
               )}
             >

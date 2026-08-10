@@ -463,18 +463,18 @@ function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['r
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[9rem]">
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-xs font-normal text-muted-foreground">
           runner: {runner}
         </DropdownMenuLabel>
         {account ? (
           <DropdownMenuLabel
             data-slot="agent-badge-account"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
+            className="font-mono text-xs font-normal text-muted-foreground"
           >
             account: {account}
           </DropdownMenuLabel>
         ) : null}
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-xs font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
       </DropdownMenuContent>
@@ -565,7 +565,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
     <span
       key="workflow"
       data-slot="workflow-chip"
-      className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-[11px] font-medium"
+      className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium"
     >
       {workflowLabel(run)}
     </span>,
@@ -575,7 +575,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
       <span
         key="branch"
         data-slot="branch-chip"
-        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 font-mono text-[11px] font-medium"
+        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 font-mono text-xs font-medium"
       >
         {run.branch}
       </span>,
@@ -612,7 +612,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
       <DiffStatLabel
         key="diff"
         stat={run.diffStat}
-        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-[11px]"
+        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs"
       />,
     )
   if (run.automation) {
@@ -620,7 +620,7 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
       <Link
         key="automation"
         to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-[11px] font-medium hover:text-foreground"
+        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium hover:text-foreground"
       >
         Automation
       </Link>,
@@ -851,7 +851,7 @@ function ResumeHintLine({ hint }: { hint: string }) {
       data-slot="resume-hint"
       title="Copy the command"
       onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-xs text-soft-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">take over interactively: {hint}</span>

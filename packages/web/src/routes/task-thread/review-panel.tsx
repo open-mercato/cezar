@@ -230,7 +230,7 @@ function ManualMergeLine({ command }: { command: string }) {
           .then(() => toast('Command copied to clipboard.'))
           .catch(() => toast(`Run manually: ${command}`))
       }}
-      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-xs text-soft-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">manual path: {command}</span>

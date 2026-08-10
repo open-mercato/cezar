@@ -66,7 +66,7 @@ function PlanRow({ entry, settled = false }: { entry: PlanEntry; settled?: boole
       {entry.status === 'in_progress' && !settled ? (
         <span
           data-slot="plan-tag"
-          className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
+          className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
         >
           in progress
         </span>
