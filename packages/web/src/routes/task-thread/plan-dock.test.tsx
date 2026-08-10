@@ -74,7 +74,7 @@ describe('PlanList', () => {
     ])
     expect(rows[0]!.className).toContain('line-through')
     expect(rows[1]!.querySelector('[data-slot="plan-tag"]')?.textContent).toBe('in progress')
-    expect(rows[1]!.querySelector('svg')?.getAttribute('class')).toContain('animate-pulse')
+    expect(rows[1]!.querySelector('svg')?.getAttribute('class')).toContain('animate-spin')
     expect(rows[2]!.querySelector('[data-slot="plan-tag"]')).toBeNull()
   })
 
@@ -95,11 +95,11 @@ describe('PlanList', () => {
     expect(rows[1]!.className).toContain('line-through')
     expect(rows[1]!.querySelector('[data-slot="plan-tag"]')).toBeNull()
 
-    // Pin the ⊘ by its own slash path: asserting only "not animate-pulse" would
-    // also pass for the pending ○, i.e. it would survive deleting the glyph.
+    // Pin the ⊘ by lucide's own class: asserting only "not spinning" would also pass
+    // for the pending ○ (lucide-circle), i.e. it would survive deleting the glyph.
     const cancelledIcon = rows[1]!.querySelector('svg')!
-    expect(cancelledIcon.querySelector('path')?.getAttribute('d')).toBe('m8.5 15.5 7-7')
-    expect(cancelledIcon.getAttribute('class')).not.toContain('animate-pulse')
+    expect(cancelledIcon.getAttribute('class')).toContain('lucide-circle-slash')
+    expect(cancelledIcon.getAttribute('class')).not.toContain('animate-spin')
   })
 
   // Audit A2: once the run has settled, the frozen snapshot must stop reading as live.
@@ -109,6 +109,6 @@ describe('PlanList', () => {
     expect(inProgress.getAttribute('data-status')).toBe('in_progress')
     expect(inProgress.textContent).toBe('Run tests') // no "in progress" tag appended
     expect(inProgress.querySelector('[data-slot="plan-tag"]')).toBeNull()
-    expect(inProgress.querySelector('svg')?.getAttribute('class')).not.toContain('animate-pulse')
+    expect(inProgress.querySelector('svg')?.getAttribute('class')).not.toContain('animate-spin')
   })
 })

@@ -1,3 +1,5 @@
+import { CircleCheckIcon, CircleIcon, CircleSlashIcon, LoaderCircleIcon } from 'lucide-react'
+
 import type { PlanEntry, PlanStatus } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
@@ -78,65 +80,27 @@ function PlanRow({ entry, settled = false }: { entry: PlanEntry; settled?: boole
 /** The mockup's three checkbox glyphs, verbatim paths: ✓ in a faint circle / a pulsing
  *  half-filled ◐ / an empty ○ — plus a ⊘ for `cancelled`, which the mockup predates.
  *  Inline because lucide has no half-filled circle. */
+// The SAME lucide glyph set the workflow rail uses (step-rail.tsx RailIcon) — one done-check
+// everywhere, no hand-drawn variants. Plan statuses map onto the rail's done/active/pending set,
+// with `cancelled` as a slashed circle.
 function PlanIcon({ status, settled = false }: { status: PlanStatus; settled?: boolean }) {
-  if (status === 'cancelled') {
-    return (
-      <svg
-        aria-hidden
-        className="size-[15px] shrink-0 text-soft-foreground/70"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      >
-        <circle cx="12" cy="12" r="8.5" opacity=".5" />
-        <path d="m8.5 15.5 7-7" />
-      </svg>
-    )
-  }
+  const base = 'size-[15px] shrink-0'
   if (status === 'completed') {
-    return (
-      <svg
-        aria-hidden
-        className="size-[15px] shrink-0 text-success"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <circle cx="12" cy="12" r="9" opacity=".35" />
-        <path d="m8.5 12.2 2.4 2.4 4.6-5" />
-      </svg>
-    )
+    return <CircleCheckIcon aria-hidden className={cn(base, 'text-success')} />
   }
   if (status === 'in_progress') {
     return (
-      <svg
-        aria-hidden
-        // A frozen snapshot doesn't pulse — the animation is a live-run signal (audit A2).
-        className={cn('size-[15px] shrink-0', !settled && 'animate-pulse motion-reduce:animate-none')}
-        viewBox="0 0 24 24"
-        fill="none"
-      >
-        {/* stroke/fill-pending, not text-*: amber is a dot & spinner color only (guardian rule). */}
-        <circle className="stroke-pending" cx="12" cy="12" r="8.5" strokeWidth="2" />
-        <path className="fill-pending" d="M12 3.5 A8.5 8.5 0 0 1 12 20.5 Z" />
-      </svg>
+      <LoaderCircleIcon
+        role="status"
+        aria-label="In progress"
+        // stroke-pending, not text-*: amber is a dot & spinner color only (guardian rule).
+        // A frozen snapshot doesn't spin — the animation is a live-run signal (audit A2).
+        className={cn(base, 'stroke-pending', !settled && 'animate-spin motion-reduce:animate-none')}
+      />
     )
   }
-  return (
-    <svg
-      aria-hidden
-      className="size-[15px] shrink-0 text-soft-foreground"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <circle cx="12" cy="12" r="8.5" />
-    </svg>
-  )
+  if (status === 'cancelled') {
+    return <CircleSlashIcon aria-hidden className={cn(base, 'text-soft-foreground/70')} />
+  }
+  return <CircleIcon aria-hidden className={cn(base, 'text-soft-foreground')} />
 }

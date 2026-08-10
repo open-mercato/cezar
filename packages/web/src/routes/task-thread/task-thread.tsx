@@ -36,7 +36,7 @@ import { collectSubagents, findSubagent, subagentChildren } from './subagent-doc
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
-import { RunHeader } from './run-header'
+import { RunHeader, TakeOverButton } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
 import { useActiveProviderAvailability } from './active-provider'
@@ -448,6 +448,7 @@ export function ThreadView({
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
+          <TakeOverButton run={run} />
           </div>
         </div>
       </div>

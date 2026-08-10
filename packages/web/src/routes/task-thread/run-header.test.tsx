@@ -7,7 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
-import { RunHeader } from './run-header'
+import { RunHeader, TakeOverButton } from './run-header'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -918,23 +918,24 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
   })
 
-  it('a closed run with a session shows the copyable per-backend resume hint', async () => {
-    stubFetch()
+  // The take-over line is now a compact button UNDER the composer (TakeOverButton) — it no longer
+  // prints the raw command; clicking it copies the per-backend resume command.
+  it('a closed run with a session shows a take-over button that copies the resume command', async () => {
     const writeText = vi.fn(() => Promise.resolve())
     vi.stubGlobal('navigator', { clipboard: { writeText } })
-    renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
+    render(<TakeOverButton run={run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' })} />)
 
-    const hint = document.querySelector('[data-slot="resume-hint"]') as HTMLElement
-    expect(hint.textContent).toContain('cd /tmp/wt && opencode --session sess-1')
-    fireEvent.click(hint)
+    const btn = document.querySelector('[data-slot="resume-hint"]') as HTMLElement
+    expect(btn).not.toBeNull()
+    expect(btn.getAttribute('title')).toContain('cd /tmp/wt && opencode --session sess-1')
+    fireEvent.click(btn)
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1')
     })
   })
 
-  it('an active run has no resume hint — the engine still owns the session', () => {
-    stubFetch()
-    renderHeader(run('running'))
+  it('an active run has no take-over button — the engine still owns the session', () => {
+    render(<TakeOverButton run={run('running')} />)
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
   })
 })

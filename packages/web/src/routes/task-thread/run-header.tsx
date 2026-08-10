@@ -109,7 +109,6 @@ export function RunHeader({
 }) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
-  const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
   const actions = useRunActions(run, onMarkedUnread)
 
@@ -199,9 +198,8 @@ export function RunHeader({
           </div>
         </div>
 
-        {/* Workflow steps moved to the context bar above the composer (thread-context-bar.tsx),
-            so the sticky header stays shallow. */}
-        {hint ? <ResumeHintLine hint={hint} /> : null}
+        {/* Workflow steps moved to the context bar above the composer, and the take-over command
+            moved to a button UNDER the composer (task-thread.tsx) — the sticky header stays shallow. */}
         {notesOpen ? <NotesPanel runId={run.id} /> : null}
       </div>
 
@@ -841,20 +839,23 @@ function ConfirmDialog({ run, actions }: { run: ApiRun; actions: RunActions }) {
   )
 }
 
-/** "take over interactively: cd … && claude --resume …" — the legacy `#d-resume` line, now
- *  copyable. Local-machine phrasing; hosted mode (R5, `capabilities.localHandoff`) will swap the
- *  cd-prefix for a bare resume command. */
-function ResumeHintLine({ hint }: { hint: string }) {
+/** "Take over in terminal" — the resume/handoff command (`cd … && claude --resume …`) copied on
+ *  click, collapsed from the old full-width monospace line so the raw path never sits on screen.
+ *  Mounted UNDER the composer (task-thread.tsx). Renders nothing when the run can't be resumed.
+ *  Local-machine phrasing; hosted mode (R5, `capabilities.localHandoff`) will swap the cd-prefix. */
+export function TakeOverButton({ run }: { run: ApiRun }) {
+  const hint = resumeHint(run)
+  if (!hint) return null
   return (
     <button
       type="button"
       data-slot="resume-hint"
-      title="Copy the command"
+      title={`Copy: ${hint}`}
       onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-xs text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="mt-2 inline-flex items-center gap-1.5 self-start rounded-md px-2 py-1 text-xs font-medium text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
     >
-      <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">take over interactively: {hint}</span>
+      <SquareTerminalIcon className="size-3.5 shrink-0" aria-hidden="true" />
+      Take over in terminal
     </button>
   )
 }
