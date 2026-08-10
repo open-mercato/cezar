@@ -904,7 +904,7 @@ describe('submit', () => {
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Runner' }))
     const runnerOptions = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(runnerOptions.find((option) => option.textContent?.includes('Codex')) as HTMLElement)
+    fireEvent.click(runnerOptions.find((option) => option.textContent?.includes('codex')) as HTMLElement)
     await waitFor(() => expect(modelPill.textContent).toContain('gpt-5.6-codex'))
 
     fireEvent.change(textarea(), { target: { value: 'Use native settings' } })

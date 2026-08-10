@@ -179,10 +179,11 @@ export function RunnerPill({
   repoAccount?: Partial<Record<Runner, string>>
 }) {
   const available = RUNNERS.filter((r) => runners.includes(r.id))
-  const options = available.flatMap((runner) => {
+  const options = available.flatMap((runner): Array<{ value: string; label: string; desc?: string }> => {
     const logins = accounts.filter((entry) => entry.provider === runner.id)
     // One login is not a choice, so it does not become a row of its own — the agent is the row.
-    if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id, desc: runner.desc }]
+    // Name only, no backend description subtitle — the row is just the agent it names.
+    if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id }]
     return logins.map((login) => ({
       value: choiceValue(runner.id, login.id),
       label: `${runner.id} · ${login.label}`,

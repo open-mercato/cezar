@@ -115,6 +115,32 @@ export function RunHeader({
         <div className="flex min-w-0 items-center gap-2">
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
+            {/* The run's actions ride the title row now — Finish/Continue/Open in…/overflow on the
+                right at the title's height; mobile still folds them into the kebab. */}
+            <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
+              {flags.finish ? (
+                <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
+                  <CheckIcon aria-hidden="true" />
+                  Finish
+                </Button>
+              ) : null}
+              {flags.continueRun ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  title={actions.continuation.reason ?? 'Reopen the session'}
+                  disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
+                  onClick={() => actions.continueRun.mutate()}
+                >
+                  <PlayIcon aria-hidden="true" />
+                  Continue
+                </Button>
+              ) : null}
+              {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
+              <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+              {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
+              <SecondaryActionsMenu run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
+            </div>
             <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
           </span>
         </div>
@@ -141,36 +167,6 @@ export function RunHeader({
             <FilesIcon aria-hidden="true" className="size-3.5" />
             Files
           </TabLink>
-
-          <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
-            {flags.finish ? (
-              <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
-                <CheckIcon aria-hidden="true" />
-                Finish
-              </Button>
-            ) : null}
-            {flags.continueRun ? (
-              <Button
-                variant="outline"
-                size="sm"
-                title={actions.continuation.reason ?? 'Reopen the session'}
-                disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
-                onClick={() => actions.continueRun.mutate()}
-              >
-                <PlayIcon aria-hidden="true" />
-                Continue
-              </Button>
-            ) : null}
-            {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-            <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
-            {/* Everything past the state's primary actions folds behind one disclosure so the row
-                stays shallow (#765): Notes, Mark unread, Archive, and the destructive pair. */}
-            <SecondaryActionsMenu
-              run={run}
-              actions={actions}
-              onToggleNotes={() => setNotesOpen((open) => !open)}
-            />
-          </div>
         </div>
 
         {/* Workflow steps moved to the context bar above the composer, and the take-over command

@@ -230,7 +230,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Runner' }))
     const options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((option) => option.textContent?.includes('Codex')) as HTMLElement)
+    fireEvent.click(options.find((option) => option.textContent?.includes('codex')) as HTMLElement)
     await waitFor(() => expect(model.textContent).toContain('gpt-5.6-codex'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
