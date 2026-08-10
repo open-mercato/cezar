@@ -640,7 +640,6 @@ function TaskTable({
               <Th className="hidden w-[160px] lg:table-cell">Tags</Th>
               <Th className="w-[172px]">Ref</Th>
               <Th className="hidden w-[124px] xl:table-cell">Workflow</Th>
-              <Th className="hidden w-[140px] xl:table-cell">Branch</Th>
               {showCost ? <Th className="hidden w-[76px] text-right lg:table-cell">Cost</Th> : null}
               <Th className="hidden w-[68px] text-right xl:table-cell">CPU</Th>
               <Th className="hidden w-[92px] text-right xl:table-cell">Mem</Th>
@@ -736,7 +735,9 @@ function TaskRow({
           {attention.label}
         </Pill>
       </td>
-      <td className={cn(TD_BASE, 'min-w-[220px] max-w-0')}>
+      {/* The one column with no fixed width, so every pixel the others give up lands here — and
+          dropping Branch gave up 140 of them. A cross-project list is read by TITLE. */}
+      <td className={cn(TD_BASE, 'min-w-[280px] max-w-0')}>
         <span className="flex min-w-0 items-center gap-1.5">
           <Link
             to={to}
@@ -786,15 +787,6 @@ function TaskRow({
       </td>
       <td className={cn(TD_BASE, 'hidden text-[12.5px] text-muted-foreground xl:table-cell')}>
         {run.workflow}
-      </td>
-      <td className={cn(TD_BASE, 'hidden xl:table-cell')}>
-        {run.branch ? (
-          <span className="rounded-[6px] bg-muted px-1.5 py-0.5 font-mono text-[11.5px] font-medium text-muted-foreground">
-            {run.branch}
-          </span>
-        ) : (
-          <Dash />
-        )}
       </td>
       {showCost ? (
         <td

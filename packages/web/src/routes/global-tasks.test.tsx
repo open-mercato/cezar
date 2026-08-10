@@ -278,6 +278,12 @@ describe('global tasks page', () => {
     fireEvent.change(search, { target: { value: 'web checkout' } })
     await waitFor(() => expect(rowIds()).toEqual(['w1']))
 
+    // Branch has no column here — dropping it gave the width to the task title — but pasting a
+    // branch name to find the task that made it still works, exactly as it does in the
+    // per-project table whose Branch column is folded by default.
+    expect(document.querySelector('[data-slot="global-tasks-table"]')!.textContent).not.toContain(
+      'feat/checkout',
+    )
     fireEvent.change(search, { target: { value: 'feat/checkout' } })
     await waitFor(() => expect(rowIds()).toEqual(['a1']))
   })

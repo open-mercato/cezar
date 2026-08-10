@@ -211,10 +211,15 @@ const matchesTags = (task: GlobalTask, selected: readonly string[]): boolean => 
 }
 
 /**
- * Search text for one row: exactly what the table PRINTS about it (the displayed title, the
- * project name, the workflow, the branch and the tags) — never the run id or a title hidden
- * behind a summary, on the same rule as the per-project table's `filterRuns`: matching on text
- * the table does not show makes rows appear for no visible reason.
+ * Search text for one row: the displayed title, the project name, the workflow, the tags — and
+ * the branch, which is the one thing here the table does NOT print.
+ *
+ * The rule it bends is a real one (matching on text the table never shows makes rows appear for
+ * no visible reason, which is why the run id and a title hidden behind a summary stay out), but
+ * a branch name is the exception the per-project table already makes: its Branch column is
+ * FOLDED by default (`lib/task-columns.ts`) and `filterRuns` searches it anyway. Pasting a
+ * branch name from a terminal to find the task that made it is a deliberate gesture, not an
+ * accidental match, so dropping the column here does not mean dropping the ability.
  */
 function haystack(task: GlobalTask): string {
   return [
