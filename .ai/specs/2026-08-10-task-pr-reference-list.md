@@ -134,7 +134,16 @@ The chip's visual language does not change; what changes is that there can be mo
 - **Accessibility:** every chip stays a real link with a descriptive `aria-label` (the existing `ReferenceChip` contract); the `+N` control is a button with `aria-expanded`, the popover is keyboard-dismissable, and the muted treatment keeps contrast above 4.5:1 against the row background rather than relying on opacity alone.
 - **Unchanged:** the inert-text degradation for a non-`http(s)` URL (#431) and the "no invented links" rule (#526) — a declared number becomes a link only through the on-screen project's repository base (`useProjectRepoBase()`), never through a transcript-scraped host.
 
-Mockups of the proposed chip rows and screenshots of the current single-chip surfaces are attached to this spec's PR as evidence (see the PR's evidence comment).
+Visuals live beside this spec and are attached to its PR as evidence:
+
+| File | Shows |
+|---|---|
+| `assets/task-pr-reference-list/current-01-tasks-overview.png` | Today: the Tasks overview Ref column and the sidebar, each with the single `#831` chip — the last declaration, with #812 and #824 from the same task already unreachable. |
+| `assets/task-pr-reference-list/current-02-task-thread-header.png` | Today: the task-thread header meta line, same single chip. |
+| `assets/task-pr-reference-list/mockup-01-task-thread-header.png` (`.html`) | Proposed: primary + inline chips + `+N`, with the popover listing every PR, its state and its origin. |
+| `assets/task-pr-reference-list/mockup-02-sidebar-and-overview.png` (`.html`) | Proposed: the sidebar's count suffix and the overview Ref column's `+N`. |
+
+The current-state captures come from the repository's own shared test environment (`.ai/scripts/test-env-up.sh`, `CEZ_DRY_RUN=1`) seeded with a task that declared three PRs — the reported reproduction, rendered.
 
 ## 📝 Edge Cases & Failure Scenarios
 
