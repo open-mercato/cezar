@@ -8,7 +8,8 @@ own stated goal on build-heavy repositories: a project sitting **exactly inside*
 cost live in disjoint file sets — the checkout is 7 MB, the `.build`/`DerivedData`
 trees beside it are 2.9 GB — and a count budget can only evict both at once. This
 spec adds a **strip** rung between "keep" and "reclaim": delete the regenerable
-artifacts, keep the checkout. Budgets then decide only *which rung* a worktree sits
+artifacts, keep the checkout — locally rebuildable output first, and dependency
+trees only when the disk is genuinely short. Budgets then decide only *which rung* a worktree sits
 on. No new user-facing settings: the second budget dimension is **discovered from
 free disk space**, not configured.
 
@@ -20,8 +21,8 @@ to be overridden by a human before merge.
 
 | # | Question | Default chosen | Rationale |
 |---|---|---|---|
-| Q1 | What is the "hot" set that keeps its build cache? | **3 most recently finished**, as an internal constant `HOT_KEEP = 3` — not a setting | `AGENTS.md` Zero config: "When a feature seems to need configuration, the design is wrong. Discover it, or default it." Three covers the realistic resume window (the task you just finished, plus the two you might bounce back to) without holding a fleet of caches. |
-| Q2 | How is the byte budget expressed — a `maxBytes` setting, or discovered? | **Discovered from free disk space**; no new config key at all | Zero config again: "Never trade a working default for a knob." A byte ceiling is a number nobody can pick correctly — it depends on the machine, not the repo. Free space is the quantity the original spec's failure mode is actually about ("the disk fills"), and it is already knowable. This also collapses the backward-compatibility surface to additive `RunRecord` fields only. |
+| Q1 | What is the "hot" set that keeps its build cache? | **The 3 most recently finished worktrees *per project*** — internal constant `HOT_KEEP = 3`, not a setting. Per project, matching `keep`, which is already resolved per repo root by `resolveWorktreeRetention(repoRoot)`. | `AGENTS.md` Zero config: "When a feature seems to need configuration, the design is wrong. Discover it, or default it." Three covers the realistic resume window (the task you just finished, plus the two you might bounce back to) without holding a fleet of caches. |
+| Q2 | How is the byte budget expressed — a `maxBytes` setting, or discovered? | **Discovered from free disk space** against a flat `DISK_FLOOR` constant; no new config key at all | Zero config again: "Never trade a working default for a knob." A byte ceiling is a number nobody can pick correctly — it depends on the machine, not the repo. Free space is the quantity the original spec's failure mode is actually about ("the disk fills"), and it is already knowable. This also collapses the backward-compatibility surface to additive `RunRecord` fields only. |
 | Q3 | Is the artifact allowlist configurable per project? | **No** — an internal constant, extended by PR when a new toolchain appears | Same law. A per-project allowlist is a footgun pointed at a delete path: a typo becomes data loss. The `git check-ignore` half of the safety rule already adapts the behavior per repository without anyone authoring anything. |
 | Q4 | Is strip on by default in its first release? | **Yes, on by default** — ⚠ **NEEDS HUMAN CONFIRMATION** | The Zero config law forbids shipping this behind an opt-in flag ("never trade a working default for a knob"), but `AGENTS.md` → "Changing a mechanism that already works" warns that exactly this kind of change leaves the zero-config user quietly worse off (#810/#811 are the named worked examples). What today's behavior is load-bearing **for** is warm build caches on recently finished tasks, and `HOT_KEEP` is what preserves it. The two laws pull in opposite directions here, the surface is `risk-high`, and every user is affected silently — so a maintainer should sign this off rather than an autonomous default. |
 
@@ -29,8 +30,8 @@ to be overridden by a human before merge.
 
 Each task runs in its own worktree under `.ai/cezar/worktrees/<runId>`. Retention
 (#483, `.ai/specs/2026-07-18-worktree-retention.md`) bounds that pool by **count**:
-`selectReclaimableWorktrees` (`packages/cezar/src/runs/retention.ts:37`) is
-`reclaimable.slice(keep)`. Its stated goal is:
+`selectReclaimableWorktrees` (`packages/cezar/src/runs/retention.ts:37`) reduces to
+`reclaimable.slice(keep)` at `retention.ts:42`. Its stated goal is:
 
 > the disk fills — at which point new tasks fail to create a worktree and the
 > cockpit degrades
@@ -104,16 +105,23 @@ A three-rung ladder replaces today's binary threshold.
 
 | Rung | What is removed | What survives | Resume path |
 |---|---|---|---|
-| **1. Strip** *(new)* | regenerable build artifacts | checkout + `.git` metadata | none needed — `run.ts:2111` still finds a real path; the agent just rebuilds |
+| **1a. Strip — derived output** *(new)* | `.build`, `DerivedData`, `target`, `dist`, `.next`, `.gradle`, `.turbo` | checkout + `.git` metadata | none needed — `run.ts:2111` still finds a real path; the agent rebuilds locally |
+| **1b. Strip — dependency trees** *(new, pressure-only)* | `node_modules`, `.venv` | checkout + `.git` metadata | rebuild **may need network** and a warm package-manager cache — see below |
 | **2. Reclaim** *(today)* | the whole directory | the `cez/<id8>` branch | `rematerializeReclaimedWorktree` |
 | **3. Delete** *(today, manual)* | directory + branch | nothing | none |
 
 Budgets stop being the eviction mechanism and become **placement**: they decide
 which rung a worktree sits on.
 
-- The `HOT_KEEP` (3) most recently finished worktrees are untouched — warm caches,
-  instant resume.
-- Everything else that is finished gets **stripped**.
+- **`keep = 0` disables every rung.** That setting means *"do not manage my
+  worktrees"*, not *"do not delete my directories"* — see Edge Cases.
+- The `HOT_KEEP` (3) most recently finished worktrees **of that project** are
+  untouched — warm caches, instant resume.
+- Everything else that is finished has its **derived output** stripped (rung 1a).
+- **Dependency trees are stripped only under real disk pressure** (rung 1b), because
+  restoring one needs a reachable registry rather than just CPU. cezar's own
+  worktrees are the worked example: the validation gate cannot run in one until
+  `node_modules` is restored.
 - Beyond `keep` (the existing count budget, unchanged) — or under disk pressure —
   worktrees are **reclaimed**, exactly as today.
 
@@ -130,11 +138,20 @@ path over user data.
 
 A path is removed **only when both conditions hold**:
 
-1. its basename is on the internal artifact allowlist —
-   `.build`, `DerivedData`, `node_modules`, `target`, `dist`, `.next`, `.venv`,
-   `.gradle`, `.turbo`; **and**
+1. its basename is on the internal artifact allowlist, which has **two tiers**:
+   - **derived output** — `.build`, `DerivedData`, `target`, `dist`, `.next`,
+     `.gradle`, `.turbo`: rebuilt locally from CPU alone, stripped whenever a
+     worktree falls outside the hot set;
+   - **dependency trees** — `node_modules`, `.venv`: restoring these needs a
+     reachable registry, so they are stripped **only under real disk pressure**;
+
+   **and**
 2. `git check-ignore -q <path>` confirms it is genuinely ignored **in that
-   repository**.
+   repository**. Invoked **without `--no-index`** — that flag stops `check-ignore`
+   consulting the index and silently converts this guard into a data-loss path
+   (measured: with `dist/` ignored and `dist/foo.js` force-added, `git check-ignore
+   -q dist` exits 1 and protects the directory, while adding `--no-index` exits 0
+   and would delete it). The prohibition carries its own regression test.
 
 Two independent conditions, both required. The first bounds *what* may ever be
 considered. The second is what makes it safe in a repository that does not match
@@ -152,15 +169,35 @@ files wholesale, which includes `.env` and local credentials.
 ### Where the byte dimension comes from
 
 Not from a setting. Before a retention pass, the enforcer reads free space on the
-volume holding `.ai/cezar/worktrees` (`fs.statfs`, Node ≥ 18.15). When free space is
-below `DISK_FLOOR` the ladder escalates: strip everything outside the hot set first,
-then reclaim oldest-first until free space recovers or nothing reclaimable is left.
+volume holding `.ai/cezar/worktrees` (`fs.statfs`; this repo already requires Node
+≥ 20, `package.json:8`, so availability is not the interesting risk — see the
+degradation note below).
 
-`DISK_FLOOR` is `max(10 GB, 10% of the volume)` — a constant, derived per machine.
-When `statfs` is unavailable or fails, the pass degrades to count-only behavior:
-byte-blind, exactly today's semantics. This mirrors the existing degradation
-contract, where a failed `du` already surfaces as `totalBytes: null` rather than a
-wrong number (`server.ts:4328`).
+`DISK_FLOOR` is a **flat 10 GiB**. An earlier draft used
+`max(10 GB, 10% of the volume)` and that is wrong in a way worth recording, because
+the percentage term dominates on exactly the machines it was not written for: a 4 TB
+volume with a comfortable 300 GB free sits under a 400 GB floor, so the pass is
+permanently under pressure and the escalation loop runs to its "nothing reclaimable
+is left" exit — emptying the pool on every pass regardless of `keep`. The spec's own
+argument settles the shape: once strip is doing the work, the byte dimension is a
+**backstop, not a tuning parameter**, and a backstop does not need to scale with the
+volume.
+
+The escalation loop therefore has **three** exit conditions, not two:
+
+1. free space clears the floor, or
+2. nothing reclaimable is left, or
+3. **the deficit is unrelievable** — reclaiming everything outside the hot set still
+   would not clear the floor. The pass then performs the strip rungs only, reports
+   the condition, and reclaims nothing. Retention must never delete on account of a
+   deficit it cannot fix; when 100 GB is missing, deleting worktrees is not the
+   answer and cezar should say so rather than thrash.
+
+When `statfs` fails or returns unusable numbers — some filesystems and platforms do —
+the pass degrades to count-only behavior: byte-blind, exactly today's semantics, and
+rung 1b never fires. This mirrors the existing degradation contract, where a failed
+`du` already surfaces as `totalBytes: null` rather than a wrong number
+(`server.ts:4328`).
 
 ### Eviction order: oldest first, not largest first
 
@@ -219,17 +256,35 @@ passes. Best-effort and never throws, matching `removeWorktree`'s existing
 discipline (`git-worktree.ts:238`). Candidate discovery is bounded — it descends
 only far enough to find the allowlisted names, never a full walk of a 2.9 GB tree.
 
-### `workflows/run.ts` — the enforcer
+### The enforcer — and its two call sites
 
-`enforceRetention` (`run.ts:1502`, invoked from the terminal-transition hook at
-`run.ts:1170` and at boot from `index.ts:238`) gains three responsibilities: sample
-free space, gather sizes, and apply both rungs.
+Retention is enforced from **two** places today, and they do not share an entry point:
+
+- `enforceRetention` (`workflows/run.ts:1502`), behind the terminal-transition hook
+  at `run.ts:1170`; and
+- **boot**, which calls `reclaimWorktrees(repoRoot, store, keep)` **directly** at
+  `index.ts:238` — it does not go through `enforceRetention`.
+
+Wiring only the first would leave a restarted cezar applying the old count-only
+behavior at boot, which is the common case on a laptop. **Both call sites are
+funnelled through one entry point before the planner is wired in** (plan step 5
+below), so there is exactly one place that samples free space, gathers sizes, and
+applies the rungs.
 
 **Sizing is measured once, not per pass.** A finished worktree is immutable — nothing
-writes to it again — so its size is measured at the terminal transition (where the
-enforcer already runs) and persisted on the run record. Re-stamped after a strip.
-This is what keeps retention O(1) per pass instead of re-walking `du` over gigabytes
-on every terminal transition of every run.
+writes to it again — so its size is measured when the enforcer first sees it and is
+then persisted on the run record, re-stamped after a strip. That keeps retention
+O(1) per pass instead of re-walking `du` over gigabytes on every terminal transition.
+
+**Lazy backfill is required, not optional.** Measuring only at the terminal
+transition would leave every run that finished *before* this ships permanently
+unmeasured — such a run never transitions again — and an absent size counts as `0`.
+On the machine in the Problem Statement that is all ten worktrees holding the 17 GB
+reporting zero to the planner, forever: the byte dimension would be inert for exactly
+the population that motivated it. The enforcer therefore measures and persists the
+size of any finished run whose `worktreeSizeBytes` is absent, once, as part of the
+pass. The machinery already exists — `worktreeSizeBytes()` is what `GET /worktrees`
+already calls per row.
 
 ## Data Model
 
@@ -251,8 +306,16 @@ and a worktree may carry both over its life (stripped, later reclaimed).
 unaffected — a *stripped* worktree still exists on disk, so resume needs no
 re-materialization at all, which is precisely the rung's advantage.
 
-**No new configuration keys.** `worktreeRetention`, `worktreeRetentionDefault`, and
-the `0 = unlimited` semantics are untouched.
+**No new configuration keys.** `worktreeRetention` and `worktreeRetentionDefault`
+are untouched.
+
+`keep = 0` deserves a sharper statement than "the semantics are untouched", because
+that would be true of the config key while being false of what the user gets. Today
+`keep <= 0` makes `selectReclaimableWorktrees` return `[]` (`retention.ts:38`) —
+cezar keeps its hands off. Under this spec **`keep = 0` disables the strip rungs
+too**, not just reclaim. Someone who set it is asking cezar not to manage their
+worktrees at all, and silently removing their build trees would honor the letter of
+the setting while breaking its meaning.
 
 ## API Contracts
 
@@ -264,7 +327,11 @@ Purely additive; no existing field changes shape or meaning.
   and `keep` are unchanged, including the `totalBytes: null` degradation.
 - `POST /worktrees/strip` — the manual counterpart to the existing reclaim-now
   action; strips every finished worktree outside the hot set. Answers
-  `{ stripped: string[], freedBytes: number }`.
+  `{ stripped: string[], freedBytes: number }`. It is idempotent, and safe when it
+  overlaps a retention pass triggered by a terminal transition (`run.ts:1170`) while
+  the panel is open: both actors target the same regenerable set, so a double removal
+  is a no-op rather than a conflict, and neither can remove what the other still
+  needs.
 - `GET/PUT /api/v1/workspace/config` — **unchanged**. This is a direct consequence
   of Q2: discovering the byte dimension instead of configuring it means the
   protected `resources` shape is not touched at all.
@@ -292,6 +359,9 @@ novel enough to re-specify.
 
 | Scenario | Behavior |
 |---|---|
+| **`keep = 0`** (user opted out of management) | **Every rung is disabled** — no strip, no reclaim. The setting means "do not manage my worktrees"; honoring it only for directory removal would break its meaning while satisfying its letter. |
+| **Free space below the floor, and unrelievable** — reclaiming everything outside the hot set still would not clear it | The pass performs the strip rungs only, reports the condition, and **reclaims nothing**. Retention never deletes on account of a deficit it cannot fix. |
+| Disk pressure relieved mid-pass | Escalation stops at the first exit condition; rung 1b (dependency trees) does not fire once the floor is clear. |
 | `git check-ignore` unavailable or errors | Condition 2 cannot be satisfied → **nothing is stripped**. Failure is closed, never open. |
 | Repository tracks an allowlisted directory (`dist/`) | Condition 2 fails → untouched. No configuration required. |
 | `fs.statfs` unavailable/fails | `pressureBytes = 0`; pass degrades to count-only, i.e. today's behavior. |
@@ -301,6 +371,7 @@ novel enough to re-specify.
 | Symlink inside a candidate path | Never followed out of the worktree; resolved paths outside the worktree root are refused. |
 | Strip partially fails (permissions, file lock) | Best-effort: what was removed stays removed, `worktreeStrippedAt` is stamped only when the pass completed, so the next pass retries. Same shape as the existing reclaim stamp discipline (`retention.ts:121`). |
 | Disk already full when the pass runs | Escalation order is strip-then-reclaim; strip needs no free space to proceed. |
+| Dependency tree stripped, then the machine goes offline | Resume needs `node_modules` and cannot restore it without a registry. This is why rung 1b is pressure-only: the trade is disk now against a network dependency later, and it is only worth making when the disk is genuinely short. |
 
 ## Risks & Impact Review
 
@@ -337,8 +408,19 @@ Every step below is verifiable, which is the point of splitting them this way.
   oldest-first ordering. No filesystem.
 - **Strip primitive** — fixture repositories: an ignored `node_modules` is removed;
   a **tracked** `dist` is not; an allowlisted name that is not ignored is not; a
-  non-allowlisted ignored path (`.env`) is not; `check-ignore` unavailable removes
-  nothing. This last set is the regression suite that matters most.
+  non-allowlisted ignored path (`.env`) is not, which is what proves both conditions
+  are load-bearing rather than one implying the other; `check-ignore` unavailable
+  removes nothing. This is the regression suite that matters most.
+- **`git check-ignore` must be invoked WITHOUT `--no-index`** — its own regression
+  test, with the tracked-`dist` fixture as the proof. Measured on a fixture repo
+  with `dist/` in `.gitignore` and `dist/foo.js` force-added: `git check-ignore -q
+  dist` exits **1** (not ignored → protected), while `git check-ignore -q --no-index
+  dist` exits **0** (ignored → the path would be deleted). The entire safety argument
+  rests on consulting the index, i.e. on a default that a future refactor could
+  plausibly "optimize" away, so the prohibition needs a test and not just a sentence.
+- **Rung ordering** — derived output is stripped outside the hot set without
+  pressure; dependency trees are stripped only under pressure; `keep = 0` strips
+  nothing at all.
 - **Store** — a `runs.json` written before these fields still parses and its runs
   survive (the `safeParse` contract).
 - **Enforcer** — sizes are measured once and reused; a stripped worktree is
@@ -373,19 +455,26 @@ Phase 2 makes it visible and manually driveable.
 4. Add free-space sampling (`fs.statfs`, `DISK_FLOOR`) with count-only degradation
    when unavailable. Test: pressure computed correctly; failure degrades. *App
    works: value unused.*
-5. Wire `enforceRetention` (`workflows/run.ts:1502`) to the planner: measure size
-   once at the terminal transition, persist it, apply strip then reclaim. Tests:
-   sizes measured once per finished run; strip precedes reclaim; hot set untouched.
-   *App works — this is the step that turns the behavior on.*
+5. **Funnel both enforcement call sites through one entry point**, changing no
+   behavior: `enforceRetention` (`workflows/run.ts:1502`) and the direct
+   `reclaimWorktrees(repoRoot, store, keep)` call at boot (`index.ts:238`). Test:
+   both paths reach the same function and today's outcomes are unchanged. *App
+   works: pure refactor — and it is what stops step 6 from silently skipping boot.*
+6. Wire that single entry point to the planner: lazily measure and persist the size
+   of any finished run that has none, then apply strip and reclaim. Tests: a
+   pre-existing finished run with no recorded size is measured exactly once; sizes
+   are not re-measured on later passes; strip precedes reclaim; the hot set is
+   untouched; `keep = 0` does nothing; an unrelievable deficit strips without
+   reclaiming. *App works — this is the step that turns the behavior on.*
 
 ### Phase 2: panel surfacing + manual strip
 
-6. Extend `GET /worktrees` (`server.ts:4313`) with `strippedAt` and `rung`, leaving
+7. Extend `GET /worktrees` (`server.ts:4313`) with `strippedAt` and `rung`, leaving
    every existing field and the `totalBytes: null` degradation intact. Test: additive
    shape; existing consumers unaffected. *App works.*
-7. Add `POST /worktrees/strip`. Test: strips outside the hot set, reports freed
-   bytes, is idempotent. *App works.*
-8. Surface the rung per row, the reclaimable-artifact summary, and the "Strip
+8. Add `POST /worktrees/strip`. Test: strips outside the hot set, reports freed
+   bytes, is idempotent, and is safe when it overlaps a retention pass. *App works.*
+9. Surface the rung per row, the reclaimable-artifact summary, and the "Strip
    artifacts now" action in `worktrees-panel.tsx`, reusing the existing confirm
-   dialog. Test: component tests for each state, including the disk-pressure notice.
-   *App works.*
+   dialog. Test: component tests for each state, including the disk-pressure and
+   unrelievable-pressure notices. *App works.*
