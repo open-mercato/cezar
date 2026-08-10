@@ -790,7 +790,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="note-line"]')?.textContent).toContain('re-queued')
   })
 
-  it('no plan → no dock, no header mirror; steps present → the rail renders in the header', () => {
+  it('no plan → no plan chip; steps present → a collapsed Steps chip above the composer', () => {
     renderView(
       <ThreadView
         run={run('running', {
@@ -802,20 +802,19 @@ describe('ThreadView', () => {
         thread={reduceThread(EVENTS)}
       />,
     )
-    expect(document.querySelector('[data-slot="plan-dock"]')).toBeNull()
-    expect(document.querySelector('[data-slot="plan-mirror"]')).toBeNull()
-    // The header shows the compact one-line summary (collapsed by default): a dot per step and
-    // the active step's name + position. The full rows only mount once it's expanded.
-    const summary = document.querySelector('[data-slot="workflow-steps"]')
-    expect(summary).not.toBeNull()
-    expect(summary!.textContent).toContain('Do the task')
-    expect(summary!.textContent).toContain('step 1 of 2')
+    expect(document.querySelector('[data-slot="plan-chip"]')).toBeNull()
+    // The context bar's Steps chip (collapsed): a dot per step and the active step's name +
+    // position. The full rail only mounts once its popover opens.
+    const chip = document.querySelector('[data-slot="steps-chip"]')
+    expect(chip).not.toBeNull()
+    expect(chip!.textContent).toContain('Do the task')
+    expect(chip!.textContent).toContain('1/2')
     const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
     expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['active', 'pending'])
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 
-  it('a plan in the stream → the dock above the composer area + the compact header mirror', () => {
+  it('a plan in the stream → a collapsed Plan chip + the compact header Plan stat', () => {
     const withPlan: RunEvent[] = [
       ...EVENTS,
       line(8, 'plan.updated', {
@@ -827,15 +826,15 @@ describe('ThreadView', () => {
       }),
     ]
     renderView(<ThreadView run={run('running')} thread={reduceThread(withPlan)} />)
-    expect(document.querySelector('[data-slot="plan-dock"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="plan-chip"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
-    // The header mirror is now the Plan stat tile.
+    // The header mirror is the Plan stat tile.
     const planStat = [...document.querySelectorAll('[data-slot="stat-tile"]')].find((tile) =>
       /Plan/i.test(tile.textContent ?? ''),
     )
     expect(planStat?.textContent).toContain('1/3')
-    // No steps on this run — the rail knows to stay away.
-    expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
+    // No steps on this run — no Steps chip.
+    expect(document.querySelector('[data-slot="steps-chip"]')).toBeNull()
   })
 
   it('plan-kind tool cards stay out of the thread — the dock is their surface (#382)', () => {
@@ -857,7 +856,7 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('running')} thread={reduceThread(events)} />)
     expect(document.querySelector('[data-slot="tool-card"]')).toBeNull()
-    expect(document.querySelector('[data-slot="plan-dock"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="plan-chip"]')).not.toBeNull()
   })
 })
 

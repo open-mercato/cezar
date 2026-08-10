@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
@@ -9,7 +9,6 @@ import {
   railProgress,
   railVisual,
   StepRail,
-  WorkflowSteps,
   type RailBarTone,
   type RailVisual,
 } from './step-rail'
@@ -151,59 +150,5 @@ describe('activeStepIndex — who the summary speaks for', () => {
   })
 })
 
-describe('WorkflowSteps — the collapsible header summary', () => {
-  const steps = [
-    step('implement', 'done', { name: 'Do the task' }),
-    step('verify', 'running', { name: 'Verify', kind: 'check' }),
-    step('review', 'pending', { name: 'Review' }),
-  ]
-  /** Unique per test — the expand memory below is module-level and keyed by run id. */
-  let seq = 0
-  const freshRun = () => `run-steps-${(seq += 1)}`
-
-  it('renders nothing without steps', () => {
-    render(<WorkflowSteps runId={freshRun()} steps={[]} />)
-    expect(document.querySelector('[data-slot="workflow-steps"]')).toBeNull()
-  })
-
-  it('collapsed by default: names the active step, one dot per step, and hides the full rows', () => {
-    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
-    const summary = document.querySelector('[data-slot="workflow-steps"]')!
-    expect(summary.textContent).toContain('Verify')
-    expect(summary.textContent).toContain('step 2 of 3')
-    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
-    expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
-    // The full rows are not mounted until the user expands.
-    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
-  })
-
-  it('expands to the full rail on click', () => {
-    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
-    fireEvent.click(screen.getByRole('button'))
-    const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
-    expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
-    expect(rows[1]!.textContent).toContain('check')
-    expect(rows[1]!.textContent).toContain('step 2 of 3')
-  })
-
-  it('remembers an explicit expand per run across remounts — a tab switch must not collapse it', () => {
-    const runId = freshRun()
-    const first = render(<WorkflowSteps runId={runId} steps={steps} />)
-    fireEvent.click(screen.getByRole('button'))
-    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
-    first.unmount()
-
-    // Same run, remounted by another task route's RunHeader: still expanded.
-    render(<WorkflowSteps runId={runId} steps={steps} />)
-    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
-  })
-
-  it('does not leak that choice to a different run — a fresh run opens collapsed', () => {
-    const first = render(<WorkflowSteps runId={freshRun()} steps={steps} />)
-    fireEvent.click(screen.getByRole('button'))
-    first.unmount()
-
-    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
-    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
-  })
-})
+// The collapsed chip that hosts this rail now lives in the context bar
+// (thread-context-bar.test.tsx); the rail itself is exercised above.

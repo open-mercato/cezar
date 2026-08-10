@@ -30,7 +30,8 @@ import { AutoResumeHint } from './auto-resume-hint'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
-import { PlanDock, planCounts } from './plan-dock'
+import { planCounts } from './plan-dock'
+import { ThreadContextBar } from './thread-context-bar'
 import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
@@ -381,11 +382,10 @@ export function ThreadView({
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
 
-          {plan !== undefined && plan.length > 0 ? (
-            // Keyed by run id: the collapse default re-derives per task (see PlanDock).
-            // `settled` freezes the plan's live styling once the run stops (audit A2).
-            <PlanDock key={run.id} runId={run.id} entries={plan} settled={runIsTerminal} />
-          ) : null}
+          {/* Steps + plan as collapsed chips that expand upward into popovers (#header-density):
+              the workflow rail moved down out of the header, the plan out of its always-open dock.
+              `settled` freezes the plan's live styling once the run stops (audit A2). */}
+          <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
 
           {/* A usage-limit stop is the one `failed` state that is still going somewhere — the
               dock says so before the composer offers a Continue nobody needs to press. */}

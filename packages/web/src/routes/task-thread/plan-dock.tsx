@@ -1,28 +1,12 @@
-import { ChevronDownIcon } from 'lucide-react'
-import { useState } from 'react'
-
 import type { PlanEntry, PlanStatus } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
 /**
- * The plan/todo dock (spec §"Task thread", issue #382; mockup `.plan-dock`): the agent's
- * latest `plan.updated` snapshot, pinned above the composer area — NOT in the thread (the
- * plan-kind tool cards are hidden there; this is their surface). Collapsed it is a one-line
- * "Plan · N/M" odometer plus the current item; expanded it is the checkbox list with the
- * entry states (✓ strikethrough / ◐ pulsing "in progress" / ○ pending / ⊘ cancelled).
- *
- * The caller keys this component by run id, so the collapse default re-derives per task.
+ * The plan/todo checklist (spec §"Task thread", issue #382): the agent's latest `plan.updated`
+ * snapshot as a checkbox list — ✓ strikethrough / ◐ pulsing "in progress" / ○ pending /
+ * ⊘ cancelled. It is NOT rendered in the thread (the plan-kind tool cards are hidden there);
+ * its home is the Plan popover on the thread context bar (see thread-context-bar.tsx).
  */
-
-/** Collapse memory per run id — a module-level map on purpose (the scroll-cache pattern):
- *  the choice survives route changes for the session without inventing server persistence. */
-const openByRun = new Map<string, boolean>()
-
-/** Desktop starts expanded, phones collapsed (the mockup's mobile reflow keeps only the
- *  odometer). jsdom has no matchMedia — that environment counts as desktop. */
-function defaultOpen(): boolean {
-  return typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 768px)').matches
-}
 
 /** The "N/M" odometer math: completed entries over all entries the agent still
  *  intends to do. `cancelled` entries leave the denominator — they are work that
@@ -50,66 +34,15 @@ export function planActiveEntry(entries: PlanEntry[]): PlanEntry | undefined {
  * settled the dock drops the present-tense current line and stops the in-progress entry pulsing
  * and claiming activity — the odometer and the struck-through completions tell the real story.
  */
-export function PlanDock({
-  runId,
-  entries,
-  settled = false,
-}: {
-  runId: string
-  entries: PlanEntry[]
-  settled?: boolean
-}) {
-  const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen())
-  if (entries.length === 0) return null // full-replacement can empty the plan — nothing to dock
-
-  const { done, total } = planCounts(entries)
-  const active = planActiveEntry(entries)
-  const toggle = () =>
-    setOpen((value) => {
-      openByRun.set(runId, !value)
-      return !value
-    })
-
+/** The checklist itself — the Plan popover's body. Owns no open state; the context-bar chip
+ *  drives visibility. `settled` freezes the live styling once the run stops (audit A2). */
+export function PlanList({ entries, settled = false }: { entries: PlanEntry[]; settled?: boolean }) {
   return (
-    <section
-      data-slot="plan-dock"
-      data-state={open ? 'open' : 'collapsed'}
-      className="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-xs"
-    >
-      {/* The mockup's `.grad-edge` — the brand gradient as a hairline top edge. */}
-      <div aria-hidden data-slot="grad-edge" className="h-[3px]" style={{ background: 'var(--grad)' }} />
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        className={cn('flex w-full items-center gap-2 px-3.5 text-left text-[13px]', open ? 'pt-2 pb-1.5' : 'py-2')}
-      >
-        <span className="shrink-0 font-semibold">Plan</span>
-        {/* Spaced by the row gap, not middot/em-dash separators (house rule). */}
-        <span data-slot="plan-count" className="shrink-0 text-muted-foreground tabular-nums">
-          {done}/{total}
-        </span>
-        {!open && active !== undefined && !settled ? (
-          <span
-            data-slot="plan-current"
-            className="min-w-0 truncate border-l border-border pl-2 text-muted-foreground"
-          >
-            {active.activeForm ?? active.content}
-          </span>
-        ) : null}
-        <ChevronDownIcon
-          aria-hidden
-          className={cn('ml-auto size-3.5 shrink-0 text-soft-foreground transition-transform', !open && 'rotate-180')}
-        />
-      </button>
-      {open ? (
-        <ul data-slot="plan-list" className="flex flex-col gap-[7px] px-3.5 pb-3">
-          {entries.map((entry, index) => (
-            <PlanRow key={`${index}:${entry.content}`} entry={entry} settled={settled} />
-          ))}
-        </ul>
-      ) : null}
-    </section>
+    <ul data-slot="plan-list" className="flex flex-col gap-[7px]">
+      {entries.map((entry, index) => (
+        <PlanRow key={`${index}:${entry.content}`} entry={entry} settled={settled} />
+      ))}
+    </ul>
   )
 }
 

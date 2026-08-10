@@ -74,7 +74,6 @@ import { isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -200,12 +199,8 @@ export function RunHeader({
           </div>
         </div>
 
-        {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-2 pb-1">
-            <WorkflowSteps runId={run.id} steps={run.steps} />
-          </div>
-        ) : null}
-
+        {/* Workflow steps moved to the context bar above the composer (thread-context-bar.tsx),
+            so the sticky header stays shallow. */}
         {hint ? <ResumeHintLine hint={hint} /> : null}
         {notesOpen ? <NotesPanel runId={run.id} /> : null}
       </div>
