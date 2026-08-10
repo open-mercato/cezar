@@ -42,7 +42,7 @@ export function ThreadContextBar({
  *  the composer's opaque top edge, so it reads as tucked under. The status color rides the top
  *  edge (see the accent maps below); pb-2 is the slice that disappears under the input. */
 const TAB_CLASS =
-  'flex min-w-0 items-center gap-1.5 rounded-t-lg border border-border border-b-0 bg-card px-2.5 pt-1 pb-2 hover:bg-muted data-[state=open]:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
+  'flex min-w-0 items-center gap-1.5 rounded-t-lg border border-border border-b-0 bg-card px-2.5 pt-2 pb-2 hover:bg-muted data-[state=open]:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
 
 /** A status-colored top edge is what tells the two tabs apart at a glance: Verify carries the
  *  workflow's live tone (green done / amber running / danger failed), Plan carries the accent. */
