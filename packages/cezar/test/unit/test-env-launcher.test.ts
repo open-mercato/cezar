@@ -71,7 +71,14 @@ printf '<!doctype html>' > packages/cezar/web/dist/index.html
     join(root, 'bin/agent-browser'),
     `#!/bin/sh
 case "\${1:-}" in
-  doctor) printf '{"ok":true}\\n' ;;
+  doctor)
+    if [ "\${FAKE_SANDBOX_DOCTOR:-}" = 1 ]; then
+      case ",\${AGENT_BROWSER_ARGS:-}," in
+        *,--no-sandbox,*) ;;
+        *) printf '{"success":false,"checks":[{"status":"fail","message":"No usable sandbox"}]}\\n'; exit 1 ;;
+      esac
+    fi
+    printf '{"success":true}\\n' ;;
   --version) printf 'test-browser 1\\n' ;;
   *) : ;;
 esac
@@ -81,12 +88,50 @@ esac
   return { root, path: join(root, 'bin') };
 }
 
-function descriptor(root: string): { baseUrl: string; app: { pid: number } } {
+function descriptor(root: string): {
+  baseUrl: string;
+  app: { pid: number };
+  browser: { installed: boolean; command: string; environment?: Record<string, string> };
+} {
   return JSON.parse(readFileSync(join(root, '.ai/qa/test-env.json'), 'utf8')) as {
     baseUrl: string;
     app: { pid: number };
+    browser: { installed: boolean; command: string; environment?: Record<string, string> };
   };
 }
+
+test('persists a host-required no-sandbox browser argument for later QA processes', () => {
+  const fixture = makeFixture(false);
+  const env = {
+    ...process.env,
+    PATH: fixture.path,
+    TEST_ENV_CACHE_TTL_SECONDS: '600',
+    FAKE_SANDBOX_DOCTOR: '1',
+    AGENT_BROWSER_ARGS: '--disable-gpu',
+  };
+  const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
+  const down = join(fixture.root, '.ai/scripts/test-env-down.sh');
+
+  const cold = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  assert.equal(cold.status, 0, cold.stderr);
+  const running = descriptor(fixture.root);
+  launchedPids.add(running.app.pid);
+  assert.equal(running.browser.installed, true);
+  assert.deepEqual(running.browser.environment, { AGENT_BROWSER_ARGS: '--no-sandbox' });
+
+  const doctor = spawnSync(running.browser.command, ['doctor', '--json'], {
+    encoding: 'utf8',
+    env: {
+      ...env,
+      AGENT_BROWSER_ARGS: `${env.AGENT_BROWSER_ARGS},${running.browser.environment?.AGENT_BROWSER_ARGS}`,
+    },
+  });
+  assert.equal(doctor.status, 0, doctor.stderr);
+
+  const stopped = spawnSync('/bin/sh', [down], { encoding: 'utf8', env, timeout: 20_000 });
+  assert.equal(stopped.status, 0, stopped.stderr);
+  launchedPids.delete(running.app.pid);
+});
 
 for (const withSetsid of [true, false]) {
   test(

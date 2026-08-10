@@ -62,6 +62,24 @@ if [ "$installed" != 1 ]; then
   skip "$notes"
 fi
 
+# `test-env-up.sh` may discover host-required launch arguments in its child shell. Persisting
+# them in the descriptor is what lets this later Vitest process reproduce the doctor-approved
+# invocation instead of losing (for example) `--no-sandbox` when the bootstrap shell exits.
+browser_args=$(node -e '
+  const fs = require("fs");
+  try {
+    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write((d.browser && d.browser.environment && d.browser.environment.AGENT_BROWSER_ARGS) || "");
+  } catch { /* no optional browser environment */ }
+' "$DESCRIPTOR" 2>/dev/null || true)
+if [ -n "$browser_args" ]; then
+  case ",${AGENT_BROWSER_ARGS:-}," in
+    *,$browser_args,*) ;;
+    *) AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:+$AGENT_BROWSER_ARGS,}$browser_args" ;;
+  esac
+  export AGENT_BROWSER_ARGS
+fi
+
 # ---- 3. run the specs -------------------------------------------------------
 cd "$REPO_ROOT"
 if npx vitest run --config packages/web/e2e/vitest.config.ts; then

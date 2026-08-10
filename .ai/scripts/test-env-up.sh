@@ -15,6 +15,8 @@
 #             imports as missing/unknown and a cached build cannot start without node_modules.
 #   2026-07-30 execute the compound preparation chain through sh -c and stop requiring an
 #             api-client dist artifact that this source-aliased workspace does not produce.
+#   2026-08-01 retry agent-browser with --no-sandbox when its doctor identifies a Linux
+#             environment without usable user namespaces; keeps browser QA available in containers.
 set -eu
 
 # ---- project-specific parameters -------------------------------------------
@@ -251,6 +253,7 @@ BROWSER_INSTALLED=0
 BROWSER_COMMAND=""
 BROWSER_VERSION=unknown
 BROWSER_NOTES=""
+BROWSER_LAUNCH_ARGS=""
 
 ensure_browser() {
   if command -v agent-browser >/dev/null 2>&1; then
@@ -296,6 +299,17 @@ ensure_browser() {
   fi
 
   "$BROWSER_COMMAND" install >/dev/null 2>&1 || true
+  BROWSER_DOCTOR_OUTPUT=$("$BROWSER_COMMAND" doctor --json 2>&1 || true)
+  if printf '%s' "$BROWSER_DOCTOR_OUTPUT" | grep -q 'No usable sandbox'; then
+    case ",${AGENT_BROWSER_ARGS:-}," in
+      *,--no-sandbox,*) ;;
+      *) AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:+$AGENT_BROWSER_ARGS,}--no-sandbox" ;;
+    esac
+    export AGENT_BROWSER_ARGS
+    # Persist only the non-sensitive host requirement discovered here. Caller-provided browser
+    # arguments can contain proxy credentials and must never be copied into the descriptor.
+    BROWSER_LAUNCH_ARGS=--no-sandbox
+  fi
   if ! "$BROWSER_COMMAND" doctor --json >/dev/null 2>&1; then
     # Linux Chrome libraries may need root; only try when it costs no prompt.
     if [ "$(uname -s 2>/dev/null || true)" = Linux ]; then
@@ -356,7 +370,7 @@ write_descriptor() {
   [ "${CEZ_SINGLE_PROJECT:-}" = 1 ] && SINGLE_PROJECT=true
   node -e '
     const fs = require("fs");
-    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc, singleProject] = process.argv.slice(1);
+    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, bArgs, desc, singleProject] = process.argv.slice(1);
     fs.writeFileSync(out, JSON.stringify({
       version: 1,
       runId: "cezar-" + new Date().toISOString().slice(0, 10) + "-" + pid,
@@ -377,6 +391,7 @@ write_descriptor() {
         version: bVer,
         descriptor: desc,
         notes: bNotes,
+        ...(bArgs ? { environment: { AGENT_BROWSER_ARGS: bArgs } } : {}),
       },
       testRunner: { name: "other", config: "packages/web/e2e/vitest.config.ts" },
       platform: "wsl2",
@@ -385,7 +400,7 @@ write_descriptor() {
     }, null, 2) + "\n");
   ' "$ENV_DESCRIPTOR" "$BASE_URL" "$PORT" "$APP_PID" \
     "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node packages/cezar/dist/index.js --port $PORT --no-open" \
-    "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR" \
+    "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_LAUNCH_ARGS" "$BROWSER_DESCRIPTOR" \
     "$SINGLE_PROJECT"
 }
 
