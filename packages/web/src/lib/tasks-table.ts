@@ -287,12 +287,19 @@ export interface UsageCell {
  *
  * A sample is only believed while the run's process tree can exist (`USAGE_LIVE_STATUSES`) — the
  * usage stream is a snapshot broadcast, and a tick that raced the run's exit must not paint a
- * finished row as live. With no live sample, Mem falls back to the persisted `peakRssBytes`
+ * finished row as live.
+ *
+ * `Pick`ed rather than a whole `RunRecord`, for the same reason `RunTitleInput` and
+ * `AttentionInput` are: the cross-project index (`RunIndexEntry`) is a slim row, and the global
+ * Tasks table must read usage exactly as the per-project one does rather than inventing a
+ * second set of fallbacks. With no live sample, Mem falls back to the persisted `peakRssBytes`
  * (dimmed, labeled `peak`); CPU has no persisted peak, so its cell goes empty rather than
  * inventing one. Exactly the legacy table's fallbacks.
  */
+export type UsageCellInput = Pick<RunRecord, 'status' | 'peakRssBytes' | 'peakProcCount'>
+
 export function usageCells(
-  run: RunRecord,
+  run: UsageCellInput,
   sample: ProcessUsage | undefined,
 ): { cpu: UsageCell; mem: UsageCell } {
   const live = USAGE_LIVE_STATUSES.has(run.status) ? sample : undefined

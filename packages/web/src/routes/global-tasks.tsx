@@ -14,7 +14,7 @@ import * as React from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { archiveProjectRun, setProjectRunRead } from '@/api/client'
-import { queryKeys, useProjects, useRunsIndex, workspaceQueryKeys } from '@/api/queries'
+import { queryKeys, useHealth, useProjects, useRunsIndex, workspaceQueryKeys } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
@@ -27,7 +27,13 @@ import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
-import { taskReferences, type TaskReference } from '@/lib/tasks-table'
+import {
+  formatCost,
+  taskReferences,
+  usageCells,
+  type TaskReference,
+  type UsageCell,
+} from '@/lib/tasks-table'
 import {
   GROUP_BY_OPTIONS,
   NO_FILTERS,
@@ -58,6 +64,7 @@ import { scopeTo } from '@/lib/project-router'
 import { allProjectTags } from '@/lib/project-tags'
 import { canBeUnread, isReadDoneItem, isUnread } from '@/lib/read-state'
 import { runTitle, type ListView } from '@/lib/task-groups'
+import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
@@ -203,6 +210,9 @@ function useIndexedRunMutation<V extends { task: GlobalTask }>({
 
 export function GlobalTasksRoute() {
   const projects = useProjects()
+  // The same host gate the per-project table honours: `CEZ_HIDE_COST` and friends turn these
+  // columns off everywhere, and a cross-project view is not an exception.
+  const metrics = usageMetricVisibility(useHealth().data)
   // Always enabled here — unlike the ⌘K palette, which parks it in a single-project workspace:
   // this page IS the index, so there is nothing else for it to fall back to. The interval is
   // this page's alone (see `useRunsIndex`): there is no cross-project run stream to invalidate
@@ -402,6 +412,7 @@ export function GlobalTasksRoute() {
                 onArchive={(task, archived) => archive.mutate({ task, archived })}
                 onSetRead={(task, read) => setRead.mutate({ task, read })}
                 busy={archive.isPending || setRead.isPending}
+                showCost={metrics.cost}
               />
             </section>
           ))
@@ -604,6 +615,7 @@ function TaskTable({
   onArchive,
   onSetRead,
   busy,
+  showCost,
 }: {
   tasks: readonly GlobalTask[]
   now: number
@@ -611,6 +623,7 @@ function TaskTable({
   onArchive: (task: GlobalTask, archived: boolean) => void
   onSetRead: (task: GlobalTask, read: boolean) => void
   busy: boolean
+  showCost: boolean
 }) {
   return (
     <div
@@ -628,6 +641,9 @@ function TaskTable({
               <Th className="w-[172px]">Ref</Th>
               <Th className="hidden w-[124px] xl:table-cell">Workflow</Th>
               <Th className="hidden w-[140px] xl:table-cell">Branch</Th>
+              {showCost ? <Th className="hidden w-[76px] text-right lg:table-cell">Cost</Th> : null}
+              <Th className="hidden w-[68px] text-right xl:table-cell">CPU</Th>
+              <Th className="hidden w-[92px] text-right xl:table-cell">Mem</Th>
               <Th className="w-[82px] text-right">Age</Th>
               <Th className="w-[76px] text-right">
                 <span className="sr-only">Actions</span>
@@ -644,6 +660,7 @@ function TaskTable({
                 onArchive={onArchive}
                 onSetRead={onSetRead}
                 busy={busy}
+                showCost={showCost}
               />
             ))}
           </tbody>
@@ -683,6 +700,7 @@ function TaskRow({
   onArchive,
   onSetRead,
   busy,
+  showCost,
 }: {
   task: GlobalTask
   now: number
@@ -690,6 +708,7 @@ function TaskRow({
   onArchive: (task: GlobalTask, archived: boolean) => void
   onSetRead: (task: GlobalTask, read: boolean) => void
   busy: boolean
+  showCost: boolean
 }) {
   const { run } = task
   const attention = deriveAttention(run)
@@ -705,6 +724,10 @@ function TaskRow({
   // project-scoped view can use the one repo it is standing in; this page has a different repo
   // per row, which is why the registry entry carries `repoUrl`.
   const references = taskReferences(run, task.project?.repoUrl)
+  // The SAME live/peak rule the per-project table applies. The live sample rides the index row
+  // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
+  // is project-scoped and so cannot reach forty projects at once.
+  const usage = usageCells(run, run.usage)
 
   return (
     <tr data-slot="global-task-row" data-run-id={run.id} data-project={run.projectId} className="hover:bg-muted">
@@ -773,6 +796,18 @@ function TaskRow({
           <Dash />
         )}
       </td>
+      {showCost ? (
+        <td
+          className={cn(
+            TD_BASE,
+            'hidden text-right font-mono text-xs text-muted-foreground tabular-nums lg:table-cell',
+          )}
+        >
+          {formatCost(run.costUsd) || <Dash />}
+        </td>
+      ) : null}
+      <UsageTd column="cpu" cell={usage.cpu} />
+      <UsageTd column="memory" cell={usage.mem} />
       <td className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
         {shortAge(run.startedAt ?? run.createdAt, now)}
       </td>
@@ -1039,6 +1074,30 @@ export function TagChip({ tag, className }: { tag: string; className?: string })
     >
       {tag}
     </span>
+  )
+}
+
+/**
+ * One CPU or Mem cell — the per-project table's exact grammar, so the two read alike: a LIVE
+ * sample is emphasized, a finished run's persisted peak is dimmed and says so, and anything
+ * else is an honest em dash rather than an invented zero.
+ */
+function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }) {
+  return (
+    <td
+      data-usage={column === 'memory' ? 'mem' : column}
+      data-usage-kind={cell.kind}
+      title={cell.title}
+      className={cn(
+        TD_BASE,
+        'hidden text-right font-mono tabular-nums xl:table-cell',
+        cell.kind === 'live' && 'bg-violet/5 text-xs font-medium text-foreground',
+        cell.kind === 'peak' && 'text-[11.5px] text-soft-foreground',
+        cell.kind === 'none' && 'text-xs text-soft-foreground',
+      )}
+    >
+      {cell.text || '—'}
+    </td>
   )
 }
 

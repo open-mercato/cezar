@@ -107,12 +107,14 @@ function stubFetch({
   truncated = [] as string[],
   indexStatus = 200,
   archiveStatus = 200,
+  costMetrics = true,
 }: {
   runs?: RunIndexEntry[]
   projects?: ProjectListEntry[]
   truncated?: string[]
   indexStatus?: number
   archiveStatus?: number
+  costMetrics?: boolean
 } = {}) {
   sent = []
   seenAt = undefined
@@ -129,6 +131,10 @@ function stubFetch({
         path,
         body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
       })
+      if (path === '/api/v1/health') {
+        // Only the slice `usageMetricVisibility` reads — the host's cost/token gate.
+        return jsonResponse({ capabilities: { costMetrics, tokenUsageMetrics: true } })
+      }
       if (path === '/api/v1/projects') {
         return jsonResponse({ projects, bootProject: 'api', projectsDir: '/repos' })
       }
@@ -660,6 +666,74 @@ describe('global tasks page', () => {
 
       fireEvent.click(overflow())
       await waitFor(() => expect(listed()).toHaveLength(3))
+    })
+  })
+
+  describe('cost, CPU and memory', () => {
+    it('shows a running task’s live sample and its cost', async () => {
+      stubFetch({
+        runs: [
+          {
+            ...RUNS[0]!,
+            status: 'running',
+            costUsd: 0.31,
+            usage: { cpuPct: 84, rssBytes: 612 * 1024 * 1024, procCount: 3 },
+          },
+        ],
+      })
+      renderPage()
+      await screen.findByText('Add checkout endpoint')
+
+      expect(screen.getByText('$0.31')).toBeTruthy()
+      const cpu = document.querySelector('[data-usage="cpu"]')!
+      expect(cpu.textContent).toBe('84%')
+      expect(cpu.getAttribute('data-usage-kind')).toBe('live')
+      expect(document.querySelector('[data-usage="mem"]')!.textContent).toBe('612 MB')
+    })
+
+    it('falls back to the persisted peak once the run is finished', async () => {
+      // The live sample stops existing with the process tree; without the peaks a finished row
+      // could say nothing at all about what it took to run.
+      stubFetch({
+        runs: [{ ...RUNS[2]!, peakRssBytes: 900 * 1024 * 1024, peakProcCount: 4 }],
+      })
+      renderPage()
+      await screen.findByText('Bump the runner')
+
+      const mem = document.querySelector('[data-usage="mem"]')!
+      expect(mem.textContent).toBe('peak 900 MB')
+      expect(mem.getAttribute('data-usage-kind')).toBe('peak')
+      // CPU has no persisted peak, so it says nothing rather than inventing one.
+      expect(document.querySelector('[data-usage="cpu"]')!.getAttribute('data-usage-kind')).toBe(
+        'none',
+      )
+    })
+
+    it('never paints a finished run’s stale sample as live', async () => {
+      stubFetch({
+        runs: [
+          {
+            ...RUNS[2]!,
+            status: 'done',
+            usage: { cpuPct: 99, rssBytes: 1024, procCount: 1 },
+          },
+        ],
+      })
+      renderPage()
+      await screen.findByText('Bump the runner')
+
+      expect(document.querySelector('[data-usage="cpu"]')!.getAttribute('data-usage-kind')).toBe(
+        'none',
+      )
+    })
+
+    it('drops the Cost column when the host hides cost metrics', async () => {
+      stubFetch({ costMetrics: false, runs: [{ ...RUNS[0]!, costUsd: 0.31 }] })
+      renderPage()
+      await screen.findByText('Add checkout endpoint')
+
+      expect(screen.queryByText('Cost')).toBeNull()
+      expect(screen.queryByText('$0.31')).toBeNull()
     })
   })
 

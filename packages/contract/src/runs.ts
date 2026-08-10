@@ -343,6 +343,24 @@ export const runIndexEntrySchema = z.object({
   issueNumber: z.number().optional(),
   referencedIssueUrl: z.string().optional(),
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
+  /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
+   *  cockpit prints an em dash rather than claiming a measurement that never happened. */
+  costUsd: z.number().optional(),
+  /** The persisted high-water marks a FINISHED run leaves behind. `usage` below stops existing
+   *  the moment the process tree does, so without these a finished row could say nothing at all
+   *  about what it took to run. */
+  peakRssBytes: z.number().optional(),
+  peakProcCount: z.number().optional(),
+  /**
+   * The live CPU/RSS sample of this run's process tree, attached on the way out exactly as
+   * `GET /runs` attaches it (`withUsage`) — never persisted.
+   *
+   * It can ride a WORKSPACE-level answer because the sampler is process-wide: one cezar process
+   * runs every project's agents, so `currentUsage(runId)` knows about a run whatever project it
+   * belongs to. That is what lets a cross-project table show live usage without opening one
+   * event stream per project (it could not — the run stream is project-scoped).
+   */
+  usage: processUsageSchema.optional(),
 });
 export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
 

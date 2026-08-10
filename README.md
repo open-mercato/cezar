@@ -399,8 +399,8 @@ were looking at. Only what you changed shows up: Active is the default, so the
 Archived view is `?archived=1` and a normal link carries no key for it.
 
 Each row shows **every** PR and issue it references — a task opened on an issue
-that landed a PR shows both — and can be marked **read/unread** (the eye) or
-**archived** (or restored) right there. Every task title, project name and project group heading links into that
+that landed a PR shows both — plus its cost and live CPU/memory, and can be
+marked **read/unread** (the eye) or **archived** (or restored) right there. Every task title, project name and project group heading links into that
 project, so the thread, its diff and its worktree are one click away and stay
 exactly where they were.
 

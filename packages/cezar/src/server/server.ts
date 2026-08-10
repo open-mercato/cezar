@@ -5139,7 +5139,9 @@ export function createApp(deps: ServerDeps) {
   /** `RunRecord` → the wire row. Optional keys are spread CONDITIONALLY: writing
    *  `titleSummary: run.titleSummary` types a key as always-present that `JSON.stringify` then
    *  drops when it is undefined, which is exactly the drift the parity guard fails on. */
-  const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => ({
+  const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => {
+    const usage = currentUsage(run.id);
+    return {
     projectId,
     id: run.id,
     title: run.title,
@@ -5165,7 +5167,14 @@ export function createApp(deps: ServerDeps) {
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
-  });
+    ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
+    ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
+    ...(run.peakProcCount !== undefined ? { peakProcCount: run.peakProcCount } : {}),
+    // The live sample, on the same terms as `GET /runs`: process-wide sampler, so a
+    // workspace-level answer can carry it for every project's runs at once.
+    ...(usage ? { usage } : {}),
+    };
+  };
 
   /**
    * `GET /workspace/runs-index` — every registered project's recent tasks in one slim answer, so

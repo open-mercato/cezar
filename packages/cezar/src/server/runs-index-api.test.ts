@@ -156,7 +156,8 @@ describe('workspace runs index API', () => {
     expect(Object.keys(row!)).not.toContain('activity');
     expect(Object.keys(row!)).not.toContain('branch');
     expect(Object.keys(row!)).not.toContain('startedAt');
-    // …including every tracker-reference input: an untracked task carries none of them.
+    // …including every tracker-reference input and every usage field: an untracked, never-run
+    // task carries none of them.
     for (const key of [
       'pullRequestUrl',
       'referencedPullRequestUrl',
@@ -164,9 +165,34 @@ describe('workspace runs index API', () => {
       'issueNumber',
       'referencedIssueUrl',
       'markerRefs',
+      'costUsd',
+      'peakRssBytes',
+      'peakProcCount',
+      'usage',
     ]) {
       expect(Object.keys(row!), key).not.toContain(key);
     }
+  });
+
+  it('carries cost and the persisted usage peaks the cross-project table paints', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'measured',
+        title: 'Measured',
+        costUsd: 0.31,
+        peakRssBytes: 943718400,
+        peakProcCount: 4,
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'measured');
+
+    expect(row).toMatchObject({ costUsd: 0.31, peakRssBytes: 943718400, peakProcCount: 4 });
+    // The LIVE sample is not persisted, so a cold project's row never carries one.
+    expect(Object.keys(row!)).not.toContain('usage');
   });
 
   it('carries the tracker-reference inputs so a cross-project row can show its PR/issue chip', async () => {
