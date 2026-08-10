@@ -56,7 +56,7 @@ When no priority label is set, infer one:
 
 When no risk label is set, infer one:
 
-- `risk-high` — the runner seam (`src/core/agent-runner.ts`), worktree/branch handling, the `.ai/cezar/` state file formats, the HTTP API surface, or broad cross-cutting edits.
+- `risk-high` — the runner seam (`packages/cezar/src/core/agent-runner.ts`), worktree/branch handling, the `.ai/cezar/` state file formats, the HTTP API surface, or broad cross-cutting edits.
 - `risk-medium` — an ordinary single-area change (also the default reading of unset).
 - `risk-low` — docs-only, typo, or isolated cosmetic changes.
 

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Illustrative interactive-skill composer</title>
+<style>
+  *{box-sizing:border-box}body{margin:0;background:#090a09;color:#f4f4f3;font:14px Inter,ui-sans-serif,system-ui}
+  .shell{display:grid;grid-template-columns:264px 1fr;min-height:100vh}.side{background:#171817;border-right:1px solid #292a29;padding:18px 12px}
+  .brand{font-weight:750;font-size:16px;margin:0 8px 25px}.new{background:#f4f4f3;color:#141514;border-radius:11px;padding:11px 18px;font-weight:700}
+  nav{display:grid;gap:7px;margin-top:18px}nav div{padding:9px 12px;color:#aaa}.main{display:grid;place-items:start center;padding-top:72px}
+  h1{font-size:20px;margin:0 0 7px}.lede{color:#9b9b99;margin-bottom:28px}.card{width:720px;border:1px solid #76c53b;box-shadow:0 0 0 3px #28371f;border-radius:18px;background:#181918;padding:18px}
+  textarea{width:100%;height:70px;resize:none;border:0;background:transparent;color:#bbb;font:15px inherit;outline:0}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .chip{border:1px solid #3b3c3b;background:#202120;padding:8px 12px;border-radius:18px;color:#ddd}.skill{border-color:#777}.off{border-color:#555;color:#c8c8c6}.off:before{content:"○ ";color:#aaa}
+  .note{margin:14px 2px 2px;padding:11px 12px;border-radius:10px;background:#222820;color:#bcd3ab;font-size:12px;display:flex;gap:9px}
+  .bottom{display:flex;justify-content:flex-end;margin-top:12px}.start{padding:8px 16px;border-radius:9px;border:0;font-weight:700}.tag{position:fixed;right:18px;bottom:16px;color:#777;font-size:11px}
+</style>
+<body><div class="shell">
+  <aside class="side"><div class="brand">◒ &nbsp;cezar</div><div class="new">＋&nbsp; New task</div><nav><div>☷ &nbsp;Tasks</div><div>⑂ &nbsp;Git</div><div>◉ &nbsp;GitHub</div><div>✣ &nbsp;Skills</div><div>⌘ &nbsp;Workflows</div><div>⚙ &nbsp;Settings</div></nav></aside>
+  <main class="main"><h1>What should the agent work on?</h1><div class="lede">Interactive skills pause for your answers and run in the current checkout.</div>
+    <section class="card"><textarea aria-label="Task">Explore whether we should add a one-click hand-off from a brainstorm…</textarea>
+      <div class="row"><span class="chip skill">✣ om-brainstorm⌄</span><span class="chip">claude⌄</span><span class="chip">auto⌄</span><span class="chip off">Worktree</span><span class="chip off">Autonomous</span></div>
+      <div class="note">ⓘ <span><strong>om-brainstorm is interactive.</strong> It recommends pausing for your answers and using the current checkout. You can turn either option on.</span></div>
+      <div class="bottom"><button class="start">Start</button></div>
+    </section>
+  </main>
+</div><div class="tag">ILLUSTRATIVE SPEC MOCKUP</div></body>
+</html>

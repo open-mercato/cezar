@@ -19,7 +19,7 @@ your phone, working your backlog while you're away.
 
 [A look inside](#a-look-inside) · [What cezar does best](#what-cezar-does-best) · [What it solves](#what-it-solves) · [Who it's for](#who-its-for) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Core concepts](#core-concepts) · [Cockpit tour](#cockpit-tour) · [Agent backends](#coding-agent-backends) · [Remote access](#remote-access-host-cezar-on-a-server)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Node 20+](https://img.shields.io/badge/Node-20%2B-339933)
 ![TypeScript 7.x](https://img.shields.io/badge/TypeScript-7.x-3178c6)
 ![Zero config](https://img.shields.io/badge/config-zero-success)
@@ -285,11 +285,12 @@ Five moves that make the cockpit worth the browser tab:
 
 ## Cockpit tour
 
-Seven views, one browser window, all live over Server-Sent Events (six until you opt into the Inbox):
+Eight views, one browser window, all live over Server-Sent Events (seven until you opt into the Inbox):
 
 | View | What's in it |
 |---|---|
 | **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
+| **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |
 | **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. |
@@ -342,25 +343,86 @@ re-registers itself at the next start.
 **From the terminal** — the same registry, no cockpit required (handy over ssh):
 
 ```bash
-cezar projects                    # list: id, branch or status, path
+cezar projects                    # list: id, branch or status, path, tags
 cezar projects add ~/code/api     # register a folder (defaults to the current repo)
 cezar projects remove api         # drop the registry entry; the repo is untouched
+cezar projects tag api storefront backend   # set the grouping tags (no tags clears them)
 ```
 
 These read and write `~/.cezar/config.json` directly, so they work with the
 server stopped, and `CEZ_HOME` selects which workspace they operate on.
 
-Settings split along the same line: **Agents**, **Worktrees**, **Bookmarklets**,
-**Prompt templates** and **MCP** describe one repo and live under
-`/p/<projectId>/settings`; **Appearance**, **Notifications**, **Resources**,
-**Projects** and **Keyboard** are yours or the machine's and live at
-`/settings/global`.
+Settings split along the same line: **General** (the project's folder, its
+registry facts, its parallel-task ceiling, and Remove), **Agents**,
+**Worktrees**, **Bookmarklets**, **Prompt templates** and **MCP** describe one
+repo and live under `/p/<projectId>/settings`; **Appearance**,
+**Notifications**, **Resources**, **Projects** and **Keyboard** are yours or the
+machine's and live at `/settings/global`.
 
-**Old URLs keep working.** Every unprefixed path — `/`, `/tasks/<id>`,
-`/settings`, and the whole `/api/…` surface — still answers exactly as before,
-bound to the project cezar was started in; the cockpit redirects flat paths to
-their `/p/<boot>/…` twin. Existing bookmarks, bookmarklets and scripts need no
-change.
+### Grouping connected repositories: tags and the All tasks page
+
+Work rarely stops at a repo boundary. A storefront is an API, a web app and a
+design system; a platform is a handful of services plus the infra that runs
+them. **Tags** are how you say so, and **All tasks** is where saying so pays off.
+
+**Tag a repo** in **Settings → Projects**: type into the *Tags* cell on its row
+and press Enter (comma works too; the × on a chip, or Backspace in an empty
+field, removes one). The field **autocompletes from the tags already used in the
+workspace** — click the field to see them all, arrow keys and Enter to pick —
+which is what keeps the second repo landing on the first one's spelling instead
+of inventing `store-front` next to `storefront`. Anything not on the list is
+just typed. A tag is a free-form label — `storefront`, `infra`, `client-acme` —
+and a project can carry several, because a repo can belong to more than one
+piece of work. Tags are trimmed, deduplicated case-insensitively (`API` and
+`api` are one tag) and stored in `~/.cezar/config.json` beside the rest of the
+registry, so they are yours and this machine's, never something added to the
+repo.
+
+**All tasks** — the top item in the sidebar, `/tasks`, or `⌘K → All tasks` —
+then shows every registered project's work in one table:
+
+- **Filter** by tag, status and workflow. Tags are one-click chips; status and
+  workflow are searchable multi-selects. Every facet ORs inside itself and ANDs
+  across, so *"anything running or waiting in storefront or infra"* is one set
+  of clicks. Each option carries how many tasks it would leave, so a filter that
+  would empty the table says so before you click it. The search box matches
+  title, project, workflow, branch and tags.
+- **Group by** tag, project, status or workflow — click the pressed one again to
+  ungroup. Grouping by tag is the reason tags exist: three repos tagged
+  `storefront` become one section, and a repo tagged twice appears under both —
+  it genuinely belongs to both.
+
+The filters, the grouping and the Active/Archived tab live in the **URL**, so a
+filtered view survives a refresh, pastes into a chat, and sits in a bookmark —
+`/tasks?tag=storefront&status=running&group=tag` is a link to exactly what you
+were looking at. Only what you changed shows up: Active is the default, so the
+Archived view is `?archived=1` and a normal link carries no key for it.
+
+Each row shows **every** PR and issue it references — a task opened on an issue
+that landed a PR shows both — plus its cost and live CPU/memory, and can be
+marked **read/unread** (the eye) or **archived** (or restored) right there. Every task title, project name and project group heading links into that
+project, so the thread, its diff and its worktree are one click away and stay
+exactly where they were.
+
+There is deliberately **no project filter**: narrowing this page to one project
+is that project's own Tasks page, which is a better version of the same answer
+(live updates, the full column set, the composer). So picking a project *leaves*
+for it rather than turning the global view into a worse local one.
+
+Nothing else in cezar reads tags, on purpose: a tag is a lens, not a permission,
+a queue or a routing rule. Removing one changes what you see and nothing else.
+
+> The page reads a workspace-wide index capped at the newest 200 tasks per
+> project — it says so, and names the projects it capped, rather than showing a
+> short list as if it were complete. Older tasks are always in that project's own
+> Tasks page.
+
+**Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
+`/settings` — still answers, bound to the project cezar was started in; the
+cockpit redirects flat paths to their `/p/<boot>/…` twin, so existing bookmarks
+and bookmarklets need no change. The HTTP API is the exception: it moved to
+`/api/v1/…` (see the CHANGELOG), so a script that calls it needs the extra
+segment.
 
 > **Hosted cockpit?** The folder picker is confined to the independent browse
 > root. Set `CEZ_BROWSE_ROOT` narrowly before first boot (or save it in
@@ -426,25 +488,65 @@ Useful environment variables:
 | Var | Effect |
 |---|---|
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
+| `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
 | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
+| `CEZ_AUTOMATIONS=1` | Turn on **GitHub automations**: the Automations view appears and cezar polls GitHub on each enabled automation's interval, launching tasks from what it finds. Off by default, and only the exact value `1` enables it — without it nothing polls GitHub, the automations endpoints answer `409`, and the nav item is absent. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are retained, so unsetting it and restarting restores the feature without migration or data loss. |
 | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
 | `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
+| `CEZ_AUTONOMOUS_DEFAULT=0` | Seed the New Task Autonomous default (`0` or `1`). Without a seed, skills default on and workflows off; a saved global Resources setting overrides it. |
+| `CEZ_WORKTREE_DEFAULT=1` | Seed the New Task Worktree default (`0` or `1`). Without a seed, eligible runs default on; a saved global Resources setting overrides it. |
+| `CEZ_DISABLE_REPO_LOCK=1` | **Dangerous escape hatch:** allow any run executing in the repository root — an explicit `worktree=false` run, non-Git degradation, or a continuation whose worktree cannot be restored — to proceed without Cezar’s repository-root lease. Agents can overwrite each other’s files or Git state; isolated worktree runs are unaffected. Off by default; only the exact value `1` enables it. |
 | `CEZ_SINGLE_PROJECT=1` | Opt into a launch-project-only cockpit: only the exact value `1` enables it. Project add, edit, checkout, folder browsing, and removal are refused and only the launch project is shown. Off by default; stored registry rows are retained, so unsetting it and restarting restores the full multi-project workspace without migration or data loss. |
+| `CEZ_HIDE_TOKEN_USAGE=1` | Hide raw input/output token counts throughout the browser cockpit while leaving backend-reported cost visible. Only the exact value `1` enables it; telemetry and API payloads are unchanged, and a restart is required after changing it. |
+| `CEZ_HIDE_COST=1` | Hide backend-reported monetary cost throughout the browser cockpit while leaving raw input/output token counts visible. Only the exact value `1` enables it; telemetry and API payloads are unchanged, and a restart is required after changing it. |
+| `CEZ_HIDE_TOKEN_METRICS=1` | Legacy master switch that hides both token usage and cost. It takes precedence over the two independent flags; only the exact value `1` enables it, payloads are unchanged, and a restart is required. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
+| `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Agents toggle overrides this default. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Agents toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Skip the `open-mercato/skills` banner on `cezar serve` startup. (The cockpit no longer shows a banner — its skills now live on the Skills page's Manage panel — so this env var is the terminal banner's only switch.) |
+| `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
+
+### Troubleshooting: the agent's shell returns nothing
+
+**Symptom.** A task on the Claude backend keeps working, but every shell command
+comes back with no output and a spurious non-zero exit status — `echo hello`
+included. Redirecting into a file inside the worktree still produces the right
+content, so the commands genuinely run; only the *capture* is lost. Codex tasks
+on the same machine are unaffected, because that backend streams over stdio
+pipes instead of round-tripping a command's output through a temp file.
+
+**Diagnosis.** The temp directory the agent was given is out of space or out of
+quota. One line tells you:
+
+```bash
+echo probe > "${TMPDIR:-/tmp}/probe"   # "Disk quota exceeded" / "No space left on device"
+df -i "${TMPDIR:-/tmp}"                # a tmpfs can exhaust inodes long before bytes
+```
+
+Under quota the file is *created* and the write then fails, so the backend reads
+back a zero-byte capture file and hands the agent an empty result.
+
+**Fix.** Since #785 cezar gives each task its own `TMPDIR` under
+`.ai/cezar/tmp/<task-id>` and write-probes it before spawning, so a broken temp
+directory fails the task with `agent temp directory is not writable: …` on the
+task thread instead of corrupting its work. If you see that error, free space on
+the disk holding the repo. `CEZ_AGENT_TMPDIR=0` turns the whole mechanism off —
+per-task directory and pre-spawn check alike — and hands agents the host
+`TMPDIR` again, which is the way out if the check itself is wrong on your
+platform.
 
 ---
 
@@ -497,8 +599,19 @@ steps:
 Parallel variants (×2/×3) of one task share that task's backend — mixing
 happens per task and per step, not inside a variant group.
 
+**Models come from your own machine.** For Codex and OpenCode, the model picker
+is not a list cezar ships — it asks the installed CLI what it can actually run
+(`codex app-server`'s `model/list`, and `opencode models`), caches the answer in
+memory for five minutes, and shows it. A model your provider rolled out
+yesterday is selectable without a cezar release, and one it retired stops being
+offered. Claude Code has no equivalent local catalog, so it keeps a short list
+of tier aliases and pinned versions. `auto` (let the agent decide) is always
+available, including when the CLI is missing, logged out, or slow — discovery
+never blocks the cockpit, and a model you pinned yourself stays selectable even
+if it is absent from the discovered list.
+
 The seam is deliberately small: a backend is one class implementing the
-`AgentRunner` interface (`src/core/agent-runner.ts`) that turns a prompt into
+`AgentRunner` interface (`packages/cezar/src/core/agent-runner.ts`) that turns a prompt into
 a stream of normalized events. Other CLIs — pi, aider, whatever ships next —
 can slot in the same way.
 
@@ -567,10 +680,18 @@ never blocks startup):
   // exactly that commit, and reports it as `team.commit`.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode" · "pi"
+  "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)
 }
 ```
+
+Put the same `"modelsLocked": true` key in `~/.cezar/config.json` to apply it
+to every registered project. When the key is absent or `false` in both config
+files (and `CEZ_AGENT_MODELS_LOCKED` is not `1`), each runner's normal model
+selector uses that runner's discovered model list. While locked, the model is
+shown read-only and follows the selected runner's native settings; the runner
+itself remains selectable.
 
 Run data (`runs.json`, NDJSON event logs, worktrees, `todos.json`) is
 git-ignored automatically; your workflows and skills stay committable.
@@ -614,8 +735,8 @@ cd cezar
 npm install
 ```
 
-**3. Build** — compiles the server (`tsc → dist/`) and the cockpit
-(`vite build → web/dist/`), then runs the pack gate:
+**3. Build** — compiles the api-client and the server (`tsc → packages/cezar/dist/`) and the cockpit
+(`vite build → packages/cezar/web/dist/`), then runs the pack gate:
 
 ```bash
 npm run build
@@ -667,9 +788,9 @@ npm run uninstall-as-command    # removes cezar / cez / cezar-cli (either flavor
 
 ```bash
 npm run dev          # server (API :4321) + Vite dev server, opens the cockpit in the browser
-npm run dev:server   # tsx src/index.ts — the API server alone
+npm run dev:server   # tsx packages/cezar/src/index.ts — the API server alone
 npm run dev:web      # Vite dev server alone (proxies /api to :4321)
-npm run build        # tsc → dist/, vite build → web/dist/, then the pack gate
+npm run build        # tsc → packages/cezar/dist/, vite build → packages/cezar/web/dist/, then the pack gate
 npm run typecheck    # server + web (tsc --noEmit)
 npm test             # vitest — server + cockpit unit suites
 npm run test:unit    # node:test — fast core-module tests
@@ -679,7 +800,7 @@ npm run test:e2e     # real-browser cockpit suite (agent-browser)
 
 The stack is deliberately small: **TypeScript** (strict, ESM), **Hono** + SSE for
 the server, **Zod** at every boundary, **YAML** for workflows, and a **React 19 +
-Vite + Tailwind v4 + shadcn/ui** cockpit shipped pre-built in `web/dist/` — the
+Vite + Tailwind v4 + shadcn/ui** cockpit shipped pre-built in `packages/cezar/web/dist/` — the
 published package carries the built app, so `npx` users never run a bundler.
 Every module is meant to be read in one sitting.
 
@@ -698,4 +819,4 @@ Start here; graduate to cezar when a team needs shared visibility.
 
 ## License
 
-**MIT** © Patryk Lewczuk
+**MIT** © Patryk Lewczuk — full text in [LICENSE](LICENSE).
