@@ -35,7 +35,12 @@ import {
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
-import { openProjectInSchema } from '@open-mercato/cezar-contract';
+import {
+  continueRunInputSchema,
+  createRunInputSchema,
+  openProjectInSchema,
+  startTodoInputSchema,
+} from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -528,77 +533,12 @@ const streamSSENoBuffer: typeof streamSSE = (c, cb, onError) => {
   return res;
 };
 
-// A run starts from a named workflow OR an inline chain of steps (spec 008 —
-// the approved plan is posted as-is, never written to a file).
-const startRunSchema = z
-  .object({
-    workflow: z.string().min(1).optional(),
-    steps: z.array(workflowStepSchema).min(1).max(8).optional(),
-    // The primary agent prompt handed to the spawned runner. Bounded like the
-    // other prompt fields (`systemPrompt` 20k, message `text` 100k) so an
-    // unbounded body can't be piped into a spawned process (#429). 100k chars
-    // (~25k tokens) is well past any hand-written task.
-    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
-    model: z.string().optional(),
-    // Agent backend for this task (falls back to config `defaultRunner`).
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
-    // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
-    // own selection, then the discovered default. Bounded like a profile id in the workspace
-    // schema, so a value this route accepts can never be degraded away by the next load.
-    agentProfile: z.string().max(64).optional(),
-    // Parallel variants (spec 010): ×2/×3 runs the task as 2–3 competing
-    // agents in separate worktrees; the user compares diffs and picks one.
-    variants: z.number().int().min(1).max(3).optional(),
-    // Composer worktree opt-out (#worktree-toggle): false runs in the repo
-    // working tree. Ignored when variants > 1.
-    worktree: z.boolean().optional(),
-    // Autonomous mode (#autonomous): the run never parks at `waiting` — it
-    // auto-continues until the agent signals done. No "needs you" is raised.
-    autonomous: z.boolean().optional(),
-    // Generate follow-up inbox entries (spec 007, #444). Honoured only while
-    // the `followups` capability is on (#471) — off, the server pins it to
-    // false whatever the client asked for. Omitted still means "enabled" for
-    // old clients, but only within an already-enabled server. The handoff
-    // journal is unaffected either way.
-    generateFollowups: z.boolean().optional(),
-    // Per-run system-prompt override (R2 2.3) — programmatic callers only
-    // (bookmarklets, scripts); deliberately NOT a composer-UI control. Wins
-    // over the config.json default; whitespace-only degrades to absent.
-    systemPrompt: z
-      .string()
-      .trim()
-      .max(20_000, 'must be at most 20000 characters')
-      .optional()
-      .transform((s) => (s ? s : undefined)),
-    // Screenshots pasted into the new-task form — same shape and limits as a
-    // live-session message; delivered with the first agent step's opening.
-    images: z
-      .array(
-        z.object({
-          mediaType: z.string().regex(/^image\//),
-          // ~5 MB per image once base64-decoded.
-          data: z.string().min(1).max(7_000_000),
-        }),
-      )
-      .max(4)
-      .optional(),
-    // Inbox follow-up (#374): the todo the composer was prefilled from
-    // (`/new?skill=&ref=&todo=t1`). On a successful start the entry is marked
-    // started — the same bookkeeping POST /api/todos/:id/start does, so the
-    // audit trail survives the composer detour. Bounded like every other
-    // string here; a todo id is a short generated key.
-    todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
-  })
-  .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
-    message: 'provide either "workflow" or "steps", not both',
-  });
-
 const pickSchema = z.object({
   runId: z.string().min(1),
 });
 
 const planSchema = z.object({
-  // Same bound as `startRunSchema.task` — this flows into `planChain` (#429).
+  // Same bound as `createRunInputSchema.task` — this flows into `planChain` (#429).
   task: z.string().trim().min(1).max(100_000, 'must be at most 100000 characters'),
 });
 
@@ -799,39 +739,6 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
     .filter((part) => part.length > 0)
     .join('\n\n').length;
 }
-
-// "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
-// the last session on the run's current backend (backward compat). A runner/model override lets
-// the follow-up composer choose which engine handles the continuation. `text` stays bounded like
-// the live-session message `text` (#429), and `images` like a live-session message's — the
-// follow-up composer is a full composer, so a screenshot pasted into it must reach the reopened
-// session rather than being silently dropped.
-const continueSchema = z.object({
-  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
-  images: z.array(imageInputSchema).max(4).optional(),
-  runner: z.enum(['claude', 'codex', 'opencode']).optional(),
-  model: z.string().max(200).optional(),
-});
-
-// Inbox "▶ Run" body (spec 007 / #401 / #413): every field optional, and the whole body is
-// optional too, so an empty POST — every client before the pills and the composer — starts on
-// the host's `defaultRunner` with no extra instructions, exactly as before. This is a START
-// path, not a continue: there is no prior backend to preserve, so an omitted `runner`/`model`
-// means "host default" rather than "keep what the run had". `prompt` (#413) is extra
-// instructions appended to the entry's suggested/summary task text; whitespace-only degrades to
-// absent so it never touches `task`.
-const startTodoSchema = z
-  .object({
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
-    model: z.string().max(200).optional(),
-    prompt: z
-      .string()
-      .trim()
-      .max(20_000, 'must be at most 20000 characters')
-      .optional()
-      .transform((s) => (s ? s : undefined)),
-  })
-  .optional();
 
 /** Hono env for `POST /todos/:id/start`: the guard in front of that route publishes the resolved
  *  entry so the handler does not re-read `todos.json` a second time in the same request. */
@@ -3472,10 +3379,10 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
-    .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
+    .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
       const { root: repoRoot, dataDir, manager } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+      if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       let workflow: WorkflowDef | undefined;
@@ -3511,6 +3418,7 @@ export function createApp(deps: ServerDeps) {
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
+        reasoningEffort: parsed.data.reasoningEffort,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
         images,
@@ -3739,7 +3647,7 @@ export function createApp(deps: ServerDeps) {
     })
 
     // "Continue" (spec 003): reopen a finished run's session in-process.
-    .post('/runs/:id/continue', jsonZodValidator(continueSchema, { absent: ({}) }), async (c) => {
+    .post('/runs/:id/continue', jsonZodValidator(continueRunInputSchema, { absent: ({}) }), async (c) => {
       const { root: repoRoot, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
@@ -3747,7 +3655,7 @@ export function createApp(deps: ServerDeps) {
       // Bounded resume text (#429); an empty/absent body still just re-runs on the
       // run's current backend, and a runner/model override reopens on that engine (#401).
       const parsed = { data: c.req.valid('json') };
-      if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+      if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
@@ -3760,6 +3668,7 @@ export function createApp(deps: ServerDeps) {
         })),
         runner: parsed.data.runner,
         model: parsed.data.model,
+        reasoningEffort: parsed.data.reasoningEffort,
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ continued: true });
@@ -4348,7 +4257,7 @@ export function createApp(deps: ServerDeps) {
    * That position is the whole point. The route's contract is that an unknown id 404s before the
    * body is looked at, and Hono only records a body in the route type when it is validated as
    * MIDDLEWARE — which necessarily runs before the handler. Registering this guard first satisfies
-   * both: the documented status order is unchanged, and `startTodoSchema` becomes visible to
+   * both: the documented status order is unchanged, and `startTodoInputSchema` becomes visible to
    * `AppType` (and so to `hc`) instead of being parsed invisibly inside the handler.
    *
    * Deliberately NOT annotated with a return type: the inferred one carries the two typed
@@ -4390,13 +4299,13 @@ export function createApp(deps: ServerDeps) {
     .post(
       '/todos/:id/start',
       todoMustExist,
-      jsonZodValidator(startTodoSchema, { absent: undefined, malformed: null }),
+      jsonZodValidator(startTodoInputSchema, { absent: undefined, malformed: null }),
       async (c) => {
         const { root: repoRoot, dataDir, manager } = c.get('project');
         const id = c.req.param('id');
         const todo = c.get('todo');
         const parsed = { data: c.req.valid('json') };
-        if (agentModelsLocked(repoRoot) && parsed.data?.model?.trim()) {
+        if (agentModelsLocked(repoRoot) && (parsed.data?.model?.trim() || parsed.data?.reasoningEffort?.trim())) {
           return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
         }
         if (todo.startedTaskId) return c.json({ error: 'already started' }, 409);
@@ -4436,6 +4345,7 @@ export function createApp(deps: ServerDeps) {
           task,
           runner: parsed.data?.runner,
           model: parsed.data?.model,
+          reasoningEffort: parsed.data?.reasoningEffort,
         });
         await markStarted(dataDir, id, run.id);
         return c.json({ run }, 201);

@@ -74,6 +74,12 @@ describe('POST /api/v1/runs systemPrompt', () => {
     expect(captured?.systemPrompt).toBeUndefined();
   });
 
+  it('passes a Codex reasoning effort through to the manager', async () => {
+    const res = await post({ ...base, runner: 'codex', reasoningEffort: 'high' });
+    expect(res.status).toBe(201);
+    expect(captured?.reasoningEffort).toBe('high');
+  });
+
   it('forwards an explicit generateFollowups=false choice', async () => {
     const res = await post({ ...base, generateFollowups: false });
     expect(res.status).toBe(201);
@@ -121,6 +127,10 @@ describe('POST /api/v1/runs systemPrompt', () => {
     const rejected = await post({ ...base, runner: 'codex', model: 'gpt-5.6-codex' });
     expect(rejected.status).toBe(409);
     expect(((await rejected.json()) as { error: string }).error).toContain('models are locked');
+    expect(captured).toBeUndefined();
+
+    const rejectedEffort = await post({ ...base, runner: 'codex', reasoningEffort: 'high' });
+    expect(rejectedEffort.status).toBe(409);
     expect(captured).toBeUndefined();
 
     const accepted = await post({ ...base, runner: 'codex' });

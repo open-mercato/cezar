@@ -10,6 +10,8 @@ import {
   modelsForRunner,
   modelCatalogStatus,
   pushRecentSource,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   resolveSource,
@@ -107,6 +109,42 @@ describe('model option resolution', () => {
   })
 })
 
+describe('Codex reasoning effort option resolution', () => {
+  const catalog = {
+    runner: 'codex' as const,
+    models: [
+      {
+        id: 'gpt-future',
+        label: 'Future',
+        description: 'Future Codex model',
+        reasoningEfforts: [
+          { id: 'low', description: 'Faster' },
+          { id: 'high', description: 'More thorough' },
+        ],
+      },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('exposes levels only for the selected discovered Codex model', () => {
+    expect(reasoningEffortsForModel('codex', 'gpt-future', catalog).map((option) => option.id)).toEqual([
+      'low',
+      'high',
+    ])
+    expect(reasoningEffortsForModel('codex', '', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('claude', 'gpt-future', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('codex', 'custom-id', catalog)).toEqual([])
+  })
+
+  it('keeps a valid pick and clears a stale or absent one back to the native default', () => {
+    expect(resolveReasoningEffort('high', 'codex', 'gpt-future', catalog)).toBe('high')
+    expect(resolveReasoningEffort('medium', 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort(null, 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort('high', 'claude', 'gpt-future', catalog)).toBe('')
+  })
+})
+
 describe('resolveSource (candidate validation + cold quick-task default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
@@ -192,6 +230,21 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     }
     expect(buildCreateRunBody(opts).model).toBeUndefined()
     expect(buildAutomationTask(opts).model).toBeUndefined()
+  })
+
+  it('sends a selected Codex effort but keeps the native default implicit', () => {
+    const base = {
+      task: 'reason carefully',
+      source: { source: 'workflow' as const, ref: 'quick-task' },
+      model: 'gpt-future',
+      runner: 'codex' as const,
+      defaultRunner: 'codex' as const,
+      variants: 1,
+      images: [],
+    }
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high' }).reasoningEffort).toBe('high')
+    expect(buildCreateRunBody({ ...base, reasoningEffort: '' }).reasoningEffort).toBeUndefined()
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high', modelsLocked: true }).reasoningEffort).toBeUndefined()
   })
 
   it('omits runner when the chosen connected runner equals the server default', () => {

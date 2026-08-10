@@ -18,7 +18,12 @@ import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
-import { appendTurnText, RunManager } from './run.ts';
+import {
+  appendTurnText,
+  reasoningEffortIssue,
+  resolveStepReasoningEffort,
+  RunManager,
+} from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 type UsageAccountingHarness = {
@@ -450,6 +455,21 @@ describe('RunManager.continueRun override', () => {
     return record.id;
   }
 
+  function resumableCodexRun(): string {
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'codex',
+      model: 'gpt-5.1-codex',
+      reasoningEffort: 'medium',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1', backend: 'codex', reasoningEffort: 'high' });
+    return record.id;
+  }
+
   it('persists a runner + model override as the run current backend', () => {
     const id = resumableRun();
     expect(manager.continueRun(id, { runner: 'codex', model: 'gpt-5.1-codex' })).toEqual({ ok: true });
@@ -489,6 +509,57 @@ describe('RunManager.continueRun override', () => {
     const after = store.getRun(id);
     expect(after?.runner).toBe('claude');
     expect(after?.model).toBe('sonnet');
+  });
+
+  it('inherits the latest Codex step effort, then persists an override or explicit reset', () => {
+    const id = resumableCodexRun();
+    expect(manager.continueRun(id)).toEqual({ ok: true });
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.reasoningEffort).toBe('high');
+    expect(store.getRun(id)?.reasoningEffort).toBe('medium');
+
+    expect(manager.continueRun(id, { reasoningEffort: 'low' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBe('low');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-2')?.reasoningEffort).toBe('low');
+
+    expect(manager.continueRun(id, { reasoningEffort: '' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBeUndefined();
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-3')?.reasoningEffort).toBeUndefined();
+  });
+
+  it('rejects an explicit effort for a non-Codex continuation', () => {
+    const id = resumableRun();
+    expect(manager.continueRun(id, { reasoningEffort: 'high' })).toEqual({
+      ok: false,
+      error: 'reasoning effort is only supported by the Codex runner',
+    });
+    expect(store.getRun(id)?.steps).toHaveLength(1);
+  });
+
+  it('clears inherited effort when Continue changes the runner', () => {
+    const id = resumableCodexRun();
+    expect(manager.continueRun(id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBeUndefined();
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.reasoningEffort).toBeUndefined();
+  });
+
+  it('strips model and effort inputs before a locked run is persisted', () => {
+    const savedLock = process.env.CEZ_AGENT_MODELS_LOCKED;
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    const lockedManager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    try {
+      const run = lockedManager.startRun(
+        { name: 'locked', source: 'built-in', steps: [{ id: 'work', prompt: '{{task}}' }] },
+        { task: 'do it', runner: 'codex', model: 'gpt-5.1-codex', reasoningEffort: 'high' },
+      );
+      expect(run.model).toBeUndefined();
+      expect(run.reasoningEffort).toBeUndefined();
+    } finally {
+      lockedManager.dispose();
+      if (savedLock === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+      else process.env.CEZ_AGENT_MODELS_LOCKED = savedLock;
+    }
   });
 
   it("an empty model clears the pin so the runner picks the model (auto)", () => {
@@ -561,6 +632,41 @@ describe('RunManager.continueRun override', () => {
     const result = manager.continueRun(record.id, { runner: 'codex' });
     expect(result.ok).toBe(false);
     expect(store.getRun(record.id)?.runner).toBe('claude');
+  });
+});
+
+describe('reasoning effort resolution', () => {
+  const workflow: WorkflowDef = {
+    name: 'mixed',
+    source: 'built-in',
+    steps: [
+      { id: 'claude', prompt: '{{task}}', runner: 'claude' },
+      { id: 'codex', prompt: '{{task}}', runner: 'codex' },
+    ],
+  };
+
+  it('prefers a Codex step override and prevents a non-Codex task from leaking its run selection', () => {
+    expect(resolveStepReasoningEffort({ runner: 'codex', reasoningEffort: 'high' }, 'codex', 'medium')).toBe('high');
+    expect(resolveStepReasoningEffort({ runner: 'codex' }, 'claude', 'medium')).toBeUndefined();
+    expect(resolveStepReasoningEffort({ runner: 'claude' }, 'codex', 'medium')).toBeUndefined();
+  });
+
+  it('rejects non-Codex values and run-level settings with no inheriting Codex step', () => {
+    expect(reasoningEffortIssue(workflow, 'claude', 'high')).toBe('reasoning effort is only supported by the Codex runner');
+    expect(
+      reasoningEffortIssue(
+        { steps: [{ id: 'claude', prompt: '{{task}}', runner: 'claude' }] },
+        'codex',
+        'high',
+      ),
+    ).toBe('reasoning effort has no Codex agent step to apply to');
+    expect(
+      reasoningEffortIssue(
+        { steps: [{ id: 'claude', prompt: '{{task}}', reasoningEffort: 'high' }] },
+        'claude',
+        undefined,
+      ),
+    ).toBe('step "claude": reasoning effort is only supported by the Codex runner');
   });
 });
 

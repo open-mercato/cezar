@@ -274,7 +274,22 @@ function serve(overrides: {
           ? data.providerStatus()
           : json(data.providerStatus, data.providerStatusStatus)
       }
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=codex') {
+        return json({
+          runner: 'codex',
+          models: [{
+            id: 'gpt-future',
+            label: 'gpt-future',
+            description: 'Newest',
+            reasoningEfforts: [
+              { id: 'low', description: 'Faster' },
+              { id: 'high', description: 'More thorough' },
+            ],
+          }],
+          source: 'live',
+          stale: false,
+        })
+      }
       if (url === '/api/v1/skills') return json(data.skills)
       if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
       if (url === '/api/v1/workflows' && method === 'POST') {
@@ -418,6 +433,36 @@ describe('picker data flows', () => {
     expect(labels.some((l) => l.includes('opus'))).toBe(false)
   })
 
+  it('shows effort only for a concrete discovered Codex model and posts an explicit choice', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="runner-pill"]') as HTMLElement)
+    let options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('codex')) as HTMLElement)
+
+    // Model auto has no discovered capability, so there is no effort picker yet.
+    expect(document.querySelector('[data-slot="effort-pill"]')).toBeNull()
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('gpt-future')) as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="effort-pill"]') as HTMLElement)
+    options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('high')) as HTMLElement)
+    fireEvent.change(textarea(), { target: { value: 'Think it through' } })
+    await startTask()
+
+    expect(postedBody()).toMatchObject({
+      task: 'Think it through',
+      runner: 'codex',
+      model: 'gpt-future',
+      reasoningEffort: 'high',
+    })
+  })
+
   it('excludes disconnected providers from the runner choices even when health detects them', async () => {
     serve({ health: HEALTH_ALL, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -453,7 +498,7 @@ describe('picker data flows', () => {
 
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
-      text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
+      text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', reasoningEffort: null, variants: 1,
       planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
@@ -763,7 +808,7 @@ describe('submit', () => {
     // 404, not a 5xx: the query client never retries a 4xx (query-client.ts), so the query
     // lands in its errored state immediately and the test stays deterministic.
     writeDraft({
-      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
+      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null, reasoningEffort: null,
       variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })

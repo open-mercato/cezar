@@ -27,6 +27,12 @@ describe('buildClaudeArgs systemPrompt', () => {
   it('omits the flag entirely when no systemPrompt is set', () => {
     expect(buildClaudeArgs(spec)).not.toContain('--append-system-prompt');
   });
+
+  it('rejects the Codex-only reasoning effort instead of ignoring it', () => {
+    expect(() => buildClaudeArgs({ ...spec, reasoningEffort: 'high' })).toThrow(
+      'reasoning effort is only supported by the Codex runner',
+    );
+  });
 });
 
 describe('buildClaudeArgs approval gate', () => {

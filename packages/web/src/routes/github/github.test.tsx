@@ -216,7 +216,17 @@ function stubFetch(
       if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse(PROVIDERS_CONNECTED)
       }
-      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({
+        runner: 'codex',
+        models: [{
+          id: 'gpt-future',
+          label: 'gpt-future',
+          description: 'Newest',
+          reasoningEfforts: [{ id: 'high', description: 'Thorough reasoning' }],
+        }],
+        source: 'live',
+        stale: false,
+      })
       if (method === 'POST' && path === '/api/v1/runs') {
         return jsonResponse({
           id: 'run-1',
@@ -1170,7 +1180,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(postedRun(sent)).toMatchObject({ runner: 'claude' })
   })
 
-  it('a runner + model pick rides the POST alongside the workflow routing', async () => {
+  it('a runner, model, and effort pick ride the POST alongside workflow routing', async () => {
     const sent = stubFetch({
       // Health describes the boot project; config describes the scoped GitHub project.
       'GET /api/v1/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
@@ -1182,6 +1192,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
     await pickPill('runner-pill', 'codex')
     await pickPill('model-pill', 'gpt-future')
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+    await pickPill('effort-pill', 'high')
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1190,6 +1202,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
       workflow: 'quick-task',
       runner: 'codex',
       model: 'gpt-future',
+      reasoningEffort: 'high',
     })
   })
 

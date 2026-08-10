@@ -238,12 +238,13 @@ describe('request shapes', () => {
       body: { prompt: 'Also add tests.' },
     },
     {
-      // #401: an Inbox card that picked a backend. No pick → the bodyless POST above, unchanged.
-      name: 'startTodo (runner + model override, #401)',
-      call: () => startTodo('todo/1', { runner: 'codex', model: 'gpt-5.1-codex' }),
+      // An Inbox card that picked every discovered Codex setting. No pick → the bodyless POST
+      // above, unchanged.
+      name: 'startTodo (runner + model + effort override)',
+      call: () => startTodo('todo/1', { runner: 'codex', model: 'gpt-5.1-codex', reasoningEffort: 'high' }),
       path: '/api/v1/todos/todo%2F1/start',
       method: 'POST',
-      body: { runner: 'codex', model: 'gpt-5.1-codex' },
+      body: { runner: 'codex', model: 'gpt-5.1-codex', reasoningEffort: 'high' },
     },
     {
       // Auto ('') and a single-backend host are filtered out by the caller, so a body that

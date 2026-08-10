@@ -8,7 +8,7 @@ import type {
   ContentBlock,
 } from './agent-runner.ts';
 import type { AgentSession, SessionOptions } from './agent-runner.ts';
-import { prependSystemPrompt } from './agent-runner.ts';
+import { assertReasoningEffortSupported, prependSystemPrompt } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
@@ -68,6 +68,7 @@ export class OpencodeServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('opencode', spec.reasoningEffort);
     const session = new OpencodeSession(this.bin, this.timeoutMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;

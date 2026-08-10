@@ -42,6 +42,7 @@ import { Composer, type ComposerHandle } from '@/components/composer/composer'
 import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
+import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
   Command,
@@ -89,6 +90,8 @@ import {
   modelsForRunner,
   modelCatalogStatus,
   pushRecentSource,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   resolveSource,
@@ -222,6 +225,12 @@ export function NewTaskRoute() {
   const model = runner === null
     ? ''
     : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+  const reasoningEffort = runner === null
+    ? ''
+    : resolveReasoningEffort(draft.reasoningEffort, runner, model, catalog.data)
+  const reasoningEfforts = runner === null
+    ? []
+    : reasoningEffortsForModel(runner, model, catalog.data)
   // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
@@ -448,6 +457,7 @@ export function NewTaskRoute() {
         task: text,
         source,
         model,
+        reasoningEffort,
         modelsLocked,
         runner,
         runnerExplicit: draft.runner !== null,
@@ -500,6 +510,7 @@ export function NewTaskRoute() {
           task: plan.task,
           steps: plan.steps,
           model,
+          reasoningEffort,
           modelsLocked,
           runner,
           runnerExplicit: draft.runner !== null,
@@ -634,7 +645,7 @@ export function NewTaskRoute() {
                     update({
                       runner: next,
                       agentProfile: picked,
-                      ...(next === displayRunner ? {} : { model: null }),
+                      ...(next === displayRunner ? {} : { model: null, reasoningEffort: null }),
                     })
                   }
                   disabled={!providersReady}
@@ -652,9 +663,18 @@ export function NewTaskRoute() {
                     ? 'Model selection is locked to native coding-agent settings.'
                     : undefined
                 }
-                onPick={(next) => update({ model: next })}
+                onPick={(next) => update({ model: next, reasoningEffort: null })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
                 status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+              />
+              <ReasoningEffortPill
+                runner={displayRunner}
+                model={model}
+                value={reasoningEffort}
+                options={reasoningEfforts}
+                disabled={!providersReady}
+                modelsLocked={modelsLocked}
+                onPick={(next) => update({ reasoningEffort: next || null })}
               />
               <PickerPill
                 slot="variants-pill"

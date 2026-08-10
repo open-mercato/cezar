@@ -61,6 +61,7 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     });
     assert.match(help.stdout, /cezar — local cockpit/);
     assert.match(help.stdout, /cezar run "<task>"/);
+    assert.match(help.stdout, /--effort <value>/);
 
     const fixtureRepo = join(root, 'fixture-repo');
     await mkdir(fixtureRepo);
@@ -171,6 +172,53 @@ if (args.join(' ') === 'auth status --json') {
         && event.provider === 'claude'
         && typeof event.authFailureId === 'string'),
       'headless runtime rejection must persist provider recovery guidance',
+    );
+
+    // The headless Codex path uses the same AgentRunSpec seam as the cockpit.
+    // Reuse the complete app-server fixture the runner contract tests use. It
+    // records requests and exits on EOF, so the packaged CLI is exercised over
+    // the real JSON-RPC lifecycle rather than a partial test double.
+    const codexShim = resolve(repoRoot, 'src/core/__fixtures__/codex/mock-codex-app-server.mjs');
+    const codexCapture = join(root, 'codex-requests.ndjson');
+    const codexWorkflowDir = join(fixtureRepo, '.ai', 'cezar', 'workflows');
+    await mkdir(codexWorkflowDir, { recursive: true });
+    await writeFile(join(fixtureRepo, '.ai', 'cezar', 'config.json'), '{"defaultRunner":"codex"}\n', 'utf8');
+    await writeFile(
+      join(codexWorkflowDir, 'cli-codex.yaml'),
+      // A trailing check keeps the agent step non-interactive. Without it, a
+      // one-step workflow rightly remains open for a human follow-up unless
+      // the model emits CEZ:DONE, which would make this CLI wiring test hang.
+      'name: cli-codex\nsteps:\n  - id: work\n    prompt: "{{task}}"\n  - id: verify\n    command: "true"\n',
+      'utf8',
+    );
+    const codexRun = await execFile(
+      process.execPath,
+      [cliPath, 'run', 'check CLI effort forwarding', '--repo', fixtureRepo, '--workflow', 'cli-codex', '--effort', 'high'],
+      {
+        cwd: consumerDir,
+        env: {
+          ...process.env,
+          CEZ_CODEX_BIN: codexShim,
+          CEZ_MOCK_CODEX_REQUESTS_FILE: codexCapture,
+          CEZ_HOME: cezHome,
+        },
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    assert.match(codexRun.stdout, /run (done|review)/);
+    const codexRequests = (await readFile(codexCapture, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { method?: string; params?: { effort?: string } });
+    const turnEfforts = codexRequests
+      .filter((request) => request.method === 'turn/start')
+      .map((request) => request.params?.effort)
+      .filter((effort): effort is string => typeof effort === 'string');
+    assert.deepEqual(
+      turnEfforts,
+      ['high'],
+      'cezar run --effort forwards the value only for the task Codex turn, not task naming',
     );
 
     // `cezar projects` (step 5.2) reads the same registry with no server

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
+import { runnerSchema } from './health.ts';
 // `StartTodoResponse` embeds a whole run record, which belongs to the runs slice.
 import { runRecordSchema } from './runs.ts';
 
@@ -89,3 +91,22 @@ export const startTodoResponseSchema = z.object({
   run: runRecordSchema,
 });
 export type StartTodoResponse = z.infer<typeof startTodoResponseSchema>;
+
+/**
+ * `POST /todos/:id/start`. No body keeps the historic host-default behavior; a supplied
+ * reasoning effort is a per-run selection for the agent the todo starts.
+ */
+export const startTodoInputSchema = z
+  .object({
+    runner: runnerSchema.optional(),
+    model: z.string().max(200).optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
+    prompt: z
+      .string()
+      .trim()
+      .max(20_000, 'must be at most 20000 characters')
+      .optional()
+      .transform((s) => (s ? s : undefined)),
+  })
+  .optional();
+export type StartTodoInput = z.input<typeof startTodoInputSchema>;

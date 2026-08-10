@@ -5,9 +5,12 @@ import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import type { ApiRun, ContinueResponse, ImageInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
+import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import {
   modelsForRunner,
   modelCatalogStatus,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
 } from '@/routes/new-task-form'
 import { useContinuationProvider } from './continuation-provider'
@@ -56,6 +59,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   // untouched Continue behaves exactly as before this feature existed.
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
   const [pickedModel, setPickedModel] = useState<string | null>(null)
+  // `null` preserves the existing session's effort; `''` deliberately resets
+  // the resumed Codex turn to its native default.
+  const [pickedReasoningEffort, setPickedReasoningEffort] = useState<string | null>(null)
 
   const continuation = useContinuationProvider(run, pickedRunner)
   const { runners, canContinue, currentRunner, runner } = continuation
@@ -70,6 +76,16 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const effectivePickedModel = modelsLocked ? null : pickedModel
   const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
   const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
+  const carriedReasoningEffort = !runnerChanged
+    ? [...run.steps].reverse().find((step) => step.sessionId)?.reasoningEffort ?? run.reasoningEffort
+    : undefined
+  const reasoningEfforts = reasoningEffortsForModel(runner, model, catalog.data)
+  const reasoningEffort = resolveReasoningEffort(
+    pickedReasoningEffort ?? carriedReasoningEffort ?? null,
+    runner,
+    model,
+    catalog.data,
+  )
 
   const mutation = useMutation({
     mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) => {
@@ -86,6 +102,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // connected fallback must be explicit even when the pills were untouched.
         runner: continuation.runnerOverride,
         model: !modelsLocked && pickedModel !== null ? model : undefined,
+        reasoningEffort: !modelsLocked && pickedReasoningEffort !== null ? reasoningEffort : undefined,
       })
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
@@ -105,6 +122,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
             onPick={(next) => {
               setPickedRunner(next)
               setPickedModel(null) // a runner switch invalidates the previous model pick
+              setPickedReasoningEffort(null)
             }}
           />
         ) : null}
@@ -115,9 +133,20 @@ export function useContinueAction(run: ApiRun): ContinueAction {
           value={model}
           readOnly={modelsLocked}
           disabledHint="Model selection is locked to native coding-agent settings."
-          onPick={(next) => setPickedModel(next)}
+          onPick={(next) => {
+            setPickedModel(next)
+            setPickedReasoningEffort(null)
+          }}
           options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
           status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+        />
+        <ReasoningEffortPill
+          runner={runner}
+          model={model}
+          value={reasoningEffort}
+          options={reasoningEfforts}
+          modelsLocked={modelsLocked}
+          onPick={setPickedReasoningEffort}
         />
       </div>
     ),

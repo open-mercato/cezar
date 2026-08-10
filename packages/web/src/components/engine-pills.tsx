@@ -1,10 +1,13 @@
 import { useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
+import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import { usableRunners } from '@/lib/provider-status'
 import {
   modelsForRunner,
   modelCatalogStatus,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   runnerOverride,
@@ -29,6 +32,8 @@ import {
 export interface EnginePick {
   runner: Runner | null
   model: string | null
+  /** `null` is untouched; `''` explicitly returns a continuation to Codex's native default. */
+  reasoningEffort?: string | null
 }
 
 /** The effective backend, plus what the body rules need to decide what to send. */
@@ -37,6 +42,8 @@ export interface ResolvedEngine {
   /** A sticky/user pick must ride the request even when it currently equals the default. */
   runnerExplicit: boolean
   model: string
+  reasoningEffort: string
+  reasoningEfforts: ReturnType<typeof reasoningEffortsForModel>
   /** The backends this host offers — the runner pill renders only when there is a choice. */
   runners: readonly Runner[]
   /** What the active project's server context would pick from its authoritative config. */
@@ -59,10 +66,14 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   const defaultRunner = config.data?.defaultRunner
   const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
   const modelsLocked = config.data?.modelsLocked === true
+  const model = resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data)
+  const reasoningEfforts = reasoningEffortsForModel(runner, model, catalog.data)
   return {
     runner,
     runnerExplicit: pick.runner !== null,
-    model: resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data),
+    model,
+    reasoningEffort: resolveReasoningEffort(pick.reasoningEffort ?? null, runner, model, catalog.data),
+    reasoningEfforts,
     runners,
     defaultRunner,
     canRun: providers.isSuccess && runners.length > 0,
@@ -89,10 +100,11 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
  * and explicitly sends the provider-status fallback when it is not. A sticky/user pick always
  * rides the request, so a boot-project snapshot can never erase that intent.
  */
-export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model'> {
+export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model' | 'reasoningEffort'> {
   return {
     runner: runnerOverride(resolved.runner, resolved.defaultRunner, resolved.runnerExplicit),
     model: resolved.modelsLocked ? undefined : resolved.model || undefined,
+    reasoningEffort: resolved.modelsLocked ? undefined : resolved.reasoningEffort || undefined,
   }
 }
 
@@ -105,7 +117,7 @@ export function EnginePills({
   onChange: (pick: EnginePick) => void
   disabled?: boolean
 }) {
-  const { runner, model, runners, canRun, modelsLocked } = useResolvedEngine(pick)
+  const { runner, model, reasoningEffort, reasoningEfforts, runners, canRun, modelsLocked } = useResolvedEngine(pick)
   const config = useConfig()
   const catalog = useRunnerModels()
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
@@ -120,7 +132,7 @@ export function EnginePills({
           disabled={unavailable}
           // Switching backend drops the model pick: the presets are per-runner, so a kept
           // model would be a preset the new runner does not have (composer rule).
-          onPick={(next) => onChange({ runner: next, model: null })}
+          onPick={(next) => onChange({ runner: next, model: null, reasoningEffort: null })}
         />
       ) : null}
       <PickerPill
@@ -133,9 +145,18 @@ export function EnginePills({
         disabled={unavailable}
         readOnly={modelsLocked === true}
         disabledHint={modelsLocked ? 'Model selection is locked to native coding-agent settings.' : undefined}
-        onPick={(next) => onChange({ ...pick, model: next })}
+        onPick={(next) => onChange({ ...pick, model: next, reasoningEffort: null })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+      />
+      <ReasoningEffortPill
+        runner={runner}
+        model={model}
+        value={reasoningEffort}
+        options={reasoningEfforts}
+        disabled={unavailable}
+        modelsLocked={modelsLocked}
+        onPick={(next) => onChange({ ...pick, reasoningEffort: next || null })}
       />
     </>
   )

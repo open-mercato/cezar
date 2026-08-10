@@ -66,6 +66,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: null,
+      reasoningEffort: null,
       variants: 1,
       planFirst: false,
       worktree: null,
@@ -81,6 +82,7 @@ describe('the new-task draft store', () => {
       runner: 'codex',
       agentProfile: null,
       model: 'gpt-5-codex',
+      reasoningEffort: 'high',
       variants: 2,
       planFirst: false,
       worktree: false,
@@ -91,6 +93,7 @@ describe('the new-task draft store', () => {
     expect(first.text).toBe('fix it')
     expect(first.worktree).toBe(false)
     expect(first.generateFollowups).toBe(false)
+    expect(first.reasoningEffort).toBe('high')
     first.text = 'mutated'
     expect(readDraft().text).toBe('fix it')
   })
@@ -102,6 +105,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: 'opus',
+      reasoningEffort: null,
       variants: 3,
       planFirst: true,
       worktree: null,
@@ -115,6 +119,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: 'opus',
+      reasoningEffort: null,
       variants: 3,
       planFirst: true,
       worktree: null,
@@ -130,6 +135,7 @@ describe('the new-task draft store', () => {
       runner: 'claude',
       agentProfile: null,
       model: 'sonnet',
+      reasoningEffort: null,
       variants: 2,
       planFirst: true,
       worktree: false,
@@ -159,6 +165,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: null,
+      reasoningEffort: null,
       variants: 1,
       planFirst: false,
       worktree: null,
@@ -174,6 +181,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: null,
+      reasoningEffort: null,
       variants: 1,
       planFirst: false,
       worktree: null,

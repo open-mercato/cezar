@@ -137,6 +137,13 @@ describe('buildPlannedRunBody — the POST /api/v1/runs wire contract for approv
     ).toBeUndefined()
   })
 
+  it('sends selected Codex effort but leaves the native default implicit', () => {
+    const codex = { ...base, runner: 'codex' as const, defaultRunner: 'codex' as const, model: 'gpt-future' }
+    expect(buildPlannedRunBody({ ...codex, reasoningEffort: 'high' }).reasoningEffort).toBe('high')
+    expect(buildPlannedRunBody({ ...codex, reasoningEffort: '' }).reasoningEffort).toBeUndefined()
+    expect(buildPlannedRunBody({ ...codex, reasoningEffort: 'high', modelsLocked: true }).reasoningEffort).toBeUndefined()
+  })
+
   it.each([
     { name: 'model rides when chosen', patch: { model: 'sonnet' }, key: 'model', expected: 'sonnet' },
     { name: 'connected fallback rides when it differs from the default', patch: { runner: 'codex' as const }, key: 'runner', expected: 'codex' },

@@ -24,6 +24,7 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     images?: Array<{ type: string; source: { media_type: string; data: string } }>;
     runner?: string;
     model?: string;
+    reasoningEffort?: string;
   };
   let captured: { id: string; opts: ContinueOpts } | undefined;
   const savedDryRun = process.env.CEZ_DRY_RUN;
@@ -69,6 +70,14 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(captured?.opts.model).toBe('gpt-5.1-codex');
   });
 
+  it('plumbs a reasoning effort override, including the explicit native-default reset', async () => {
+    expect((await post({ runner: 'codex', reasoningEffort: 'high' })).status).toBe(200);
+    expect(captured?.opts.reasoningEffort).toBe('high');
+
+    expect((await post({ reasoningEffort: '' })).status).toBe(200);
+    expect(captured?.opts.reasoningEffort).toBe('');
+  });
+
   it('an empty POST omits both — the run keeps its current backend (backward compat)', async () => {
     const res = await post({});
     expect(res.status).toBe(200);
@@ -91,6 +100,9 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     );
 
     expect((await post({ runner: 'codex', model: 'gpt-5.6-codex' })).status).toBe(409);
+    expect(captured).toBeUndefined();
+
+    expect((await post({ runner: 'codex', reasoningEffort: 'high' })).status).toBe(409);
     expect(captured).toBeUndefined();
 
     expect((await post({ runner: 'codex' })).status).toBe(200);

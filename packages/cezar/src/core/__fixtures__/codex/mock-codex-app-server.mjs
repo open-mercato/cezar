@@ -8,12 +8,21 @@
 // `MOCK_CODEX_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
 // server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
 // and handles SIGTERM itself, exiting 143 rather than dying from the signal.
+import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+
+// The same fixture can stand in for the executable at provider-auth time.
+// `codex login status` is the only probe that precedes `codex app-server`.
+if (process.argv.slice(2).join(' ') === 'login status') {
+  process.stdout.write('Logged in using ChatGPT\n');
+  process.exit(0);
+}
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
 
 const ignoreEof = process.env.MOCK_CODEX_IGNORE_EOF === '1';
+const requestsFile = process.env.CEZ_MOCK_CODEX_REQUESTS_FILE;
 if (ignoreEof) {
   process.on('SIGTERM', () => process.exit(143));
   // Keep the event loop alive so EOF alone can never end the process.
@@ -26,6 +35,13 @@ rl.on('line', (line) => {
     msg = JSON.parse(line);
   } catch {
     return;
+  }
+  if (requestsFile) {
+    try {
+      appendFileSync(requestsFile, `${JSON.stringify(msg)}\n`);
+    } catch {
+      // Test capture must never change the protocol behavior.
+    }
   }
   if (msg.id === 'ask-1' && msg.result) {
     const answer = msg.result.answers?.library?.answers;
@@ -65,6 +81,7 @@ rl.on('line', (line) => {
       } });
       return;
     }
+    if (turnText.includes('mock:hold-turn')) return;
     if (turnText.includes('mock:subagent-activity')) {
       emit({ method: 'item/started', params: { item: { type: 'subAgentActivity', id: 'activity_1', kind: 'started', agentThreadId: 'th_child', agentPath: '/root/scope_review' } } });
       emit({ method: 'item/completed', params: { item: { type: 'subAgentActivity', id: 'activity_1', kind: 'started', agentThreadId: 'th_child', agentPath: '/root/scope_review' } } });
@@ -109,6 +126,9 @@ rl.on('line', (line) => {
     emit({ method: 'item/commandExecution/outputDelta', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', itemId: 'item_c1', delta: ' M src/example.ts\n' } });
     emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'commandExecution', id: 'item_c1', command: ['bash', '-lc', 'git status --short'], cwd: '/repo', status: 'completed', exitCode: 0 } } });
     emit({ method: 'thread/tokenUsage/updated', params: { threadId: 'th_mock_1', tokenUsage: { total: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 }, last: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 } } } });
+    emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } });
+  } else if (msg.method === 'turn/steer') {
+    emit({ id: msg.id, result: {} });
     emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } });
   }
 });
