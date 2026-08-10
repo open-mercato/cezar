@@ -364,7 +364,9 @@ export function JumpToLatestPill({ onJump }: { onJump: () => void }) {
       type="button"
       data-slot="jump-to-latest"
       onClick={onJump}
-      className="pointer-events-auto inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border bg-background px-3.5 text-xs font-medium text-muted-foreground shadow-modal hover:text-foreground"
+      // bg-card (not bg-background): the page is #f7f7fb now, so a white pill reads as floating,
+      // not blended. shadow-md gives a tight lift instead of shadow-modal's wide 48px halo.
+      className="pointer-events-auto inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3.5 text-xs font-medium text-muted-foreground shadow-md hover:text-foreground"
     >
       <ArrowDownIcon aria-hidden className="size-3.5" />
       Jump to latest
