@@ -2,6 +2,7 @@ import { ChevronDownIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
+import { RunnerLogo } from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,7 +45,7 @@ export function PickerPill({
   ariaLabel: string
   label: ReactNode
   value: string
-  options: ReadonlyArray<{ value: string; label: string; desc?: string }>
+  options: ReadonlyArray<{ value: string; label: string; desc?: string; icon?: ReactNode }>
   onPick: (value: string) => void
   disabled?: boolean
   /** Display the resolved value without presenting a selector. */
@@ -97,6 +98,9 @@ export function PickerPill({
         <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
           {options.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
+              {option.icon ? (
+                <span className="flex size-4 shrink-0 items-center justify-center">{option.icon}</span>
+              ) : null}
               <span className="flex min-w-0 flex-col">
                 <span className="text-[12.5px] font-medium">{option.label}</span>
                 {option.desc ? (
@@ -179,18 +183,22 @@ export function RunnerPill({
   repoAccount?: Partial<Record<Runner, string>>
 }) {
   const available = RUNNERS.filter((r) => runners.includes(r.id))
-  const options = available.flatMap((runner): Array<{ value: string; label: string; desc?: string }> => {
-    const logins = accounts.filter((entry) => entry.provider === runner.id)
-    // One login is not a choice, so it does not become a row of its own — the agent is the row.
-    // Name only, no backend description subtitle — the row is just the agent it names.
-    if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id }]
-    return logins.map((login) => ({
-      value: choiceValue(runner.id, login.id),
-      label: `${runner.id} · ${login.label}`,
-      // The folder, because the label is cezar's invention and the folder is the account.
-      desc: login.configDir,
-    }))
-  })
+  const options = available.flatMap(
+    (runner): Array<{ value: string; label: string; desc?: string; icon?: ReactNode }> => {
+      const logins = accounts.filter((entry) => entry.provider === runner.id)
+      const icon = <RunnerLogo runner={runner.id} className="size-4" />
+      // One login is not a choice, so it does not become a row of its own — the agent is the row.
+      // Name only, no backend description subtitle — the row is just its agent's logo + name.
+      if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id, icon }]
+      return logins.map((login) => ({
+        value: choiceValue(runner.id, login.id),
+        label: `${runner.id} · ${login.label}`,
+        // The folder, because the label is cezar's invention and the folder is the account.
+        desc: login.configDir,
+        icon,
+      }))
+    },
+  )
 
   // What is selected right now: the override if the user made one, else whatever the repo resolves
   // to, else the discovered account. Falls back to the plain runner row for an agent with one login
@@ -205,7 +213,12 @@ export function RunnerPill({
     <PickerPill
       slot="runner-pill"
       ariaLabel="Runner"
-      label={options.find((option) => option.value === value_)?.label ?? value}
+      label={
+        <span className="inline-flex items-center gap-1.5">
+          <RunnerLogo runner={value} className="size-4" />
+          {options.find((option) => option.value === value_)?.label ?? value}
+        </span>
+      }
       value={value_}
       disabled={disabled}
       onPick={(next) => {

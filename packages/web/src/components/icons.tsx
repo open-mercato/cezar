@@ -1,5 +1,25 @@
 import type { SVGProps } from 'react'
 
+import claudeLogo from '@/assets/runners/claude.svg'
+import codexLogo from '@/assets/runners/codex.svg'
+import opencodeLogo from '@/assets/runners/opencode.svg'
+
+/** The coding-agent backends' own brand marks (assets/runners/*.svg). Rendered as an <img> — they
+ *  are multi-colour logos (Claude's burst, the OpenAI mark, OpenCode's tile), not monochrome glyphs,
+ *  so `currentColor` would flatten them. `object-contain` keeps each logo's own aspect ratio inside
+ *  a square box. Unknown runner → null, and the caller falls back to a lucide bot. */
+const RUNNER_LOGOS: Record<string, string | undefined> = {
+  claude: claudeLogo,
+  codex: codexLogo,
+  opencode: opencodeLogo,
+}
+
+export function RunnerLogo({ runner, className }: { runner: string; className?: string }) {
+  const src = RUNNER_LOGOS[runner]
+  if (!src) return null
+  return <img src={src} alt="" aria-hidden className={`object-contain ${className ?? ''}`} />
+}
+
 /** Brand marks that lucide does not ship.
  *
  *  lucide-react 1.x removed every brand icon (no `GithubIcon`), so the forge nav item would

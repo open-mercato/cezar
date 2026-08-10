@@ -36,7 +36,7 @@ import {
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { ClaudeIcon } from '@/components/icons'
+import { RunnerLogo } from '@/components/icons'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { ReferenceChip } from '@/components/reference-chip'
 import { TabLink } from '@/components/tab-link'
@@ -399,8 +399,9 @@ function EditableTitle({ run }: { run: ApiRun }) {
 /** The Claude burst for a claude run, a neutral bot otherwise — the runner's face in the Agent
  *  stat. */
 function RunnerIcon({ runner, className }: { runner: ApiRun['runner']; className?: string }) {
-  return runner === 'claude' ? (
-    <ClaudeIcon className={className} aria-hidden="true" />
+  // Every known backend ships a brand logo; only a legacy record with no runner falls to the bot.
+  return runner ? (
+    <RunnerLogo runner={runner} className={className} />
   ) : (
     <BotIcon className={className} aria-hidden="true" />
   )
