@@ -389,7 +389,7 @@ export function ThreadView({
               (Status left the header — it only echoed this), the Verify/Plan tabs on the right.
               -mb-2 tucks the row's bottom a touch under the input's top edge. */}
           <div data-slot="composer-topline" className="-mb-2 flex items-end justify-between gap-3 pl-1">
-            <div className="min-w-0 pb-2 text-xs text-muted-foreground">
+            <div className="min-w-0 pb-3.5 text-xs text-muted-foreground">
               {run.status === 'waiting' ? (
                 <span data-slot="paused-hint" className="flex items-center gap-2">
                   <StatusDot tone="pending" pulse />
