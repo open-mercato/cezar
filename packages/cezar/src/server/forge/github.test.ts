@@ -1654,6 +1654,31 @@ describe('searchGithubItems (#730)', () => {
   });
 
   /**
+   * The query must sit behind an end-of-flags `--` (#836). Ahead of it, `gh` parses a query that
+   * starts with `-`/`--` as a flag: `--foo` answers `unknown flag: --foo`, which the quiet degrade
+   * turns into the tab's "GitHub could not be searched" — an infrastructure failure reported for
+   * ordinary search text — and the exact query `--web` matches `gh search`'s own `-w, --web` and
+   * opens a browser on the machine hosting the cockpit. A stub cannot reproduce the CLI's parser,
+   * so what is pinned is the argv shape that decides it: `--` immediately before the query, last.
+   */
+  it('sends the query behind `--`, so a flag-shaped query stays search text', async () => {
+    const argvs = ghSpy((argv) => {
+      if (argv[0] === 'repo') return 'owner/n\n';
+      if (argv[0] === 'search') return JSON.stringify([searchHit()]);
+      return '';
+    });
+
+    const res = await searchGithubItems('/repo/search-flagish', 'pr', '--web');
+
+    expect(res.available).toBe(true);
+    const search = argvs.find((a) => a[0] === 'search');
+    expect(search?.at(-1)).toBe('--web');
+    expect(search?.at(-2)).toBe('--');
+    // Nothing flag-shaped may precede the terminator either — the query is the only trailing arg.
+    expect(search?.slice(0, -2)).not.toContain('--web');
+  });
+
+  /**
    * `gh search issues` does not define `isDraft` and rejects the whole call with
    * `Unknown JSON field: "isDraft"` — so asking for it made EVERY text query on the Issues tab
    * degrade to "GitHub could not be searched", leaving a closed issue reachable by number only.

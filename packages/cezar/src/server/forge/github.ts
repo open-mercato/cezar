@@ -643,13 +643,18 @@ export async function searchGithubItems(
     const out = await gh(repoRoot, [
       'search',
       kind === 'pr' ? 'prs' : 'issues',
-      trimmed,
       '--repo',
       `${handle.owner}/${handle.name}`,
       '--limit',
       String(capped),
       '--json',
       searchJsonFields(kind),
+      // End-of-flags, then the query: `gh` parses a leading `-`/`--` as a flag otherwise, so a
+      // flag-shaped query would degrade the tab to "GitHub could not be searched: unknown flag",
+      // and the exact text `--web` would match `gh search`'s own `-w, --web` and open a browser
+      // on the cockpit's host. Behind `--` it is search text, which is all the box ever means.
+      '--',
+      trimmed,
     ]);
     const hits = z.array(ghSearchHitSchema).parse(JSON.parse(out));
     return {
