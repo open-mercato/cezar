@@ -571,17 +571,18 @@ On startup cezar probes which CLIs are installed and the cockpit only offers
 the backends it found — install any one of the four and you're operational.
 
 **Models come from your own machine.** The model picker does not ship a list of
-vendor releases that goes stale between cezar versions. For all three backends
-cezar asks the CLI on your host what *it* currently offers (Claude Code's
-`list_models` control request; the Codex app-server's `model/list`; `opencode
-models`) and shows exactly that, in that order — so a model your account gained
-yesterday is selectable today with no cezar release, and one your provider
-retired stops being offered. Discovery is read-only, costs no tokens, and is
-cached briefly in memory. If the CLI is missing, logged out, too old or slow, the
-picker quietly falls back to that runner's built-in entries (`auto` plus Claude's
-tier aliases) and says so in a status row. `auto` — send no model at all and let
-the CLI decide — is always available, and a model you pinned by hand stays
-selectable even when it is no longer advertised.
+vendor releases that goes stale between cezar versions. For Claude, Codex and
+OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
+Code's `list_models` control request; the Codex app-server's `model/list`;
+`opencode models`) and shows exactly that, in that order — so a model your
+account gained yesterday is selectable today with no cezar release, and one your
+provider retired stops being offered. Discovery is read-only, costs no tokens,
+and is cached briefly in memory. If the CLI is missing, logged out, too old or
+slow, the picker quietly falls back to that runner's built-in entries (`auto`
+plus Claude's tier aliases) and says so in a status row; `pi`, which has no
+host-local catalog yet, always shows its built-in entries. `auto` — send no
+model at all and let the CLI decide — is always available, and a model you
+pinned by hand stays selectable even when it is no longer advertised.
 
 **Pick a backend at three levels** (most specific wins):
 
