@@ -324,11 +324,11 @@ type ResponseValidator<T> = {
  * Its own server cannot produce such a body (`contract-parity.test.ts` pins both response types
  * to these schemas) — this guards the boundary against a proxy, a stale server, or a stub.
  */
-async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>, T>(
+async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>>(
   res: R,
   label: string,
-  schema: ResponseValidator<T>,
-): Promise<T> {
+  schema: ResponseValidator<OkJson<R>>,
+): Promise<OkJson<R>> {
   const status = res.status
   const parsed = await unwrap(res, label)
   const result = schema.safeParse(parsed)
