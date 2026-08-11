@@ -2356,4 +2356,109 @@ describe('cross-state search fallback (#730)', () => {
       { timeout: 3000 },
     )
   })
+
+
+  it('stops rendering hits once the local filter matches the query again (#856)', async () => {
+    // A second open PR carrying a label PR_137 does not, so the label filter can empty the local
+    // narrow for a query that otherwise matches — the only way to reach the forge fallback while
+    // an open item is a genuine match for the text.
+    const PR_200: GithubItem = {
+      kind: 'pr',
+      number: 200,
+      title: 'Docs pass',
+      author: 'lin',
+      createdAt: '2026-07-12T08:00:00.000Z',
+      labels: ['docs'],
+      body: '',
+      url: 'https://github.com/acme/demo/pull/200',
+      comments: 0,
+      isDraft: false,
+      checks: null,
+    }
+    const MERGED_STREAM: GithubItem = { ...MERGED_PR, title: 'Stream reconcile' }
+
+    const sent = stubFetch({
+      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+      // A real `gh search prs Stream` answers with the OPEN #137 alongside the merged one — which
+      // is what made the stale payload render #137 a second time.
+      'GET /api/v1/github/search?kind=pr&q=Stream': () =>
+        jsonResponse({ available: true, items: [PR_137, MERGED_STREAM] }),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    // 1. Narrow to `docs`, which #137 does not carry. The popover stays open on select.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-slot="gh-label-filter"]')!)
+    const docsOption = await waitFor(() =>
+      [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find(
+        (el) => el.textContent?.trim() === 'docs',
+      )!,
+    )
+    fireEvent.click(docsOption)
+    await waitFor(() => expect(rows()).toHaveLength(1)) // only #200 survives the label narrow
+
+    // 2. Search `Stream`: the local narrow (`Stream` + `docs`) is empty, so the forge is asked and
+    //    the answer is cached under the key ('pr', 'Stream'). The hits themselves stay off screen
+    //    while `docs` is on — they are narrowed by the same filter — so the request is the signal.
+    fireEvent.change(searchBox(), { target: { value: 'Stream' } })
+    await waitFor(
+      () =>
+        expect(sent.some((r) => r.path === '/api/v1/github/search?kind=pr&q=Stream')).toBe(true),
+      { timeout: 3000 },
+    )
+    // Let the response land in the cache before the filter is cleared, so the assertion below is
+    // about a cached payload outliving its `enabled` flag and not about a request in flight.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+
+    // 3. Clear the label filter. #137 matches `Stream` locally again, so the fallback is no longer
+    //    wanted — but the query TEXT never changed, so the cache key did not either. Before #856
+    //    the stale payload kept rendering and #137 appeared in both lists at once.
+    const clearOption = [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((el) =>
+      el.textContent?.startsWith('Clear'),
+    )!
+    fireEvent.click(clearOption)
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-rows"]')).not.toBeNull())
+    const numbersIn = (slot: string) =>
+      [...document.querySelectorAll<HTMLElement>(`[data-slot="${slot}"] [data-slot="gh-row"]`)].map(
+        (row) => row.dataset.number,
+      )
+    expect(numbersIn('gh-rows')).toEqual(['137'])
+    // Nothing may appear in both lists — the assertion the issue asks for.
+    const listed = new Set(numbersIn('gh-rows'))
+    expect(numbersIn('gh-search-hits').filter((n) => listed.has(n))).toEqual([])
+    expect(document.querySelector('[data-slot="gh-search-hits"]')).toBeNull()
+  })
+
+  it('never repeats a listed item under "Found on GitHub" mid-debounce either (#856)', async () => {
+    // The other half of #856, and the reason the `searchWanted` gate alone is not enough: while a
+    // freshly typed query debounces, the payload on screen is still the PREVIOUS query's, and
+    // `searchWanted` is still derived from that same stale text — so the gate reads true. The hits
+    // deliberately stay put rather than blink out on every keystroke; what must not survive is an
+    // item the list above is already showing.
+    const MERGED_STREAM: GithubItem = { ...MERGED_PR, title: 'Stream reconcile' }
+    stubFetch({
+      // As a real `gh search prs 4507` would: the open #137 comes back beside the merged one.
+      'GET /api/v1/github/search?kind=pr&q=4507': () =>
+        jsonResponse({ available: true, items: [PR_137, MERGED_STREAM] }),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+    await waitFor(() => expect(hits()).not.toBeNull(), { timeout: 3000 })
+
+    // `Stream` matches the open #137 locally, so it enters the list above — while the hits still
+    // hold the payload keyed on `4507`, which contains #137 too.
+    fireEvent.change(searchBox(), { target: { value: 'Stream' } })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50)) // inside the 350 ms debounce
+    })
+
+    const numbers = rows().map((row) => row.dataset.number)
+    expect(numbers).toEqual([...new Set(numbers)]) // no number rendered twice
+    expect(numbers).toContain('137')
+  })
 })

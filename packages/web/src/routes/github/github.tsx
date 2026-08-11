@@ -342,9 +342,22 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const allItems = openItems
   const items = filterGithubItems(allItems, { query, labels: labelFilter })
   const filtering = query.trim() !== '' || labelFilter.length > 0
-  const searchPayload = forgeSearch.data?.available ? forgeSearch.data : null
-  // Hits are narrowed by the label filter too — it reads as "narrow whatever is on screen".
-  const searchHits = searchPayload ? filterGithubItems(searchPayload.items, { labels: labelFilter }) : []
+  // Gated on `searchWanted`, not just on the payload: the query key is (kind, text), so flipping
+  // `enabled` off does not evict what a previous run cached under the same text. Reading `data`
+  // alone therefore kept the hits on screen after the local narrow started matching again —
+  // rendering an open item twice, once per list (#856).
+  const searchPayload = searchWanted && forgeSearch.data?.available ? forgeSearch.data : null
+  // Hits are narrowed by the label filter too — it reads as "narrow whatever is on screen". They
+  // also drop anything the list above already shows: `gh search` returns OPEN matches alongside
+  // closed and merged ones, and during the debounce window the payload belongs to the previous
+  // query text, so without this an open item could occupy both lists at once (#856). "Found on
+  // GitHub" only ever means "past the open list", so an overlap is never information.
+  const listedNumbers = new Set(items.map((item) => item.number))
+  const searchHits = searchPayload
+    ? filterGithubItems(searchPayload.items, { labels: labelFilter }).filter(
+        (item) => !listedNumbers.has(item.number),
+      )
+    : []
   // "A search is coming or running" — the debounce window counts. Without it, the moment between
   // the last keystroke and the request firing would render the definitive "nothing anywhere",
   // which is the same lie #730 set out to remove, just half a second long.
