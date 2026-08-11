@@ -3,7 +3,7 @@ import { accessSync, constants, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { openInTerminal } from './open-in-terminal.ts';
+import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
 
 /**
@@ -238,6 +238,7 @@ function pickInstalledMacApp(names: string | string[]): string {
 /** Spawn detached; success = no error within a short settle window (mirrors open-in-terminal). */
 function runDetached(bin: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
+    refuseSpawnUnderTest(bin, args);
     let child;
     try {
       child = spawn(bin, args, { stdio: 'ignore', detached: true });

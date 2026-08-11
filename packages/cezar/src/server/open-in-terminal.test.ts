@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { createLaunchScript, openInTerminal, wslTerminalLaunchers } from './open-in-terminal.ts';
+import { createLaunchScript, openInTerminal, refuseSpawnUnderTest, wslTerminalLaunchers } from './open-in-terminal.ts';
 
 describe('wslTerminalLaunchers (#361 WSL support)', () => {
   it('tries Windows Terminal first, re-entering the distro through wsl.exe', () => {
@@ -82,5 +82,48 @@ describe('openInTerminal env (spec 2026-07-29-agent-profiles)', () => {
         CLAUDE_CONFIG_DIR: `/home/u${String.fromCharCode(10)}evil`,
       }),
     ).resolves.toBe(false);
+  });
+});
+
+/**
+ * #820 — the backstop. A test that reaches a real launcher opens a window on the developer's
+ * machine; the suite once left a Terminal sitting in a fixture directory it had already deleted.
+ * The guard makes that omission impossible to commit, because it fails loudly instead of
+ * succeeding quietly.
+ */
+describe('the spawn guard (#820)', () => {
+  const saved = process.env.CEZ_ALLOW_TEST_SPAWN;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CEZ_ALLOW_TEST_SPAWN;
+    else process.env.CEZ_ALLOW_TEST_SPAWN = saved;
+  });
+
+  it('refuses, naming the command and the seam to inject', () => {
+    delete process.env.CEZ_ALLOW_TEST_SPAWN;
+    expect(() => refuseSpawnUnderTest('osascript', ['-e', 'tell application "Terminal"']))
+      .toThrow(/refusing to spawn a launcher from a test: osascript -e tell application "Terminal"/)
+    expect(() => refuseSpawnUnderTest('osascript', [])).toThrow(/ServerDeps\.openTerminal/);
+  });
+
+  it('lets a file that has mocked child_process through, explicitly', () => {
+    process.env.CEZ_ALLOW_TEST_SPAWN = '1';
+    expect(() => refuseSpawnUnderTest('osascript', ['-e', 'x'])).not.toThrow();
+  });
+
+  it('never fires outside a test run', () => {
+    delete process.env.CEZ_ALLOW_TEST_SPAWN;
+    const vitest = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      expect(() => refuseSpawnUnderTest('osascript', ['-e', 'x'])).not.toThrow();
+    } finally {
+      if (vitest !== undefined) process.env.VITEST = vitest;
+    }
+  });
+
+  it('stops openInTerminal before it can reach the OS', async () => {
+    delete process.env.CEZ_ALLOW_TEST_SPAWN;
+    // The exact call #820 reported: `openInApp('terminal', dir)` → `openInTerminal(dir, ':')`.
+    await expect(openInTerminal('/tmp/some-account-folder', ':')).rejects.toThrow(/refusing to spawn/);
   });
 });

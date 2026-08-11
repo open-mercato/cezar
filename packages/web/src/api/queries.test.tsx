@@ -119,10 +119,25 @@ class FakeHealthSocket {
 describe('useRunnerModels', () => {
   it('loads the workspace Codex catalog', async () => {
     fetchMock.mockResolvedValue(json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false }))
-    const { result } = renderHook(() => useRunnerModels(), { wrapper: wrapper() })
+    const { result } = renderHook(() => useRunnerModels('codex'), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.models[0]?.id).toBe('gpt-future')
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=codex')
+  })
+
+  it('loads the OpenCode catalog from its own cache entry (#794)', async () => {
+    fetchMock.mockResolvedValue(json({ runner: 'opencode', models: [{ id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels('opencode'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.models[0]?.id).toBe('openai/gpt-5.4')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=opencode')
+  })
+
+  it('never asks the server about claude, which has no host catalog', async () => {
+    const { result } = renderHook(() => useRunnerModels('claude'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
+    expect(result.current.data).toBeUndefined()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
@@ -744,6 +759,32 @@ describe('useMarkRunSeen', () => {
     const list = client.getQueryData<Array<typeof armed>>(queryKeys.runs.list())
     expect(list?.[0]?.autoResumeAt).toBe('2026-08-03T19:33:53.000Z')
     expect(list?.[0]?.seenAt).toBe('2026-08-03T19:23:14.000Z')
+  })
+
+  it('marks the workspace run index stale, so the global Tasks page stops showing it unread', async () => {
+    // The bug this pins: the receipt patches the project-scoped list and detail, and the global
+    // page renders from a THIRD cache with a 30s staleTime. Opening an unread task from /tasks
+    // and coming straight back showed it still unread until a refresh.
+    fetchMock.mockResolvedValue(json({ ...RUN, seenAt: '2026-08-03T19:23:14.000Z' }))
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.runsIndex, {
+      runs: [{ projectId: 'api', id: 'run-1', title: 'x', status: 'done', createdAt: RUN.createdAt, archived: false, workflow: 'quick-task' }],
+      perProjectLimit: 200,
+      truncated: [],
+    })
+    expect(client.getQueryState(workspaceQueryKeys.runsIndex)?.isInvalidated).toBe(false)
+
+    const { result } = renderHook(() => useMarkRunSeen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    // Stale, not refetched: nothing is observing the index from a task thread, so this costs no
+    // request — the global page's next mount reads the truth.
+    expect(client.getQueryState(workspaceQueryKeys.runsIndex)?.isInvalidated).toBe(true)
   })
 
   it('still stamps a detail cache that arrived only with the answer', async () => {

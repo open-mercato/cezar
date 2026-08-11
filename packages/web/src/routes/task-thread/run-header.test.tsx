@@ -917,6 +917,57 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
   })
 
+  describe('the canonical model identity (#546)', () => {
+    /** Opens the agent badge's menu — `DropdownMenuContent` is not in the DOM until it does. */
+    const openAgentMenu = async () => {
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      const badge = within(meta).getByRole('button', { name: /^Agent:/ })
+      fireEvent.pointerDown(badge, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+      await waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
+      return document.querySelector('[role="menu"]') as HTMLElement
+    }
+
+    it('shows the provider/model the run actually resolved to', async () => {
+      // The reader `modelIdentity` was missing (#546): #405 persisted it for cost attribution and
+      // replay and nothing read it, so the field could rot without anyone noticing.
+      stubFetch()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'opus',
+        modelIdentity: 'anthropic/claude-opus-4-8',
+      }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')?.textContent)
+        .toBe('identity: anthropic/claude-opus-4-8')
+      // It ADDS to the asked-for model rather than replacing it — `model` is still the free-text
+      // the caller typed, and losing that would make the badge answer a different question.
+      expect(menu.textContent).toContain('model: opus')
+    })
+
+    it('says nothing for a run from before the identity was recorded', async () => {
+      // Same omitted-not-guessed rule as the account line: resolving it now would attribute a
+      // provider to a run that never wrote one down.
+      stubFetch()
+      renderHeader(run('done', { runner: 'claude', model: 'opus' }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
+    })
+
+    it('omits the line when it would only repeat the model', async () => {
+      // A gateway id is already in provider/model form, so echoing it would be noise in a menu
+      // whose whole value is that every line answers something.
+      stubFetch()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'anthropic/claude-opus-4-8',
+        modelIdentity: 'anthropic/claude-opus-4-8',
+      }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
+      expect(menu.textContent).toContain('model: anthropic/claude-opus-4-8')
+    })
+  })
+
   it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'claude' }))

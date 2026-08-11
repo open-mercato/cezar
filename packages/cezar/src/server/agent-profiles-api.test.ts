@@ -679,14 +679,24 @@ describe('agent profiles API', () => {
 
     it('allows a terminal for the FOLDER, which is the case it does apply to', async () => {
       const account = await create('work', signedIn('claude-klaudiusz'));
-      // `openInApp` is the real thing here, so assert only that the target passed validation:
-      // a 400 would mean it was refused, and anything else means it reached the launcher.
-      const res = await apiRequest(makeApp(), `/api/v1/workspace/agent-profiles/${account.id}/open`, {
+      // #820: this reached the REAL launcher and opened a Terminal on whoever ran the suite,
+      // sitting in a `cez-profiles-home-*` fixture that `afterEach` had already deleted. Inject
+      // the launcher instead — which also lets the assertion say what it means: `not.toBe(400)`
+      // passed whether the target was accepted OR the launcher blew up behind it.
+      const launched: Array<[string, string]> = [];
+      const app = makeApp({
+        openApp: async (target, path) => {
+          launched.push([target, path]);
+          return true;
+        },
+      });
+      const res = await apiRequest(app, `/api/v1/workspace/agent-profiles/${account.id}/open`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ file: 'folder', target: 'terminal' }),
       });
-      expect(res.status).not.toBe(400);
+      expect(res.status).toBe(200);
+      expect(launched).toEqual([['terminal', account.path]]);
     });
 
     it('409s a file the agent has not written yet rather than reporting a false success', async () => {

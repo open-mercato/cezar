@@ -151,7 +151,7 @@ export function SessionTranscript({
   renderMode,
 }: SessionTranscriptProps) {
   const rowModels = useMemo(() => buildTranscriptRows(sections, runId), [sections, runId])
-  const internalScroll = useThreadScroll(`${runId}:${viewId}`, mode)
+  const internalScroll = useThreadScroll(`${runId}:${viewId}`, { surface: mode })
   const controls = scrollControls ?? internalScroll
   const rows = useMemo<ThreadRow[]>(
     () =>

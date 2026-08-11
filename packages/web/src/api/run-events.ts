@@ -51,8 +51,19 @@ export function parseRunEvent(data: string): RunEvent | null {
  * No reducer cache, no query-client involvement: unlike the global stream, this data belongs
  * to exactly the component that asked for it.
  */
-export function useRunEvents(runId: string | undefined): RunEvent[] {
+export interface RunEventStreamOptions {
+  cursor?: string
+  afterSeq?: number
+  /** Optimized history keeps a bounded live tail; full-replay fallback leaves this absent. */
+  maxEvents?: number
+  /** Ask the history owner to fold the live prefix into a fresh persisted tail page. */
+  compactAt?: number
+  onCompact?: () => void
+}
+
+export function useRunEvents(runId: string | undefined, options: RunEventStreamOptions = {}): RunEvent[] {
   const [events, setEvents] = useState<RunEvent[]>([])
+  const { cursor, afterSeq = 0, maxEvents, compactAt, onCompact } = options
 
   useEffect(() => {
     // The reset also covers the runId-changed case: whatever accumulated belongs to the old id.
@@ -65,10 +76,11 @@ export function useRunEvents(runId: string | undefined): RunEvent[] {
 
     // The high-water mark lives with the socket's effect, not in state: a reconnect replay
     // arrives between renders, and dedup must not race React's batching.
-    let maxSeq = 0
+    let maxSeq = afterSeq
     let source: EventSource | null = null
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
+    let compactionRequested = false
     const CLOSED = 2 // EventSource.CLOSED, spelled literally like global-events.tsx
     const REOPEN_DELAY_MS = 1_500
 
@@ -90,7 +102,20 @@ export function useRunEvents(runId: string | undefined): RunEvent[] {
       const parsed = parseRunEvent((event as MessageEvent<string>).data)
       if (!parsed || !(parsed.seq > maxSeq)) return
       maxSeq = parsed.seq
-      setEvents((current) => [...current, parsed])
+      setEvents((current) => {
+        const next = [...current, parsed]
+        if (
+          !compactionRequested &&
+          compactAt !== undefined &&
+          next.length >= compactAt
+        ) {
+          compactionRequested = true
+          queueMicrotask(() => {
+            if (!disposed) onCompact?.()
+          })
+        }
+        return maxEvents === undefined || next.length <= maxEvents ? next : next.slice(-maxEvents)
+      })
     }
 
     // The keepalive carries no payload we accumulate — it exists only to prove the socket is
@@ -116,7 +141,11 @@ export function useRunEvents(runId: string | undefined): RunEvent[] {
       // Scoped per project like every client.ts path (spec 3.1) — unscoped this is the
       // byte-identical legacy URL. Read per (re)open, but the scope only changes with the
       // route, which unmounts this hook first.
-      source = new Source(apiPath(`/runs/${encodeURIComponent(runId)}/events`), {
+      const params = new URLSearchParams()
+      if (cursor !== undefined) params.set('cursor', cursor)
+      if (cursor !== undefined || afterSeq > 0) params.set('afterSeq', String(maxSeq))
+      const query = params.size > 0 ? `?${params.toString()}` : ''
+      source = new Source(apiPath(`/runs/${encodeURIComponent(runId)}/events${query}`), {
         withCredentials: true,
       })
       for (const name of RUN_EVENT_NAMES) source.addEventListener(name, onFrame)
@@ -181,7 +210,7 @@ export function useRunEvents(runId: string | undefined): RunEvent[] {
       window.removeEventListener('pageshow', onPageShow)
       source?.close()
     }
-  }, [runId])
+  }, [runId, cursor, afterSeq, maxEvents, compactAt, onCompact])
 
   return events
 }

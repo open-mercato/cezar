@@ -13,6 +13,7 @@ import {
   taskReference,
   taskPrUrl,
   taskIssueUrl,
+  taskReferences,
   usageCells,
   workflowLabel,
 } from '@/lib/tasks-table'
@@ -239,6 +240,91 @@ describe('taskPrUrl', () => {
       referencedPullRequestUrl: 'https://github.com/o/r/pull/454',
     })
     expect(taskPrUrl(r)).toBe('https://github.com/o/r/pull/900')
+  })
+})
+
+describe('taskReferences', () => {
+  const REPO = 'https://github.com/o/r'
+
+  it('returns every reference a task has, strongest first', () => {
+    // The real multi-reference case: a review task opened on an issue, ABOUT one PR, having
+    // created another. All three are true at once.
+    expect(
+      taskReferences(
+        run({
+          pullRequestUrl: `${REPO}/pull/533`,
+          referencedPullRequestUrl: `${REPO}/pull/530`,
+          referencedIssueUrl: `${REPO}/issues/524`,
+          markerRefs: { pr: 530, issue: 524 },
+        }),
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 533, url: `${REPO}/pull/533` },
+      { kind: 'PR', number: 530, url: `${REPO}/pull/530` },
+      { kind: 'Issue', number: 524, url: `${REPO}/issues/524` },
+    ])
+  })
+
+  it('is what taskReference takes its single answer from', () => {
+    const r = run({ pullRequestUrl: `${REPO}/pull/7`, referencedIssueUrl: `${REPO}/issues/4` })
+    expect(taskReference(r)).toEqual(taskReferences(r)[0])
+  })
+
+  it('keeps #526: an issue-subject run with no PR of its own adopts no stray PR', () => {
+    // Not even as a SECOND reference — a false association is false however many chips it sits
+    // beside.
+    expect(
+      taskReferences(
+        run({
+          referencedPullRequestUrl: `${REPO}/pull/900`,
+          referencedIssueUrl: `${REPO}/issues/524`,
+          markerRefs: { issue: 524 },
+        }),
+      ),
+    ).toEqual([{ kind: 'Issue', number: 524, url: `${REPO}/issues/524` }])
+  })
+
+  it('dedupes one reference reached through two fields', () => {
+    expect(
+      taskReferences(run({ pullRequestUrl: `${REPO}/pull/7`, prNumber: 7 })),
+    ).toEqual([{ kind: 'PR', number: 7, url: `${REPO}/pull/7` }])
+  })
+
+  it('keeps a PR and an issue that happen to share a number', () => {
+    // Different things — deduping on the number alone would silently drop one.
+    const refs = taskReferences(
+      run({ pullRequestUrl: `${REPO}/pull/12`, referencedIssueUrl: `${REPO}/issues/12` }),
+    )
+    expect(refs.map((reference) => reference.kind)).toEqual(['PR', 'Issue'])
+  })
+
+  it('falls back to a number known before any URL was scraped', () => {
+    expect(taskReferences(run({ prNumber: 42 }))).toEqual([{ kind: 'PR', number: 42 }])
+  })
+
+  it('makes a number-only reference clickable from the project’s own repo', () => {
+    // The cross-project case: the global page has a different repo per row, so it passes each
+    // project's `repoUrl` and every chip becomes a link instead of inert text.
+    expect(taskReferences(run({ prNumber: 42, issueNumber: 12 }), REPO)).toEqual([
+      { kind: 'PR', number: 42, url: `${REPO}/pull/42` },
+      { kind: 'Issue', number: 12, url: `${REPO}/issues/12` },
+    ])
+  })
+
+  it('never invents a URL without a repo to build it from', () => {
+    // Inert text beats a link that goes somewhere made up.
+    expect(taskReferences(run({ prNumber: 42 }), undefined)).toEqual([{ kind: 'PR', number: 42 }])
+  })
+
+  it('prefers the real URL over a synthesized one', () => {
+    // A task's PR can live in another repo (a fork, a submodule); the scraped URL is the truth.
+    expect(
+      taskReferences(run({ pullRequestUrl: 'https://github.com/other/repo/pull/9' }), REPO),
+    ).toEqual([{ kind: 'PR', number: 9, url: 'https://github.com/other/repo/pull/9' }])
+  })
+
+  it('is empty when the task references nothing', () => {
+    expect(taskReferences(run())).toEqual([])
   })
 })
 

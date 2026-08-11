@@ -15,7 +15,7 @@ import {
   useOpenTargets,
   useProviderStatus,
   useRemoveAgentProfile,
-  useRunnerModels,
+  useRunnerModelCatalogs,
   useSelectAgentProfile,
   useUpdateAgentProfile,
   useWorkspaceConfig,
@@ -356,7 +356,8 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
   const queryClient = useQueryClient()
   const config = useWorkspaceConfig()
   const providerStatus = useProviderStatus()
-  const catalog = useRunnerModels()
+  // A row per runner, so every runner's own host catalog is needed at once (#794).
+  const catalogs = useRunnerModelCatalogs()
   const select = useSelectAgentProfile()
 
   const save = useMutation({
@@ -428,13 +429,15 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
               }
               className="block w-full max-w-xs rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
             >
-              {modelsForRunner(entry.id, catalog.data, [models[entry.id]]).map((model) => (
+              {modelsForRunner(entry.id, catalogs[entry.id].data, [models[entry.id]]).map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.id === '' ? 'auto (default)' : model.label}
                 </option>
               ))}
-              {modelCatalogStatus(entry.id, catalog.data, catalog.isError) ? (
-                <option disabled>{modelCatalogStatus(entry.id, catalog.data, catalog.isError)}</option>
+              {modelCatalogStatus(entry.id, catalogs[entry.id].data, catalogs[entry.id].isError) ? (
+                <option disabled>
+                  {modelCatalogStatus(entry.id, catalogs[entry.id].data, catalogs[entry.id].isError)}
+                </option>
               ) : null}
             </select>
           </label>

@@ -452,6 +452,22 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
 
 // ---- host model catalog (`GET /api/v1/models`) -----------------------------------------------
 
+/**
+ * The runners whose model list is discovered from the host rather than hard-coded: Codex
+ * through its app-server protocol, OpenCode through its own `models` listing (#794). Claude has
+ * no equivalent local source, so its picker keeps static presets and `GET /api/v1/models`
+ * rejects it. One definition, used by the route's query validator and by the cockpit's picker.
+ */
+export const modelDiscoveryRunnerSchema = z.enum(['codex', 'opencode']);
+export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
+export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
+  modelDiscoveryRunnerSchema.options;
+
+/** True when `runner` has a host-discovered catalog (and therefore a `/models` answer). */
+export function runnerDiscoversModels(runner: Runner): runner is ModelDiscoveryRunner {
+  return (MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner);
+}
+
 export const runnerModelOptionSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -459,8 +475,9 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=codex` — discovered models, plus how fresh the answer is. Never an
- *  error: an unavailable CLI degrades to `source: 'unavailable'` with a `reason`. */
+/** `GET /api/v1/models?runner=codex|opencode` — the models discovered from that runner's own
+ *  host installation, plus how fresh the answer is. Never an error: an unavailable CLI degrades
+ *  to `source: 'unavailable'` with a `reason`. Claude has no host-local catalog and is rejected. */
 export const runnerModelCatalogResponseSchema = z.object({
   runner: runnerSchema,
   models: z.array(runnerModelOptionSchema),
