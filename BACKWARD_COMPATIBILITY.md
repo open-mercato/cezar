@@ -6,7 +6,7 @@ cezar is a published npm CLI (`@open-mercato/cezar`, currently 0.x — renamed f
 
 ## 1. CLI commands, flags and exit codes (`packages/cezar/src/index.ts`)
 
-- **Bins:** `cezar` and `cez` (both in `package.json` `bin`). Removing either alias is breaking.
+- **Bins:** `cezar`, `cez` and `cezar-cli` (all three in the manifest's `bin`; section 6 has the full package surface). Removing any alias is breaking.
 - **Commands:** bare invocation = `serve` (cockpit); `cezar run "<task>"`; `cezar init`.
 - **`cezar projects` subcommands:** `list` (the default), `add`, `remove`/`rm`, `tag`. `tag <id> [<tag>…]` replaces a project's grouping tags wholesale; naming none clears them.
 - **Flags:** `-p/--port` (default 4321, auto-picks the next free port), `--repo <dir>`, `--workflow <name>` (default `quick-task`), `--model <model>`, `--no-open`, `-h/--help`.
@@ -116,14 +116,15 @@ Breaking: requiring frontmatter, dropping a discovery directory, or inverting pr
 
 The Manage-skills opt-out (`importedSkills` in the global `~/.cezar/ui-state.json`) preserves this contract: the key is a tri-state and its **absence keeps the historical full default-repo catalog**, so an existing install that never curated sees exactly what it saw before. Only a *present* array (the user actively curated in the Skills page) narrows the default repo, and only that repo — a `config.json` `skillsRepos` the user configured is never gated. The selection lives at workspace scope (not the per-repo `.ai/cezar/ui-state.json`) so it follows the user across projects and never depends on the launch directory. Emptying the default catalog for a not-yet-curated install would be the breaking case, and is deliberately not what happens.
 
-## 6. npm package surface (`package.json`)
+## 6. npm package surface (`packages/cezar/package.json`)
 
-- Name `@open-mercato/cezar` (plus the `cezar-cli` npx alias documented in the README); `bin` entries `cezar` + `cez`; published `files`: `dist`, `packages/cezar/web/dist`, `packages/web/public/open-mercato.svg`, `scripts`, `README.md`; `engines.node >= 20`; `"type": "module"`.
-- There is **no** `exports`/library API — the package is CLI-only. Keep it that way deliberately: adding one creates a new compatibility surface; if it happens, this document gains a section first.
+- Name `@open-mercato/cezar` (plus the separately published `cezar-cli` alias package documented in the README); `bin` entries `cezar`, `cez` + `cezar-cli`; published `files`: `dist`, `web/dist`, `scripts`, `README.md`; `engines.node >= 20`; `"type": "module"`. Manifest paths are package-relative — the package root is `packages/cezar/`, so `web/dist` is `packages/cezar/web/dist` in the repo.
+- **`exports` — the resolution gate, not a library API.** The manifest declares exactly three subpaths: `.` → `./dist/index.js` (the CLI entry), `./app-type` → `./dist/server/app-type.js`, and `./package.json`. There is still no *runtime* library API — `./app-type` is type-only by construction (`import type` erases at build, which is what lets a browser bundle consume it without dragging `node:*` in) and exists because `@open-mercato/api-client` and the cockpit type their client off the server's own route table (`packages/web/src/api/client.ts`, spec `2026-07-23-independent-server-web-packages`). The map itself is load-bearing regardless: once a package declares `exports`, Node serves **only** the listed subpaths and hard-blocks the rest, so this is what keeps the deep-path surface closed. Adding or removing a subpath is breaking.
+- **First-party consumers import the bare specifier `@open-mercato/cezar`, never a deep path.** 0.9.3 shipped an alias whose `bin.js` did `import('@open-mercato/cezar/dist/index.js')`; the exports gate blocked it and every `npx cezar-cli` died with `ERR_PACKAGE_PATH_NOT_EXPORTED` against a file sitting right there in the tarball (#851, fixed in #852). Nothing else in the gate could see it — bin paths resolve inside the package and never pass through `exports`, and `check:pack` counts packed files rather than resolving them. `packages/cezar/test/e2e/alias-bin-exports.test.ts` now pins it: it resolves every specifier `alias-cezar/bin.js` imports against the real manifest and requires it to land on `dist/index.js`.
 - `dist/index.js` must remain the bin entry, and `web/` must stay resolvable relative to `dist/server` (`resolveWebDir` walks `../../web`; the built cockpit lives at `packages/cezar/web/dist`).
 - The tarball MUST contain the built UI (`packages/cezar/web/dist/index.html` + hashed `packages/cezar/web/dist/assets/*`) — `npm run check:pack` (`packages/cezar/scripts/check-pack.mjs`, run as the last leg of `npm run build`, hence by `prepublishOnly`) enforces this; do not remove it from the build chain.
 
-Breaking: dropping a bin alias, raising `engines.node`, removing `packages/cezar/web/dist/` or `scripts/` from `files`, renaming the package. Required path: raise `engines` only in a version bump flagged as breaking; keep old aliases through a deprecation release.
+Breaking: dropping a bin alias, raising `engines.node`, removing `packages/cezar/web/dist/` or `scripts/` from `files`, adding or removing an `exports` subpath, renaming the package. Required path: raise `engines` only in a version bump flagged as breaking; keep old aliases and old `exports` subpaths through a deprecation release. `packages/cezar/src/bc-package-surface.test.ts` holds this section's `bin`, `files` and `exports` lists to what the manifest actually declares — the drift it now guards is what let the `exports` map ship undocumented and #851 happen.
 
 ## 7. Agent event protocol (`packages/cezar/src/core/agent-runner.ts`, `packages/cezar/src/core/ui-events.ts`)
 
