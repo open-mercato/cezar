@@ -51,8 +51,8 @@ Land @patzick's `changes-requested` ask: stop steering `health-topic.test.ts` wi
 
 ### Phase 2: Address @patzick's review — fake timers instead of `Date.now` spies
 
-- [ ] 2.1 Install a `Date`-only fake clock for the suite (`vi.useFakeTimers({ toFake: ['Date'] })` / `vi.useRealTimers()`), and document why the timer functions are deliberately left real
-- [ ] 2.2 Replace every `vi.spyOn(Date, 'now').mockReturnValue(...)` with `vi.setSystemTime(...)`, pinning each case's clock to an explicit offset from a post-`settle()` baseline instead of an incidental `Date.now()` reading
+- [x] 2.1 Install a `Date`-only fake clock for the suite (`vi.useFakeTimers({ toFake: ['Date'] })` / `vi.useRealTimers()`), and document why the timer functions are deliberately left real — 77e54c6d
+- [x] 2.2 Replace every `vi.spyOn(Date, 'now').mockReturnValue(...)` with `vi.setSystemTime(...)`, pinning each case's clock to an explicit offset from a post-`settle()` baseline instead of an incidental `Date.now()` reading — 77e54c6d
 - [ ] 2.3 Re-run the focused suite and confirm the ten cases still assert the same cache policy, then run the full configured validation gate
 
 ### Phase 3: Close the review loop
