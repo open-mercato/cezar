@@ -119,6 +119,8 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  /** One teardown per session — see `terminate()`. */
+  private signalled = false;
 
   constructor(
     private readonly bin: string,
@@ -265,9 +267,16 @@ class OpencodeSession implements AgentSession {
    * window (#858, the same defect #844 fixed for the other two backends). Every
    * caller here is followed by `await this.exited`, so a server that survived
    * SIGTERM did not just leak — it hung the session's result forever.
+   *
+   * One teardown per session: all three call sites can run for the same session
+   * (`interrupt()` on the deadline, then the result promise's `finally`), and
+   * once SIGTERM is out with SIGKILL armed there is nothing a second pass adds.
+   * The old `!child.killed` test deduplicated this as a side effect of being
+   * wrong; `signalled` keeps that property on purpose.
    */
   private terminate(): void {
-    if (this.hasExited()) return;
+    if (this.signalled || this.hasExited()) return;
+    this.signalled = true;
     this.child.kill('SIGTERM');
     setTimeout(() => {
       if (this.hasExited()) return;

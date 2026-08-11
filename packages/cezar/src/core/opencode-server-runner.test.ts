@@ -115,6 +115,22 @@ describe('SIGTERM→SIGKILL escalation for an opencode server that survives SIGT
     });
   });
 
+  it('sends one SIGTERM per session however many teardown paths run', () => {
+    withFakeChild((fake) => {
+      const session = startSession(0);
+
+      // `interrupt()` on the deadline and the result promise's `finally` both
+      // reach terminate() for the same session; the escalation is armed once.
+      session.interrupt();
+      session.end();
+      session.interrupt();
+      expect(fake.signals).toEqual(['SIGTERM']);
+
+      vi.advanceTimersByTime(KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    });
+  });
+
   it('does not signal at all when the server exited before the teardown', () => {
     withFakeChild((fake) => {
       const session = startSession(0);
