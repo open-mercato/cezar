@@ -11,7 +11,6 @@ import {
   useProviderStatus,
   useRepo,
   useRunnerModelCatalogs,
-  type RunnerModelCatalogs,
   useSelectAgentProfile,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
@@ -50,6 +49,8 @@ const SYSTEM_PROMPT_MAX = 20_000
 
 export function AgentsSection() {
   const config = useConfig()
+  // One row per runner here, so every runner's own host catalog is needed at once (#794) —
+  // unlike the composer, which only ever renders the runner the user picked.
   const catalogs = useRunnerModelCatalogs()
   const providerStatus = useProviderStatus()
 
@@ -80,7 +81,7 @@ function AgentsForm({
   providerStatus,
 }: {
   config: ConfigResponse
-  catalogs: RunnerModelCatalogs
+  catalogs: ReturnType<typeof useRunnerModelCatalogs>
   providerStatus: ReturnType<typeof useProviderStatus>
 }) {
   const repo = useRepo()
@@ -154,7 +155,9 @@ function AgentsForm({
                 : providerConnected
                   ? undefined
                   : 'Connect this provider before selecting it.'
-            const modelOptions = modelsForRunner(runner.id, catalogs.data[runner.id], [
+            const catalog = catalogs[runner.id]
+            const catalogStatus = modelCatalogStatus(runner.id, catalog.data, catalog.isError)
+            const modelOptions = modelsForRunner(runner.id, catalog.data, [
               config.defaultModels[runner.id],
             ])
             const configuredModel = config.defaultModels[runner.id] ?? ''
@@ -197,11 +200,7 @@ function AgentsForm({
                         {model.id === '' ? 'auto (default)' : model.label}
                       </option>
                     ))}
-                    {modelCatalogStatus(runner.id, catalogs.data[runner.id], catalogs.isError[runner.id]) ? (
-                      <option disabled>
-                        {modelCatalogStatus(runner.id, catalogs.data[runner.id], catalogs.isError[runner.id])}
-                      </option>
-                    ) : null}
+                    {catalogStatus ? <option disabled>{catalogStatus}</option> : null}
                   </select>
                 )}
               </label>

@@ -164,6 +164,8 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       'GET /launch-key',
       'GET /events',
       'GET /runs/:id/events',
+      'GET /runs/:id/history',
+      'GET /runs/:id/history-context',
       'POST /runs',
       'POST /runs/archive-finished',
       'PUT /ui-state',

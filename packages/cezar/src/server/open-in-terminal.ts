@@ -139,9 +139,34 @@ export function createLaunchScript(
   return scriptPath;
 }
 
+/**
+ * A test that reaches a real launcher opens a window on the developer's machine — a Terminal on
+ * macOS, a `cmd` window on Windows, an emulator on Linux — and #820 is what that looks like: a
+ * suite run left a Terminal sitting in a `cez-profiles-home-*` fixture directory the same run had
+ * already deleted. Throwing beats returning `false`: a silent refusal would let the omission
+ * survive as a passing test, and the fix is always the same one line — inject the launcher seam
+ * (`openTerminal` / `openFile` / `openApp` on `ServerDeps`) instead of reaching the real one.
+ *
+ * `CEZ_ALLOW_TEST_SPAWN=1` is the deliberate exception, for a file that has replaced
+ * `node:child_process` with a mock: nothing reaches a real process there, and asserting the argv a
+ * launcher WOULD pass is exactly how the Windows launcher-safety cases (#469, BatBadBut) are
+ * pinned. Set it around those tests, never process-wide.
+ *
+ * Exported so `open-in-app.ts` shares this one definition rather than keeping a second copy that
+ * could drift.
+ */
+export function refuseSpawnUnderTest(bin: string, args: readonly string[]): void {
+  if (!process.env.VITEST || process.env.CEZ_ALLOW_TEST_SPAWN === '1') return;
+  throw new Error(
+    `refusing to spawn a launcher from a test: ${[bin, ...args].join(' ')}\n` +
+      'Inject the launcher (ServerDeps.openTerminal / openFile / openApp) instead of calling the real one.',
+  );
+}
+
 /** Spawn detached; success = no error within a short settle window. */
 function runDetached(bin: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
+    refuseSpawnUnderTest(bin, args);
     let child;
     try {
       child = spawn(bin, args, { stdio: 'ignore', detached: true });

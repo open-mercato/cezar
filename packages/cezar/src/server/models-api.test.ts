@@ -24,16 +24,21 @@ describe('workspace model catalog API', () => {
 
   type Discover = () => Promise<Array<{ id: string; label: string; description: string }>>;
 
-  /** Both discovering runners share one adapter here — the route contract is what is under test,
-   *  and each adapter's own wire handling lives in its `*-model-catalog.test.ts`. */
-  const app = (discover: Discover) =>
+  /** Claude and Codex share one adapter here — the route contract is what is under test, and each
+   *  adapter's own wire handling lives in its `*-model-catalog.test.ts`. OpenCode takes its own so
+   *  a per-runner assertion can tell the two answers apart. */
+  const app = (discover: Discover, opencodeDiscover: Discover = discover) =>
     createApp({
       repoRoot: root,
       store,
       manager: {} as RunManager,
       version: 'test',
       modelCatalog: new RunnerModelCatalog({
-        adapters: { claude: { discover }, codex: { discover } },
+        adapters: {
+          claude: { discover },
+          codex: { discover },
+          opencode: { discover: opencodeDiscover },
+        },
       }),
     });
 
@@ -94,16 +99,36 @@ describe('workspace model catalog API', () => {
     });
   });
 
-  // opencode has no host-local catalog to read, so it is still not a valid runner here (#799
-  // is adding one separately).
-  it.each(['/api/v1/models', '/api/v1/models?runner=opencode', '/api/v1/models?runner=nope'])(
-    'rejects invalid query %s',
-    async (path) => {
-      const response = await apiRequest(app(async () => []), path);
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: 'runner must be claude or codex' });
-    },
-  );
+  it('answers the OpenCode catalog too — the runner that used to have no discovery path (#794)', async () => {
+    const server = app(
+      async () => [{ id: 'gpt-future', label: 'GPT Future', description: 'Newly available' }],
+      async () => [{ id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' }],
+    );
+    const response = await apiRequest(server, '/api/v1/models?runner=opencode');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runner: 'opencode',
+      models: [{ id: 'openai/gpt-5.4', description: 'via openai' }],
+      source: 'live',
+    });
+  });
+
+  it('degrades an OpenCode discovery failure the same way', async () => {
+    const server = app(async () => [], async () => { throw new Error('secret detail'); });
+    const response = await apiRequest(server, '/api/v1/models?runner=opencode');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      runner: 'opencode', models: [], source: 'unavailable', stale: false,
+      reason: 'OpenCode model discovery is temporarily unavailable',
+    });
+  });
+
+  // Every runner cezar ships now discovers, so only a MISSING or unknown `runner` is rejected.
+  it.each(['/api/v1/models', '/api/v1/models?runner=nope'])('rejects invalid query %s', async (path) => {
+    const response = await apiRequest(app(async () => []), path);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'runner must be claude, codex or opencode' });
+  });
 
   it('is workspace-level rather than project-scoped', async () => {
     const response = await apiRequest(app(async () => []), '/api/v1/p/default/models?runner=codex');

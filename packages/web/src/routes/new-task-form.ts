@@ -1,18 +1,19 @@
+// A contract VALUE, not a type: which runners cezar can interrogate for a live catalog is decided
+// once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
+// disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
+import { runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
   ImageInput,
+  ModelDiscoveryRunner,
   Runner,
   RunnerModelCatalogResponse,
   Skill,
   UiState,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
-// A contract VALUE, not a type: the runners cezar can interrogate for a live catalog are decided
-// once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
-// disagree about who has discovery.
-import { modelDiscoveryRunnerSchema } from '@open-mercato/cezar-api-client'
 
 /**
  * The new-task form's picker rules and its POST body, as pure functions — the exact semantics
@@ -59,12 +60,12 @@ export interface ModelPreset {
 /**
  * Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner decides.
  *
- * For a runner in `MODEL_DISCOVERY_RUNNERS` this list is only the FALLBACK, used when the host
- * catalog has nothing to offer; a live catalog replaces it. Nothing dated may be listed here —
- * pinned ids (`claude-opus-4-8`, `gpt-5.1-codex`) are exactly the drift discovery exists to end
- * (#784). Claude therefore keeps only its tier aliases, which stay true across every rollout
- * because the CLI resolves them itself. OpenCode has no discovery path yet, so its `provider/model`
- * presets are still the real list.
+ * Every runner now discovers (`MODEL_DISCOVERY_RUNNERS`), so this list is only the FALLBACK, used
+ * when the host catalog has nothing to offer; a live catalog replaces it. Nothing dated may be
+ * listed here — pinned ids (`claude-opus-4-8`, `gpt-5.1-codex`) are exactly the drift discovery
+ * exists to end (#794 for OpenCode, #784 for Claude). Claude therefore keeps only its tier
+ * aliases, which stay true across every rollout because the CLI resolves them itself; Codex and
+ * OpenCode list `auto` alone.
  */
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
@@ -78,10 +79,6 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   ],
   opencode: [
     { id: '', label: 'auto', desc: 'Use your OpenCode default model' },
-    { id: 'anthropic/claude-opus-4-8', label: 'claude-opus-4.8', desc: 'via Anthropic' },
-    { id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', desc: 'via Anthropic' },
-    { id: 'openai/gpt-5.1', label: 'gpt-5.1', desc: 'via OpenAI' },
-    { id: 'openai/gpt-5.1-codex', label: 'gpt-5.1-codex', desc: 'via OpenAI' },
   ],
 }
 
@@ -114,21 +111,6 @@ export function modelConflictsWithRunner(model: string, runner: Runner): boolean
   )
 }
 
-/** The runners `GET /api/v1/models` answers for — those with a host-local catalog to read. */
-export const MODEL_DISCOVERY_RUNNERS = modelDiscoveryRunnerSchema.options as readonly Runner[]
-
-/** True when this runner's picker is fed by host discovery rather than by the static presets. */
-export function runnerDiscoversModels(runner: Runner): boolean {
-  return MODEL_DISCOVERY_RUNNERS.includes(runner)
-}
-
-/** How a runner is named in the picker's status rows. */
-const RUNNER_LABELS: Record<Runner, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-}
-
 export function modelsForRunner(
   runner: Runner,
   catalog?: RunnerModelCatalogResponse,
@@ -142,6 +124,7 @@ export function modelsForRunner(
   // `auto`-only one (#784).
   const base = discovered.length > 0 ? [autoPreset(presets)] : [...presets]
   const seen = new Set(base.map((model) => model.id))
+  // `discovered` is already empty for a runner without discovery, so no second gate is needed.
   for (const model of discovered) {
     if (!model.id || seen.has(model.id)) continue
     seen.add(model.id)
@@ -164,13 +147,21 @@ function autoPreset(presets: readonly ModelPreset[]): ModelPreset {
   return presets.find((preset) => preset.id === '') ?? { id: '', label: 'auto', desc: '' }
 }
 
+/** How each discovery runner is named in the picker's status line. Keyed by
+ *  `ModelDiscoveryRunner` on purpose: a runner gaining discovery cannot forget its label here. */
+const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+}
+
 export function modelCatalogStatus(
   runner: Runner,
   catalog: RunnerModelCatalogResponse | undefined,
   failed = false,
 ): string | undefined {
   if (!runnerDiscoversModels(runner)) return undefined
-  const name = RUNNER_LABELS[runner]
+  const name = DISCOVERY_RUNNER_LABEL[runner]
   if (catalog?.stale) return `Using cached ${name} model list`
   if (failed || catalog?.source === 'unavailable') return `Latest ${name} models unavailable`
   return undefined

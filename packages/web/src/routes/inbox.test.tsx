@@ -165,17 +165,14 @@ const startBody = (sent: readonly SentRequest[], id: string): unknown =>
  *  card, because every runnable card carries its own pair. */
 async function pick(card: HTMLElement, slot: string, label: string) {
   fireEvent.pointerDown(card.querySelector(`[data-slot="${slot}"]`)!)
-  fireEvent.click(await findOption(label))
-}
-
-/** The model catalog is fetched for the runner actually selected (#784), so an option can land a
- *  tick after the menu opens — poll for it rather than reading the first render. */
-async function findOption(label: string): Promise<HTMLElement> {
-  return waitFor(() => {
-    const match = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
-    if (!match) throw new Error(`no menu option matching ${label}`)
-    return match
+  // A discovery runner's options arrive with its catalog (#794), so wait for the labelled
+  // option rather than merely for the menu to open.
+  let option: HTMLElement | undefined
+  await waitFor(() => {
+    option = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
+    expect(option).toBeDefined()
   })
+  fireEvent.click(option as HTMLElement)
 }
 
 function renderInbox(entry = '/inbox') {

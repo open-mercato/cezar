@@ -4,6 +4,18 @@
 
 cezar currently renders a hard-coded Codex model list that has drifted far behind the models the same host's Codex CLI makes available. Replace Codex's static presets with a zero-config, host-local catalog discovered through the Codex app-server `model/list` protocol, expose that catalog through a small workspace API, and let every model picker consume the same query result. Discovery is best-effort and cached: `auto` always remains usable, an unavailable or incompatible CLI never blocks cockpit boot, and configured/custom model identifiers remain representable.
 
+## Update — OpenCode discovery (#794)
+
+Q1 below limited live discovery to Codex, on the grounds that only Codex had both a reported
+defect and an authoritative local protocol. Issue #794 supplied the missing half for OpenCode:
+`opencode models` lists what the host's configured providers actually route, and the four
+hard-coded OpenCode presets had drifted exactly as the Codex ones had. OpenCode now uses the
+same service, the same route (`GET /api/v1/models?runner=claude|codex|opencode`) and the same
+picker merge; its adapter is `packages/cezar/src/core/opencode-model-catalog.ts`. Everything else
+in this spec — the in-memory-only cache, `auto` always usable, custom ids preserved, no persisted
+catalog — applies unchanged. Q1's Claude half was lifted separately by #784 (see the note below),
+so every runner cezar ships now reads its models from the host.
+
 ## Resolved assumptions (autonomous defaults)
 
 | # | Question | Applied default | Why | Confirm? |
@@ -13,7 +25,7 @@ cezar currently renders a hard-coded Codex model list that has drifted far behin
 > **Q1's Claude half was lifted by #784.** Claude's presets drifted exactly as predicted (they
 > still advertised Opus 4.8), and the Claude Code CLI turned out to expose an authoritative
 > host-local catalog of its own — a `list_models` control request over the same stream-json
-> channel the runner already speaks. `src/core/claude-model-catalog.ts` is the Claude adapter
+> channel the runner already speaks. `packages/cezar/src/core/claude-model-catalog.ts` is the adapter
 > behind the same `RunnerModelCatalog`, and `GET /api/v1/models` now accepts `runner=claude`.
 > One deviation from the Codex design below: Claude's static presets are kept as an explicit
 > FALLBACK rather than emptied to `auto`, because its tier aliases (`opus`, `sonnet`, `haiku`)

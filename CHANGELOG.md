@@ -1,6 +1,38 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **One table for every project's tasks, grouped by the repos that belong together.** Work
+  rarely stops at a repo boundary — a storefront is an API, a web app and a design system — but
+  until now the cockpit could only ever show you one of them at a time. Two things change that.
+  **Tag your repositories** in **Settings → Projects**: type a label into the Tags cell
+  (`storefront`, `infra`, `client-acme`), press Enter, and a project carries it; a repo can carry
+  several, because a repo can belong to more than one piece of work. The field autocompletes from
+  the tags already used in the workspace — which is not a convenience but the thing that makes
+  tags work at all, since a group only exists if the second repo lands on the first one's
+  spelling rather than inventing `store-front` beside `storefront`. And **All tasks** — the new
+  top item in the sidebar, `/tasks`, or `⌘K → All tasks` — shows every registered project's work
+  in one table, each with its PR or issue chip and an archive button. Filter it by tag, status
+  and workflow: every facet is multi-select and ORs inside itself while ANDing across, so
+  "anything running or waiting in storefront or infra" is one set of clicks, and each option
+  shows how many tasks it would leave so a filter that would empty the table says so before you
+  click it. Group by tag and three repos become one section — a repo tagged twice appears under
+  both, because it genuinely belongs to both. There is deliberately no project *filter*: picking
+  a project **leaves** for its own Tasks page, which is a better version of that same answer
+  (live updates, the full column set, the composer). Every title, project name and project group
+  heading links into that project, so the thread, its diff and its worktree are exactly where
+  they were. The filters, the grouping and the Active/Archived tab live in the URL, so a filtered
+  view survives a refresh and pastes into a chat as a link to exactly what you were looking at —
+  and only what you changed appears in it, since Active and "ungrouped" are the bare defaults.
+  Tags are trimmed and deduplicated case-insensitively (`API` and `api` are one
+  tag) and live in `~/.cezar/config.json` beside the rest of the registry, so they are yours and
+  this machine's — nothing is added to the repo, and an older cezar round-trips them untouched.
+  Nothing else in cezar reads them, on purpose: a tag is a lens, not a permission, a queue or a
+  routing rule. The page reads one workspace-wide index capped at the newest 200 tasks per
+  project, and names the projects it capped rather than showing a short list as if it were
+  complete. `PATCH /api/v1/projects/:id` grew an optional `tags` alongside `maxParallel`, each
+  key applied only when the body names it, so a pre-tags client's `{ maxParallel }` still means
+  exactly what it always did. Over ssh, `cezar projects tag <id> [<tag>…]` does the same thing
+  with no cockpit. Spec: `.ai/specs/2026-08-10-global-tasks-and-project-tags.md`.
 - ✨ **Advanced users can opt out of repository-root run serialization.** Set the exact value
   `CEZ_DISABLE_REPO_LOCK=1` to let runs executing in the shared checkout overlap, including
   explicit `worktree=false` runs, non-Git degradation, and continuations whose worktree cannot be

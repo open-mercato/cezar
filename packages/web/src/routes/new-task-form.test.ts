@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
@@ -10,8 +11,6 @@ import {
   modelsForRunner,
   modelCatalogStatus,
   modelConflictsWithRunner,
-  runnerDiscoversModels,
-  MODEL_DISCOVERY_RUNNERS,
   pushRecentSource,
   resolveModel,
   resolveRunner,
@@ -126,24 +125,50 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('gpt-6', 'claude')).toBe(true)
     // A runner's own vendor, an explicit gateway id, and an unfamiliar custom id all pass.
     expect(modelConflictsWithRunner('claude-opus-4-8', 'claude')).toBe(false)
-    // A gateway id names its provider, so the shape half never fires on it. (`openai/gpt-5.1`
-    // itself is still rejected here, but only because it is an OpenCode PRESET — a separate
-    // quirk this change does not touch.)
+    // A gateway id names its provider, so the shape half never fires on it.
     expect(modelConflictsWithRunner('openai/gpt-6', 'claude')).toBe(false)
     expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'opencode')).toBe(false)
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
   })
 
-  it('stays silent for a runner with no host catalog', () => {
-    expect(modelCatalogStatus('opencode', undefined, true)).toBeUndefined()
-    expect(runnerDiscoversModels('opencode')).toBe(false)
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex'])
+  it('every runner cezar ships reads its models from the host', () => {
+    // #794 gave OpenCode a catalog and #784 gave Claude one, so the picker no longer has a
+    // preset-only runner. The contract's list is the single source both the route and the picker
+    // compile against — this asserts they still agree on who discovers.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode'])
+    expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
-  it('opencode: provider/model ids, newest Anthropic + OpenAI', () => {
-    expect(modelsForRunner('opencode').map((m) => m.id)).toEqual([
-      '', 'anthropic/claude-opus-4-8', 'anthropic/claude-sonnet-5', 'openai/gpt-5.1', 'openai/gpt-5.1-codex',
-    ])
+  it('opencode: auto alone until the host catalog answers (#794)', () => {
+    expect(modelsForRunner('opencode').map((m) => m.id)).toEqual([''])
+    expect(
+      modelsForRunner('opencode', {
+        runner: 'opencode',
+        models: [
+          { id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' },
+          { id: 'anthropic/claude-sonnet-5', label: 'anthropic/claude-sonnet-5', description: 'via anthropic' },
+        ],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual(['', 'openai/gpt-5.4', 'anthropic/claude-sonnet-5'])
+  })
+
+  it('a pinned OpenCode id the host no longer offers stays selectable', () => {
+    expect(
+      modelsForRunner(
+        'opencode',
+        { runner: 'opencode', models: [], source: 'unavailable', stale: false },
+        ['openai/gpt-5.1'],
+      ).map((m) => m.id),
+    ).toEqual(['', 'openai/gpt-5.1'])
+  })
+
+  it('names the runner whose catalog is stale or unavailable', () => {
+    expect(
+      modelCatalogStatus('opencode', { runner: 'opencode', models: [], source: 'cache', stale: true, reason: 'raw' }),
+    ).toBe('Using cached OpenCode model list')
+    expect(modelCatalogStatus('opencode', undefined, true)).toBe('Latest OpenCode models unavailable')
   })
 
   it('resolveModel keeps known picks and arbitrary native model pins', () => {

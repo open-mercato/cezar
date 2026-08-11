@@ -851,6 +851,29 @@ describe('ThreadView', () => {
   })
 })
 
+/** The bounded-history routes the thread route hydrates from (progressive-history spec): the
+ *  newest page and the compact current-state context. The route-level suites below are about the
+ *  RECORD — the auto-resume hint, the read receipt — not the transcript, so they answer both with
+ *  an honest empty session. A catch-all `{}` would not do: these are typed payloads the hook
+ *  reads directly, so an unmodelled route makes the whole thread fail for a reason that has
+ *  nothing to do with what the test is proving. */
+const EMPTY_HISTORY_PAGE = {
+  events: [],
+  itemCount: 0,
+  liveCursor: 'live-0',
+  asOfSeq: 0,
+  hasOlder: false,
+}
+const EMPTY_HISTORY_CONTEXT = { contextEvents: [], asOfSeq: 0 }
+
+/** The history payload for `path`, or `undefined` when it is not a history route — so each fetch
+ *  stub below keeps its own routing table and only defers the two shared shapes to here. */
+function historyBodyFor(path: string, id: string): unknown {
+  if (path === `/api/v1/runs/${id}/history`) return EMPTY_HISTORY_PAGE
+  if (path === `/api/v1/runs/${id}/history-context`) return EMPTY_HISTORY_CONTEXT
+  return undefined
+}
+
 /** Route-level: loading and 404 — driven through the real fetch boundary. jsdom has no
  *  EventSource, which `useRunEvents` treats as "no stream" — honest for these states. */
 function renderRoute(id: string) {
@@ -896,7 +919,9 @@ describe('TaskThreadRoute', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
         const path = String(input)
-        const body = path === '/api/v1/runs/r1' ? record : path === '/api/v1/health' ? {} : []
+        const history = historyBodyFor(path, 'r1')
+        const body =
+          history !== undefined ? history : path === '/api/v1/runs/r1' ? record : path === '/api/v1/health' ? {} : []
         return Promise.resolve(
           new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
         )
@@ -962,6 +987,8 @@ describe('TaskThreadRoute — read receipts', () => {
           current = rest as ApiRun
           return Promise.resolve(jsonResponse(current))
         }
+        const history = historyBodyFor(path, initial.id)
+        if (history !== undefined) return Promise.resolve(jsonResponse(history))
         if (path === `/api/v1/runs/${initial.id}`) return Promise.resolve(jsonResponse(current))
         if (path === '/api/v1/runs') return Promise.resolve(jsonResponse([]))
         if (path === '/api/v1/providers/status') {

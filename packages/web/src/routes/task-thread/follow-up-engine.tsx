@@ -56,9 +56,10 @@ export function useContinueAction(run: ApiRun): ContinueAction {
 
   const continuation = useContinuationProvider(run, pickedRunner)
   const { runners, canContinue, currentRunner, runner } = continuation
-  // Read after the runner is known — each backend has its own catalog. Only a run that can
-  // actually be continued needs one: every other thread (running, queued, or closed with no
-  // session) would be fetching it to render nothing.
+  // The catalog belongs to the runner this continuation would use (#794), so switching the
+  // runner pill re-reads that backend's own models. Only a run that can actually be continued
+  // fetches at all — every other thread (running, queued, closed with no session) would be
+  // fetching it to render nothing.
   const catalog = useRunnerModels(runner, available)
   const modelsLocked = config.data?.modelsLocked === true
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the

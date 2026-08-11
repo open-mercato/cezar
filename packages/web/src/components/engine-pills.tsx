@@ -57,8 +57,7 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   // scoped start surface must read the active project's `/api/config` instead (#699).
   const defaultRunner = config.data?.defaultRunner
   const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
-  // Fetched AFTER the runner is resolved — each backend has its own catalog, so asking before
-  // we know which one is selected would answer for the wrong CLI.
+  // Resolved first: each runner has its own host catalog (#794), so the fetch follows the pick.
   const catalog = useRunnerModels(runner)
   const modelsLocked = config.data?.modelsLocked === true
   return {

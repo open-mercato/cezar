@@ -93,6 +93,7 @@ function serve({
   providerStatusPending = false,
   providerStatusAfterFirstError,
   agentProfiles,
+  hostModels = {},
 }: {
   config?: Partial<ConfigResponse>
   putStatus?: number
@@ -104,6 +105,9 @@ function serve({
   /** Extra agent accounts (spec 2026-07-29-agent-profiles). Omitted = the route never answers,
    *  which is how every pre-existing test in this file keeps its byte-identical surface. */
   agentProfiles?: AgentProfilesResponse
+  /** What each runner's host CLI reports it can run (`GET /api/v1/models?runner=…`, #794).
+   *  Omitted = every catalog answers empty, so only `auto` and configured pins are offered. */
+  hostModels?: Record<string, Array<{ id: string; label: string; description: string }>>
 } = {}) {
   requests = []
   let providerStatusReads = 0
@@ -185,6 +189,12 @@ function serve({
       }
       if (url === '/api/v1/projects' && method === 'GET') {
         return json({ projects: [PROJECT], bootProject: 'boot', projectsDir: '~/cezar/projects' })
+      }
+      // One catalog per discovery runner (#794): this screen renders a row per runner, so it
+      // asks each host CLI separately rather than reusing Codex's answer everywhere.
+      if (url.startsWith('/api/v1/models?runner=') && method === 'GET') {
+        const runner = url.slice('/api/v1/models?runner='.length)
+        return json({ runner, models: hostModels[runner] ?? [], source: 'live', stale: false })
       }
       return new Promise<never>(() => {})
     }),
@@ -421,6 +431,36 @@ describe('the agents form', () => {
     await waitFor(() => expect(puts()).toHaveLength(2))
     expect(puts()[1]?.body).toEqual({ defaultModels: { claude: null } })
     await waitFor(() => expect(claude.value).toBe(''))
+  })
+
+  it('offers each runner the models its own host CLI reports (#794)', async () => {
+    serve({
+      hostModels: {
+        codex: [{ id: 'gpt-5.6-codex', label: 'gpt-5.6-codex', description: 'Newest' }],
+        opencode: [
+          { id: 'openai/gpt-5.5', label: 'openai/gpt-5.5', description: 'via openai' },
+          { id: 'anthropic/claude-sonnet-5', label: 'anthropic/claude-sonnet-5', description: 'via anthropic' },
+        ],
+      },
+    })
+    renderAt('/settings/agents')
+    await waitFor(() => expect(form()).not.toBeNull())
+
+    const opencode = screen.getByLabelText<HTMLSelectElement>('Default model for opencode')
+    await waitFor(() =>
+      expect([...opencode.options].map((o) => o.value)).toEqual([
+        '',
+        'openai/gpt-5.5',
+        'anthropic/claude-sonnet-5',
+      ]),
+    )
+    // The stale hard-coded presets this issue reported are gone, and Codex's catalog — fetched
+    // under its own key — never leaks into OpenCode's row.
+    expect([...opencode.options].map((o) => o.value)).not.toContain('openai/gpt-5.1')
+    expect([...opencode.options].map((o) => o.value)).not.toContain('gpt-5.6-codex')
+    expect(
+      [...screen.getByLabelText<HTMLSelectElement>('Default model for codex').options].map((o) => o.value),
+    ).toEqual(['', 'gpt-5.6-codex'])
   })
 
   it('shows native models as read-only values while keeping the runner selectable', async () => {
