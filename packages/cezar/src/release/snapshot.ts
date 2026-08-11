@@ -18,8 +18,8 @@ import { stampManifestSet, type ReleaseManifests as ReleaseManifestSet } from '.
 export interface SnapshotContext {
   /** `GITHUB_EVENT_NAME` — only `pull_request` and `push` ever publish. */
   eventName: string;
-  /** `GITHUB_REF_NAME` for push events — only `develop` publishes a snapshot;
-   *  `main` is reserved for owner-driven stable releases (see stable.ts). */
+  /** `GITHUB_REF_NAME` for push events — `develop` and `main` publish snapshots;
+   *  stable releases still move `latest` through the owner-driven release workflow. */
   refName: string;
   /** PR number for pull_request events; absent/invalid → no publish. */
   prNumber?: number;
@@ -68,11 +68,10 @@ function resolveChannel(ctx: SnapshotContext): { channel: string; distTag: strin
     return { channel: `pr${n}`, distTag: `pr-${n}` };
   }
   if (ctx.eventName === 'push') {
-    // Only `develop` publishes a snapshot. `main` is deliberately excluded so a
-    // merge to main never touches npm — stable `latest` releases are cut
-    // manually via the Release workflow (stable.ts). Defense in depth: the
-    // workflow's `if` already restricts the push channel to develop.
-    if (ctx.refName === 'develop') return { channel: 'develop', distTag: 'develop' };
+    // Both moving preview channels are explicit and never affect stable `latest`.
+    if (ctx.refName === 'develop' || ctx.refName === 'main') {
+      return { channel: ctx.refName, distTag: ctx.refName };
+    }
     return null;
   }
   return null;
