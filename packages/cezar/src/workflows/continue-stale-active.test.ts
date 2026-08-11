@@ -140,16 +140,101 @@ describe("Continue reconciles a stale 'active' registration (#798)", () => {
     });
     expect(manager.continueRun(runId, { text: 'carry on' })).toEqual({ ok: true });
 
-    // The released session is signalled on the way out and settles shortly afterwards. Its own
-    // step is closed, but the run record belongs to the continuation that took over.
+    // The released session settles on its own terms and says so. It closes out its own step and
+    // writes nothing to the run record — which is why the continuation that took over is free to
+    // bring the run up to `running` afterwards, in either order.
     await waitFor(() =>
       store
         .readEvents(runId)
         .some((event) => event.type === 'note' && String(event.message).includes('had been released')),
     );
+    await waitFor(() => store.getRun(runId)?.status === 'running');
     const record = store.getRun(runId);
-    expect(record?.status).toBe('running');
     expect(record?.steps.find((step) => step.id === 'continue-1')?.status).not.toBe('running');
+    expect(record?.steps.find((step) => step.id === 'continue-2')?.status).toBe('running');
     expect(manager.isActive(runId)).toBe(true);
+  }, 30_000);
+});
+
+/**
+ * The repo-root lease is the sharpest edge of #798: a continuation parks on it BEFORE it writes
+ * `status: running`, so a lease-blocked run genuinely sits in `active` with a terminal record —
+ * the exact desync, produced by ordinary engine behavior rather than by a stall. Releasing such a
+ * session must not let its own `acquireRepoRoot` rejection cancel the run or evict the
+ * continuation that replaced it.
+ */
+describe('a session released while parked on the repo-root lease (#798)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedBin = process.env.CEZ_CLAUDE_BIN;
+  const savedLock = process.env.CEZ_DISABLE_REPO_LOCK;
+
+  beforeEach(async () => {
+    process.env.CEZ_CLAUDE_BIN = HANGING_CLAUDE;
+    // The lease IS the subject here, so it stays on.
+    delete process.env.CEZ_DISABLE_REPO_LOCK;
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-stale-lease-'));
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterEach(async () => {
+    for (const record of store.listRuns()) manager.cancel(record.id);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    manager.dispose();
+    if (savedBin === undefined) delete process.env.CEZ_CLAUDE_BIN;
+    else process.env.CEZ_CLAUDE_BIN = savedBin;
+    if (savedLock !== undefined) process.env.CEZ_DISABLE_REPO_LOCK = savedLock;
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  function rootRunWithSession(): string {
+    const record = store.createRun({
+      title: 'root',
+      workflow: 'quick-task',
+      task: 'work in place',
+      runner: 'claude',
+      steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+    });
+    store.updateStep(record.id, 'work', {
+      status: 'failed',
+      sessionId: `session-${record.id}`,
+      backend: 'claude',
+      finishedAt: new Date().toISOString(),
+    });
+    store.updateRun(record.id, {
+      status: 'failed',
+      error: 'Claude AI usage limit reached|1',
+      finishedAt: new Date().toISOString(),
+    });
+    return record.id;
+  }
+
+  it('neither cancels the run nor evicts the continuation that replaced it', async () => {
+    // The holder takes the lease and never lets go — its session ignores EOF.
+    const holder = rootRunWithSession();
+    expect(manager.continueRun(holder, { text: 'hold the tree' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(holder)?.status === 'running');
+
+    // The blocked run parks on the lease: registered as active, record still terminal.
+    const blocked = rootRunWithSession();
+    expect(manager.continueRun(blocked, { text: 'go' })).toEqual({ ok: true });
+    await waitFor(() => manager.isActive(blocked));
+    expect(store.getRun(blocked)?.status).toBe('failed');
+
+    // Continue again — this is what the reporter could never get past.
+    expect(manager.continueRun(blocked, { text: 'carry on' })).toEqual({ ok: true });
+
+    // The released waiter wakes on the interrupt and rejects its lease. Before the ownership
+    // guard it answered that by cancelling the run and dropping the newcomer out of `active`.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(store.getRun(blocked)?.status).not.toBe('cancelled');
+    expect(manager.isActive(blocked)).toBe(true);
   }, 30_000);
 });

@@ -1233,11 +1233,14 @@ export class RunManager {
       `[cez] releasing a stale session registration for run ${runId} — the record settled to`
       + ` ${run.status} while the engine still held it`,
     );
-    // `cancelled` + `end()` together: the flag stops the released session's own settle path from
-    // writing the run record (it checks ownership), and `end()` gives a session that is merely
-    // slow, rather than wedged, a chance to actually stop.
+    // The flag stops the released session's own settle path from writing the run record (it
+    // checks ownership); `interrupt()` and `end()` then give it a chance to actually stop. Both,
+    // because "stalled" has two shapes here: a live session that needs a signal, and one still
+    // parked on the repo-root lease — which has no session at all and wakes only through
+    // `interrupt`, so without it the release would be honored but not felt.
     state.cancelled = true;
     try {
+      state.interrupt();
       state.session?.end();
     } catch {
       // A wedged session may throw on teardown — releasing the run must not depend on it.
@@ -1250,6 +1253,21 @@ export class RunManager {
       message: `released a stale session registration (the task had already settled to ${run.status})`,
     });
     return true;
+  }
+
+  /**
+   * Write a session's terminal outcome onto the run record — but only while that session is still
+   * the registered one (#798).
+   *
+   * Every such write sits behind an await that can stall for as long as the thing it is waiting
+   * on: the repo-root lease, worktree creation, skill discovery. Stall past a
+   * `releaseStaleActive` and the run belongs to a newer session, whose record this one must not
+   * touch. The released session says so on the transcript instead, and lets go either way.
+   */
+  private settleOwnedOrRelease(runId: string, state: ActiveRun, write: () => void): void {
+    if (this.active.get(runId) === state) write();
+    else this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+    this.dropActive(runId, state);
   }
 
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
@@ -2208,14 +2226,17 @@ export class RunManager {
           type: 'note',
           message: 'waiting for exclusive access to the repository working tree',
         });
+        // The lease wait is unbounded, which makes this the likeliest place for a session to be
+        // released out from under itself (#798) — a released one is `cancelled`, so it lands here.
         if (!(await this.acquireRepoRoot(runId, state))) {
-          this.store.updateRun(runId, {
-            status: 'cancelled',
-            finishedAt: new Date().toISOString(),
-            currentStepId: undefined,
+          this.settleOwnedOrRelease(runId, state, () => {
+            this.store.updateRun(runId, {
+              status: 'cancelled',
+              finishedAt: new Date().toISOString(),
+              currentStepId: undefined,
+            });
+            this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
           });
-          this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
-          this.dropActive(runId);
           return;
         }
       }
@@ -2384,22 +2405,25 @@ export class RunManager {
     const failBeforeSpawn = (message: string): void => {
       const failedAt = new Date().toISOString();
       sink.sessionEnded('error', message);
+      // This step is always ours to close out; the RUN record only while we still own it (#798) —
+      // every caller below sits behind an await that a stale-active release can outlive.
       this.store.updateStep(runId, stepId, {
         status: 'failed',
         error: message,
         finishedAt: failedAt,
       });
-      this.store.updateRun(runId, {
-        status: 'failed',
-        error: `continue failed: ${message}`,
-        finishedAt: failedAt,
-        currentStepId: undefined,
+      this.settleOwnedOrRelease(runId, state, () => {
+        this.store.updateRun(runId, {
+          status: 'failed',
+          error: `continue failed: ${message}`,
+          finishedAt: failedAt,
+          currentStepId: undefined,
+        });
+        this.store.appendEvent(runId, {
+          type: 'lifecycle',
+          message: `continue failed — ${message}`,
+        });
       });
-      this.store.appendEvent(runId, {
-        type: 'lifecycle',
-        message: `continue failed — ${message}`,
-      });
-      this.dropActive(runId);
     };
     // Apply the SAME canonical-identity gate the first spawn applies (#405, review M1).
     // A follow-up may switch both runner and model (#401), so without this the record keeps
@@ -2444,6 +2468,19 @@ export class RunManager {
       return;
     }
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
+
+    // Last line before the spawn, and the only place this can be asked honestly: a release (#798)
+    // that lands anywhere in the long run-up above — the lease, the profile probe, skill discovery
+    // — finds no session to signal and `state.interrupt` still the placeholder, so the release is
+    // recorded but not felt. Spawning now would leave an orphan turn writing into a task that has
+    // already moved on. Checking here makes "a released session never spawns" true outright,
+    // rather than true only when the release happened to arrive at a convenient moment.
+    if (this.active.get(runId) !== state) {
+      this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: new Date().toISOString() });
+      this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+      this.dropActive(runId, state);
+      return;
+    }
 
     const runner = createRunner(continueBackend);
     state.currentStepId = stepId;
@@ -2651,14 +2688,15 @@ export class RunManager {
         const message = err instanceof Error ? err.message : String(err);
         const error = `worktree creation failed: ${message}`;
         emit({ type: 'note', message: `${error} — task stopped before workflow execution` });
-        this.store.updateRun(runId, {
-          status: 'failed',
-          error,
-          finishedAt: new Date().toISOString(),
-          currentStepId: undefined,
+        this.settleOwnedOrRelease(runId, state, () => {
+          this.store.updateRun(runId, {
+            status: 'failed',
+            error,
+            finishedAt: new Date().toISOString(),
+            currentStepId: undefined,
+          });
+          emit({ type: 'lifecycle', message: `run failed — ${error}` });
         });
-        emit({ type: 'lifecycle', message: `run failed — ${error}` });
-        this.dropActive(runId);
         return;
       }
     } else {
