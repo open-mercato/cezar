@@ -197,7 +197,7 @@ When `statfs` fails or returns unusable numbers — some filesystems and platfor
 the pass degrades to count-only behavior: byte-blind, exactly today's semantics, and
 rung 1b never fires. This mirrors the existing degradation contract, where a failed
 `du` already surfaces as `totalBytes: null` rather than a wrong number
-(`server.ts:4328`).
+(`server.ts:4401`).
 
 ### Eviction order: oldest first, not largest first
 
@@ -321,7 +321,7 @@ the setting while breaking its meaning.
 
 Purely additive; no existing field changes shape or meaning.
 
-- `GET /worktrees` (`server.ts:4313`) — each row gains `strippedAt: string | null`
+- `GET /worktrees` (`server.ts:4382`) — each row gains `strippedAt: string | null`
   and `rung: 'hot' | 'stripped' | 'reclaimable'`, so the panel can explain what it
   is showing instead of the user inferring it from a size. `sizeBytes`, `totalBytes`
   and `keep` are unchanged, including the `totalBytes: null` degradation.
@@ -469,7 +469,7 @@ Phase 2 makes it visible and manually driveable.
 
 ### Phase 2: panel surfacing + manual strip
 
-7. Extend `GET /worktrees` (`server.ts:4313`) with `strippedAt` and `rung`, leaving
+7. Extend `GET /worktrees` (`server.ts:4382`) with `strippedAt` and `rung`, leaving
    every existing field and the `totalBytes: null` degradation intact. Test: additive
    shape; existing consumers unaffected. *App works.*
 8. Add `POST /worktrees/strip`. Test: strips outside the hot set, reports freed
