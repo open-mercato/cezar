@@ -39,7 +39,8 @@ const packageManifest = join(repoRoot, 'packages', 'cezar', 'package.json');
 /** Every `@open-mercato/cezar` specifier the alias entry point imports. */
 async function aliasSpecifiers(): Promise<string[]> {
   const source = await readFile(aliasBin, 'utf8');
-  return [...source.matchAll(/['"](@open-mercato\/cezar(?:\/[^'"]*)?)['"]/g)].map((m) => m[1] as string);
+  const pattern = /['"](@open-mercato\/cezar(?:\/[^'"]*)?)['"]/g;
+  return [...source.matchAll(pattern)].map((match) => match[1] as string);
 }
 
 test('the cezar-cli alias imports a specifier the exports map exposes', async () => {
