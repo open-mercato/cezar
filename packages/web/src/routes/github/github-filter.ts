@@ -47,8 +47,12 @@ export function filterGithubItems(
  * the unfiltered list), and a query that already found something locally is not worth a `gh`
  * subprocess.
  *
- * Deliberately independent of the label filter: labels narrow whatever list is on screen,
- * including search hits, so an active label filter neither forces nor suppresses the fallback.
+ * The label filter takes part in this decision, by way of the caller: `github.tsx` derives
+ * `localMatches` from `filterGithubItems(openItems, { query, labels })`, so a label filter that
+ * narrows the open matches to zero DOES reach for the forge. It can only ever force the fallback,
+ * never suppress it — filtering removes matches, it never adds any. That is deliberate: the hits
+ * come back re-narrowed by the same label filter before rendering, so a label-filtered empty view
+ * is just as legitimate a reason to ask GitHub as an unfiltered one (#837).
  */
 export function shouldSearchForge(query: string, localMatches: number): boolean {
   return query.trim() !== '' && localMatches === 0

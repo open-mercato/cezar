@@ -95,4 +95,16 @@ describe('shouldSearchForge', () => {
     expect(filterGithubItems(items, { query: '142' }).length).toBeGreaterThan(0)
     expect(shouldSearchForge('142', filterGithubItems(items, { query: '142' }).length)).toBe(false)
   })
+
+  // Locks what the JSDoc promises about the caller (#837): `github.tsx` counts local matches WITH
+  // the label filter applied, so a label filter that empties an otherwise-matching query does reach
+  // for the forge. Documented as intentional — the hits are re-narrowed by the same labels before
+  // rendering — so this asserts the contract rather than guarding against it.
+  it('a label filter that empties the local matches does trigger the fallback', () => {
+    const countWith = (labels: readonly string[]) =>
+      filterGithubItems(items, { query: '142', labels }).length
+    expect(shouldSearchForge('142', countWith([]))).toBe(false)
+    expect(countWith(['cli'])).toBe(0)
+    expect(shouldSearchForge('142', countWith(['cli']))).toBe(true)
+  })
 })
