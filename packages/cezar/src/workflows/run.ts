@@ -38,7 +38,7 @@ import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
-import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+import type { QueuedMessage, RunRecord, RunStatus, RunStore, StepState } from '../runs/store.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
@@ -233,6 +233,20 @@ export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
 export const QUEUE_WATCHDOG_MS = 60_000;
 /** Shared empty holds for the common "nothing is held" pump — avoids allocating per sweep. */
 const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
+
+/**
+ * The statuses a run can be continued from — the record's own way of saying "this run has
+ * settled". `review` is in the list because "Send back" is a continuation (spec 009).
+ *
+ * Also the reconciliation key for #798: a record in one of these states while the in-memory
+ * `active` registry still holds the run is a broken invariant, not a live session.
+ */
+const CONTINUABLE_STATUSES: readonly RunStatus[] = ['done', 'failed', 'cancelled', 'review'];
+
+/** Posted when a released session finally settles — see `releaseStaleActive` (#798). */
+const RELEASED_SESSION_SETTLED_NOTE =
+  'a previously stalled agent session finished after it had been released — the task record was'
+  + ' left to whichever session owns it now';
 
 /**
  * May this run start, given what its account is holding?
@@ -1136,9 +1150,25 @@ export class RunManager {
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
 
-  /** Remove a run from the live registries — keeps `waiting ⊆ active`. */
-  private dropActive(runId: string): void {
+  /**
+   * Remove a run from the live registries — keeps `waiting ⊆ active`.
+   *
+   * `expected` is the caller's own `ActiveRun`, and passing it makes the drop conditional: a
+   * stalled session can be released by `releaseStaleActive` (#798) and a NEW session registered
+   * under the same run id while the old one is still parked on an await. When that old session
+   * finally unwedges, its teardown must free its own resources without evicting the newcomer —
+   * otherwise the recovery this fix exists for would itself strand the very run it just revived.
+   * Omit `expected` (every synchronous, pre-registration path) to drop unconditionally.
+   */
+  private dropActive(runId: string, expected?: ActiveRun): void {
     const state = this.active.get(runId);
+    if (expected !== undefined && state !== expected) {
+      // Not ours any more: release what this state alone holds, and touch nothing shared —
+      // the slot, the tmp dir and the retention sweep all belong to the live registration now.
+      expected.releaseRepoRoot?.();
+      expected.releaseRepoRoot = undefined;
+      return;
+    }
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.waiting.delete(runId);
@@ -1173,6 +1203,53 @@ export class RunManager {
     // there is no keep-count to respect and nothing left to recover from it. A
     // Continue (or an auto-resume) re-creates it through `agentEnv`.
     removeAgentTmpDir(this.dataDir, runId);
+  }
+
+  /**
+   * Reconcile the in-memory registry against the durable record before Continue refuses (#798).
+   *
+   * Every terminal transition is supposed to funnel through `dropActive`, which is why
+   * `continueRun` could treat `active` as authoritative. But `dropActive` sits at the END of a
+   * session's teardown, behind awaits that can stall without bound — `await session.result` on a
+   * provider session that never settles once a usage window closes, then `autosaveCommit` on the
+   * way out. Stall there and the record says the run finished while the registry says it is
+   * live. The cockpit reads the record, so it offers Continue; the engine read memory, so it
+   * refused with `run is still active` — permanently, since nothing else ever cleared the entry
+   * and `recover()` re-enters the same continuation path on every boot.
+   *
+   * The record wins: a settled status means this registration is a leftover. Release it (ending
+   * the session so a merely-slow one stops writing), and let the caller continue. A genuinely
+   * live run — `queued`/`running`/`waiting` — is untouched here and still refused, by the status
+   * check that follows, with the more accurate `cannot continue a … run`.
+   *
+   * Returns whether a stale entry was released.
+   */
+  private releaseStaleActive(runId: string): boolean {
+    const state = this.active.get(runId);
+    if (!state) return false;
+    const run = this.store.getRun(runId);
+    if (!run || !CONTINUABLE_STATUSES.includes(run.status)) return false;
+    console.warn(
+      `[cez] releasing a stale session registration for run ${runId} — the record settled to`
+      + ` ${run.status} while the engine still held it`,
+    );
+    // `cancelled` + `end()` together: the flag stops the released session's own settle path from
+    // writing the run record (it checks ownership), and `end()` gives a session that is merely
+    // slow, rather than wedged, a chance to actually stop.
+    state.cancelled = true;
+    try {
+      state.session?.end();
+    } catch {
+      // A wedged session may throw on teardown — releasing the run must not depend on it.
+    }
+    this.clearIdleTimer(state);
+    this.clearAutosaveTimer(state);
+    this.dropActive(runId, state);
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `released a stale session registration (the task had already settled to ${run.status})`,
+    });
+    return true;
   }
 
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
@@ -1981,11 +2058,16 @@ export class RunManager {
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
-    if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
+    // `this.active` is a liveness HINT; the record is the truth (#798). A run whose record has
+    // already settled is not live no matter what the registry still holds, so reconcile the two
+    // here rather than refusing forever — see `releaseStaleActive` for why that desync happens.
+    if (this.active.has(runId) && !this.releaseStaleActive(runId)) {
+      return { ok: false, error: 'run is still active' };
+    }
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
+    if (!CONTINUABLE_STATUSES.includes(run.status)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
@@ -2403,10 +2485,23 @@ export class RunManager {
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
     const finishedAt = () => new Date().toISOString();
+    /** Does the registry still consider THIS session the run's live one? A stalled session can be
+     *  released by `releaseStaleActive` (#798) and a newer continuation registered in its place;
+     *  when the old one finally settles, it may close out its own step but must not write the run
+     *  record the newcomer now owns. */
+    const stillRegistered = () => this.active.get(runId) === state;
     try {
       await session.result;
       if (sessionError) throw new Error(sessionError);
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
+      if (!stillRegistered()) {
+        this.store.updateStep(runId, stepId, {
+          status: state.cancelled ? 'cancelled' : 'done',
+          finishedAt: finishedAt(),
+        });
+        this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+        return;
+      }
       if (state.cancelled) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
@@ -2422,6 +2517,10 @@ export class RunManager {
       const message = err instanceof Error ? err.message : String(err);
       sink.sessionEnded('error', message);
       this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
+      if (!stillRegistered()) {
+        this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+        return;
+      }
       appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
       this.store.updateRun(runId, {
         status: 'failed',
@@ -2435,7 +2534,7 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
       if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'turn end');
-      this.dropActive(runId);
+      this.dropActive(runId, state);
     }
   }
 
@@ -2712,6 +2811,16 @@ export class RunManager {
     this.clearAutosaveTimer(state);
     if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'run finalize');
 
+    // A workflow that stalled long enough for `releaseStaleActive` to hand the run to a newer
+    // session (#798) closes out quietly: its steps are already settled above, and the run record
+    // belongs to whoever holds the registration now.
+    if (this.active.get(runId) !== state) {
+      this.clearIdleTimer(state);
+      emit({ type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+      this.dropActive(runId, state);
+      return;
+    }
+
     const finishedAt = new Date().toISOString();
     if (state.cancelled) {
       const run = this.store.getRun(runId);
@@ -2729,7 +2838,7 @@ export class RunManager {
       await this.settleSuccess(runId);
     }
     this.clearIdleTimer(state);
-    this.dropActive(runId);
+    this.dropActive(runId, state);
   }
 
   /** Returns an error message, or null on success. */
