@@ -83,5 +83,27 @@ exactly as `quick-list.e2e.ts` and `queued-stack.e2e.ts` already do.
 
 ### Phase 3: Verification
 
-- [ ] 3.1 Run `npm run test:e2e` and the full configured validation gate; report honestly when the
-      browser provider cannot be provisioned.
+- [x] 3.1 Run `npm run test:e2e` and the full configured validation gate; report honestly when the
+      browser provider cannot be provisioned. — 2b510cd4
+
+## Verification
+
+- **The new spec:** 5/5 green, run three times in a row (13.6s / 20.9s / 18.0s) after the two
+  flakes below were fixed. It also passes inside the full suite.
+- **Mutation-checked.** Dropping the folded `42px` from the `colgroup` (and rebuilding — the
+  fixture server serves built assets, so a source-only edit proves nothing) turns the width
+  assertion red: the shrink falls to 15.42px against a `> 20` floor. The spec really does guard
+  the behavior it claims to.
+- **Two flakes found and fixed, both in the spec, neither in the app.** (1) A direct API write
+  landed on a keep-alive socket the server had already closed — `ECONNRESET` — so the spec passed
+  only when the whole run finished inside the ~5s keep-alive window; the first green run was 6.5s
+  and hid it. (2) The card-parity test inherited the fold state earlier tests happened to leave,
+  and a toggle clicked into the state it already held flipped it the wrong way and hung for the
+  full 25s provider timeout.
+- **Validation gate:** `npm run typecheck`, `npm test`, `npm run test:unit`, `npm run build`,
+  `npm run test:package` — all green.
+- **Full `npm run test:e2e` is red on this machine, and was already red without this change.**
+  With the new spec: 11 failed files / 30 failed tests. Baseline, same machine, same session, the
+  new spec temporarily moved out of the glob: 11 failed files / 31 failed tests. The failing set
+  is pre-existing and itself unstable between runs (`workflows.e2e.ts` and
+  `settings-monitoring.e2e.ts` swap places), and `task-columns.e2e.ts` is in neither list.
