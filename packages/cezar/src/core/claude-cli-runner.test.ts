@@ -1,12 +1,34 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
-import { buildClaudeArgs, ClaudeCliRunner } from './claude-cli-runner.ts';
+import {
+  buildClaudeArgs,
+  ClaudeCliRunner,
+  EOF_KILL_GRACE_MS,
+  EOF_TERM_GRACE_MS,
+  KILL_GRACE_MS,
+} from './claude-cli-runner.ts';
 import type { UiEvent } from './ui-events.ts';
+
+/** Only the escalation tests below swap the child out; every other test in this
+ *  file keeps spawning its real stub binary through the untouched `spawn`. */
+const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+  };
+});
 
 /**
  * The per-backend system-prompt delivery mechanism (spec §protocol v2
@@ -107,6 +129,109 @@ describe('a teardown cezar initiated', () => {
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
   }, 15_000);
+});
+
+/**
+ * #844 — the watchdogs used to ask `!child.killed` before escalating, but Node
+ * sets `killed` the moment a signal is *delivered*. claude installs its own
+ * SIGTERM handler, so the flag went true while the process ran on and the
+ * SIGKILL that exists for exactly that case was never sent — one leaked CLI per
+ * teardown. The escalation now follows real termination instead.
+ */
+describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
+  function signallableChild(): {
+    child: ChildProcessWithoutNullStreams;
+    signals: NodeJS.Signals[];
+    exit: (code: number) => void;
+  } {
+    const signals: NodeJS.Signals[] = [];
+    const emitter = new EventEmitter();
+    const child = Object.assign(emitter, {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      killed: false,
+      pid: 4242,
+      // Node's semantics: delivery flips `killed`; a CLI with its own handler
+      // keeps running with `exitCode` still null.
+      kill: (signal: NodeJS.Signals) => {
+        signals.push(signal);
+        Object.assign(child, { killed: true });
+        return true;
+      },
+    }) as unknown as ChildProcessWithoutNullStreams;
+    const exit = (code: number) => {
+      Object.assign(child, { exitCode: code });
+      emitter.emit('exit', code, null);
+    };
+    return { child, signals, exit };
+  }
+
+  function withFakeChild(run: (fake: ReturnType<typeof signallableChild>) => void): void {
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    vi.useFakeTimers();
+    try {
+      run(fake);
+    } finally {
+      vi.useRealTimers();
+      spawnHook.override = null;
+    }
+  }
+
+  it('escalates after end() even though Node already flagged the child as killed', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      session.end();
+
+      vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM']);
+      // Delivered, not dead — the state that used to disable the escalation.
+      expect(fake.child.killed).toBe(true);
+      expect(fake.child.exitCode).toBeNull();
+
+      vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    });
+  });
+
+  it('escalates on the wall-clock timeout path as well', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 20 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      void session.result.catch(() => undefined);
+
+      vi.advanceTimersByTime(20);
+      expect(fake.signals).toEqual(['SIGTERM']);
+
+      vi.advanceTimersByTime(KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    });
+  });
+
+  it('stops escalating once the CLI really exits after SIGTERM', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      session.end();
+
+      vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM']);
+      fake.exit(143);
+
+      vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM']);
+    });
+  });
 });
 
 describe('prependSystemPrompt (codex/opencode delivery)', () => {
