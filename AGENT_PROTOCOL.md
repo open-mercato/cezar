@@ -85,10 +85,10 @@ a finished run settle as `failed` and a cancelled run settle as `failed` too.
 
 That watchdog MUST gate its SIGKILL escalation on real termination, never on
 `ChildProcess.killed` (#844). Node sets `killed` when a signal is *delivered*,
-so the watchdog's own SIGTERM flips it while the CLI — which handles the signal
-— keeps running, and the escalation written for exactly that case is skipped.
-Use `trackChildExit(child)` (`packages/cezar/src/core/agent-runner.ts`), which
-seeds from `exitCode`/`signalCode` and listens for `exit`.
+so the watchdog's own SIGTERM flips it while the CLI — which handles the
+signal — keeps running, and the escalation written for exactly that case is
+skipped. Use `trackChildExit(child)` (`packages/cezar/src/core/agent-runner.ts`),
+which seeds from `exitCode`/`signalCode` and listens for `exit`.
 
 `SessionOptions`:
 
