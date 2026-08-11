@@ -18,6 +18,8 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
 });
 
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
 // This file is the one place allowed past the #820 spawn guard, and both reasons are visible
 // above: `spawn` is replaced file-wide, and where it does fall through to the real one it launches
 // a stub binary this test wrote onto its own temp PATH — never a GUI app. Scoped to the file and
@@ -239,10 +241,13 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
 });
 
 describe('agentCliRunner', () => {
-  it('maps cli:<runner> ids to the runner, and rejects everything else', () => {
-    expect(agentCliRunner('cli:claude')).toBe('claude');
-    expect(agentCliRunner('cli:codex')).toBe('codex');
-    expect(agentCliRunner('cli:opencode')).toBe('opencode');
+  // Driven off RUNNER_IDS, not a literal list, so runner #5 is covered the moment it is added
+  // (the pi entry was missed on the hand-written list, #387 review).
+  it.each(RUNNER_IDS)('maps cli:%s to that runner', (runner) => {
+    expect(agentCliRunner(`cli:${runner}`)).toBe(runner);
+  });
+
+  it('rejects every id that is not a CLI handoff', () => {
     expect(agentCliRunner('vscode')).toBeNull();
     expect(agentCliRunner('terminal')).toBeNull();
     expect(agentCliRunner('cli:bogus')).toBeNull();

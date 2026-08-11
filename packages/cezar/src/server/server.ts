@@ -41,6 +41,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
@@ -564,7 +565,7 @@ const startRunSchema = z
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    runner: z.enum(RUNNER_IDS).optional(),
     // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
     // own selection, then the discovered default. Bounded like a profile id in the workspace
     // schema, so a value this route accepts can never be degraded away by the next load.
@@ -832,7 +833,7 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: z.array(imageInputSchema).max(4).optional(),
-  runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
 });
 
@@ -845,7 +846,7 @@ const continueSchema = z.object({
 // absent so it never touches `task`.
 const startTodoSchema = z
   .object({
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    runner: z.enum(RUNNER_IDS).optional(),
     model: z.string().max(200).optional(),
     prompt: z
       .string()
@@ -1758,7 +1759,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, or opencode' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, or pi' }), async (c) => {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
@@ -2967,6 +2968,7 @@ export function createApp(deps: ServerDeps) {
             claude: z.string().trim().min(1).max(200).nullable().optional(),
             codex: z.string().trim().min(1).max(200).nullable().optional(),
             opencode: z.string().trim().min(1).max(200).nullable().optional(),
+            pi: z.string().trim().min(1).max(200).nullable().optional(),
           })
           .optional(),
       })
@@ -5093,13 +5095,14 @@ export function createApp(deps: ServerDeps) {
   const modelPresetSchema = z.string().trim().max(200).nullable().optional();
   const setConfigSchema = z.object({
     baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
-    defaultRunner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    defaultRunner: z.enum(RUNNER_IDS).optional(),
     systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
     defaultModels: z
       .object({
         claude: modelPresetSchema,
         codex: modelPresetSchema,
         opencode: modelPresetSchema,
+        pi: modelPresetSchema,
       })
       .optional(),
     // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
@@ -5633,6 +5636,8 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
       return `codex resume ${sessionId}`;
     case 'opencode':
       return `opencode --session ${sessionId}`;
+    case 'pi':
+      return `pi --session ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }

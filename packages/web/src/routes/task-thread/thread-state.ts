@@ -69,7 +69,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'opencode'
+  provider: 'claude' | 'codex' | 'opencode' | 'pi'
   authFailureId: string
 }
 
@@ -192,7 +192,9 @@ function str(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return value === 'claude' || value === 'codex' || value === 'opencode' ? value : undefined
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'pi'
+    ? value
+    : undefined
 }
 
 /** The engine's turn-end markers (`CEZ:DONE`, `CEZ:MONITORING` from #490) plus the in-band

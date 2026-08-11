@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 /**
  * A workflow is an ordered list of steps. Two step kinds:
@@ -26,7 +27,7 @@ export const workflowStepSchema = z
      *  data loss. It also gates the persisted `workflowDef` (`runs/store.ts`), but nothing
      *  has ever been able to write the legacy id THERE either, because this same enum was
      *  the only way in: there is no legacy shape to keep parseable. */
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
     // check step

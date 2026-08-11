@@ -5,8 +5,8 @@
 **Parallel coding agents orchestrator** — a local cockpit for running and
 tracking AI coding-agent tasks in your repo.
 
-Type a task, pick a workflow and an agent — **Claude Code, Codex or OpenCode
-(experimental), or a mix of them per step** — and watch it work live: steps, tool calls,
+Type a task, pick a workflow and an agent — **Claude Code, Codex, OpenCode or pi
+(the latter two experimental), or a mix of them per step** — and watch it work live: steps, tool calls,
 tokens, diffs, in a browser cockpit that runs entirely on your machine.
 Your CLI logins, your `gh`, your files. No accounts, no database, no cloud.
 
@@ -60,7 +60,7 @@ it does better than any of them:
 
 - 🪶 **Genuinely zero config.** `npx cezar-cli` in your repo and you're running —
   no wizard, no API keys, no env vars, no schema, no database. It rides the
-  `claude` / `codex` / `opencode` logins and the `gh` you already have, and every
+  `claude` / `codex` / `opencode` / `pi` logins and the `gh` you already have, and every
   missing piece degrades gracefully instead of blocking you.
 - 🖥️ **Built for a server (VPS mode).** cezar is made to live on a **VPS, cloud,
   or dedicated box** as an always-on janitor for your repo — headless-first, with
@@ -207,7 +207,7 @@ event live and parks the run at a review gate when there's a diff to inspect.
         ▼
    ┌──────────────────────────────┐     ┌───────────────────────────────┐
    │  git worktree per task       │     │  agent CLI  (your login)      │
-   │  (isolated branch, parallel) │◄───►│  claude · codex · opencode    │
+   │  (isolated branch, parallel) │◄───►│ claude · codex · opencode · pi│
    └──────────────────────────────┘     │  Bash open · no prompts       │
         │                                 └───────────────────────────────┘
         │  agent text · tool calls · tool results · tokens · cost
@@ -444,7 +444,7 @@ steps:
     prompt: "{{task}}"
     skill: project-conventions   # optional — from .ai/skills or .ai/cezar/skills
     # model: opus                # optional per-step model override
-    # runner: codex              # optional per-step backend: claude · codex · opencode
+    # runner: codex              # optional per-step backend: claude · codex · opencode · pi
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
   - id: verify
     name: Verify
@@ -496,6 +496,7 @@ Useful environment variables:
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
+| `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -552,20 +553,22 @@ platform.
 ## Coding agent backends
 
 cezar is not married to one vendor. Every agent step runs through a single
-`AgentRunner` seam with three built-in backends:
+`AgentRunner` seam with four built-in backends:
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
 | **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` → `acceptEdits` + approval UI). |
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
+| **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |
 
-> ⚠️ **OpenCode support is experimental.** The runner works but is less battle-tested
-> than the Claude Code and Codex backends, and OpenCode auto-approves every permission
-> (it ignores `allowedTools`). Treat it as a preview and expect rough edges.
+> ⚠️ **OpenCode and pi support are experimental.** Both runners work but are less
+> battle-tested than the Claude Code and Codex backends, and OpenCode auto-approves
+> every permission (it ignores `allowedTools`). Treat them as previews and expect
+> rough edges.
 
 On startup cezar probes which CLIs are installed and the cockpit only offers
-the backends it found — install any one of the three and you're operational.
+the backends it found — install any one of the four and you're operational.
 
 **Models come from your own machine.** The model picker does not ship a list of
 vendor releases that goes stale between cezar versions. For all three backends
@@ -678,7 +681,7 @@ never blocks startup):
   // the source against a moving branch head — cezar verifies it resolves to
   // exactly that commit, and reports it as `team.commit`.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
-  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode"
+  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)

@@ -1,6 +1,6 @@
 import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 
-const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'opencode']
+const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'opencode', 'pi']
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,10 +61,12 @@ function safeProviderRows(value: unknown, requireEnabled: boolean): ProviderStat
 
 function completeProviderRows(value: unknown): ProviderStatus[] | null {
   const rows = safeProviderRows(value, true)
-  if (rows === null || rows.length !== RUNNER_ORDER.length) return null
+  if (rows === null || rows.length === 0) return null
   const byProvider = new Map(rows.map((row) => [row.provider, row]))
-  if (RUNNER_ORDER.some((provider) => !byProvider.has(provider))) return null
-  return RUNNER_ORDER.map((provider) => byProvider.get(provider) as ProviderStatus)
+  return RUNNER_ORDER.flatMap((provider) => {
+    const row = byProvider.get(provider)
+    return row ? [row as ProviderStatus] : []
+  })
 }
 
 export function parseProviderStatusResponse(value: unknown): ProviderStatusResponse {

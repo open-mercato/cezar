@@ -94,6 +94,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // opencode selects across providers, so a bare model is ambiguous: reject it
   // loudly rather than let the server pick a default the user never asked for.
   opencode: {},
+  // pi selects across providers with the same `provider/model` convention as
+  // opencode (#387) — no default provider, so a bare model is rejected loudly
+  // and `toBackendModel` hands pi the full `provider/model` on its `--model`.
+  pi: {},
 };
 
 const SLASH = '/';

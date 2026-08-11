@@ -92,6 +92,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'pi',
 }
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
@@ -99,6 +100,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   claude: 'npm i -g @anthropic-ai/claude-code',
   codex: 'npm i -g @openai/codex',
   opencode: 'https://opencode.ai',
+  pi: 'https://github.com/badlogic/pi-mono',
 }
 
 /** Same vocabulary the Providers card uses — one wording for "is this logged in?". */
@@ -142,7 +144,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   // Every agent gets a tab, including one that cannot carry a second login: the tab is where its
   // install state and config folder live, and hiding OpenCode would just move the question
   // "is OpenCode set up?" somewhere else.
-  const providers: ProviderId[] = ['claude', 'codex', 'opencode']
+  const providers: ProviderId[] = ['claude', 'codex', 'opencode', 'pi']
 
   if (!data.editable) {
     return (

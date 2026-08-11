@@ -1387,6 +1387,38 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     expect(JSON.parse(onDisk)[0].runner).toBe('claude');
   });
 
+  it('persists and reloads a `pi` run, index and step alike (#387)', () => {
+    // `storedRunnerSchema` derives from `RUNNER_IDS` rather than re-listing the ids, so a new
+    // runner is readable the moment it is registered. Without this, a completed pi run would
+    // fail the whole-array parse on the next boot and take every other run down with it.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        {
+          ...LEGACY_RUN,
+          runner: 'pi',
+          steps: [
+            {
+              id: 'task',
+              name: 'Do the task',
+              kind: 'agent',
+              status: 'done',
+              iterations: 1,
+              tokensUsed: 0,
+              sessionId: 'pi-sess-1',
+              backend: 'pi',
+            },
+          ],
+        },
+      ]),
+      'utf8',
+    );
+
+    const run = RunStore.open(dataDir).getRun('legacy-1');
+    expect(run?.runner).toBe('pi');
+    expect(run?.steps[0]?.backend).toBe('pi');
+  });
+
   it('still rejects a runner id that is not a legacy spelling of a real backend', () => {
     // Widening the READ side is not an invitation to accept anything: an unknown id is still
     // a parse failure, which is what keeps the enum meaningful.

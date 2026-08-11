@@ -7,6 +7,10 @@ import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-r
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
+import type { RunnerId } from '../core/agent-runner.ts';
+
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
  * A sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
@@ -49,7 +53,7 @@ const usageCounterSchema = z.number().finite().nonnegative();
  * should be able to ASK for the legacy spelling.
  */
 const storedRunnerSchema = z
-  .enum(['claude', 'codex', 'opencode', 'claude-cli'])
+  .enum([...RUNNER_IDS, 'claude-cli'])
   .transform((id) => (id === 'claude-cli' ? ('claude' as const) : id));
 
 const stepStateSchema = z.object({
@@ -524,7 +528,7 @@ export class RunStore extends EventEmitter {
     workflow: string;
     task: string;
     model?: string;
-    runner?: 'claude' | 'codex' | 'opencode';
+    runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
     generateFollowups?: boolean;

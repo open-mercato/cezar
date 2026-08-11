@@ -146,6 +146,7 @@ const agentDefaultsSchema = z
         claude: z.string().trim().min(1).max(200).optional().catch(undefined),
         codex: z.string().trim().min(1).max(200).optional().catch(undefined),
         opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
+        pi: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()

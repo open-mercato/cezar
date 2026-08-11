@@ -32,6 +32,13 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   claude: ['opus', 'sonnet', 'haiku'],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex'],
   opencode: [],
+  // pi lists nothing for the same reason OpenCode does (#794), plus one of its own: it picks a
+  // model with the canonical `provider/model` convention and has no default provider, so the
+  // structural check in {@link modelConflictsWithRunner} already guards it without vendor
+  // knowledge. Listing pi's composer presets here would actively break OpenCode — the ids
+  // overlap (`anthropic/claude-sonnet-5`), and a shared id present in pi's list but absent from
+  // OpenCode's empty one would read as "another runner's preset" and be refused.
+  pi: [],
 };
 
 /**
