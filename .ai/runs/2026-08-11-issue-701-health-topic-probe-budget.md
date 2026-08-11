@@ -59,5 +59,10 @@ Land @patzick's `changes-requested` ask: stop steering `health-topic.test.ts` wi
 
 ### Phase 3: Close the review loop
 
-- [ ] 3.1 Answer the second half of @patzick's review on the PR — whether the probe budgets are still needed once the clock is faked — and update the PR body's What Changed / Tests sections
-- [ ] 3.2 Run `om-auto-review-pr 733 --autofix`, post the resume summary, and normalize labels (clear `changes-requested` only if the review clears it)
+- [x] 3.1 Answer the second half of @patzick's review on the PR — whether the probe budgets are still needed once the clock is faked — and update the PR body's What Changed / Tests sections — answered in the re-review comment of 2026-08-11
+
+  **Answer: yes, and the two changes are orthogonal.** The budgets guard `settle()`, which waits on a child process finishing, not on a timer firing. `vi.setSystemTime` moves the cache's "now" two hours in a microsecond but cannot make `git` answer sooner. Making the budgets genuinely unnecessary means stubbing `detectEnvironment` / `getRepoInfo` so nothing is spawned — a real improvement, and its own PR.
+
+- [x] 3.2 Run `om-auto-review-pr 733 --autofix`, post the resume summary, and normalize labels (clear `changes-requested` only if the review clears it) — re-review submitted 2026-08-11
+
+  No blocker, major or minor findings; one nit (`vi.restoreAllMocks()` now vestigial) declined with a reason, so the autofix loop had nothing actionable to do. Verified beyond the gate with two mutation probes against `server.ts` (ceiling disabled → 2 cases fail in 315 ms; stale revalidation awaited → 1 case fails in 622 ms), both reverted, tree clean. Pipeline label moved `changes-requested` → `review`. **@patzick's review is not dismissed — only he can do that.**
