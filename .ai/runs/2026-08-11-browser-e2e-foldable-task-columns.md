@@ -69,17 +69,17 @@ exactly as `quick-list.e2e.ts` and `queued-stack.e2e.ts` already do.
 
 ### Phase 1: Fixture and harness
 
-- [ ] 1.1 Add the spec file with its fixture-server boot: throwaway `dataRoot`, pinned `runs.json`
+- [x] 1.1 Add the spec file with its fixture-server boot: throwaway `dataRoot`, pinned `runs.json`
       seeded with a task carrying a branch, a diff stat, a reference and usage numbers, isolated
-      `CEZ_HOME`, desktop viewport, and teardown that removes everything it created.
+      `CEZ_HOME`, desktop viewport, and teardown that removes everything it created. — 8e6e0677
 
 ### Phase 2: Assertions
 
-- [ ] 2.1 Default fold state and header affordances (issue point 2).
-- [ ] 2.2 Folding Workflow: attribute, `aria-pressed`, and measured width shrink (issue point 3).
-- [ ] 2.3 Persistence across a reload, verified in `ui-state.json` (issue point 4).
-- [ ] 2.4 Sibling preservation against an unrelated `appearance.accent` (issue point 5).
-- [ ] 2.5 The sub-`md` card list is unaffected by the desktop fold choices (issue point 7).
+- [x] 2.1 Default fold state and header affordances (issue point 2). — 8e6e0677
+- [x] 2.2 Folding Workflow: attribute, `aria-pressed`, and measured width shrink (issue point 3). — 8e6e0677
+- [x] 2.3 Persistence across a reload, verified in `ui-state.json` (issue point 4). — 8e6e0677
+- [x] 2.4 Sibling preservation against an unrelated `appearance.accent` (issue point 5). — 41170543
+- [x] 2.5 The sub-`md` card list is unaffected by the desktop fold choices (issue point 7). — 41170543
 
 ### Phase 3: Verification
 
