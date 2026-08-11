@@ -317,7 +317,8 @@ describe('TasksOverview — the table', () => {
 
     expect(logicalRowIds('aligned')).toEqual(headerIds)
     expect(logicalRowIds('aligned-queue')).toEqual(headerIds)
-    expect(tableRow('aligned-queue')?.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
+    // Both live columns folded, so the queued row folds with everyone else — no spanning note.
+    expect(tableRow('aligned-queue')?.querySelector('[data-slot="queue-note"]')).toBeNull()
     expect(document.querySelector('th[data-column-id="cpu"]')?.getAttribute('data-folded')).toBe('true')
     expect(document.querySelector('th[data-column-id="memory"]')?.getAttribute('data-folded')).toBe('true')
   })
@@ -463,6 +464,31 @@ describe('TasksOverview — the table', () => {
     // The note replaces the CPU/Mem cells — a queued run has no process to measure.
     expect(tableRow('q2')?.querySelectorAll('[data-usage]')).toHaveLength(0)
     expect(tableRow('q1')?.querySelector('[data-slot="queue-note"]')?.textContent).toBe('#1 in queue')
+  })
+
+  it('lets the fold win over the queue note when both live columns are folded', () => {
+    renderOverview({
+      expandedColumns: { cpu: false, memory: false },
+      runs: [run({ id: 'q1', status: 'queued' })],
+    })
+
+    const row = tableRow('q1') as HTMLElement
+    // The note's nowrap text would prise both 42px columns back open on an auto-layout table.
+    expect(row.querySelector('[data-slot="queue-note"]')).toBeNull()
+    expect(row.querySelector('td[data-column-id="cpu"]')?.getAttribute('data-folded')).toBe('true')
+    expect(row.querySelector('td[data-column-id="memory"]')?.getAttribute('data-folded')).toBe('true')
+    expect(row.textContent).not.toContain('in queue')
+  })
+
+  it.each([
+    ['CPU', { cpu: true, memory: false }],
+    ['Mem', { cpu: false, memory: true }],
+  ])('still shows the queue note while %s is expanded to carry it', (_label, expandedColumns) => {
+    renderOverview({ expandedColumns, runs: [run({ id: 'q1', status: 'queued' })] })
+
+    const note = tableRow('q1')?.querySelector('[data-slot="queue-note"]')
+    expect(note?.textContent).toBe('#1 in queue')
+    expect(note?.getAttribute('colspan')).toBe('2')
   })
 
   it('keeps queue numbers stable under search — the engine does not care what you typed', () => {
