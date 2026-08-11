@@ -161,6 +161,7 @@ describe('workspace runs index API', () => {
     for (const key of [
       'pullRequestUrl',
       'referencedPullRequestUrl',
+      'referencedPrCandidates',
       'prNumber',
       'issueNumber',
       'referencedIssueUrl',
@@ -251,6 +252,30 @@ describe('workspace runs index API', () => {
     expect(row).toMatchObject({
       issueNumber: 4143,
       referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+    });
+  });
+
+  it('carries the PR candidates the client needs to refuse a foreign PR chip (#854)', async () => {
+    // The PR half of the same evidence rule: `prNumber` is seeded by the auto-namer too, so a
+    // task driving another repository's pull request carries that repository's number. Without
+    // these on the row the global Tasks page is the one surface that cannot refuse it.
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'foreign-pr-number',
+        title: 'Drive a PR in another repo',
+        prNumber: 1977,
+        referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'foreign-pr-number');
+
+    expect(row).toMatchObject({
+      prNumber: 1977,
+      referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
     });
   });
 

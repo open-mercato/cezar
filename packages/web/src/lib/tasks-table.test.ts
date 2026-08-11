@@ -366,6 +366,60 @@ describe('taskReferences', () => {
     ).toEqual([{ kind: 'Issue', number: 4143 }])
   })
 
+  it('drops a number-only PR a candidate proves is another repo’s (#854)', () => {
+    // The PR half of #819's rule. `prNumber` reaches a run the same two ways `issueNumber` does,
+    // and the auto-namer scrapes it off a transcript — so a task driving open-mercato's #1977
+    // seeds a number cezar does not own. Rebuilt here it is `…/cezar/pull/1977`, a 404.
+    expect(
+      taskReferences(
+        run({
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        }),
+        'https://github.com/open-mercato/cezar',
+      ),
+    ).toEqual([])
+  })
+
+  it('keeps a number-only PR whose foreign candidates carry other numbers (#854)', () => {
+    // Evidence about THIS number only, exactly as on the issue side.
+    expect(
+      taskReferences(
+        run({ prNumber: 42, referencedPrCandidates: ['https://github.com/other/repo/pull/9'] }),
+        REPO,
+      ),
+    ).toEqual([{ kind: 'PR', number: 42, url: `${REPO}/pull/42` }])
+  })
+
+  it('keeps a foreign-numbered PR as inert text when no repo is known (#854)', () => {
+    // Nothing is rebuilt without a `repoBase`, so there is no wrong link to prevent.
+    expect(
+      taskReferences(
+        run({
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        }),
+      ),
+    ).toEqual([{ kind: 'PR', number: 1977 }])
+  })
+
+  it('keeps a discovered URL for a number the candidates call foreign (#854)', () => {
+    // Suppression removes a SYNTHESIZED link, never a real one: the run created that PR in
+    // another repo, `pullRequestUrl` says where it lives, and the chip goes there correctly.
+    expect(
+      taskReferences(
+        run({
+          pullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        }),
+        'https://github.com/open-mercato/cezar',
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 1977, url: 'https://github.com/open-mercato/open-mercato/pull/1977' },
+    ])
+  })
+
   it('is empty when the task references nothing', () => {
     expect(taskReferences(run())).toEqual([])
   })

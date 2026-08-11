@@ -621,6 +621,30 @@ describe('global tasks page', () => {
     expect(screen.queryByText(/4143/)).toBeNull()
   })
 
+  it('paints no PR chip for a number another repo demonstrably owns (#854)', async () => {
+    // Same record, PR half: an `om-auto-fix-pr` task driving open-mercato's #1977 from inside the
+    // cezar project seeds that number here, and this is the surface that has a repo for every row
+    // — so without the guard it is the one that would link `acme/api/pull/1977` and 404.
+    stubFetch({
+      runs: [
+        {
+          ...RUNS[0]!,
+          pullRequestUrl: undefined,
+          referencedPullRequestUrl: undefined,
+          referencedIssueUrl: undefined,
+          markerRefs: undefined,
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        },
+      ],
+    })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    expect(document.querySelector('[data-slot="pr-chip"]')).toBeNull()
+    expect(screen.queryByText(/1977/)).toBeNull()
+  })
+
   it('leaves a number-only reference inert when its project has no known repo', async () => {
     // Inert text beats a link that goes somewhere invented.
     stubFetch({

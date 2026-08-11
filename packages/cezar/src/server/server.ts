@@ -5247,6 +5247,11 @@ export function createApp(deps: ServerDeps) {
     ...(run.referencedPullRequestUrl !== undefined
       ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
       : {}),
+    // #854: the PR half of the same evidence rule — a `prNumber` the auto-namer scraped off a
+    // task driving ANOTHER repository is refused by the client on the strength of these.
+    ...(run.referencedPrCandidates !== undefined
+      ? { referencedPrCandidates: run.referencedPrCandidates }
+      : {}),
     ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
