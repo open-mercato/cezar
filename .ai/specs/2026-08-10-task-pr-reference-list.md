@@ -97,8 +97,8 @@ const prRefSchema = z.object({
    *  synthesizes the link from the PROJECT's repository only (the #526 rule), never from the
    *  transcript. */
   url: z.string().optional(),
-  /** Provenance, and — unlike the original draft of this spec — the FIRST key of the primary
-   *  ordering, because these four are not equally trustworthy:
+  /** Provenance, and the FIRST key of the primary ordering, because these four sources are not
+   *  equally trustworthy:
    *  'created' = this run opened it (`pullRequestUrl`, the strongest evidence there is);
    *  'marker'  = the agent declared it via `CEZ:PR=`;
    *  'legacy'  = derived once from an older record's `pullRequestUrl`/`referencedPullRequestUrl`;
@@ -111,10 +111,11 @@ const prRefSchema = z.object({
 });
 
 /** Every PR this task has been associated with, oldest first. Append-only and deduplicated by
- *  number; an entry is only ever enriched (a URL added), never repointed. Capped at MAX_PR_REFS;
- *  the primary entry is never the one evicted. Absent on every pre-spec run — the cockpit derives
- *  a one-entry view from `pullRequestUrl` / `referencedPullRequestUrl` / `prNumber` instead, so
- *  nothing is migrated and nothing is rewritten. */
+ *  number; an entry is only ever enriched (a URL added, an origin upgraded), never repointed.
+ *  Capped at MAX_PR_REFS; the primary entry is never the one evicted. Absent on every pre-spec
+ *  run — the cockpit derives a one-entry view instead, taking the provenance from the field it
+ *  came from (`pullRequestUrl` → 'created', `referencedPullRequestUrl` → 'legacy', a bare
+ *  `prNumber` → 'derived'), so nothing is migrated and nothing is rewritten. */
 prRefs: z.array(prRefSchema).catch([]).optional(),
 ```
 
