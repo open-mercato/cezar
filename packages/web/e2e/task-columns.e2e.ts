@@ -134,6 +134,36 @@ async function waitForUiState(check: (state: UiState) => boolean, what: string):
   throw new Error(`cezar e2e: ${uiStateFile} never showed ${what}`)
 }
 
+/**
+ * A direct API write, retried past a reset keep-alive socket.
+ *
+ * Not defensive padding — this suite reliably hits it. Node's `fetch` pools connections and will
+ * not retry a request it lost mid-flight, while the server is free to close an idle keep-alive
+ * socket after a few seconds. Whole tests here go by driving only the BROWSER, so Node's pooled
+ * socket sits untouched the entire time and the next direct call lands on a half-closed one:
+ * `ECONNRESET`, which says nothing about the app. `getRun` in `queued-stack.e2e.ts` retries for
+ * the same reason. Without this the spec passes only when the run finishes inside the keep-alive
+ * window — which is exactly the sort of green that turns red in CI.
+ */
+async function putUiState(patch: Record<string, unknown>): Promise<void> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/workspace/ui-state`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!response.ok) throw new Error(`PUT /workspace/ui-state answered ${response.status}`)
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  }
+  throw lastError
+}
+
 /** Open the Tasks overview and wait until the table is both rendered and interactive.
  *
  *  The `disabled` wait is not ceremony: the header toggles are disabled while the workspace
@@ -162,6 +192,22 @@ function foldedHeaderIds(): string[] {
   return browser.evaluate(
     `[...document.querySelectorAll('${TABLE} thead th[data-folded="true"]')].map((el) => el.dataset.columnId)`,
   ) as string[]
+}
+
+/** Drive the named columns to `folded`, clicking only the ones that are not there already.
+ *
+ *  Idempotent on purpose: a toggle blindly clicked into the state it already holds flips it the
+ *  WRONG way, and the wait that follows then hangs for the full provider timeout — a 25-second
+ *  failure that reads like a product hang and is really just an assumption about test order. */
+function setFolded(ids: readonly string[], folded: boolean): void {
+  for (const id of ids) {
+    const isFolded = browser.count(`${th(id)}[data-folded="true"]`) === 1
+    if (isFolded === folded) continue
+    browser.click(`${th(id)} button`)
+    browser.waitForFunction(
+      `document.querySelector('${th(id)}[data-folded="true"]') ${folded ? '!==' : '==='} null`,
+    )
+  }
 }
 
 /** `textContent`, not the provider's `get text`: the latter returns *rendered* text, so the card's
@@ -257,12 +303,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
 
   it('preserves an unrelated ui-state sibling when a column is toggled', async () => {
     // Write a preference this feature knows nothing about, through the same endpoint the app uses.
-    const response = await fetch(`${baseUrl}/api/v1/workspace/ui-state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ appearance: { accent: 'violet' } }),
-    })
-    expect(response.ok).toBe(true)
+    await putUiState({ appearance: { accent: 'violet' } })
     await waitForUiState((s) => s.appearance?.accent === 'violet', 'appearance.accent === violet')
 
     // Reload so the client's cache holds the authoritative state including that sibling — the
@@ -285,7 +326,12 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
   })
 
   it('renders the same card fields below md whatever the desktop fold choices are', () => {
-    // Workflow, Branch and Reference are all folded on the desktop at this point.
+    // Establish the folded desktop state explicitly rather than inheriting whatever the earlier
+    // tests left — this assertion is about the card, so it must not also be a test of test order.
+    const foldable = ['workflow', 'branch', 'reference'] as const
+    openTasks()
+    setFolded(foldable, true)
+
     browser.setViewport(MOBILE.width, MOBILE.height)
     browser.goto(`${baseUrl}/p/${bootProject}/`)
     browser.waitForFunction(`document.querySelector('[data-slot="task-card"]') !== null`)
@@ -302,10 +348,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     // Expand everything on the desktop, then come back: the card must not have moved.
     browser.setViewport(DESKTOP.width, DESKTOP.height)
     openTasks()
-    for (const id of ['workflow', 'reference', 'branch']) {
-      browser.click(`${th(id)} button`)
-      browser.waitForFunction(`document.querySelector('${th(id)}[data-folded="true"]') === null`)
-    }
+    setFolded(foldable, false)
     expect(foldedHeaderIds()).toEqual([])
 
     browser.setViewport(MOBILE.width, MOBILE.height)
