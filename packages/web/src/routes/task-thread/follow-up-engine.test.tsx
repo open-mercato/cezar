@@ -203,10 +203,14 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     let options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('codex')) as HTMLElement)
 
-    // The model pill now lists codex presets; pin one.
+    // The model pill now lists codex's discovered models; pin one once the catalog lands (#794).
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Model' }))
-    options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('gpt-future')) as HTMLElement)
+    let discovered: HTMLElement | undefined
+    await waitFor(() => {
+      discovered = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes('gpt-future'))
+      expect(discovered).toBeDefined()
+    })
+    fireEvent.click(discovered as HTMLElement)
 
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())

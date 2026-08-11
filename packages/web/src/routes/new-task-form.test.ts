@@ -7,6 +7,7 @@ import {
   availableRunners,
   buildCreateRunBody,
   MODELS_BY_RUNNER,
+  modelConflictsWithRunner,
   modelsForRunner,
   modelCatalogStatus,
   pushRecentSource,
@@ -80,10 +81,49 @@ describe('model option resolution', () => {
     expect(modelCatalogStatus('claude', undefined, true)).toBeUndefined()
   })
 
-  it('opencode: provider/model ids, newest Anthropic + OpenAI', () => {
-    expect(modelsForRunner('opencode').map((m) => m.id)).toEqual([
-      '', 'anthropic/claude-opus-4-8', 'anthropic/claude-sonnet-5', 'openai/gpt-5.1', 'openai/gpt-5.1-codex',
-    ])
+  it('opencode: auto alone until the host catalog answers (#794)', () => {
+    expect(modelsForRunner('opencode').map((m) => m.id)).toEqual([''])
+    expect(
+      modelsForRunner('opencode', {
+        runner: 'opencode',
+        models: [
+          { id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' },
+          { id: 'anthropic/claude-sonnet-5', label: 'anthropic/claude-sonnet-5', description: 'via anthropic' },
+        ],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual(['', 'openai/gpt-5.4', 'anthropic/claude-sonnet-5'])
+  })
+
+  it('a pinned OpenCode id the host no longer offers stays selectable', () => {
+    expect(
+      modelsForRunner(
+        'opencode',
+        { runner: 'opencode', models: [], source: 'unavailable', stale: false },
+        ['openai/gpt-5.1'],
+      ).map((m) => m.id),
+    ).toEqual(['', 'openai/gpt-5.1'])
+  })
+
+  it('never reads a provider-spanning runner’s preset as another runner’s exclusive model', () => {
+    // pi lists `openai/gpt-5.1` and `anthropic/claude-sonnet-5` as presets, and OpenCode serves
+    // the very same models from the very same providers. Counting pi's list as evidence of
+    // "belongs to another runner" would silently strip those ids from OpenCode's picker — the
+    // #794 bug, reintroduced through the back door.
+    for (const model of ['openai/gpt-5.1', 'anthropic/claude-sonnet-5']) {
+      expect(modelConflictsWithRunner(model, 'opencode')).toBe(false)
+      expect(modelConflictsWithRunner(model, 'pi')).toBe(false)
+    }
+    // The guard it must NOT lose: a bare id that is unmistakably one single-provider runner's.
+    expect(modelConflictsWithRunner('opus', 'codex')).toBe(true)
+  })
+
+  it('names the runner whose catalog is stale or unavailable', () => {
+    expect(
+      modelCatalogStatus('opencode', { runner: 'opencode', models: [], source: 'cache', stale: true, reason: 'raw' }),
+    ).toBe('Using cached OpenCode model list')
+    expect(modelCatalogStatus('opencode', undefined, true)).toBe('Latest OpenCode models unavailable')
   })
 
   it('resolveModel keeps known picks and arbitrary native model pins', () => {

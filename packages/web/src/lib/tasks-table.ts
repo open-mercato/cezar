@@ -132,13 +132,26 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
  *  is about (#407 — review/continue tasks reference an existing PR instead of opening one).
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
  *  a task that reviewed PR X must still be able to open its own PR from its branch. */
-export function taskPrUrl(run: RunRecord): string | undefined {
-  if (run.pullRequestUrl) return run.pullRequestUrl
-  // #526: a run whose declared subject is an ISSUE (CEZ:ISSUE) and that declared no PR must
-  // not adopt an incidental transcript PR as "its" PR — an `om-prepare-issue` run linking a
-  // stray PR that merely appeared in its output is a false, misleading association.
-  if (run.markerRefs?.issue !== undefined && run.markerRefs?.pr === undefined) return undefined
-  return run.referencedPullRequestUrl
+export function taskPrUrl(run: TaskReferenceInput): string | undefined {
+  return prUrls(run)[0]
+}
+
+/**
+ * Every PR URL a task legitimately points at, strongest first: the PR it CREATED, then the PR the
+ * conversation is about (#407). Both are real and can coexist — a review task can open a
+ * follow-up PR of its own — which is why this is a list and `taskPrUrl` is merely its head.
+ *
+ * The one suppression is #526: a run whose declared subject is an ISSUE (CEZ:ISSUE) and that
+ * declared no PR must not adopt an incidental transcript PR as "its" PR — an `om-prepare-issue`
+ * run linking a stray PR that merely appeared in its output is a false, misleading association.
+ * It lives HERE, once, so the singular and plural accessors cannot drift apart on it.
+ */
+function prUrls(run: TaskReferenceInput): string[] {
+  const urls: string[] = []
+  if (run.pullRequestUrl) urls.push(run.pullRequestUrl)
+  const suppressAboutPr = run.markerRefs?.issue !== undefined && run.markerRefs?.pr === undefined
+  if (!suppressAboutPr && run.referencedPullRequestUrl) urls.push(run.referencedPullRequestUrl)
+  return urls
 }
 
 /** Display-only issue association. Action gates must continue to use their created-resource
@@ -147,7 +160,7 @@ export function taskPrUrl(run: RunRecord): string | undefined {
  * `repoBase` is the repository of the project on screen (`useProjectRepoBase()`) and is the only
  * authority a *synthesized* link may be built on. Callers without it get today's behavior:
  * a discovered URL or nothing. */
-export function taskIssueUrl(run: RunRecord, repoBase?: string): string | undefined {
+export function taskIssueUrl(run: TaskReferenceInput, repoBase?: string): string | undefined {
   if (run.referencedIssueUrl) return run.referencedIssueUrl
   // #526: an issue-subject run (om-prepare-issue) knows its issue number from the CEZ:ISSUE
   // marker even when no full `…/issues/N` link was ever scanned into referencedIssueUrl.
@@ -160,26 +173,96 @@ export function taskIssueUrl(run: RunRecord, repoBase?: string): string | undefi
   return `${repoBase}/issues/${number}`
 }
 
+/**
+ * What deciding a task's tracker chip actually reads.
+ *
+ * `Pick`ed rather than the whole `RunRecord`, for the same reason `RunTitleInput` and
+ * `AttentionInput` are: the cross-project index (`RunIndexEntry`) is a slim row, not a record,
+ * and the global Tasks page must resolve a PR/issue chip exactly as every other surface does.
+ * Widening this means widening `runIndexEntrySchema` too, or that page silently answers
+ * differently — which is the whole failure a shared rule exists to prevent.
+ */
+export type TaskReferenceInput = Pick<
+  RunRecord,
+  | 'pullRequestUrl'
+  | 'referencedPullRequestUrl'
+  | 'prNumber'
+  | 'issueNumber'
+  | 'referencedIssueUrl'
+  | 'markerRefs'
+>
+
 export interface TaskReference {
   kind: 'PR' | 'Issue'
   number: number
   url?: string
 }
 
-/** The strongest known tracker reference for a task. PRs win once one exists;
- * issue-driven queued runs still expose their already-known issue immediately. */
-export function taskReference(run: RunRecord): TaskReference | undefined {
-  const pullRequestUrl = taskPrUrl(run)
-  const pullRequestNumber = pullRequestUrl ? Number(prNumber(pullRequestUrl)) : run.prNumber
-  if (pullRequestNumber && Number.isInteger(pullRequestNumber)) {
-    return { kind: 'PR', number: pullRequestNumber, ...(pullRequestUrl ? { url: pullRequestUrl } : {}) }
+/**
+ * EVERY tracker reference a task knows about, strongest first.
+ *
+ * A task routinely has more than one, and the count is not capped at two: a review task opened on
+ * issue #524 can be ABOUT PR #530 and have created PR #533 of its own, and all three are true at
+ * once. Surfaces with room — the global Tasks table — show them all; surfaces with room for one
+ * (`taskReference` below) take the first.
+ *
+ * Built by walking an ordered list of SOURCES rather than by hand-picking a winner, so adding the
+ * next kind of reference is one entry here and nothing else — and the PR half is `prUrls`, the
+ * same list `taskPrUrl` takes its head from, so the two can never disagree about #407 or #526. Order is strongest-first — the PR a
+ * task created, the PR it is about, then the issue — which is also what makes `taskReference`
+ * answer exactly what it always answered.
+ *
+ * What this deliberately does NOT read is `referencedPrCandidates` / `referencedIssueCandidates`.
+ * Those are transcript scrapings that routinely name OTHER repositories (#526), so a further
+ * reference has to arrive as a real field before it can be shown: the shape is ready for more,
+ * the guesswork is not invited in. `markerRefs.pr` is the obvious next source, and is left out
+ * only because today it never appears without one of the URLs below already carrying it.
+ *
+ * Deduped by kind+number, so one reference reached through two fields stays one chip.
+ */
+export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {
+  const sources: { kind: TaskReference['kind']; url?: string; number?: number }[] = [
+    ...prUrls(run).map((url) => ({ kind: 'PR' as const, url })),
+    // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
+    // into a real link — see the synthesis note below.
+    { kind: 'PR', number: run.prNumber },
+    { kind: 'Issue', url: taskIssueUrl(run, repoBase) },
+    { kind: 'Issue', number: run.issueNumber },
+  ]
+
+  const seen = new Set<string>()
+  const references: TaskReference[] = []
+  for (const source of sources) {
+    const number = source.url ? Number(prNumber(source.url)) : source.number
+    if (!number || !Number.isInteger(number)) continue
+    const key = `${source.kind}#${number}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    // A number with no URL becomes one from the PROJECT's own repo — the same synthesis rule
+    // `taskIssueUrl` already applies, and the same hard limit: only ever the project's repo,
+    // never a URL scraped from a transcript, which routinely names another repository (#526).
+    // Without a `repoBase` the chip stays inert text rather than linking somewhere invented.
+    const url = source.url ?? synthesizeUrl(source.kind, number, repoBase)
+    references.push({ kind: source.kind, number, ...(url ? { url } : {}) })
   }
-  const issueUrl = taskIssueUrl(run)
-  const issueNumber = run.issueNumber ?? (issueUrl ? Number(prNumber(issueUrl)) : undefined)
-  if (issueNumber && Number.isInteger(issueNumber)) {
-    return { kind: 'Issue', number: issueNumber, ...(issueUrl ? { url: issueUrl } : {}) }
-  }
-  return undefined
+  return references
+}
+
+/** `#402` on a known repo → its forge URL. Undefined without a repo to build it from. */
+function synthesizeUrl(
+  kind: TaskReference['kind'],
+  number: number,
+  repoBase: string | undefined,
+): string | undefined {
+  if (!repoBase) return undefined
+  return `${repoBase}/${kind === 'PR' ? 'pull' : 'issues'}/${number}`
+}
+
+/** The strongest known tracker reference — what a row with space for exactly one shows (the
+ *  sidebar row, the per-project table). PRs win once one exists; issue-driven queued runs still
+ *  expose their already-known issue immediately. */
+export function taskReference(run: TaskReferenceInput): TaskReference | undefined {
+  return taskReferences(run)[0]
 }
 
 /** The PR chip's `#402`. Null when the URL's last segment is not a number — a forge we don't
@@ -204,12 +287,19 @@ export interface UsageCell {
  *
  * A sample is only believed while the run's process tree can exist (`USAGE_LIVE_STATUSES`) — the
  * usage stream is a snapshot broadcast, and a tick that raced the run's exit must not paint a
- * finished row as live. With no live sample, Mem falls back to the persisted `peakRssBytes`
+ * finished row as live.
+ *
+ * `Pick`ed rather than a whole `RunRecord`, for the same reason `RunTitleInput` and
+ * `AttentionInput` are: the cross-project index (`RunIndexEntry`) is a slim row, and the global
+ * Tasks table must read usage exactly as the per-project one does rather than inventing a
+ * second set of fallbacks. With no live sample, Mem falls back to the persisted `peakRssBytes`
  * (dimmed, labeled `peak`); CPU has no persisted peak, so its cell goes empty rather than
  * inventing one. Exactly the legacy table's fallbacks.
  */
+export type UsageCellInput = Pick<RunRecord, 'status' | 'peakRssBytes' | 'peakProcCount'>
+
 export function usageCells(
-  run: RunRecord,
+  run: UsageCellInput,
   sample: ProcessUsage | undefined,
 ): { cpu: UsageCell; mem: UsageCell } {
   const live = USAGE_LIVE_STATUSES.has(run.status) ? sample : undefined

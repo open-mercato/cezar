@@ -164,8 +164,14 @@ const startBody = (sent: readonly SentRequest[], id: string): unknown =>
  *  card, because every runnable card carries its own pair. */
 async function pick(card: HTMLElement, slot: string, label: string) {
   fireEvent.pointerDown(card.querySelector(`[data-slot="${slot}"]`)!)
-  const options = await screen.findAllByRole('menuitemradio')
-  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  // A discovery runner's options arrive with its catalog (#794), so wait for the labelled
+  // option rather than merely for the menu to open.
+  let option: HTMLElement | undefined
+  await waitFor(() => {
+    option = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
+    expect(option).toBeDefined()
+  })
+  fireEvent.click(option as HTMLElement)
 }
 
 function renderInbox(entry = '/inbox') {

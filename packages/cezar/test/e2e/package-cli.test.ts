@@ -184,10 +184,12 @@ if (args.join(' ') === 'auth status --json') {
     assert.match(projects.stdout, /fixture-repo/);
     assert.match(projects.stdout, /1 project\(s\)/);
 
-    // server-install / server-uninstall dry-run round-trip. CEZ_HOME isolates
-    // ~/.cezar/server.json to a temp dir; CEZ_DRY_RUN performs no real sudo.
+    // server-install / server-uninstall dry-run round-trip. A separate CEZ_HOME
+    // isolates ~/.cezar/server.json from the project-registry fixture above;
+    // CEZ_DRY_RUN performs no real sudo.
     assert.match(help.stdout, /cezar server-install/);
-    const serverEnv = { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: cezHome };
+    const serverHome = join(root, 'server-home');
+    const serverEnv = { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: serverHome };
     const serverExec = { cwd: consumerDir, env: serverEnv, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 } as const;
 
     await execFile(
@@ -195,7 +197,7 @@ if (args.join(' ') === 'auth status --json') {
       [cliPath, 'server-install', '--platform', 'ubuntu-vps', '--yes', '--repo', fixtureRepo],
       serverExec,
     );
-    const state = JSON.parse(await readFile(join(cezHome, 'server.json'), 'utf8')) as {
+    const state = JSON.parse(await readFile(join(serverHome, 'server.json'), 'utf8')) as {
       platform: string;
       installed: boolean;
       steps: Record<string, unknown>;
@@ -209,7 +211,7 @@ if (args.join(' ') === 'auth status --json') {
       [cliPath, 'server-uninstall', '--platform', 'ubuntu-vps', '--yes'],
       serverExec,
     );
-    const reversed = JSON.parse(await readFile(join(cezHome, 'server.json'), 'utf8')) as {
+    const reversed = JSON.parse(await readFile(join(serverHome, 'server.json'), 'utf8')) as {
       installed: boolean;
       steps: Record<string, unknown>;
     };
@@ -226,7 +228,7 @@ if (args.join(' ') === 'auth status --json') {
       [cliPath, 'server-install', '--platform', 'ubuntu-vps', '--yes', '--repo', fixtureRepo],
       serverExec,
     );
-    const resumedExternal = JSON.parse(await readFile(join(cezHome, 'server.json'), 'utf8')) as {
+    const resumedExternal = JSON.parse(await readFile(join(serverHome, 'server.json'), 'utf8')) as {
       externalProxy?: boolean;
       steps: Record<string, unknown>;
     };

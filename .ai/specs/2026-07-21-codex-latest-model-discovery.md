@@ -4,6 +4,17 @@
 
 cezar currently renders a hard-coded Codex model list that has drifted far behind the models the same host's Codex CLI makes available. Replace Codex's static presets with a zero-config, host-local catalog discovered through the Codex app-server `model/list` protocol, expose that catalog through a small workspace API, and let every model picker consume the same query result. Discovery is best-effort and cached: `auto` always remains usable, an unavailable or incompatible CLI never blocks cockpit boot, and configured/custom model identifiers remain representable.
 
+## Update — OpenCode discovery (#794)
+
+Q1 below limited live discovery to Codex, on the grounds that only Codex had both a reported
+defect and an authoritative local protocol. Issue #794 supplied the missing half for OpenCode:
+`opencode models` lists what the host's configured providers actually route, and the four
+hard-coded OpenCode presets had drifted exactly as the Codex ones had. OpenCode now uses the
+same service, the same route (`GET /api/v1/models?runner=codex|opencode`) and the same picker
+merge; its adapter is `packages/cezar/src/core/opencode-model-catalog.ts`. Everything else in
+this spec — the in-memory-only cache, `auto` always usable, custom ids preserved, no persisted
+catalog — applies unchanged. Claude remains a non-goal: it has no host-local catalog to ask.
+
 ## Resolved assumptions (autonomous defaults)
 
 | # | Question | Applied default | Why | Confirm? |

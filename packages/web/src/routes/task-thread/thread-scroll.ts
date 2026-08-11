@@ -19,6 +19,47 @@ export const VIRTUALIZE_THRESHOLD = 300
 
 /** ~80px per the research: pin-to-bottom while streaming only when the reader is this close. */
 export const NEAR_BOTTOM_SLACK_PX = 80
+export const HISTORY_BOUNDARY_SLACK_PX = 600
+
+/** Intent handlers only consume an older-page arm while the reader is near the retained start. */
+export function isNearHistoryStart(box: { scrollTop: number; clientHeight: number }): boolean {
+  return box.scrollTop < Math.max(HISTORY_BOUNDARY_SLACK_PX, box.clientHeight)
+}
+
+export interface ThreadRowPosition {
+  key: string
+  top: number
+  bottom: number
+}
+
+export interface ThreadRowAnchor {
+  key: string
+  offset: number
+}
+
+/** Capture the first stable row intersecting the viewport, including a partially visible row. */
+export function firstVisibleThreadAnchor(
+  viewportTop: number,
+  rows: readonly ThreadRowPosition[],
+): ThreadRowAnchor | undefined {
+  const row = rows.find(({ bottom }) => bottom > viewportTop)
+  return row === undefined ? undefined : { key: row.key, offset: row.top - viewportTop }
+}
+
+/** Restore a captured row identity even when page eviction changed the total scroll height. */
+export function threadAnchorScrollTop(
+  currentScrollTop: number,
+  viewportTop: number,
+  anchor: ThreadRowAnchor | undefined,
+  rows: readonly ThreadRowPosition[],
+  fallbackTop: number,
+): number {
+  if (anchor === undefined) return fallbackTop
+  const row = rows.find(({ key }) => key === anchor.key)
+  return row === undefined
+    ? fallbackTop
+    : currentScrollTop + (row.top - viewportTop - anchor.offset)
+}
 
 /**
  * The stick rule shared by the thread scroller and the tool-output live tail: the viewport

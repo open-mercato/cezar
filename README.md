@@ -5,8 +5,8 @@
 **Parallel coding agents orchestrator** — a local cockpit for running and
 tracking AI coding-agent tasks in your repo.
 
-Type a task, pick a workflow and an agent — **Claude Code, Codex or OpenCode
-(experimental), or a mix of them per step** — and watch it work live: steps, tool calls,
+Type a task, pick a workflow and an agent — **Claude Code, Codex, OpenCode or pi
+(the latter two experimental), or a mix of them per step** — and watch it work live: steps, tool calls,
 tokens, diffs, in a browser cockpit that runs entirely on your machine.
 Your CLI logins, your `gh`, your files. No accounts, no database, no cloud.
 
@@ -60,7 +60,7 @@ it does better than any of them:
 
 - 🪶 **Genuinely zero config.** `npx cezar-cli` in your repo and you're running —
   no wizard, no API keys, no env vars, no schema, no database. It rides the
-  `claude` / `codex` / `opencode` logins and the `gh` you already have, and every
+  `claude` / `codex` / `opencode` / `pi` logins and the `gh` you already have, and every
   missing piece degrades gracefully instead of blocking you.
 - 🖥️ **Built for a server (VPS mode).** cezar is made to live on a **VPS, cloud,
   or dedicated box** as an always-on janitor for your repo — headless-first, with
@@ -207,7 +207,7 @@ event live and parks the run at a review gate when there's a diff to inspect.
         ▼
    ┌──────────────────────────────┐     ┌───────────────────────────────┐
    │  git worktree per task       │     │  agent CLI  (your login)      │
-   │  (isolated branch, parallel) │◄───►│  claude · codex · opencode    │
+   │  (isolated branch, parallel) │◄───►│ claude · codex · opencode · pi│
    └──────────────────────────────┘     │  Bash open · no prompts       │
         │                                 └───────────────────────────────┘
         │  agent text · tool calls · tool results · tokens · cost
@@ -285,11 +285,12 @@ Five moves that make the cockpit worth the browser tab:
 
 ## Cockpit tour
 
-Seven views, one browser window, all live over Server-Sent Events (six until you opt into the Inbox):
+Eight views, one browser window, all live over Server-Sent Events (seven until you opt into the Inbox):
 
 | View | What's in it |
 |---|---|
 | **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
+| **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |
 | **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. |
@@ -342,9 +343,10 @@ re-registers itself at the next start.
 **From the terminal** — the same registry, no cockpit required (handy over ssh):
 
 ```bash
-cezar projects                    # list: id, branch or status, path
+cezar projects                    # list: id, branch or status, path, tags
 cezar projects add ~/code/api     # register a folder (defaults to the current repo)
 cezar projects remove api         # drop the registry entry; the repo is untouched
+cezar projects tag api storefront backend   # set the grouping tags (no tags clears them)
 ```
 
 These read and write `~/.cezar/config.json` directly, so they work with the
@@ -356,6 +358,64 @@ registry facts, its parallel-task ceiling, and Remove), **Agents**,
 repo and live under `/p/<projectId>/settings`; **Appearance**,
 **Notifications**, **Resources**, **Projects** and **Keyboard** are yours or the
 machine's and live at `/settings/global`.
+
+### Grouping connected repositories: tags and the All tasks page
+
+Work rarely stops at a repo boundary. A storefront is an API, a web app and a
+design system; a platform is a handful of services plus the infra that runs
+them. **Tags** are how you say so, and **All tasks** is where saying so pays off.
+
+**Tag a repo** in **Settings → Projects**: type into the *Tags* cell on its row
+and press Enter (comma works too; the × on a chip, or Backspace in an empty
+field, removes one). The field **autocompletes from the tags already used in the
+workspace** — click the field to see them all, arrow keys and Enter to pick —
+which is what keeps the second repo landing on the first one's spelling instead
+of inventing `store-front` next to `storefront`. Anything not on the list is
+just typed. A tag is a free-form label — `storefront`, `infra`, `client-acme` —
+and a project can carry several, because a repo can belong to more than one
+piece of work. Tags are trimmed, deduplicated case-insensitively (`API` and
+`api` are one tag) and stored in `~/.cezar/config.json` beside the rest of the
+registry, so they are yours and this machine's, never something added to the
+repo.
+
+**All tasks** — the top item in the sidebar, `/tasks`, or `⌘K → All tasks` —
+then shows every registered project's work in one table:
+
+- **Filter** by tag, status and workflow. Tags are one-click chips; status and
+  workflow are searchable multi-selects. Every facet ORs inside itself and ANDs
+  across, so *"anything running or waiting in storefront or infra"* is one set
+  of clicks. Each option carries how many tasks it would leave, so a filter that
+  would empty the table says so before you click it. The search box matches
+  title, project, workflow, branch and tags.
+- **Group by** tag, project, status or workflow — click the pressed one again to
+  ungroup. Grouping by tag is the reason tags exist: three repos tagged
+  `storefront` become one section, and a repo tagged twice appears under both —
+  it genuinely belongs to both.
+
+The filters, the grouping and the Active/Archived tab live in the **URL**, so a
+filtered view survives a refresh, pastes into a chat, and sits in a bookmark —
+`/tasks?tag=storefront&status=running&group=tag` is a link to exactly what you
+were looking at. Only what you changed shows up: Active is the default, so the
+Archived view is `?archived=1` and a normal link carries no key for it.
+
+Each row shows **every** PR and issue it references — a task opened on an issue
+that landed a PR shows both — plus its cost and live CPU/memory, and can be
+marked **read/unread** (the eye) or **archived** (or restored) right there. Every task title, project name and project group heading links into that
+project, so the thread, its diff and its worktree are one click away and stay
+exactly where they were.
+
+There is deliberately **no project filter**: narrowing this page to one project
+is that project's own Tasks page, which is a better version of the same answer
+(live updates, the full column set, the composer). So picking a project *leaves*
+for it rather than turning the global view into a worse local one.
+
+Nothing else in cezar reads tags, on purpose: a tag is a lens, not a permission,
+a queue or a routing rule. Removing one changes what you see and nothing else.
+
+> The page reads a workspace-wide index capped at the newest 200 tasks per
+> project — it says so, and names the projects it capped, rather than showing a
+> short list as if it were complete. Older tasks are always in that project's own
+> Tasks page.
 
 **Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
 `/settings` — still answers, bound to the project cezar was started in; the
@@ -384,7 +444,7 @@ steps:
     prompt: "{{task}}"
     skill: project-conventions   # optional — from .ai/skills or .ai/cezar/skills
     # model: opus                # optional per-step model override
-    # runner: codex              # optional per-step backend: claude · codex · opencode
+    # runner: codex              # optional per-step backend: claude · codex · opencode · pi
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
   - id: verify
     name: Verify
@@ -436,6 +496,7 @@ Useful environment variables:
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
+| `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -492,20 +553,22 @@ platform.
 ## Coding agent backends
 
 cezar is not married to one vendor. Every agent step runs through a single
-`AgentRunner` seam with three built-in backends:
+`AgentRunner` seam with four built-in backends:
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
 | **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` → `acceptEdits` + approval UI). |
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
+| **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |
 
-> ⚠️ **OpenCode support is experimental.** The runner works but is less battle-tested
-> than the Claude Code and Codex backends, and OpenCode auto-approves every permission
-> (it ignores `allowedTools`). Treat it as a preview and expect rough edges.
+> ⚠️ **OpenCode and pi support are experimental.** Both runners work but are less
+> battle-tested than the Claude Code and Codex backends, and OpenCode auto-approves
+> every permission (it ignores `allowedTools`). Treat them as previews and expect
+> rough edges.
 
 On startup cezar probes which CLIs are installed and the cockpit only offers
-the backends it found — install any one of the three and you're operational.
+the backends it found — install any one of the four and you're operational.
 
 **Pick a backend at three levels** (most specific wins):
 
@@ -535,6 +598,17 @@ steps:
 
 Parallel variants (×2/×3) of one task share that task's backend — mixing
 happens per task and per step, not inside a variant group.
+
+**Models come from your own machine.** For Codex and OpenCode, the model picker
+is not a list cezar ships — it asks the installed CLI what it can actually run
+(`codex app-server`'s `model/list`, and `opencode models`), caches the answer in
+memory for five minutes, and shows it. A model your provider rolled out
+yesterday is selectable without a cezar release, and one it retired stops being
+offered. Claude Code has no equivalent local catalog, so it keeps a short list
+of tier aliases and pinned versions. `auto` (let the agent decide) is always
+available, including when the CLI is missing, logged out, or slow — discovery
+never blocks the cockpit, and a model you pinned yourself stays selectable even
+if it is absent from the discovered list.
 
 The seam is deliberately small: a backend is one class implementing the
 `AgentRunner` interface (`packages/cezar/src/core/agent-runner.ts`) that turns a prompt into
@@ -605,7 +679,7 @@ never blocks startup):
   // the source against a moving branch head — cezar verifies it resolves to
   // exactly that commit, and reports it as `team.commit`.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
-  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode"
+  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)

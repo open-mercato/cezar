@@ -1,6 +1,7 @@
 import {
   FolderIcon,
   FolderOpenIcon,
+  LayersIcon,
   MenuIcon,
   PlusIcon,
   SearchIcon,
@@ -9,7 +10,7 @@ import {
 } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
-import { Link as RouterLink, useLocation } from 'react-router'
+import { Link as RouterLink, matchPath, useLocation } from 'react-router'
 
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
@@ -117,6 +118,11 @@ export function useSidebarNavigate(): (() => void) | undefined {
   return React.useContext(SidebarNavigateContext)
 }
 
+/** The main transcript owns cached/tail arrival; every other routed surface uses shell-top. */
+export function routeOwnsScrollArrival(pathname: string): boolean {
+  return matchPath({ path: '/tasks/:id', end: true }, stripProjectPrefix(pathname)) !== null
+}
+
 /**
  * The cockpit's app shell: a fixed sidebar plus a single scrolling main region.
  *
@@ -163,6 +169,7 @@ export function AppShell({
   const current = activeNavItem(areaPathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const mainRef = React.useRef<HTMLElement>(null)
+  const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788). Read once, lazily, from `localStorage` — it is a
   // browser-local preference like the theme, so there is nothing to fetch and nothing to wait
   // for, and the first paint is already the user's width rather than a default that jumps.
@@ -177,13 +184,15 @@ export function AppShell({
 
   // The scroller PERSISTS across routes (it is the shell's, not the view's), so without this
   // a deep scroll on one page carries into the next — most visibly on mobile, where Tasks or
-  // GitHub opened mid-list. Layout effect: the reset lands before the new view paints. Routes
-  // that own their arrival position (the task thread's cached-restore / stick-to-bottom) set
-  // it later, in their own effects once their content ref lands, so they still win.
+  // GitHub opened mid-list. Layout effect: the reset lands before the new view paints. The main
+  // task transcript is the exception: its own layout effect restores the cached offset or live
+  // tail before paint, so a competing shell reset would expose the exact top-to-tail jump it is
+  // responsible for preventing.
   React.useLayoutEffect(() => {
+    if (routeOwnsArrival) return
     const main = mainRef.current
     if (main) main.scrollTop = 0
-  }, [pathname])
+  }, [pathname, routeOwnsArrival])
 
   // Close on route change. Without this the drawer survives the navigation it triggered and sits
   // on top of the view the user just asked for — and back/forward and the ⌘K palette (Step 4.3)
@@ -520,16 +529,27 @@ function SidebarContent({
       </div>
 
       {projectGroups ? (
-        // Step 3.3: one collapsible group per registered project — nav + task list per group.
-        // The whole area scrolls as one (per the sidebar mockup); collapsed groups are one row.
-        <div
-          data-slot="project-groups"
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-2"
-        >
-          <SidebarNavigateContext.Provider value={onNavigate}>
-            {projectGroups}
-          </SidebarNavigateContext.Provider>
-        </div>
+        <>
+          {/* PINNED above the scroller, not the first row inside it. It is about every group
+              rather than a peer of them, and a workspace with enough projects to want this page
+              is exactly the workspace that scrolls it out of sight. Its own bordered band is
+              what stops it reading as an unusually-worded project. Only in a multi-project
+              workspace: with one project the page would be that project's own Tasks table
+              wearing a second name. */}
+          <div className="shrink-0 border-b border-border px-1.5 pt-0.5 pb-2">
+            <AllTasksLink onNavigate={onNavigate} />
+          </div>
+          {/* Step 3.3: one collapsible group per registered project — nav + task list per group.
+              The whole area scrolls as one (per the sidebar mockup); collapsed groups are one row. */}
+          <div
+            data-slot="project-groups"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pt-1.5 pb-2"
+          >
+            <SidebarNavigateContext.Provider value={onNavigate}>
+              {projectGroups}
+            </SidebarNavigateContext.Provider>
+          </div>
+        </>
       ) : (
         <>
           <nav aria-label="Main" className="px-2.5 py-1.5">
@@ -618,6 +638,42 @@ function SidebarContent({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * The way into the global Tasks page (`/tasks`) — every project's work in one table, filtered
+ * and grouped by project, tag, status or workflow.
+ *
+ * A PLAIN router Link, like the footer's global-settings one and for the same reason: the page
+ * sits outside every project, and the scoped `Link` this file otherwise uses would prefix it
+ * with the active `/p/<id>`, which is not a route. Its own icon (layers, not the per-project
+ * checklist) so the two Tasks surfaces never read as the same button.
+ */
+function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
+  const { pathname } = useLocation()
+  const isActive = pathname === '/tasks'
+  return (
+    <RouterLink
+      to="/tasks"
+      data-slot="all-tasks-link"
+      onClick={onNavigate}
+      aria-current={isActive ? 'page' : undefined}
+      // Reads at the weight of a section header rather than a nav row: full-strength foreground
+      // and semibold, where the project groups below it are semibold-on-default and their nav
+      // rows are muted. The violet icon is the one spot of accent — the same hue the tag chips
+      // and this page's own selected filters use, so the door and the room match.
+      className={cn(
+        'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9',
+        isActive && 'bg-muted',
+      )}
+    >
+      <LayersIcon
+        className={cn('size-4 shrink-0', isActive ? 'text-violet' : 'text-violet/70')}
+        aria-hidden="true"
+      />
+      All tasks
+    </RouterLink>
   )
 }
 

@@ -630,11 +630,18 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
   )
 }
 
-/** The agent icon by the token counter (#416): hover/focus reveals the runner, account and model —
- *  the answer to "what am I actually running here?" — without turning them into permanent text next
- *  to the live status pill. Always rendered (a run always has an effective runner, `model`
- *  reads "auto" when the runner picks it), and reuses the same click/keyboard-accessible
- *  `DropdownMenu` as the rest of this header instead of inventing a hover-only affordance. */
+/** The agent icon by the token counter (#416): hover/focus reveals the runner, account, model and
+ *  canonical model identity — the answer to "what am I actually running here?" — without turning
+ *  them into permanent text next to the live status pill. Always rendered (a run always has an
+ *  effective runner, `model` reads "auto" when the runner picks it), and reuses the same
+ *  click/keyboard-accessible `DropdownMenu` as the rest of this header instead of inventing a
+ *  hover-only affordance.
+ *
+ *  This is the production reader for `RunRecord.modelIdentity` (#546): the field was persisted by
+ *  #405 for cost attribution and replay and had none, which is how a persisted field rots into
+ *  something nobody can tell is load-bearing. The menu is the right home for it — it answers a
+ *  question only a user debugging "which provider actually served this?" asks, so it belongs
+ *  behind the same disclosure as the account rather than in the truncating summary line. */
 function AgentBadge({ run }: { run: ApiRun }) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
@@ -660,6 +667,14 @@ function AgentBadge({ run }: { run: ApiRun }) {
       // A deleted account still names the folder this run's sessions live in, so the id is shown
       // rather than swallowed — "gone" is the useful half of that answer.
       : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
+  // The canonical `provider/model` the run actually resolved to (#405), shown only when it says
+  // something `model` does not (#546). `model` is the free-text the caller ASKED for — `opus`,
+  // `auto`, a gateway id — so on a repo whose Claude runner points at a custom endpoint the two
+  // genuinely differ, and "which provider served this?" is a question only this field answers.
+  // Absent on pre-#405 records and skipped when it merely repeats `model`, following the same
+  // omitted-not-guessed rule as the account line below: an identity nothing wrote down is not
+  // one this header may invent.
+  const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
   const summary = [runner, account, model].filter(Boolean).join(' · ')
   return (
     <DropdownMenu>
@@ -699,6 +714,14 @@ function AgentBadge({ run }: { run: ApiRun }) {
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
+        {identity ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-identity"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            identity: {identity}
+          </DropdownMenuLabel>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )

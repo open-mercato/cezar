@@ -46,12 +46,13 @@ export class ModelIdentityError extends Error {
 }
 
 /**
- * Providers cezar names today. Informational and extensible — an unknown
- * provider in an explicit `provider/model` string still passes through, so
- * future models and new backends are never silently rejected.
+ * No provider allowlist lives here on purpose (#548). `resolveModelIdentity`
+ * lets an unknown provider in an explicit `provider/model` string pass through,
+ * so future models and new backends are never silently rejected — an exported
+ * roster of "providers cezar names today" would gate nothing, and an unused
+ * public export reads as a contract someone must keep current. The per-backend
+ * knowledge that IS load-bearing lives in `BACKEND_MODEL_MAP` below.
  */
-export const KNOWN_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const;
-export type KnownProvider = (typeof KNOWN_PROVIDERS)[number];
 
 interface BackendModelMap {
   /**
@@ -75,7 +76,11 @@ interface BackendModelMap {
 /**
  * Per-backend mapping table — the one place #387 extends for the `pi` runner.
  * `claude-cli` is the legacy id kept so old run records normalise identically
- * to `claude`.
+ * to `claude`. That is now true end to end: `storedRunnerSchema`
+ * (`runs/store.ts`) parses the legacy spelling out of `runs.json` and folds it
+ * to `claude` (#547), so the entry below is what a record carrying it maps
+ * through on the way in — not, as the comment used to imply, a mapping for a
+ * value the store could never load.
  */
 export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> = {
   // Claude Code supports custom/gateway model ids such as DeepSeek via an
@@ -89,6 +94,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // opencode selects across providers, so a bare model is ambiguous: reject it
   // loudly rather than let the server pick a default the user never asked for.
   opencode: {},
+  // pi selects across providers with the same `provider/model` convention as
+  // opencode (#387) — no default provider, so a bare model is rejected loudly
+  // and `toBackendModel` hands pi the full `provider/model` on its `--model`.
+  pi: {},
 };
 
 const SLASH = '/';

@@ -7,6 +7,10 @@ import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-r
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
+import type { RunnerId } from '../core/agent-runner.ts';
+
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
  * A sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
@@ -28,6 +32,30 @@ export type StepStatus =
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
+/**
+ * A runner id as it may appear in a PERSISTED record, normalized to the three
+ * ids the rest of cezar speaks (#547).
+ *
+ * `claude-cli` is the legacy spelling of `claude` — still a member of
+ * `AgentBackend` and still accepted by `createRunner`, and named by
+ * `BACKWARD_COMPATIBILITY.md` §3 as an id `runs.json` keeps parseable. The enum
+ * here did not accept it, so that promise was false: the loader `safeParse`s the
+ * WHOLE array, so one record carrying it would have dropped every run in the
+ * file — the exact failure mode §3 exists to warn about.
+ *
+ * Parse-and-fold rather than widen: the legacy id is accepted on the way in and
+ * collapsed to `claude`, so no consumer, wire type or contract schema ever sees
+ * a fourth runner. The narrowing is one-way and permanent (the index is
+ * re-serialized from the parsed records), which is what "old run records
+ * normalise identically to `claude`" in `core/model-identity.ts` has always
+ * claimed. Use ONLY for read-back of stored state — request bodies, settings and
+ * workflow step defs stay the three selectable ids (`RunnerId`), because nothing
+ * should be able to ASK for the legacy spelling.
+ */
+const storedRunnerSchema = z
+  .enum([...RUNNER_IDS, 'claude-cli'])
+  .transform((id) => (id === 'claude-cli' ? ('claude' as const) : id));
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -47,8 +75,9 @@ const stepStateSchema = z.object({
   error: z.string().optional(),
   /** Latest backend-owned session id, used for same-backend Continue. */
   sessionId: z.string().optional(),
-  /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse. */
-  backend: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
+   *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
+  backend: storedRunnerSchema.optional(),
   /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
    *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
    *  only means something inside the config dir that created it: `sessionId` and `profileId` are
@@ -111,10 +140,15 @@ export const runRecordSchema = z.object({
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
    *  records carry only `model`, and it stays the human/hand-edit surface; this
-   *  is the parseable identity cost attribution and reproducible replay key off. */
+   *  is the parseable identity cost attribution and reproducible replay key off.
+   *
+   *  Read in production by the session header's agent badge (#546), which shows it
+   *  whenever it says something `model` does not — so this is no longer a
+   *  write-only field whose next reader has to guess whether it is load-bearing. */
   modelIdentity: z.string().optional(),
-  /** Agent backend this run used — drives "open in CLI" resume command. */
-  runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Agent backend this run used — drives "open in CLI" resume command. `storedRunnerSchema`
+   *  so a legacy `claude-cli` record folds to `claude` instead of failing the whole index (#547). */
+  runner: storedRunnerSchema.optional(),
   /** Per-task agent-account override from the composer (spec 2026-07-29-agent-profiles), applying
    *  to steps that run on `runner`. Steps on a DIFFERENT backend still resolve from the project's
    *  own selection — an override for Claude says nothing about which Codex account a mixed
@@ -494,7 +528,7 @@ export class RunStore extends EventEmitter {
     workflow: string;
     task: string;
     model?: string;
-    runner?: 'claude' | 'codex' | 'opencode';
+    runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
     generateFollowups?: boolean;
@@ -709,11 +743,28 @@ export class RunStore extends EventEmitter {
 
   /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
    *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
-   *  clause for clause: a `done` or `failed` run that finished and has not been seen
-   *  since. Cancelled runs are never unread — you stopped them yourself — and archived
-   *  ones never are either, since archiving is a stronger "done with this" than reading;
-   *  both are skipped, as are runs already read. Keeping the two rules identical is what
-   *  makes the returned count the number the cockpit's unread badge was showing. */
+   *  clause for clause:
+   *   - a `done` or `failed` run that finished and has not been seen since;
+   *   - cancelled runs are never unread — you stopped them yourself;
+   *   - archived ones never are either, since archiving is a stronger "done with this"
+   *     than reading;
+   *   - and a `failed` run with a pending `autoResumeAt` is not a done item AT ALL
+   *     (`isScheduledResume`, spec 2026-08-03-auto-resume-after-usage-limit): it has an
+   *     appointment to pick the work back up, so there is no outcome to have missed.
+   *
+   *  Keeping the two rules identical is what makes the returned count the number the
+   *  cockpit's unread badge was showing. The `autoResumeAt` clause is the one that drifted
+   *  (#803): `isUnread` gained it with auto-resume and this sweep did not, so a task waiting
+   *  out a usage limit was uncounted by the badge but stamped read by the sweep — and this
+   *  comment asserted an invariant the code no longer held.
+   *
+   *  This rule lives in two languages of the same repo, which is why it has now drifted
+   *  once. The cockpit cannot import it (`packages/web` does not depend on the service, and
+   *  should not), so a single definition would have to move to `packages/contract` — the one
+   *  package both sides already import. Worth doing; deliberately not done here, because
+   *  widening the contract package's remit from "shapes" to "behavior" is a design change
+   *  that deserves its own review rather than riding along in a bug fix. Until then: EDIT
+   *  BOTH, and the case-table tests on either side are what catch you if you don't. */
   markAllRead(): number {
     const now = new Date().toISOString();
     let count = 0;
@@ -721,6 +772,7 @@ export class RunStore extends EventEmitter {
       const unread =
         !run.archived &&
         (run.status === 'done' || run.status === 'failed') &&
+        !(run.status === 'failed' && run.autoResumeAt !== undefined) &&
         run.finishedAt !== undefined &&
         (run.seenAt === undefined || run.seenAt < run.finishedAt);
       if (!unread) continue;

@@ -84,8 +84,17 @@ export function ProjectGroups({
   const { pathname } = useLocation()
   // The shell renders outside the routes, so there is no `ProjectScopeProvider` above it — the
   // URL's own prefix is the scope, exactly as `project-router` resolves it for links.
-  const activeProjectId = pathnameProjectId(pathname) ?? bootProjectId
-  const { collapsed, toggle } = useSidebarCollapse(activeProjectId)
+  //
+  // `scopedProjectId` is null on the pages that belong to NO project — the global Tasks page and
+  // global settings. Nothing may be highlighted there: a `/p/` prefix is the only thing that
+  // makes a project the one you are standing in, and painting the boot project as selected while
+  // the user reads an all-projects table says the page is about that project when it is not.
+  const scopedProjectId = pathnameProjectId(pathname)
+  // Collapse defaults are a different question ("which group opens when you have never touched
+  // one?") and still want a project, so they keep the boot fallback: landing on a global page
+  // must not fold the whole sidebar shut.
+  const collapseAnchorId = scopedProjectId ?? bootProjectId
+  const { collapsed, toggle } = useSidebarCollapse(collapseAnchorId)
 
   // One filter for the whole cockpit (`ListViewProvider`): switching the Tasks table to Archived
   // switches every group with it, rather than leaving the sidebar answering a different question.
@@ -112,8 +121,8 @@ export function ProjectGroups({
           key={project.id}
           project={project}
           boot={project.id === bootProjectId}
-          active={project.id === activeProjectId}
-          collapsed={isProjectCollapsed(collapsed, project.id, activeProjectId)}
+          active={project.id === scopedProjectId}
+          collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
           onToggle={toggle}
           view={view}
           activeTo={activeTo}
@@ -210,6 +219,11 @@ function ProjectGroup({
       data-project={project.id}
       data-status={project.status}
       data-collapsed={collapsed ? '' : undefined}
+      // "This is the project the URL names." Absent on the global pages, which name none — see
+      // `scopedProjectId` above. An attribute rather than only a class because the highlight is
+      // a fact about the group, and a `hover:bg-muted` in the class list makes the class an
+      // unreliable way to ask.
+      data-active={active ? '' : undefined}
       className="mb-1"
     >
       <button
