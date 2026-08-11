@@ -25,20 +25,27 @@ import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
-import type {
-  GroupResponse,
-  GroupVariant,
-  PickVariantResponse,
-  RunIndexEntry,
-  RunsIndexResponse,
+import {
+  setWorkspaceUiStateInputSchema,
+  type GroupResponse,
+  type GroupVariant,
+  type PickVariantResponse,
+  type RunIndexEntry,
+  type RunsIndexResponse,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
-import { openProjectInSchema } from '@open-mercato/cezar-contract';
+import {
+  modelDiscoveryRunnerSchema,
+  openProjectInSchema,
+  updateProjectInputSchema,
+} from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
+import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -67,8 +74,20 @@ import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../sk
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import {
+  HistoryCursorError,
+  deriveRunContextEvents,
+  readEventsAfterLiveCursor,
+  readRunHistoryPage,
+  validateLiveCursor,
+} from '../runs/event-history.ts';
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
+import {
+  runEventsQuerySchema,
+  runHistoryQuerySchema,
+  runIdParamSchema,
+} from '@open-mercato/cezar-contract';
 import type { RunManager } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
@@ -125,6 +144,7 @@ import { withEnvPrefix } from '../core/shell-env.ts';
 import {
   allocateProjectSlug,
   listProjects,
+  normalizeProjectTags,
   probeProjectStatus,
   registerProject,
   removeProject,
@@ -225,6 +245,10 @@ export interface ServerDeps {
   /** Hand a local FILE (or folder) to the OS default app. Injected so the account-file open route
    *  is testable without actually launching an editor. */
   openFile?: typeof openFileInDefaultApp;
+  /** Hand a folder to a detected app by target id — editor, file manager, or `terminal`, which
+   *  reaches `openInTerminal`. Injected for the same reason as the two above: a test that reaches
+   *  this for real opens a window on the developer's machine (#820). */
+  openApp?: typeof openInApp;
   /** Process-wide Open Mercato skills update detector. Injected in tests and
    * shared by every workspace route/project; createApp owns the default. */
   skillsUpdate?: SkillsUpdateService;
@@ -540,7 +564,7 @@ const startRunSchema = z
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    runner: z.enum(RUNNER_IDS).optional(),
     // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
     // own selection, then the discovered default. Bounded like a profile id in the workspace
     // schema, so a value this route accepts can never be degraded away by the next load.
@@ -656,68 +680,6 @@ const appearanceSchema = z.object({
   density: z.enum(['comfortable', 'compact', 'ultra']).optional(),
   width: z.enum(['narrow', 'wide']).optional(),
 });
-
-const providerAuthDismissalsSchema = z
-  .object({
-    claude: z.string().min(1).max(128).optional(),
-    codex: z.string().min(1).max(128).optional(),
-    opencode: z.string().min(1).max(128).optional(),
-  })
-  .strict();
-
-/** Global GUI state (`~/.cezar/ui-state.json`, step 2.7) — the workspace twin
- *  of `uiStateSchema` below, sharing its `.passthrough()` + key-cap + shallow
- *  merge-on-write semantics via `parseUiStateBody`. Known keys are the
- *  cross-project prefs from the spec's Data Model; everything project-scoped
- *  (githubView, prompt templates, dismissed banners…) stays per-repo. */
-const workspaceUiStateSchema = z
-  .object({
-    appearance: appearanceSchema.optional(),
-    notifications: z.object({ enabled: z.boolean().optional() }).passthrough().optional(),
-    dismissedProviderAuthFailures: providerAuthDismissalsSchema.optional(),
-    // LEGACY, like `sidebar` below: both moved into the browser's own
-    // localStorage (packages/web/src/lib/{last-location,sidebar-collapse}.ts),
-    // because one workspace-wide answer meant the last client to navigate — a
-    // phone, a second window — decided where every other client's next launch
-    // landed, and whose sidebar groups were shut. Kept named and bounded here
-    // so a cockpit from before that change still round-trips and validates.
-    lastLocation: z
-      .object({
-        projectId: z.string().min(1).max(64),
-        pathname: z.string().min(1).max(2048).startsWith('/p/'),
-        search: z.string().max(4096).startsWith('?').optional(),
-        hash: z.string().max(2048).startsWith('#').optional(),
-      })
-      .strict()
-      .optional(),
-    // Sidebar per-project collapse map, keyed by project id (slug ≤ 64 chars).
-    // Entry-capped like `skillUsage`: the map is written straight to a file the
-    // cockpit GETs on every load, so it must stay bounded on every axis.
-    sidebar: z
-      .object({
-        collapsed: z
-          .record(z.string().min(1).max(64), z.boolean())
-          .refine((map) => Object.keys(map).length <= UI_STATE_MAX_KEYS, {
-            message: `sidebar.collapsed must have at most ${UI_STATE_MAX_KEYS} entries`,
-          })
-          .optional(),
-      })
-      .passthrough()
-      .optional(),
-    // The user's curated selection of default (vendor) skills — `open-mercato/skills` — so the
-    // catalog is no longer forced in full. GLOBAL (here, not per-repo) because "which skills I
-    // want" describes the person, not a checkout, and must not depend on where cezar was launched
-    // (multi-project workspace). Tri-state, enforced in `discoverSkills`: an ABSENT key means "not
-    // curated" and every default skill still shows (opt-out default — no silent break on upgrade);
-    // a PRESENT array (even `[]`) shows only those names. Bounded like the `skillUsage` map: the
-    // file is GET/PUT wholesale, so an unbounded array is an unbounded write. Names match
-    // `lastTask.ref` (`.min(1).max(200)`). The client PUTs the whole array (shallow top-level merge).
-    importedSkills: z
-      .array(z.string().min(1).max(200))
-      .max(SKILL_USAGE_MAX_ENTRIES)
-      .optional(),
-  })
-  .passthrough();
 
 const uiStateSchema = z
   .object({
@@ -870,7 +832,7 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: z.array(imageInputSchema).max(4).optional(),
-  runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
 });
 
@@ -883,7 +845,7 @@ const continueSchema = z.object({
 // absent so it never touches `task`.
 const startTodoSchema = z
   .object({
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    runner: z.enum(RUNNER_IDS).optional(),
     model: z.string().max(200).optional(),
     prompt: z
       .string()
@@ -939,7 +901,6 @@ function capUiStateKeys(data: unknown, ctx: z.RefinementCtx): void {
 // generic wrapper leaves the schema type unresolved where `jsonBody` needs it, and Hono answers
 // that by dropping the whole PUT from the route schema rather than erroring — both ui-state PUTs
 // silently vanished from `AppType`. Concrete consts keep them visible to `hc`.
-const workspaceUiStateBody = workspaceUiStateSchema.superRefine(capUiStateKeys);
 const uiStateBody = uiStateSchema.superRefine(capUiStateKeys);
 
 /**
@@ -1078,7 +1039,10 @@ export function createApp(deps: ServerDeps) {
   const bootRoot = deps.repoRoot;
   const bootDataDir = join(bootRoot, '.ai/cezar');
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
-    adapters: { codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) } },
+    adapters: {
+      codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
+      opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
+    },
   });
   const providerAuth = deps.providerAuth ?? new ProviderAuthService();
   const workspaceConfig = deps.workspaceConfig ?? {
@@ -1131,6 +1095,7 @@ export function createApp(deps: ServerDeps) {
   };
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
+  const openApp = deps.openApp ?? openInApp;
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
@@ -1692,7 +1657,10 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(z.literal('codex')) }), { message: 'runner must be codex' }), async (c) => {
+    // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
+    // authoritative host-local catalog (#794), so the client compiles against exactly what this
+    // validates. Claude has no such source: its picker stays on static presets and this 400s.
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be codex or opencode' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -1816,7 +1784,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, or opencode' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, or pi' }), async (c) => {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
@@ -2258,7 +2226,7 @@ export function createApp(deps: ServerDeps) {
         }
         const opened = target === undefined
           ? await openFile(path)
-          : await openInApp(target, path);
+          : await openApp(target, path);
         if (!opened) return c.json({ error: `could not open ${basename(path)}`, path }, 409);
         return c.json({ opened: true as const, path });
       },
@@ -2509,7 +2477,21 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     })
 
-    .patch('/projects/:projectId', jsonZodValidator(() => updateProjectSchema), async (c) => {
+    // Edit the per-project registry fields the cockpit owns: the concurrency ceiling (spec
+    // 2026-07-22-per-project-concurrency) and the grouping tags (spec
+    // 2026-08-10-global-tasks-and-project-tags). A PATCH (not PUT) because it touches named
+    // fields and leaves the rest of the entry alone, and a distinct route from POST
+    // (register-a-folder) to keep register vs. edit semantics clear.
+    //
+    // The body schema is the CONTRACT's, passed directly rather than restated behind a thunk:
+    // it is already in scope, and a second copy is a second thing to keep in step. Its bounds
+    // mirror `workspaceProjectSchema` (config.ts) exactly, so a value this route accepts can
+    // never be degraded away by the next load's `.catch`.
+    //
+    // Deliberately NOT the home of the agent-account selection: that lives in
+    // `~/.cezar/agent-accounts.json` beside the accounts it names, so a cezar version that has
+    // never heard of accounts cannot drop it (see workspace/agent-accounts.ts).
+    .patch('/projects/:projectId', jsonZodValidator(updateProjectInputSchema), async (c) => {
       if (capabilities().singleProject) {
         return c.json(singleProjectRefusal('editing projects'), 409);
       }
@@ -2521,7 +2503,7 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       // `default` is the boot alias the cockpit is allowed to use everywhere else.
       const id = raw === 'default' ? await resolveBootProject() : raw;
-      const { maxParallel } = parsed.data;
+      const { maxParallel, tags } = parsed.data;
 
       // Read-first (mirroring DELETE, server.ts:1252-1258): a well-formed but
       // unknown id must 404 WITHOUT rewriting the config — otherwise it would both
@@ -2541,10 +2523,23 @@ export function createApp(deps: ServerDeps) {
         await mergeWriteWorkspaceConfig((config) => {
           const entry = config.projects.find((p) => p.id === id);
           if (!entry) return; // lost a race with a concurrent remove — answered below
-          // null clears the override; a number sets it. Mutated in place so
-          // `.passthrough()` keys on the entry survive.
-          if (maxParallel === null) delete entry.maxParallel;
-          else entry.maxParallel = maxParallel;
+          // Each key is applied only when the body NAMED it: a PATCH that says
+          // nothing about a field must leave it exactly as it was, which is what
+          // keeps the tags editor from clearing a concurrency ceiling (and the
+          // pre-tags `{ maxParallel }` body from clearing tags). null clears;
+          // a value sets. Mutated in place so `.passthrough()` keys survive.
+          if (maxParallel !== undefined) {
+            if (maxParallel === null) delete entry.maxParallel;
+            else entry.maxParallel = maxParallel;
+          }
+          if (tags !== undefined) {
+            // Normalized on the way IN, so every reader — this API, the CLI, the
+            // global Tasks page — sees one spelling per tag and never has to
+            // fold case itself.
+            const normalized = normalizeProjectTags(tags);
+            if (normalized === undefined) delete entry.tags;
+            else entry.tags = normalized;
+          }
           updated = entry;
         });
       } catch (err) {
@@ -2828,21 +2823,6 @@ export function createApp(deps: ServerDeps) {
       }
     });
 
-  // Edit one field of an existing registry entry (spec
-  // 2026-07-22-per-project-concurrency): the per-project concurrency ceiling.
-  // A PATCH (not PUT) because it touches a single field, and a distinct route
-  // from POST (register-a-folder) to keep register vs. edit semantics clear.
-  // `maxParallel: null` clears the override back to "inherit the workspace
-  // cap". Bounds mirror `workspaceProjectSchema` (config.ts) exactly, so a
-  // value this route accepts can never be degraded away by the next load's
-  // `.catch`.
-  //
-  // Deliberately NOT the home of the agent-account selection: that lives in
-  // `~/.cezar/agent-accounts.json` beside the accounts it names, so a cezar version that has
-  // never heard of accounts cannot drop it (see workspace/agent-accounts.ts).
-  const updateProjectSchema = z.object({
-    maxParallel: z.number().int().min(1).max(16).nullable(),
-  });
   // ---- GUI clone (multi-project spec, step 4.3) ----------------------------
   // "Add project → Clone from GitHub": clone into the checkout root, then
   // register the result through `registerFolder` above (same guards, same
@@ -3002,7 +2982,7 @@ export function createApp(deps: ServerDeps) {
     // chain's type accumulation alone. Method-agnostic here, which the GET does not mind.
     .use('/workspace/ui-state', bodyLimit({ maxSize: UI_STATE_BODY_LIMIT }))
 
-    .put('/workspace/ui-state', jsonZodValidator(workspaceUiStateBody), async (c) => {
+    .put('/workspace/ui-state', jsonZodValidator(setWorkspaceUiStateInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
       try {
         return c.json(
@@ -3050,6 +3030,7 @@ export function createApp(deps: ServerDeps) {
             claude: z.string().trim().min(1).max(200).nullable().optional(),
             codex: z.string().trim().min(1).max(200).nullable().optional(),
             opencode: z.string().trim().min(1).max(200).nullable().optional(),
+            pi: z.string().trim().min(1).max(200).nullable().optional(),
           })
           .optional(),
       })
@@ -3682,6 +3663,36 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(withUsage(run)) : c.json({ error: 'not found' }, 404);
     })
 
+    .get(
+      '/runs/:id/history',
+      paramZodValidator(runIdParamSchema),
+      queryZodValidator(runHistoryQuerySchema),
+      async (c) => {
+        const { store, dataDir } = c.get('project');
+        const { id } = c.req.valid('param');
+        if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+        try {
+          return c.json(
+            await readRunHistoryPage(join(dataDir, 'runs', `${id}.ndjson`), c.req.valid('query').cursor),
+          );
+        } catch (error) {
+          if (error instanceof HistoryCursorError) return c.json({ error: error.message }, error.status);
+          throw error;
+        }
+      },
+    )
+
+    .get(
+      '/runs/:id/history-context',
+      paramZodValidator(runIdParamSchema),
+      async (c) => {
+        const { store, dataDir } = c.get('project');
+        const { id } = c.req.valid('param');
+        if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+        return c.json(await deriveRunContextEvents(join(dataDir, 'runs', `${id}.ndjson`)));
+      },
+    )
+
     // Editable titles (#389). The UI displays `titleSummary ?? title`, so a
     // user edit sets BOTH: `title` (the record's own name — the raw task stops
     // being it the moment the user renames the run) and `titleSummary` (what
@@ -3927,7 +3938,7 @@ export function createApp(deps: ServerDeps) {
       if (fallback === null) {
         return c.json({ error: 'this account\'s folder cannot be used in a terminal command' }, 409);
       }
-      const opened = await openInTerminal(cwd, command, account.env);
+      const opened = await openTerminal(cwd, command, account.env);
       if (!opened) {
         return c.json({ error: 'no terminal emulator found', command: fallback }, 409);
       }
@@ -3995,7 +4006,7 @@ export function createApp(deps: ServerDeps) {
           );
         }
         const filePath = join(run.worktreePath, result.path);
-        const opened = await openFileInDefaultApp(filePath);
+        const opened = await openFile(filePath);
         if (!opened) return c.json({ error: `could not open ${result.path}`, path: filePath }, 409);
         return c.json({ opened: true, path: filePath });
       }
@@ -4035,14 +4046,14 @@ export function createApp(deps: ServerDeps) {
         if (fallback === null) {
           return c.json({ error: 'this account\'s folder cannot be used in a terminal command' }, 409);
         }
-        const opened = await openInTerminal(dir, command, account.env);
+        const opened = await openTerminal(dir, command, account.env);
         if (!opened) {
           return c.json({ error: 'no terminal emulator found', command: fallback }, 409);
         }
         return c.json({ opened: true, path: dir, command });
       }
 
-      const opened = await openInApp(target, dir);
+      const opened = await openApp(target, dir);
       if (!opened) return c.json({ error: `could not open ${target}`, path: dir }, 409);
       return c.json({ opened: true, path: dir });
     })
@@ -4404,7 +4415,7 @@ export function createApp(deps: ServerDeps) {
       if (!detectOpenTargets().some((candidate) => candidate.id === target)) {
         return c.json({ error: `no such app on this machine: ${target}` }, 400);
       }
-      const opened = await openInApp(target, root);
+      const opened = await openApp(target, root);
       if (!opened) return c.json({ error: `could not open ${target}`, path: root }, 409);
       return c.json({ opened: true as const, path: root });
     });
@@ -4570,13 +4581,32 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: SSE streams (project-scoped) ----
   const sseRoutes = new Hono<ProjectApiEnv>()
-    .get('/runs/:id/events', (c) => {
-      const { store } = c.get('project');
-      const id = c.req.param('id');
+    .get(
+      '/runs/:id/events',
+      paramZodValidator(runIdParamSchema),
+      queryZodValidator(runEventsQuerySchema),
+      async (c) => {
+      const { store, dataDir } = c.get('project');
+      const { id } = c.req.valid('param');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const query = c.req.valid('query');
+      const eventsPath = join(dataDir, 'runs', `${id}.ndjson`);
+      if (query.cursor) {
+        try {
+          await validateLiveCursor(eventsPath, query.cursor);
+        } catch (error) {
+          if (error instanceof HistoryCursorError) return c.json({ error: error.message }, error.status);
+          throw error;
+        }
+      }
+      const lastEventId = Number.parseInt(c.req.header('Last-Event-ID') ?? '', 10);
+      const requestedAfter = Math.max(
+        query.afterSeq ?? 0,
+        Number.isSafeInteger(lastEventId) && lastEventId >= 0 ? lastEventId : 0,
+      );
       return streamSSENoBuffer(c, async (stream) => {
         let replaying = true;
-        let maxSeq = 0;
+        let maxSeq = requestedAfter;
         const buffered: RunEvent[] = [];
         // One endpoint, two SSE event names: v1 lines stay `run-event` (the name
         // the legacy UI listened to — its default branch JSON-dumped unknown
@@ -4587,6 +4617,7 @@ export function createApp(deps: ServerDeps) {
         // EventSource ignores names it has no listener for.
         const writeEvent = (event: RunEvent) =>
           stream.writeSSE({
+            id: String(event.seq),
             event: isV2WireEventType(event.type) ? 'ui-event' : 'run-event',
             data: JSON.stringify(event),
           });
@@ -4606,9 +4637,14 @@ export function createApp(deps: ServerDeps) {
           store.off('run', onRun);
         });
 
-        for (const event of store.readEvents(id)) {
-          maxSeq = Math.max(maxSeq, event.seq);
+        const replay = query.cursor
+          ? await readEventsAfterLiveCursor(eventsPath, query.cursor)
+          : { events: store.readEvents(id), boundarySeq: 0 };
+        maxSeq = Math.max(maxSeq, replay.boundarySeq);
+        for (const event of replay.events) {
+          if (event.seq <= maxSeq) continue;
           await writeEvent(event);
+          maxSeq = event.seq;
         }
         replaying = false;
         for (const event of buffered) {
@@ -4622,7 +4658,8 @@ export function createApp(deps: ServerDeps) {
           await stream.sleep(15_000);
         }
       });
-    })
+    },
+    )
 
     // Global SSE: run-summary updates for the list view + inbox changes.
     // Scoped `/p/:projectId/events` carries that project's stream in today's
@@ -5120,13 +5157,14 @@ export function createApp(deps: ServerDeps) {
   const modelPresetSchema = z.string().trim().max(200).nullable().optional();
   const setConfigSchema = z.object({
     baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
-    defaultRunner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    defaultRunner: z.enum(RUNNER_IDS).optional(),
     systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
     defaultModels: z
       .object({
         claude: modelPresetSchema,
         codex: modelPresetSchema,
         opencode: modelPresetSchema,
+        pi: modelPresetSchema,
       })
       .optional(),
     // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
@@ -5252,7 +5290,9 @@ export function createApp(deps: ServerDeps) {
   /** `RunRecord` → the wire row. Optional keys are spread CONDITIONALLY: writing
    *  `titleSummary: run.titleSummary` types a key as always-present that `JSON.stringify` then
    *  drops when it is undefined, which is exactly the drift the parity guard fails on. */
-  const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => ({
+  const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => {
+    const usage = currentUsage(run.id);
+    return {
     projectId,
     id: run.id,
     title: run.title,
@@ -5265,7 +5305,27 @@ export function createApp(deps: ServerDeps) {
     ...(run.seenAt !== undefined ? { seenAt: run.seenAt } : {}),
     archived: run.archived,
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
-  });
+    workflow: run.workflow,
+    ...(run.branch !== undefined ? { branch: run.branch } : {}),
+    ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
+    // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
+    // that picks between them (see the schema's note).
+    ...(run.pullRequestUrl !== undefined ? { pullRequestUrl: run.pullRequestUrl } : {}),
+    ...(run.referencedPullRequestUrl !== undefined
+      ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
+      : {}),
+    ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
+    ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
+    ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
+    ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
+    ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
+    ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
+    ...(run.peakProcCount !== undefined ? { peakProcCount: run.peakProcCount } : {}),
+    // The live sample, on the same terms as `GET /runs`: process-wide sampler, so a
+    // workspace-level answer can carry it for every project's runs at once.
+    ...(usage ? { usage } : {}),
+    };
+  };
 
   /**
    * `GET /workspace/runs-index` — every registered project's recent tasks in one slim answer, so
@@ -5638,6 +5698,8 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
       return `codex resume ${sessionId}`;
     case 'opencode':
       return `opencode --session ${sessionId}`;
+    case 'pi':
+      return `pi --session ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }

@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `vi.hoisted` so `spawnMock` is initialized before the (hoisted) vi.mock factory runs — the
 // factory sets its default implementation, so a bare `const` would be read before init.
@@ -16,6 +16,21 @@ vi.mock('node:child_process', async (importOriginal) => {
     (actual.spawn as (...a: unknown[]) => unknown)(...args),
   );
   return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+});
+
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
+// This file is the one place allowed past the #820 spawn guard, and both reasons are visible
+// above: `spawn` is replaced file-wide, and where it does fall through to the real one it launches
+// a stub binary this test wrote onto its own temp PATH — never a GUI app. Scoped to the file and
+// restored afterwards, so no other suite inherits the exemption.
+const savedAllowSpawn = process.env.CEZ_ALLOW_TEST_SPAWN;
+beforeAll(() => {
+  process.env.CEZ_ALLOW_TEST_SPAWN = '1';
+});
+afterAll(() => {
+  if (savedAllowSpawn === undefined) delete process.env.CEZ_ALLOW_TEST_SPAWN;
+  else process.env.CEZ_ALLOW_TEST_SPAWN = savedAllowSpawn;
 });
 
 import {
@@ -226,10 +241,13 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
 });
 
 describe('agentCliRunner', () => {
-  it('maps cli:<runner> ids to the runner, and rejects everything else', () => {
-    expect(agentCliRunner('cli:claude')).toBe('claude');
-    expect(agentCliRunner('cli:codex')).toBe('codex');
-    expect(agentCliRunner('cli:opencode')).toBe('opencode');
+  // Driven off RUNNER_IDS, not a literal list, so runner #5 is covered the moment it is added
+  // (the pi entry was missed on the hand-written list, #387 review).
+  it.each(RUNNER_IDS)('maps cli:%s to that runner', (runner) => {
+    expect(agentCliRunner(`cli:${runner}`)).toBe(runner);
+  });
+
+  it('rejects every id that is not a CLI handoff', () => {
     expect(agentCliRunner('vscode')).toBeNull();
     expect(agentCliRunner('terminal')).toBeNull();
     expect(agentCliRunner('cli:bogus')).toBeNull();

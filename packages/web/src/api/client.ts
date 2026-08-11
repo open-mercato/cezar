@@ -74,8 +74,11 @@ import type {
   RepoBranchResponse,
   RepoCommitPayload,
   RunCommitsResponse,
+  RunHistoryContext,
+  RunHistoryPage,
   RepoResponse,
   Runner,
+  ModelDiscoveryRunner,
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
@@ -86,6 +89,7 @@ import type {
   SetConfigResponse,
   SetAgentConfigInput,
   SetWorkspaceConfigInput,
+  SetWorkspaceUiStateInput,
   ImportableSkill,
   Skill,
   StartTodoResponse,
@@ -349,9 +353,13 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** Host-local Codex catalog. Workspace-level: one CLI/account serves every project. */
-export async function getRunnerModels(opts?: ReadOptions): Promise<RunnerModelCatalogResponse> {
-  return unwrap(await cez.api.v1.models.$get({ query: { runner: 'codex' } }, init(opts)), '/models')
+/** Host-local catalog for one discovery runner (`codex`, `opencode` — #794). Workspace-level:
+ *  one CLI/account serves every project. */
+export async function getRunnerModels(
+  runner: ModelDiscoveryRunner,
+  opts?: ReadOptions,
+): Promise<RunnerModelCatalogResponse> {
+  return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
@@ -451,6 +459,33 @@ export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
       init(opts),
     ),
     runPath(id),
+  )
+}
+
+export async function getRunHistory(
+  id: string,
+  cursor?: string,
+  opts?: ReadOptions,
+): Promise<RunHistoryPage> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].history.$get(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id) },
+        query: { ...(cursor !== undefined ? { cursor } : {}) },
+      },
+      init(opts),
+    ),
+    `${runPath(id)}/history`,
+  )
+}
+
+export async function getRunHistoryContext(id: string, opts?: ReadOptions): Promise<RunHistoryContext> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['history-context'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `${runPath(id)}/history-context`,
   )
 }
 
@@ -975,6 +1010,50 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
   )
 }
 
+/**
+ * The same route by EXPLICIT project — the twin of `getProjectRuns`, and for the same reason:
+ * the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would send the
+ * BOOT project's id for a row that belongs to another project, and the archive would either 404
+ * or (with a colliding id) land on the wrong task. Every caller that is already standing in the
+ * run's own project keeps using `archiveRun`.
+ */
+export async function archiveProjectRun(
+  projectId: string,
+  id: string,
+  archived = true,
+): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { archived },
+    }),
+    runPath(id, '/archive'),
+  )
+}
+
+/**
+ * The read receipt by EXPLICIT project — the twin of `archiveProjectRun`, and for the same
+ * reason: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * stamp the receipt on the boot project. `read: false` is the inverse route (#775).
+ */
+export async function setProjectRunRead(
+  projectId: string,
+  id: string,
+  read: boolean,
+): Promise<RunRecord> {
+  const route = read ? 'read' : 'unread'
+  return unwrap(
+    await (read
+      ? cez.api.v1.p[':projectId'].runs[':id'].read.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })
+      : cez.api.v1.p[':projectId'].runs[':id'].unread.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })),
+    runPath(id, `/${route}`),
+  )
+}
+
 /** Stop THIS task from resuming itself after a usage limit (spec
  *  2026-08-03-auto-resume-after-usage-limit) — the per-task twin of the workspace setting.
  *  Idempotent: a task with nothing scheduled answers the same way. */
@@ -1475,9 +1554,15 @@ export async function getWorkspaceUiState(opts?: ReadOptions): Promise<Workspace
 
 /** Shallow top-level merge server-side, same as its per-repo twin — send whole top-level
  *  objects (`{ sidebar: {...} }`), never a nested leaf alone. Answers the merged state. */
-export async function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceUiState> {
+export async function putWorkspaceUiState(
+  patch: SetWorkspaceUiStateInput,
+  opts: { keepalive?: boolean } = {},
+): Promise<WorkspaceUiState> {
   return unwrap(
-    await cez.api.v1.workspace['ui-state'].$put({ json: patch }),
+    await cez.api.v1.workspace['ui-state'].$put(
+      { json: patch },
+      { init: { keepalive: opts.keepalive } },
+    ),
     '/workspace/ui-state',
   )
 }

@@ -143,13 +143,88 @@ describe('workspace runs index API', () => {
       // for a project it is not standing in — the same inputs the Tasks badge reads.
       seenAt: '2026-07-14T12:00:00Z',
       archived: false,
+      // The global Tasks page's own columns: always-present workflow, plus branch/startedAt
+      // when the run has them (this one does not — see the absent-key assertions below).
+      workflow: 'build',
     });
-    // The fat keys the palette has no use for never reach the wire.
+    // The fat keys neither consumer has a use for never reach the wire — `workflow` rides along
+    // as a plain string, `steps[]` and `workflowDef` (the expensive half) do not.
     expect(row).not.toHaveProperty('steps');
     expect(row).not.toHaveProperty('task');
     expect(row).not.toHaveProperty('workflowDef');
     // An absent optional is absent, not `undefined` — the wire has no such value.
     expect(Object.keys(row!)).not.toContain('activity');
+    expect(Object.keys(row!)).not.toContain('branch');
+    expect(Object.keys(row!)).not.toContain('startedAt');
+    // …including every tracker-reference input and every usage field: an untracked, never-run
+    // task carries none of them.
+    for (const key of [
+      'pullRequestUrl',
+      'referencedPullRequestUrl',
+      'prNumber',
+      'issueNumber',
+      'referencedIssueUrl',
+      'markerRefs',
+      'costUsd',
+      'peakRssBytes',
+      'peakProcCount',
+      'usage',
+    ]) {
+      expect(Object.keys(row!), key).not.toContain(key);
+    }
+  });
+
+  it('carries cost and the persisted usage peaks the cross-project table paints', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'measured',
+        title: 'Measured',
+        costUsd: 0.31,
+        peakRssBytes: 943718400,
+        peakProcCount: 4,
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'measured');
+
+    expect(row).toMatchObject({ costUsd: 0.31, peakRssBytes: 943718400, peakProcCount: 4 });
+    // The LIVE sample is not persisted, so a cold project's row never carries one.
+    expect(Object.keys(row!)).not.toContain('usage');
+  });
+
+  it('carries the tracker-reference inputs so a cross-project row can show its PR/issue chip', async () => {
+    // Verbatim, not pre-resolved: the rule that picks between them (#407, #526) lives in the
+    // cockpit's `taskReference()`, and resolving it a second time here would be a second rule.
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'tracked',
+        title: 'Ship it',
+        branch: 'feat/ship',
+        startedAt: '2026-07-14T10:00:05Z',
+        pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+        prNumber: 42,
+        markerRefs: { pr: 42 },
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'tracked');
+
+    expect(row).toMatchObject({
+      branch: 'feat/ship',
+      startedAt: '2026-07-14T10:00:05Z',
+      pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+      prNumber: 42,
+      markerRefs: { pr: 42 },
+    });
+    // Still the slim row — the expensive half never rides along.
+    expect(row).not.toHaveProperty('steps');
+    expect(row).not.toHaveProperty('workflowDef');
   });
 
   it('includes archived runs — findable from a project is findable from anywhere', async () => {

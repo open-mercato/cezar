@@ -1119,8 +1119,14 @@ const SINGLE_BACKEND = () => jsonResponse(health(['claude']))
 /** Open a pill's dropdown and choose an option by label (Radix opens on pointerDown). */
 async function pickPill(slot: string, label: string) {
   fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`)!)
-  const options = await screen.findAllByRole('menuitemradio')
-  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  // A discovery runner's options arrive with its catalog (#794), so wait for the labelled
+  // option rather than merely for the menu to open.
+  let option: HTMLElement | undefined
+  await waitFor(() => {
+    option = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
+    expect(option).toBeDefined()
+  })
+  fireEvent.click(option as HTMLElement)
 }
 
 const postedRun = (sent: readonly SentRequest[]) =>

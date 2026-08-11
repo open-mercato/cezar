@@ -356,6 +356,9 @@ describe('the hero surface', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
     expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
+    // unconditionally, so it also claimed isolation for runs that had opted out of it — the
+    // per-state cases live in "the run-mode note" below.
     await pillReady()
     // ⌘N drops you here to type — after the provider check enables the composer, the caret
     // must land in the box without the user clicking it.
@@ -412,10 +415,12 @@ describe('picker data flows', () => {
     // …the model reset to auto and the presets are codex's now.
     expect((document.querySelector('[data-slot="model-pill"]') as HTMLElement).textContent).toContain('auto')
     fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    options = await screen.findAllByRole('menuitemradio')
-    const labels = options.map((o) => o.textContent ?? '')
-    expect(labels.some((l) => l.includes('gpt-future'))).toBe(true)
-    expect(labels.some((l) => l.includes('opus'))).toBe(false)
+    // codex's catalog is fetched for the runner now SELECTED (#794), so it lands after the switch.
+    await waitFor(() => {
+      const labels = screen.getAllByRole('menuitemradio').map((o) => o.textContent ?? '')
+      expect(labels.some((l) => l.includes('gpt-future'))).toBe(true)
+      expect(labels.some((l) => l.includes('opus'))).toBe(false)
+    })
   })
 
   it('excludes disconnected providers from the runner choices even when health detects them', async () => {
@@ -465,6 +470,49 @@ describe('picker data flows', () => {
     fireEvent.pointerDown(modelPill)
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.some((option) => option.textContent?.includes('claude-opus-4-8'))).toBe(false)
+  })
+
+  describe('the run-mode note (#793)', () => {
+    const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
+
+    it('promises isolation only while the run will actually get a worktree', async () => {
+      serve()
+      renderNewTask()
+      await pillReady()
+      expect(note()).toBe('Runs in an isolated worktree — review everything before it lands.')
+
+      // Unchecking the chip changes where the work lands, so it has to change what the header
+      // says. This is the regression: the line was printed unconditionally, so it kept promising
+      // isolation for a run that was about to edit the user's checkout directly.
+      fireEvent.click(document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement)
+      await waitFor(() => expect(note())
+        .toBe('Runs in the repo working tree — your checkout is modified directly.'))
+    })
+
+    it('explains a non-git folder rather than warning about a checkout', async () => {
+      // There is no worktree to opt into here, so "your checkout is modified directly" would be
+      // the wrong half of the truth — the user needs to know WHY there is no isolation on offer.
+      serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
+      renderNewTask()
+      await pillReady()
+      expect(note())
+        .toBe('Runs in place — no git repository detected, so there is no worktree to isolate in.')
+    })
+
+    it('follows the workspace Worktree-off policy, not just an explicit click', async () => {
+      // The resolved mode, not the draft: a run can land in the checkout because policy said so,
+      // and the header has to be honest about that too.
+      serve({
+        workspaceConfig: {
+          ...WORKSPACE_CONFIG,
+          composerDefaults: { ...WORKSPACE_CONFIG.composerDefaults!, inheritedWorktree: false },
+        },
+      })
+      renderNewTask()
+      await pillReady()
+      await waitFor(() => expect(note())
+        .toBe('Runs in the repo working tree — your checkout is modified directly.'))
+    })
   })
 
   it('gates variants on git: no repo → pill disabled with the honest reason, base pill gone', async () => {

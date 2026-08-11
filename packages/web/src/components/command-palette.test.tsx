@@ -76,7 +76,13 @@ function skill(overrides: Partial<Skill> & { name: string; source: Skill['source
 function indexed(
   overrides: Partial<RunIndexEntry> & { id: string; projectId: string; title: string },
 ): RunIndexEntry {
-  return { status: 'done', createdAt: '2026-07-14T10:00:00Z', archived: false, ...overrides }
+  return {
+    status: 'done',
+    createdAt: '2026-07-14T10:00:00Z',
+    archived: false,
+    workflow: 'build',
+    ...overrides,
+  }
 }
 
 function project(overrides: Partial<ProjectListEntry> & { id: string }): ProjectListEntry {
