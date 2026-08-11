@@ -1,0 +1,61 @@
+# Execution plan — answer @patzick's review: drive `health-topic.test.ts` time through vitest's fake-timer API (adopted from PR #733)
+
+**Origin:** adopted — reconstructed by `om-auto-continue-pr` on 2026-08-11 because PR #733 carried no execution plan (it predates the `Tracking plan:` convention on this branch).
+**PR:** #733 · **Branch:** `fix/issue-701-health-topic-probe-budget` · **Base:** `main`
+**Author:** @wojciechszyjka — this plan interprets the remaining review feedback; correct it by editing this file or commenting on the PR.
+
+## 🎯 Goal
+
+Land @patzick's `changes-requested` ask: stop steering `health-topic.test.ts` with raw `vi.spyOn(Date, 'now')` mocks and drive its clock through vitest's fake-timer API instead, then state plainly whether the probe-budget change this PR opened with is still needed.
+
+## Scope
+
+- `packages/cezar/src/server/health-topic.test.ts` — the clock-control mechanism in all five cases that move time, plus the suite's setup/teardown.
+- A written answer, on the PR, to the second half of the review ("not sure if this one will still be needed then").
+
+## Non-goals
+
+- **No production code.** `server.ts`'s health cache, its TTL, and its staleness ceiling are the subject under test and stay untouched; this PR has been test-only since it opened and stays that way.
+- **No mocking of the probes themselves.** Stubbing `detectEnvironment` / `getRepoInfo` would make the suite fast, but it would also stop exercising the real snapshot path these cases were written against. If that is wanted it belongs in its own PR, not here.
+- **Not the rest of #701.** The other ~26 load-sensitive suites (`git-worktree`, `run-lease`, `autosave-*`, …) stay out of scope; they fail identically on an untouched `main` and were measured as such on 2026-08-10.
+
+## Evidence
+
+| Conclusion | Drawn from | Confidence |
+|---|---|---|
+| The one remaining blocker is the clock-mocking mechanism, not the budgets | @patzick's `CHANGES_REQUESTED` review, 2026-08-10T18:25Z: *"this test should be rewritten using fake timers from vitest … mocking Date now doesn't look proper"* | high |
+| Everything else on this PR is already accepted | @pkarw's `APPROVED` review of 2026-07-30 (all five validation commands green) and the `om-auto-fix-pr` run of 2026-08-10 that resolved the conflict against `main` and re-verified CI | high |
+| The suite steers time in five places | `vi.spyOn(Date, 'now').mockReturnValue(...)` at the staleness-ceiling, stale-window, publish-on-change, unsubscribe, and in-flight-dedupe cases | high |
+| Faking timers cannot remove the need for the wait budgets | The cache's clock arithmetic is `Date.now()`-based, but `settle()` waits on a fire-and-forget snapshot that spawns `git` and agent-CLI child processes — real subprocess latency, which no timer mock shortens | high |
+| Only `Date` may be faked, not the timer functions | The code under test `await`s real child processes and real fs; faking `setTimeout`/`setInterval`/`nextTick` would leave nothing to advance the clock while those awaits are pending, and the suite would deadlock | medium |
+
+## Assumptions
+
+- **`vi.useFakeTimers({ toFake: ['Date'] })` is what "use fake timers" means for a suite that spawns real processes.** It is the same `vi.useFakeTimers` / `vi.setSystemTime` API the review linked; the `toFake` narrowing is what makes it applicable here. If @patzick wants the timer functions faked too, that requires stubbing the probes first and is a different PR.
+- **Pinning the clock right after `settle()` is an improvement worth taking while here.** It removes a second latent flake in the same file: the "answers instantly from cache inside the TTL" case currently passes only because `settle()` happened to finish inside the 5 s TTL, which is the very assumption this PR set out to stop relying on.
+- **The budgets stay.** If the answer should instead be "close this PR", that is @patzick's call and the PR comment asks for it explicitly.
+
+## Risks
+
+- `vi.waitFor` nudges an installed fake clock by one poll interval per poll. With only `Date` faked that advances the simulated clock at roughly real-time pace during a wait — bounded, and analysed against the 60 s staleness ceiling in the test's own comments, but it is the one non-obvious interaction of this change.
+- Freezing `Date` for the whole suite could surface an unrelated dependency on a moving clock (the run store, the topic's publish interval). The focused suite plus the full validation gate are what catch that.
+
+## Progress
+
+> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
+
+### Phase 1: Already landed on this PR (reconstructed)
+
+- [x] 1.1 Give both `vi.waitFor` call sites an explicit 30 s probe budget and the nine async cases a 60 s test ceiling, replacing vitest's unspendable 1 s / 5 s defaults — d58f0dc0
+- [x] 1.2 Merge `origin/main` and resolve the three-way conflict in `health-topic.test.ts`, keeping `main`'s stronger assertions over the branch's weaker ones — e2aa2c9d
+
+### Phase 2: Address @patzick's review — fake timers instead of `Date.now` spies
+
+- [ ] 2.1 Install a `Date`-only fake clock for the suite (`vi.useFakeTimers({ toFake: ['Date'] })` / `vi.useRealTimers()`), and document why the timer functions are deliberately left real
+- [ ] 2.2 Replace every `vi.spyOn(Date, 'now').mockReturnValue(...)` with `vi.setSystemTime(...)`, pinning each case's clock to an explicit offset from a post-`settle()` baseline instead of an incidental `Date.now()` reading
+- [ ] 2.3 Re-run the focused suite and confirm the ten cases still assert the same cache policy, then run the full configured validation gate
+
+### Phase 3: Close the review loop
+
+- [ ] 3.1 Answer the second half of @patzick's review on the PR — whether the probe budgets are still needed once the clock is faked — and update the PR body's What Changed / Tests sections
+- [ ] 3.2 Run `om-auto-review-pr 733 --autofix`, post the resume summary, and normalize labels (clear `changes-requested` only if the review clears it)
