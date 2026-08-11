@@ -2461,4 +2461,71 @@ describe('cross-state search fallback (#730)', () => {
     expect(numbers).toEqual([...new Set(numbers)]) // no number rendered twice
     expect(numbers).toContain('137')
   })
+
+  it('does not claim "open, closed or merged" when no query ever reached the forge', async () => {
+    // A label-only narrow never searches — `shouldSearchForge` requires a non-empty query — so the
+    // cross-state verdict would be unfounded certainty of exactly the kind #730 removed, just
+    // reached from the label dropdown instead of the search box. Two labels no single item carries
+    // together is the cheapest way to empty the list without typing anything.
+    const PR_200: GithubItem = {
+      kind: 'pr',
+      number: 200,
+      title: 'Docs pass',
+      author: 'lin',
+      createdAt: '2026-07-12T08:00:00.000Z',
+      labels: ['docs'],
+      body: '',
+      url: 'https://github.com/acme/demo/pull/200',
+      comments: 0,
+      isDraft: false,
+      checks: null,
+    }
+    const sent = stubFetch({
+      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    // AND-narrow to `docs` + `perf`: #200 carries only the first, #137 only the second.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-slot="gh-label-filter"]')!)
+    for (const name of ['docs', 'perf']) {
+      const option = await waitFor(() =>
+        [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find(
+          (el) => el.textContent?.trim() === name,
+        )!,
+      )
+      fireEvent.click(option)
+    }
+
+    await waitFor(() => expect(rows()).toHaveLength(0))
+    const verdict = document.querySelector('[data-slot="gh-empty"]')?.textContent ?? ''
+    expect(verdict).toContain('No open pull requests match your filter')
+    expect(verdict).not.toContain('open, closed or merged')
+    expect(sent.some((r) => r.path.includes('/github/search'))).toBe(false)
+  })
+
+  it('says the search failed when the REQUEST failed, not just when the driver degraded', async () => {
+    // The driver's own `{available: false, reason}` was handled from the start; a request that
+    // never landed was not. A `q` past the route's 256-char cap is the deterministic way there —
+    // a 400 the client turns into a rejected query, which used to fall through to the flat
+    // "nothing in any state" and assert the opposite of what the tab actually knows.
+    const overLong = 'x'.repeat(300)
+    stubFetch({
+      [`GET /api/v1/github/search?kind=pr&q=${overLong}`]: () =>
+        jsonResponse({ error: 'invalid search query' }, 400),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    fireEvent.change(searchBox(), { target: { value: overLong } })
+
+    await waitFor(
+      () => {
+        const verdict = document.querySelector('[data-slot="gh-empty"]')?.textContent ?? ''
+        expect(verdict).toContain('GitHub could not be searched')
+        expect(verdict).not.toContain('open, closed or merged')
+      },
+      { timeout: 3000 },
+    )
+  })
 })

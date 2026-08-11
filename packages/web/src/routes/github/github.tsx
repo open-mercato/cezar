@@ -385,6 +385,18 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
 
   const listPath = view === 'issues' ? '/github' : '/github/prs'
 
+  // The forge was asked and could not answer. Two ways that happens, and only the first used to
+  // be handled: the driver degraded in-payload (`available: false` + a reason), or the request
+  // never landed at all — a 400 on an over-long `q`, a 5xx, a dropped connection. Without the
+  // `isError` half a failed request fell through to the definitive "nothing in any state", which
+  // is precisely the claim #730 exists to stop the tab from making.
+  const searchFailed = searchWanted && (forgeSearch.data?.available === false || forgeSearch.isError)
+  const searchFailureReason =
+    forgeSearch.data?.available === false
+      ? (forgeSearch.data.reason ?? 'unknown reason')
+      : forgeSearch.error instanceof Error
+        ? forgeSearch.error.message
+        : 'the search request failed'
   // What the empty list has to say for itself, or `null` when the "Found on GitHub" section below
   // already says it. Resolved BEFORE the wrapper rather than inside it (#838): as the contents of
   // a padded `<div>`, a null verdict still rendered the padding, leaving an empty ~2rem gap above
@@ -397,16 +409,22 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
       <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
       Searching GitHub for “{query.trim()}”…
     </p>
-  ) : searchHits.length > 0 ? null : forgeSearch.data && !forgeSearch.data.available ? (
+  ) : searchHits.length > 0 ? null : searchFailed ? (
     <p>
       No open {view === 'issues' ? 'issues' : 'pull requests'} match your filter, and GitHub could
-      not be searched: {forgeSearch.data.reason ?? 'unknown reason'}.
+      not be searched: {searchFailureReason}.
     </p>
-  ) : (
+  ) : searchPayload ? (
+    // Earned, not assumed: only a search that actually answered for THIS narrow licenses the
+    // cross-state verdict. A label-only filter never asks the forge at all (`shouldSearchForge`
+    // requires a non-empty query), so claiming "closed or merged" there would be the same
+    // unfounded certainty in a different costume.
     <p>
       No {view === 'issues' ? 'issues' : 'pull requests'} match your filter — open, closed or
       merged.
     </p>
+  ) : (
+    <p>No open {view === 'issues' ? 'issues' : 'pull requests'} match your filter.</p>
   )
 
   return (
