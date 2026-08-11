@@ -4,6 +4,7 @@ import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
   bumpSkillUsage,
+  commandItemFilter,
   filterSkills,
   fuzzyMatch,
   isProjectSkill,
@@ -203,6 +204,18 @@ describe('multiWordFilter (#411: multi-keyword search for cmdk)', () => {
 
   it('matching is case-insensitive', () => {
     expect(multiWordFilter('skill Deploy /path', 'DEPLOY')).toBeGreaterThan(0)
+  })
+})
+
+describe('commandItemFilter', () => {
+  it('filters from cmdk input without re-ranking matching items', () => {
+    expect(commandItemFilter('workflow quick-task', 'qui')).toBe(1)
+    expect(commandItemFilter('skill om-auto-qa-pr', 'qui')).toBe(0)
+    expect(commandItemFilter('skill om-fix', 'fix')).toBe(1)
+    expect(commandItemFilter('skill prefix-helper', 'fix')).toBe(1)
+    expect(commandItemFilter('skill om-fix-issue', 'omfx')).toBe(1)
+    expect(commandItemFilter('skill om-fix /skills/quick-task.md', 'quick')).toBe(0)
+    expect(commandItemFilter('workflow quick-task', 'workflow')).toBe(0)
   })
 })
 

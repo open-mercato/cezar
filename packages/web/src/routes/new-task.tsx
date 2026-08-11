@@ -60,6 +60,7 @@ import {
 } from '@/lib/prompt-templates'
 import {
   bumpSkillUsage,
+  commandItemFilter,
   isProjectSkill,
   orderSkillsByUsage,
   partitionSkillsForDisplay,
@@ -1110,7 +1111,7 @@ function SourcePill({
           sideOffset={8}
           className="w-[336px] max-w-[calc(100vw-2rem)] p-0"
         >
-          <Command shouldFilter={false}>
+          <Command filter={commandItemFilter}>
             <CommandInput
               placeholder="search skills & workflows…"
               value={search}

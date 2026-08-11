@@ -25,7 +25,13 @@ import {
   normalizePromptTemplates,
   type PromptTemplate,
 } from '@/lib/prompt-templates'
-import { isProjectSkill, partitionSkillsForDisplay, searchSkills, skillKeywords } from '@/lib/skills'
+import {
+  commandItemFilter,
+  isProjectSkill,
+  partitionSkillsForDisplay,
+  searchSkills,
+  skillKeywords,
+} from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
 /**
@@ -352,7 +358,7 @@ function TemplateSkillsPicker({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">
-        <Command shouldFilter={false}>
+        <Command filter={commandItemFilter}>
           <CommandInput
             placeholder="search skills…"
             value={search}

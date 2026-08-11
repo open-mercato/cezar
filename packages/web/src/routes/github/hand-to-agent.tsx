@@ -40,6 +40,7 @@ import {
 } from '@/lib/prompt-templates'
 import {
   bumpSkillUsage,
+  commandItemFilter,
   isProjectSkill,
   partitionSkillsForDisplay,
   searchSkills,
@@ -521,7 +522,7 @@ function SkillsPicker({
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">
-          <Command shouldFilter={false}>
+          <Command filter={commandItemFilter}>
             <CommandInput
               placeholder="search skills…"
               value={search}

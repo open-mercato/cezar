@@ -20,6 +20,17 @@ import { resetToasts, Toaster } from '@/components/ui/toaster'
 import { readDraft, resetDraft, writeDraft } from './new-task-draft'
 import { NewTaskRoute } from './new-task'
 
+const skillSearchMockState = vi.hoisted(() => ({ forceStaleResults: false }))
+
+vi.mock('@/lib/skills', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/skills')>()
+  return {
+    ...actual,
+    searchSkills: (...args: Parameters<typeof actual.searchSkills>) =>
+      skillSearchMockState.forceStaleResults ? [...args[0]] : actual.searchSkills(...args),
+  }
+})
+
 /**
  * The /new screen against a mocked API: picker data flows (runner hidden on single-backend
  * hosts, model presets switching per runner, variants gated on git), the EXACT submit bodies
@@ -45,6 +56,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  skillSearchMockState.forceStaleResults = false
   cleanup()
   resetToasts()
   vi.unstubAllGlobals()
@@ -624,6 +636,32 @@ describe('picker data flows', () => {
       expect(visible).toHaveLength(0)
     })
   })
+
+  it('lets cmdk hide unrelated Most used skills when React results are stale', async () => {
+    skillSearchMockState.forceStaleResults = true
+    serve({ uiState: { skillUsage: { 'om-fix': 5 } } })
+    renderNewTask()
+    await pillReady()
+    fireEvent.click(sourcePill())
+    const input = await screen.findByPlaceholderText('search skills & workflows…')
+
+    expect([...document.querySelectorAll('[cmdk-group-heading]')].map((heading) => heading.textContent)).toContain(
+      'Most used',
+    )
+
+    fireEvent.change(input, { target: { value: 'qui' } })
+
+    await waitFor(() => {
+      const options = [...document.querySelectorAll('[data-slot="source-option"]')]
+      expect(options.map((option) => option.getAttribute('data-source-ref'))).toEqual(['quick-task'])
+      expect(
+        [...document.querySelectorAll('[cmdk-group]:not([hidden]) [cmdk-group-heading]')].map(
+          (heading) => heading.textContent,
+        ),
+      ).toEqual(['Workflows'])
+    })
+  })
+
 })
 
 // ---- provider authentication gate -------------------------------------------------------------

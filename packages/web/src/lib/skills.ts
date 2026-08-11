@@ -191,6 +191,16 @@ export function multiWordFilter(value: string, search: string, keywords?: string
 }
 
 /**
+ * cmdk fallback for the grouped pickers. React remains responsible for ranking and tiering,
+ * while cmdk independently hides non-matches from its own live input value. Every hit returns
+ * the same score so cmdk cannot undo the JS ordering when both search paths are in sync.
+ */
+export function commandItemFilter(value: string, search: string, keywords?: string[]): number {
+  const [, name = ''] = value.split(/\s+/, 2)
+  return queryScore(name, keywords?.join(' '), search) > 0 ? 1 : 0
+}
+
+/**
  * How well a whole `query` matches a single `text` (a skill name or its description).
  * 0 = no match; higher = better: exact > prefix > word-boundary hit > buried substring >
  * subsequence. The subsequence fallback keeps `fuzzyMatch`'s permissiveness ("omfx" still
