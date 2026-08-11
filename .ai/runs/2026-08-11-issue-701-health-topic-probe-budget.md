@@ -53,7 +53,9 @@ Land @patzick's `changes-requested` ask: stop steering `health-topic.test.ts` wi
 
 - [x] 2.1 Install a `Date`-only fake clock for the suite (`vi.useFakeTimers({ toFake: ['Date'] })` / `vi.useRealTimers()`), and document why the timer functions are deliberately left real — 77e54c6d
 - [x] 2.2 Replace every `vi.spyOn(Date, 'now').mockReturnValue(...)` with `vi.setSystemTime(...)`, pinning each case's clock to an explicit offset from a post-`settle()` baseline instead of an incidental `Date.now()` reading — 77e54c6d
-- [ ] 2.3 Re-run the focused suite and confirm the ten cases still assert the same cache policy, then run the full configured validation gate
+- [x] 2.3 Re-run the focused suite and confirm the ten cases still assert the same cache policy, then run the full configured validation gate — 77e54c6d
+
+  All five configured commands green on `77e54c6d`: `typecheck` ✅, `build` ✅ (`check:pack ok — 462 files`), `test:unit` ✅ 35 pass / 1 skipped, `test:package` ✅ 12 pass, `npm test` ✅ **310/310 files, 5651/5651 tests**. The full suite was run twice: once on a saturated machine (27 files red, 410 s) and once on a quiet one (0 red, 88 s) — the same tree, which is this PR's own argument about #701 reproduced by accident.
 
 ### Phase 3: Close the review loop
 
