@@ -92,9 +92,12 @@ describe('BACKWARD_COMPATIBILITY.md §6 package surface', () => {
     // themselves keys count as targets.
     const subpaths = new Set(Object.keys(manifest.exports));
     const targets = new Set(Object.values(manifest.exports).filter((to) => !subpaths.has(to)));
+    // Bullets only: the trailing "Breaking:" paragraph names `exports` subpaths too, and a
+    // reworded bullet would otherwise let this latch onto that paragraph and fail with a
+    // comparison nobody can read instead of the "no bullet" message below.
     const bullet = packageSurface
       .split('\n')
-      .find((line) => line.includes('`exports`') && line.includes('subpaths'));
+      .find((line) => line.startsWith('- ') && line.includes('`exports`') && line.includes('subpaths'));
     expect(bullet, '§6 no longer has a bullet describing the `exports` subpaths').toBeDefined();
 
     const named = backticked(bullet!).filter((token) => /^\.(\/\S*)?$/.test(token));
@@ -108,15 +111,20 @@ describe('BACKWARD_COMPATIBILITY.md §6 package surface', () => {
     expect(breaking).toMatch(/`exports`/);
   });
 
-  it('reads a non-trivial number of names on both sides — guards against a vacuous pass', () => {
+  it('reads names on both sides — guards against a vacuous pass', () => {
     // Without this, a parser that silently stopped seeing the enumerations would pass the guards
     // above by comparing two empty sets, which is the one failure mode a drift guard must not
-    // have. The manifest side is asserted too: a manifest read that returned `{}` would be just
-    // as invisible.
-    expect(clauseNames(packageSurface, '`bin` entries').length).toBeGreaterThan(2);
-    expect(clauseNames(packageSurface, 'published `files`:').length).toBeGreaterThan(3);
-    expect(Object.keys(manifest.bin).length).toBeGreaterThan(2);
-    expect(Object.keys(manifest.exports).length).toBeGreaterThan(2);
+    // have. The manifest side is asserted too: a read that returned `{}` would be just as
+    // invisible.
+    //
+    // Non-emptiness, deliberately, not a count: dropping a bin or an `exports` subpath is a
+    // legitimate (breaking, deprecation-path) change, and pinning today's number would fail it
+    // here — on an assertion that is not about what the author did — rather than in the
+    // comparisons above, which is where such a change belongs.
+    expect(clauseNames(packageSurface, '`bin` entries').length).toBeGreaterThan(0);
+    expect(clauseNames(packageSurface, 'published `files`:').length).toBeGreaterThan(0);
+    expect(Object.keys(manifest.bin).length).toBeGreaterThan(0);
+    expect(Object.keys(manifest.exports).length).toBeGreaterThan(0);
   });
 });
 
@@ -128,7 +136,11 @@ describe('BACKWARD_COMPATIBILITY.md §1 bins', () => {
     const cli = section(doc, '## 1. CLI commands');
     const bins = cli.split('\n').find((line) => line.startsWith('- **Bins:**'));
     expect(bins, '§1 no longer has a `- **Bins:**` line').toBeDefined();
-    const named = backticked(bins!.slice(0, bins!.indexOf('(')));
+    // Everything before the parenthetical, which backticks `bin` itself and would otherwise
+    // enter the set. Without the -1 guard, a rewrite that drops the parenthetical would make
+    // `slice(0, -1)` eat the closing backtick of the last alias and lose it silently.
+    const aside = bins!.indexOf('(');
+    const named = backticked(aside === -1 ? bins! : bins!.slice(0, aside));
     expect(new Set(named)).toEqual(new Set(Object.keys(manifest.bin)));
   });
 });
