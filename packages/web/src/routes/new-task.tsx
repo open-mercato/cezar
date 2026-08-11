@@ -25,6 +25,7 @@ import {
   useProviderStatus,
   useProjects,
   useRepo,
+  useRunnerModelCatalogs,
   useRunnerModels,
   useSkills,
   useUiState,
@@ -82,6 +83,7 @@ import {
 } from './new-task-autostart'
 import {
   clearDraftText,
+  composerRunModeNote,
   readDraft,
   resolveComposerRunMode,
   writeDraft,
@@ -243,15 +245,12 @@ export function NewTaskRoute() {
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
-
-  const codexCatalog = useRunnerModels()
-  // The opencode catalog is what surfaces API-provider models (deepseek/…,
-  // Zen's kimi/glm/mimo) the user authenticated opencode against — without it
-  // a configured harness jury is invisible in these pickers (2026-07-24).
-  const opencodeCatalog = useRunnerModels(true, 'opencode')
-  const catalogFor = (r: Runner) =>
-    r === 'codex' ? codexCatalog.data : r === 'opencode' ? opencodeCatalog.data : undefined
-  const catalog = displayRunner === 'opencode' ? opencodeCatalog : codexCatalog
+  const catalog = useRunnerModels(displayRunner)
+  // A normal task only needs its selected runner. The multi-model surface needs every runner's
+  // catalog at once to build the role lineup; disabled hooks remain inert while the feature is off.
+  const harnessCatalogs = useRunnerModelCatalogs(multiModelEnabled)
+  const catalogFor = (candidate: Runner) =>
+    candidate === displayRunner ? catalog.data : harnessCatalogs[candidate].data
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
@@ -304,8 +303,8 @@ export function NewTaskRoute() {
     }
   }, [providersReady])
 
-  const codexCatalogData = codexCatalog.data
-  const opencodeCatalogData = opencodeCatalog.data
+  const codexCatalogData = harnessCatalogs.codex.data
+  const opencodeCatalogData = harnessCatalogs.opencode.data
   // Configured agentHarness advisor bindings (kimi-subscription, deepseek-api…)
   // join the reviewer options (spec 2026-07-24-advisor-reviewers).
   const harnessStatus = useHarnessStatus(multiModelEnabled)
@@ -313,14 +312,20 @@ export function NewTaskRoute() {
   const [harnessBaseReason, setHarnessBaseReason] = useState('')
   const harnessOptions = useMemo<HarnessModelOption[]>(
     () => [
-      ...runners.flatMap((r) =>
-        modelsForRunner(r, r === 'opencode' ? opencodeCatalogData : codexCatalogData).map((m) => ({
+      ...runners.flatMap((r) => {
+        // Pi is a first-class ordinary runner, but the harness has no Pi probe/runtime binding
+        // yet. Do not advertise a lineup the conductor cannot execute.
+        if (r === 'pi') return []
+        return modelsForRunner(
+          r,
+          r === 'codex' ? codexCatalogData : r === 'opencode' ? opencodeCatalogData : undefined,
+        ).map((m) => ({
           runner: r,
           model: m.id,
           label: m.label,
           family: modelFamilyOf({ runner: r, model: m.id }),
-        })),
-      ),
+        }))
+      }),
       ...advisorHarnessOptions(harnessStatusData),
     ],
     // `runners` derives from provider status; join to a stable key so the memo
@@ -393,7 +398,11 @@ export function NewTaskRoute() {
   }
 
   // Parallel variants need a worktree per variant, hence git (the server 409s without it).
-  const hasGit = health.data === undefined || health.data.repo !== null
+  // Read it from the PROJECT-scoped `/repo` above, never from `/api/health.repo`: health is bound
+  // to the boot folder, so booting outside a git repo hid the worktree controls for every
+  // registered project (#791) — the same per-project sweep as #700 (forge) and #699 (runner
+  // defaults). Loading still assumes git so the controls do not flicker.
+  const hasGit = repo.data === undefined || repo.data.info !== null
   const variants = hasGit ? draft.variants : 1
 
   // Worktree opt-out (#worktree-toggle): any ordinary run in a git repo may use the current
@@ -738,10 +747,10 @@ export function NewTaskRoute() {
           <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
             What should the agent work on?
           </h1>
-          <p className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
+          <p data-slot="run-mode-note" className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
             {composerMode === 'multi'
               ? 'Several models implement and review in one long staged run — you publish the result.'
-              : 'Runs in an isolated worktree — review everything before it lands.'}
+              : composerRunModeNote({ worktree: worktreeOn, hasGit })}
           </p>
         </header>
 

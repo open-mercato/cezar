@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadWorkspaceConfig } from './config.ts';
+import { DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,
@@ -38,7 +38,9 @@ export interface WorkspaceResourceLimits {
   maxParallel: number;
   /** Durable monitoring sessions that do not consume active-task capacity. */
   maxMonitoringSessions?: number;
-  /** Optional automatic monitoring re-check cadence; null means stay parked. */
+  /** Automatic monitoring re-check cadence in minutes. Default ON at
+   *  `DEFAULT_MONITORING_WAKE_MINUTES`; explicit `null` means stay parked; absent means
+   *  "this loader predates the key" and reads as the default. */
   monitoringWakeIntervalMinutes?: number | null;
   /** Resume a run stopped by a provider usage limit when that limit resets. Default ON. */
   autoResumeOnUsageLimit?: boolean;
@@ -109,13 +111,14 @@ export interface SemaphoreParticipant {
 const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   maxParallel: 2,
   maxMonitoringSessions: 2,
-  monitoringWakeIntervalMinutes: null,
+  monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
   autoResumeOnUsageLimit: true,
   memoryLimitMb: null,
 };
 
 /** Production loader: the `resources` slice of `~/.cezar/config.json`
- *  (schema-defaulted, so a missing/corrupt file yields the zero-config 2/null),
+ *  (schema-defaulted, so a missing/corrupt file yields the zero-config
+ *  2 parallel / 2 monitoring / 5-minute wake / no memory cap),
  *  plus the per-project `maxParallel` overrides built into a root→limit map.
  *  The registry `root` is already realpath-normalized (`registerProject`), so
  *  the keys match `normalizeRootSync`'s output at lookup time. */
@@ -184,8 +187,13 @@ export class WorkspaceSemaphore {
     return this.limits.maxMonitoringSessions ?? 2;
   }
 
+  /** Cadence for automatic monitoring re-checks, or null when the operator chose "park
+   *  until resumed". Deliberately NOT `?? DEFAULT`: `null` is a real user choice and
+   *  `null ?? 5` would silently override it (#810). Only an ABSENT key — an older `load`
+   *  stub, a partial `initial` — falls back to the shipped default. */
   monitoringWakeIntervalMinutes(): number | null {
-    return this.limits.monitoringWakeIntervalMinutes ?? null;
+    const configured = this.limits.monitoringWakeIntervalMinutes;
+    return configured === undefined ? DEFAULT_MONITORING_WAKE_MINUTES : configured;
   }
 
   /** Whether a usage-limit stop schedules its own resume. Absent (an older `load` stub, a config

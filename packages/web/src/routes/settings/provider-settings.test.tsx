@@ -74,10 +74,10 @@ function serve({
       if (url === '/api/v1/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
       }
-      if (/^\/api\/v1\/providers\/(claude|codex|opencode)\/enabled$/.test(url) && method === 'PUT') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode|pi)\/enabled$/.test(url) && method === 'PUT') {
         return enabledResponses.shift() ?? json(status)
       }
-      if (/^\/api\/v1\/providers\/(claude|codex|opencode)\/retry$/.test(url) && method === 'POST') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode|pi)\/retry$/.test(url) && method === 'POST') {
         return json(retry, retryCode)
       }
       return new Promise<never>(() => {})
@@ -114,7 +114,7 @@ afterEach(() => {
 })
 
 describe('ProviderSettings', () => {
-  it('always renders Claude Code, Codex, and OpenCode cards in that order', async () => {
+  it('always renders Claude Code, Codex, OpenCode, and pi cards in that order', async () => {
     serve()
     renderSettings()
 
@@ -123,7 +123,7 @@ describe('ProviderSettings', () => {
       [...document.querySelectorAll('[data-slot="provider-card"]')].map((item) =>
         item.querySelector('h3')?.textContent,
       ),
-    ).toEqual(['Claude Code', 'Codex', 'OpenCode'])
+    ).toEqual(['Claude Code', 'Codex', 'OpenCode', 'pi'])
   })
 
   it('presents discovery truth, enablement, and runtime recovery without hiding diagnostics', async () => {
@@ -265,7 +265,7 @@ describe('ProviderSettings', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(3)
+    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(4)
   })
 
   it('treats a malformed successful response as a safe verification error', async () => {
@@ -275,7 +275,7 @@ describe('ProviderSettings', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(3)
+    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(4)
     expect(screen.queryByText(secret)).toBeNull()
   })
 

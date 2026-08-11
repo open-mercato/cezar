@@ -10,8 +10,9 @@ import { atomicWriteJsonSync } from './config.ts';
  * read and the atomic write; the schema and key cap live at the route boundary
  * (`GET/PUT /api/workspace/ui-state`, step 2.7). The state is an opaque
  * `.passthrough()`-style bag — cross-project prefs (appearance, notifications,
- * per-project sidebar collapse) live here; project-scoped prefs stay in each
- * repo's own file.
+ * curated skills) live here; project-scoped prefs stay in each repo's own file,
+ * and prefs that describe the BROWSER rather than the workspace (sidebar
+ * collapse, the last visited location) stay in that browser's localStorage.
  */
 
 /** Read `~/.cezar/ui-state.json` on demand — never cached, never throws.

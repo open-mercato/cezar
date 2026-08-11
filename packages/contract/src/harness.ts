@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { runnerSchema } from './health.ts';
 
 /**
  * The staged multi-model harness contract. These schemas intentionally describe only the
@@ -22,8 +21,12 @@ export type HarnessSkillProfile = z.infer<typeof harnessSkillProfileSchema>;
 export const harnessEffortSchema = z.enum(['low', 'medium', 'high', 'max']);
 export type HarnessEffort = z.infer<typeof harnessEffortSchema>;
 
+/** Runners the harness conductor can probe and bind today. Pi remains available to ordinary
+ * runs, but it has no harness probe transport yet and must not be accepted as a role binding. */
+const harnessRunnerSchema = z.enum(['claude', 'codex', 'opencode']);
+
 export const harnessModelRefSchema = z.object({
-  runner: z.union([runnerSchema, z.literal('harness')]),
+  runner: z.union([harnessRunnerSchema, z.literal('harness')]),
   model: z.string(),
   effort: harnessEffortSchema.optional(),
   family: z.string().optional(),
@@ -33,7 +36,7 @@ export const harnessModelRefSchema = z.object({
 export type HarnessModelRef = z.infer<typeof harnessModelRefSchema>;
 
 const harnessRunnerModelRefSchema = harnessModelRefSchema.extend({
-  runner: runnerSchema,
+  runner: harnessRunnerSchema,
 });
 
 export const harnessRolesSchema = z.object({

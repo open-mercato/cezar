@@ -1,6 +1,44 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **One table for every project's tasks, grouped by the repos that belong together.** Work
+  rarely stops at a repo boundary — a storefront is an API, a web app and a design system — but
+  until now the cockpit could only ever show you one of them at a time. Two things change that.
+  **Tag your repositories** in **Settings → Projects**: type a label into the Tags cell
+  (`storefront`, `infra`, `client-acme`), press Enter, and a project carries it; a repo can carry
+  several, because a repo can belong to more than one piece of work. The field autocompletes from
+  the tags already used in the workspace — which is not a convenience but the thing that makes
+  tags work at all, since a group only exists if the second repo lands on the first one's
+  spelling rather than inventing `store-front` beside `storefront`. And **All tasks** — the new
+  top item in the sidebar, `/tasks`, or `⌘K → All tasks` — shows every registered project's work
+  in one table, each with its PR or issue chip and an archive button. Filter it by tag, status
+  and workflow: every facet is multi-select and ORs inside itself while ANDing across, so
+  "anything running or waiting in storefront or infra" is one set of clicks, and each option
+  shows how many tasks it would leave so a filter that would empty the table says so before you
+  click it. Group by tag and three repos become one section — a repo tagged twice appears under
+  both, because it genuinely belongs to both. There is deliberately no project *filter*: picking
+  a project **leaves** for its own Tasks page, which is a better version of that same answer
+  (live updates, the full column set, the composer). Every title, project name and project group
+  heading links into that project, so the thread, its diff and its worktree are exactly where
+  they were. The filters, the grouping and the Active/Archived tab live in the URL, so a filtered
+  view survives a refresh and pastes into a chat as a link to exactly what you were looking at —
+  and only what you changed appears in it, since Active and "ungrouped" are the bare defaults.
+  Tags are trimmed and deduplicated case-insensitively (`API` and `api` are one
+  tag) and live in `~/.cezar/config.json` beside the rest of the registry, so they are yours and
+  this machine's — nothing is added to the repo, and an older cezar round-trips them untouched.
+  Nothing else in cezar reads them, on purpose: a tag is a lens, not a permission, a queue or a
+  routing rule. The page reads one workspace-wide index capped at the newest 200 tasks per
+  project, and names the projects it capped rather than showing a short list as if it were
+  complete. `PATCH /api/v1/projects/:id` grew an optional `tags` alongside `maxParallel`, each
+  key applied only when the body names it, so a pre-tags client's `{ maxParallel }` still means
+  exactly what it always did. Over ssh, `cezar projects tag <id> [<tag>…]` does the same thing
+  with no cockpit. Spec: `.ai/specs/2026-08-10-global-tasks-and-project-tags.md`.
+- ✨ **Advanced users can opt out of repository-root run serialization.** Set the exact value
+  `CEZ_DISABLE_REPO_LOCK=1` to let runs executing in the shared checkout overlap, including
+  explicit `worktree=false` runs, non-Git degradation, and continuations whose worktree cannot be
+  restored. The safe default is unchanged and isolated worktree runs are unaffected. This escape
+  hatch is intentionally dangerous: concurrent agents can overwrite each other's files or Git
+  state, so cezar emits a visible unsafe-mode note whenever it is active. (#762)
 - ✨ **Agent accounts: run one project on your work login and another on your personal one.**
   The same CLI logged in twice — `CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
   Codex — is now something cezar can address. Add the extra config folder under **Settings → Agent
@@ -25,6 +63,18 @@
   because that would bill the wrong subscription while the UI said otherwise. OpenCode is not
   supported yet: it keeps credentials outside its config folder, so a second folder would change
   settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+
+## 🐛 Fixes
+- 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Which sidebar
+  project groups are collapsed, and which page a bare `/` restores, were stored workspace-wide in
+  `~/.cezar/ui-state.json` — so every open cockpit shared one answer: the last client to navigate
+  decided where the next launch landed on every other client, and a group collapsed on a narrow
+  screen collapsed everywhere. Both now live in each browser's own storage, which is also what they
+  always described. Each toggle costs zero requests, the sidebar paints its real state on the first
+  frame instead of after a fetch, and the bare-root restore no longer waits on the UI-state read.
+  The server keys stay accepted and round-tripped for older cockpits; existing collapse state and a
+  remembered location are workspace-wide values with no per-browser answer yet, so each browser
+  starts from the defaults once and remembers from there.
 
 # 0.9.2 (2026-08-04)
 
@@ -54,6 +104,23 @@
   shows how many are unread, opening a task's thread clears it, and a "Mark all read" sweep clears
   the lot. Unread is a deliberately separate channel from the status dot, which keeps saying
   done/failed, so "what happened" and "have I seen it" never collapse into one signal.
+
+- ✨ **⌘K searches the whole workspace, not just the project you are standing in.** The palette
+  now lists your **projects** — recency-ordered like the sidebar, the active one last — so
+  switching is a keystroke, and it finds **tasks in any project**, each row labelled with the
+  project it belongs to. That is backed by one new workspace-level route,
+  `GET /api/v1/workspace/runs-index`, which answers a deliberately slim row per run instead of the
+  full record: it never builds a project context, so reading it cannot prune worktrees or resume
+  interrupted runs — typing in a search box must not restart agents. Projects this process has
+  never opened are read straight off `runs.json`, sharing `RunStore`'s own reconciliation so a
+  crashed process's `running` row reads as interrupted here exactly as it would once opened.
+  The palette also opens on **New task** (one row now, not three scattered copies) followed by
+  **Recently finished** — the tasks you have not opened since they finished, the same signal
+  behind the Tasks badge. Ranking is substring-based rather than cmdk's fuzzy subsequence, because
+  a run id is a uuid and typing a task number used to match stray digits inside unrelated ids
+  ahead of the task actually named that; searching also folds the sections into one ranked list so
+  a near-miss can never sit above an exact hit. The dialog is wider on wider screens, taller on
+  taller ones, and anchored near the top so it no longer jumps as results come and go.
 
 ## 🔧 Changed
 - Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
@@ -99,6 +166,15 @@
   HEAD was repointed onto another branch, the ± diff stat folded in that branch's whole history; it
   is now anchored at HEAD so it counts only the task's own changes, and the Changes tab says so when
   a repointed HEAD has narrowed what it shows.
+
+## 👥 Contributors
+
+- @pkarw
+- @pat-lewczuk
+- @patzick
+- @andrzejewsky
+- @sheeerth
+- @wojciechszyjka
 
 # 0.9.1 (2026-07-24)
 

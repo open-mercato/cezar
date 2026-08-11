@@ -4,21 +4,35 @@
  * no token-budget circuit breaker, no zod response schemas — one run is one
  * agent-CLI session streaming normalized events.
  *
- * Three interchangeable backends implement this seam, each as a persistent
+ * Four interchangeable backends implement this seam, each as a persistent
  * process so multi-turn follow-ups, `waiting`, interrupt and resume all work:
  *  - `claude`   — Claude Code CLI, stream-json over stdin/stdout;
  *  - `codex`    — `codex app-server`, JSON-RPC 2.0 (JSONL) over stdin/stdout;
- *  - `opencode` — `opencode serve`, HTTP + SSE.
+ *  - `opencode` — `opencode serve`, HTTP + SSE;
+ *  - `pi`       — pi coding CLI, RPC over JSONL stdin/stdout, selecting its
+ *                 model with `provider/model`.
  */
 
 import type { UiEvent } from './ui-events.ts';
 
-/** `claude-cli` is the legacy id kept so old run records still parse. */
-export type AgentBackend = 'claude' | 'codex' | 'opencode' | 'claude-cli';
+/**
+ * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
+ * truth for the set. Every runtime enumeration derives from this tuple (zod schemas, the
+ * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
+ * the literals, so adding runner #5 is a one-line change here and typecheck finds the rest.
+ */
+export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
 
 /** The user-selectable runners (what config/GUI expose). */
-export type RunnerId = 'claude' | 'codex' | 'opencode';
-export const RUNNER_IDS: readonly RunnerId[] = ['claude', 'codex', 'opencode'];
+export type RunnerId = (typeof RUNNER_IDS)[number];
+
+/** `claude-cli` is the legacy id kept so old run records still parse. */
+export type AgentBackend = RunnerId | 'claude-cli';
+
+/** Narrow an arbitrary string (a config value, a check name) to a runner id. */
+export function isRunnerId(value: string): value is RunnerId {
+  return (RUNNER_IDS as readonly string[]).includes(value);
+}
 
 export interface AgentRunSpec {
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */

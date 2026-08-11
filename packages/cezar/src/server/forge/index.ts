@@ -59,6 +59,20 @@ export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null 
   return parsed ? (FORGE_HOSTS[parsed.host] ?? null) : null;
 }
 
+/**
+ * A remote's web root — `https://github.com/owner/repo` — or null for anything not on a known
+ * forge host.
+ *
+ * Built from the PARSED remote, never by string-editing the raw one, and that is the point: a
+ * remote may carry credentials (`https://user:token@github.com/o/r.git`), and this is a value the
+ * cockpit renders and links to. Rebuilding it from `{host, owner, repo}` leaves nothing to leak.
+ */
+export function forgeWebRoot(remote: string | undefined): string | null {
+  const parsed = remote ? parseRemote(remote) : null;
+  if (!parsed || !(parsed.host in FORGE_HOSTS)) return null;
+  return `https://${parsed.host}/${parsed.owner}/${parsed.repo}`;
+}
+
 /** Remote host → driver | null. GitLab lands here later as one more case. */
 export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   if (!repoInfo?.remote) return null;

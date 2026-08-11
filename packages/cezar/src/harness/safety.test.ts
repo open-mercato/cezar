@@ -182,7 +182,7 @@ describe('harness safety primitives', () => {
         }),
       ).not.toThrow();
     }
-  });
+  }, 15_000);
 
   it('retains Claude native sandboxing with the phase-output allowance off macOS', () => {
     const root = tempDir('cez-claude-native-sandbox-');

@@ -3,6 +3,10 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+// Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
+// file must not `.catch` away are the same constants the PATCH route validates against, so they
+// are imported rather than repeated.
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
 
@@ -48,10 +52,29 @@ const workspaceProjectSchema = z
      *  value degrades to "inherit" (`.catch(undefined)`) rather than a hard
      *  default, and `.passthrough()` preserves the key across cezar round-trips. */
     maxParallel: z.number().int().min(1).max(16).optional().catch(undefined),
+    /** Free-form labels grouping connected repositories (`storefront`, `infra`), used by the
+     *  global Tasks page to filter and group across projects. Absent = untagged; the writers
+     *  (`PATCH /api/projects/:id`, `cezar projects tag`) delete the key rather than storing `[]`,
+     *  so an untagged project costs nothing in the file. Bounds mirror the PATCH schema exactly,
+     *  so a value that route accepts can never be degraded away by the next load's `.catch`. */
+    tags: z
+      .array(z.string().trim().min(1).max(PROJECT_TAG_MAX_LENGTH))
+      .max(PROJECT_TAGS_MAX)
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 
 export type WorkspaceProject = z.infer<typeof workspaceProjectSchema>;
+
+/**
+ * Zero-config cadence, in minutes, for re-checking a run parked with
+ * `CEZ:MONITORING` (#810). The single source of truth for that default — the
+ * schema below and `WorkspaceSemaphore`'s fallback both read it, so an install
+ * with no `~/.cezar/config.json` and a semaphore built without boot wiring
+ * agree. `null` (explicit park) is a user choice and is never replaced by it.
+ */
+export const DEFAULT_MONITORING_WAKE_MINUTES = 5;
 
 const resourcesSchema = z
   .object({
@@ -59,8 +82,28 @@ const resourcesSchema = z
     maxParallel: z.number().int().min(1).max(16).default(2).catch(2),
     /** Extra durable `CEZ:MONITORING` sessions exempt from the active-task cap. */
     maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
-    /** Optional cadence for re-checking monitored work; null parks at zero model cost. */
-    monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().default(null).catch(null),
+    /**
+     * Cadence for re-checking monitored work; `null` parks at zero model cost until a
+     * user (or an external integration) resumes the session.
+     *
+     * Default-ON at 5 minutes (#810). It shipped as `null` and that made monitoring a
+     * dead end: #661 removed the 15-minute idle timer that used to bound a parked
+     * monitor, so with no wake timer a `CEZ:MONITORING` run has NO timer at all — and
+     * cezar has no other resume path (no process-exit callback, no CI webhook, no
+     * sub-agent-completion event). Tasks sat in `monitoring` for hours until a human
+     * typed something. Same reasoning as `autoResumeOnUsageLimit` below: it spends
+     * nothing while the downstream work is genuinely pending and it finishes the work
+     * the user already asked for. `MAX_AUTO_CONTINUES` still caps a forgotten loop, and
+     * an explicit `null` (Settings → Resources → "Park until resumed") is preserved.
+     */
+    monitoringWakeIntervalMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(60)
+      .nullable()
+      .default(DEFAULT_MONITORING_WAKE_MINUTES)
+      .catch(DEFAULT_MONITORING_WAKE_MINUTES),
     /**
      * Resume a task the provider's usage limit stopped, once that limit resets
      * (spec 2026-08-03-auto-resume-after-usage-limit). ON by default, which is the one
@@ -103,6 +146,7 @@ const agentDefaultsSchema = z
         claude: z.string().trim().min(1).max(200).optional().catch(undefined),
         codex: z.string().trim().min(1).max(200).optional().catch(undefined),
         opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
+        pi: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()

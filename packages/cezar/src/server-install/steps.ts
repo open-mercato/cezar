@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomInt } from 'node:crypto';
+import { isRunnerId } from '../core/agent-runner.ts';
 import { detectEnvironment, type BackendCheck } from '../core/backend-detect.ts';
 import {
   CANCEL,
@@ -284,8 +285,11 @@ export function depCheckStep(opts: DepStepOpts = {}): InstallStep {
     async check(ctx) {
       if (ctx.dryRun) return false;
       const checks = await detect();
-      // Satisfied when at least one agent CLI is present and authed.
-      return checks.some((c) => ['claude', 'codex', 'opencode'].includes(c.name) && c.available);
+      // Satisfied when at least one agent CLI is present and authed. Derived from RUNNER_IDS,
+      // never a literal list: `BackendCheck['name']` also carries the non-agent tools (`gh`,
+      // `git`), so the gate has to filter — and a hand-written array silently under-counts the
+      // moment a runner is added (a pi-only host reporting "no agent CLI", #387 review).
+      return checks.some((c) => isRunnerId(c.name) && c.available);
     },
     async run(ctx) {
       const checks = await detect();

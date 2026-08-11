@@ -10,9 +10,16 @@ let browser: AgentBrowser
 let baseUrl: string
 let bootProject: string
 let automationId: string | undefined
+/** `capabilities.automations` (#801) — the shared environment boots WITHOUT the opt-in, which is
+ *  what a default cezar does, so the enabled-path cases below skip unless it was turned on. */
+let automationsAvailable = false
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
+  const health = (await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json())) as {
+    capabilities: { automations: boolean }
+  }
+  automationsAvailable = health.capabilities.automations
   bootProject = await bootProjectId(baseUrl)
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(1440, 900)
@@ -24,7 +31,31 @@ afterAll(async () => {
 })
 
 describe('GitHub automations', () => {
-  it('creates paused, previews safely, enables from a baseline, and exposes the log', async () => {
+  // The default shape of the product, asserted in a real browser: nothing about automations is
+  // reachable or advertised until an operator opts in. Before #801 this sidebar item was present
+  // on every project with a GitHub remote, which is exactly what the flag exists to undo.
+  it('is absent from the sidebar and refuses its API without the opt-in', async ({ skip }) => {
+    skip(automationsAvailable, 'the shared environment explicitly enabled automations')
+    browser.goto(`${baseUrl}/p/${bootProject}/`)
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"]') !== null`)
+    expect(browser.text('[data-slot="sidebar"]')).not.toContain('Automations')
+
+    // The deep link still resolves — the route map is unchanged — but says the feature is off.
+    browser.goto(`${baseUrl}/p/${bootProject}/automations`)
+    browser.waitForFunction(`document.body.textContent.includes('GitHub automations are off')`)
+    expect(browser.text('main')).toContain('CEZ_AUTOMATIONS=1')
+    browser.screenshot(`${artifactsDir}/automations-disabled.png`)
+
+    const refused = await fetch(`${baseUrl}/api/v1/automations`)
+    expect(refused.status).toBe(409)
+    expect(((await refused.json()) as { error: string }).error).toContain('CEZ_AUTOMATIONS')
+  }, 60_000)
+
+  it('creates paused, previews safely, enables from a baseline, and exposes the log', async ({ skip }) => {
+    skip(
+      !automationsAvailable,
+      'automations are opt-in; run CEZ_AUTOMATIONS=1 npm run test:e2e -- --force',
+    )
     const name = `E2E issue triage ${process.pid}`
     browser.goto(`${baseUrl}/p/${bootProject}/automations/new`)
     browser.waitForFunction(`document.querySelector('#automation-name') !== null`)

@@ -59,6 +59,7 @@ import type {
   MessageInput,
   MessageResponse,
   OpenInCliResponse,
+  OpenProjectInResponse,
   OpenTargetsResponse,
   ParsedWorkflow,
   PatchRunInput,
@@ -76,17 +77,23 @@ import type {
   RemoveWorktreeResponse,
   RepoBranchResponse,
   RepoCommitPayload,
-  RepoResponse,
   RunCommitsResponse,
+  RunHistoryContext,
+  RunHistoryPage,
+  RepoResponse,
   RunRecord,
   Runner,
+  ModelDiscoveryRunner,
   RunnerModelCatalogResponse,
+  RunsIndexResponse,
+  WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
   SetAgentConfigInput,
   SetConfigInput,
   SetConfigResponse,
   SetWorkspaceConfigInput,
+  SetWorkspaceUiStateInput,
   Skill,
   StartTodoResponse,
   TodoItem,
@@ -97,7 +104,6 @@ import type {
   WorkspaceConfigResponse,
   WorkspaceUiState,
   SkillsUpdateState,
-  WorktreeEntry,
   WorktreesResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
@@ -354,10 +360,10 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** Host-local model catalog for a discovery-capable runner (codex; opencode since
- *  2026-07-24). Workspace-level: one CLI/account serves every project. */
+/** Host-local catalog for one discovery runner (`codex`, `opencode` — #794). Workspace-level:
+ *  one CLI/account serves every project. */
 export async function getRunnerModels(
-  runner: 'codex' | 'opencode' = 'codex',
+  runner: ModelDiscoveryRunner,
   opts?: ReadOptions,
 ): Promise<RunnerModelCatalogResponse> {
   return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
@@ -446,6 +452,13 @@ export async function getProjectRuns(projectId: string, opts?: ReadOptions): Pro
   return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId } }, init(opts)), '/runs')
 }
 
+/** The cross-project task index (`GET /api/v1/workspace/runs-index`) — what lets ⌘K find a task
+ *  without knowing which project it lives in. Workspace-level like the registry, so it has no
+ *  project-scoped spelling and never takes `queryScope()`. */
+export async function getRunsIndex(opts?: ReadOptions): Promise<RunsIndexResponse> {
+  return unwrap(await cez.api.v1.workspace['runs-index'].$get({}, init(opts)), '/workspace/runs-index')
+}
+
 export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].$get(
@@ -453,6 +466,33 @@ export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
       init(opts),
     ),
     runPath(id),
+  )
+}
+
+export async function getRunHistory(
+  id: string,
+  cursor?: string,
+  opts?: ReadOptions,
+): Promise<RunHistoryPage> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].history.$get(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id) },
+        query: { ...(cursor !== undefined ? { cursor } : {}) },
+      },
+      init(opts),
+    ),
+    `${runPath(id)}/history`,
+  )
+}
+
+export async function getRunHistoryContext(id: string, opts?: ReadOptions): Promise<RunHistoryContext> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['history-context'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `${runPath(id)}/history-context`,
   )
 }
 
@@ -1073,6 +1113,50 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
   )
 }
 
+/**
+ * The same route by EXPLICIT project — the twin of `getProjectRuns`, and for the same reason:
+ * the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would send the
+ * BOOT project's id for a row that belongs to another project, and the archive would either 404
+ * or (with a colliding id) land on the wrong task. Every caller that is already standing in the
+ * run's own project keeps using `archiveRun`.
+ */
+export async function archiveProjectRun(
+  projectId: string,
+  id: string,
+  archived = true,
+): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { archived },
+    }),
+    runPath(id, '/archive'),
+  )
+}
+
+/**
+ * The read receipt by EXPLICIT project — the twin of `archiveProjectRun`, and for the same
+ * reason: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * stamp the receipt on the boot project. `read: false` is the inverse route (#775).
+ */
+export async function setProjectRunRead(
+  projectId: string,
+  id: string,
+  read: boolean,
+): Promise<RunRecord> {
+  const route = read ? 'read' : 'unread'
+  return unwrap(
+    await (read
+      ? cez.api.v1.p[':projectId'].runs[':id'].read.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })
+      : cez.api.v1.p[':projectId'].runs[':id'].unread.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })),
+    runPath(id, `/${route}`),
+  )
+}
+
 /** Stop THIS task from resuming itself after a usage limit (spec
  *  2026-08-03-auto-resume-after-usage-limit) — the per-task twin of the workspace setting.
  *  Idempotent: a task with nothing scheduled answers the same way. */
@@ -1104,6 +1188,18 @@ export async function markRunSeen(id: string): Promise<RunRecord> {
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/read'),
+  )
+}
+
+/** Put a finished task back to unread (#775): the inverse of `markRunSeen`. Bodyless — the
+ *  server CLEARS `seenAt` (an absent receipt is what every reader already treats as unread)
+ *  and answers with the updated record. */
+export async function markRunUnseen(id: string): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].unread.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/unread'),
   )
 }
 
@@ -1270,6 +1366,19 @@ export async function getOpenTargets(opts?: ReadOptions): Promise<OpenTargetsRes
       init(opts),
     ),
     '/open-targets',
+  )
+}
+
+/** Open the ACTIVE PROJECT's own folder in the chosen local app (Settings → "Project folder").
+ *  No path travels: the server opens the scoped project's registered root. 400 for an app this
+ *  machine does not have or a `cli:` handoff, 409 in hosted mode or when the launch failed. */
+export async function openProjectIn(target: string): Promise<OpenProjectInResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['open-in'].$post({
+      param: { projectId: queryScope() },
+      json: { target },
+    }),
+    '/open-in',
   )
 }
 
@@ -1548,9 +1657,15 @@ export async function getWorkspaceUiState(opts?: ReadOptions): Promise<Workspace
 
 /** Shallow top-level merge server-side, same as its per-repo twin — send whole top-level
  *  objects (`{ sidebar: {...} }`), never a nested leaf alone. Answers the merged state. */
-export async function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceUiState> {
+export async function putWorkspaceUiState(
+  patch: SetWorkspaceUiStateInput,
+  opts: { keepalive?: boolean } = {},
+): Promise<WorkspaceUiState> {
   return unwrap(
-    await cez.api.v1.workspace['ui-state'].$put({ json: patch }),
+    await cez.api.v1.workspace['ui-state'].$put(
+      { json: patch },
+      { init: { keepalive: opts.keepalive } },
+    ),
     '/workspace/ui-state',
   )
 }

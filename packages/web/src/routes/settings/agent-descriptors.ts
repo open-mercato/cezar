@@ -6,8 +6,13 @@ import type { AgentConfigFile, Runner } from '@open-mercato/cezar-api-client'
  * selector first, then that agent's settings, MCP and memory together — not by
  * purpose across agents. One descriptor entry per agent, keyed by the same
  * `Runner` id the rest of the codebase uses (the BACKEND_MODEL_MAP precedent from
- * #405: one table entry per agent, extension by design). A future agent (#387's
- * `pi`) is one entry here plus its catalog files — no layout or route work.
+ * #405: one table entry per agent, extension by design). A new agent is one entry
+ * here plus its catalog files — no layout or route work.
+ *
+ * `pi` (#387) is deliberately absent, not forgotten: nothing in `src/agent-config`'s
+ * catalog names a pi-owned config file yet, so a pi entry would render three empty
+ * groups. It gets a descriptor together with its catalog files. The tab list only
+ * ever offers ids from this table, so `descriptorFor` cannot be reached with `pi`.
  *
  * Group membership derives from the flat `/api/agent-config` listing: a file
  * belongs to an agent when `runners` INCLUDES it (not `runners[0]` — the shared

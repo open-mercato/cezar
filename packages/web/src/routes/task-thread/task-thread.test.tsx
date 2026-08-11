@@ -851,6 +851,29 @@ describe('ThreadView', () => {
   })
 })
 
+/** The bounded-history routes the thread route hydrates from (progressive-history spec): the
+ *  newest page and the compact current-state context. The route-level suites below are about the
+ *  RECORD — the auto-resume hint, the read receipt — not the transcript, so they answer both with
+ *  an honest empty session. A catch-all `{}` would not do: these are typed payloads the hook
+ *  reads directly, so an unmodelled route makes the whole thread fail for a reason that has
+ *  nothing to do with what the test is proving. */
+const EMPTY_HISTORY_PAGE = {
+  events: [],
+  itemCount: 0,
+  liveCursor: 'live-0',
+  asOfSeq: 0,
+  hasOlder: false,
+}
+const EMPTY_HISTORY_CONTEXT = { contextEvents: [], asOfSeq: 0 }
+
+/** The history payload for `path`, or `undefined` when it is not a history route — so each fetch
+ *  stub below keeps its own routing table and only defers the two shared shapes to here. */
+function historyBodyFor(path: string, id: string): unknown {
+  if (path === `/api/v1/runs/${id}/history`) return EMPTY_HISTORY_PAGE
+  if (path === `/api/v1/runs/${id}/history-context`) return EMPTY_HISTORY_CONTEXT
+  return undefined
+}
+
 /** Route-level: loading and 404 — driven through the real fetch boundary. jsdom has no
  *  EventSource, which `useRunEvents` treats as "no stream" — honest for these states. */
 function renderRoute(id: string) {
@@ -896,7 +919,9 @@ describe('TaskThreadRoute', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
         const path = String(input)
-        const body = path === '/api/v1/runs/r1' ? record : path === '/api/v1/health' ? {} : []
+        const history = historyBodyFor(path, 'r1')
+        const body =
+          history !== undefined ? history : path === '/api/v1/runs/r1' ? record : path === '/api/v1/health' ? {} : []
         return Promise.resolve(
           new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
         )
@@ -924,5 +949,135 @@ describe('TaskThreadRoute', () => {
     })
     expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/')
     expect(document.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
+  })
+})
+
+/**
+ * Read receipts through the real route (#unread-done-items, #775). These drive the whole loop —
+ * fetch → cache → the auto-mark-read effect → the header's Mark unread → fetch again — because
+ * the interesting behavior only exists at that junction: the effect and the action pull the
+ * receipt in opposite directions on the very same record.
+ */
+describe('TaskThreadRoute — read receipts', () => {
+  const FINISHED_AT = '2026-07-14T13:00:00.000Z'
+  const SEEN_AT = '2026-07-14T13:05:00.000Z'
+  const RE_SEEN_AT = '2026-07-14T14:00:00.000Z'
+
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+
+  /** A fetch stub that actually MODELS the receipt: `/read` stamps it, `/unread` clears it, and
+   *  `GET /runs/:id` answers the current record. A stub that always replayed the initial record
+   *  would hide the exact bug this suite exists for — the effect re-firing on a cleared receipt. */
+  function stubReceiptServer(initial: ApiRun) {
+    const sent: Array<{ path: string; method: string }> = []
+    let current: ApiRun = { ...initial }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        const method = init.method ?? 'GET'
+        sent.push({ path, method })
+        if (method === 'POST' && path === `/api/v1/runs/${initial.id}/read`) {
+          current = { ...current, seenAt: RE_SEEN_AT }
+          return Promise.resolve(jsonResponse(current))
+        }
+        if (method === 'POST' && path === `/api/v1/runs/${initial.id}/unread`) {
+          const { seenAt: _cleared, ...rest } = current
+          current = rest as ApiRun
+          return Promise.resolve(jsonResponse(current))
+        }
+        const history = historyBodyFor(path, initial.id)
+        if (history !== undefined) return Promise.resolve(jsonResponse(history))
+        if (path === `/api/v1/runs/${initial.id}`) return Promise.resolve(jsonResponse(current))
+        if (path === '/api/v1/runs') return Promise.resolve(jsonResponse([]))
+        if (path === '/api/v1/providers/status') {
+          return Promise.resolve(
+            jsonResponse({
+              providers: [
+                { provider: 'claude', status: 'connected', enabled: true },
+                { provider: 'codex', status: 'not-installed', enabled: true },
+                { provider: 'opencode', status: 'not-installed', enabled: true },
+              ],
+            }),
+          )
+        }
+        return Promise.resolve(jsonResponse({}))
+      }),
+    )
+    return { sent, currentRecord: () => current }
+  }
+
+  /** A fresh visit to `/tasks/:id` — a NEW route instance every time, which is what makes the
+   *  suppression's per-visit reset observable. The query client is shared across visits on
+   *  purpose: navigating away and back inside the cockpit does not empty the cache. */
+  function visit(id: string, queryClient = createQueryClient()) {
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/tasks/${id}`]}>
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskThreadRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    return { ...view, queryClient }
+  }
+
+  const posted = (sent: Array<{ path: string; method: string }>, path: string) =>
+    sent.filter((r) => r.method === 'POST' && r.path === path).length
+
+  it('opening an unread finished task marks it read', async () => {
+    const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
+    visit('r1')
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+  })
+
+  it('marking unread inside the open thread is NOT re-stamped by the auto-read effect', async () => {
+    // The regression this feature lives or dies on: clearing the receipt makes `isUnread` true
+    // again, and the auto-mark-read effect re-runs on exactly that change. Without the per-visit
+    // suppression it would immediately POST /read and the action would look broken.
+    const { sent, currentRecord } = stubReceiptServer(
+      run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT }),
+    )
+    visit('r1')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/unread')).toBe(1))
+
+    // Let every settled mutation, cache write and re-render drain before judging.
+    await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
+    expect(currentRecord().seenAt).toBeUndefined()
+  })
+
+  it('a later fresh visit marks it read again — reopening the mail still counts', async () => {
+    // The suppression is per-visit, not sticky: the email grammar this is modelled on says a
+    // task you deliberately put back to unread goes read again the next time you open it.
+    const { sent, currentRecord } = stubReceiptServer(
+      run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT }),
+    )
+    const first = visit('r1')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
+    expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
+    first.unmount()
+
+    visit('r1', first.queryClient)
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+    expect(currentRecord().seenAt).toBe(RE_SEEN_AT)
+  })
+
+  it('the control appears as soon as opening the task has marked it read', async () => {
+    // Opening an unread task is what makes the action meaningful in the first place: the auto-read
+    // effect stamps the receipt, and the header immediately offers the way back. (The
+    // still-unread case cannot be reached from this route — it is covered where the header's flag
+    // is driven directly, in run-header.test.tsx.)
+    const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
+    visit('r1')
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
   })
 })

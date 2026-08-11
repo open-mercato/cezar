@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
 
 /**
  * The CenteredState surfaces (Step 4.1), in a real browser: the no-tasks hero on the overview
@@ -18,7 +18,6 @@ import { AgentBrowser, bootProjectId, fixtureServeEnv } from './agent-browser'
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
-const repoRoot = resolve(import.meta.dirname, '../../..')
 
 function freePort(): Promise<number> {
   return new Promise((done, fail) => {
@@ -63,7 +62,7 @@ beforeAll(async () => {
   baseUrl = `http://localhost:${port}`
   server = spawn(
     process.execPath,
-    [join(repoRoot, 'packages/cezar/dist/index.js'), 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
     { env: fixtureServeEnv(dataRoot), stdio: 'ignore' }
   )
   await waitForHealth(baseUrl)

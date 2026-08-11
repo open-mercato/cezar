@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-/** The three agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode']);
+/** The agent backends a run can be dispatched to. */
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'pi']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */
@@ -14,7 +14,7 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'gh', 'git']),
+  name: z.enum(['claude', 'codex', 'opencode', 'pi', 'gh', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
@@ -40,6 +40,14 @@ export const capabilitiesSchema = z.object({
   localHandoff: z.boolean(),
   followups: z.boolean(),
   singleProject: z.boolean(),
+  /**
+   * `true` means `CEZ_AUTOMATIONS=1` opted this server into GitHub automations (#801). Off — the
+   * default — the whole feature is absent: no `Automations` nav item anywhere it is rendered, the
+   * `/api/v1/…/automations*` family answers `409`, and the workspace scheduler never polls GitHub.
+   *
+   * REQUIRED for the same reason as `tokenMetrics` below: this server always sends it.
+   */
+  automations: z.boolean(),
   /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation

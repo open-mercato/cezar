@@ -237,7 +237,13 @@ are real buttons (keyboard/enter, focus ring `--ring`), the card has
   continuation appends it as a `user-message`, which is what resolves the card, so
   the resumed and live paths agree. A closed run that never recorded a session has
   nothing to reopen and says so; a `409` from the live path (a cockpit whose record
-  is stale) is retried as a resume rather than dropped. The original design
+  is stale) is retried as a resume rather than dropped. Idle shutdown has a brief
+  teardown interval where `/messages` already reports `session closed` but the old
+  run still occupies the RunManager's active map; during that interval the ask card
+  keeps the answer single-flight and retries only the exact transient
+  `409 run is still active` continuation refusal with bounded, capped exponential
+  backoff for roughly five seconds. Other
+  continuation failures surface immediately on the card. The original design
   ("the card renders resolved/closed") left a card whose chips silently failed —
   every tap posted to `POST /messages` and died on its `409 session closed`.
 - **Reload / resume of a run parked on an ask** → the card is reconstructed from

@@ -7,6 +7,36 @@ import { pathnameProjectId } from './project-router'
 
 export type LocationParts = Pick<Location, 'pathname' | 'search' | 'hash'>
 
+/**
+ * Where the remembered location lives: THIS browser, not the workspace file.
+ *
+ * It shipped in `~/.cezar/ui-state.json` and that made one answer serve every client — the phone
+ * on the couch decided where the desktop's next bare-root launch landed, and two open cockpits
+ * overwrote each other on every navigation. "The page this window was last on" describes a
+ * browser, so it is stored per browser (like `cez-theme`). A server that still holds the legacy
+ * `lastLocation` key keeps it; nothing reads it any more.
+ */
+export const LAST_LOCATION_STORAGE_KEY = 'cez-last-location'
+
+/** The stored value, unvalidated — `locationToRestore` is what decides whether it is usable. */
+export function readStoredLastLocation(): unknown {
+  try {
+    const raw = localStorage.getItem(LAST_LOCATION_STORAGE_KEY)
+    return raw === null ? null : JSON.parse(raw)
+  } catch {
+    // Absent, private mode, or a hand-edited non-JSON value — no remembered location.
+    return null
+  }
+}
+
+export function writeStoredLastLocation(location: WorkspaceLastLocation): void {
+  try {
+    localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify(location))
+  } catch {
+    // Private mode / storage full — navigation continues, the next launch just starts at boot.
+  }
+}
+
 const LAST_LOCATION_KEYS = new Set(['projectId', 'pathname', 'search', 'hash'])
 
 function parsedLastLocation(value: unknown): WorkspaceLastLocation | null {
@@ -96,15 +126,16 @@ export function locationToRestore(
   return `${location.pathname}${location.search ?? ''}${location.hash ?? ''}`
 }
 
-export function sameLastLocation(
-  left: WorkspaceLastLocation | undefined,
-  right: WorkspaceLastLocation,
-): boolean {
+/** `left` is deliberately `unknown`: the comparison's caller reads it back out of storage, where
+ *  the type system does not reach. Anything that does not parse as a location is simply not equal
+ *  to one, so a corrupted value is overwritten rather than kept. */
+export function sameLastLocation(left: unknown, right: WorkspaceLastLocation): boolean {
+  const parsed = parsedLastLocation(left)
   return (
-    left !== undefined &&
-    left.projectId === right.projectId &&
-    left.pathname === right.pathname &&
-    (left.search ?? '') === (right.search ?? '') &&
-    (left.hash ?? '') === (right.hash ?? '')
+    parsed !== null &&
+    parsed.projectId === right.projectId &&
+    parsed.pathname === right.pathname &&
+    (parsed.search ?? '') === (right.search ?? '') &&
+    (parsed.hash ?? '') === (right.hash ?? '')
   )
 }

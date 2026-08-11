@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
@@ -47,6 +47,7 @@ import {
   getRunHandoff,
   getRunnerModels,
   getRuns,
+  getRunsIndex,
   getSkills,
   getSkillsWhenReady,
   getTodos,
@@ -59,6 +60,7 @@ import {
   applySkillsUpdate,
   getWorktrees,
   markRunSeen,
+  markRunUnseen,
   patchRun,
   probeHarness,
   putAgentConfigFile,
@@ -73,9 +75,10 @@ import {
   updateProject,
   retryProviderAuth,
 } from './client'
-import { queryScope } from '@open-mercato/cezar-api-client'
+import { queryScope, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { githubRepoBase } from '@/lib/tasks-table'
+import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
@@ -84,9 +87,12 @@ import type {
   HarnessRoles,
   HealthResponse,
   MessageInput,
+  Runner,
   PatchRunInput,
   ProviderId,
   OpenAgentAccountFileInput,
+  ProjectListEntry,
+  ProjectsResponse,
   ProviderStatusResponse,
   RunRecord,
   SelectAgentProfileInput,
@@ -209,6 +215,9 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
+  /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
+   *  it answers for every project at once, so no scope owns it. */
+  runsIndex: ['workspace', 'runs-index'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */
@@ -235,16 +244,46 @@ export const workspaceQueryKeys = {
     [...workspaceQueryKeys.fsBrowseRoot, path, showHidden] as const,
 }
 
-/** `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue —
- *  hooks cannot be called conditionally) skip the fetch when it definitely won't. `runner`
- *  picks which discovery-capable backend's catalog to fetch (codex; opencode 2026-07-24). */
-export function useRunnerModels(enabled = true, runner: 'codex' | 'opencode' = 'codex') {
+/**
+ * One runner's host-discovered catalog, cached per runner (#794 — this used to be hard-wired to
+ * Codex, which is why OpenCode had nothing but stale presets to show).
+ *
+ * A runner with no host catalog (claude) never fetches and never resolves data, so its picker
+ * falls back to static presets exactly as before — callers can pass any runner and read
+ * `data`/`isError` without checking first.
+ *
+ * `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue — hooks
+ * cannot be called conditionally) skip the fetch when it definitely won't.
+ */
+export function useRunnerModels(runner: Runner, enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.models(runner),
-    queryFn: ({ signal }) => getRunnerModels(runner, { signal }),
+    // The narrowing IS the guard — the query is disabled for a runner with no host catalog, so
+    // this branch is unreachable rather than merely unlikely, and no cast is needed to say so.
+    queryFn: ({ signal }) =>
+      runnerDiscoversModels(runner)
+        ? getRunnerModels(runner, { signal })
+        : Promise.reject(new Error(`${runner} has no host model catalog`)),
     staleTime: 5 * 60 * 1_000,
-    enabled,
+    enabled: enabled && runnerDiscoversModels(runner),
   })
+}
+
+/**
+ * Every runner's catalog at once, keyed by runner — for the screens that render a row PER runner
+ * (the Settings default-model selects) rather than one for the runner the user picked.
+ *
+ * One `useRunnerModels` call per runner in a fixed order, so the hook count never varies and
+ * each catalog keeps its own cache entry, `enabled` state and error state.
+ */
+export function useRunnerModelCatalogs(
+  enabled = true,
+): Record<Runner, ReturnType<typeof useRunnerModels>> {
+  const claude = useRunnerModels('claude', enabled)
+  const codex = useRunnerModels('codex', enabled)
+  const opencode = useRunnerModels('opencode', enabled)
+  const pi = useRunnerModels('pi', enabled)
+  return { claude, codex, opencode, pi }
 }
 
 export function useProviderStatus() {
@@ -365,24 +404,41 @@ export function useRegisterProject() {
  *
  * No retry: the interesting failures are the deliberate 409s (running tasks, the boot
  * project), and re-asking cannot change those answers.
+ *
+ * The invalidation is deliberately NOT returned: TanStack awaits a promise a mutation callback
+ * returns before running the per-call ones, so returning it would make the caller's `onSuccess`
+ * wait for the registry REFETCH. Settings → General removes the project its own URL names and
+ * navigates away in that callback — gating that on a second round-trip leaves the user on a page
+ * for a project that no longer exists for as long as the refetch takes.
  */
 export function useRemoveProject() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (projectId: string) => removeProject(projectId),
     retry: false,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
+    },
   })
 }
 
 /**
- * Set or clear a project's per-project concurrency ceiling
- * (`PATCH /api/projects/:projectId`, spec 2026-07-22 — Settings → Projects).
+ * Edit one registry entry — the per-project concurrency ceiling (spec 2026-07-22) and the
+ * grouping tags — from Settings → Projects.
  *
- * Same registry invalidation as the add/remove paths: the pane reads the ceiling
- * off the projects query, so the row must reflect the new value without a reload.
- * No retry — an out-of-range value or unknown id (400/404) is a deterministic
- * refusal re-asking cannot change.
+ * **Optimistic, and that is load-bearing rather than cosmetic.** The editors are bound to the
+ * server value with no local mirror, so between the PATCH and the refetch the cached project
+ * still holds the OLD list. Adding two tags in a row therefore read the stale list twice and the
+ * second save overwrote the first: click `api`, click `web`, and `api` was gone — the whole list
+ * is replaced wholesale, so a stale read is a silent deletion, not a stale display.
+ *
+ * Writing the new value into the cache immediately closes that window: the next click composes on
+ * top of it. The server's own answer then replaces the row (it is the authority on normalization),
+ * and the final invalidate re-reads the registry. A failure rolls the snapshot back, so a refused
+ * edit leaves the row exactly as it was.
+ *
+ * No retry — an out-of-range value or unknown id (400/404) is a deterministic refusal re-asking
+ * cannot change.
  */
 export function useUpdateProject() {
   const queryClient = useQueryClient()
@@ -394,8 +450,58 @@ export function useUpdateProject() {
       return updateProject(id, patch)
     },
     retry: false,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+    onMutate: async ({ id, ...patch }) => {
+      await queryClient.cancelQueries({ queryKey: workspaceQueryKeys.projects })
+      const previous = queryClient.getQueryData<ProjectsResponse>(workspaceQueryKeys.projects)
+      queryClient.setQueryData<ProjectsResponse>(workspaceQueryKeys.projects, (current) =>
+        current === undefined
+          ? current
+          : {
+              ...current,
+              projects: current.projects.map((project) =>
+                project.id === id ? applyProjectPatch(project, patch) : project,
+              ),
+            },
+      )
+      return { previous }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(workspaceQueryKeys.projects, context.previous)
+      }
+    },
+    onSuccess: ({ project: updated }) => {
+      // The server is the authority on normalization (trim, case-insensitive dedupe, sort), so
+      // its entry replaces the optimistic one rather than merging with it.
+      queryClient.setQueryData<ProjectsResponse>(workspaceQueryKeys.projects, (current) =>
+        current === undefined
+          ? current
+          : {
+              ...current,
+              projects: current.projects.map((project) =>
+                project.id === updated.id ? updated : project,
+              ),
+            },
+      )
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
   })
+}
+
+/** One registry entry with a PATCH body applied — the same per-key rule the route follows: a
+ *  field changes only when the body NAMED it, and `null` (or, for tags, an empty list) clears. */
+function applyProjectPatch(
+  project: ProjectListEntry,
+  patch: UpdateProjectInput,
+): ProjectListEntry {
+  const { maxParallel: _mp, tags: _tags, ...rest } = project
+  const next: ProjectListEntry = { ...rest }
+  const maxParallel = 'maxParallel' in patch ? patch.maxParallel : project.maxParallel
+  if (maxParallel !== null && maxParallel !== undefined) next.maxParallel = maxParallel
+  const tags = 'tags' in patch && patch.tags !== undefined ? patch.tags : project.tags
+  const normalized = tags === null || tags === undefined ? [] : normalizeTagsForDisplay(tags)
+  if (normalized.length > 0) next.tags = normalized
+  return next
 }
 
 /**
@@ -640,6 +746,35 @@ export function useRuns() {
   return useQuery({
     queryKey: queryKeys.runs.list(),
     queryFn: ({ signal }) => getRuns({ signal }),
+  })
+}
+
+/**
+ * Every registered project's recent tasks, slim — the ⌘K palette's cross-project finder.
+ *
+ * `enabled` rather than always-on, and the palette passes `false` in a single-project workspace:
+ * there is nothing to aggregate there, and the active project's own `useRuns()` entry (already
+ * warm, and stream-patched) answers better than this snapshot could.
+ *
+ * ONE request for the whole registry, deliberately — the alternative, N `useProjectRuns` calls,
+ * ships a full `RunRecord` per run (`steps[]` and all) times the registry, to render a title and
+ * a dot. `staleTime` because a task search is a glance, not a live view: the palette mounts on
+ * open, and re-opening it seconds later should not re-ask the whole workspace. The active
+ * project's rows come from `useRuns()` anyway, so the live half of the list is never this stale.
+ */
+export function useRunsIndex(enabled = true, refetchIntervalMs?: number) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.runsIndex,
+    queryFn: ({ signal }) => getRunsIndex({ signal }),
+    enabled,
+    staleTime: 30_000,
+    // The cockpit's default is NO polling, because the run stream says when something changed
+    // (see `createQueryClient`). This index is the one list with no stream behind it: the run
+    // SSE is per-project, and a page showing forty projects cannot open forty of them. An
+    // interval here is therefore not papering over a broken stream — it is the only freshness
+    // mechanism there is, and only the global Tasks page (which is a live view rather than a
+    // glance) asks for one. The palette leaves it off and keeps its 30s staleness.
+    ...(refetchIntervalMs === undefined ? {} : { refetchInterval: refetchIntervalMs }),
   })
 }
 
@@ -1124,6 +1259,25 @@ export function usePatchRun(id: string) {
 }
 
 /**
+ * Mark the WORKSPACE run index stale after a change to one run's read state.
+ *
+ * The index (`GET /workspace/runs-index`) is a third cache, independent of the project-scoped
+ * run list and detail these mutations patch, and it has a 30s staleTime. Without this, opening an
+ * unread task from the global Tasks page and coming straight back showed it STILL unread until
+ * the next poll or a refresh — which reads as "the click did not work".
+ *
+ * Invalidate rather than patch, deliberately. Patching would need the run's project id (the index
+ * keys on `projectId + id`, because a run id is only unique inside one project), and this
+ * mutation knows a run only by id — deriving the project from the router would couple a data hook
+ * to a `<Router>` that its own unit tests, and any non-routed caller, do not provide. Nothing is
+ * observing the index while you are in a thread, so this costs no request: it simply means the
+ * global page's next mount reads the truth instead of a stale snapshot.
+ */
+function invalidateRunsIndex(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.runsIndex })
+}
+
+/**
  * Mark one run read (#unread-done-items): `POST /api/runs/:id/read`. Opening a finished task's
  * thread fires this so the unread dot clears without waiting for the round-trip — the list and
  * detail caches are stamped with `seenAt` optimistically, then reconciled to the server's exact
@@ -1178,8 +1332,68 @@ export function useMarkRunSeen() {
       queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
         current ? stampReceipt(current) : updated,
       )
+      invalidateRunsIndex(queryClient)
     },
   })
+}
+
+/**
+ * Put one finished run back to unread (#775): `POST /api/runs/:id/unread`. The exact inverse of
+ * `useMarkRunSeen`, down to the cache choreography — both caches cancelled so an in-flight
+ * refetch cannot re-stamp the receipt after the optimistic write, `seenAt` *cleared* instead of
+ * stamped, and a guarded rollback so a run that could not be marked unread honestly stays read
+ * (which is also the mixed-version failure mode: an older server 404s this route, and the user
+ * sees the marker not come back rather than a cockpit lying about the server's state).
+ *
+ * Clearing is spelled as a rest-destructure rather than `seenAt: undefined`: the reader is
+ * `isUnread`, which keys on the field being absent, and an explicit `undefined` would survive
+ * into a record shape the server never writes.
+ */
+export function useMarkRunUnseen() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => markRunUnseen(id),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.list() })
+      await queryClient.cancelQueries({ queryKey: queryKeys.runs.detail(id) })
+      const prevList = queryClient.getQueryData<RunRecord[]>(queryKeys.runs.list())
+      const prevDetail = queryClient.getQueryData<RunRecord>(queryKeys.runs.detail(id))
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) =>
+        list?.map((run) => (run.id === id ? withoutReceipt(run) : run)),
+      )
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(id), (run) =>
+        run ? withoutReceipt(run) : run,
+      )
+      return { prevList, prevDetail, id }
+    },
+    onError: (_error, id, context) => {
+      if (context?.prevList) queryClient.setQueryData(queryKeys.runs.list(), context.prevList)
+      if (context?.prevDetail) queryClient.setQueryData(queryKeys.runs.detail(id), context.prevDetail)
+    },
+    onSuccess: (updated) => {
+      // Clear ONLY the receipt on the record already in cache — never write the answer wholesale.
+      //
+      // Same reason as the read twin above: `POST /runs/:id/unread` answers with a SNAPSHOT taken
+      // while the request was in flight, so writing it over the cached record permanently reverts
+      // every field the run stream advanced in that window (nothing refetches afterwards). A
+      // finished run is quieter than a just-finished one, but it is not silent — the janitor still
+      // discovers PR links, titles still get summarized, and a `failed` run still publishes its
+      // `autoResumeAt`. Clearing the one field this mutation owns cannot lose any of them.
+      const clearReceipt = (run: RunRecord): RunRecord =>
+        run.id === updated.id ? withoutReceipt(run) : run
+      queryClient.setQueryData<RunRecord[]>(queryKeys.runs.list(), (list) => list?.map(clearReceipt))
+      queryClient.setQueryData<RunRecord>(queryKeys.runs.detail(updated.id), (current) =>
+        current ? clearReceipt(current) : updated,
+      )
+      invalidateRunsIndex(queryClient)
+    },
+  })
+}
+
+/** A copy of the record with the read receipt gone — the optimistic half of `useMarkRunUnseen`. */
+function withoutReceipt(run: RunRecord): RunRecord {
+  const { seenAt: _dropped, ...rest } = run
+  return rest
 }
 
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself
