@@ -270,6 +270,10 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
   })
 
   it('folding Workflow measurably shrinks the column, not just its attribute', () => {
+    // State the precondition instead of assuming it. A toggle clicked from the wrong state folds
+    // the other way and the wait below then burns the full 25s provider timeout — this turns that
+    // into an instant, legible failure that names the actual problem.
+    expect(browser.count(`${th('workflow')}[data-folded="true"]`)).toBe(0)
     const expandedWidth = headerWidth('workflow')
 
     browser.click(`${th('workflow')} button`)
@@ -311,6 +315,9 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     openTasks()
     browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
 
+    // Same precondition discipline as the fold test: this click must be a fold, not a coin flip on
+    // whatever the earlier tests left behind.
+    expect(browser.count(`${th('reference')}[data-folded="true"]`)).toBe(0)
     browser.click(`${th('reference')} button`)
     browser.waitForFunction(`document.querySelector('${th('reference')}[data-folded="true"]') !== null`)
 
