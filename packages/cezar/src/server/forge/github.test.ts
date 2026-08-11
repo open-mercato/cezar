@@ -1765,6 +1765,24 @@ describe('searchGithubItems (#730)', () => {
     expect(search?.[search.indexOf('--limit') + 1]).toBe(String(GH_SEARCH_MAX));
   });
 
+  it('honours `limit` and flags `truncated` in CEZ_DRY_RUN too, on the live rule (#838)', async () => {
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+
+    // '1' appears in every fixture issue number (142 / 139 / 135), so the cap has something to bite
+    // on. Before #838 the dry-run branch returned ahead of `capped` and shipped all three unflagged
+    // — offline mode is the only place cap-and-truncate is exercised without `gh`.
+    const capped = await searchGithubItems('/repo/dry-cap', 'issue', '1', 2);
+    expect(capped.items.map((i) => i.number)).toEqual([142, 139]);
+    expect(capped.truncated).toBe(true);
+
+    const whole = await searchGithubItems('/repo/dry-cap', 'issue', '1');
+    expect(whole.items).toHaveLength(3);
+    expect(whole.truncated).toBe(false);
+
+    // Still entirely offline — the fixture path must never reach the CLI.
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
   it('degrades to {available:false, reason} instead of throwing when gh fails', async () => {
     ghSpy((argv) => (argv[0] === 'repo' ? 'owner/n\n' : new Error('HTTP 403: rate limit exceeded')));
 

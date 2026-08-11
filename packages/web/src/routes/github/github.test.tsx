@@ -2325,6 +2325,22 @@ describe('cross-state search fallback (#730)', () => {
     )
   })
 
+  it('drops the empty-state wrapper entirely once hits arrive, so its padding leaves no gap (#838)', async () => {
+    stubFetch({
+      'GET /api/v1/github/search?kind=pr&q=4507': () =>
+        jsonResponse({ available: true, items: [MERGED_PR] }),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+    await waitFor(() => expect(hits()).not.toBeNull(), { timeout: 3000 })
+
+    // The verdict was already null in this state; what #838 fixes is the `px-4 py-4` container
+    // still rendering around it, which read as an empty ~2 rem band above "Found on GitHub".
+    expect(document.querySelector('[data-slot="gh-empty"]')).toBeNull()
+  })
+
   it('states plainly that nothing matched in ANY state when the search comes back empty', async () => {
     stubFetch() // the default search stub answers `{available: true, items: []}`
     renderAt('/github/prs')

@@ -595,18 +595,20 @@ export async function searchGithubItems(
 ): Promise<ForgeSearchData> {
   const trimmed = query.trim();
   if (trimmed === '') return { available: true, items: [] };
+  const capped = Math.min(Math.max(limit, 1), GH_SEARCH_MAX);
   if (process.env.CEZ_DRY_RUN === '1') {
     const mock = mockGithub();
     const pool = kind === 'issue' ? mock.issues : mock.prs;
     const needle = trimmed.replace(/^#/, '').toLowerCase();
-    return {
-      available: true,
-      items: pool.filter(
-        (i) => String(i.number).includes(needle) || i.title.toLowerCase().includes(needle),
-      ),
-    };
+    // The fixture obeys `limit` and flags `truncated` on the live path's own rule (#838). The
+    // catalog is a handful of rows, so the cap never bites in the demo itself — but offline mode
+    // is the only place anyone developing without `gh` exercises cap-and-truncate at all, and a
+    // dry-run that returned the whole pool unflagged would hide a regression in it.
+    const items = pool
+      .filter((i) => String(i.number).includes(needle) || i.title.toLowerCase().includes(needle))
+      .slice(0, capped);
+    return { available: true, items, truncated: items.length >= capped };
   }
-  const capped = Math.min(Math.max(limit, 1), GH_SEARCH_MAX);
   const labelColors: Record<string, string> = {};
   const numeric = trimmed.replace(/^#/, '');
   try {

@@ -281,10 +281,14 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   )
   // Evaluated against the DEBOUNCED query, not the live one: the fallback must be decided by the
   // same text the request will carry, or a fast typist fires a `gh` subprocess per keystroke.
-  const searchWanted = shouldSearchForge(
-    debouncedQuery,
-    filterGithubItems(openItems, { query: debouncedQuery, labels: labelFilter }).length,
+  // Memoized because this walks the whole open set — up to `LIST_LIMIT` rows — and only its three
+  // inputs can change the answer; unmemoized it re-filtered that set on every unrelated render,
+  // doubling the filtering the render body below already does for the live query (#838).
+  const localMatches = useMemo(
+    () => filterGithubItems(openItems, { query: debouncedQuery, labels: labelFilter }).length,
+    [openItems, debouncedQuery, labelFilter],
   )
+  const searchWanted = shouldSearchForge(debouncedQuery, localMatches)
   const forgeSearch = useGithubSearch(view === 'issues' ? 'issue' : 'pr', debouncedQuery, searchWanted)
 
   if (!gh) {
@@ -367,6 +371,30 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   openThreadRef.current = selected ? { kind: selected.kind, number: selected.number } : null
 
   const listPath = view === 'issues' ? '/github' : '/github/prs'
+
+  // What the empty list has to say for itself, or `null` when the "Found on GitHub" section below
+  // already says it. Resolved BEFORE the wrapper rather than inside it (#838): as the contents of
+  // a padded `<div>`, a null verdict still rendered the padding, leaving an empty ~2rem gap above
+  // that heading. The search-hits case stays below `searching` in the chain on purpose — while a
+  // new query is in flight over stale hits, the spinner is the honest thing to show.
+  const emptyState = !filtering ? (
+    <p>No open {view === 'issues' ? 'issues' : 'pull requests'}.</p>
+  ) : searching ? (
+    <p className="flex items-center gap-1.5">
+      <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
+      Searching GitHub for “{query.trim()}”…
+    </p>
+  ) : searchHits.length > 0 ? null : forgeSearch.data && !forgeSearch.data.available ? (
+    <p>
+      No open {view === 'issues' ? 'issues' : 'pull requests'} match your filter, and GitHub could
+      not be searched: {forgeSearch.data.reason ?? 'unknown reason'}.
+    </p>
+  ) : (
+    <p>
+      No {view === 'issues' ? 'issues' : 'pull requests'} match your filter — open, closed or
+      merged.
+    </p>
+  )
 
   return (
     // Bounded to the viewport (`h-full min-h-0`) so the PAGE never scrolls — each pane owns its
@@ -455,27 +483,13 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
         {items.length === 0 ? (
           // Nothing in the OPEN list matched. Rather than the old flat "no match" — which was a
           // lie whenever the item existed but was closed or merged (#730) — report what the forge
-          // search found, is finding, or could not do.
-          <div data-slot="gh-empty" className="px-4 py-4 text-sm text-soft-foreground">
-            {!filtering ? (
-              <p>No open {view === 'issues' ? 'issues' : 'pull requests'}.</p>
-            ) : searching ? (
-              <p className="flex items-center gap-1.5">
-                <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
-                Searching GitHub for “{query.trim()}”…
-              </p>
-            ) : searchHits.length > 0 ? null : forgeSearch.data && !forgeSearch.data.available ? (
-              <p>
-                No open {view === 'issues' ? 'issues' : 'pull requests'} match your filter, and
-                GitHub could not be searched: {forgeSearch.data.reason ?? 'unknown reason'}.
-              </p>
-            ) : (
-              <p>
-                No {view === 'issues' ? 'issues' : 'pull requests'} match your filter — open,
-                closed or merged.
-              </p>
-            )}
-          </div>
+          // search found, is finding, or could not do. No verdict to report (the hits below are
+          // the answer) means no wrapper at all, so its padding cannot leave a gap.
+          emptyState && (
+            <div data-slot="gh-empty" className="px-4 py-4 text-sm text-soft-foreground">
+              {emptyState}
+            </div>
+          )
         ) : (
           <ul data-slot="gh-rows" className="flex flex-col gap-0.5 px-2 py-2">
             {items.map((item) => (
