@@ -241,11 +241,16 @@ export interface TaskReference {
  * task created, the PR it is about, then the issue — which is also what makes `taskReference`
  * answer exactly what it always answered.
  *
- * What this deliberately does NOT read is `referencedPrCandidates` / `referencedIssueCandidates`.
- * Those are transcript scrapings that routinely name OTHER repositories (#526), so a further
- * reference has to arrive as a real field before it can be shown: the shape is ready for more,
- * the guesswork is not invited in. `markerRefs.pr` is the obvious next source, and is left out
- * only because today it never appears without one of the URLs below already carrying it.
+ * What this deliberately does NOT take a reference FROM is `referencedPrCandidates` /
+ * `referencedIssueCandidates`. Those are transcript scrapings that routinely name OTHER
+ * repositories (#526), so a further reference has to arrive as a real field before it can be
+ * shown: the shape is ready for more, the guesswork is not invited in. `markerRefs.pr` is the
+ * obvious next source, and is left out only because today it never appears without one of the
+ * URLs below already carrying it.
+ *
+ * The issue candidates are read in one direction only, and it is the opposite one: as EVIDENCE
+ * that removes a chip (#819, `chipIssueNumber`). A scraping can prove a number is somebody
+ * else's repository's; it can never be promoted into the link itself.
  *
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
@@ -256,7 +261,7 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
     // into a real link — see the synthesis note below.
     { kind: 'PR', number: run.prNumber },
     { kind: 'Issue', url: taskIssueUrl(run, repoBase) },
-    { kind: 'Issue', number: run.issueNumber },
+    { kind: 'Issue', number: chipIssueNumber(run, repoBase) },
   ]
 
   const seen = new Set<string>()
@@ -275,6 +280,22 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
     references.push({ kind: source.kind, number, ...(url ? { url } : {}) })
   }
   return references
+}
+
+/**
+ * The bare `issueNumber` a chip may still be built from, after #819's evidence guard has had its
+ * say. `taskIssueUrl` refuses to synthesize a link for a number a candidate proves belongs to
+ * another repository — but the numeric source below reaches `synthesizeUrl` directly, so without
+ * this the list would rebuild the very link the accessor just declined and the guard would hold
+ * everywhere except the surface with the most rows.
+ *
+ * Only a KNOWN `repoBase` can suppress: with no repo to build from, the chip is inert text, and
+ * inert text carrying the number is strictly better than hiding a reference the task really has.
+ */
+function chipIssueNumber(run: TaskReferenceInput, repoBase?: string): number | undefined {
+  const number = run.issueNumber
+  if (number === undefined || !repoBase) return number
+  return namesNumberElsewhere(run.referencedIssueCandidates, number, repoBase) ? undefined : number
 }
 
 /** `#402` on a known repo → its forge URL. Undefined without a repo to build it from. */

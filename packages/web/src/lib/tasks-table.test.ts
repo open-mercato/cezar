@@ -323,6 +323,49 @@ describe('taskReferences', () => {
     ).toEqual([{ kind: 'PR', number: 9, url: 'https://github.com/other/repo/pull/9' }])
   })
 
+  it('drops a number-only issue a candidate proves is another repo’s (#819)', () => {
+    // The list synthesizes from `issueNumber` directly, so #819's guard has to hold HERE too —
+    // otherwise the accessor declines the link and the list rebuilds it one line later, and the
+    // 404 chip survives on the page with the most rows.
+    expect(
+      taskReferences(
+        run({
+          issueNumber: 4143,
+          markerRefs: { pr: 1977 },
+          referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+          referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+        }),
+        'https://github.com/open-mercato/cezar',
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 1977, url: 'https://github.com/open-mercato/open-mercato/pull/1977' },
+    ])
+  })
+
+  it('keeps a number-only issue whose foreign candidates carry other numbers (#819)', () => {
+    // Evidence about THIS number only — merely having mentioned another repo costs a task
+    // nothing.
+    expect(
+      taskReferences(
+        run({ issueNumber: 12, referencedIssueCandidates: ['https://github.com/other/repo/issues/9'] }),
+        REPO,
+      ),
+    ).toEqual([{ kind: 'Issue', number: 12, url: `${REPO}/issues/12` }])
+  })
+
+  it('keeps a foreign-numbered issue as inert text when no repo is known (#819)', () => {
+    // Nothing can be rebuilt without a `repoBase`, so there is no wrong link to prevent — and a
+    // number the task really does reference is worth more on screen than off it.
+    expect(
+      taskReferences(
+        run({
+          issueNumber: 4143,
+          referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+        }),
+      ),
+    ).toEqual([{ kind: 'Issue', number: 4143 }])
+  })
+
   it('is empty when the task references nothing', () => {
     expect(taskReferences(run())).toEqual([])
   })

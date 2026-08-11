@@ -5250,6 +5250,11 @@ export function createApp(deps: ServerDeps) {
     ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
+    // #819: evidence, not a link — the candidates are what let the client prove a bare
+    // `issueNumber` is another repository's and paint no chip rather than a 404 one.
+    ...(run.referencedIssueCandidates !== undefined
+      ? { referencedIssueCandidates: run.referencedIssueCandidates }
+      : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
