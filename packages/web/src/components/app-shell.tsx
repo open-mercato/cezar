@@ -777,7 +777,8 @@ function BrandTile() {
       alt=""
       aria-hidden="true"
       data-slot="brand-tile"
-      className="size-[26px] shrink-0 rounded-sm"
+      // size-9 matches the two-line lockup's height (name + motto) — the cat deserves the rank.
+      className="size-9 shrink-0 rounded-sm"
     />
   )
 }
