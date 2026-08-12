@@ -161,9 +161,11 @@ describe('workspace runs index API', () => {
     for (const key of [
       'pullRequestUrl',
       'referencedPullRequestUrl',
+      'referencedPrCandidates',
       'prNumber',
       'issueNumber',
       'referencedIssueUrl',
+      'referencedIssueCandidates',
       'markerRefs',
       'costUsd',
       'peakRssBytes',
@@ -225,6 +227,56 @@ describe('workspace runs index API', () => {
     // Still the slim row — the expensive half never rides along.
     expect(row).not.toHaveProperty('steps');
     expect(row).not.toHaveProperty('workflowDef');
+  });
+
+  it('carries the issue candidates the client needs to refuse a foreign issue chip (#819)', async () => {
+    // The candidates are evidence, never a link: `taskIssueUrl` uses them to prove a bare
+    // `issueNumber` (which the auto-namer scrapes from a transcript, so it can name ANOTHER
+    // repository) is not this project's, and paints nothing rather than a 404 chip. Drop them
+    // from this row and the global Tasks page is the one surface that cannot run the check.
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'foreign-number',
+        title: 'Fix PR in another repo',
+        issueNumber: 4143,
+        referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+        markerRefs: { pr: 1977 },
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'foreign-number');
+
+    expect(row).toMatchObject({
+      issueNumber: 4143,
+      referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+    });
+  });
+
+  it('carries the PR candidates the client needs to refuse a foreign PR chip (#854)', async () => {
+    // The PR half of the same evidence rule: `prNumber` is seeded by the auto-namer too, so a
+    // task driving another repository's pull request carries that repository's number. Without
+    // these on the row the global Tasks page is the one surface that cannot refuse it.
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'foreign-pr-number',
+        title: 'Drive a PR in another repo',
+        prNumber: 1977,
+        referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'foreign-pr-number');
+
+    expect(row).toMatchObject({
+      prNumber: 1977,
+      referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+    });
   });
 
   it('includes archived runs — findable from a project is findable from anywhere', async () => {

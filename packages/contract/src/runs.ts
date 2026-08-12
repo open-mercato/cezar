@@ -327,21 +327,31 @@ export const runIndexEntrySchema = z.object({
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),
   /**
-   * The six fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
+   * The eight fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
    * or issue chip. Carried verbatim rather than pre-resolved into a `{kind, number, url}` on the
    * server, because the rule that picks between them is subtle (#407, #526: a run that REVIEWED
    * a PR must not claim it as its own, an issue-subject run must not adopt an incidental
    * transcript PR) and it already exists, tested, on the client. Resolving it a second time
    * server-side would be a second rule, and the two would drift.
    *
-   * Six scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
+   * Both `referenced*Candidates` lists ride along as EVIDENCE — never as links. They are what
+   * prove a bare `issueNumber` (#819) or `prNumber` (#854) belongs to another repository, which
+   * is what lets the cockpit refuse to rebuild it as a local `…/issues/N` or `…/pull/N` link.
+   * Leave either off and this row is the one surface that cannot run its half of the check — the
+   * global page would keep painting the 404 chip every other surface suppresses, which is exactly
+   * the drift carrying the inputs verbatim prevents. They arrive together for the same reason the
+   * guard does: one half of a rule is how the two halves drift.
+   *
+   * Eight scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
    * the expensive half, stay off it.
    */
   pullRequestUrl: z.string().optional(),
   referencedPullRequestUrl: z.string().optional(),
+  referencedPrCandidates: z.array(z.string()).optional(),
   prNumber: z.number().optional(),
   issueNumber: z.number().optional(),
   referencedIssueUrl: z.string().optional(),
+  referencedIssueCandidates: z.array(z.string()).optional(),
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */

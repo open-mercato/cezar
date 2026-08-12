@@ -170,7 +170,32 @@ export function taskIssueUrl(run: TaskReferenceInput, repoBase?: string): string
   // wrong-link defect #526 exists to kill, just pointing at an issue instead of a PR.
   const number = run.markerRefs?.issue ?? run.issueNumber
   if (!number || !repoBase) return undefined
+  // #819: the `?? run.issueNumber` fallback is the door #526 left open. `markerRefs.issue` is
+  // agent-declared and this project's, but `issueNumber` also arrives from the auto-namer, which
+  // scrapes the transcript — and a task working on ANOTHER repository scrapes that repo's numbers.
+  // Candidates stay evidence and never become the link (#526's rule): a candidate naming THIS
+  // number in a different repository proves the number is not ours, so synthesize nothing. The
+  // matching candidate is deliberately not promoted — a coincidental `#4143` in an unrelated repo
+  // would just be a different wrong link. No chip beats a wrong chip.
+  if (namesNumberElsewhere(run.referencedIssueCandidates, number, repoBase)) return undefined
   return `${repoBase}/issues/${number}`
+}
+
+/** True when a discovered candidate URL carries `number` under a repository other than `repoBase`
+ *  — the evidence that a synthesized `${repoBase}/issues/${number}` or `${repoBase}/pull/${number}`
+ *  would be a foreign number rebuilt locally (#819, #854). Number-and-repo generic on purpose: both
+ *  halves of the rule are the same question asked of a different candidate list. Compared
+ *  case-insensitively: GitHub repo names are case-insensitive, and a transcript that spells the
+ *  remote differently must not suppress a correct chip. */
+function namesNumberElsewhere(
+  candidates: readonly string[] | undefined,
+  number: number,
+  repoBase: string,
+): boolean {
+  const prefix = `${repoBase.toLowerCase()}/`
+  return (candidates ?? []).some(
+    (url) => url.endsWith(`/${number}`) && !url.toLowerCase().startsWith(prefix),
+  )
 }
 
 /**
@@ -181,14 +206,22 @@ export function taskIssueUrl(run: TaskReferenceInput, repoBase?: string): string
  * and the global Tasks page must resolve a PR/issue chip exactly as every other surface does.
  * Widening this means widening `runIndexEntrySchema` too, or that page silently answers
  * differently — which is the whole failure a shared rule exists to prevent.
+ *
+ * Both `referenced*Candidates` lists are in it for exactly that reason (#819, #854): they are the
+ * evidence needed to prove a number is another repository's before a link is synthesized from it.
+ * Drop either from the slim row and the global Tasks page loses that half of the proof, silently
+ * paints the 404 chip every other surface now suppresses, and the rule drifts apart across
+ * surfaces again.
  */
 export type TaskReferenceInput = Pick<
   RunRecord,
   | 'pullRequestUrl'
   | 'referencedPullRequestUrl'
+  | 'referencedPrCandidates'
   | 'prNumber'
   | 'issueNumber'
   | 'referencedIssueUrl'
+  | 'referencedIssueCandidates'
   | 'markerRefs'
 >
 
@@ -212,11 +245,16 @@ export interface TaskReference {
  * task created, the PR it is about, then the issue — which is also what makes `taskReference`
  * answer exactly what it always answered.
  *
- * What this deliberately does NOT read is `referencedPrCandidates` / `referencedIssueCandidates`.
- * Those are transcript scrapings that routinely name OTHER repositories (#526), so a further
- * reference has to arrive as a real field before it can be shown: the shape is ready for more,
- * the guesswork is not invited in. `markerRefs.pr` is the obvious next source, and is left out
- * only because today it never appears without one of the URLs below already carrying it.
+ * What this deliberately does NOT take a reference FROM is `referencedPrCandidates` /
+ * `referencedIssueCandidates`. Those are transcript scrapings that routinely name OTHER
+ * repositories (#526), so a further reference has to arrive as a real field before it can be
+ * shown: the shape is ready for more, the guesswork is not invited in. `markerRefs.pr` is the
+ * obvious next source, and is left out only because today it never appears without one of the
+ * URLs below already carrying it.
+ *
+ * Both candidate lists are read in one direction only, and it is the opposite one: as EVIDENCE
+ * that removes a chip (#819 `chipIssueNumber`, #854 `chipPrNumber`). A scraping can prove a number
+ * is somebody else's repository's; it can never be promoted into the link itself.
  *
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
@@ -225,9 +263,9 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
     ...prUrls(run).map((url) => ({ kind: 'PR' as const, url })),
     // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
     // into a real link — see the synthesis note below.
-    { kind: 'PR', number: run.prNumber },
+    { kind: 'PR', number: chipPrNumber(run, repoBase) },
     { kind: 'Issue', url: taskIssueUrl(run, repoBase) },
-    { kind: 'Issue', number: run.issueNumber },
+    { kind: 'Issue', number: chipIssueNumber(run, repoBase) },
   ]
 
   const seen = new Set<string>()
@@ -246,6 +284,47 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
     references.push({ kind: source.kind, number, ...(url ? { url } : {}) })
   }
   return references
+}
+
+/**
+ * The bare `issueNumber` a chip may still be built from, after #819's evidence guard has had its
+ * say. `taskIssueUrl` refuses to synthesize a link for a number a candidate proves belongs to
+ * another repository — but the numeric source below reaches `synthesizeUrl` directly, so without
+ * this the list would rebuild the very link the accessor just declined and the guard would hold
+ * everywhere except the surface with the most rows.
+ *
+ * Only a KNOWN `repoBase` can suppress: with no repo to build from, the chip is inert text, and
+ * inert text carrying the number is strictly better than hiding a reference the task really has.
+ */
+function chipIssueNumber(run: TaskReferenceInput, repoBase?: string): number | undefined {
+  const number = run.issueNumber
+  if (number === undefined || !repoBase) return number
+  return namesNumberElsewhere(run.referencedIssueCandidates, number, repoBase) ? undefined : number
+}
+
+/**
+ * The PR half of the same rule (#854), and the place the two halves are reconciled.
+ *
+ * `prNumber` reaches a run exactly the two ways `issueNumber` does — declared by a `CEZ:PR` marker,
+ * or seeded by the auto-namer, which scrapes the transcript. A task driving ANOTHER repository's
+ * pull request scrapes that repository's numbers, so the auto-namer can seed a `prNumber` that is
+ * not this project's; rebuilt against the project repo by `synthesizeUrl` it is the same confident
+ * 404 #819 reported for issues, and `referencedPrCandidates` is the same evidence sitting on the
+ * same record. #840 left it out for want of a reported symptom, not because the number is safer.
+ *
+ * Same asymmetry as the issue half: only a KNOWN `repoBase` can suppress, because without one
+ * nothing is rebuilt and inert text carrying the number beats hiding a real reference.
+ *
+ * The two halves cover every synthesis path there is: this list is the only PR code that reaches
+ * `synthesizeUrl`. `taskPrUrl` returns the head of `prUrls`, which is *discovered* URLs only and
+ * never synthesizes, so it needs no guard today — but a PR twin of `taskIssueUrl` that ever starts
+ * building `${repoBase}/pull/${number}` must call this function, exactly as `taskIssueUrl` calls
+ * `namesNumberElsewhere`, or the accessor and the list would answer differently again.
+ */
+function chipPrNumber(run: TaskReferenceInput, repoBase?: string): number | undefined {
+  const number = run.prNumber
+  if (number === undefined || !repoBase) return number
+  return namesNumberElsewhere(run.referencedPrCandidates, number, repoBase) ? undefined : number
 }
 
 /** `#402` on a known repo → its forge URL. Undefined without a repo to build it from. */
