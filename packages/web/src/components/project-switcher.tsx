@@ -16,8 +16,8 @@ import { scopeTo, useNavigate } from '@/lib/project-router'
  * registered projects (check on the active one) and lands in the picked one's tasks — a separate
  * mental model from "+ Add project", which sits beside it and only ever ADDS.
  *
- * With one registered project there is nothing to switch, so the chip renders static — same
- * face, no chevron, no dead menu.
+ * The chevron renders even with ONE project (review): it is what says "this is a switcher" —
+ * and the menu is never dead, since Manage projects always lives at its bottom.
  */
 export function ProjectSwitcher({
   projects,
@@ -37,10 +37,6 @@ export function ProjectSwitcher({
       </span>
     </>
   )
-
-  if (projects.length <= 1) {
-    return <span className="flex min-w-0 items-center gap-2">{identity}</span>
-  }
 
   return (
     <DropdownMenu>

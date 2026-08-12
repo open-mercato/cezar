@@ -14,6 +14,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandSeparator,
   CommandShortcut,
 } from '@/components/ui/command'
 import { deriveAttention } from '@/lib/attention'
@@ -429,6 +430,8 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandItem>
         </CommandGroup>
 
+        <CommandSeparator />
+
         {/* Only in the DEFAULT view. Once you type, splitting tasks by read-state is noise: it
             floats a section of near-misses above the exact match you are looking for, purely
             because that section renders first. Searching gets one ranked Tasks list. */}
@@ -518,6 +521,8 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandGroup>
         ) : null}
 
+        <CommandSeparator />
+
         {otherTasks.length > 0 ? (
           <CommandGroup heading="Tasks">
             {/* Same preview rule as Skills: unfiltered, the recency order's head is the useful
@@ -541,6 +546,8 @@ function PaletteContent({ close }: { close: () => void }) {
             ) : null}
           </CommandGroup>
         ) : null}
+
+        <CommandSeparator />
 
         {orderedSkills.length > 0 ? (
           // Before Actions: starting a task from a skill is everyday work, toggling the theme is
@@ -573,6 +580,8 @@ function PaletteContent({ close }: { close: () => void }) {
             ) : null}
           </CommandGroup>
         ) : null}
+
+        <CommandSeparator />
 
         <CommandGroup heading="Theme">
           {/* Spelled directly — the old single "Toggle theme" cycled light→dark→system, and its

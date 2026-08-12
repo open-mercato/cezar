@@ -113,7 +113,7 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur md:px-6"
+      className="sticky top-0 z-20 border-b border-border bg-canvas/95 px-4 pt-6 pb-0 backdrop-blur md:px-6"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
@@ -394,7 +394,14 @@ function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={cn(cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10')}
+      className={cn(
+        // Soft-purple, not a plain outline (review): even the calmer lifecycle states are THE
+        // contextual action and must not dress like Open in — pale wash, purple-200 border,
+        // text-safe purple ink. The urgent states keep full purple; failure keeps danger.
+        cta.tone === 'neutral' &&
+          'border-violet/25 bg-violet/8 text-violet-strong hover:bg-violet/15 hover:text-violet-strong',
+        cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10',
+      )}
     >
       {icon}
       {cta.label}

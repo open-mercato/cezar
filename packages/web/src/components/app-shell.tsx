@@ -280,7 +280,9 @@ export function AppShell({
             id="main"
             tabIndex={-1}
             data-slot="main"
-            className="row-start-3 min-h-0 overflow-y-auto overscroll-contain outline-none"
+            // bg-canvas: the CONTENT plane sits one step lighter than the app chrome (review #5)
+            // so the working column stops floating on the same wash as everything else.
+            className="row-start-3 min-h-0 overflow-y-auto overscroll-contain bg-canvas outline-none"
           >
             {children}
           </main>

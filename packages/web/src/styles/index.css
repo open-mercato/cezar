@@ -114,6 +114,11 @@
   /* Text/icons printed *on* --violet (the Inbox count badge and now every primary control).
    * White in both themes — the violet never lightens enough for ink to pass AA against it. */
   --violet-foreground: #ffffff;
+  /* The accent's TEXT-SAFE shade (review: purple-700-style ink for soft-purple chips): dark
+   * enough for AA on the pale violet washes in light, bright enough on dark surfaces here. */
+  --violet-strong: #c0a5ff;
+  /* Content pane, one step lighter than the app chrome (see the light block). */
+  --canvas: #121212;
   --primary: var(--violet);
   --primary-foreground: var(--violet-foreground);
   --ring: var(--violet);
@@ -176,9 +181,12 @@
   /* THREE surface levels (design review): a near-neutral app canvas, a minimally darker
    * sidebar, and near-white cards/inputs/code — the previous one-lavender-world flattened the
    * screen. Borders sit between them. */
-  --background: #f8f8fb;
+  --background: #f6f6f9;
   --foreground: #18171b;
   --card: #ffffff;
+  /* The CONTENT surface (review #5): the main pane sits one step lighter than the app chrome,
+   * so the working column reads as its own plane instead of floating on the page. */
+  --canvas: #fcfcfd;
   --card-2: #f2f1f8;
   --sidebar: #f5f4f8;
   --muted: #f2f1f8;
@@ -190,6 +198,8 @@
    * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f — the review's
    * #96939C tertiary is 2.9:1 and would reopen finding A1. */
   --soft-foreground: #6f6f6f;
+  /* violet-700-style ink: 6.5:1 on white / the pale soft-purple washes. */
+  --violet-strong: #6d28d9;
   --border: #e5e3ea;
   /* AA-checked (audit 2026-08-08, X1): the interactive field/control border, kept separate
    * from the decorative --border (#ebebeb) precisely so it can meet 1.4.11's 3:1 for UI
@@ -303,6 +313,8 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-violet: var(--violet);
+  --color-violet-strong: var(--violet-strong);
+  --color-canvas: var(--canvas);
   --color-violet-foreground: var(--violet-foreground);
   --color-ring: var(--ring);
 
