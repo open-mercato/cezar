@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
+import { ArchiveIcon, ChevronDownIcon, CircleDotIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, useRuns } from '@/api/queries'
 import { Link, scopeTo, useNavigate, useProjectMatch } from '@/lib/project-router'
@@ -59,40 +59,15 @@ export function TaskQuickList({
   const buckets = groupRuns(runs, view)
   const unread = unreadDoneCount(runs)
 
-  return (
-    <div data-slot="quick-list">
-      {/* Sticky, not scrolled away: the rows say what you are looking at, and a long Recent list
-          must not be able to hide that the view is filtered. TASKS is a labelled section of two
-          nav-style rows (the sidebar redesign), not a segmented track — the selected row carries
-          the accent tint, Active carries the count and the unread badge the Tasks nav item used
-          to wear. */}
-      <div className="sticky top-0 z-10 flex flex-col gap-0.5 bg-sidebar pt-2 pb-0.5">
-        {/* Section headers: small but DARK, tight to their rows (review) — hierarchy from
-            contrast and rhythm, not from size. */}
-        <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
-          Tasks
-        </h2>
-        <ViewRow view="active" current={view} onSelect={onViewChange} count={counts.active} unread={unread}>
-          Active
-          {/* The one reason to look at a row you are not on. */}
-          {counts.waiting > 0 && view !== 'active' ? (
-            <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
-          ) : null}
-        </ViewRow>
-        <ViewRow view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
-          Archived
-        </ViewRow>
-      </div>
-
-      {/* A delicate divider between contexts (review): siblings inside a group keep an 8–12px
-          rhythm, GROUPS separate with a line + ~28px — that difference is the hierarchy. */}
-      <hr aria-hidden="true" className="mx-3 mt-3 mb-2 border-border" />
-
-      {buckets.length === 0 ? (
-        <p className="px-3 py-3.5 text-xs text-soft-foreground">
-          {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
-        </p>
-      ) : (
+  // The selected view's rows render as the EXPANSION of its own row (Active or Archived) — one
+  // outline-style list, not a separate RECENT section further down.
+  const expansion =
+    buckets.length === 0 ? (
+      <p className="px-3 py-2 text-xs text-soft-foreground">
+        {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
+      </p>
+    ) : (
+      <div data-slot="quick-list-expansion" className="my-1 ml-4 border-l border-border pl-1.5">
         <QuickListBuckets
           buckets={buckets}
           currentRunId={currentRunId}
@@ -100,7 +75,32 @@ export function TaskQuickList({
           showTokens={showTokens}
           showCost={showCost}
         />
-      )}
+      </div>
+    )
+
+  return (
+    <div data-slot="quick-list">
+      <div className="flex flex-col gap-0.5 pt-2 pb-0.5">
+        {/* Section headers: small but DARK, tight to their rows (review) — hierarchy from
+            contrast and rhythm, not from size. */}
+        <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
+          Tasks
+        </h2>
+        <ViewRow view="active" current={view} onSelect={onViewChange} count={counts.active} unread={unread}>
+          <CircleDotIcon aria-hidden="true" className="size-4 shrink-0" />
+          Active
+          {/* The one reason to look at a row you are not on. */}
+          {counts.waiting > 0 && view !== 'active' ? (
+            <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
+          ) : null}
+        </ViewRow>
+        {view === 'active' ? expansion : null}
+        <ViewRow view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
+          <ArchiveIcon aria-hidden="true" className="size-4 shrink-0" />
+          Archived
+        </ViewRow>
+        {view === 'archived' ? expansion : null}
+      </div>
     </div>
   )
 }

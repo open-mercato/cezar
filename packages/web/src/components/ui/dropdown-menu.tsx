@@ -109,11 +109,15 @@ function DropdownMenuCheckboxItem({
 }
 
 function DropdownMenuRadioGroup({
+  className,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
   return (
     <DropdownMenuPrimitive.RadioGroup
       data-slot="dropdown-menu-radio-group"
+      // space-y-0.5: the checked item's tint and its focused neighbour's are both filled,
+      // rounded surfaces — without a seam they fuse into one blob.
+      className={cn("space-y-0.5", className)}
       {...props}
     />
   )
