@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
-import { ToolsMenu, forgeNote, toolsTooltip } from './tools-menu'
+import { ToolsMenu, conciseToolVersion, forgeNote, toolsTooltip } from './tools-menu'
 
 afterEach(cleanup)
 
@@ -80,6 +80,17 @@ async function openMenu(): Promise<HTMLElement> {
 const rowsIn = (menu: HTMLElement) =>
   Array.from(menu.querySelectorAll<HTMLElement>('[data-slot="tool-row"]'))
 
+describe('conciseToolVersion', () => {
+  it.each([
+    ['git version 2.50.1 (Apple Git-155)', '2.50.1'],
+    ['mock (CEZ_DRY_RUN=1)', 'mock'],
+    ['2.0.44', '2.0.44'],
+    ['gh version 2.62.0 (2026-01-10)', '2.62.0'],
+  ])('%s → %s', (raw, expected) => {
+    expect(conciseToolVersion(raw)).toBe(expected)
+  })
+})
+
 describe('toolsTooltip', () => {
   it('is just the cezar version while everything is available', () => {
     expect(toolsTooltip(ALL_GOOD)).toBe('cezar v0.1.3')
@@ -135,18 +146,19 @@ describe('ToolsMenu', () => {
     expect(row.querySelector('[data-slot="tool-hint"]')).toBeNull()
   })
 
-  it('renders a missing tool with the server hint verbatim and a Set up link', async () => {
+  it('renders a missing tool as ONE line, the server hint as its tooltip, and a Set up link', async () => {
     renderMenu(HEALTH)
     const menu = await openMenu()
 
     const row = rowsIn(menu).find((el) => el.dataset.tool === 'codex') as HTMLElement
     expect(row.dataset.available).toBe('false')
     expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
-    expect(row.querySelector('[data-slot="tool-version"]')?.textContent).toBe('not found')
-    // The degradation doctrine: the server's human-written hint, word for word.
-    expect(row.querySelector('[data-slot="tool-hint"]')?.textContent).toBe(
+    // The degradation doctrine: the server's human-written hint, word for word — but as the
+    // row's tooltip, not an inline paragraph that turns the menu into a wall of text.
+    expect(row.getAttribute('title')).toBe(
       'optional: install the Codex CLI (npm i -g @openai/codex) and log in to use the Codex runner'
     )
+    expect(row.querySelector('[data-slot="tool-hint"]')).toBeNull()
     expect(row.querySelector('[data-slot="tool-setup"]')?.textContent).toBe('Set up →')
     // The whole row is the link into Settings → Agents.
     expect(row.closest('a')?.getAttribute('href') ?? row.getAttribute('href')).toBe('/settings/agents')

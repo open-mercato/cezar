@@ -23,6 +23,19 @@ import {
  * answer → no trigger — same honesty rule as the repo/version chips).
  */
 
+/**
+ * The version CELL is a number, not a sentence (the menu was drowning in raw probe strings like
+ * "git version 2.50.1 (Apple Git-155)" and "mock (CEZ_DRY_RUN=1)"): pull the first dotted
+ * version number out of whatever the tool printed, fall back to the first word for
+ * versionless strings ("mock"). The verbatim probe output stays on the row as its tooltip.
+ * Exported for the tests.
+ */
+export function conciseToolVersion(version: string): string {
+  const number = version.match(/\d+(?:\.\d+)+\S*/)
+  if (number) return number[0]
+  return version.split(/[\s(]/, 1)[0] || version
+}
+
 /** The trigger's hover tooltip: the cezar version, plus whichever tools need attention.
  *  Exported for the tests — the string is a small contract of its own. */
 export function toolsTooltip(health: HealthResponse): string {
@@ -103,14 +116,16 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
   )
 }
 
-/** A present tool: dot, mono name, right-aligned version. Informational, not interactive —
- *  there is nothing to do to a tool that works. */
+/** A present tool: dot, mono name, right-aligned CONCISE version — the verbatim probe output
+ *  ("git version 2.50.1 (Apple Git-155)") lives in the tooltip, not the column. Informational,
+ *  not interactive — there is nothing to do to a tool that works. */
 function AvailableToolRow({ check }: { check: BackendCheck }) {
   return (
     <div
       data-slot="tool-row"
       data-tool={check.name}
       data-available="true"
+      title={check.version ?? undefined}
       className="flex items-center gap-2 rounded-sm px-2 py-1.5"
     >
       <StatusDot tone="success" />
@@ -119,16 +134,17 @@ function AvailableToolRow({ check }: { check: BackendCheck }) {
         data-slot="tool-version"
         className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground tabular-nums"
       >
-        {check.version ?? 'not found'}
+        {check.version ? conciseToolVersion(check.version) : 'not found'}
       </span>
     </div>
   )
 }
 
 /**
- * A missing tool: red dot + "not found", the server's `hint` verbatim as the secondary line
- * (degradation doctrine — the server writes those for people), and "Set up →" into Settings →
- * Agents. The whole row is the link, so the DropdownMenuItem closes the menu on navigation.
+ * A missing tool: ONE line — red dot, name, "Set up →" into Settings → Agents. The server's
+ * `hint` (degradation doctrine: written for people) rides the row as its tooltip and waits in
+ * full at the setup destination — printed inline it turned every missing tool into a paragraph
+ * and the menu into a wall of text. The whole row is the link, so the menu closes on navigation.
  */
 function UnavailableToolRow({ check }: { check: BackendCheck }) {
   return (
@@ -138,27 +154,13 @@ function UnavailableToolRow({ check }: { check: BackendCheck }) {
         data-slot="tool-row"
         data-tool={check.name}
         data-available="false"
-        className="flex-col items-stretch gap-1"
+        title={check.hint ?? undefined}
+        className="gap-2"
       >
-        <span className="flex items-center gap-2">
-          <StatusDot tone="danger" />
-          <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
-          <span
-            data-slot="tool-version"
-            className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground"
-          >
-            not found
-          </span>
-        </span>
-        <span className="flex items-end justify-between gap-3 pl-[15px]">
-          {check.hint ? (
-            <span data-slot="tool-hint" className="min-w-0 text-[11px] leading-snug text-muted-foreground">
-              {check.hint}
-            </span>
-          ) : null}
-          <span data-slot="tool-setup" className="ml-auto shrink-0 text-[11.5px] font-semibold text-violet">
-            Set up →
-          </span>
+        <StatusDot tone="danger" />
+        <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
+        <span data-slot="tool-setup" className="ml-auto shrink-0 text-[11.5px] font-semibold text-violet">
+          Set up →
         </span>
       </Link>
     </DropdownMenuItem>
